@@ -47,6 +47,8 @@ const nav = [
   },
   { label: 'Salary Advance', icon: '₹', to: '/salary-advance' },
   { label: 'Salary Input', icon: '📝', to: '/salary-input' },
+  { label: 'Loans', icon: '🏦', to: '/loans' },
+  { label: 'Leave Management', icon: '📋', to: '/leave-management' },
   { label: 'Reports', icon: '📋', to: '/reports' },
   { label: 'Alerts', icon: '🔔', to: '/alerts' },
   { label: 'Employees', icon: '👤', to: '/employees' },

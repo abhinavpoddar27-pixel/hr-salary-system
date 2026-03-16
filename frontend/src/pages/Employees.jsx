@@ -1,9 +1,13 @@
-import React, { useState } from 'react'
+import React, { useState, useRef } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import toast from 'react-hot-toast'
-import { getEmployees, getEmployee, updateEmployee, updateSalaryStructure, getLeaveBalances, updateLeaveBalance } from '../utils/api'
+import { getEmployees, getEmployee, updateEmployee, updateSalaryStructure, getLeaveBalances, updateLeaveBalance, getEmployeeDocuments, uploadEmployeeDocument, deleteEmployeeDocument, getEmployeeLoans } from '../utils/api'
 import { fmtINR } from '../utils/formatters'
 import { useAppStore } from '../store/appStore'
+import Modal from '../components/ui/Modal'
+import CalendarView from '../components/ui/CalendarView'
+import { Abbr } from '../components/ui/Tooltip'
+import clsx from 'clsx'
 
 function SalaryModal({ employee, onClose }) {
   const qc = useQueryClient()
@@ -234,12 +238,276 @@ function EditEmployeeModal({ employee, onClose }) {
   )
 }
 
+function EmployeeProfileModal({ employee, onClose }) {
+  const { selectedMonth, selectedYear } = useAppStore()
+  const qc = useQueryClient()
+  const [activeTab, setActiveTab] = useState('info')
+  const fileRef = useRef(null)
+  const [docType, setDocType] = useState('Other')
+
+  const { data: empRes } = useQuery({
+    queryKey: ['employee-detail', employee.code],
+    queryFn: () => getEmployee(employee.code),
+    retry: 0
+  })
+  const emp = empRes?.data?.data || employee
+
+  const { data: docsRes, refetch: refetchDocs } = useQuery({
+    queryKey: ['employee-docs', employee.code],
+    queryFn: () => getEmployeeDocuments(employee.code),
+    retry: 0,
+    enabled: activeTab === 'documents'
+  })
+  const docs = docsRes?.data?.data || []
+
+  const { data: loansRes } = useQuery({
+    queryKey: ['employee-loans', employee.code],
+    queryFn: () => getEmployeeLoans(employee.code),
+    retry: 0,
+    enabled: activeTab === 'loans'
+  })
+  const loans = loansRes?.data?.data || []
+
+  const uploadMutation = useMutation({
+    mutationFn: (formData) => uploadEmployeeDocument(employee.code, formData),
+    onSuccess: () => { toast.success('Document uploaded'); refetchDocs(); }
+  })
+
+  const deleteMutation = useMutation({
+    mutationFn: (id) => deleteEmployeeDocument(id),
+    onSuccess: () => { toast.success('Document deleted'); refetchDocs(); }
+  })
+
+  const handleUpload = () => {
+    const file = fileRef.current?.files[0]
+    if (!file) return toast.error('Select a file first')
+    const fd = new FormData()
+    fd.append('file', file)
+    fd.append('documentType', docType)
+    uploadMutation.mutate(fd)
+    fileRef.current.value = ''
+  }
+
+  const DOC_TYPES = ['Resume', 'Interview Form', 'Offer Letter', 'Joining Form', 'ID Proof', 'Address Proof', 'Education Certificate', 'Experience Letter', 'PF Transfer Form', 'Other']
+  const PROFILE_TABS = [
+    { id: 'info', label: 'Personal' },
+    { id: 'employment', label: 'Employment' },
+    { id: 'attendance', label: 'Attendance' },
+    { id: 'documents', label: 'Documents' },
+    { id: 'loans', label: 'Loans' },
+  ]
+
+  return (
+    <Modal title={`${emp.name || employee.code}`} onClose={onClose} size="lg">
+      <div className="space-y-4">
+        {/* Header */}
+        <div className="flex items-center gap-4 pb-3 border-b">
+          <div className="w-14 h-14 bg-blue-100 rounded-2xl flex items-center justify-center text-blue-600 text-xl font-bold">
+            {(emp.name || '?')[0]}
+          </div>
+          <div>
+            <div className="text-lg font-bold text-slate-800">{emp.name}</div>
+            <div className="text-sm text-slate-500">{emp.code} · {emp.department} · {emp.designation}</div>
+            <div className="flex gap-2 mt-1">
+              <span className={clsx('text-xs px-2 py-0.5 rounded-full font-medium',
+                emp.status === 'Active' ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'
+              )}>{emp.status || 'Active'}</span>
+              <span className="text-xs px-2 py-0.5 rounded-full bg-blue-50 text-blue-700">{emp.employment_type || 'Permanent'}</span>
+            </div>
+          </div>
+        </div>
+
+        {/* Tabs */}
+        <div className="flex gap-1 border-b">
+          {PROFILE_TABS.map(t => (
+            <button key={t.id} onClick={() => setActiveTab(t.id)}
+              className={clsx('px-3 py-2 text-sm font-medium border-b-2 transition-colors',
+                activeTab === t.id ? 'border-blue-600 text-blue-600' : 'border-transparent text-slate-500 hover:text-slate-700'
+              )}>
+              {t.label}
+            </button>
+          ))}
+        </div>
+
+        {/* Personal Info */}
+        {activeTab === 'info' && (
+          <div className="grid grid-cols-2 gap-3 text-sm">
+            {[
+              ['Father Name', emp.father_name],
+              ['DOB', emp.dob],
+              ['Gender', emp.gender],
+              ['Blood Group', emp.blood_group],
+              ['Marital Status', emp.marital_status],
+              ['Spouse Name', emp.spouse_name],
+              ['Phone', emp.phone],
+              ['Email', emp.email],
+              ['Aadhar', emp.aadhar],
+              ['PAN', emp.pan],
+              ['Emergency Contact', emp.emergency_contact_name],
+              ['Emergency Phone', emp.emergency_contact_phone],
+              ['Current Address', emp.address_current],
+              ['Permanent Address', emp.address_permanent],
+              ['Qualification', emp.qualification],
+              ['Category', emp.category],
+            ].map(([label, val]) => (
+              <div key={label} className="flex flex-col">
+                <span className="text-xs text-slate-400">{label}</span>
+                <span className="text-slate-700 font-medium">{val || '—'}</span>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {/* Employment */}
+        {activeTab === 'employment' && (
+          <div className="space-y-4">
+            <div className="grid grid-cols-2 gap-3 text-sm">
+              {[
+                ['Date of Joining', emp.date_of_joining],
+                ['Company', emp.company],
+                ['Department', emp.department],
+                ['Designation', emp.designation],
+                ['Shift', emp.shift_code || 'DAY'],
+                ['Employment Type', emp.employment_type],
+                ['Weekly Off', ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'][emp.weekly_off_day || 0]],
+                ['PF Number', emp.pf_number],
+                ['UAN', emp.uan],
+                ['ESI Number', emp.esi_number],
+                ['Bank Account', emp.bank_account || emp.account_number],
+                ['Bank', emp.bank_name],
+                ['IFSC', emp.ifsc || emp.ifsc_code],
+                ['Probation End', emp.probation_end_date],
+                ['Confirmation Date', emp.confirmation_date],
+                ['Previous Employer', emp.previous_employer],
+              ].map(([label, val]) => (
+                <div key={label} className="flex flex-col">
+                  <span className="text-xs text-slate-400">{label}</span>
+                  <span className="text-slate-700 font-medium font-mono">{val || '—'}</span>
+                </div>
+              ))}
+            </div>
+            {emp.salaryStructure && (
+              <div className="bg-slate-50 rounded-xl p-3">
+                <h4 className="text-xs font-bold text-slate-500 uppercase mb-2">Current Salary Structure</h4>
+                <div className="grid grid-cols-3 gap-2 text-sm">
+                  <div><span className="text-slate-400 text-xs">Gross</span><div className="font-bold">{fmtINR(emp.salaryStructure.gross_salary || 0)}</div></div>
+                  <div><span className="text-slate-400 text-xs">Basic</span><div>{fmtINR(emp.salaryStructure.basic || 0)}</div></div>
+                  <div><span className="text-slate-400 text-xs">HRA</span><div>{fmtINR(emp.salaryStructure.hra || 0)}</div></div>
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* Attendance Calendar */}
+        {activeTab === 'attendance' && (
+          <div>
+            <CalendarView employeeCode={employee.code} month={selectedMonth} year={selectedYear} />
+          </div>
+        )}
+
+        {/* Documents */}
+        {activeTab === 'documents' && (
+          <div className="space-y-3">
+            <div className="flex gap-2 items-end">
+              <div>
+                <label className="label">Type</label>
+                <select value={docType} onChange={e => setDocType(e.target.value)} className="select text-sm w-40">
+                  {DOC_TYPES.map(t => <option key={t}>{t}</option>)}
+                </select>
+              </div>
+              <div className="flex-1">
+                <label className="label">File</label>
+                <input type="file" ref={fileRef} className="input text-sm" />
+              </div>
+              <button onClick={handleUpload} disabled={uploadMutation.isPending} className="btn-primary text-sm">
+                {uploadMutation.isPending ? 'Uploading...' : 'Upload'}
+              </button>
+            </div>
+
+            {docs.length === 0 ? (
+              <div className="text-center py-6 text-slate-400 text-sm">No documents uploaded yet</div>
+            ) : (
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="border-b text-xs text-slate-500">
+                    <th className="py-1 text-left">Type</th>
+                    <th className="py-1 text-left">File Name</th>
+                    <th className="py-1 text-right">Size</th>
+                    <th className="py-1 text-left">Uploaded</th>
+                    <th className="py-1">Actions</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {docs.map(d => (
+                    <tr key={d.id} className="border-b border-slate-100">
+                      <td className="py-1.5"><span className="bg-slate-100 px-2 py-0.5 rounded text-xs">{d.document_type}</span></td>
+                      <td className="py-1.5 font-medium">{d.file_name}</td>
+                      <td className="py-1.5 text-right text-slate-400">{d.file_size ? `${(d.file_size / 1024).toFixed(0)} KB` : '—'}</td>
+                      <td className="py-1.5 text-slate-400 text-xs">{d.created_at?.split('T')[0]}</td>
+                      <td className="py-1.5">
+                        <button onClick={() => deleteMutation.mutate(d.id)}
+                          className="text-red-500 text-xs hover:text-red-700">Delete</button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+          </div>
+        )}
+
+        {/* Loans */}
+        {activeTab === 'loans' && (
+          <div>
+            {loans.length === 0 ? (
+              <div className="text-center py-6 text-slate-400 text-sm">No loans found</div>
+            ) : (
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="border-b text-xs text-slate-500">
+                    <th className="py-1 text-left">Type</th>
+                    <th className="py-1 text-right">Principal</th>
+                    <th className="py-1 text-right"><Abbr code="EMI">EMI</Abbr></th>
+                    <th className="py-1 text-center">Tenure</th>
+                    <th className="py-1 text-right">Recovered</th>
+                    <th className="py-1">Status</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {loans.map(l => (
+                    <tr key={l.id} className="border-b border-slate-100">
+                      <td className="py-1.5 font-medium">{l.loan_type}</td>
+                      <td className="py-1.5 text-right font-mono">{fmtINR(l.principal_amount)}</td>
+                      <td className="py-1.5 text-right font-mono">{fmtINR(l.emi_amount)}</td>
+                      <td className="py-1.5 text-center">{l.tenure_months}m ({l.paidEmis || 0}/{l.tenure_months})</td>
+                      <td className="py-1.5 text-right font-mono text-green-600">{fmtINR(l.totalRecovered || 0)}</td>
+                      <td className="py-1.5">
+                        <span className={clsx('text-xs px-2 py-0.5 rounded-full',
+                          l.status === 'Active' ? 'bg-green-100 text-green-700' :
+                          l.status === 'Completed' ? 'bg-blue-100 text-blue-700' :
+                          'bg-slate-100 text-slate-600'
+                        )}>{l.status}</span>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+          </div>
+        )}
+      </div>
+    </Modal>
+  )
+}
+
 export default function Employees() {
   const { selectedMonth, selectedYear } = useAppStore()
   const [search, setSearch] = useState('')
   const [deptFilter, setDeptFilter] = useState('')
   const [editEmp, setEditEmp] = useState(null)
   const [salaryEmp, setSalaryEmp] = useState(null)
+  const [profileEmp, setProfileEmp] = useState(null)
   const [sortField, setSortField] = useState('name')
   const [sortDir, setSortDir] = useState('asc')
 
@@ -349,8 +617,9 @@ export default function Employees() {
                     <td className="text-center">{e.esi_applicable !== 0 ? <span className="text-green-500 text-xs">✓</span> : <span className="text-slate-300 text-xs">—</span>}</td>
                     <td>
                       <div className="flex gap-1.5">
+                        <button onClick={() => setProfileEmp(e)} className="text-xs py-0.5 px-2 bg-blue-50 text-blue-700 rounded hover:bg-blue-100 border border-blue-200">Profile</button>
                         <button onClick={() => setEditEmp(e)} className="btn-secondary text-xs py-0.5 px-2">Edit</button>
-                        <button onClick={() => setSalaryEmp(e)} className="text-xs py-0.5 px-2 bg-brand-50 text-brand-600 rounded hover:bg-brand-100 border border-brand-200">₹ Salary</button>
+                        <button onClick={() => setSalaryEmp(e)} className="text-xs py-0.5 px-2 bg-brand-50 text-brand-600 rounded hover:bg-brand-100 border border-brand-200">₹</button>
                       </div>
                     </td>
                   </tr>
@@ -363,6 +632,7 @@ export default function Employees() {
 
       {editEmp && <EditEmployeeModal employee={editEmp} onClose={() => setEditEmp(null)} />}
       {salaryEmp && <SalaryModal employee={salaryEmp} onClose={() => setSalaryEmp(null)} />}
+      {profileEmp && <EmployeeProfileModal employee={profileEmp} onClose={() => setProfileEmp(null)} />}
     </div>
   )
 }

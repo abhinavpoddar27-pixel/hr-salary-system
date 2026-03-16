@@ -73,6 +73,10 @@ export const getLeaveBalances = (code, year) => api.get(`/employees/${code}/leav
 export const updateEmployeeLeaves = (code, data) => api.put(`/employees/${code}/leaves`, data)
 export const updateLeaveBalance = (code, data) => api.put(`/employees/${code}/leaves`, data)
 export const getDepartments = () => api.get('/employees/meta/departments')
+export const getEmployeeDocuments = (code) => api.get(`/employees/${code}/documents`)
+export const uploadEmployeeDocument = (code, formData) => api.post(`/employees/${code}/documents`, formData, { headers: { 'Content-Type': 'multipart/form-data' } })
+export const downloadEmployeeDocument = (id) => api.get(`/employees/documents/${id}/download`, { responseType: 'blob' })
+export const deleteEmployeeDocument = (id) => api.delete(`/employees/documents/${id}`)
 
 // ── Payroll ────────────────────────────────────────────
 export const calculateDays = (data) => api.post('/payroll/calculate-days', data)
@@ -98,16 +102,46 @@ export const getOvertimeReport = (month, year) => api.get('/analytics/overtime',
 export const getWorkingHoursReport = (month, year) => api.get('/analytics/working-hours', { params: { month, year } })
 export const getDepartmentDeepDive = (dept, month, year) => api.get(`/analytics/department/${encodeURIComponent(dept)}`, { params: { month, year } })
 export const releaseHeldSalary = (code, month, year) => api.put(`/payroll/salary/${code}/hold-release`, { month, year })
+
+// ── Loans ────────────────────────────────────────────────
+export const getLoans = (params) => api.get('/loans', { params })
+export const getLoanTypes = () => api.get('/loans/types')
+export const getLoanStats = () => api.get('/loans/stats')
+export const getLoanDeductions = (month, year) => api.get('/loans/deductions', { params: { month, year } })
+export const createLoan = (data) => api.post('/loans', data)
+export const getLoanDetails = (id) => api.get(`/loans/${id}`)
+export const approveLoan = (id, data) => api.put(`/loans/${id}/approve`, data)
+export const rejectLoan = (id, data) => api.put(`/loans/${id}/reject`, data)
+export const closeLoan = (id, data) => api.put(`/loans/${id}/close`, data)
+export const getEmployeeLoans = (code) => api.get(`/loans/employee/${code}`)
+export const processLoanDeductions = (month, year) => api.post('/loans/process-deductions', { month, year })
 export const getAlerts = (month, year, unread) => api.get('/analytics/alerts', { params: { month, year, ...(unread ? { unread: 'true' } : {}) } })
 export const generateAlerts = (month, year) => api.post('/analytics/alerts/generate', { month, year })
 export const markAlertRead = (id) => api.put(`/analytics/alerts/${id}/read`)
 export const getEmployeeProfile = (code) => api.get(`/analytics/employee/${code}`)
 
+// ── Leaves ────────────────────────────────────────────
+export const getLeaveApplications = (params) => api.get('/leaves', { params })
+export const submitLeaveApplication = (data) => api.post('/leaves', data)
+export const approveLeave = (id, data) => api.put(`/leaves/${id}/approve`, data)
+export const rejectLeave = (id, data) => api.put(`/leaves/${id}/reject`, data)
+export const getLeaveSummary = (params) => api.get('/leaves/summary', { params })
+
+// ── Notifications ────────────────────────────────────────
+export const getNotifications = (unread) => api.get('/notifications', { params: unread ? { unread: 'true' } : {} })
+export const markNotificationRead = (id) => api.put(`/notifications/${id}/read`)
+export const markAllNotificationsRead = () => api.put('/notifications/read-all')
+export const generateNotifications = () => api.post('/notifications/generate')
+
+// ── Employee Lifecycle ────────────────────────────────────
+export const getLifecycleEvents = (code) => api.get(`/lifecycle/employee/${code}`)
+export const addLifecycleEvent = (data) => api.post('/lifecycle', data)
+
 // ── Reports ────────────────────────────────────────────
 export const getAttendanceSummaryReport = (month, year, company) => api.get('/reports/attendance-summary', { params: { month, year, company } })
 export const getMissPunchReport = (month, year) => api.get('/reports/miss-punch-report', { params: { month, year } })
 export const getLateComingReport = (month, year) => api.get('/reports/late-coming', { params: { month, year } })
-export const getOvertimeReport = (month, year) => api.get('/reports/overtime', { params: { month, year } })
+export const getOvertimeReportData = (month, year) => api.get('/reports/overtime', { params: { month, year } })
 export const getPFStatement = (month, year) => api.get('/reports/pf-statement', { params: { month, year } })
 export const getESIStatement = (month, year) => api.get('/reports/esi-statement', { params: { month, year } })
 export const getBankTransferSheet = (month, year, company) => api.get('/reports/bank-transfer', { params: { month, year, company } })

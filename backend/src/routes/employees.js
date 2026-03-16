@@ -1,6 +1,33 @@
 const express = require('express');
 const router = express.Router();
+const path = require('path');
+const fs = require('fs');
+const multer = require('multer');
 const { getDb } = require('../database/db');
+
+// Document upload directory
+const DOCS_DIR = process.env.DOCS_DIR || path.join(__dirname, '..', '..', 'uploads', 'documents');
+if (!fs.existsSync(DOCS_DIR)) fs.mkdirSync(DOCS_DIR, { recursive: true });
+
+const docUpload = multer({
+  storage: multer.diskStorage({
+    destination: (req, file, cb) => {
+      const empDir = path.join(DOCS_DIR, req.params.code);
+      if (!fs.existsSync(empDir)) fs.mkdirSync(empDir, { recursive: true });
+      cb(null, empDir);
+    },
+    filename: (req, file, cb) => {
+      const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E3);
+      cb(null, uniqueSuffix + '-' + file.originalname);
+    }
+  }),
+  limits: { fileSize: 10 * 1024 * 1024 }, // 10MB
+  fileFilter: (req, file, cb) => {
+    const allowed = ['.pdf', '.jpg', '.jpeg', '.png', '.doc', '.docx', '.xls', '.xlsx'];
+    const ext = path.extname(file.originalname).toLowerCase();
+    cb(null, allowed.includes(ext));
+  }
+});
 
 // GET all employees
 router.get('/', (req, res) => {
@@ -81,7 +108,19 @@ router.put('/:code', (req, res) => {
   const emp = db.prepare('SELECT * FROM employees WHERE code = ?').get(code);
   if (!emp) return res.status(404).json({ success: false, error: 'Employee not found' });
 
-  const allowedFields = ['name', 'father_name', 'dob', 'gender', 'department', 'designation', 'company', 'employment_type', 'contractor_group', 'date_of_joining', 'date_of_exit', 'exit_reason', 'default_shift_id', 'shift_code', 'weekly_off_day', 'bank_account', 'account_number', 'ifsc', 'ifsc_code', 'bank_name', 'pf_number', 'uan', 'esi_number', 'aadhar', 'pan', 'phone', 'email', 'status', 'is_data_complete'];
+  const allowedFields = [
+    'name', 'father_name', 'dob', 'gender', 'department', 'designation', 'company',
+    'employment_type', 'contractor_group', 'date_of_joining', 'date_of_exit', 'exit_reason',
+    'default_shift_id', 'shift_code', 'weekly_off_day',
+    'bank_account', 'account_number', 'ifsc', 'ifsc_code', 'bank_name',
+    'pf_number', 'uan', 'esi_number', 'aadhar', 'pan', 'phone', 'email',
+    'status', 'is_data_complete',
+    // Enhanced fields
+    'blood_group', 'emergency_contact_name', 'emergency_contact_phone',
+    'address_current', 'address_permanent', 'marital_status', 'spouse_name',
+    'qualification', 'experience_years', 'previous_employer',
+    'probation_end_date', 'confirmation_date', 'category', 'notes'
+  ];
 
   const setClauses = [];
   const params = [];
@@ -207,6 +246,81 @@ router.get('/meta/departments', (req, res) => {
   const db = getDb();
   const depts = db.prepare('SELECT DISTINCT department FROM employees WHERE department IS NOT NULL ORDER BY department').all();
   res.json({ success: true, data: depts.map(d => d.department) });
+});
+
+// ── Document Management ─────────────────────────────────
+
+/**
+ * GET /api/employees/:code/documents
+ */
+router.get('/:code/documents', (req, res) => {
+  const db = getDb();
+  const docs = db.prepare(`
+    SELECT * FROM employee_documents WHERE employee_code = ? ORDER BY created_at DESC
+  `).all(req.params.code);
+  res.json({ success: true, data: docs });
+});
+
+/**
+ * POST /api/employees/:code/documents
+ * Upload a document for an employee
+ */
+router.post('/:code/documents', docUpload.single('file'), (req, res) => {
+  const db = getDb();
+  const { code } = req.params;
+  const { documentType, remarks } = req.body;
+  const uploadedBy = req.user?.username || 'admin';
+
+  if (!req.file) return res.status(400).json({ success: false, error: 'No file uploaded' });
+
+  const emp = db.prepare('SELECT id FROM employees WHERE code = ?').get(code);
+  if (!emp) return res.status(404).json({ success: false, error: 'Employee not found' });
+
+  const result = db.prepare(`
+    INSERT INTO employee_documents (employee_id, employee_code, document_type, file_name, file_path, file_size, mime_type, uploaded_by, remarks)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(
+    emp.id, code, documentType || 'Other',
+    req.file.originalname, req.file.path,
+    req.file.size, req.file.mimetype,
+    uploadedBy, remarks || ''
+  );
+
+  res.json({ success: true, id: result.lastInsertRowid, message: 'Document uploaded' });
+});
+
+/**
+ * GET /api/employees/documents/:id/download
+ * Download a document
+ */
+router.get('/documents/:id/download', (req, res) => {
+  const db = getDb();
+  const doc = db.prepare('SELECT * FROM employee_documents WHERE id = ?').get(req.params.id);
+  if (!doc) return res.status(404).json({ success: false, error: 'Document not found' });
+
+  if (!fs.existsSync(doc.file_path)) {
+    return res.status(404).json({ success: false, error: 'File not found on disk' });
+  }
+
+  res.download(doc.file_path, doc.file_name);
+});
+
+/**
+ * DELETE /api/employees/documents/:id
+ * Delete a document
+ */
+router.delete('/documents/:id', (req, res) => {
+  const db = getDb();
+  const doc = db.prepare('SELECT * FROM employee_documents WHERE id = ?').get(req.params.id);
+  if (!doc) return res.status(404).json({ success: false, error: 'Document not found' });
+
+  // Remove file from disk
+  if (fs.existsSync(doc.file_path)) {
+    fs.unlinkSync(doc.file_path);
+  }
+
+  db.prepare('DELETE FROM employee_documents WHERE id = ?').run(req.params.id);
+  res.json({ success: true, message: 'Document deleted' });
 });
 
 module.exports = router;

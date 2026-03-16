@@ -3,6 +3,7 @@ import { Link, useNavigate } from 'react-router-dom'
 import { useAppStore } from '../../store/appStore'
 import { logout } from '../../utils/api'
 import { MONTH_OPTIONS, YEAR_OPTIONS, monthYearLabel } from '../../utils/formatters'
+import NotificationBell from './NotificationBell'
 import toast from 'react-hot-toast'
 
 export default function Header({ title }) {
@@ -42,15 +43,8 @@ export default function Header({ title }) {
         </select>
       </div>
 
-      {/* Alerts */}
-      <Link to="/alerts" className="relative p-2 text-slate-500 hover:text-slate-700 hover:bg-slate-100 rounded-lg">
-        <span className="text-lg">🔔</span>
-        {alertCount > 0 && (
-          <span className="absolute -top-0.5 -right-0.5 w-4 h-4 bg-red-500 text-white text-xs rounded-full flex items-center justify-center font-bold">
-            {alertCount > 9 ? '9+' : alertCount}
-          </span>
-        )}
-      </Link>
+      {/* Notifications */}
+      <NotificationBell />
 
       <div className="text-xs text-slate-400 border-l border-slate-200 pl-4 hidden sm:block">
         {monthYearLabel(selectedMonth, selectedYear)}
