@@ -5,6 +5,9 @@ import { getAttendanceRegister, updateAttendanceRecord, getEmployees } from '../
 import { useAppStore } from '../store/appStore'
 import PipelineProgress from '../components/pipeline/PipelineProgress'
 import { statusColor } from '../utils/formatters'
+import { Abbr, Tip } from '../components/ui/Tooltip'
+import AbbreviationLegend from '../components/ui/AbbreviationLegend'
+import CalendarView from '../components/ui/CalendarView'
 import clsx from 'clsx'
 
 function CellEditor({ record, onSave, onClose }) {
@@ -14,8 +17,8 @@ function CellEditor({ record, onSave, onClose }) {
   const [remark, setRemark] = useState(record.correction_remark || '')
 
   return (
-    <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50" onClick={onClose}>
-      <div className="bg-white rounded-xl p-5 w-80 shadow-xl" onClick={e => e.stopPropagation()}>
+    <div className="fixed inset-0 bg-black/40 backdrop-blur-sm flex items-center justify-center z-50 animate-fade-in" onClick={onClose}>
+      <div className="bg-white rounded-2xl p-5 w-80 shadow-glass-xl animate-scale-in" onClick={e => e.stopPropagation()}>
         <h3 className="font-bold text-slate-800 mb-3 text-sm">Edit: {record.employee_name} — {record.date}</h3>
         <div className="space-y-3">
           <div>
@@ -51,6 +54,7 @@ export default function AttendanceRegister() {
   const [selectedEmp, setSelectedEmp] = useState('')
   const [editRecord, setEditRecord] = useState(null)
   const [searchEmp, setSearchEmp] = useState('')
+  const [showCalendar, setShowCalendar] = useState(false)
 
   const { data: empsRes } = useQuery({ queryKey: ['employees'], queryFn: () => getEmployees({}), retry: 0 })
   const employees = empsRes?.data?.data || []
@@ -88,13 +92,21 @@ export default function AttendanceRegister() {
     return statusColor(status) || 'bg-slate-50 text-slate-400'
   }
 
+  // Count attendance stats
+  const presentDays = records.filter(r => (r.status_final || r.status_original) === 'P').length
+  const absentDays = records.filter(r => (r.status_final || r.status_original) === 'A').length
+  const halfDays = records.filter(r => (r.status_final || r.status_original) === '½P').length
+  const weekOffs = records.filter(r => ['WO', 'WOP', 'WO½P'].includes(r.status_final || r.status_original)).length
+
+  const selectedEmployee = employees.find(e => e.code === selectedEmp)
+
   return (
-    <div>
+    <div className="animate-fade-in">
       <PipelineProgress stageStatus={{ 1: 'done', 2: 'done', 3: 'done', 4: 'done', 5: 'active' }} />
-      <div className="p-6 space-y-4">
+      <div className="p-6 space-y-5 max-w-screen-xl">
         <div>
-          <h2 className="text-lg font-bold text-slate-800">Stage 5: Manual Corrections & Attendance Register</h2>
-          <p className="text-sm text-slate-500">Click any cell to edit. Green=OK, Yellow=Corrected, Red=Issue, Purple=Night shift, Grey=Week Off.</p>
+          <h2 className="section-title">Stage 5: Manual Corrections & Attendance Register</h2>
+          <p className="section-subtitle mt-1">Click any cell to edit. View daily attendance in grid or calendar format.</p>
         </div>
 
         <div className="flex gap-3">
@@ -102,7 +114,7 @@ export default function AttendanceRegister() {
             <label className="label">Select Employee</label>
             <input type="search" placeholder="Search by name or code..." value={searchEmp} onChange={e => setSearchEmp(e.target.value)} className="input mb-1" />
             {searchEmp && filteredEmps.length > 0 && (
-              <div className="border border-slate-200 rounded-lg max-h-40 overflow-y-auto bg-white shadow-lg">
+              <div className="border border-slate-200 rounded-lg max-h-40 overflow-y-auto bg-white shadow-lg z-10 relative">
                 {filteredEmps.slice(0, 10).map(e => (
                   <button key={e.code} onClick={() => { setSelectedEmp(e.code); setSearchEmp('') }} className="w-full text-left px-3 py-2 hover:bg-slate-50 text-sm">
                     <span className="font-medium">{e.name}</span> <span className="text-slate-400">{e.code}</span> <span className="text-xs text-slate-400">{e.department}</span>
@@ -114,50 +126,110 @@ export default function AttendanceRegister() {
         </div>
 
         {selectedEmp && (
-          <div className="card overflow-hidden">
-            <div className="card-header">
-              <h3 className="font-semibold text-slate-700">
-                {employees.find(e => e.code === selectedEmp)?.name} — {['','Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'][selectedMonth]} {selectedYear}
-              </h3>
-              <div className="flex gap-2 text-xs">
-                <span className="flex items-center gap-1"><span className="w-3 h-3 rounded bg-green-200 inline-block" />Present</span>
-                <span className="flex items-center gap-1"><span className="w-3 h-3 rounded bg-red-200 inline-block" />Absent</span>
-                <span className="flex items-center gap-1"><span className="w-3 h-3 rounded bg-purple-200 inline-block" />Night</span>
-                <span className="flex items-center gap-1"><span className="w-3 h-3 rounded bg-amber-200 inline-block" />Corrected</span>
+          <>
+            {/* Attendance Summary Stats */}
+            <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
+              <div className="stat-card border-l-4 border-l-green-400">
+                <span className="text-xs font-semibold text-slate-400 uppercase tracking-wider"><Abbr code="P">Present</Abbr></span>
+                <span className="text-2xl font-bold text-green-700">{presentDays}</span>
+              </div>
+              <div className="stat-card border-l-4 border-l-red-400">
+                <span className="text-xs font-semibold text-slate-400 uppercase tracking-wider"><Abbr code="A">Absent</Abbr></span>
+                <span className="text-2xl font-bold text-red-600">{absentDays}</span>
+              </div>
+              <div className="stat-card border-l-4 border-l-yellow-400">
+                <span className="text-xs font-semibold text-slate-400 uppercase tracking-wider"><Abbr code="½P">Half Day</Abbr></span>
+                <span className="text-2xl font-bold text-yellow-600">{halfDays}</span>
+              </div>
+              <div className="stat-card border-l-4 border-l-slate-400">
+                <span className="text-xs font-semibold text-slate-400 uppercase tracking-wider"><Abbr code="WO">Week Off</Abbr></span>
+                <span className="text-2xl font-bold text-slate-600">{weekOffs}</span>
+              </div>
+              <div className="stat-card border-l-4 border-l-blue-400">
+                <span className="text-xs font-semibold text-slate-400 uppercase tracking-wider">Total Days</span>
+                <span className="text-2xl font-bold text-blue-600">{daysInMonth}</span>
               </div>
             </div>
-            <div className="overflow-x-auto p-4">
-              {isLoading ? (
-                <div className="text-center py-6 text-slate-400">Loading...</div>
-              ) : (
-                <div className="grid gap-1" style={{ gridTemplateColumns: `repeat(${daysInMonth}, minmax(52px, 1fr))` }}>
-                  {days.map(d => {
-                    const rec = recordByDay[d]
-                    const dow = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'][new Date(`${selectedYear}-${String(selectedMonth).padStart(2,'0')}-${String(d).padStart(2,'0')}`).getDay()]
-                    const status = rec ? (rec.status_final || rec.status_original) : '?'
-                    const isSun = dow === 'Sun'
 
-                    return (
-                      <div
-                        key={d}
-                        onClick={() => rec && setEditRecord(rec)}
-                        className={clsx(
-                          'rounded-lg p-1.5 text-center text-xs cursor-pointer hover:ring-2 hover:ring-blue-400 transition-all min-h-[60px] flex flex-col',
-                          isSun ? 'bg-slate-100 text-slate-400' : cellClass(rec)
-                        )}
-                      >
-                        <div className="font-bold">{d}</div>
-                        <div className="text-xs opacity-70">{dow}</div>
-                        <div className="font-semibold mt-0.5">{status}</div>
-                        {rec?.in_time_final && <div className="text-xs opacity-70">{rec.in_time_final}</div>}
-                        {rec?.out_time_final && <div className="text-xs opacity-70">{rec.out_time_final}</div>}
-                      </div>
-                    )
-                  })}
-                </div>
-              )}
+            {/* Toggle between Grid and Calendar view */}
+            <div className="flex items-center gap-2">
+              <button
+                onClick={() => setShowCalendar(false)}
+                className={clsx('px-3 py-1.5 rounded-lg text-xs font-medium transition-all border',
+                  !showCalendar ? 'bg-blue-600 text-white border-blue-600' : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-50'
+                )}
+              >
+                Grid View
+              </button>
+              <button
+                onClick={() => setShowCalendar(true)}
+                className={clsx('px-3 py-1.5 rounded-lg text-xs font-medium transition-all border',
+                  showCalendar ? 'bg-blue-600 text-white border-blue-600' : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-50'
+                )}
+              >
+                📅 Calendar View
+              </button>
             </div>
-          </div>
+
+            {/* Calendar View */}
+            {showCalendar && (
+              <div className="card p-5 animate-slide-up">
+                <CalendarView employeeCode={selectedEmp} month={selectedMonth} year={selectedYear} />
+              </div>
+            )}
+
+            {/* Grid View */}
+            {!showCalendar && (
+              <div className="card overflow-hidden">
+                <div className="card-header flex items-center justify-between">
+                  <h3 className="font-semibold text-slate-700">
+                    {selectedEmployee?.name} — {['','Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'][selectedMonth]} {selectedYear}
+                  </h3>
+                  <div className="flex gap-2 text-xs">
+                    <span className="flex items-center gap-1"><span className="w-3 h-3 rounded bg-green-200 inline-block" /><Abbr code="P">Present</Abbr></span>
+                    <span className="flex items-center gap-1"><span className="w-3 h-3 rounded bg-red-200 inline-block" /><Abbr code="A">Absent</Abbr></span>
+                    <span className="flex items-center gap-1"><span className="w-3 h-3 rounded bg-purple-200 inline-block" />Night</span>
+                    <span className="flex items-center gap-1"><span className="w-3 h-3 rounded bg-amber-200 inline-block" />Corrected</span>
+                    <span className="flex items-center gap-1"><span className="w-3 h-3 rounded bg-slate-200 inline-block" /><Abbr code="WO">Week Off</Abbr></span>
+                  </div>
+                </div>
+                <div className="overflow-x-auto p-4">
+                  {isLoading ? (
+                    <div className="text-center py-6 text-slate-400">
+                      <div className="w-6 h-6 border-3 border-blue-200 border-t-blue-600 rounded-full animate-spin mx-auto mb-2" />
+                      Loading...
+                    </div>
+                  ) : (
+                    <div className="grid gap-1" style={{ gridTemplateColumns: `repeat(${daysInMonth}, minmax(52px, 1fr))` }}>
+                      {days.map(d => {
+                        const rec = recordByDay[d]
+                        const dow = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'][new Date(`${selectedYear}-${String(selectedMonth).padStart(2,'0')}-${String(d).padStart(2,'0')}`).getDay()]
+                        const status = rec ? (rec.status_final || rec.status_original) : '?'
+                        const isSun = dow === 'Sun'
+
+                        return (
+                          <div
+                            key={d}
+                            onClick={() => rec && setEditRecord(rec)}
+                            className={clsx(
+                              'rounded-lg p-1.5 text-center text-xs cursor-pointer hover:ring-2 hover:ring-blue-400 transition-all min-h-[60px] flex flex-col',
+                              isSun ? 'bg-slate-100 text-slate-400' : cellClass(rec)
+                            )}
+                          >
+                            <div className="font-bold">{d}</div>
+                            <div className="text-xs opacity-70">{dow}</div>
+                            <div className="font-semibold mt-0.5">{status}</div>
+                            {rec?.in_time_final && <div className="text-xs opacity-70">{rec.in_time_final}</div>}
+                            {rec?.out_time_final && <div className="text-xs opacity-70">{rec.out_time_final}</div>}
+                          </div>
+                        )
+                      })}
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
+          </>
         )}
 
         {!selectedEmp && (
@@ -166,6 +238,8 @@ export default function AttendanceRegister() {
             <p>Search for an employee to view their attendance register</p>
           </div>
         )}
+
+        <AbbreviationLegend keys={['P', 'A', 'WO', 'WOP', '½P', 'OT', 'Dept', 'Hrs', 'Emp', 'Att']} />
       </div>
 
       {editRecord && (

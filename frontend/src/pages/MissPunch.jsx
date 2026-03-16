@@ -74,6 +74,7 @@ export default function MissPunch() {
   const [sortField, setSortField] = useState('date')
   const [sortDir, setSortDir] = useState('asc')
   const [calendarEmployee, setCalendarEmployee] = useState(null)
+  const [filterDate, setFilterDate] = useState('')
 
   const { data: res, isLoading, refetch } = useQuery({
     queryKey: ['miss-punches', selectedMonth, selectedYear, filterDept, filterType, filterResolved],
@@ -81,7 +82,11 @@ export default function MissPunch() {
     retry: 0
   })
 
-  const filteredRecords = (res?.data?.data || []).filter(r => !filterType || r.miss_punch_type === filterType)
+  const filteredRecords = (res?.data?.data || []).filter(r => {
+    if (filterType && r.miss_punch_type !== filterType) return false
+    if (filterDate && r.date !== filterDate) return false
+    return true
+  })
   const summary = res?.data?.summary || {}
 
   // Sorting
@@ -182,6 +187,10 @@ export default function MissPunch() {
           <div>
             <label className="label"><Abbr code="Dept">Dept</Abbr></label>
             <input type="text" placeholder="Filter dept..." value={filterDept} onChange={e => setFilterDept(e.target.value)} className="input w-40" />
+          </div>
+          <div>
+            <label className="label">Date</label>
+            <input type="date" value={filterDate} onChange={e => setFilterDate(e.target.value)} className="input w-40" />
           </div>
           <div>
             <label className="label">Issue Type</label>

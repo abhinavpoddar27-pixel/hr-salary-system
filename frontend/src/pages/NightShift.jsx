@@ -5,6 +5,9 @@ import { getNightShifts, confirmNightShift, rejectNightShift } from '../utils/ap
 import { useAppStore } from '../store/appStore'
 import PipelineProgress from '../components/pipeline/PipelineProgress'
 import { fmtDate } from '../utils/formatters'
+import { Abbr, Tip } from '../components/ui/Tooltip'
+import AbbreviationLegend from '../components/ui/AbbreviationLegend'
+import CalendarView from '../components/ui/CalendarView'
 import clsx from 'clsx'
 
 function ConfidenceBadge({ confidence }) {
@@ -16,6 +19,7 @@ function ConfidenceBadge({ confidence }) {
 export default function NightShift() {
   const { selectedMonth, selectedYear } = useAppStore()
   const [filter, setFilter] = useState('all')
+  const [calendarEmployee, setCalendarEmployee] = useState(null)
 
   const { data: res, isLoading, refetch } = useQuery({
     queryKey: ['night-shifts', selectedMonth, selectedYear],
@@ -44,30 +48,30 @@ export default function NightShift() {
   })
 
   return (
-    <div>
+    <div className="animate-fade-in">
       <PipelineProgress stageStatus={{ 1: 'done', 2: 'done', 3: 'done', 4: 'active' }} />
 
-      <div className="p-6 space-y-4 max-w-screen-xl">
+      <div className="p-6 space-y-5 max-w-screen-xl">
         <div>
-          <h2 className="text-lg font-bold text-slate-800">Stage 4: Night Shift Pairing</h2>
-          <p className="text-sm text-slate-500 mt-1">
-            The EESL system treats each calendar date independently. Workers who punch IN at ~20:00 and OUT next morning at ~08:00 are automatically paired here.
-            High-confidence pairs are auto-confirmed. Medium and low confidence pairs need your review.
+          <h2 className="section-title">Stage 4: Night Shift Pairing</h2>
+          <p className="section-subtitle mt-1">
+            Workers who punch IN at ~20:00 and OUT next morning at ~08:00 are automatically paired here.
+            High-confidence pairs are auto-confirmed. Medium and low pairs need your review.
           </p>
         </div>
 
         {/* Stats */}
         <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
           {[
-            { label: 'Total Pairs', value: summary.total || 0, color: 'bg-slate-50' },
-            { label: 'Auto-confirmed', value: summary.confirmed || 0, color: 'bg-green-50 text-green-700' },
-            { label: 'Needs Review', value: (summary.mediumConfidence || 0) + (summary.lowConfidence || 0), color: 'bg-yellow-50 text-yellow-700' },
-            { label: 'High Confidence', value: summary.highConfidence || 0, color: 'bg-green-50 text-green-600' },
-            { label: 'Low Confidence', value: summary.lowConfidence || 0, color: 'bg-red-50 text-red-600' },
+            { label: 'Total Pairs', value: summary.total || 0, color: 'slate' },
+            { label: 'Auto-confirmed', value: summary.confirmed || 0, color: 'green' },
+            { label: 'Needs Review', value: (summary.mediumConfidence || 0) + (summary.lowConfidence || 0), color: 'amber' },
+            { label: 'High Confidence', value: summary.highConfidence || 0, color: 'emerald' },
+            { label: 'Low Confidence', value: summary.lowConfidence || 0, color: 'red' },
           ].map(s => (
-            <div key={s.label} className={clsx('rounded-xl p-3 text-center', s.color, 'border border-slate-200')}>
-              <div className="text-xl font-bold">{s.value}</div>
-              <div className="text-xs mt-0.5">{s.label}</div>
+            <div key={s.label} className={clsx('stat-card border-l-4', `border-l-${s.color}-400`)}>
+              <span className="text-xs font-semibold text-slate-400 uppercase tracking-wider">{s.label}</span>
+              <span className={clsx('text-2xl font-bold', `text-${s.color}-700`)}>{s.value}</span>
             </div>
           ))}
         </div>
@@ -91,29 +95,51 @@ export default function NightShift() {
           ))}
         </div>
 
+        {/* Calendar Panel */}
+        {calendarEmployee && (
+          <div className="card p-5 animate-slide-up">
+            <div className="flex items-center justify-between mb-3">
+              <h3 className="text-sm font-bold text-slate-700">
+                Daily Attendance: {calendarEmployee.name} ({calendarEmployee.code})
+              </h3>
+              <button onClick={() => setCalendarEmployee(null)} className="btn-ghost text-xs">Close</button>
+            </div>
+            <CalendarView employeeCode={calendarEmployee.code} month={selectedMonth} year={selectedYear} />
+          </div>
+        )}
+
         {/* Pairs table */}
         <div className="card overflow-hidden">
+          <div className="card-header">
+            <span className="font-semibold text-slate-700">Night Shift Pairs — {filtered.length} records</span>
+          </div>
           <div className="overflow-x-auto">
-            <table className="w-full table-compact">
+            <table className="w-full table-compact text-xs">
               <thead>
                 <tr>
-                  <th>Employee</th>
-                  <th>Dept</th>
-                  <th>IN Date</th>
+                  <th><Abbr code="Emp">Employee</Abbr></th>
+                  <th><Abbr code="Dept">Dept</Abbr></th>
+                  <th><Tip text="Date when the night shift IN punch was recorded">IN Date</Tip></th>
                   <th>IN Time</th>
-                  <th>OUT Date</th>
+                  <th><Tip text="Date when the morning OUT punch was recorded (next day)">OUT Date</Tip></th>
                   <th>OUT Time</th>
-                  <th>Hours</th>
-                  <th>Confidence</th>
+                  <th><Tip text="Total hours worked in the night shift"><Abbr code="Hrs">Hours</Abbr></Tip></th>
+                  <th><Tip text="System confidence in the IN/OUT pairing: High=auto-confirmed, Medium/Low=needs review">Confidence</Tip></th>
                   <th>Status</th>
                   <th>Action</th>
+                  <th>Cal</th>
                 </tr>
               </thead>
               <tbody>
                 {isLoading ? (
-                  <tr><td colSpan={10} className="text-center py-8 text-slate-400">Loading night shift data...</td></tr>
+                  <tr><td colSpan={11} className="text-center py-12 text-slate-400">
+                    <div className="flex flex-col items-center gap-2">
+                      <div className="w-6 h-6 border-3 border-purple-200 border-t-purple-600 rounded-full animate-spin" />
+                      <span className="text-sm">Loading night shift data...</span>
+                    </div>
+                  </td></tr>
                 ) : filtered.length === 0 ? (
-                  <tr><td colSpan={10} className="text-center py-8 text-slate-400">
+                  <tr><td colSpan={11} className="text-center py-12 text-slate-400">
                     {pairs.length === 0 ? 'No night shift data. Import attendance first.' : 'No records in this filter.'}
                   </td></tr>
                 ) : (
@@ -124,12 +150,12 @@ export default function NightShift() {
                     )}>
                       <td>
                         <div className="font-medium text-sm">{pair.employee_name || pair.employee_code}</div>
-                        <div className="text-xs text-slate-400">{pair.employee_code}</div>
+                        <div className="text-xs text-slate-400 font-mono">{pair.employee_code}</div>
                       </td>
-                      <td className="text-slate-600 text-xs">{pair.department}</td>
-                      <td className="font-mono text-sm">{fmtDate(pair.in_date)}</td>
+                      <td className="text-slate-600">{pair.department}</td>
+                      <td className="font-mono">{fmtDate(pair.in_date)}</td>
                       <td className="font-mono text-purple-700 font-medium">{pair.in_time}</td>
-                      <td className="font-mono text-sm">{fmtDate(pair.out_date)}</td>
+                      <td className="font-mono">{fmtDate(pair.out_date)}</td>
                       <td className="font-mono text-purple-700 font-medium">{pair.out_time}</td>
                       <td className={clsx('font-bold', pair.calculated_hours >= 10 ? 'text-green-600' : 'text-yellow-600')}>
                         {pair.calculated_hours?.toFixed(1)}h
@@ -151,6 +177,15 @@ export default function NightShift() {
                           <button onClick={() => rejectMutation.mutate(pair.id)} className="text-xs text-red-400 hover:text-red-600">Undo</button>
                         )}
                       </td>
+                      <td>
+                        <button
+                          onClick={() => setCalendarEmployee({ code: pair.employee_code, name: pair.employee_name || pair.employee_code })}
+                          className="btn-ghost text-xs px-2 py-1 text-blue-600"
+                          title="View daily attendance"
+                        >
+                          📅
+                        </button>
+                      </td>
                     </tr>
                   ))
                 )}
@@ -160,7 +195,7 @@ export default function NightShift() {
         </div>
 
         {summary.mediumConfidence === 0 && summary.lowConfidence === 0 && pairs.length > 0 && (
-          <div className="card p-4 bg-green-50 border-green-200 flex items-center gap-3">
+          <div className="card p-4 bg-green-50 border-green-200 flex items-center gap-3 animate-slide-up">
             <span className="text-2xl">🌙</span>
             <div>
               <p className="font-semibold text-green-700">All night shifts confirmed!</p>
@@ -168,6 +203,8 @@ export default function NightShift() {
             </div>
           </div>
         )}
+
+        <AbbreviationLegend keys={['P', 'A', 'WO', 'WOP', '½P', 'Dept', 'Hrs', 'Emp', 'Att']} />
       </div>
     </div>
   )

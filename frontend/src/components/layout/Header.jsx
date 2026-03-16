@@ -7,7 +7,12 @@ import NotificationBell from './NotificationBell'
 import toast from 'react-hot-toast'
 
 export default function Header({ title }) {
-  const { selectedMonth, selectedYear, setMonthYear, alertCount, user, clearAuth } = useAppStore()
+  const {
+    selectedMonth, selectedYear, setMonthYear,
+    dateRangeMode, dateRangeStart, dateRangeEnd,
+    setDateRangeMode, setDateRange,
+    alertCount, user, clearAuth
+  } = useAppStore()
   const navigate = useNavigate()
   const [showUserMenu, setShowUserMenu] = useState(false)
 
@@ -24,30 +29,76 @@ export default function Header({ title }) {
         <h1 className="text-base font-semibold text-slate-800">{title || 'HR & Salary System'}</h1>
       </div>
 
-      {/* Month/Year selector */}
-      <div className="flex items-center gap-2 bg-slate-50 border border-slate-200 rounded-lg px-3 py-1.5">
-        <span className="text-xs text-slate-500 font-medium">Period:</span>
-        <select
-          value={selectedMonth}
-          onChange={e => setMonthYear(parseInt(e.target.value), selectedYear)}
-          className="text-sm font-medium text-slate-700 bg-transparent border-none focus:outline-none cursor-pointer"
-        >
-          {MONTH_OPTIONS.map(m => <option key={m.value} value={m.value}>{m.label}</option>)}
-        </select>
-        <select
-          value={selectedYear}
-          onChange={e => setMonthYear(selectedMonth, parseInt(e.target.value))}
-          className="text-sm font-medium text-slate-700 bg-transparent border-none focus:outline-none cursor-pointer"
-        >
-          {YEAR_OPTIONS.map(y => <option key={y.value} value={y.value}>{y.label}</option>)}
-        </select>
+      {/* Period selector with mode toggle */}
+      <div className="flex items-center gap-2">
+        {/* Mode toggle */}
+        <div className="flex bg-slate-100 rounded-lg p-0.5">
+          <button
+            onClick={() => setDateRangeMode('month')}
+            className={`px-2 py-1 text-xs font-medium rounded-md transition-all ${
+              dateRangeMode === 'month' ? 'bg-white text-slate-800 shadow-sm' : 'text-slate-500 hover:text-slate-700'
+            }`}
+          >
+            Month
+          </button>
+          <button
+            onClick={() => setDateRangeMode('custom')}
+            className={`px-2 py-1 text-xs font-medium rounded-md transition-all ${
+              dateRangeMode === 'custom' ? 'bg-white text-slate-800 shadow-sm' : 'text-slate-500 hover:text-slate-700'
+            }`}
+          >
+            Custom
+          </button>
+        </div>
+
+        {dateRangeMode === 'month' ? (
+          <div className="flex items-center gap-2 bg-slate-50 border border-slate-200 rounded-lg px-3 py-1.5">
+            <span className="text-xs text-slate-500 font-medium">Period:</span>
+            <select
+              value={selectedMonth}
+              onChange={e => setMonthYear(parseInt(e.target.value), selectedYear)}
+              className="text-sm font-medium text-slate-700 bg-transparent border-none focus:outline-none cursor-pointer"
+            >
+              {MONTH_OPTIONS.map(m => <option key={m.value} value={m.value}>{m.label}</option>)}
+            </select>
+            <select
+              value={selectedYear}
+              onChange={e => setMonthYear(selectedMonth, parseInt(e.target.value))}
+              className="text-sm font-medium text-slate-700 bg-transparent border-none focus:outline-none cursor-pointer"
+            >
+              {YEAR_OPTIONS.map(y => <option key={y.value} value={y.value}>{y.label}</option>)}
+            </select>
+          </div>
+        ) : (
+          <div className="flex items-center gap-2 bg-slate-50 border border-slate-200 rounded-lg px-3 py-1.5">
+            <span className="text-xs text-slate-500 font-medium">From:</span>
+            <input
+              type="date"
+              value={dateRangeStart}
+              onChange={e => setDateRange(e.target.value, dateRangeEnd)}
+              className="text-sm font-medium text-slate-700 bg-transparent border-none focus:outline-none cursor-pointer"
+            />
+            <span className="text-xs text-slate-400">to</span>
+            <input
+              type="date"
+              value={dateRangeEnd}
+              onChange={e => setDateRange(dateRangeStart, e.target.value)}
+              className="text-sm font-medium text-slate-700 bg-transparent border-none focus:outline-none cursor-pointer"
+            />
+          </div>
+        )}
       </div>
 
       {/* Notifications */}
       <NotificationBell />
 
       <div className="text-xs text-slate-400 border-l border-slate-200 pl-4 hidden sm:block">
-        {monthYearLabel(selectedMonth, selectedYear)}
+        {dateRangeMode === 'month'
+          ? monthYearLabel(selectedMonth, selectedYear)
+          : dateRangeStart && dateRangeEnd
+            ? `${new Date(dateRangeStart + 'T12:00:00').toLocaleDateString('en-IN', { day: '2-digit', month: 'short' })} – ${new Date(dateRangeEnd + 'T12:00:00').toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })}`
+            : 'Select dates'
+        }
       </div>
 
       {/* User menu */}
@@ -80,13 +131,13 @@ export default function Header({ title }) {
                   onClick={() => { setShowUserMenu(false); navigate('/settings/policy') }}
                   className="w-full text-left px-4 py-2 text-sm text-slate-600 hover:bg-slate-50 flex items-center gap-2"
                 >
-                  ⚙️ Settings
+                  Settings
                 </button>
                 <button
                   onClick={() => { setShowUserMenu(false); handleLogout() }}
                   className="w-full text-left px-4 py-2 text-sm text-red-600 hover:bg-red-50 flex items-center gap-2"
                 >
-                  🚪 Sign out
+                  Sign out
                 </button>
               </div>
             </div>

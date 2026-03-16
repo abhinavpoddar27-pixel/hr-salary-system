@@ -32,6 +32,13 @@ export const useAppStore = create(
       setSelectedYear: (year) => set({ selectedYear: year }),
       setMonthYear: (month, year) => set({ selectedMonth: month, selectedYear: year }),
 
+      // ── Date range (for reports) ────────────────────────────
+      dateRangeMode: 'month', // 'month' | 'custom'
+      dateRangeStart: '',
+      dateRangeEnd: '',
+      setDateRangeMode: (mode) => set({ dateRangeMode: mode }),
+      setDateRange: (start, end) => set({ dateRangeStart: start, dateRangeEnd: end }),
+
       // ── Company filter ──────────────────────────────────────
       selectedCompany: '',
       setSelectedCompany: (company) => set({ selectedCompany: company }),
@@ -65,7 +72,10 @@ export const useAppStore = create(
       partialize: (state) => ({
         selectedMonth: state.selectedMonth,
         selectedYear: state.selectedYear,
-        sidebarCollapsed: state.sidebarCollapsed
+        sidebarCollapsed: state.sidebarCollapsed,
+        dateRangeMode: state.dateRangeMode,
+        dateRangeStart: state.dateRangeStart,
+        dateRangeEnd: state.dateRangeEnd
         // Note: auth is handled via localStorage directly (token + user), not via persist
       })
     }
