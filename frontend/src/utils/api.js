@@ -1,0 +1,127 @@
+import axios from 'axios'
+import toast from 'react-hot-toast'
+
+const api = axios.create({
+  baseURL: '/api',
+  timeout: 60000,
+  withCredentials: true
+})
+
+// Attach JWT token from localStorage to every request
+api.interceptors.request.use(config => {
+  const token = localStorage.getItem('hr_token')
+  if (token) config.headers['Authorization'] = `Bearer ${token}`
+  return config
+})
+
+// Handle responses: 401 → redirect to login; others → toast error
+api.interceptors.response.use(
+  res => res,
+  err => {
+    if (err.response?.status === 401) {
+      // Don't toast on auth errors — just redirect to login
+      localStorage.removeItem('hr_token')
+      localStorage.removeItem('hr_user')
+      if (!window.location.pathname.includes('/login')) {
+        window.location.href = '/login'
+      }
+      return Promise.reject(err)
+    }
+    const msg = err.response?.data?.error || err.message || 'Request failed'
+    toast.error(msg)
+    return Promise.reject(err)
+  }
+)
+
+// ── Auth ────────────────────────────────────────────────
+export const login = (username, password) => api.post('/auth/login', { username, password })
+export const logout = () => api.post('/auth/logout')
+export const getMe = () => api.get('/auth/me')
+export const changePassword = (data) => api.post('/auth/change-password', data)
+export const getUsers = () => api.get('/auth/users')
+export const createUser = (data) => api.post('/auth/users', data)
+
+// ── Import ──────────────────────────────────────────────
+export const uploadFiles = (formData) => api.post('/import/upload', formData, { headers: { 'Content-Type': 'multipart/form-data' } })
+export const getImportHistory = () => api.get('/import/history')
+export const getImportSummary = (month, year) => api.get(`/import/summary/${month}/${year}`)
+export const markStageComplete = (stage, month, year, company) => api.post(`/import/stage/${stage}/complete`, { month, year, company })
+export const deleteImport = (id) => api.delete(`/import/${id}`)
+
+// ── Attendance ─────────────────────────────────────────
+export const getProcessedRecords = (params) => api.get('/attendance/processed', { params })
+export const getMissPunches = (params) => api.get('/attendance/miss-punches', { params })
+export const resolveMissPunch = (id, data) => api.post(`/attendance/miss-punches/${id}/resolve`, data)
+export const bulkResolveMissPunches = (data) => api.post('/attendance/miss-punches/bulk-resolve', data)
+export const getNightShifts = (params) => api.get('/attendance/night-shifts', { params })
+export const confirmNightShift = (id) => api.post(`/attendance/night-shifts/${id}/confirm`)
+export const rejectNightShift = (id) => api.post(`/attendance/night-shifts/${id}/reject`)
+export const updateAttendanceRecord = (id, data) => api.put(`/attendance/record/${id}`, data)
+export const getAttendanceRegister = (params) => api.get('/attendance/register', { params })
+export const getValidationStatus = (params) => api.get('/attendance/validation-status', { params })
+
+// ── Employees ──────────────────────────────────────────
+export const getEmployees = (params) => api.get('/employees', { params })
+export const getEmployee = (code) => api.get(`/employees/${code}`)
+export const createEmployee = (data) => api.post('/employees', data)
+export const updateEmployee = (code, data) => api.put(`/employees/${code}`, data)
+export const updateSalaryStructure = (code, data) => api.put(`/employees/${code}/salary`, data)
+export const getEmployeeLeaves = (code, year) => api.get(`/employees/${code}/leaves`, { params: { year } })
+export const getLeaveBalances = (code, year) => api.get(`/employees/${code}/leaves`, { params: { year } })
+export const updateEmployeeLeaves = (code, data) => api.put(`/employees/${code}/leaves`, data)
+export const updateLeaveBalance = (code, data) => api.put(`/employees/${code}/leaves`, data)
+export const getDepartments = () => api.get('/employees/meta/departments')
+
+// ── Payroll ────────────────────────────────────────────
+export const calculateDays = (data) => api.post('/payroll/calculate-days', data)
+export const getDayCalculations = (params) => api.get('/payroll/day-calculations', { params })
+export const getDayCalculation = (code, month, year) => api.get(`/payroll/day-calculations/${code}`, { params: { month, year } })
+export const computeSalary = (data) => api.post('/payroll/compute-salary', data)
+export const getSalaryRegister = (month, year, company) => api.get('/payroll/salary-register', { params: { month, year, company } })
+export const getPayslip = (code, month, year) => api.get(`/payroll/payslip/${code}`, { params: { month, year } })
+export const updateManualDeductions = (code, data) => api.put(`/payroll/salary/${code}/manual-deductions`, data)
+export const finaliseSalary = (data) => api.post('/payroll/finalise', data)
+
+// ── Analytics ──────────────────────────────────────────
+export const getOrgOverview = (month, year) => api.get('/analytics/overview', { params: { month, year } })
+export const getHeadcountTrend = (month, year, months) => api.get('/analytics/headcount-trend', { params: { month, year, months } })
+export const getAttritionData = (month, year) => api.get('/analytics/attrition', { params: { month, year } })
+export const getAttrition = (month, year) => api.get('/analytics/attrition', { params: { month, year } })
+export const getChronicAbsentees = (month, year) => api.get('/analytics/absentees', { params: { month, year } })
+export const getAbsentees = (month, year) => api.get('/analytics/absentees', { params: { month, year } })
+export const getPunctualityReport = (month, year) => api.get('/analytics/punctuality', { params: { month, year } })
+export const getDepartmentStats = (month, year) => api.get('/analytics/departments', { params: { month, year } })
+export const getAttendanceHeatmap = (month, year) => api.get('/analytics/heatmap', { params: { month, year } })
+export const getAlerts = (month, year, unread) => api.get('/analytics/alerts', { params: { month, year, ...(unread ? { unread: 'true' } : {}) } })
+export const generateAlerts = (month, year) => api.post('/analytics/alerts/generate', { month, year })
+export const markAlertRead = (id) => api.put(`/analytics/alerts/${id}/read`)
+export const getEmployeeProfile = (code) => api.get(`/analytics/employee/${code}`)
+
+// ── Reports ────────────────────────────────────────────
+export const getAttendanceSummaryReport = (month, year, company) => api.get('/reports/attendance-summary', { params: { month, year, company } })
+export const getMissPunchReport = (month, year) => api.get('/reports/miss-punch-report', { params: { month, year } })
+export const getLateComingReport = (month, year) => api.get('/reports/late-coming', { params: { month, year } })
+export const getOvertimeReport = (month, year) => api.get('/reports/overtime', { params: { month, year } })
+export const getPFStatement = (month, year) => api.get('/reports/pf-statement', { params: { month, year } })
+export const getESIStatement = (month, year) => api.get('/reports/esi-statement', { params: { month, year } })
+export const getBankTransferSheet = (month, year, company) => api.get('/reports/bank-transfer', { params: { month, year, company } })
+export const getBankTransfer = (month, year, company) => api.get('/reports/bank-transfer', { params: { month, year, company } })
+export const getHeadcountReport = (month, year) => api.get('/reports/headcount', { params: { month, year } })
+export const getAuditTrail = (month, year) => api.get('/reports/audit-trail', { params: { month, year } })
+
+// ── Settings ───────────────────────────────────────────
+export const getShifts = () => api.get('/settings/shifts')
+export const createShift = (data) => api.post('/settings/shifts', data)
+export const updateShift = (id, data) => api.put(`/settings/shifts/${id}`, data)
+export const getHolidays = (year) => api.get('/settings/holidays', { params: { year } })
+export const createHoliday = (data) => api.post('/settings/holidays', data)
+export const deleteHoliday = (id) => api.delete(`/settings/holidays/${id}`)
+export const getPolicyConfig = () => api.get('/settings/policy')
+export const getPolicy = () => api.get('/settings/policy')
+export const updatePolicyConfig = (data) => api.put('/settings/policy', data)
+export const updatePolicy = (data) => api.put('/settings/policy', data)
+export const getComplianceItems = (year) => api.get('/settings/compliance', { params: { year } })
+export const updateComplianceItem = (id, data) => api.put(`/settings/compliance/${id}`, data)
+export const generateComplianceCalendar = (year) => api.post(`/settings/compliance/generate/${year}`)
+
+export default api

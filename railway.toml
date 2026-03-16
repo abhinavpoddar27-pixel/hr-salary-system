@@ -1,0 +1,11 @@
+[build]
+builder = "NIXPACKS"
+buildCommand = "npm install --prefix backend && npm install --prefix frontend && npm run build --prefix frontend"
+
+[deploy]
+startCommand = "node backend/server.js"
+restartPolicyType = "ON_FAILURE"
+restartPolicyMaxRetries = 3
+
+[[deploy.healthcheckPath]]
+path = "/api/health"

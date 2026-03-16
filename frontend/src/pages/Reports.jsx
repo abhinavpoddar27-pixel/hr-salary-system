@@ -1,0 +1,556 @@
+import React, { useState } from 'react'
+import { useQuery } from '@tanstack/react-query'
+import toast from 'react-hot-toast'
+import {
+  getAttendanceSummaryReport, getMissPunchReport, getSalaryRegister,
+  getBankTransferSheet, getPFStatement, getESIStatement, getAuditTrail,
+  getHeadcountReport
+} from '../utils/api'
+import { useAppStore } from '../store/appStore'
+import { fmtINR, fmtDate } from '../utils/formatters'
+
+const MONTH_NAMES = ['', 'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
+
+// Helper: Export table data to CSV
+function exportToCSV(data, columns, filename) {
+  if (!data || data.length === 0) { toast.error('No data to export'); return }
+  const header = columns.map(c => c.label).join(',')
+  const rows = data.map(row => columns.map(c => {
+    const val = c.accessor ? c.accessor(row) : row[c.key]
+    return `"${String(val ?? '').replace(/"/g, '""')}"`
+  }).join(','))
+  const csv = [header, ...rows].join('\n')
+  const blob = new Blob([csv], { type: 'text/csv' })
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a'); a.href = url; a.download = filename; a.click()
+  URL.revokeObjectURL(url)
+  toast.success(`Exported ${filename}`)
+}
+
+// Report card component
+function ReportCard({ title, description, icon, children }) {
+  return (
+    <div className="card">
+      <div className="card-header">
+        <div className="flex items-center gap-2">
+          <span className="text-lg">{icon}</span>
+          <div>
+            <h3 className="font-semibold text-slate-700">{title}</h3>
+            <p className="text-xs text-slate-400">{description}</p>
+          </div>
+        </div>
+      </div>
+      <div className="p-4">{children}</div>
+    </div>
+  )
+}
+
+export default function Reports() {
+  const { selectedMonth, selectedYear } = useAppStore()
+  const [activeReport, setActiveReport] = useState('attendance')
+  const [companyFilter, setCompanyFilter] = useState('')
+
+  // Attendance Summary
+  const { data: attRes, isLoading: attLoading } = useQuery({
+    queryKey: ['report-attendance', selectedMonth, selectedYear, companyFilter],
+    queryFn: () => getAttendanceSummaryReport(selectedMonth, selectedYear, companyFilter),
+    enabled: activeReport === 'attendance',
+    retry: 0
+  })
+  const attData = attRes?.data?.data || []
+
+  // Miss Punch Report
+  const { data: mpRes, isLoading: mpLoading } = useQuery({
+    queryKey: ['report-misspunch', selectedMonth, selectedYear],
+    queryFn: () => getMissPunchReport(selectedMonth, selectedYear),
+    enabled: activeReport === 'misspunch',
+    retry: 0
+  })
+  const mpData = mpRes?.data?.data || []
+
+  // Salary Register
+  const { data: salRes, isLoading: salLoading } = useQuery({
+    queryKey: ['salary-register', selectedMonth, selectedYear, companyFilter],
+    queryFn: () => getSalaryRegister(selectedMonth, selectedYear, companyFilter),
+    enabled: activeReport === 'salary',
+    retry: 0
+  })
+  const salData = salRes?.data?.data || []
+  const salTotals = salRes?.data?.totals || {}
+
+  // Bank NEFT
+  const { data: bankRes, isLoading: bankLoading } = useQuery({
+    queryKey: ['bank-neft', selectedMonth, selectedYear, companyFilter],
+    queryFn: () => getBankTransferSheet(selectedMonth, selectedYear, companyFilter),
+    enabled: activeReport === 'bank',
+    retry: 0
+  })
+  const bankData = bankRes?.data?.data || []
+
+  // PF Statement
+  const { data: pfRes, isLoading: pfLoading } = useQuery({
+    queryKey: ['pf-report', selectedMonth, selectedYear],
+    queryFn: () => getPFStatement(selectedMonth, selectedYear),
+    enabled: activeReport === 'pf',
+    retry: 0
+  })
+  const pfData = pfRes?.data?.data || {}
+
+  // ESI Statement
+  const { data: esiRes, isLoading: esiLoading } = useQuery({
+    queryKey: ['esi-report', selectedMonth, selectedYear],
+    queryFn: () => getESIStatement(selectedMonth, selectedYear),
+    enabled: activeReport === 'esi',
+    retry: 0
+  })
+  const esiData = esiRes?.data?.data || {}
+
+  // Audit Trail
+  const { data: auditRes, isLoading: auditLoading } = useQuery({
+    queryKey: ['audit-trail', selectedMonth, selectedYear],
+    queryFn: () => getAuditTrail(selectedMonth, selectedYear),
+    enabled: activeReport === 'audit',
+    retry: 0
+  })
+  const auditData = auditRes?.data?.data || []
+
+  const REPORTS = [
+    { id: 'attendance', label: '📋 Attendance Summary', desc: 'Per-employee present/absent/LOP summary' },
+    { id: 'misspunch', label: '⏰ Miss Punch', desc: 'All miss punch cases and resolutions' },
+    { id: 'salary', label: '💰 Salary Register', desc: 'Full salary register with all components' },
+    { id: 'bank', label: '🏦 Bank NEFT', desc: 'Bank transfer sheet for net pay' },
+    { id: 'pf', label: '🔵 PF Statement', desc: 'Provident Fund challan data' },
+    { id: 'esi', label: '🟣 ESI Statement', desc: 'ESI challan data' },
+    { id: 'audit', label: '🔍 Audit Trail', desc: 'All field-level changes with before/after' },
+  ]
+
+  const monthLabel = `${MONTH_NAMES[selectedMonth]}_${selectedYear}`
+
+  return (
+    <div className="p-6">
+      <div className="flex gap-6">
+        {/* Left: report list */}
+        <div className="w-60 flex-shrink-0">
+          <h2 className="text-sm font-bold text-slate-600 uppercase tracking-wide mb-3">Reports</h2>
+          <div className="space-y-1">
+            {REPORTS.map(r => (
+              <button
+                key={r.id}
+                onClick={() => setActiveReport(r.id)}
+                className={`w-full text-left px-3 py-2.5 rounded-lg text-sm transition-colors ${
+                  activeReport === r.id ? 'bg-brand-50 text-brand-700 font-medium' : 'text-slate-600 hover:bg-slate-50'
+                }`}
+              >
+                <div>{r.label}</div>
+                <div className="text-xs text-slate-400 mt-0.5">{r.desc}</div>
+              </button>
+            ))}
+          </div>
+        </div>
+
+        {/* Right: report content */}
+        <div className="flex-1 space-y-4">
+          {/* Attendance Summary */}
+          {activeReport === 'attendance' && (
+            <div className="space-y-4">
+              <div className="flex items-center justify-between">
+                <h3 className="text-base font-bold text-slate-800">Attendance Summary — {MONTH_NAMES[selectedMonth]} {selectedYear}</h3>
+                <button
+                  onClick={() => exportToCSV(attData, [
+                    { key: 'employee_code', label: 'Code' },
+                    { key: 'employee_name', label: 'Name' },
+                    { key: 'department', label: 'Department' },
+                    { key: 'present_days', label: 'Present' },
+                    { key: 'absent_days', label: 'Absent' },
+                    { key: 'half_days', label: 'Half Days' },
+                    { key: 'wo_days', label: 'WO' },
+                    { key: 'paid_sundays', label: 'Paid Sundays' },
+                    { key: 'total_payable', label: 'Payable Days' },
+                    { key: 'lop_days', label: 'LOP' },
+                  ], `attendance_${monthLabel}.csv`)}
+                  className="btn-secondary text-sm"
+                >
+                  ⬇ Export CSV
+                </button>
+              </div>
+              {attLoading ? <div className="card p-8 text-center text-slate-400">Loading...</div> : (
+                <div className="card overflow-hidden">
+                  <div className="overflow-x-auto">
+                    <table className="table-compact w-full">
+                      <thead>
+                        <tr>
+                          <th>Code</th>
+                          <th>Name</th>
+                          <th>Department</th>
+                          <th className="text-center">Present</th>
+                          <th className="text-center">Absent</th>
+                          <th className="text-center">½ Day</th>
+                          <th className="text-center">WO</th>
+                          <th className="text-center">WOP</th>
+                          <th className="text-center">Paid Sun</th>
+                          <th className="text-center">LOP</th>
+                          <th className="text-center font-bold">Payable</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {attData.length === 0 ? (
+                          <tr><td colSpan={11} className="text-center py-6 text-slate-400">No data. Run payroll pipeline first.</td></tr>
+                        ) : attData.map((e, i) => (
+                          <tr key={i}>
+                            <td className="text-slate-500">{e.employee_code}</td>
+                            <td className="font-medium">{e.employee_name}</td>
+                            <td>{e.department}</td>
+                            <td className="text-center text-green-700">{e.present_days}</td>
+                            <td className="text-center text-red-600">{e.absent_days}</td>
+                            <td className="text-center">{e.half_days}</td>
+                            <td className="text-center text-slate-400">{e.wo_days}</td>
+                            <td className="text-center text-green-600">{e.wop_days}</td>
+                            <td className="text-center text-blue-600">{e.paid_sundays}</td>
+                            <td className="text-center text-red-500">{e.lop_days > 0 ? e.lop_days : '—'}</td>
+                            <td className="text-center font-bold text-brand-700">{e.total_payable}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Miss Punch Report */}
+          {activeReport === 'misspunch' && (
+            <div className="space-y-4">
+              <div className="flex items-center justify-between">
+                <h3 className="text-base font-bold text-slate-800">Miss Punch Report — {MONTH_NAMES[selectedMonth]} {selectedYear}</h3>
+                <button onClick={() => exportToCSV(mpData, [
+                  { key: 'employee_code', label: 'Code' }, { key: 'employee_name', label: 'Name' },
+                  { key: 'date', label: 'Date' }, { key: 'miss_punch_type', label: 'Issue' },
+                  { key: 'in_time_original', label: 'IN (Original)' }, { key: 'out_time_original', label: 'OUT (Original)' },
+                  { key: 'in_time_final', label: 'IN (Final)' }, { key: 'out_time_final', label: 'OUT (Final)' },
+                  { key: 'miss_punch_resolved', label: 'Resolved' }, { key: 'correction_remark', label: 'Remark' }
+                ], `miss_punch_${monthLabel}.csv`)} className="btn-secondary text-sm">⬇ Export CSV</button>
+              </div>
+              {mpLoading ? <div className="card p-8 text-center text-slate-400">Loading...</div> : (
+                <div className="card overflow-hidden">
+                  <div className="overflow-x-auto">
+                    <table className="table-compact w-full">
+                      <thead>
+                        <tr>
+                          <th>Employee</th>
+                          <th>Date</th>
+                          <th>Issue Type</th>
+                          <th>IN (Orig)</th>
+                          <th>OUT (Orig)</th>
+                          <th>IN (Final)</th>
+                          <th>OUT (Final)</th>
+                          <th>Resolved</th>
+                          <th>Remark</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {mpData.length === 0 ? (
+                          <tr><td colSpan={9} className="text-center py-6 text-slate-400">No miss punch data</td></tr>
+                        ) : mpData.map((r, i) => (
+                          <tr key={i}>
+                            <td>
+                              <div className="font-medium">{r.employee_name}</div>
+                              <div className="text-xs text-slate-400">{r.employee_code}</div>
+                            </td>
+                            <td>{fmtDate(r.date)}</td>
+                            <td><span className="badge badge-absent text-xs">{r.miss_punch_type}</span></td>
+                            <td className="text-slate-400">{r.in_time_original || '—'}</td>
+                            <td className="text-slate-400">{r.out_time_original || '—'}</td>
+                            <td className={r.in_time_final ? 'text-green-700 font-medium' : ''}>{r.in_time_final || '—'}</td>
+                            <td className={r.out_time_final ? 'text-green-700 font-medium' : ''}>{r.out_time_final || '—'}</td>
+                            <td className="text-center">{r.miss_punch_resolved ? <span className="text-green-600">✓</span> : <span className="text-amber-500">⏳</span>}</td>
+                            <td className="text-xs text-slate-500">{r.correction_remark || '—'}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Salary Register */}
+          {activeReport === 'salary' && (
+            <div className="space-y-4">
+              <div className="flex items-center justify-between">
+                <h3 className="text-base font-bold text-slate-800">Salary Register — {MONTH_NAMES[selectedMonth]} {selectedYear}</h3>
+                <button onClick={() => exportToCSV(salData, [
+                  { key: 'employee_code', label: 'Code' }, { key: 'employee_name', label: 'Name' },
+                  { key: 'department', label: 'Dept' }, { key: 'gross_salary', label: 'Gross' },
+                  { key: 'basic', label: 'Basic' }, { key: 'hra', label: 'HRA' },
+                  { key: 'payable_days', label: 'Payable Days' }, { key: 'earned_basic', label: 'Earned Basic' },
+                  { key: 'earned_hra', label: 'Earned HRA' }, { key: 'total_earned', label: 'Total Earned' },
+                  { key: 'employee_pf', label: 'EE PF' }, { key: 'employee_esi', label: 'EE ESI' },
+                  { key: 'professional_tax', label: 'PT' }, { key: 'total_deductions', label: 'Total Ded.' },
+                  { key: 'net_pay', label: 'Net Pay' }
+                ], `salary_register_${monthLabel}.csv`)} className="btn-secondary text-sm">⬇ Export CSV</button>
+              </div>
+              {/* Totals */}
+              {Object.keys(salTotals).length > 0 && (
+                <div className="grid grid-cols-4 gap-3">
+                  <div className="card p-3 text-center"><div className="text-lg font-bold text-slate-700">{fmtINR(salTotals.totalGross || 0)}</div><div className="text-xs text-slate-500">Gross Payroll</div></div>
+                  <div className="card p-3 text-center"><div className="text-lg font-bold text-red-600">{fmtINR(salTotals.totalDeductions || 0)}</div><div className="text-xs text-slate-500">Total Deductions</div></div>
+                  <div className="card p-3 text-center bg-green-50"><div className="text-lg font-bold text-green-700">{fmtINR(salTotals.totalNet || 0)}</div><div className="text-xs text-slate-500 font-medium">Net Payroll</div></div>
+                  <div className="card p-3 text-center"><div className="text-lg font-bold text-blue-600">{fmtINR(salTotals.totalPFLiability || 0)}</div><div className="text-xs text-slate-500">PF Liability</div></div>
+                </div>
+              )}
+              {salLoading ? <div className="card p-8 text-center text-slate-400">Loading...</div> : (
+                <div className="card overflow-hidden">
+                  <div className="overflow-x-auto">
+                    <table className="table-compact w-full text-xs">
+                      <thead>
+                        <tr>
+                          <th>Code</th>
+                          <th>Name</th>
+                          <th>Dept</th>
+                          <th className="text-center">Days</th>
+                          <th className="text-right">Gross</th>
+                          <th className="text-right">Earned</th>
+                          <th className="text-right">EE PF</th>
+                          <th className="text-right">EE ESI</th>
+                          <th className="text-right">PT</th>
+                          <th className="text-right">Ded.</th>
+                          <th className="text-right font-bold text-brand-700">Net Pay</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {salData.length === 0 ? (
+                          <tr><td colSpan={11} className="text-center py-6 text-slate-400">Run salary computation first</td></tr>
+                        ) : salData.map((e, i) => (
+                          <tr key={i}>
+                            <td>{e.employee_code}</td>
+                            <td className="font-medium">{e.employee_name}</td>
+                            <td>{e.department}</td>
+                            <td className="text-center">{e.payable_days}</td>
+                            <td className="text-right">{fmtINR(e.gross_salary)}</td>
+                            <td className="text-right">{fmtINR(e.total_earned)}</td>
+                            <td className="text-right text-blue-600">{fmtINR(e.employee_pf)}</td>
+                            <td className="text-right text-purple-600">{fmtINR(e.employee_esi)}</td>
+                            <td className="text-right">{fmtINR(e.professional_tax)}</td>
+                            <td className="text-right text-red-600">{fmtINR(e.total_deductions)}</td>
+                            <td className="text-right font-bold text-green-700">{fmtINR(e.net_pay)}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Bank NEFT */}
+          {activeReport === 'bank' && (
+            <div className="space-y-4">
+              <div className="flex items-center justify-between">
+                <h3 className="text-base font-bold text-slate-800">Bank Transfer Sheet — {MONTH_NAMES[selectedMonth]} {selectedYear}</h3>
+                <button onClick={() => exportToCSV(bankData, [
+                  { key: 'employee_code', label: 'Emp Code' }, { key: 'employee_name', label: 'Name' },
+                  { key: 'account_number', label: 'Account No.' }, { key: 'bank_name', label: 'Bank' },
+                  { key: 'ifsc_code', label: 'IFSC' }, { key: 'net_pay', label: 'Amount' }
+                ], `bank_neft_${monthLabel}.csv`)} className="btn-secondary text-sm">⬇ Export CSV</button>
+              </div>
+              <div className="card p-3 bg-blue-50 border border-blue-200 text-sm text-blue-800">
+                Total Net Payable: <strong>{fmtINR(bankData.reduce((s, e) => s + (parseFloat(e.net_pay) || 0), 0))}</strong> ({bankData.length} employees)
+              </div>
+              {bankLoading ? <div className="card p-8 text-center text-slate-400">Loading...</div> : (
+                <div className="card overflow-hidden">
+                  <div className="overflow-x-auto">
+                    <table className="table-compact w-full">
+                      <thead>
+                        <tr>
+                          <th>Sr.</th>
+                          <th>Employee</th>
+                          <th>Account Number</th>
+                          <th>Bank</th>
+                          <th>IFSC</th>
+                          <th className="text-right">Net Pay</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {bankData.length === 0 ? (
+                          <tr><td colSpan={6} className="text-center py-6 text-slate-400">Run salary computation first</td></tr>
+                        ) : bankData.map((e, i) => (
+                          <tr key={i}>
+                            <td className="text-slate-400">{i + 1}</td>
+                            <td>
+                              <div className="font-medium">{e.employee_name}</div>
+                              <div className="text-xs text-slate-400">{e.employee_code}</div>
+                            </td>
+                            <td className="font-mono">{e.account_number || <span className="text-red-400">Not Set</span>}</td>
+                            <td>{e.bank_name || '—'}</td>
+                            <td className="font-mono text-xs">{e.ifsc_code || '—'}</td>
+                            <td className="text-right font-bold text-green-700">{fmtINR(e.net_pay)}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* PF Report */}
+          {activeReport === 'pf' && (
+            <div className="space-y-4">
+              <div className="flex items-center justify-between">
+                <h3 className="text-base font-bold text-slate-800">PF Statement — {MONTH_NAMES[selectedMonth]} {selectedYear}</h3>
+                <button onClick={() => exportToCSV(pfData.employees || [], [
+                  { key: 'employee_code', label: 'Code' }, { key: 'employee_name', label: 'Name' },
+                  { key: 'uan', label: 'UAN' }, { key: 'pf_wages', label: 'PF Wages' },
+                  { key: 'employee_pf', label: 'EE PF (12%)' }, { key: 'employer_pf', label: 'ER PF (3.67%)' },
+                  { key: 'eps', label: 'EPS (8.33%)' }
+                ], `pf_statement_${monthLabel}.csv`)} className="btn-secondary text-sm">⬇ Export CSV</button>
+              </div>
+              <div className="grid grid-cols-4 gap-3">
+                <div className="card p-3 text-center"><div className="font-bold text-blue-600">{fmtINR(pfData.totals?.employeePF || 0)}</div><div className="text-xs text-slate-500">EE PF</div></div>
+                <div className="card p-3 text-center"><div className="font-bold text-green-600">{fmtINR(pfData.totals?.employerPF || 0)}</div><div className="text-xs text-slate-500">ER PF</div></div>
+                <div className="card p-3 text-center"><div className="font-bold text-purple-600">{fmtINR(pfData.totals?.eps || 0)}</div><div className="text-xs text-slate-500">EPS</div></div>
+                <div className="card p-3 text-center bg-blue-50"><div className="font-bold text-blue-700">{fmtINR(pfData.totals?.total || 0)}</div><div className="text-xs text-slate-600 font-semibold">Total</div></div>
+              </div>
+              {pfLoading ? <div className="card p-8 text-center text-slate-400">Loading...</div> : (
+                <div className="card overflow-hidden">
+                  <div className="overflow-x-auto">
+                    <table className="table-compact w-full">
+                      <thead>
+                        <tr>
+                          <th>Code</th><th>Name</th><th>UAN</th>
+                          <th className="text-right">PF Wages</th>
+                          <th className="text-right">EE PF</th>
+                          <th className="text-right">ER PF</th>
+                          <th className="text-right">EPS</th>
+                          <th className="text-right">Total</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {(pfData.employees || []).map((e, i) => (
+                          <tr key={i}>
+                            <td>{e.employee_code}</td>
+                            <td className="font-medium">{e.employee_name}</td>
+                            <td className="text-slate-400">{e.uan || '—'}</td>
+                            <td className="text-right">{fmtINR(e.pf_wages)}</td>
+                            <td className="text-right">{fmtINR(e.employee_pf)}</td>
+                            <td className="text-right">{fmtINR(e.employer_pf)}</td>
+                            <td className="text-right">{fmtINR(e.eps)}</td>
+                            <td className="text-right font-semibold">{fmtINR((e.employee_pf || 0) + (e.employer_pf || 0) + (e.eps || 0))}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* ESI Report */}
+          {activeReport === 'esi' && (
+            <div className="space-y-4">
+              <div className="flex items-center justify-between">
+                <h3 className="text-base font-bold text-slate-800">ESI Statement — {MONTH_NAMES[selectedMonth]} {selectedYear}</h3>
+                <button onClick={() => exportToCSV(esiData.employees || [], [
+                  { key: 'employee_code', label: 'Code' }, { key: 'employee_name', label: 'Name' },
+                  { key: 'esi_number', label: 'ESI No.' }, { key: 'esi_wages', label: 'ESI Wages' },
+                  { key: 'employee_esi', label: 'EE ESI (0.75%)' }, { key: 'employer_esi', label: 'ER ESI (3.25%)' }
+                ], `esi_statement_${monthLabel}.csv`)} className="btn-secondary text-sm">⬇ Export CSV</button>
+              </div>
+              <div className="grid grid-cols-3 gap-3">
+                <div className="card p-3 text-center"><div className="font-bold text-blue-600">{fmtINR(esiData.totals?.employeeESI || 0)}</div><div className="text-xs text-slate-500">EE ESI</div></div>
+                <div className="card p-3 text-center"><div className="font-bold text-green-600">{fmtINR(esiData.totals?.employerESI || 0)}</div><div className="text-xs text-slate-500">ER ESI</div></div>
+                <div className="card p-3 text-center bg-purple-50"><div className="font-bold text-purple-700">{fmtINR(esiData.totals?.total || 0)}</div><div className="text-xs text-slate-600 font-semibold">Total</div></div>
+              </div>
+              {esiLoading ? <div className="card p-8 text-center text-slate-400">Loading...</div> : (
+                <div className="card overflow-hidden">
+                  <div className="overflow-x-auto">
+                    <table className="table-compact w-full">
+                      <thead>
+                        <tr>
+                          <th>Code</th><th>Name</th><th>ESI No.</th>
+                          <th className="text-right">ESI Wages</th>
+                          <th className="text-right">EE ESI</th>
+                          <th className="text-right">ER ESI</th>
+                          <th className="text-right">Total</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {(esiData.employees || []).map((e, i) => (
+                          <tr key={i}>
+                            <td>{e.employee_code}</td>
+                            <td className="font-medium">{e.employee_name}</td>
+                            <td className="text-slate-400">{e.esi_number || '—'}</td>
+                            <td className="text-right">{fmtINR(e.esi_wages)}</td>
+                            <td className="text-right">{fmtINR(e.employee_esi)}</td>
+                            <td className="text-right">{fmtINR(e.employer_esi)}</td>
+                            <td className="text-right font-semibold">{fmtINR((e.employee_esi || 0) + (e.employer_esi || 0))}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Audit Trail */}
+          {activeReport === 'audit' && (
+            <div className="space-y-4">
+              <div className="flex items-center justify-between">
+                <h3 className="text-base font-bold text-slate-800">Audit Trail — {MONTH_NAMES[selectedMonth]} {selectedYear}</h3>
+                <button onClick={() => exportToCSV(auditData, [
+                  { key: 'created_at', label: 'Timestamp' }, { key: 'table_name', label: 'Table' },
+                  { key: 'record_id', label: 'Record ID' }, { key: 'field_name', label: 'Field' },
+                  { key: 'old_value', label: 'Old Value' }, { key: 'new_value', label: 'New Value' },
+                  { key: 'stage', label: 'Stage' }, { key: 'remark', label: 'Remark' }
+                ], `audit_trail_${monthLabel}.csv`)} className="btn-secondary text-sm">⬇ Export CSV</button>
+              </div>
+              {auditLoading ? <div className="card p-8 text-center text-slate-400">Loading...</div> : (
+                <div className="card overflow-hidden">
+                  <div className="overflow-x-auto">
+                    <table className="table-compact w-full text-xs">
+                      <thead>
+                        <tr>
+                          <th>Timestamp</th>
+                          <th>Table</th>
+                          <th>Record</th>
+                          <th>Field</th>
+                          <th>Old Value</th>
+                          <th>New Value</th>
+                          <th>Stage</th>
+                          <th>Remark</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {auditData.length === 0 ? (
+                          <tr><td colSpan={8} className="text-center py-6 text-slate-400">No audit entries found</td></tr>
+                        ) : auditData.map((a, i) => (
+                          <tr key={i}>
+                            <td className="text-slate-400 whitespace-nowrap">{a.created_at}</td>
+                            <td className="font-mono">{a.table_name}</td>
+                            <td className="font-mono">{a.record_id}</td>
+                            <td className="text-blue-700">{a.field_name}</td>
+                            <td className="text-red-600 font-mono">{a.old_value || '—'}</td>
+                            <td className="text-green-700 font-mono">{a.new_value || '—'}</td>
+                            <td><span className="badge bg-slate-100 text-slate-600">{a.stage}</span></td>
+                            <td className="text-slate-500">{a.remark}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  )
+}

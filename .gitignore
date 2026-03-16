@@ -1,0 +1,14 @@
+node_modules/
+backend/node_modules/
+frontend/node_modules/
+data/*.db
+data/*.db-journal
+data/*.db-wal
+data/*.db-shm
+uploads/
+*.log
+.DS_Store
+dist/
+frontend/dist/
+.env
+*.env.local
