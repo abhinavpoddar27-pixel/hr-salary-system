@@ -5,6 +5,7 @@ import clsx from 'clsx'
 
 const nav = [
   { label: 'Dashboard', icon: '🏠', to: '/' },
+  { label: 'Daily MIS', icon: '📊', to: '/daily-mis' },
   {
     label: 'Salary Processing', icon: '💰', to: '/pipeline',
     children: [
@@ -44,6 +45,8 @@ const nav = [
       { label: 'Compliance Calendar', to: '/compliance/calendar' },
     ]
   },
+  { label: 'Salary Advance', icon: '₹', to: '/salary-advance' },
+  { label: 'Salary Input', icon: '📝', to: '/salary-input' },
   { label: 'Reports', icon: '📋', to: '/reports' },
   { label: 'Alerts', icon: '🔔', to: '/alerts' },
   { label: 'Employees', icon: '👤', to: '/employees' },

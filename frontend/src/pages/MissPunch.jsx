@@ -1,14 +1,22 @@
-import React, { useState } from 'react'
+import React, { useState, useMemo } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import toast from 'react-hot-toast'
 import { getMissPunches, resolveMissPunch, bulkResolveMissPunches } from '../utils/api'
 import { useAppStore } from '../store/appStore'
 import PipelineProgress from '../components/pipeline/PipelineProgress'
 import { fmtDate, statusColor } from '../utils/formatters'
+import { Abbr } from '../components/ui/Tooltip'
+import AbbreviationLegend from '../components/ui/AbbreviationLegend'
+import CalendarView from '../components/ui/CalendarView'
 import clsx from 'clsx'
 
 const SOURCES = ['Gate Register', 'Production Office', 'Supervisor Confirmed', 'Other']
 const ISSUE_LABELS = { MISSING_IN: 'Missing IN', MISSING_OUT: 'Missing OUT', NO_PUNCH: 'No Punch', NIGHT_UNPAIRED: 'Night Unpaired' }
+
+function SortIcon({ field, sortField, sortDir }) {
+  if (sortField !== field) return <span className="text-slate-300 ml-1">↕</span>
+  return <span className="text-blue-500 ml-1">{sortDir === 'asc' ? '↑' : '↓'}</span>
+}
 
 function EditRow({ record, onSave, onCancel }) {
   const [inTime, setInTime] = useState(record.in_time_final || record.in_time_original || '')
@@ -18,8 +26,8 @@ function EditRow({ record, onSave, onCancel }) {
   const [convertToLeave, setConvertToLeave] = useState(false)
 
   return (
-    <tr className="bg-blue-50">
-      <td colSpan={9} className="px-4 py-3">
+    <tr className="bg-blue-50/80">
+      <td colSpan={10} className="px-4 py-3">
         <div className="flex flex-wrap items-end gap-3">
           <div>
             <label className="label">IN Time</label>
@@ -41,7 +49,7 @@ function EditRow({ record, onSave, onCancel }) {
           </div>
           <div>
             <label className="label flex items-center gap-1.5 cursor-pointer">
-              <input type="checkbox" checked={convertToLeave} onChange={e => setConvertToLeave(e.target.checked)} />
+              <input type="checkbox" checked={convertToLeave} onChange={e => setConvertToLeave(e.target.checked)} className="rounded" />
               Mark as Leave (Absent)
             </label>
           </div>
@@ -63,6 +71,9 @@ export default function MissPunch() {
   const [filterResolved, setFilterResolved] = useState('false')
   const [bulkModal, setBulkModal] = useState(false)
   const [bulkForm, setBulkForm] = useState({ inTime: '', outTime: '', source: 'Gate Register', remark: '' })
+  const [sortField, setSortField] = useState('date')
+  const [sortDir, setSortDir] = useState('asc')
+  const [calendarEmployee, setCalendarEmployee] = useState(null)
 
   const { data: res, isLoading, refetch } = useQuery({
     queryKey: ['miss-punches', selectedMonth, selectedYear, filterDept, filterType, filterResolved],
@@ -70,8 +81,39 @@ export default function MissPunch() {
     retry: 0
   })
 
-  const records = (res?.data?.data || []).filter(r => !filterType || r.miss_punch_type === filterType)
+  const filteredRecords = (res?.data?.data || []).filter(r => !filterType || r.miss_punch_type === filterType)
   const summary = res?.data?.summary || {}
+
+  // Sorting
+  const records = useMemo(() => {
+    const sorted = [...filteredRecords]
+    sorted.sort((a, b) => {
+      let cmp = 0
+      switch (sortField) {
+        case 'date':
+          cmp = (a.date || '').localeCompare(b.date || '')
+          break
+        case 'employee':
+          cmp = (a.employee_name || a.employee_code || '').localeCompare(b.employee_name || b.employee_code || '')
+          break
+        case 'department':
+          cmp = (a.department || '').localeCompare(b.department || '')
+          break
+        case 'type':
+          cmp = (a.miss_punch_type || '').localeCompare(b.miss_punch_type || '')
+          break
+        default:
+          cmp = 0
+      }
+      return sortDir === 'desc' ? -cmp : cmp
+    })
+    return sorted
+  }, [filteredRecords, sortField, sortDir])
+
+  const toggleSort = (field) => {
+    if (sortField === field) setSortDir(d => d === 'asc' ? 'desc' : 'asc')
+    else { setSortField(field); setSortDir('asc') }
+  }
 
   const resolveMutation = useMutation({
     mutationFn: ({ id, data }) => resolveMissPunch(id, data),
@@ -100,14 +142,14 @@ export default function MissPunch() {
   const progress = records.length > 0 ? Math.round(resolvedCount / records.length * 100) : 0
 
   return (
-    <div>
+    <div className="animate-fade-in">
       <PipelineProgress stageStatus={{ 1: 'done', 2: 'active' }} />
 
-      <div className="p-6 space-y-4 max-w-screen-xl">
+      <div className="p-6 space-y-5 max-w-screen-xl">
         <div className="flex items-start justify-between">
           <div>
-            <h2 className="text-lg font-bold text-slate-800">Stage 2: Miss Punch Detection & Rectification</h2>
-            <p className="text-sm text-slate-500">Review and correct missing IN/OUT punches. Night shift records are automatically handled in Stage 4.</p>
+            <h2 className="section-title">Stage 2: Miss Punch Detection & Rectification</h2>
+            <p className="section-subtitle mt-1">Review and correct missing IN/OUT punches. Night shift records are automatically handled in Stage 4.</p>
           </div>
           <div className="flex gap-2">
             {selected.size > 0 && (
@@ -119,26 +161,26 @@ export default function MissPunch() {
         </div>
 
         {/* Progress bar */}
-        <div className="card p-4">
+        <div className="card p-5">
           <div className="flex items-center justify-between mb-2">
-            <span className="text-sm font-medium text-slate-700">Resolution Progress</span>
+            <span className="text-sm font-semibold text-slate-700">Resolution Progress</span>
             <span className="text-sm text-slate-500">{resolvedCount} of {records.length} resolved</span>
           </div>
-          <div className="w-full bg-slate-200 rounded-full h-3">
-            <div className="bg-green-500 h-3 rounded-full transition-all" style={{ width: `${progress}%` }} />
+          <div className="w-full bg-slate-100 rounded-full h-3 overflow-hidden">
+            <div className="bg-gradient-to-r from-emerald-400 to-emerald-500 h-3 rounded-full transition-all duration-500" style={{ width: `${progress}%` }} />
           </div>
-          <div className="flex gap-4 mt-2 text-xs text-slate-500">
-            <span>🔴 Missing IN: {summary.byType?.MISSING_IN || 0}</span>
-            <span>🟡 Missing OUT: {summary.byType?.MISSING_OUT || 0}</span>
-            <span>⚫ No Punch: {summary.byType?.NO_PUNCH || 0}</span>
-            <span>🌙 Night Unpaired: {summary.byType?.NIGHT_UNPAIRED || 0}</span>
+          <div className="flex gap-4 mt-3 text-xs text-slate-500">
+            <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-red-400"></span> Missing IN: {summary.byType?.MISSING_IN || 0}</span>
+            <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-amber-400"></span> Missing OUT: {summary.byType?.MISSING_OUT || 0}</span>
+            <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-slate-400"></span> No Punch: {summary.byType?.NO_PUNCH || 0}</span>
+            <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-purple-400"></span> Night Unpaired: {summary.byType?.NIGHT_UNPAIRED || 0}</span>
           </div>
         </div>
 
         {/* Filters */}
         <div className="flex gap-3 items-end flex-wrap">
           <div>
-            <label className="label">Department</label>
+            <label className="label"><Abbr code="Dept">Dept</Abbr></label>
             <input type="text" placeholder="Filter dept..." value={filterDept} onChange={e => setFilterDept(e.target.value)} className="input w-40" />
           </div>
           <div>
@@ -158,6 +200,19 @@ export default function MissPunch() {
           </div>
         </div>
 
+        {/* Calendar slide-out for selected employee */}
+        {calendarEmployee && (
+          <div className="card p-5 animate-slide-up">
+            <div className="flex items-center justify-between mb-3">
+              <h3 className="text-sm font-bold text-slate-700">
+                Daily Attendance: {calendarEmployee.name} ({calendarEmployee.code})
+              </h3>
+              <button onClick={() => setCalendarEmployee(null)} className="btn-ghost text-xs">Close</button>
+            </div>
+            <CalendarView employeeCode={calendarEmployee.code} month={selectedMonth} year={selectedYear} />
+          </div>
+        )}
+
         {/* Records Table */}
         <div className="card overflow-hidden">
           <div className="overflow-x-auto">
@@ -170,27 +225,50 @@ export default function MissPunch() {
                       else setSelected(new Set())
                     }} className="rounded" />
                   </th>
-                  <th>Employee</th>
-                  <th>Dept</th>
-                  <th>Date</th>
+                  <th className="cursor-pointer select-none" onClick={() => toggleSort('employee')}>
+                    <Abbr code="Emp">Employee</Abbr> <SortIcon field="employee" sortField={sortField} sortDir={sortDir} />
+                  </th>
+                  <th className="cursor-pointer select-none" onClick={() => toggleSort('department')}>
+                    <Abbr code="Dept">Dept</Abbr> <SortIcon field="department" sortField={sortField} sortDir={sortDir} />
+                  </th>
+                  <th className="cursor-pointer select-none" onClick={() => toggleSort('date')}>
+                    Date <SortIcon field="date" sortField={sortField} sortDir={sortDir} />
+                  </th>
                   <th>Status</th>
                   <th>IN</th>
                   <th>OUT</th>
-                  <th>Issue</th>
+                  <th className="cursor-pointer select-none" onClick={() => toggleSort('type')}>
+                    Issue <SortIcon field="type" sortField={sortField} sortDir={sortDir} />
+                  </th>
+                  <th>Calendar</th>
                   <th>Action</th>
                 </tr>
               </thead>
               <tbody>
                 {isLoading ? (
-                  <tr><td colSpan={9} className="text-center py-8 text-slate-400">Loading...</td></tr>
+                  <tr><td colSpan={10} className="text-center py-12 text-slate-400">
+                    <div className="flex flex-col items-center gap-2">
+                      <div className="w-6 h-6 border-3 border-blue-200 border-t-blue-600 rounded-full animate-spin" />
+                      <span className="text-sm">Loading records...</span>
+                    </div>
+                  </td></tr>
                 ) : records.length === 0 ? (
-                  <tr><td colSpan={9} className="text-center py-8 text-slate-400">
-                    {filterResolved === 'false' ? '✅ All miss punches resolved!' : 'No records found'}
+                  <tr><td colSpan={10} className="text-center py-12 text-slate-400">
+                    {filterResolved === 'false' ? (
+                      <div className="flex flex-col items-center gap-2">
+                        <span className="text-3xl">✅</span>
+                        <span className="font-medium text-emerald-600">All miss punches resolved!</span>
+                      </div>
+                    ) : 'No records found'}
                   </td></tr>
                 ) : (
                   records.map(rec => (
                     <React.Fragment key={rec.id}>
-                      <tr className={clsx(rec.miss_punch_resolved && 'opacity-50', editId === rec.id && 'hidden')}>
+                      <tr className={clsx(
+                        rec.miss_punch_resolved && 'opacity-50',
+                        editId === rec.id && 'hidden',
+                        'transition-all duration-100'
+                      )}>
                         <td>
                           {!rec.miss_punch_resolved && (
                             <input type="checkbox" checked={selected.has(rec.id)} onChange={() => {
@@ -203,17 +281,36 @@ export default function MissPunch() {
                         </td>
                         <td>
                           <div className="font-medium text-sm">{rec.employee_name || rec.employee_code}</div>
-                          <div className="text-xs text-slate-400">{rec.employee_code}</div>
+                          <div className="text-xs text-slate-400 font-mono">{rec.employee_code}</div>
                         </td>
                         <td className="text-slate-600">{rec.department}</td>
                         <td className="font-mono text-sm">{fmtDate(rec.date)}</td>
-                        <td><span className={clsx('badge text-xs', statusColor(rec.status_final || rec.status_original))}>{rec.status_final || rec.status_original}</span></td>
-                        <td className={clsx('font-mono', !rec.in_time_final && 'text-red-500')}>{rec.in_time_final || rec.in_time_original || <span className="text-red-500">—</span>}</td>
-                        <td className={clsx('font-mono', !rec.out_time_final && 'text-red-500')}>{rec.out_time_final || rec.out_time_original || <span className="text-red-500">—</span>}</td>
+                        <td><span className={clsx('inline-flex px-2 py-0.5 rounded-md text-xs font-semibold', statusColor(rec.status_final || rec.status_original))}>{rec.status_final || rec.status_original}</span></td>
+                        <td className={clsx('font-mono text-sm', !rec.in_time_final && !rec.in_time_original && 'text-red-500 font-bold')}>
+                          {rec.in_time_final || rec.in_time_original || '—'}
+                        </td>
+                        <td className={clsx('font-mono text-sm', !rec.out_time_final && !rec.out_time_original && 'text-red-500 font-bold')}>
+                          {rec.out_time_final || rec.out_time_original || '—'}
+                        </td>
                         <td>
-                          <span className={clsx('badge-yellow text-xs', rec.miss_punch_type === 'NO_PUNCH' && 'badge-red', rec.miss_punch_type === 'NIGHT_UNPAIRED' && 'badge-purple')}>
+                          <span className={clsx(
+                            'text-xs font-semibold px-2 py-0.5 rounded-md',
+                            rec.miss_punch_type === 'NO_PUNCH' ? 'badge-red' :
+                            rec.miss_punch_type === 'NIGHT_UNPAIRED' ? 'badge-purple' :
+                            rec.miss_punch_type === 'MISSING_IN' ? 'badge-red' :
+                            'badge-yellow'
+                          )}>
                             {ISSUE_LABELS[rec.miss_punch_type] || rec.miss_punch_type}
                           </span>
+                        </td>
+                        <td>
+                          <button
+                            onClick={() => setCalendarEmployee({ code: rec.employee_code, name: rec.employee_name || rec.employee_code })}
+                            className="btn-ghost text-xs px-2 py-1 text-blue-600"
+                            title="View daily attendance calendar"
+                          >
+                            📅
+                          </button>
                         </td>
                         <td>
                           {rec.miss_punch_resolved ? (
@@ -240,23 +337,25 @@ export default function MissPunch() {
 
         {/* Proceed button */}
         {pendingCount === 0 && records.length > 0 && (
-          <div className="card p-4 bg-green-50 border-green-200 flex items-center justify-between">
-            <div className="flex items-center gap-2">
-              <span className="text-2xl">✅</span>
+          <div className="card p-5 bg-emerald-50/80 border-emerald-200 flex items-center justify-between animate-slide-up">
+            <div className="flex items-center gap-3">
+              <span className="text-3xl">✅</span>
               <div>
-                <p className="font-semibold text-green-700">All miss punches resolved!</p>
-                <p className="text-sm text-green-600">Proceed to Stage 3: Shift Verification</p>
+                <p className="font-bold text-emerald-700">All miss punches resolved!</p>
+                <p className="text-sm text-emerald-600">Proceed to Stage 3: Shift Verification</p>
               </div>
             </div>
           </div>
         )}
+
+        <AbbreviationLegend keys={['P', 'A', 'WO', 'WOP', '½P', 'Dept', 'Emp', 'Att']} />
       </div>
 
       {/* Bulk correction modal */}
       {bulkModal && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
-          <div className="bg-white rounded-xl p-6 w-full max-w-md shadow-xl">
-            <h3 className="font-bold text-slate-800 mb-4">Bulk Correct {selected.size} Records</h3>
+        <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm flex items-center justify-center z-50 animate-fade-in">
+          <div className="bg-white rounded-2xl p-6 w-full max-w-md shadow-glass-xl animate-scale-in">
+            <h3 className="font-bold text-slate-800 text-base mb-4">Bulk Correct {selected.size} Records</h3>
             <div className="space-y-3">
               <div>
                 <label className="label">IN Time (apply to all selected)</label>
@@ -277,7 +376,7 @@ export default function MissPunch() {
                 <input type="text" value={bulkForm.remark} onChange={e => setBulkForm(f => ({...f, remark: e.target.value}))} placeholder="e.g. Biometric was down, all present per gate register" className="input" />
               </div>
             </div>
-            <div className="flex gap-3 mt-4">
+            <div className="flex gap-3 mt-5">
               <button onClick={() => bulkMutation.mutate({ recordIds: [...selected], ...bulkForm })} className="btn-primary flex-1" disabled={bulkMutation.isPending}>
                 {bulkMutation.isPending ? 'Applying...' : 'Apply to All Selected'}
               </button>

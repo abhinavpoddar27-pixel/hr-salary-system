@@ -68,6 +68,9 @@ app.use('/api/payroll',    requireAuth, require('./src/routes/payroll'));
 app.use('/api/analytics',  requireAuth, require('./src/routes/analytics'));
 app.use('/api/reports',    requireAuth, require('./src/routes/reports'));
 app.use('/api/settings',   requireAuth, require('./src/routes/settings'));
+app.use('/api/advance',    requireAuth, require('./src/routes/advance'));
+app.use('/api/salary-input', requireAuth, require('./src/routes/salary-input'));
+app.use('/api/daily-mis',   requireAuth, require('./src/routes/daily-mis'));
 
 // Health check (public)
 app.get('/api/health', (req, res) => {

@@ -14,7 +14,6 @@ router.post('/calculate-days', (req, res) => {
 
   if (!month || !year) return res.status(400).json({ success: false, error: 'month and year required' });
 
-  // Get all employees with attendance in this month
   const empCodes = db.prepare(`
     SELECT DISTINCT employee_code
     FROM attendance_processed
@@ -22,11 +21,9 @@ router.post('/calculate-days', (req, res) => {
     AND is_night_out_only = 0
   `).all(...[month, year, company].filter(Boolean)).map(r => r.employee_code);
 
-  // Get holidays for this month
   const monthStr = String(month).padStart(2,'0');
   const holidays = db.prepare(`
-    SELECT date FROM holidays
-    WHERE date LIKE ?
+    SELECT date FROM holidays WHERE date LIKE ?
   `).all(`${year}-${monthStr}-%`);
 
   const results = [];
@@ -36,15 +33,12 @@ router.post('/calculate-days', (req, res) => {
     for (const empCode of empCodes) {
       try {
         const emp = db.prepare('SELECT id FROM employees WHERE code = ?').get(empCode);
-
-        // Get attendance records for this employee
         const records = db.prepare(`
           SELECT * FROM attendance_processed
           WHERE employee_code = ? AND month = ? AND year = ?
           ${company ? 'AND company = ?' : ''}
         `).all(...[empCode, month, year, company].filter(Boolean));
 
-        // Get leave balances
         const leaveBalances = { CL: 0, EL: 0, SL: 0 };
         if (emp) {
           const lbs = db.prepare('SELECT * FROM leave_balances WHERE employee_id = ? AND year = ?').all(emp.id, year);
@@ -57,7 +51,6 @@ router.post('/calculate-days', (req, res) => {
         calcResult.employeeId = emp?.id;
         saveDayCalculation(db, calcResult);
 
-        // Update leave balances used
         if (emp && (calcResult.clUsed > 0 || calcResult.elUsed > 0)) {
           if (calcResult.clUsed > 0) {
             db.prepare(`
@@ -81,8 +74,6 @@ router.post('/calculate-days', (req, res) => {
   });
 
   txn();
-
-  // Mark stage 6 complete
   db.prepare(`UPDATE monthly_imports SET stage_6_done = 1 WHERE month = ? AND year = ?`).run(month, year);
 
   res.json({
@@ -103,7 +94,6 @@ router.post('/calculate-days', (req, res) => {
 
 /**
  * GET /api/payroll/day-calculations
- * Get day calculations for a month
  */
 router.get('/day-calculations', (req, res) => {
   const db = getDb();
@@ -123,7 +113,6 @@ router.get('/day-calculations', (req, res) => {
 
 /**
  * GET /api/payroll/day-calculations/:code
- * Get day calculation for specific employee
  */
 router.get('/day-calculations/:code', (req, res) => {
   const db = getDb();
@@ -139,7 +128,6 @@ router.get('/day-calculations/:code', (req, res) => {
 
   if (!record) return res.status(404).json({ success: false, error: 'Day calculation not found' });
 
-  // Parse week breakdown
   if (record.week_breakdown) {
     try { record.week_breakdown = JSON.parse(record.week_breakdown); } catch (e) {}
   }
@@ -149,7 +137,7 @@ router.get('/day-calculations/:code', (req, res) => {
 
 /**
  * POST /api/payroll/compute-salary
- * Compute salary for all employees in a month
+ * Compute salary for all employees — with zero-day exclusion, gross change, holds
  */
 router.post('/compute-salary', (req, res) => {
   const db = getDb();
@@ -167,6 +155,8 @@ router.post('/compute-salary', (req, res) => {
 
   const results = [];
   const errors = [];
+  const excluded = [];
+  const held = [];
 
   const txn = db.transaction(() => {
     for (const emp of employees) {
@@ -174,6 +164,9 @@ router.post('/compute-salary', (req, res) => {
       if (comp.success) {
         saveSalaryComputation(db, comp);
         results.push(comp);
+        if (comp.salaryHeld) held.push({ code: emp.code, name: emp.name, reason: comp.holdReason });
+      } else if (comp.excluded) {
+        excluded.push({ code: comp.employeeCode, name: emp.name, reason: comp.reason });
       } else {
         errors.push({ employeeCode: emp.code, error: comp.error });
       }
@@ -181,17 +174,20 @@ router.post('/compute-salary', (req, res) => {
   });
   txn();
 
-  // Mark stage 7 done
   db.prepare('UPDATE monthly_imports SET stage_7_done = 1 WHERE month = ? AND year = ?').run(month, year);
 
   const totalNetSalary = results.reduce((s, r) => s + r.netSalary, 0);
   const totalGross = results.reduce((s, r) => s + r.grossEarned, 0);
+  const grossChangedCount = results.filter(r => r.grossChanged).length;
+  const heldCount = results.filter(r => r.salaryHeld).length;
 
   res.json({
     success: true,
     processed: results.length,
     errors: errors.length,
     errorDetails: errors,
+    excluded,
+    held,
     summary: {
       totalNetSalary: Math.round(totalNetSalary * 100) / 100,
       totalGrossSalary: Math.round(totalGross * 100) / 100,
@@ -199,34 +195,26 @@ router.post('/compute-salary', (req, res) => {
       totalPFEmployer: Math.round(results.reduce((s, r) => s + r.pfEmployer, 0) * 100) / 100,
       totalESIEmployee: Math.round(results.reduce((s, r) => s + r.esiEmployee, 0) * 100) / 100,
       totalESIEmployer: Math.round(results.reduce((s, r) => s + r.esiEmployer, 0) * 100) / 100,
+      grossChangedCount,
+      heldCount,
+      excludedCount: excluded.length
     }
   });
 });
 
 /**
  * GET /api/payroll/salary-register
- * Get salary register for a month
+ * Includes new fields: gross_changed, salary_held, hold_reason, prev_month_gross, loan_recovery
  */
 router.get('/salary-register', (req, res) => {
   const db = getDb();
   const { month, year, company } = req.query;
 
   const records = db.prepare(`
-    SELECT sc.employee_code, e.name as employee_name, e.department, e.designation,
-           sc.gross_salary, sc.payable_days,
-           sc.basic_earned, sc.da_earned, sc.hra_earned, sc.other_allowances_earned,
-           sc.gross_earned as total_earned,
-           sc.pf_employee as employee_pf,
-           sc.pf_employer as employer_pf,
-           sc.esi_employee as employee_esi,
-           sc.esi_employer as employer_esi,
-           sc.professional_tax,
-           sc.lop_deduction, sc.tds, sc.advance_recovery, sc.other_deductions,
-           sc.total_deductions,
-           sc.net_salary as net_pay,
-           sc.is_finalised,
-           dc.total_payable_days,
-           dc.days_present, dc.days_absent, dc.lop_days, dc.paid_sundays
+    SELECT sc.*, e.name as employee_name, e.department, e.designation,
+           e.bank_account, e.ifsc,
+           dc.total_payable_days, dc.days_present, dc.days_absent, dc.lop_days, dc.paid_sundays,
+           dc.days_half_present, dc.ot_hours
     FROM salary_computations sc
     LEFT JOIN employees e ON sc.employee_code = e.code
     LEFT JOIN day_calculations dc ON sc.employee_code = dc.employee_code AND sc.month = dc.month AND sc.year = dc.year
@@ -235,22 +223,48 @@ router.get('/salary-register', (req, res) => {
     ORDER BY e.department, e.name
   `).all(...[month, year, company].filter(Boolean));
 
+  const activeRecords = records.filter(r => !r.salary_held);
+  const heldRecords = records.filter(r => r.salary_held);
+
   const totals = records.length > 0 ? {
-    totalGross: records.reduce((s, r) => s + (r.total_earned || 0), 0),
+    totalGross: records.reduce((s, r) => s + (r.gross_earned || 0), 0),
     totalDeductions: records.reduce((s, r) => s + (r.total_deductions || 0), 0),
-    totalNet: records.reduce((s, r) => s + (r.net_pay || 0), 0),
-    totalPFEmployee: records.reduce((s, r) => s + (r.employee_pf || 0), 0),
-    totalPFLiability: records.reduce((s, r) => s + (r.employee_pf || 0) + (r.employer_pf || 0), 0),
-    totalESI: records.reduce((s, r) => s + (r.employee_esi || 0) + (r.employer_esi || 0), 0),
-    count: records.length
+    totalNet: activeRecords.reduce((s, r) => s + (r.net_salary || 0), 0),
+    totalPFEmployee: records.reduce((s, r) => s + (r.pf_employee || 0), 0),
+    totalPFLiability: records.reduce((s, r) => s + (r.pf_employee || 0) + (r.pf_employer || 0), 0),
+    totalESI: records.reduce((s, r) => s + (r.esi_employee || 0) + (r.esi_employer || 0), 0),
+    totalLoanRecovery: records.reduce((s, r) => s + (r.loan_recovery || 0), 0),
+    totalAdvanceRecovery: records.reduce((s, r) => s + (r.advance_recovery || 0), 0),
+    count: records.length,
+    heldCount: heldRecords.length,
+    grossChangedCount: records.filter(r => r.gross_changed).length,
+    bankTransferTotal: activeRecords.reduce((s, r) => s + (r.net_salary || 0), 0)
   } : {};
 
   res.json({ success: true, data: records, totals });
 });
 
 /**
+ * PUT /api/payroll/salary/:code/hold-release
+ * Release a held salary
+ */
+router.put('/salary/:code/hold-release', (req, res) => {
+  const db = getDb();
+  const { code } = req.params;
+  const { month, year } = req.body;
+  const user = req.user?.username || 'admin';
+
+  db.prepare(`
+    UPDATE salary_computations SET
+      salary_held = 0, hold_released = 1, hold_released_by = ?, hold_released_at = datetime('now')
+    WHERE employee_code = ? AND month = ? AND year = ?
+  `).run(user, code, month, year);
+
+  res.json({ success: true, message: `Salary released for ${code}` });
+});
+
+/**
  * GET /api/payroll/payslip/:code
- * Get payslip data for an employee
  */
 router.get('/payslip/:code', (req, res) => {
   const db = getDb();
@@ -263,7 +277,6 @@ router.get('/payslip/:code', (req, res) => {
 
 /**
  * PUT /api/payroll/salary/:code/manual-deductions
- * Update manual deductions (advance, TDS, other)
  */
 router.put('/salary/:code/manual-deductions', (req, res) => {
   const db = getDb();
@@ -273,8 +286,8 @@ router.put('/salary/:code/manual-deductions', (req, res) => {
   db.prepare(`
     UPDATE salary_computations SET
       advance_recovery = ?, tds = ?, other_deductions = ?,
-      total_deductions = pf_employee + esi_employee + professional_tax + ? + ? + lop_deduction + ?,
-      net_salary = gross_earned - (pf_employee + esi_employee + professional_tax + ? + ? + lop_deduction + ?)
+      total_deductions = pf_employee + esi_employee + professional_tax + ? + ? + lop_deduction + ? + COALESCE(loan_recovery, 0),
+      net_salary = gross_earned - (pf_employee + esi_employee + professional_tax + ? + ? + lop_deduction + ? + COALESCE(loan_recovery, 0))
     WHERE employee_code = ? AND month = ? AND year = ?
   `).run(
     advanceRecovery || 0, tds || 0, otherDeductions || 0,
@@ -288,7 +301,6 @@ router.put('/salary/:code/manual-deductions', (req, res) => {
 
 /**
  * POST /api/payroll/finalise
- * Finalise salary for a month
  */
 router.post('/finalise', (req, res) => {
   const db = getDb();

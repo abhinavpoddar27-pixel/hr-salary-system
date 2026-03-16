@@ -23,6 +23,9 @@ const Reports = React.lazy(() => import('./pages/Reports'))
 const Employees = React.lazy(() => import('./pages/Employees'))
 const Settings = React.lazy(() => import('./pages/Settings'))
 const Alerts = React.lazy(() => import('./pages/Alerts'))
+const SalaryAdvance = React.lazy(() => import('./pages/SalaryAdvance'))
+const SalaryInput = React.lazy(() => import('./pages/SalaryInput'))
+const DailyMIS = React.lazy(() => import('./pages/DailyMIS'))
 
 function PageLoader() {
   return (
@@ -76,6 +79,9 @@ export default function App() {
           <Route path="/pipeline/corrections" element={<RequireAuth><Layout title="Stage 5: Manual Corrections"><AttendanceRegister /></Layout></RequireAuth>} />
           <Route path="/pipeline/day-calc" element={<RequireAuth><Layout title="Stage 6: Day Calculation & Leave Adjustment"><DayCalculation /></Layout></RequireAuth>} />
           <Route path="/pipeline/salary" element={<RequireAuth><Layout title="Stage 7: Salary Computation"><SalaryComputation /></Layout></RequireAuth>} />
+          <Route path="/salary-advance" element={<RequireAuth><Layout title="Salary Advance"><SalaryAdvance /></Layout></RequireAuth>} />
+          <Route path="/salary-input" element={<RequireAuth><Layout title="Salary Input & Changes"><SalaryInput /></Layout></RequireAuth>} />
+          <Route path="/daily-mis" element={<RequireAuth><Layout title="Daily MIS"><DailyMIS /></Layout></RequireAuth>} />
           <Route path="/workforce/*" element={<RequireAuth><Layout title="Workforce Analytics"><WorkforceAnalytics /></Layout></RequireAuth>} />
           <Route path="/analytics/*" element={<RequireAuth><Layout title="Attendance Analytics"><Analytics /></Layout></RequireAuth>} />
           <Route path="/compliance/*" element={<RequireAuth><Layout title="Compliance"><Compliance /></Layout></RequireAuth>} />

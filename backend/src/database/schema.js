@@ -270,6 +270,165 @@ function initSchema(db) {
     );
 
     -- ─────────────────────────────────────────────────────────
+    -- SALARY ADVANCES
+    -- ─────────────────────────────────────────────────────────
+
+    CREATE TABLE IF NOT EXISTS salary_advances (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      employee_id INTEGER REFERENCES employees(id),
+      employee_code TEXT NOT NULL,
+      month INTEGER NOT NULL,
+      year INTEGER NOT NULL,
+      working_days_1_to_15 INTEGER DEFAULT 0,
+      is_eligible INTEGER DEFAULT 0,
+      advance_amount REAL DEFAULT 0,
+      calculation_date TEXT,
+      paid INTEGER DEFAULT 0,
+      paid_date TEXT,
+      payment_mode TEXT DEFAULT 'Bank Transfer',
+      recovered INTEGER DEFAULT 0,
+      recovery_month INTEGER,
+      recovery_year INTEGER,
+      created_at TEXT DEFAULT (datetime('now')),
+      UNIQUE(employee_code, month, year)
+    );
+
+    -- ─────────────────────────────────────────────────────────
+    -- SALARY CHANGE REQUESTS
+    -- ─────────────────────────────────────────────────────────
+
+    CREATE TABLE IF NOT EXISTS salary_change_requests (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      employee_id INTEGER REFERENCES employees(id),
+      employee_code TEXT NOT NULL,
+      requested_by TEXT,
+      old_gross REAL,
+      new_gross REAL,
+      old_structure TEXT,
+      new_structure TEXT,
+      reason TEXT,
+      status TEXT DEFAULT 'Pending',
+      approved_by TEXT,
+      approved_at TEXT,
+      created_at TEXT DEFAULT (datetime('now'))
+    );
+
+    -- ─────────────────────────────────────────────────────────
+    -- LOANS & ADVANCE REGISTER
+    -- ─────────────────────────────────────────────────────────
+
+    CREATE TABLE IF NOT EXISTS loans (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      employee_id INTEGER REFERENCES employees(id),
+      employee_code TEXT NOT NULL,
+      loan_type TEXT NOT NULL,
+      principal_amount REAL NOT NULL,
+      interest_rate REAL DEFAULT 0,
+      total_amount REAL NOT NULL,
+      emi_amount REAL NOT NULL,
+      tenure_months INTEGER NOT NULL,
+      start_month INTEGER,
+      start_year INTEGER,
+      status TEXT DEFAULT 'Active',
+      approved_by TEXT,
+      approved_at TEXT,
+      disbursed_date TEXT,
+      disbursement_mode TEXT DEFAULT 'Bank Transfer',
+      total_recovered REAL DEFAULT 0,
+      remaining_balance REAL DEFAULT 0,
+      remarks TEXT,
+      created_at TEXT DEFAULT (datetime('now')),
+      updated_at TEXT DEFAULT (datetime('now'))
+    );
+
+    CREATE TABLE IF NOT EXISTS loan_repayments (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      loan_id INTEGER REFERENCES loans(id),
+      employee_code TEXT NOT NULL,
+      month INTEGER NOT NULL,
+      year INTEGER NOT NULL,
+      emi_amount REAL NOT NULL,
+      principal_component REAL DEFAULT 0,
+      interest_component REAL DEFAULT 0,
+      deducted_from_salary INTEGER DEFAULT 0,
+      deduction_date TEXT,
+      status TEXT DEFAULT 'Pending',
+      remarks TEXT,
+      created_at TEXT DEFAULT (datetime('now'))
+    );
+
+    -- ─────────────────────────────────────────────────────────
+    -- EMPLOYEE DOCUMENTS
+    -- ─────────────────────────────────────────────────────────
+
+    CREATE TABLE IF NOT EXISTS employee_documents (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      employee_id INTEGER REFERENCES employees(id),
+      employee_code TEXT NOT NULL,
+      document_type TEXT NOT NULL,
+      file_name TEXT NOT NULL,
+      file_path TEXT NOT NULL,
+      file_size INTEGER,
+      mime_type TEXT,
+      uploaded_by TEXT,
+      remarks TEXT,
+      created_at TEXT DEFAULT (datetime('now'))
+    );
+
+    -- ─────────────────────────────────────────────────────────
+    -- LEAVE APPLICATIONS
+    -- ─────────────────────────────────────────────────────────
+
+    CREATE TABLE IF NOT EXISTS leave_applications (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      employee_id INTEGER REFERENCES employees(id),
+      employee_code TEXT NOT NULL,
+      leave_type TEXT NOT NULL,
+      start_date TEXT NOT NULL,
+      end_date TEXT NOT NULL,
+      days REAL NOT NULL,
+      reason TEXT,
+      status TEXT DEFAULT 'Pending',
+      applied_at TEXT DEFAULT (datetime('now')),
+      approved_by TEXT,
+      approved_at TEXT,
+      rejection_reason TEXT,
+      remarks TEXT
+    );
+
+    -- ─────────────────────────────────────────────────────────
+    -- NOTIFICATIONS
+    -- ─────────────────────────────────────────────────────────
+
+    CREATE TABLE IF NOT EXISTS notifications (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      type TEXT NOT NULL,
+      title TEXT NOT NULL,
+      message TEXT,
+      action_url TEXT,
+      is_read INTEGER DEFAULT 0,
+      created_at TEXT DEFAULT (datetime('now'))
+    );
+
+    -- ─────────────────────────────────────────────────────────
+    -- EMPLOYEE LIFECYCLE
+    -- ─────────────────────────────────────────────────────────
+
+    CREATE TABLE IF NOT EXISTS employee_lifecycle (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      employee_id INTEGER REFERENCES employees(id),
+      employee_code TEXT NOT NULL,
+      event_type TEXT NOT NULL,
+      event_date TEXT NOT NULL,
+      details TEXT,
+      from_value TEXT,
+      to_value TEXT,
+      remarks TEXT,
+      processed_by TEXT,
+      created_at TEXT DEFAULT (datetime('now'))
+    );
+
+    -- ─────────────────────────────────────────────────────────
     -- COMPLIANCE
     -- ─────────────────────────────────────────────────────────
 
@@ -463,6 +622,54 @@ function initSchema(db) {
     const insertHoliday = db.prepare('INSERT OR IGNORE INTO holidays (date, name, type, is_recurring) VALUES (?, ?, ?, ?)');
     holidays2025.forEach(h => insertHoliday.run(...h));
   }
+
+  // ── Migrations: Add new columns to existing tables ──────────────
+
+  const safeAddColumn = (table, column, type) => {
+    try {
+      db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${type}`);
+    } catch (e) {
+      // Column already exists — ignore
+    }
+  };
+
+  // salary_computations: gross change detection + salary hold + loan recovery
+  safeAddColumn('salary_computations', 'prev_month_gross', 'REAL DEFAULT 0');
+  safeAddColumn('salary_computations', 'gross_changed', 'INTEGER DEFAULT 0');
+  safeAddColumn('salary_computations', 'salary_held', 'INTEGER DEFAULT 0');
+  safeAddColumn('salary_computations', 'hold_reason', 'TEXT');
+  safeAddColumn('salary_computations', 'hold_released', 'INTEGER DEFAULT 0');
+  safeAddColumn('salary_computations', 'hold_released_by', 'TEXT');
+  safeAddColumn('salary_computations', 'hold_released_at', 'TEXT');
+  safeAddColumn('salary_computations', 'loan_recovery', 'REAL DEFAULT 0');
+
+  // employees: enhanced personal info + document support
+  safeAddColumn('employees', 'blood_group', 'TEXT');
+  safeAddColumn('employees', 'emergency_contact_name', 'TEXT');
+  safeAddColumn('employees', 'emergency_contact_phone', 'TEXT');
+  safeAddColumn('employees', 'address_current', 'TEXT');
+  safeAddColumn('employees', 'address_permanent', 'TEXT');
+  safeAddColumn('employees', 'marital_status', 'TEXT');
+  safeAddColumn('employees', 'spouse_name', 'TEXT');
+  safeAddColumn('employees', 'qualification', 'TEXT');
+  safeAddColumn('employees', 'experience_years', 'REAL DEFAULT 0');
+  safeAddColumn('employees', 'previous_employer', 'TEXT');
+  safeAddColumn('employees', 'probation_end_date', 'TEXT');
+  safeAddColumn('employees', 'confirmation_date', 'TEXT');
+  safeAddColumn('employees', 'category', 'TEXT');
+  safeAddColumn('employees', 'photo_path', 'TEXT');
+  safeAddColumn('employees', 'notes', 'TEXT');
+
+  // monthly_imports: daily vs monthly import type
+  safeAddColumn('monthly_imports', 'import_type', "TEXT DEFAULT 'monthly'");
+
+  // ── Add new policy config keys if missing ─────────────────────
+  const insertPolicyIfMissing = db.prepare('INSERT OR IGNORE INTO policy_config (key, value, description) VALUES (?, ?, ?)');
+  insertPolicyIfMissing.run('salary_hold_min_days', '5', 'Minimum payable days below which salary is held');
+  insertPolicyIfMissing.run('advance_cutoff_date', '15', 'Attendance data cutoff date for advance calculation');
+  insertPolicyIfMissing.run('advance_min_working_days', '9', 'Minimum working days (1st-15th) for advance eligibility');
+  insertPolicyIfMissing.run('advance_fraction', '0.3333', 'Fraction of gross salary paid as advance');
+  insertPolicyIfMissing.run('advance_process_date', '19', 'Date of month when advance processing starts');
 
   console.log('✅ Database schema initialized');
 }

@@ -1,0 +1,91 @@
+/**
+ * HR Abbreviation Dictionary
+ * Used throughout the app for tooltips and legend panels.
+ */
+
+const ABBREVIATIONS = {
+  // ── Attendance Statuses ───────────────────────
+  P:     { full: 'Present', desc: 'Employee was present for the full shift' },
+  A:     { full: 'Absent', desc: 'Employee did not report for duty' },
+  WO:    { full: 'Weekly Off', desc: 'Scheduled rest day (usually Sunday)' },
+  WOP:   { full: 'Weekly Off Present', desc: 'Employee worked on their scheduled weekly off' },
+  '½P':  { full: 'Half Day Present', desc: 'Worked less than full shift but met half-day minimum' },
+  'WO½P':{ full: 'Weekly Off Half Present', desc: 'Worked half day on a scheduled weekly off' },
+
+  // ── Leave Types ───────────────────────────────
+  CL:    { full: 'Casual Leave', desc: 'Short-duration leave for personal/urgent matters' },
+  EL:    { full: 'Earned Leave', desc: 'Leave earned proportional to days worked; encashable' },
+  SL:    { full: 'Sick Leave', desc: 'Leave for medical reasons; may require documentation' },
+  LWP:   { full: 'Leave Without Pay', desc: 'Approved leave where no salary is paid' },
+
+  // ── Salary Components ─────────────────────────
+  DA:    { full: 'Dearness Allowance', desc: 'Cost of living adjustment linked to Consumer Price Index' },
+  HRA:   { full: 'House Rent Allowance', desc: 'Tax-beneficial component for housing expenses' },
+  LOP:   { full: 'Loss of Pay', desc: 'Salary deduction for unapproved absence days' },
+  OT:    { full: 'Overtime', desc: 'Hours worked beyond the normal shift duration' },
+  TDS:   { full: 'Tax Deducted at Source', desc: 'Income tax withheld and deposited by employer' },
+
+  // ── Statutory Compliance ──────────────────────
+  PF:    { full: 'Provident Fund', desc: 'Retirement savings: 12% employee + 12% employer of basic + DA' },
+  EPF:   { full: 'Employee Provident Fund', desc: 'Employee\'s 12% contribution towards PF' },
+  EPS:   { full: 'Employee Pension Scheme', desc: 'Employer\'s 8.33% contribution (max ₹1,250/month) for pension' },
+  ESI:   { full: 'Employee State Insurance', desc: 'Health insurance for employees earning up to ₹21,000/month' },
+  PT:    { full: 'Professional Tax', desc: 'State-level tax on employment income (varies by state)' },
+  UAN:   { full: 'Universal Account Number', desc: 'Unique 12-digit PF account identifier assigned by EPFO' },
+  ECR:   { full: 'Electronic Challan cum Return', desc: 'PF monthly contribution filing format for EPFO' },
+
+  // ── Banking & Transfer ────────────────────────
+  NEFT:  { full: 'National Electronic Funds Transfer', desc: 'Bank transfer method used for salary disbursement' },
+  IFSC:  { full: 'Indian Financial System Code', desc: '11-character code identifying a bank branch for transfers' },
+  EMI:   { full: 'Equated Monthly Instalment', desc: 'Fixed monthly repayment amount for loans/advances' },
+
+  // ── HR & Operations ───────────────────────────
+  MIS:   { full: 'Management Information System', desc: 'Daily operational report for management decision-making' },
+  FNF:   { full: 'Full & Final Settlement', desc: 'Final dues payment to an employee at time of exit' },
+  DOJ:   { full: 'Date of Joining', desc: 'The date the employee officially joined the company' },
+  DOE:   { full: 'Date of Exit', desc: 'The date the employee officially left the company' },
+  HOD:   { full: 'Head of Department', desc: 'Senior person responsible for a department' },
+  KPI:   { full: 'Key Performance Indicator', desc: 'Measurable value showing how effectively objectives are met' },
+  CTC:   { full: 'Cost to Company', desc: 'Total annual cost the company bears for an employee' },
+  PAN:   { full: 'Permanent Account Number', desc: '10-character alphanumeric tax identification number' },
+  Dept:  { full: 'Department', desc: 'Organizational unit where the employee works' },
+  Desig: { full: 'Designation', desc: 'Official job title or position of the employee' },
+  Emp:   { full: 'Employee', desc: 'A person employed by the company' },
+  Att:   { full: 'Attendance', desc: 'Record of employee presence and work hours' },
+  Avg:   { full: 'Average', desc: 'The arithmetic mean of a set of values' },
+  Hrs:   { full: 'Hours', desc: 'Working hours logged' },
+  Ded:   { full: 'Deductions', desc: 'Amounts subtracted from gross salary' },
+  Net:   { full: 'Net Salary', desc: 'Take-home pay after all deductions' },
+  Gross: { full: 'Gross Salary', desc: 'Total salary before any deductions' },
+  YTD:   { full: 'Year to Date', desc: 'Cumulative total from the start of the financial year' },
+};
+
+/**
+ * Get the full form and description for an abbreviation.
+ * @param {string} abbr - The abbreviation key
+ * @returns {{ full: string, desc: string } | null}
+ */
+export function getAbbreviation(abbr) {
+  return ABBREVIATIONS[abbr] || null;
+}
+
+/**
+ * Get all abbreviations used on a specific page/context.
+ * @param {string[]} keys - Array of abbreviation keys used on the page
+ * @returns {Array<{ key: string, full: string, desc: string }>}
+ */
+export function getPageAbbreviations(keys) {
+  return keys
+    .filter(k => ABBREVIATIONS[k])
+    .map(k => ({ key: k, ...ABBREVIATIONS[k] }));
+}
+
+/**
+ * Get all abbreviations in the dictionary.
+ * @returns {Array<{ key: string, full: string, desc: string }>}
+ */
+export function getAllAbbreviations() {
+  return Object.entries(ABBREVIATIONS).map(([key, val]) => ({ key, ...val }));
+}
+
+export default ABBREVIATIONS;

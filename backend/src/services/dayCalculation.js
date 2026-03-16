@@ -118,9 +118,13 @@ function calculateDays(employeeCode, month, year, company, attendanceRecords, le
   let otHours = 0;
 
   for (const dateStr of allDates) {
+    const isSunday = getDayOfWeek(dateStr) === 0;
+    const isHoliday = holidayDates.has(dateStr);
+
     const rec = recordByDate[dateStr];
     if (!rec) {
-      if (!holidayDates.has(dateStr) && getDayOfWeek(dateStr) !== 0) daysAbsent++;
+      // Only count as absent if it's a regular working day (not Sunday, not holiday)
+      if (!isHoliday && !isSunday) daysAbsent++;
       continue;
     }
 
@@ -130,7 +134,12 @@ function calculateDays(employeeCode, month, year, company, attendanceRecords, le
     else if (status === 'WOP') { daysPresent += 1; daysWOP += 1; }
     else if (status === '½P') daysHalfPresent += 0.5;
     else if (status === 'WO½P') { daysHalfPresent += 0.5; daysWOP += 0.5; }
-    else if (status === 'A') daysAbsent++;
+    else if (status === 'A') {
+      // Sundays and holidays should NEVER be counted as absent days
+      // They are weekly offs / public holidays, not absent days
+      if (!isSunday && !isHoliday) daysAbsent++;
+    }
+    // WO status on Sunday/weekly off is expected — don't count as absent
 
     // OT hours
     if (rec.overtime_minutes) otHours += rec.overtime_minutes / 60;

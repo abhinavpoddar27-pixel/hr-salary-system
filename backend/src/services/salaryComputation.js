@@ -1,6 +1,7 @@
 /**
  * Salary Computation Service
  * Indian manufacturing payroll — PF, ESI, Professional Tax (Punjab)
+ * Phase 2: + zero-day filter, gross change detection, salary hold, advance/loan recovery
  */
 
 /**
@@ -27,14 +28,77 @@ function calcProfessionalTax(grossSalary, db) {
 }
 
 /**
+ * Check if employee is a new joinee (joined in this month)
+ */
+function isNewJoinee(db, employeeCode, month, year) {
+  const emp = db.prepare('SELECT date_of_joining FROM employees WHERE code = ?').get(employeeCode);
+  if (!emp || !emp.date_of_joining) return false;
+  const doj = new Date(emp.date_of_joining);
+  return doj.getMonth() + 1 === month && doj.getFullYear() === year;
+}
+
+/**
+ * Check if employee has approved leave for this month
+ */
+function hasApprovedLeave(db, employeeCode, month, year) {
+  try {
+    const emp = db.prepare('SELECT id FROM employees WHERE code = ?').get(employeeCode);
+    if (!emp) return false;
+    const monthStr = String(month).padStart(2, '0');
+    const startOfMonth = `${year}-${monthStr}-01`;
+    const endOfMonth = `${year}-${monthStr}-${new Date(year, month, 0).getDate()}`;
+    const leave = db.prepare(`
+      SELECT id FROM leave_applications
+      WHERE employee_code = ? AND status = 'Approved'
+      AND start_date <= ? AND end_date >= ?
+    `).get(employeeCode, endOfMonth, startOfMonth);
+    return !!leave;
+  } catch { return false; }
+}
+
+/**
+ * Get previous month gross salary for comparison
+ */
+function getPrevMonthGross(db, employeeCode, month, year) {
+  let pm = month - 1, py = year;
+  if (pm === 0) { pm = 12; py--; }
+  const prev = db.prepare(`
+    SELECT gross_salary FROM salary_computations
+    WHERE employee_code = ? AND month = ? AND year = ?
+  `).get(employeeCode, pm, py);
+  return prev ? prev.gross_salary : 0;
+}
+
+/**
+ * Get advance recovery amount for this month
+ */
+function getAdvanceRecovery(db, employeeCode, month, year) {
+  try {
+    const adv = db.prepare(`
+      SELECT advance_amount FROM salary_advances
+      WHERE employee_code = ? AND recovery_month = ? AND recovery_year = ?
+      AND paid = 1 AND recovered = 0
+    `).get(employeeCode, month, year);
+    return adv ? adv.advance_amount : 0;
+  } catch { return 0; }
+}
+
+/**
+ * Get loan EMI deductions for this month
+ */
+function getLoanDeductions(db, employeeCode, month, year) {
+  try {
+    const repayments = db.prepare(`
+      SELECT SUM(emi_amount) as total_emi FROM loan_repayments
+      WHERE employee_code = ? AND month = ? AND year = ?
+      AND status = 'Pending'
+    `).get(employeeCode, month, year);
+    return repayments?.total_emi || 0;
+  } catch { return 0; }
+}
+
+/**
  * Compute salary for one employee for a month.
- *
- * @param {Object} db - better-sqlite3 db
- * @param {Object} employee - employee record with code, id
- * @param {number} month
- * @param {number} year
- * @param {string} company
- * @returns {Object} salary computation result
  */
 function computeEmployeeSalary(db, employee, month, year, company) {
   // Get day calculation for this employee
@@ -47,6 +111,18 @@ function computeEmployeeSalary(db, employee, month, year, company) {
     return { success: false, error: 'Day calculation not found. Run Stage 6 first.' };
   }
 
+  // ── Zero-day check ──
+  const daysPresent = dayCalc.days_present || 0;
+  const daysHalfPresent = dayCalc.days_half_present || 0;
+  if (daysPresent === 0 && daysHalfPresent === 0) {
+    return {
+      success: false,
+      excluded: true,
+      employeeCode: employee.code,
+      reason: 'Zero working days — no attendance recorded'
+    };
+  }
+
   // Get salary structure (most recent effective from <= current month)
   const monthStr = `${year}-${String(month).padStart(2,'0')}-01`;
   const salStruct = db.prepare(`
@@ -56,7 +132,7 @@ function computeEmployeeSalary(db, employee, month, year, company) {
   `).get(employee.id, monthStr);
 
   if (!salStruct) {
-    return { success: false, error: 'Salary structure not found. Configure in Settings → Employee Master.' };
+    return { success: false, error: 'Salary structure not found. Configure in Settings > Employee Master.' };
   }
 
   // Policy values
@@ -68,6 +144,7 @@ function computeEmployeeSalary(db, employee, month, year, company) {
   const esiThreshold = parseFloat(getPolicyValue(db, 'esi_threshold', 21000));
   const pfWageCeiling = parseFloat(getPolicyValue(db, 'pf_wage_ceiling', 15000));
   const otRate = parseFloat(getPolicyValue(db, 'ot_rate_multiplier', 2));
+  const holdMinDays = parseFloat(getPolicyValue(db, 'salary_hold_min_days', 5));
 
   // Gross monthly salary
   const basicMonthly = salStruct.basic || 0;
@@ -94,18 +171,14 @@ function computeEmployeeSalary(db, employee, month, year, company) {
 
   // OT pay
   const otHours = dayCalc.ot_hours || 0;
-  const basicHourlyRate = basicMonthly / (divisor * 8); // 8 hours per day baseline
+  const basicHourlyRate = basicMonthly / (divisor * 8);
   const otPay = Math.round(otHours * basicHourlyRate * otRate * 100) / 100;
 
   // Gross earned
   const grossEarned = basicEarned + daEarned + hraEarned + conveyanceEarned + otherEarned + otPay;
 
   // ─── PF ───
-  let pfEmployee = 0;
-  let pfEmployer = 0;
-  let pfWages = 0;
-  let eps = 0;
-
+  let pfEmployee = 0, pfEmployer = 0, pfWages = 0, eps = 0;
   if (salStruct.pf_applicable) {
     const pfWageBase = pfWageCeiling > 0
       ? Math.min(basicEarned + daEarned, pfWageCeiling)
@@ -113,15 +186,11 @@ function computeEmployeeSalary(db, employee, month, year, company) {
     pfWages = Math.round(pfWageBase * 100) / 100;
     pfEmployee = Math.round(pfWageBase * pfEmpRate * 100) / 100;
     pfEmployer = Math.round(pfWageBase * pfEmprRate * 100) / 100;
-    // EPS: 8.33% of pf wages (capped at 1250)
     eps = Math.min(Math.round(pfWageBase * 0.0833 * 100) / 100, 1250);
   }
 
   // ─── ESI ───
-  let esiEmployee = 0;
-  let esiEmployer = 0;
-  let esiWages = 0;
-
+  let esiEmployee = 0, esiEmployer = 0, esiWages = 0;
   if (salStruct.esi_applicable && grossMonthly <= esiThreshold) {
     esiWages = Math.round(grossEarned * 100) / 100;
     esiEmployee = Math.round(grossEarned * esiEmpRate * 100) / 100;
@@ -134,18 +203,40 @@ function computeEmployeeSalary(db, employee, month, year, company) {
   // ─── LOP Deduction ───
   const lopDeduction = Math.round(lopDays * perDayRate * 100) / 100;
 
-  // ─── Advance Recovery (manual, from existing record or 0) ───
+  // ─── Advance Recovery (from salary_advances table) ───
+  const autoAdvanceRecovery = getAdvanceRecovery(db, employee.code, month, year);
+
+  // ─── Loan EMI Recovery ───
+  const loanRecovery = getLoanDeductions(db, employee.code, month, year);
+
+  // ─── Preserve manual values if record already exists ───
   const existingComp = db.prepare(`
-    SELECT advance_recovery, tds, other_deductions FROM salary_computations
+    SELECT tds, other_deductions, advance_recovery FROM salary_computations
     WHERE employee_code = ? AND month = ? AND year = ?
   `).get(employee.code, month, year);
-  const advanceRecovery = existingComp?.advance_recovery || 0;
   const tds = existingComp?.tds || 0;
   const otherDeductions = existingComp?.other_deductions || 0;
+  // Use auto advance if available, else preserve manual
+  const advanceRecovery = autoAdvanceRecovery > 0 ? autoAdvanceRecovery : (existingComp?.advance_recovery || 0);
 
   // ─── Total Deductions & Net ───
-  const totalDeductions = pfEmployee + esiEmployee + professionalTax + tds + advanceRecovery + lopDeduction + otherDeductions;
+  const totalDeductions = pfEmployee + esiEmployee + professionalTax + tds + advanceRecovery + lopDeduction + otherDeductions + loanRecovery;
   const netSalary = Math.max(0, Math.round((grossEarned - totalDeductions) * 100) / 100);
+
+  // ─── Gross Change Detection ───
+  const prevMonthGross = getPrevMonthGross(db, employee.code, month, year);
+  const grossChanged = (prevMonthGross > 0 && Math.abs(grossMonthly - prevMonthGross) > 0.01) ? 1 : 0;
+
+  // ─── Salary Hold Logic ───
+  let salaryHeld = 0, holdReason = '';
+  if (payableDays < holdMinDays) {
+    const newJoinee = isNewJoinee(db, employee.code, month, year);
+    const hasLeave = hasApprovedLeave(db, employee.code, month, year);
+    if (!newJoinee && !hasLeave) {
+      salaryHeld = 1;
+      holdReason = `Only ${payableDays} payable days (min ${holdMinDays} required)`;
+    }
+  }
 
   return {
     success: true,
@@ -155,15 +246,18 @@ function computeEmployeeSalary(db, employee, month, year, company) {
     grossSalary: grossMonthly,
     payableDays: Math.round(payableDays * 100) / 100,
     perDayRate: Math.round(perDayRate * 100) / 100,
-    basicEarned, daEarned, hraEarned, conveyanceEarned, otherEarned: otherEarned,
+    basicEarned, daEarned, hraEarned, conveyanceEarned, otherEarned,
     otPay, grossEarned,
     pfWages, esiWages, eps,
     pfEmployee, pfEmployer,
     esiEmployee, esiEmployer,
     professionalTax, tds,
     advanceRecovery, lopDeduction, otherDeductions,
+    loanRecovery,
     totalDeductions: Math.round(totalDeductions * 100) / 100,
-    netSalary
+    netSalary,
+    prevMonthGross, grossChanged,
+    salaryHeld, holdReason
   };
 }
 
@@ -178,14 +272,16 @@ function saveSalaryComputation(db, comp) {
       ot_pay, gross_earned,
       pf_wages, esi_wages, pf_employee, pf_employer, eps, esi_employee, esi_employer,
       professional_tax, tds, advance_recovery, lop_deduction, other_deductions,
-      total_deductions, net_salary
+      total_deductions, net_salary,
+      prev_month_gross, gross_changed, salary_held, hold_reason, loan_recovery
     ) VALUES (
       ?, ?, ?, ?, ?, ?, ?,
       ?, ?, ?, ?, ?,
       ?, ?,
       ?, ?, ?, ?, ?, ?, ?,
       ?, ?, ?, ?, ?,
-      ?, ?
+      ?, ?,
+      ?, ?, ?, ?, ?
     )
     ON CONFLICT(employee_code, month, year, company) DO UPDATE SET
       gross_salary = excluded.gross_salary,
@@ -209,6 +305,11 @@ function saveSalaryComputation(db, comp) {
       lop_deduction = excluded.lop_deduction,
       total_deductions = excluded.total_deductions,
       net_salary = excluded.net_salary,
+      prev_month_gross = excluded.prev_month_gross,
+      gross_changed = excluded.gross_changed,
+      salary_held = excluded.salary_held,
+      hold_reason = excluded.hold_reason,
+      loan_recovery = excluded.loan_recovery,
       is_finalised = 0
   `).run(
     comp.employeeCode, comp.month, comp.year, comp.company,
@@ -217,8 +318,31 @@ function saveSalaryComputation(db, comp) {
     comp.otPay, comp.grossEarned,
     comp.pfWages, comp.esiWages, comp.pfEmployee, comp.pfEmployer, comp.eps, comp.esiEmployee, comp.esiEmployer,
     comp.professionalTax, comp.tds, comp.advanceRecovery, comp.lopDeduction, comp.otherDeductions,
-    comp.totalDeductions, comp.netSalary
+    comp.totalDeductions, comp.netSalary,
+    comp.prevMonthGross, comp.grossChanged, comp.salaryHeld, comp.holdReason, comp.loanRecovery
   );
+
+  // Mark advance as recovered if applicable
+  if (comp.advanceRecovery > 0) {
+    try {
+      db.prepare(`
+        UPDATE salary_advances SET recovered = 1
+        WHERE employee_code = ? AND recovery_month = ? AND recovery_year = ?
+        AND paid = 1 AND recovered = 0
+      `).run(comp.employeeCode, comp.month, comp.year);
+    } catch {}
+  }
+
+  // Mark loan repayments as deducted
+  if (comp.loanRecovery > 0) {
+    try {
+      db.prepare(`
+        UPDATE loan_repayments SET status = 'Deducted', deducted_from_salary = 1
+        WHERE employee_code = ? AND month = ? AND year = ?
+        AND status = 'Pending'
+      `).run(comp.employeeCode, comp.month, comp.year);
+    } catch {}
+  }
 }
 
 /**
@@ -228,7 +352,6 @@ function generatePayslipData(db, employeeCode, month, year) {
   const employee = db.prepare('SELECT * FROM employees WHERE code = ?').get(employeeCode);
   const comp = db.prepare('SELECT * FROM salary_computations WHERE employee_code = ? AND month = ? AND year = ?').get(employeeCode, month, year);
   const dayCalc = db.prepare('SELECT * FROM day_calculations WHERE employee_code = ? AND month = ? AND year = ?').get(employeeCode, month, year);
-  const salStruct = employee ? db.prepare('SELECT * FROM salary_structures WHERE employee_id = ? ORDER BY effective_from DESC LIMIT 1').get(employee.id) : null;
 
   if (!comp || !dayCalc) return null;
 
@@ -265,6 +388,7 @@ function generatePayslipData(db, employeeCode, month, year) {
       { label: 'Professional Tax', amount: comp.professional_tax },
       { label: 'TDS', amount: comp.tds },
       { label: 'Advance Recovery', amount: comp.advance_recovery },
+      { label: 'Loan EMI', amount: comp.loan_recovery },
       { label: 'LOP Deduction', amount: comp.lop_deduction },
       { label: 'Other Deductions', amount: comp.other_deductions }
     ].filter(d => d.amount > 0),
@@ -273,6 +397,10 @@ function generatePayslipData(db, employeeCode, month, year) {
     netSalary: comp.net_salary,
     pfEmployer: comp.pf_employer,
     esiEmployer: comp.esi_employer,
+    grossChanged: comp.gross_changed,
+    salaryHeld: comp.salary_held,
+    holdReason: comp.hold_reason,
+    prevMonthGross: comp.prev_month_gross,
     generatedAt: new Date().toISOString()
   };
 }

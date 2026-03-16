@@ -255,6 +255,74 @@ router.get('/register', (req, res) => {
 });
 
 /**
+ * GET /api/attendance/daily/:code
+ * Get daily attendance for an employee for calendar view
+ */
+router.get('/daily/:code', (req, res) => {
+  const db = getDb();
+  const { code } = req.params;
+  const { month, year } = req.query;
+
+  if (!month || !year) {
+    return res.status(400).json({ success: false, error: 'month and year required' });
+  }
+
+  const records = db.prepare(`
+    SELECT id, date, status_original, status_final,
+      in_time_original, in_time_final, out_time_original, out_time_final,
+      actual_hours, is_night_shift, is_miss_punch, miss_punch_type,
+      miss_punch_resolved, is_late_arrival, late_by_minutes,
+      overtime_minutes, correction_remark
+    FROM attendance_processed
+    WHERE employee_code = ? AND month = ? AND year = ? AND is_night_out_only = 0
+    ORDER BY date
+  `).all(code, month, year);
+
+  res.json({ success: true, data: records });
+});
+
+/**
+ * PUT /api/attendance/record/:id/shift
+ * Update shift assignment for a record and recalculate late/early metrics
+ */
+router.put('/record/:id/shift', (req, res) => {
+  const db = getDb();
+  const { id } = req.params;
+  const { shiftId } = req.body;
+
+  const record = db.prepare('SELECT * FROM attendance_processed WHERE id = ?').get(id);
+  if (!record) return res.status(404).json({ success: false, error: 'Record not found' });
+
+  const shift = db.prepare('SELECT * FROM shifts WHERE id = ?').get(shiftId);
+  if (!shift) return res.status(404).json({ success: false, error: 'Shift not found' });
+
+  // Recalculate late arrival based on new shift
+  let isLate = 0, lateBy = 0;
+  const inTime = record.in_time_final || record.in_time_original;
+  if (inTime && shift.start_time) {
+    const [ih, im] = inTime.split(':').map(Number);
+    const [sh, sm] = shift.start_time.split(':').map(Number);
+    const grace = shift.grace_minutes || 0;
+    const diffMin = (ih * 60 + im) - (sh * 60 + sm);
+    if (diffMin > grace) {
+      isLate = 1;
+      lateBy = diffMin;
+    }
+  }
+
+  db.prepare(`
+    UPDATE attendance_processed SET
+      shift_id = ?, shift_detected = ?,
+      is_late_arrival = ?, late_by_minutes = ?
+    WHERE id = ?
+  `).run(shiftId, shift.name, isLate, lateBy, id);
+
+  logAudit('attendance_processed', id, 'shift_id', record.shift_id, shiftId, 'Stage 3', `Shift changed to ${shift.name}`);
+
+  res.json({ success: true, data: { shiftId, shiftName: shift.name, isLate, lateBy } });
+});
+
+/**
  * GET /api/attendance/validation-status
  * Check if all records are ready to proceed
  */
