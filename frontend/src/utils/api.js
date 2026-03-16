@@ -59,6 +59,8 @@ export const rejectNightShift = (id) => api.post(`/attendance/night-shifts/${id}
 export const updateAttendanceRecord = (id, data) => api.put(`/attendance/record/${id}`, data)
 export const getAttendanceRegister = (params) => api.get('/attendance/register', { params })
 export const getValidationStatus = (params) => api.get('/attendance/validation-status', { params })
+export const getEmployeeDailyAttendance = (code, month, year) => api.get(`/attendance/daily/${code}`, { params: { month, year } })
+export const updateRecordShift = (id, data) => api.put(`/attendance/record/${id}/shift`, data)
 
 // ── Employees ──────────────────────────────────────────
 export const getEmployees = (params) => api.get('/employees', { params })
@@ -92,6 +94,10 @@ export const getAbsentees = (month, year) => api.get('/analytics/absentees', { p
 export const getPunctualityReport = (month, year) => api.get('/analytics/punctuality', { params: { month, year } })
 export const getDepartmentStats = (month, year) => api.get('/analytics/departments', { params: { month, year } })
 export const getAttendanceHeatmap = (month, year) => api.get('/analytics/heatmap', { params: { month, year } })
+export const getOvertimeReport = (month, year) => api.get('/analytics/overtime', { params: { month, year } })
+export const getWorkingHoursReport = (month, year) => api.get('/analytics/working-hours', { params: { month, year } })
+export const getDepartmentDeepDive = (dept, month, year) => api.get(`/analytics/department/${encodeURIComponent(dept)}`, { params: { month, year } })
+export const releaseHeldSalary = (code, month, year) => api.put(`/payroll/salary/${code}/hold-release`, { month, year })
 export const getAlerts = (month, year, unread) => api.get('/analytics/alerts', { params: { month, year, ...(unread ? { unread: 'true' } : {}) } })
 export const generateAlerts = (month, year) => api.post('/analytics/alerts/generate', { month, year })
 export const markAlertRead = (id) => api.put(`/analytics/alerts/${id}/read`)

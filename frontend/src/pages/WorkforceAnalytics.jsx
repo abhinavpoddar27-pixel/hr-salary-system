@@ -203,16 +203,16 @@ export default function WorkforceAnalytics() {
           </div>
 
           {/* New Joins */}
-          {(attrition.newJoinsList || []).length > 0 && (
+          {(attrition.newJoinDetails || []).length > 0 && (
             <div className="card overflow-hidden">
               <div className="card-header">
-                <h3 className="font-semibold text-slate-700 text-green-700">🟢 New Joins</h3>
+                <h3 className="font-semibold text-green-700">New Joins</h3>
               </div>
               <div className="overflow-x-auto">
                 <table className="table-compact w-full">
                   <thead><tr><th>Employee</th><th>Code</th><th>Department</th><th>Company</th></tr></thead>
                   <tbody>
-                    {attrition.newJoinsList.map((e, i) => (
+                    {attrition.newJoinDetails.map((e, i) => (
                       <tr key={i}>
                         <td className="font-medium">{e.name}</td>
                         <td className="text-slate-500">{e.code}</td>
@@ -227,16 +227,16 @@ export default function WorkforceAnalytics() {
           )}
 
           {/* Exits */}
-          {(attrition.exitsList || []).length > 0 && (
+          {(attrition.exitDetails || []).length > 0 && (
             <div className="card overflow-hidden">
               <div className="card-header">
-                <h3 className="font-semibold text-red-700">🔴 Exits</h3>
+                <h3 className="font-semibold text-red-700">Exits</h3>
               </div>
               <div className="overflow-x-auto">
                 <table className="table-compact w-full">
                   <thead><tr><th>Employee</th><th>Code</th><th>Department</th><th>Company</th></tr></thead>
                   <tbody>
-                    {attrition.exitsList.map((e, i) => (
+                    {attrition.exitDetails.map((e, i) => (
                       <tr key={i}>
                         <td className="font-medium">{e.name}</td>
                         <td className="text-slate-500">{e.code}</td>

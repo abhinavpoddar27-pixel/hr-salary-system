@@ -78,11 +78,19 @@ function computeOrgOverview(db, month, year) {
 
   const attendanceRate = totalPossible > 0 ? Math.round((totalPresent / totalPossible) * 1000) / 10 : 0;
 
+  // Avg hours and miss punches
+  let totalHours = 0, hoursCount = 0, missPunchCount = 0;
+  for (const r of records) {
+    if (r.actual_hours && r.actual_hours > 0) { totalHours += r.actual_hours; hoursCount++; }
+    if (!r.in_time_original || !r.out_time_original) missPunchCount++;
+  }
+  const avgHours = hoursCount > 0 ? Math.round(totalHours / hoursCount * 100) / 100 : 0;
+
   // Department stats
   const deptStats = {};
   for (const r of records) {
     const dept = r.department || 'Unknown';
-    if (!deptStats[dept]) deptStats[dept] = { employees: new Set(), present: 0, possible: 0, late: 0, ot: 0 };
+    if (!deptStats[dept]) deptStats[dept] = { employees: new Set(), present: 0, possible: 0, late: 0, ot: 0, hours: 0, hoursCount: 0, missPunch: 0, absent: 0 };
     deptStats[dept].employees.add(r.employee_code);
 
     const dow = new Date(r.date + 'T12:00:00').getDay();
@@ -91,18 +99,26 @@ function computeOrgOverview(db, month, year) {
       const status = r.status_final || r.status_original || '';
       if (status === 'P' || status === 'WOP') deptStats[dept].present += 1;
       else if (status === '½P' || status === 'WO½P') deptStats[dept].present += 0.5;
+      else if (status === 'A') deptStats[dept].absent++;
     }
 
     if (r.is_late_arrival) deptStats[dept].late++;
     if (r.overtime_minutes) deptStats[dept].ot += r.overtime_minutes;
+    if (r.actual_hours > 0) { deptStats[dept].hours += r.actual_hours; deptStats[dept].hoursCount++; }
+    if (!r.in_time_original || !r.out_time_original) deptStats[dept].missPunch++;
   }
 
   const departments = Object.entries(deptStats).map(([dept, stats]) => ({
     department: dept,
+    totalEmployees: stats.employees.size,
     headcount: stats.employees.size,
+    presentDays: Math.round(stats.present * 10) / 10,
+    absentDays: stats.absent,
     attendanceRate: stats.possible > 0 ? Math.round((stats.present / stats.possible) * 1000) / 10 : 0,
     punctualityIssues: stats.late,
     overtimeHours: Math.round(stats.ot / 60),
+    avgActualHours: stats.hoursCount > 0 ? Math.round(stats.hours / stats.hoursCount * 100) / 100 : 0,
+    missPunchCount: stats.missPunch,
     isContractor: isContractorDept(dept)
   })).sort((a, b) => b.headcount - a.headcount);
 
@@ -112,13 +128,30 @@ function computeOrgOverview(db, month, year) {
     FROM salary_computations WHERE month = ? AND year = ?
   `).get(month, year);
 
+  // Total present / absent day counts
+  let totalPresentDays = 0, totalAbsentDays = 0;
+  for (const r of records) {
+    const dow = new Date(r.date + 'T12:00:00').getDay();
+    if (dow === 0) continue;
+    const status = r.status_final || r.status_original || '';
+    if (status === 'P' || status === 'WOP') totalPresentDays += 1;
+    else if (status === '½P' || status === 'WO½P') totalPresentDays += 0.5;
+    else if (status === 'A') totalAbsentDays++;
+  }
+
   return {
     month, year,
     totalHeadcount,
+    totalEmployees: totalHeadcount,
     companyBreakdown: Object.entries(companyBreakdown).map(([company, emps]) => ({ company, count: emps.size })),
     permanentCount,
     contractorCount,
     attendanceRate,
+    avgAttendanceRate: attendanceRate,
+    avgHours,
+    missPunchCount,
+    totalPresentDays: Math.round(totalPresentDays * 10) / 10,
+    totalAbsentDays,
     departments,
     salaryOutflow: salaryData?.total || 0,
     grossOutflow: salaryData?.gross || 0
@@ -131,8 +164,10 @@ function computeOrgOverview(db, month, year) {
 function computeHeadcountTrend(db, months) {
   // months: array of {month, year}
   const trend = [];
+  const MONTH_NAMES = ['','Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
 
   for (const { month, year } of months) {
+    // Try attendance data first
     const result = db.prepare(`
       SELECT COUNT(DISTINCT employee_code) as count, company
       FROM attendance_processed
@@ -140,32 +175,109 @@ function computeHeadcountTrend(db, months) {
       GROUP BY company
     `).all(month, year);
 
-    const total = db.prepare(`
+    let total = db.prepare(`
       SELECT COUNT(DISTINCT employee_code) as count
       FROM attendance_processed
       WHERE month = ? AND year = ? AND is_night_out_only = 0
     `).get(month, year);
 
+    let totalCount = total?.count || 0;
+    let byCompany = result;
+
+    // Fallback to employee master if no attendance data
+    if (totalCount === 0) {
+      const monthStr = String(month).padStart(2, '0');
+      const monthEnd = `${year}-${monthStr}-31`;
+      const monthStart = `${year}-${monthStr}-01`;
+
+      totalCount = db.prepare(`
+        SELECT COUNT(*) as count FROM employees
+        WHERE date_of_joining <= ?
+        AND (date_of_exit IS NULL OR date_of_exit = '' OR date_of_exit > ?)
+        AND status != 'Inactive'
+      `).get(monthEnd, monthStart)?.count || 0;
+
+      byCompany = db.prepare(`
+        SELECT COUNT(*) as count, company FROM employees
+        WHERE date_of_joining <= ?
+        AND (date_of_exit IS NULL OR date_of_exit = '' OR date_of_exit > ?)
+        AND status != 'Inactive'
+        GROUP BY company
+      `).all(monthEnd, monthStart);
+    }
+
+    // Permanent vs Contractor split
+    let permCount = 0, contCount = 0;
+    const empCodes = totalCount > 0 ? db.prepare(`
+      SELECT DISTINCT employee_code FROM attendance_processed
+      WHERE month = ? AND year = ? AND is_night_out_only = 0
+    `).all(month, year).map(r => r.employee_code) : [];
+
+    if (empCodes.length > 0) {
+      for (const code of empCodes) {
+        const emp = db.prepare('SELECT department FROM employees WHERE code = ?').get(code);
+        if (isContractorDept(emp?.department)) contCount++;
+        else permCount++;
+      }
+    } else {
+      // Fallback from employee master
+      const monthStr = String(month).padStart(2, '0');
+      const monthEnd = `${year}-${monthStr}-31`;
+      const monthStart = `${year}-${monthStr}-01`;
+      const emps = db.prepare(`
+        SELECT department FROM employees
+        WHERE date_of_joining <= ?
+        AND (date_of_exit IS NULL OR date_of_exit = '' OR date_of_exit > ?)
+        AND status != 'Inactive'
+      `).all(monthEnd, monthStart);
+      for (const emp of emps) {
+        if (isContractorDept(emp.department)) contCount++;
+        else permCount++;
+      }
+    }
+
     trend.push({
       month, year,
-      label: `${['','Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'][month]} ${year}`,
-      total: total?.count || 0,
-      byCompany: result
+      label: `${MONTH_NAMES[month]} ${year}`,
+      monthLabel: `${MONTH_NAMES[month]} ${year}`,
+      total: totalCount,
+      totalEmployees: totalCount,
+      permanentCount: permCount,
+      contractorCount: contCount,
+      byCompany
     });
   }
 
   // Detect joins and exits
   for (let i = 1; i < trend.length; i++) {
-    const prev = db.prepare(`
-      SELECT DISTINCT employee_code FROM attendance_processed
-      WHERE month = ? AND year = ? AND is_night_out_only = 0
-    `).all(trend[i-1].month, trend[i-1].year).map(r => r.employee_code);
+    const getPrev = () => {
+      const codes = db.prepare(`
+        SELECT DISTINCT employee_code FROM attendance_processed
+        WHERE month = ? AND year = ? AND is_night_out_only = 0
+      `).all(trend[i-1].month, trend[i-1].year).map(r => r.employee_code);
+      if (codes.length > 0) return codes;
+      // Fallback
+      const ms = String(trend[i-1].month).padStart(2,'0');
+      return db.prepare(`
+        SELECT code as employee_code FROM employees
+        WHERE date_of_joining <= ? AND (date_of_exit IS NULL OR date_of_exit = '' OR date_of_exit > ?) AND status != 'Inactive'
+      `).all(`${trend[i-1].year}-${ms}-31`, `${trend[i-1].year}-${ms}-01`).map(r => r.employee_code);
+    };
+    const getCurr = () => {
+      const codes = db.prepare(`
+        SELECT DISTINCT employee_code FROM attendance_processed
+        WHERE month = ? AND year = ? AND is_night_out_only = 0
+      `).all(trend[i].month, trend[i].year).map(r => r.employee_code);
+      if (codes.length > 0) return codes;
+      const ms = String(trend[i].month).padStart(2,'0');
+      return db.prepare(`
+        SELECT code as employee_code FROM employees
+        WHERE date_of_joining <= ? AND (date_of_exit IS NULL OR date_of_exit = '' OR date_of_exit > ?) AND status != 'Inactive'
+      `).all(`${trend[i].year}-${ms}-31`, `${trend[i].year}-${ms}-01`).map(r => r.employee_code);
+    };
 
-    const curr = db.prepare(`
-      SELECT DISTINCT employee_code FROM attendance_processed
-      WHERE month = ? AND year = ? AND is_night_out_only = 0
-    `).all(trend[i].month, trend[i].year).map(r => r.employee_code);
-
+    const prev = getPrev();
+    const curr = getCurr();
     const prevSet = new Set(prev);
     const currSet = new Set(curr);
 
@@ -401,12 +513,177 @@ function generateAlerts(db, month, year) {
   return alerts;
 }
 
+/**
+ * Compute overtime analysis
+ */
+function computeOvertimeReport(db, month, year) {
+  const records = db.prepare(`
+    SELECT ap.employee_code, ap.overtime_minutes, ap.actual_hours, ap.date,
+           e.name, e.department, e.company
+    FROM attendance_processed ap
+    LEFT JOIN employees e ON ap.employee_code = e.code
+    WHERE ap.month = ? AND ap.year = ? AND ap.is_night_out_only = 0
+    AND ap.overtime_minutes > 0
+  `).all(month, year);
+
+  const byEmp = {};
+  for (const r of records) {
+    if (!byEmp[r.employee_code]) {
+      byEmp[r.employee_code] = {
+        code: r.employee_code, name: r.name, department: r.department,
+        company: r.company, totalOTMinutes: 0, otDays: 0, maxOT: 0
+      };
+    }
+    byEmp[r.employee_code].totalOTMinutes += (r.overtime_minutes || 0);
+    byEmp[r.employee_code].otDays++;
+    if (r.overtime_minutes > byEmp[r.employee_code].maxOT) byEmp[r.employee_code].maxOT = r.overtime_minutes;
+  }
+
+  const employees = Object.values(byEmp).map(e => ({
+    ...e,
+    totalOTHours: Math.round(e.totalOTMinutes / 60 * 10) / 10,
+    avgOTMinutes: e.otDays > 0 ? Math.round(e.totalOTMinutes / e.otDays) : 0
+  })).sort((a, b) => b.totalOTMinutes - a.totalOTMinutes);
+
+  // Department summary
+  const deptMap = {};
+  for (const e of employees) {
+    const dept = e.department || 'Unknown';
+    if (!deptMap[dept]) deptMap[dept] = { totalMinutes: 0, employees: 0, days: 0 };
+    deptMap[dept].totalMinutes += e.totalOTMinutes;
+    deptMap[dept].employees++;
+    deptMap[dept].days += e.otDays;
+  }
+
+  const totalOTMinutes = employees.reduce((s, e) => s + e.totalOTMinutes, 0);
+  const totalOTHours = Math.round(totalOTMinutes / 60 * 10) / 10;
+
+  return {
+    month, year,
+    totalOTHours,
+    totalOTMinutes,
+    employeesWithOT: employees.length,
+    topOTEmployees: employees.slice(0, 20),
+    allEmployees: employees,
+    departmentSummary: Object.entries(deptMap).map(([dept, s]) => ({
+      department: dept,
+      totalHours: Math.round(s.totalMinutes / 60 * 10) / 10,
+      employees: s.employees,
+      totalDays: s.days,
+      avgPerEmployee: s.employees > 0 ? Math.round(s.totalMinutes / s.employees / 60 * 10) / 10 : 0
+    })).sort((a, b) => b.totalHours - a.totalHours)
+  };
+}
+
+/**
+ * Compute working hours distribution
+ */
+function computeWorkingHoursReport(db, month, year) {
+  const records = db.prepare(`
+    SELECT ap.employee_code, ap.actual_hours, ap.date,
+           e.name, e.department
+    FROM attendance_processed ap
+    LEFT JOIN employees e ON ap.employee_code = e.code
+    WHERE ap.month = ? AND ap.year = ? AND ap.is_night_out_only = 0
+    AND ap.actual_hours > 0
+  `).all(month, year);
+
+  // Histogram buckets
+  const buckets = { '<6h': 0, '6-7h': 0, '7-8h': 0, '8-9h': 0, '9-10h': 0, '10-11h': 0, '11-12h': 0, '>12h': 0 };
+  for (const r of records) {
+    const h = r.actual_hours;
+    if (h < 6) buckets['<6h']++;
+    else if (h < 7) buckets['6-7h']++;
+    else if (h < 8) buckets['7-8h']++;
+    else if (h < 9) buckets['8-9h']++;
+    else if (h < 10) buckets['9-10h']++;
+    else if (h < 11) buckets['10-11h']++;
+    else if (h < 12) buckets['11-12h']++;
+    else buckets['>12h']++;
+  }
+
+  // Per employee avg hours
+  const byEmp = {};
+  for (const r of records) {
+    if (!byEmp[r.employee_code]) byEmp[r.employee_code] = { code: r.employee_code, name: r.name, department: r.department, total: 0, count: 0 };
+    byEmp[r.employee_code].total += r.actual_hours;
+    byEmp[r.employee_code].count++;
+  }
+
+  const employees = Object.values(byEmp).map(e => ({
+    ...e,
+    avgHours: Math.round(e.total / e.count * 100) / 100
+  })).sort((a, b) => b.avgHours - a.avgHours);
+
+  const totalHours = records.reduce((s, r) => s + r.actual_hours, 0);
+  const avgHours = records.length > 0 ? Math.round(totalHours / records.length * 100) / 100 : 0;
+
+  return {
+    month, year,
+    distribution: Object.entries(buckets).map(([range, count]) => ({ range, count })),
+    avgHoursPerDay: avgHours,
+    totalRecords: records.length,
+    topWorkers: employees.slice(0, 15),
+    lowWorkers: employees.filter(e => e.avgHours < 7).sort((a, b) => a.avgHours - b.avgHours).slice(0, 15)
+  };
+}
+
+/**
+ * Department deep-dive: employee-level stats for a specific department
+ */
+function computeDepartmentDeepDive(db, department, month, year) {
+  const records = db.prepare(`
+    SELECT ap.*, e.name, e.department, e.designation
+    FROM attendance_processed ap
+    LEFT JOIN employees e ON ap.employee_code = e.code
+    WHERE ap.month = ? AND ap.year = ? AND ap.is_night_out_only = 0
+    AND e.department = ?
+  `).all(month, year, department);
+
+  if (records.length === 0) return { department, employees: [] };
+
+  const byEmp = {};
+  for (const r of records) {
+    if (!byEmp[r.employee_code]) {
+      byEmp[r.employee_code] = {
+        code: r.employee_code, name: r.name, designation: r.designation,
+        present: 0, absent: 0, halfDay: 0, total: 0, late: 0, otMinutes: 0,
+        hours: 0, hoursCount: 0, missPunch: 0
+      };
+    }
+    const dow = new Date(r.date + 'T12:00:00').getDay();
+    if (dow !== 0) {
+      byEmp[r.employee_code].total++;
+      const status = r.status_final || r.status_original || '';
+      if (status === 'P' || status === 'WOP') byEmp[r.employee_code].present++;
+      else if (status === '½P' || status === 'WO½P') { byEmp[r.employee_code].present += 0.5; byEmp[r.employee_code].halfDay++; }
+      else if (status === 'A') byEmp[r.employee_code].absent++;
+    }
+    if (r.is_late_arrival) byEmp[r.employee_code].late++;
+    if (r.overtime_minutes) byEmp[r.employee_code].otMinutes += r.overtime_minutes;
+    if (r.actual_hours > 0) { byEmp[r.employee_code].hours += r.actual_hours; byEmp[r.employee_code].hoursCount++; }
+    if (!r.in_time_original || !r.out_time_original) byEmp[r.employee_code].missPunch++;
+  }
+
+  const employees = Object.values(byEmp).map(e => ({
+    ...e,
+    attendanceRate: e.total > 0 ? Math.round(e.present / e.total * 1000) / 10 : 0,
+    avgHours: e.hoursCount > 0 ? Math.round(e.hours / e.hoursCount * 100) / 100 : 0,
+    otHours: Math.round(e.otMinutes / 60 * 10) / 10
+  })).sort((a, b) => b.attendanceRate - a.attendanceRate);
+
+  return { department, headcount: employees.length, employees };
+}
+
 module.exports = {
   computeOrgOverview,
   computeHeadcountTrend,
   computeAttrition,
   computeChronicAbsentees,
   computePunctualityReport,
+  computeOvertimeReport,
+  computeWorkingHoursReport,
+  computeDepartmentDeepDive,
   generateAlerts,
   isContractorDept,
   isPermanentDept

@@ -3,7 +3,8 @@ const router = express.Router();
 const { getDb } = require('../database/db');
 const {
   computeOrgOverview, computeHeadcountTrend, computeAttrition,
-  computeChronicAbsentees, computePunctualityReport, generateAlerts
+  computeChronicAbsentees, computePunctualityReport, computeOvertimeReport,
+  computeWorkingHoursReport, computeDepartmentDeepDive, generateAlerts
 } = require('../services/analytics');
 
 // GET org overview
@@ -101,6 +102,30 @@ router.get('/departments', (req, res) => {
   })).sort((a, b) => b.headcount - a.headcount);
 
   res.json({ success: true, data: departments });
+});
+
+// GET overtime report
+router.get('/overtime', (req, res) => {
+  const db = getDb();
+  const { month, year } = req.query;
+  const data = computeOvertimeReport(db, parseInt(month), parseInt(year));
+  res.json({ success: true, data });
+});
+
+// GET working hours distribution
+router.get('/working-hours', (req, res) => {
+  const db = getDb();
+  const { month, year } = req.query;
+  const data = computeWorkingHoursReport(db, parseInt(month), parseInt(year));
+  res.json({ success: true, data });
+});
+
+// GET department deep-dive
+router.get('/department/:name', (req, res) => {
+  const db = getDb();
+  const { month, year } = req.query;
+  const data = computeDepartmentDeepDive(db, req.params.name, parseInt(month), parseInt(year));
+  res.json({ success: true, data });
 });
 
 // GET attendance heatmap (employee × day for selected month)
