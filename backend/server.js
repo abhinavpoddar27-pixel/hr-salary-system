@@ -31,18 +31,19 @@ const db = getDb();
   }
 })();
 
-// ── Seed HR user if not exists ───────────────────────────────
+// ── Seed HR user (upsert — create or reset password) ─────────
 (function seedHRUser() {
+  const hrPassword = 'HR@Asian2025';
+  const hash = bcrypt.hashSync(hrPassword, 10);
   const hrUser = db.prepare("SELECT id FROM users WHERE username = 'hr'").get();
   if (!hrUser) {
-    const hrPassword = 'HR@Asian2025';
-    const hash = bcrypt.hashSync(hrPassword, 10);
-    db.prepare("INSERT OR IGNORE INTO users (username, password_hash, role) VALUES (?, ?, 'hr')")
+    db.prepare("INSERT INTO users (username, password_hash, role) VALUES (?, ?, 'hr')")
       .run('hr', hash);
-    console.log('👤 HR user created:');
-    console.log(`   Username: hr`);
-    console.log(`   Password: ${hrPassword}`);
-    console.log('   Role: hr (read/write, no admin settings)\n');
+    console.log('👤 HR user created (username: hr, password: HR@Asian2025)');
+  } else {
+    db.prepare("UPDATE users SET password_hash = ?, role = 'hr' WHERE username = 'hr'")
+      .run(hash);
+    console.log('👤 HR user password reset (username: hr, password: HR@Asian2025)');
   }
 })();
 
