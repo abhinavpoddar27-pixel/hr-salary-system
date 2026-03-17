@@ -9,7 +9,7 @@ import React, { useEffect, useRef } from 'react';
  *     <ModalFooter>...</ModalFooter>
  *   </Modal>
  */
-export default function Modal({ open, onClose, title, children, size = 'md' }) {
+export default function Modal({ open = true, onClose, title, children, size = 'md' }) {
   const overlayRef = useRef(null);
 
   useEffect(() => {

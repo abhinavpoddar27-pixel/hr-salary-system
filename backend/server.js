@@ -18,6 +18,7 @@ try { require('express-async-errors'); } catch (e) { console.warn('⚠️  expre
 const express = require('express');
 const cors = require('cors');
 const cookieParser = require('cookie-parser');
+const compression = require('compression');
 const path = require('path');
 const fs = require('fs');
 const bcrypt = require('bcryptjs');
@@ -89,9 +90,28 @@ app.use(cors({
   credentials: true
 }));
 
+// ── Performance: Compression ─────────────────────────────────
+app.use(compression({
+  level: 6,
+  threshold: 1024,        // Only compress responses > 1KB
+  filter: (req, res) => {
+    if (req.headers['x-no-compression']) return false;
+    return compression.filter(req, res);
+  }
+}));
+
 app.use(cookieParser());
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ extended: true, limit: '50mb' }));
+
+// ── Performance: API response caching for GET endpoints ──────
+app.use('/api', (req, res, next) => {
+  if (req.method === 'GET' && !req.path.includes('/health')) {
+    // Cache GET API responses for 5 seconds (short but prevents redundant hits)
+    res.setHeader('Cache-Control', 'private, max-age=5');
+  }
+  next();
+});
 
 // ── Auth middleware ────────────────────────────────────────────
 const { requireAuth } = require('./src/middleware/auth');
@@ -167,9 +187,22 @@ app.get('/api/version', (req, res) => {
 if (IS_PROD) {
   const distPath = path.join(__dirname, '../frontend/dist');
   if (fs.existsSync(distPath)) {
-    app.use(express.static(distPath));
+    // Serve static assets with long cache (Vite hashed filenames)
+    app.use(express.static(distPath, {
+      maxAge: '30d',          // Cache hashed assets for 30 days
+      immutable: true,
+      etag: true,
+      lastModified: true,
+      setHeaders: (res, filePath) => {
+        // index.html should NOT be cached (SPA entry)
+        if (filePath.endsWith('.html')) {
+          res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+        }
+      }
+    }));
     // SPA fallback — send index.html for all non-API routes
     app.get('*', (req, res) => {
+      res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
       res.sendFile(path.join(distPath, 'index.html'));
     });
     console.log(`📦 Serving frontend from ${distPath}`);

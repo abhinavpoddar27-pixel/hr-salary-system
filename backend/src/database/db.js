@@ -12,7 +12,28 @@ function getDb() {
     db.pragma('journal_mode = WAL');
     db.pragma('foreign_keys = ON');
     db.pragma('synchronous = NORMAL');
+    db.pragma('cache_size = -64000');    // 64MB cache
+    db.pragma('temp_store = MEMORY');    // Temp tables in memory
+    db.pragma('mmap_size = 268435456');  // 256MB memory-mapped I/O
     initSchema(db);
+
+    // Performance indexes (idempotent)
+    try {
+      db.exec(`
+        CREATE INDEX IF NOT EXISTS idx_employees_code ON employees(code);
+        CREATE INDEX IF NOT EXISTS idx_employees_department ON employees(department);
+        CREATE INDEX IF NOT EXISTS idx_employees_status ON employees(status);
+        CREATE INDEX IF NOT EXISTS idx_employees_company ON employees(company);
+        CREATE INDEX IF NOT EXISTS idx_salary_structures_employee ON salary_structures(employee_id);
+        CREATE INDEX IF NOT EXISTS idx_attendance_processed_employee ON attendance_processed(employee_code, month, year);
+        CREATE INDEX IF NOT EXISTS idx_attendance_processed_month ON attendance_processed(month, year, company);
+        CREATE INDEX IF NOT EXISTS idx_attendance_raw_import ON attendance_raw(import_id);
+        CREATE INDEX IF NOT EXISTS idx_leave_balances_employee ON leave_balances(employee_id, year);
+        CREATE INDEX IF NOT EXISTS idx_night_shift_pairs_month ON night_shift_pairs(month, year, company);
+        CREATE INDEX IF NOT EXISTS idx_day_calculations_employee ON day_calculations(employee_code, month, year);
+        CREATE INDEX IF NOT EXISTS idx_audit_log_table ON audit_log(table_name, record_id);
+      `);
+    } catch (e) { /* indexes may already exist or tables don't exist yet */ }
   }
   return db;
 }
