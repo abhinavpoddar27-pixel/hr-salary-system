@@ -1,4 +1,4 @@
-require('express-async-errors');
+try { require('express-async-errors'); } catch (e) { console.warn('⚠️  express-async-errors not found, async errors may not be caught'); }
 const express = require('express');
 const cors = require('cors');
 const cookieParser = require('cookie-parser');
