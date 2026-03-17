@@ -3,6 +3,7 @@ import { useQuery } from '@tanstack/react-query'
 import { getAlerts } from '../utils/api'
 import { useAppStore } from '../store/appStore'
 import { fmtDate } from '../utils/formatters'
+import EmployeeQuickView from '../components/ui/EmployeeQuickView'
 
 const SEVERITY_CONFIG = {
   critical: { label: 'Critical', bg: 'bg-red-50', border: 'border-red-300', badge: 'bg-red-100 text-red-800', icon: '🔴', text: 'text-red-700' },
@@ -24,12 +25,13 @@ const ALERT_TYPES = {
   NIGHT_UNPAIRED: { title: 'Night Shift Unpaired', icon: '🌙' }
 }
 
-function AlertCard({ alert }) {
+function AlertCard({ alert, isExpanded, onToggle }) {
   const severity = SEVERITY_CONFIG[alert.severity?.toLowerCase()] || SEVERITY_CONFIG.info
   const alertType = ALERT_TYPES[alert.alert_type] || { title: alert.alert_type, icon: '⚡' }
 
   return (
-    <div className={`rounded-lg border p-4 ${severity.bg} ${severity.border}`}>
+    <div className={`rounded-lg border p-4 ${severity.bg} ${severity.border} ${alert.employee_code ? 'cursor-pointer hover:shadow-md transition-shadow' : ''}`} onClick={() => alert.employee_code && onToggle && onToggle()}>
+
       <div className="flex items-start gap-3">
         <span className="text-xl leading-none mt-0.5">{alertType.icon}</span>
         <div className="flex-1 min-w-0">
@@ -56,6 +58,11 @@ function AlertCard({ alert }) {
           {alert.created_at ? new Date(alert.created_at).toLocaleDateString('en-IN') : ''}
         </div>
       </div>
+      {isExpanded && alert.employee_code && (
+        <div className="mt-3 pt-3 border-t border-slate-200/60" onClick={e => e.stopPropagation()}>
+          <EmployeeQuickView employeeCode={alert.employee_code} />
+        </div>
+      )}
     </div>
   )
 }
@@ -65,6 +72,7 @@ export default function Alerts() {
   const [severityFilter, setSeverityFilter] = useState('all')
   const [typeFilter, setTypeFilter] = useState('all')
   const [search, setSearch] = useState('')
+  const [expandedAlert, setExpandedAlert] = useState(null)
 
   const { data: alertsRes, isLoading, refetch } = useQuery({
     queryKey: ['alerts', selectedMonth, selectedYear],
@@ -171,7 +179,7 @@ export default function Alerts() {
               <h3 className="text-sm font-bold text-red-700 uppercase tracking-wide">
                 🔴 Critical ({criticalAlerts.length})
               </h3>
-              {criticalAlerts.map((a, i) => <AlertCard key={i} alert={a} />)}
+              {criticalAlerts.map((a, i) => <AlertCard key={`critical-${i}`} alert={a} isExpanded={expandedAlert === `critical-${i}`} onToggle={() => setExpandedAlert(expandedAlert === `critical-${i}` ? null : `critical-${i}`)} />)}
             </div>
           )}
 
@@ -181,7 +189,7 @@ export default function Alerts() {
               <h3 className="text-sm font-bold text-orange-700 uppercase tracking-wide">
                 🟠 High ({highAlerts.length})
               </h3>
-              {highAlerts.map((a, i) => <AlertCard key={i} alert={a} />)}
+              {highAlerts.map((a, i) => <AlertCard key={`high-${i}`} alert={a} isExpanded={expandedAlert === `high-${i}`} onToggle={() => setExpandedAlert(expandedAlert === `high-${i}` ? null : `high-${i}`)} />)}
             </div>
           )}
 
@@ -191,7 +199,7 @@ export default function Alerts() {
               <h3 className="text-sm font-bold text-slate-500 uppercase tracking-wide">
                 Other ({otherAlerts.length})
               </h3>
-              {otherAlerts.map((a, i) => <AlertCard key={i} alert={a} />)}
+              {otherAlerts.map((a, i) => <AlertCard key={`other-${i}`} alert={a} isExpanded={expandedAlert === `other-${i}`} onToggle={() => setExpandedAlert(expandedAlert === `other-${i}` ? null : `other-${i}`)} />)}
             </div>
           )}
         </div>

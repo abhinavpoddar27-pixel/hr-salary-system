@@ -13,6 +13,10 @@ import { useAppStore } from '../store/appStore'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import toast from 'react-hot-toast'
 import clsx from 'clsx'
+import useExpandableRows from '../hooks/useExpandableRows'
+import DrillDownRow, { DrillDownChevron } from '../components/ui/DrillDownRow'
+import EmployeeQuickView from '../components/ui/EmployeeQuickView'
+import DepartmentQuickView from '../components/ui/DepartmentQuickView'
 
 const COLORS_PIE = ['#3b82f6', '#22c55e', '#f59e0b', '#ef4444', '#8b5cf6', '#06b6d4', '#ec4899']
 
@@ -161,8 +165,7 @@ function HeadcountTab() {
                       onClick={() => setExpandedMonth(expandedMonth === t.monthLabel ? null : t.monthLabel)}
                     >
                       <td className="font-medium">
-                        <span className="mr-1.5 text-xs text-slate-400">{expandedMonth === t.monthLabel ? '▼' : '▶'}</span>
-                        {t.monthLabel}
+                        <DrillDownChevron isExpanded={expandedMonth === t.monthLabel} /> {t.monthLabel}
                       </td>
                       <td className="text-center font-bold text-brand-600">{t.totalEmployees}</td>
                       <td className="text-center text-green-700">{t.permanentCount}</td>
@@ -178,9 +181,8 @@ function HeadcountTab() {
                       </td>
                     </tr>
                     {expandedMonth === t.monthLabel && (
-                      <tr>
-                        <td colSpan={7} className="p-0 bg-slate-50">
-                          <div className="p-4 space-y-4 animate-slide-up">
+                      <DrillDownRow colSpan={7}>
+                          <div className="space-y-4">
                             {/* Department breakdown for this month */}
                             {t.byCompany && t.byCompany.length > 0 && (
                               <div>
@@ -259,8 +261,7 @@ function HeadcountTab() {
                               </div>
                             )}
                           </div>
-                        </td>
-                      </tr>
+                      </DrillDownRow>
                     )}
                   </React.Fragment>
                 ))}
@@ -299,6 +300,9 @@ function HeadcountTab() {
 function AttritionTab() {
   const { selectedMonth, selectedYear } = useAppStore()
   const qc = useQueryClient()
+  const inactiveExpand = useExpandableRows()
+  const joinExpand = useExpandableRows()
+  const exitExpand = useExpandableRows()
 
   const { data: attritionRes } = useQuery({
     queryKey: ['attrition', selectedMonth, selectedYear],
@@ -373,23 +377,39 @@ function AttritionTab() {
               </thead>
               <tbody>
                 {inactive.map((e, i) => (
-                  <tr key={i}>
-                    <td className="font-mono text-sm">{e.code}</td>
-                    <td className="font-medium">{e.name}</td>
-                    <td>{e.department}</td>
-                    <td><span className={clsx('text-xs px-2 py-0.5 rounded-full',
-                      e.employment_type === 'Permanent' ? 'bg-green-100 text-green-700' : 'bg-amber-100 text-amber-700'
-                    )}>{e.employment_type}</span></td>
-                    <td className="text-slate-500">{e.inactive_since || '—'}</td>
-                    <td><span className="text-xs px-2 py-0.5 rounded-full bg-red-100 text-red-700">{e.status}</span></td>
-                    <td>
-                      <button onClick={() => reactivateMutation.mutate(e.code)}
-                        disabled={reactivateMutation.isPending}
-                        className="text-xs text-blue-600 hover:text-blue-800 font-medium">
-                        Reactivate
-                      </button>
-                    </td>
-                  </tr>
+                  <React.Fragment key={i}>
+                    <tr onClick={() => inactiveExpand.toggle(e.code || i)} className={clsx('cursor-pointer transition-colors', inactiveExpand.isExpanded(e.code || i) && 'bg-blue-50')}>
+                      <td className="font-mono text-sm"><DrillDownChevron isExpanded={inactiveExpand.isExpanded(e.code || i)} /> {e.code}</td>
+                      <td className="font-medium">{e.name}</td>
+                      <td>{e.department}</td>
+                      <td><span className={clsx('text-xs px-2 py-0.5 rounded-full',
+                        e.employment_type === 'Permanent' ? 'bg-green-100 text-green-700' : 'bg-amber-100 text-amber-700'
+                      )}>{e.employment_type}</span></td>
+                      <td className="text-slate-500">{e.inactive_since || '—'}</td>
+                      <td><span className="text-xs px-2 py-0.5 rounded-full bg-red-100 text-red-700">{e.status}</span></td>
+                      <td>
+                        <button onClick={(ev) => { ev.stopPropagation(); reactivateMutation.mutate(e.code) }}
+                          disabled={reactivateMutation.isPending}
+                          className="text-xs text-blue-600 hover:text-blue-800 font-medium">
+                          Reactivate
+                        </button>
+                      </td>
+                    </tr>
+                    {inactiveExpand.isExpanded(e.code || i) && (
+                      <DrillDownRow colSpan={7}>
+                        <EmployeeQuickView employeeCode={e.code} compact
+                          contextContent={
+                            <div className="text-xs space-y-1">
+                              <div className="font-semibold text-slate-500 mb-2">Inactive Details</div>
+                              <div>Status: <span className="font-medium text-red-600">{e.status}</span></div>
+                              <div>Inactive Since: <span className="font-medium">{e.inactive_since || '—'}</span></div>
+                              <div>Type: <span className="font-medium">{e.employment_type}</span></div>
+                            </div>
+                          }
+                        />
+                      </DrillDownRow>
+                    )}
+                  </React.Fragment>
                 ))}
               </tbody>
             </table>
@@ -410,12 +430,19 @@ function AttritionTab() {
                 <thead><tr><th>Employee</th><th>Code</th><th>Department</th><th>Company</th></tr></thead>
                 <tbody>
                   {attrition.newJoinDetails.map((e, i) => (
-                    <tr key={i}>
-                      <td className="font-medium">{e.name}</td>
-                      <td className="text-slate-500 font-mono text-xs">{e.code}</td>
-                      <td>{e.department}</td>
-                      <td>{e.company}</td>
-                    </tr>
+                    <React.Fragment key={i}>
+                      <tr onClick={() => joinExpand.toggle(e.code || i)} className={clsx('cursor-pointer transition-colors', joinExpand.isExpanded(e.code || i) && 'bg-blue-50')}>
+                        <td className="font-medium"><DrillDownChevron isExpanded={joinExpand.isExpanded(e.code || i)} /> {e.name}</td>
+                        <td className="text-slate-500 font-mono text-xs">{e.code}</td>
+                        <td>{e.department}</td>
+                        <td>{e.company}</td>
+                      </tr>
+                      {joinExpand.isExpanded(e.code || i) && (
+                        <DrillDownRow colSpan={4}>
+                          <EmployeeQuickView employeeCode={e.code} compact />
+                        </DrillDownRow>
+                      )}
+                    </React.Fragment>
                   ))}
                 </tbody>
               </table>
@@ -431,12 +458,19 @@ function AttritionTab() {
                 <thead><tr><th>Employee</th><th>Code</th><th>Department</th><th>Company</th></tr></thead>
                 <tbody>
                   {attrition.exitDetails.map((e, i) => (
-                    <tr key={i}>
-                      <td className="font-medium">{e.name}</td>
-                      <td className="text-slate-500 font-mono text-xs">{e.code}</td>
-                      <td>{e.department}</td>
-                      <td>{e.company}</td>
-                    </tr>
+                    <React.Fragment key={i}>
+                      <tr onClick={() => exitExpand.toggle(e.code || i)} className={clsx('cursor-pointer transition-colors', exitExpand.isExpanded(e.code || i) && 'bg-blue-50')}>
+                        <td className="font-medium"><DrillDownChevron isExpanded={exitExpand.isExpanded(e.code || i)} /> {e.name}</td>
+                        <td className="text-slate-500 font-mono text-xs">{e.code}</td>
+                        <td>{e.department}</td>
+                        <td>{e.company}</td>
+                      </tr>
+                      {exitExpand.isExpanded(e.code || i) && (
+                        <DrillDownRow colSpan={4}>
+                          <EmployeeQuickView employeeCode={e.code} compact />
+                        </DrillDownRow>
+                      )}
+                    </React.Fragment>
                   ))}
                 </tbody>
               </table>
@@ -453,6 +487,8 @@ function AttritionTab() {
 // ═══════════════════════════════════════════════════════════
 function ContractorTab() {
   const { selectedMonth, selectedYear } = useAppStore()
+  const contractorExpand = useExpandableRows()
+  const permanentExpand = useExpandableRows()
 
   const { data: overviewRes } = useQuery({
     queryKey: ['org-overview', selectedMonth, selectedYear],
@@ -553,19 +589,26 @@ function ContractorTab() {
               </thead>
               <tbody>
                 {contractorDepts.map((d, i) => (
-                  <tr key={i}>
-                    <td className="font-medium text-slate-800">{d.department}</td>
-                    <td className="text-center font-bold">{d.headcount}</td>
-                    <td className="text-center">
-                      <span className={clsx('px-2 py-0.5 rounded-full text-xs font-bold',
-                        d.attendanceRate >= 85 ? 'bg-green-100 text-green-700' : d.attendanceRate >= 70 ? 'bg-amber-100 text-amber-700' : 'bg-red-100 text-red-700'
-                      )}>{d.attendanceRate}%</span>
-                    </td>
-                    <td className="text-center text-green-700">{d.presentDays}</td>
-                    <td className="text-center text-red-600">{d.absentDays}</td>
-                    <td className="text-center">{d.avgActualHours || '—'}</td>
-                    <td className="text-center text-amber-600">{d.punctualityIssues || 0}</td>
-                  </tr>
+                  <React.Fragment key={i}>
+                    <tr onClick={() => contractorExpand.toggle(d.department)} className={clsx('cursor-pointer transition-colors', contractorExpand.isExpanded(d.department) && 'bg-blue-50')}>
+                      <td className="font-medium text-slate-800"><DrillDownChevron isExpanded={contractorExpand.isExpanded(d.department)} /> {d.department}</td>
+                      <td className="text-center font-bold">{d.headcount}</td>
+                      <td className="text-center">
+                        <span className={clsx('px-2 py-0.5 rounded-full text-xs font-bold',
+                          d.attendanceRate >= 85 ? 'bg-green-100 text-green-700' : d.attendanceRate >= 70 ? 'bg-amber-100 text-amber-700' : 'bg-red-100 text-red-700'
+                        )}>{d.attendanceRate}%</span>
+                      </td>
+                      <td className="text-center text-green-700">{d.presentDays}</td>
+                      <td className="text-center text-red-600">{d.absentDays}</td>
+                      <td className="text-center">{d.avgActualHours || '—'}</td>
+                      <td className="text-center text-amber-600">{d.punctualityIssues || 0}</td>
+                    </tr>
+                    {contractorExpand.isExpanded(d.department) && (
+                      <DrillDownRow colSpan={7}>
+                        <DepartmentQuickView department={d.department} />
+                      </DrillDownRow>
+                    )}
+                  </React.Fragment>
                 ))}
               </tbody>
             </table>
@@ -592,19 +635,26 @@ function ContractorTab() {
               </thead>
               <tbody>
                 {permanentDepts.map((d, i) => (
-                  <tr key={i}>
-                    <td className="font-medium text-slate-800">{d.department}</td>
-                    <td className="text-center font-bold">{d.headcount}</td>
-                    <td className="text-center">
-                      <span className={clsx('px-2 py-0.5 rounded-full text-xs font-bold',
-                        d.attendanceRate >= 85 ? 'bg-green-100 text-green-700' : d.attendanceRate >= 70 ? 'bg-amber-100 text-amber-700' : 'bg-red-100 text-red-700'
-                      )}>{d.attendanceRate}%</span>
-                    </td>
-                    <td className="text-center text-green-700">{d.presentDays}</td>
-                    <td className="text-center text-red-600">{d.absentDays}</td>
-                    <td className="text-center">{d.avgActualHours || '—'}</td>
-                    <td className="text-center text-amber-600">{d.punctualityIssues || 0}</td>
-                  </tr>
+                  <React.Fragment key={i}>
+                    <tr onClick={() => permanentExpand.toggle(d.department)} className={clsx('cursor-pointer transition-colors', permanentExpand.isExpanded(d.department) && 'bg-blue-50')}>
+                      <td className="font-medium text-slate-800"><DrillDownChevron isExpanded={permanentExpand.isExpanded(d.department)} /> {d.department}</td>
+                      <td className="text-center font-bold">{d.headcount}</td>
+                      <td className="text-center">
+                        <span className={clsx('px-2 py-0.5 rounded-full text-xs font-bold',
+                          d.attendanceRate >= 85 ? 'bg-green-100 text-green-700' : d.attendanceRate >= 70 ? 'bg-amber-100 text-amber-700' : 'bg-red-100 text-red-700'
+                        )}>{d.attendanceRate}%</span>
+                      </td>
+                      <td className="text-center text-green-700">{d.presentDays}</td>
+                      <td className="text-center text-red-600">{d.absentDays}</td>
+                      <td className="text-center">{d.avgActualHours || '—'}</td>
+                      <td className="text-center text-amber-600">{d.punctualityIssues || 0}</td>
+                    </tr>
+                    {permanentExpand.isExpanded(d.department) && (
+                      <DrillDownRow colSpan={7}>
+                        <DepartmentQuickView department={d.department} />
+                      </DrillDownRow>
+                    )}
+                  </React.Fragment>
                 ))}
               </tbody>
             </table>

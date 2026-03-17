@@ -8,6 +8,8 @@ import { Abbr, Tip } from '../components/ui/Tooltip'
 import AbbreviationLegend from '../components/ui/AbbreviationLegend'
 import CalendarView from '../components/ui/CalendarView'
 import clsx from 'clsx'
+import DrillDownRow, { DrillDownChevron } from '../components/ui/DrillDownRow'
+import EmployeeQuickView from '../components/ui/EmployeeQuickView'
 
 function SortIcon({ field, sortField, sortDir }) {
   if (sortField !== field) return <span className="text-slate-300 ml-1">↕</span>
@@ -232,13 +234,15 @@ export default function DayCalculation() {
                     const hasLOP = (r.lop_days || 0) > 0
                     return (
                       <React.Fragment key={r.id}>
-                        <tr className={clsx(
-                          'transition-colors',
-                          isZeroDay && 'bg-red-50/60',
-                          !isZeroDay && hasLOP && 'bg-amber-50/40'
+                        <tr onClick={() => setExpandedRow(expandedRow === r.id ? null : r.id)} className={clsx(
+                          'transition-colors cursor-pointer hover:bg-blue-50/50',
+                          expandedRow === r.id && 'bg-blue-50/70',
+                          isZeroDay && !expandedRow && 'bg-red-50/60',
+                          !isZeroDay && hasLOP && !expandedRow && 'bg-amber-50/40'
                         )}>
                           <td>
                             <div className="flex items-center gap-1.5">
+                              <DrillDownChevron isExpanded={expandedRow === r.id} />
                               {isZeroDay && <span className="w-2 h-2 rounded-full bg-red-500 shrink-0" title="0 working days" />}
                               <div>
                                 <div className="font-medium text-sm">{r.employee_name || r.employee_code}</div>
@@ -278,9 +282,12 @@ export default function DayCalculation() {
                             </div>
                           </td>
                         </tr>
-                        {expandedRow === r.id && r.week_breakdown && (
-                          <tr>
-                            <td colSpan={15} className="bg-slate-50 px-6 py-3">
+                        {expandedRow === r.id && (
+                          <DrillDownRow colSpan={15}>
+                            <EmployeeQuickView
+                              employeeCode={r.employee_code}
+                              contextContent={r.week_breakdown && (
+                                <div>
                               <p className="text-xs font-semibold text-slate-600 mb-2">Week-by-Week Sunday Granting:</p>
                               <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-2">
                                 {(() => {
@@ -301,8 +308,10 @@ export default function DayCalculation() {
                                   } catch (e) { return <div className="text-slate-400">No breakdown data</div> }
                                 })()}
                               </div>
-                            </td>
-                          </tr>
+                                </div>
+                              )}
+                            />
+                          </DrillDownRow>
                         )}
                       </React.Fragment>
                     )

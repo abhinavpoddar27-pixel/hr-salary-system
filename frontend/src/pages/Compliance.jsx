@@ -4,6 +4,9 @@ import toast from 'react-hot-toast'
 import { getComplianceItems, updateComplianceItem, generateComplianceCalendar, getPFStatement, getESIStatement } from '../utils/api'
 import { useAppStore } from '../store/appStore'
 import { fmtDate, fmtINR } from '../utils/formatters'
+import useExpandableRows from '../hooks/useExpandableRows'
+import DrillDownRow, { DrillDownChevron } from '../components/ui/DrillDownRow'
+import EmployeeQuickView from '../components/ui/EmployeeQuickView'
 
 const MONTH_NAMES = ['', 'January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December']
 
@@ -92,6 +95,8 @@ export default function Compliance() {
   const [editItem, setEditItem] = useState(null)
   const [filterType, setFilterType] = useState('All')
   const [filterStatus, setFilterStatus] = useState('All')
+  const { toggle: pfToggle, isExpanded: pfIsExpanded } = useExpandableRows()
+  const { toggle: esiToggle, isExpanded: esiIsExpanded } = useExpandableRows()
 
   const { data: compRes, isLoading } = useQuery({
     queryKey: ['compliance', selectedYear],
@@ -282,16 +287,48 @@ export default function Compliance() {
                   {(pfData.employees || []).length === 0 ? (
                     <tr><td colSpan={8} className="text-center py-6 text-slate-400">Compute salary first</td></tr>
                   ) : (pfData.employees || []).map((e, i) => (
-                    <tr key={i}>
-                      <td className="font-medium">{e.employee_name}</td>
-                      <td className="text-slate-500">{e.employee_code}</td>
-                      <td className="text-slate-400">{e.uan || '—'}</td>
-                      <td className="text-right">{fmtINR(e.pf_wages)}</td>
-                      <td className="text-right">{fmtINR(e.employee_pf)}</td>
-                      <td className="text-right">{fmtINR(e.employer_pf)}</td>
-                      <td className="text-right">{fmtINR(e.eps)}</td>
-                      <td className="text-right font-semibold">{fmtINR((e.employee_pf || 0) + (e.employer_pf || 0) + (e.eps || 0))}</td>
-                    </tr>
+                    <React.Fragment key={e.employee_code || i}>
+                      <tr onClick={() => pfToggle(e.employee_code || i)} className={`cursor-pointer transition-colors hover:bg-blue-50/50 ${pfIsExpanded(e.employee_code || i) ? 'bg-blue-50' : ''}`}>
+                        <td className="font-medium"><DrillDownChevron isExpanded={pfIsExpanded(e.employee_code || i)} /> {e.employee_name}</td>
+                        <td className="text-slate-500">{e.employee_code}</td>
+                        <td className="text-slate-400">{e.uan || '—'}</td>
+                        <td className="text-right">{fmtINR(e.pf_wages)}</td>
+                        <td className="text-right">{fmtINR(e.employee_pf)}</td>
+                        <td className="text-right">{fmtINR(e.employer_pf)}</td>
+                        <td className="text-right">{fmtINR(e.eps)}</td>
+                        <td className="text-right font-semibold">{fmtINR((e.employee_pf || 0) + (e.employer_pf || 0) + (e.eps || 0))}</td>
+                      </tr>
+                      {pfIsExpanded(e.employee_code || i) && (
+                        <DrillDownRow colSpan={8}>
+                          <EmployeeQuickView
+                            employeeCode={e.employee_code}
+                            contextContent={
+                              <div>
+                                <div className="text-xs font-semibold text-slate-500 mb-2">PF Contribution Details</div>
+                                <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+                                  <div className="bg-white rounded-lg border border-slate-100 px-3 py-2">
+                                    <div className="text-[10px] text-slate-400 uppercase">PF Wages</div>
+                                    <div className="text-sm font-bold text-slate-700">{fmtINR(e.pf_wages)}</div>
+                                  </div>
+                                  <div className="bg-white rounded-lg border border-slate-100 px-3 py-2">
+                                    <div className="text-[10px] text-slate-400 uppercase">EE PF (12%)</div>
+                                    <div className="text-sm font-bold text-blue-700">{fmtINR(e.employee_pf)}</div>
+                                  </div>
+                                  <div className="bg-white rounded-lg border border-slate-100 px-3 py-2">
+                                    <div className="text-[10px] text-slate-400 uppercase">ER PF (3.67%)</div>
+                                    <div className="text-sm font-bold text-green-700">{fmtINR(e.employer_pf)}</div>
+                                  </div>
+                                  <div className="bg-white rounded-lg border border-slate-100 px-3 py-2">
+                                    <div className="text-[10px] text-slate-400 uppercase">EPS (8.33%)</div>
+                                    <div className="text-sm font-bold text-purple-700">{fmtINR(e.eps)}</div>
+                                  </div>
+                                </div>
+                              </div>
+                            }
+                          />
+                        </DrillDownRow>
+                      )}
+                    </React.Fragment>
                   ))}
                 </tbody>
                 {(pfData.employees || []).length > 0 && (
@@ -356,15 +393,43 @@ export default function Compliance() {
                   {(esiData.employees || []).length === 0 ? (
                     <tr><td colSpan={7} className="text-center py-6 text-slate-400">Compute salary first</td></tr>
                   ) : (esiData.employees || []).map((e, i) => (
-                    <tr key={i}>
-                      <td className="font-medium">{e.employee_name}</td>
-                      <td className="text-slate-500">{e.employee_code}</td>
-                      <td className="text-slate-400">{e.esi_number || '—'}</td>
-                      <td className="text-right">{fmtINR(e.esi_wages)}</td>
-                      <td className="text-right">{fmtINR(e.employee_esi)}</td>
-                      <td className="text-right">{fmtINR(e.employer_esi)}</td>
-                      <td className="text-right font-semibold">{fmtINR((e.employee_esi || 0) + (e.employer_esi || 0))}</td>
-                    </tr>
+                    <React.Fragment key={e.employee_code || i}>
+                      <tr onClick={() => esiToggle(e.employee_code || i)} className={`cursor-pointer transition-colors hover:bg-blue-50/50 ${esiIsExpanded(e.employee_code || i) ? 'bg-blue-50' : ''}`}>
+                        <td className="font-medium"><DrillDownChevron isExpanded={esiIsExpanded(e.employee_code || i)} /> {e.employee_name}</td>
+                        <td className="text-slate-500">{e.employee_code}</td>
+                        <td className="text-slate-400">{e.esi_number || '—'}</td>
+                        <td className="text-right">{fmtINR(e.esi_wages)}</td>
+                        <td className="text-right">{fmtINR(e.employee_esi)}</td>
+                        <td className="text-right">{fmtINR(e.employer_esi)}</td>
+                        <td className="text-right font-semibold">{fmtINR((e.employee_esi || 0) + (e.employer_esi || 0))}</td>
+                      </tr>
+                      {esiIsExpanded(e.employee_code || i) && (
+                        <DrillDownRow colSpan={7}>
+                          <EmployeeQuickView
+                            employeeCode={e.employee_code}
+                            contextContent={
+                              <div>
+                                <div className="text-xs font-semibold text-slate-500 mb-2">ESI Contribution Details</div>
+                                <div className="grid grid-cols-2 lg:grid-cols-3 gap-3">
+                                  <div className="bg-white rounded-lg border border-slate-100 px-3 py-2">
+                                    <div className="text-[10px] text-slate-400 uppercase">Gross Wages</div>
+                                    <div className="text-sm font-bold text-slate-700">{fmtINR(e.esi_wages)}</div>
+                                  </div>
+                                  <div className="bg-white rounded-lg border border-slate-100 px-3 py-2">
+                                    <div className="text-[10px] text-slate-400 uppercase">EE ESI (0.75%)</div>
+                                    <div className="text-sm font-bold text-blue-700">{fmtINR(e.employee_esi)}</div>
+                                  </div>
+                                  <div className="bg-white rounded-lg border border-slate-100 px-3 py-2">
+                                    <div className="text-[10px] text-slate-400 uppercase">ER ESI (3.25%)</div>
+                                    <div className="text-sm font-bold text-green-700">{fmtINR(e.employer_esi)}</div>
+                                  </div>
+                                </div>
+                              </div>
+                            }
+                          />
+                        </DrillDownRow>
+                      )}
+                    </React.Fragment>
                   ))}
                 </tbody>
                 {(esiData.employees || []).length > 0 && (

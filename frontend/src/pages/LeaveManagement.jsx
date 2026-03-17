@@ -5,6 +5,9 @@ import { useAppStore } from '../store/appStore'
 import Modal from '../components/ui/Modal'
 import clsx from 'clsx'
 import toast from 'react-hot-toast'
+import useExpandableRows from '../hooks/useExpandableRows'
+import DrillDownRow, { DrillDownChevron } from '../components/ui/DrillDownRow'
+import EmployeeQuickView from '../components/ui/EmployeeQuickView'
 
 const STATUS_COLORS = {
   Pending: 'bg-amber-100 text-amber-700',
@@ -119,6 +122,7 @@ export default function LeaveManagement() {
   const [showApply, setShowApply] = useState(false)
   const [rejectModal, setRejectModal] = useState(null)
   const [rejectReason, setRejectReason] = useState('')
+  const { toggle: toggleDrill, isExpanded: isDrillExpanded } = useExpandableRows()
 
   const { data: leavesRes, isLoading } = useQuery({
     queryKey: ['leave-applications', selectedMonth, selectedYear, statusFilter !== 'All' ? statusFilter : undefined],
@@ -257,10 +261,16 @@ export default function LeaveManagement() {
                 <tr><td colSpan={9} className="text-center py-8 text-slate-400">No leave applications found</td></tr>
               ) : (
                 filtered.map(l => (
-                  <tr key={l.id}>
+                  <React.Fragment key={l.id}>
+                  <tr onClick={() => toggleDrill(l.id)} className="cursor-pointer hover:bg-blue-50/50 transition-colors">
                     <td>
-                      <div className="font-medium text-slate-800">{l.employee_name || l.employee_code}</div>
-                      <div className="text-xs text-slate-500">{l.employee_code}{l.department ? ` | ${l.department}` : ''}</div>
+                      <div className="flex items-center gap-1">
+                        <DrillDownChevron isExpanded={isDrillExpanded(l.id)} />
+                        <div>
+                          <div className="font-medium text-slate-800">{l.employee_name || l.employee_code}</div>
+                          <div className="text-xs text-slate-500">{l.employee_code}{l.department ? ` | ${l.department}` : ''}</div>
+                        </div>
+                      </div>
                     </td>
                     <td>
                       <span className="px-2 py-0.5 rounded-full text-xs font-medium bg-slate-100 text-slate-700">
@@ -302,6 +312,28 @@ export default function LeaveManagement() {
                       )}
                     </td>
                   </tr>
+                  {isDrillExpanded(l.id) && (
+                    <DrillDownRow colSpan={9}>
+                      <EmployeeQuickView
+                        employeeCode={l.employee_code}
+                        contextContent={
+                          <div>
+                            <div className="text-xs font-semibold text-slate-500 mb-2">Leave Details</div>
+                            <div className="grid grid-cols-2 gap-2 text-xs">
+                              <div><span className="text-slate-400">Leave Type:</span> <span className="font-medium">{l.leave_type}</span></div>
+                              <div><span className="text-slate-400">From:</span> <span>{l.start_date ? new Date(l.start_date).toLocaleDateString('en-IN') : '-'}</span></div>
+                              <div><span className="text-slate-400">To:</span> <span>{l.end_date ? new Date(l.end_date).toLocaleDateString('en-IN') : '-'}</span></div>
+                              <div><span className="text-slate-400">Days:</span> <span className="font-medium">{l.days}</span></div>
+                              <div className="col-span-2"><span className="text-slate-400">Reason:</span> <span>{l.reason || '-'}</span></div>
+                              <div><span className="text-slate-400">Status:</span> <span className="font-medium">{l.status}</span></div>
+                              <div><span className="text-slate-400">Applied:</span> <span>{l.applied_at ? new Date(l.applied_at).toLocaleDateString('en-IN') : '-'}</span></div>
+                            </div>
+                          </div>
+                        }
+                      />
+                    </DrillDownRow>
+                  )}
+                  </React.Fragment>
                 ))
               )}
             </tbody>

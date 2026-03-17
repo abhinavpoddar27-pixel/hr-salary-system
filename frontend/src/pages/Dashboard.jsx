@@ -7,6 +7,9 @@ import { getOrgOverview, getHeadcountTrend, getAlerts, generateAlerts } from '..
 import StatCard from '../components/common/StatCard'
 import { fmtINR, fmtPct, monthYearLabel, attendanceRateColor, severityIcon, severityColor, fmtDate } from '../utils/formatters'
 import clsx from 'clsx'
+import useExpandableRows from '../hooks/useExpandableRows'
+import DrillDownRow, { DrillDownChevron } from '../components/ui/DrillDownRow'
+import DepartmentQuickView from '../components/ui/DepartmentQuickView'
 
 export default function Dashboard() {
   const { selectedMonth, selectedYear } = useAppStore()
@@ -35,6 +38,7 @@ export default function Dashboard() {
   const alertCounts = alertsRes?.data?.counts || {}
 
   const depts = overview?.departments || []
+  const { toggle, isExpanded } = useExpandableRows()
 
   function heatmapColor(rate) {
     if (!rate) return 'bg-slate-100 text-slate-400'
@@ -176,23 +180,30 @@ export default function Dashboard() {
               </thead>
               <tbody>
                 {depts.map(dept => (
-                  <tr key={dept.department}>
-                    <td className="font-medium">{dept.department || '(Unclassified)'}</td>
-                    <td>{dept.headcount}</td>
-                    <td>
-                      <span className={clsx('px-2 py-0.5 rounded-full text-xs font-medium', heatmapColor(dept.attendanceRate))}>
-                        {fmtPct(dept.attendanceRate)}
-                      </span>
-                    </td>
-                    <td>
-                      {dept.isContractor
-                        ? <span className="badge-yellow">Contractor</span>
-                        : <span className="badge-blue">Permanent</span>
-                      }
-                    </td>
-                    <td className={dept.punctualityIssues > 5 ? 'text-red-600 font-medium' : ''}>{dept.punctualityIssues}</td>
-                    <td>{dept.overtimeHours}h</td>
-                  </tr>
+                  <React.Fragment key={dept.department}>
+                    <tr onClick={() => toggle(dept.department)} className={clsx('cursor-pointer transition-colors hover:bg-blue-50/50', isExpanded(dept.department) && 'bg-blue-50')}>
+                      <td className="font-medium"><DrillDownChevron isExpanded={isExpanded(dept.department)} /> {dept.department || '(Unclassified)'}</td>
+                      <td>{dept.headcount}</td>
+                      <td>
+                        <span className={clsx('px-2 py-0.5 rounded-full text-xs font-medium', heatmapColor(dept.attendanceRate))}>
+                          {fmtPct(dept.attendanceRate)}
+                        </span>
+                      </td>
+                      <td>
+                        {dept.isContractor
+                          ? <span className="badge-yellow">Contractor</span>
+                          : <span className="badge-blue">Permanent</span>
+                        }
+                      </td>
+                      <td className={dept.punctualityIssues > 5 ? 'text-red-600 font-medium' : ''}>{dept.punctualityIssues}</td>
+                      <td>{dept.overtimeHours}h</td>
+                    </tr>
+                    {isExpanded(dept.department) && (
+                      <DrillDownRow colSpan={6}>
+                        <DepartmentQuickView department={dept.department} />
+                      </DrillDownRow>
+                    )}
+                  </React.Fragment>
                 ))}
               </tbody>
             </table>

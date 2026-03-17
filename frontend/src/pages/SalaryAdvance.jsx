@@ -6,6 +6,9 @@ import { fmtINR, monthYearLabel, fmtDate } from '../utils/formatters'
 import { Abbr } from '../components/ui/Tooltip'
 import AbbreviationLegend from '../components/ui/AbbreviationLegend'
 import clsx from 'clsx'
+import useExpandableRows from '../hooks/useExpandableRows'
+import DrillDownRow, { DrillDownChevron } from '../components/ui/DrillDownRow'
+import EmployeeQuickView from '../components/ui/EmployeeQuickView'
 import api from '../utils/api'
 
 /* ── Reusable sortable table hook ────────────────────── */
@@ -35,6 +38,7 @@ export default function SalaryAdvance() {
   const [filterView, setFilterView] = useState('all')
   const [search, setSearch] = useState('')
   const sort = useSortable('employee_name')
+  const { toggle, isExpanded } = useExpandableRows()
 
   const { data: res, isLoading, refetch } = useQuery({
     queryKey: ['advance-list', selectedMonth, selectedYear],
@@ -211,7 +215,8 @@ export default function SalaryAdvance() {
                 </thead>
                 <tbody>
                   {records.map(r => (
-                    <tr key={r.id} className={clsx('transition-colors', !r.is_eligible && 'opacity-50')}>
+                    <React.Fragment key={r.id}>
+                    <tr onClick={() => toggle(r.id)} className={clsx('transition-colors cursor-pointer hover:bg-blue-50/50', isExpanded(r.id) && 'bg-blue-50/70', !r.is_eligible && !isExpanded(r.id) && 'opacity-50')}>
                       <td>
                         {r.is_eligible && !r.paid && (
                           <input type="checkbox" checked={selected.has(r.id)} onChange={() => {
@@ -222,8 +227,13 @@ export default function SalaryAdvance() {
                         )}
                       </td>
                       <td>
-                        <div className="font-medium text-sm">{r.employee_name || r.employee_code}</div>
-                        <div className="text-xs text-slate-400 font-mono">{r.employee_code}</div>
+                        <div className="flex items-center gap-1.5">
+                          <DrillDownChevron isExpanded={isExpanded(r.id)} />
+                          <div>
+                            <div className="font-medium text-sm">{r.employee_name || r.employee_code}</div>
+                            <div className="text-xs text-slate-400 font-mono">{r.employee_code}</div>
+                          </div>
+                        </div>
                       </td>
                       <td className="text-xs text-slate-600">{r.department}</td>
                       <td className="text-center font-mono font-medium">{r.working_days_1_to_15}</td>
@@ -260,6 +270,27 @@ export default function SalaryAdvance() {
                         )}
                       </td>
                     </tr>
+                    {isExpanded(r.id) && (
+                      <DrillDownRow colSpan={10}>
+                        <EmployeeQuickView
+                          employeeCode={r.employee_code}
+                          contextContent={
+                            <div className="text-xs space-y-2">
+                              <p className="font-semibold text-slate-600">Advance Details</p>
+                              <div className="grid grid-cols-2 gap-2">
+                                <div className="flex justify-between"><span className="text-slate-500">Working Days (1st-15th)</span><span className="font-mono font-medium">{r.working_days_1_to_15}</span></div>
+                                <div className="flex justify-between"><span className="text-slate-500">Eligible</span><span className={r.is_eligible ? 'text-green-600 font-medium' : 'text-red-600 font-medium'}>{r.is_eligible ? 'Yes' : 'No'}</span></div>
+                                <div className="flex justify-between"><span className="text-slate-500">Advance Amount</span><span className="font-mono font-bold">{r.is_eligible ? fmtINR(r.advance_amount) : '—'}</span></div>
+                                <div className="flex justify-between"><span className="text-slate-500">Status</span><span className="font-medium">{r.paid ? 'Paid' : r.is_eligible ? 'Pending' : '—'}</span></div>
+                                {r.paid_date && <div className="flex justify-between"><span className="text-slate-500">Paid Date</span><span className="font-mono">{r.paid_date}</span></div>}
+                                <div className="flex justify-between"><span className="text-slate-500">Recovered</span><span className="font-medium">{r.recovered ? 'Yes' : r.paid ? 'Pending' : '—'}</span></div>
+                              </div>
+                            </div>
+                          }
+                        />
+                      </DrillDownRow>
+                    )}
+                  </React.Fragment>
                   ))}
                 </tbody>
               </table>

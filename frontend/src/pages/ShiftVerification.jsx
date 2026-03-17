@@ -9,6 +9,9 @@ import { Abbr, Tip } from '../components/ui/Tooltip'
 import AbbreviationLegend from '../components/ui/AbbreviationLegend'
 import CalendarView from '../components/ui/CalendarView'
 import clsx from 'clsx'
+import useExpandableRows from '../hooks/useExpandableRows'
+import DrillDownRow, { DrillDownChevron } from '../components/ui/DrillDownRow'
+import EmployeeQuickView from '../components/ui/EmployeeQuickView'
 
 const SHIFT_COLORS = {
   DAY: { bg: 'bg-blue-50', text: 'text-blue-700', border: 'border-blue-300', ring: 'ring-blue-400', hoverBg: 'hover:bg-blue-100', activeBg: 'bg-blue-600 text-white' },
@@ -67,6 +70,7 @@ export default function ShiftVerification() {
   const [showAll, setShowAll] = useState(false)
   const [sortField, setSortField] = useState('date')
   const [sortDir, setSortDir] = useState('asc')
+  const { toggle, isExpanded } = useExpandableRows()
 
   const { data: res, isLoading, refetch } = useQuery({
     queryKey: ['processed-records-shift', selectedMonth, selectedYear],
@@ -300,7 +304,8 @@ export default function ShiftVerification() {
                 ) : records.map(r => {
                   const currentColor = getShiftColor(r.shift_name || r.shift_detected)
                   return (
-                    <tr key={r.id} className="transition-colors">
+                    <React.Fragment key={r.id}>
+                    <tr onClick={() => toggle(r.id)} className={clsx('transition-colors cursor-pointer hover:bg-blue-50/50', isExpanded(r.id) && 'bg-blue-50/70')}>
                       <td>
                         <input type="checkbox" checked={selected.has(r.id)} onChange={() => {
                           const next = new Set(selected)
@@ -309,8 +314,13 @@ export default function ShiftVerification() {
                         }} className="rounded" />
                       </td>
                       <td>
-                        <div className="font-medium text-sm">{r.employee_name || r.employee_code}</div>
-                        <div className="text-xs text-slate-400 font-mono">{r.employee_code}</div>
+                        <div className="flex items-center gap-1.5">
+                          <DrillDownChevron isExpanded={isExpanded(r.id)} />
+                          <div>
+                            <div className="font-medium text-sm">{r.employee_name || r.employee_code}</div>
+                            <div className="text-xs text-slate-400 font-mono">{r.employee_code}</div>
+                          </div>
+                        </div>
                       </td>
                       <td className="text-slate-600">{r.department}</td>
                       <td className="font-mono text-sm">{fmtDate(r.date)}</td>
@@ -350,6 +360,27 @@ export default function ShiftVerification() {
                         </button>
                       </td>
                     </tr>
+                    {isExpanded(r.id) && (
+                      <DrillDownRow colSpan={11}>
+                        <EmployeeQuickView
+                          employeeCode={r.employee_code}
+                          contextContent={
+                            <div>
+                              <div className="text-xs font-semibold text-slate-500 mb-2">Shift Details</div>
+                              <div className="grid grid-cols-2 gap-2 text-xs">
+                                <div><span className="text-slate-400">Date:</span> <span className="font-medium">{fmtDate(r.date)}</span></div>
+                                <div><span className="text-slate-400">Detected Shift:</span> <span className="font-medium">{r.shift_name || r.shift_detected || 'DAY'}</span></div>
+                                <div><span className="text-slate-400">IN Time:</span> <span className="font-mono">{r.in_time_final || r.in_time_original || '—'}</span></div>
+                                <div><span className="text-slate-400">OUT Time:</span> <span className="font-mono">{r.out_time_final || r.out_time_original || '—'}</span></div>
+                                <div><span className="text-slate-400">Hours:</span> <span className="font-mono">{r.actual_hours ? `${r.actual_hours.toFixed(1)}h` : '—'}</span></div>
+                                {r.is_late_arrival && <div><span className="text-slate-400">Late By:</span> <span className="text-red-600 font-medium">{r.late_by_minutes} min</span></div>}
+                              </div>
+                            </div>
+                          }
+                        />
+                      </DrillDownRow>
+                    )}
+                    </React.Fragment>
                   )
                 })}
               </tbody>

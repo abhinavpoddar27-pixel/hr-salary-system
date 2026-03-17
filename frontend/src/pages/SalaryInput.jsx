@@ -6,6 +6,9 @@ import { Abbr } from '../components/ui/Tooltip'
 import AbbreviationLegend from '../components/ui/AbbreviationLegend'
 import Modal, { ModalBody, ModalFooter } from '../components/ui/Modal'
 import clsx from 'clsx'
+import useExpandableRows from '../hooks/useExpandableRows'
+import DrillDownRow, { DrillDownChevron } from '../components/ui/DrillDownRow'
+import EmployeeQuickView from '../components/ui/EmployeeQuickView'
 import api from '../utils/api'
 
 export default function SalaryInput() {
@@ -14,6 +17,7 @@ export default function SalaryInput() {
   const [editForm, setEditForm] = useState({ basic: 0, da: 0, hra: 0, conveyance: 0, other_allowances: 0, pf_applicable: 1, esi_applicable: 1 })
   const [reason, setReason] = useState('')
   const [tab, setTab] = useState('employees') // employees | pending | history
+  const { toggle, isExpanded } = useExpandableRows()
 
   // All employees with salary structures
   const { data: empRes, refetch: refetchEmps } = useQuery({
@@ -144,10 +148,16 @@ export default function SalaryInput() {
                   </thead>
                   <tbody>
                     {filteredEmployees.map(e => (
-                      <tr key={e.code}>
+                      <React.Fragment key={e.code}>
+                    <tr onClick={() => toggle(e.code)} className="transition-colors cursor-pointer hover:bg-blue-50/50" style={isExpanded(e.code) ? { background: 'rgb(239 246 255 / 0.7)' } : {}}>
                         <td>
-                          <div className="font-medium text-sm">{e.name || e.code}</div>
-                          <div className="text-xs text-slate-400 font-mono">{e.code}</div>
+                          <div className="flex items-center gap-1.5">
+                            <DrillDownChevron isExpanded={isExpanded(e.code)} />
+                            <div>
+                              <div className="font-medium text-sm">{e.name || e.code}</div>
+                              <div className="text-xs text-slate-400 font-mono">{e.code}</div>
+                            </div>
+                          </div>
                         </td>
                         <td className="text-xs text-slate-600">{e.department}</td>
                         <td className="text-xs text-slate-600">{e.designation}</td>
@@ -161,9 +171,39 @@ export default function SalaryInput() {
                         <td>{e.esi_applicable ? <span className="badge-green text-xs">Yes</span> : <span className="text-slate-400">No</span>}</td>
                         <td className="font-mono text-xs">{e.effective_from || '—'}</td>
                         <td>
-                          <button onClick={() => openEdit(e)} className="btn-ghost text-xs text-blue-600">Edit</button>
+                          <button onClick={(ev) => { ev.stopPropagation(); openEdit(e); }} className="btn-ghost text-xs text-blue-600">Edit</button>
                         </td>
                       </tr>
+                      {isExpanded(e.code) && (
+                        <DrillDownRow colSpan={13}>
+                          <EmployeeQuickView
+                            employeeCode={e.code}
+                            contextContent={
+                              <div className="text-xs space-y-2">
+                                <p className="font-semibold text-slate-600">Salary Structure</p>
+                                <div className="grid grid-cols-2 gap-2">
+                                  {[
+                                    ['Basic', e.basic],
+                                    ['DA', e.da],
+                                    ['HRA', e.hra],
+                                    ['Conveyance', e.conveyance],
+                                    ['Other Allowances', e.other_allowances],
+                                  ].map(([k, v]) => (
+                                    <div key={k} className="flex justify-between"><span className="text-slate-500">{k}</span><span className="font-mono font-medium">{fmtINR(v)}</span></div>
+                                  ))}
+                                  <div className="flex justify-between border-t pt-1 col-span-2"><span className="text-slate-700 font-semibold">Gross Salary</span><span className="font-mono font-bold">{fmtINR(e.gross_salary)}</span></div>
+                                </div>
+                                <div className="flex gap-3 mt-1">
+                                  <span className="text-slate-500">PF: <strong>{e.pf_applicable ? 'Yes' : 'No'}</strong></span>
+                                  <span className="text-slate-500">ESI: <strong>{e.esi_applicable ? 'Yes' : 'No'}</strong></span>
+                                  {e.effective_from && <span className="text-slate-500">Effective: <strong>{e.effective_from}</strong></span>}
+                                </div>
+                              </div>
+                            }
+                          />
+                        </DrillDownRow>
+                      )}
+                    </React.Fragment>
                     ))}
                   </tbody>
                 </table>

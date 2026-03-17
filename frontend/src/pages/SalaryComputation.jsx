@@ -10,6 +10,8 @@ import AbbreviationLegend from '../components/ui/AbbreviationLegend'
 import CalendarView from '../components/ui/CalendarView'
 import Modal, { ModalBody, ModalFooter } from '../components/ui/Modal'
 import clsx from 'clsx'
+import DrillDownRow, { DrillDownChevron } from '../components/ui/DrillDownRow'
+import EmployeeQuickView from '../components/ui/EmployeeQuickView'
 import api from '../utils/api'
 
 export default function SalaryComputation() {
@@ -219,13 +221,15 @@ export default function SalaryComputation() {
                 <tbody>
                   {salaries.map(s => (
                     <React.Fragment key={s.employee_code}>
-                      <tr className={clsx(
-                        'transition-colors',
-                        s.salary_held && 'bg-amber-50/50',
-                        s.gross_changed && !s.salary_held && 'bg-blue-50/30'
+                      <tr onClick={() => setShowDetails(showDetails === s.employee_code ? null : s.employee_code)} className={clsx(
+                        'transition-colors cursor-pointer hover:bg-blue-50/50',
+                        showDetails === s.employee_code && 'bg-blue-50/70',
+                        s.salary_held && showDetails !== s.employee_code && 'bg-amber-50/50',
+                        s.gross_changed && !s.salary_held && showDetails !== s.employee_code && 'bg-blue-50/30'
                       )}>
                         <td>
                           <div className="flex items-center gap-1.5">
+                            <DrillDownChevron isExpanded={showDetails === s.employee_code} />
                             {s.gross_changed ? (
                               <span className="salary-change-flag w-5 h-5 flex items-center justify-center rounded text-xs font-bold shrink-0 print-visible" title={`Gross changed: ${fmtINR(s.prev_month_gross)} → ${fmtINR(s.gross_salary)}`}>
                                 ◆
@@ -280,48 +284,43 @@ export default function SalaryComputation() {
                         </td>
                       </tr>
                       {showDetails === s.employee_code && (
-                        <tr className="bg-slate-50/80">
-                          <td colSpan={14} className="px-4 py-3">
-                            <div className="grid grid-cols-3 gap-4 text-xs">
-                              <div>
-                                <p className="font-semibold mb-1 text-slate-600">Earnings</p>
-                                <div className="space-y-0.5">
-                                  {[['Basic', s.basic_earned], ['DA', s.da_earned], ['HRA', s.hra_earned], ['Conv.', s.conveyance_earned], ['Other', s.other_allowances_earned], ['OT', s.ot_pay]].map(([k,v]) => v > 0 && (
-                                    <div key={k} className="flex justify-between"><span>{k}</span><span className="font-mono font-medium">{fmtINR(v)}</span></div>
-                                  ))}
-                                </div>
-                              </div>
-                              <div>
-                                <p className="font-semibold mb-1 text-slate-600">Deductions</p>
-                                <div className="space-y-0.5">
-                                  {[['PF (Emp)', s.pf_employee], ['PF (Empr)', s.pf_employer], ['ESI (Emp)', s.esi_employee], ['ESI (Empr)', s.esi_employer], ['PT', s.professional_tax], ['TDS', s.tds], ['LOP', s.lop_deduction], ['Advance', s.advance_recovery], ['Loan EMI', s.loan_recovery], ['Other', s.other_deductions]].map(([k,v]) => v > 0 && (
-                                    <div key={k} className="flex justify-between"><span>{k}</span><span className="font-mono font-medium text-red-600">{fmtINR(v)}</span></div>
-                                  ))}
-                                </div>
-                              </div>
-                              <div>
-                                <p className="font-semibold mb-1 text-slate-600">Attendance</p>
-                                <div className="space-y-0.5">
-                                  {[['Present', s.days_present], ['Absent', s.days_absent], ['Half', s.days_half_present], ['Paid Sundays', s.paid_sundays], ['LOP Days', s.lop_days], ['Payable', s.total_payable_days], ['OT Hours', s.ot_hours]].map(([k,v]) => (
-                                    <div key={k} className="flex justify-between"><span>{k}</span><span className="font-mono font-medium">{v ?? '—'}</span></div>
-                                  ))}
-                                </div>
-                                {s.gross_changed ? (
-                                  <div className="mt-2 p-2 bg-blue-50 rounded-lg border border-blue-200">
-                                    <span className="text-xs text-blue-700 font-semibold">Gross Changed</span>
-                                    <div className="text-xs text-blue-600">{fmtINR(s.prev_month_gross)} → {fmtINR(s.gross_salary)}</div>
+                        <DrillDownRow colSpan={14}>
+                          <EmployeeQuickView
+                            employeeCode={s.employee_code}
+                            contextContent={
+                              <div className="grid grid-cols-2 gap-4 text-xs">
+                                <div>
+                                  <p className="font-semibold mb-1 text-slate-600">Earnings</p>
+                                  <div className="space-y-0.5">
+                                    {[['Basic', s.basic_earned], ['DA', s.da_earned], ['HRA', s.hra_earned], ['Conv.', s.conveyance_earned], ['Other', s.other_allowances_earned], ['OT', s.ot_pay]].map(([k,v]) => v > 0 && (
+                                      <div key={k} className="flex justify-between"><span>{k}</span><span className="font-mono font-medium">{fmtINR(v)}</span></div>
+                                    ))}
                                   </div>
-                                ) : null}
-                                {s.salary_held ? (
-                                  <div className="mt-2 p-2 bg-amber-50 rounded-lg border border-amber-200">
-                                    <span className="text-xs text-amber-700 font-semibold">Salary Held</span>
-                                    <div className="text-xs text-amber-600">{s.hold_reason}</div>
+                                </div>
+                                <div>
+                                  <p className="font-semibold mb-1 text-slate-600">Deductions</p>
+                                  <div className="space-y-0.5">
+                                    {[['PF (Emp)', s.pf_employee], ['PF (Empr)', s.pf_employer], ['ESI (Emp)', s.esi_employee], ['ESI (Empr)', s.esi_employer], ['PT', s.professional_tax], ['TDS', s.tds], ['LOP', s.lop_deduction], ['Advance', s.advance_recovery], ['Loan EMI', s.loan_recovery], ['Other', s.other_deductions]].map(([k,v]) => v > 0 && (
+                                      <div key={k} className="flex justify-between"><span>{k}</span><span className="font-mono font-medium text-red-600">{fmtINR(v)}</span></div>
+                                    ))}
                                   </div>
-                                ) : null}
+                                  {s.gross_changed && (
+                                    <div className="mt-2 p-2 bg-blue-50 rounded-lg border border-blue-200">
+                                      <span className="text-xs text-blue-700 font-semibold">Gross Changed:</span>
+                                      <span className="text-xs text-blue-600 ml-1">{fmtINR(s.prev_month_gross)} → {fmtINR(s.gross_salary)}</span>
+                                    </div>
+                                  )}
+                                  {s.salary_held && (
+                                    <div className="mt-2 p-2 bg-amber-50 rounded-lg border border-amber-200">
+                                      <span className="text-xs text-amber-700 font-semibold">Held:</span>
+                                      <span className="text-xs text-amber-600 ml-1">{s.hold_reason}</span>
+                                    </div>
+                                  )}
+                                </div>
                               </div>
-                            </div>
-                          </td>
-                        </tr>
+                            }
+                          />
+                        </DrillDownRow>
                       )}
                     </React.Fragment>
                   ))}

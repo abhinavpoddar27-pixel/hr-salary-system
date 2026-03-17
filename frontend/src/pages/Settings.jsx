@@ -11,6 +11,8 @@ import {
 } from '../utils/api'
 import { useAppStore } from '../store/appStore'
 import clsx from 'clsx'
+import useExpandableRows from '../hooks/useExpandableRows'
+import DrillDownRow, { DrillDownChevron } from '../components/ui/DrillDownRow'
 
 const DAYS = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday']
 
@@ -342,6 +344,7 @@ function PolicyTab() {
 // ─── Audit Trail Tab ───────────────────────────────────────────────
 function AuditTab() {
   const { selectedMonth, selectedYear } = useAppStore()
+  const { toggle, isExpanded } = useExpandableRows()
 
   const { data: auditRes, isLoading } = useQuery({
     queryKey: ['audit-trail', selectedMonth, selectedYear],
@@ -367,12 +370,63 @@ function AuditTab() {
               ) : audits.length === 0 ? (
                 <tr><td colSpan={4} className="text-center py-8 text-slate-400">No audit entries</td></tr>
               ) : audits.map((a, i) => (
-                <tr key={i}>
-                  <td className="text-xs font-mono">{a.created_at?.replace('T', ' ').split('.')[0]}</td>
-                  <td className="font-medium">{a.performed_by || '—'}</td>
-                  <td>{a.action}</td>
-                  <td className="text-sm text-slate-500 max-w-xs truncate">{a.details}</td>
-                </tr>
+                <React.Fragment key={a.id || i}>
+                  <tr onClick={() => toggle(a.id || i)} className={clsx('cursor-pointer transition-colors hover:bg-blue-50/50', isExpanded(a.id || i) && 'bg-blue-50')}>
+                    <td className="text-xs font-mono"><DrillDownChevron isExpanded={isExpanded(a.id || i)} /> {a.created_at?.replace('T', ' ').split('.')[0]}</td>
+                    <td className="font-medium">{a.performed_by || '—'}</td>
+                    <td>{a.action}</td>
+                    <td className="text-sm text-slate-500 max-w-xs truncate">{a.details}</td>
+                  </tr>
+                  {isExpanded(a.id || i) && (
+                    <DrillDownRow colSpan={4}>
+                      <div className="space-y-3">
+                        <div className="text-xs font-semibold text-slate-500">Full Audit Details</div>
+                        <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+                          <div className="bg-white rounded-lg border border-slate-100 px-3 py-2">
+                            <div className="text-[10px] text-slate-400 uppercase">Timestamp</div>
+                            <div className="text-xs font-medium text-slate-700 font-mono">{a.created_at?.replace('T', ' ').split('.')[0]}</div>
+                          </div>
+                          <div className="bg-white rounded-lg border border-slate-100 px-3 py-2">
+                            <div className="text-[10px] text-slate-400 uppercase">Performed By</div>
+                            <div className="text-xs font-medium text-slate-700">{a.performed_by || '—'}</div>
+                          </div>
+                          <div className="bg-white rounded-lg border border-slate-100 px-3 py-2">
+                            <div className="text-[10px] text-slate-400 uppercase">Action</div>
+                            <div className="text-xs font-medium text-blue-700">{a.action}</div>
+                          </div>
+                          {a.entity_type && (
+                            <div className="bg-white rounded-lg border border-slate-100 px-3 py-2">
+                              <div className="text-[10px] text-slate-400 uppercase">Entity</div>
+                              <div className="text-xs font-medium text-slate-700">{a.entity_type} {a.entity_id ? `#${a.entity_id}` : ''}</div>
+                            </div>
+                          )}
+                        </div>
+                        {a.details && (
+                          <div className="bg-white rounded-lg border border-slate-100 px-3 py-2">
+                            <div className="text-[10px] text-slate-400 uppercase mb-1">Details</div>
+                            <div className="text-xs text-slate-700 whitespace-pre-wrap">{a.details}</div>
+                          </div>
+                        )}
+                        {(a.before_value || a.after_value) && (
+                          <div className="grid grid-cols-2 gap-3">
+                            {a.before_value && (
+                              <div className="bg-red-50 rounded-lg border border-red-100 px-3 py-2">
+                                <div className="text-[10px] text-red-400 uppercase mb-1">Before</div>
+                                <div className="text-xs text-red-700 font-mono whitespace-pre-wrap">{typeof a.before_value === 'object' ? JSON.stringify(a.before_value, null, 2) : a.before_value}</div>
+                              </div>
+                            )}
+                            {a.after_value && (
+                              <div className="bg-green-50 rounded-lg border border-green-100 px-3 py-2">
+                                <div className="text-[10px] text-green-400 uppercase mb-1">After</div>
+                                <div className="text-xs text-green-700 font-mono whitespace-pre-wrap">{typeof a.after_value === 'object' ? JSON.stringify(a.after_value, null, 2) : a.after_value}</div>
+                              </div>
+                            )}
+                          </div>
+                        )}
+                      </div>
+                    </DrillDownRow>
+                  )}
+                </React.Fragment>
               ))}
             </tbody>
           </table>
@@ -386,6 +440,7 @@ function AuditTab() {
 function UsageLogsTab() {
   const [page, setPage] = useState(1)
   const [filters, setFilters] = useState({ username: '', action: '', dateFrom: '', dateTo: '' })
+  const { toggle, isExpanded } = useExpandableRows()
 
   const { data: logsRes, isLoading } = useQuery({
     queryKey: ['usage-logs', page, filters],
@@ -477,18 +532,70 @@ function UsageLogsTab() {
               ) : logs.length === 0 ? (
                 <tr><td colSpan={6} className="text-center py-8 text-slate-400">No logs found</td></tr>
               ) : logs.map((l, i) => (
-                <tr key={i}>
-                  <td className="text-xs font-mono whitespace-nowrap">{l.created_at?.replace('T', ' ').split('.')[0]}</td>
-                  <td className="font-medium text-sm">{l.username}</td>
-                  <td><span className={clsx('text-xs px-2 py-0.5 rounded-full',
-                    l.role === 'admin' ? 'bg-purple-100 text-purple-700' : l.role === 'hr' ? 'bg-blue-100 text-blue-700' : 'bg-slate-100 text-slate-600'
-                  )}>{l.role}</span></td>
-                  <td><span className={clsx('text-xs font-mono font-bold',
-                    l.method === 'GET' ? 'text-green-600' : l.method === 'POST' ? 'text-blue-600' : l.method === 'PUT' ? 'text-amber-600' : 'text-red-600'
-                  )}>{l.method}</span></td>
-                  <td className="font-mono text-xs text-slate-500 max-w-xs truncate">{l.path}</td>
-                  <td className="text-xs text-slate-400">{l.ip_address}</td>
-                </tr>
+                <React.Fragment key={l.id || i}>
+                  <tr onClick={() => toggle(l.id || i)} className={clsx('cursor-pointer transition-colors hover:bg-blue-50/50', isExpanded(l.id || i) && 'bg-blue-50')}>
+                    <td className="text-xs font-mono whitespace-nowrap"><DrillDownChevron isExpanded={isExpanded(l.id || i)} /> {l.created_at?.replace('T', ' ').split('.')[0]}</td>
+                    <td className="font-medium text-sm">{l.username}</td>
+                    <td><span className={clsx('text-xs px-2 py-0.5 rounded-full',
+                      l.role === 'admin' ? 'bg-purple-100 text-purple-700' : l.role === 'hr' ? 'bg-blue-100 text-blue-700' : 'bg-slate-100 text-slate-600'
+                    )}>{l.role}</span></td>
+                    <td><span className={clsx('text-xs font-mono font-bold',
+                      l.method === 'GET' ? 'text-green-600' : l.method === 'POST' ? 'text-blue-600' : l.method === 'PUT' ? 'text-amber-600' : 'text-red-600'
+                    )}>{l.method}</span></td>
+                    <td className="font-mono text-xs text-slate-500 max-w-xs truncate">{l.path}</td>
+                    <td className="text-xs text-slate-400">{l.ip_address}</td>
+                  </tr>
+                  {isExpanded(l.id || i) && (
+                    <DrillDownRow colSpan={6}>
+                      <div className="space-y-3">
+                        <div className="text-xs font-semibold text-slate-500">Request Details</div>
+                        <div className="grid grid-cols-2 lg:grid-cols-3 gap-3">
+                          <div className="bg-white rounded-lg border border-slate-100 px-3 py-2">
+                            <div className="text-[10px] text-slate-400 uppercase">Method</div>
+                            <div className={clsx('text-sm font-bold font-mono',
+                              l.method === 'GET' ? 'text-green-600' : l.method === 'POST' ? 'text-blue-600' : l.method === 'PUT' ? 'text-amber-600' : 'text-red-600'
+                            )}>{l.method}</div>
+                          </div>
+                          <div className="bg-white rounded-lg border border-slate-100 px-3 py-2">
+                            <div className="text-[10px] text-slate-400 uppercase">Path</div>
+                            <div className="text-xs font-medium text-slate-700 font-mono break-all">{l.path}</div>
+                          </div>
+                          <div className="bg-white rounded-lg border border-slate-100 px-3 py-2">
+                            <div className="text-[10px] text-slate-400 uppercase">Status</div>
+                            <div className={clsx('text-sm font-bold',
+                              l.status_code >= 200 && l.status_code < 300 ? 'text-green-600' :
+                              l.status_code >= 400 ? 'text-red-600' : 'text-slate-700'
+                            )}>{l.status_code || '—'}</div>
+                          </div>
+                          <div className="bg-white rounded-lg border border-slate-100 px-3 py-2">
+                            <div className="text-[10px] text-slate-400 uppercase">User</div>
+                            <div className="text-xs font-medium text-slate-700">{l.username} ({l.role})</div>
+                          </div>
+                          <div className="bg-white rounded-lg border border-slate-100 px-3 py-2">
+                            <div className="text-[10px] text-slate-400 uppercase">IP Address</div>
+                            <div className="text-xs font-medium text-slate-700 font-mono">{l.ip_address || '—'}</div>
+                          </div>
+                          {l.response_time != null && (
+                            <div className="bg-white rounded-lg border border-slate-100 px-3 py-2">
+                              <div className="text-[10px] text-slate-400 uppercase">Response Time</div>
+                              <div className="text-xs font-medium text-slate-700">{l.response_time}ms</div>
+                            </div>
+                          )}
+                          <div className="bg-white rounded-lg border border-slate-100 px-3 py-2">
+                            <div className="text-[10px] text-slate-400 uppercase">Timestamp</div>
+                            <div className="text-xs font-medium text-slate-700 font-mono">{l.created_at?.replace('T', ' ').split('.')[0]}</div>
+                          </div>
+                          {l.user_agent && (
+                            <div className="bg-white rounded-lg border border-slate-100 px-3 py-2 col-span-2">
+                              <div className="text-[10px] text-slate-400 uppercase">User Agent</div>
+                              <div className="text-xs text-slate-600 truncate">{l.user_agent}</div>
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    </DrillDownRow>
+                  )}
+                </React.Fragment>
               ))}
             </tbody>
           </table>

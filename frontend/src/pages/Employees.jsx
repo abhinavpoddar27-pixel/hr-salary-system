@@ -8,6 +8,9 @@ import Modal from '../components/ui/Modal'
 import CalendarView from '../components/ui/CalendarView'
 import { Abbr } from '../components/ui/Tooltip'
 import clsx from 'clsx'
+import useExpandableRows from '../hooks/useExpandableRows'
+import DrillDownRow, { DrillDownChevron } from '../components/ui/DrillDownRow'
+import EmployeeQuickView from '../components/ui/EmployeeQuickView'
 
 function SalaryModal({ employee, onClose }) {
   const qc = useQueryClient()
@@ -510,6 +513,7 @@ export default function Employees() {
   const [profileEmp, setProfileEmp] = useState(null)
   const [sortField, setSortField] = useState('name')
   const [sortDir, setSortDir] = useState('asc')
+  const { toggle, isExpanded } = useExpandableRows()
 
   const { data: empsRes, isLoading } = useQuery({
     queryKey: ['employees'],
@@ -601,28 +605,47 @@ export default function Employees() {
                 {filtered.length === 0 ? (
                   <tr><td colSpan={10} className="text-center py-8 text-slate-400">No employees found</td></tr>
                 ) : filtered.map(e => (
-                  <tr key={e.code}>
-                    <td className="font-mono text-sm text-slate-600">{e.code}</td>
-                    <td className="font-medium text-slate-800">{e.name}</td>
-                    <td className="text-slate-600">{e.department}</td>
-                    <td className="text-slate-500">{e.designation || '—'}</td>
-                    <td>
-                      <span className={`badge text-xs ${e.employment_type === 'Permanent' ? 'bg-green-100 text-green-700' : 'bg-amber-100 text-amber-700'}`}>
-                        {e.employment_type || 'Permanent'}
-                      </span>
-                    </td>
-                    <td className="text-slate-500">{e.shift_code || 'DAY'}</td>
-                    <td className="text-right font-medium">{e.gross_salary ? fmtINR(e.gross_salary) : <span className="text-slate-300">Not Set</span>}</td>
-                    <td className="text-center">{e.pf_applicable !== 0 ? <span className="text-green-500 text-xs">✓</span> : <span className="text-slate-300 text-xs">—</span>}</td>
-                    <td className="text-center">{e.esi_applicable !== 0 ? <span className="text-green-500 text-xs">✓</span> : <span className="text-slate-300 text-xs">—</span>}</td>
-                    <td>
-                      <div className="flex gap-1.5">
-                        <button onClick={() => setProfileEmp(e)} className="text-xs py-0.5 px-2 bg-blue-50 text-blue-700 rounded hover:bg-blue-100 border border-blue-200">Profile</button>
-                        <button onClick={() => setEditEmp(e)} className="btn-secondary text-xs py-0.5 px-2">Edit</button>
-                        <button onClick={() => setSalaryEmp(e)} className="text-xs py-0.5 px-2 bg-brand-50 text-brand-600 rounded hover:bg-brand-100 border border-brand-200">₹</button>
-                      </div>
-                    </td>
-                  </tr>
+                  <React.Fragment key={e.code}>
+                    <tr onClick={() => toggle(e.code)} className={clsx('cursor-pointer transition-colors hover:bg-blue-50/50', isExpanded(e.code) && 'bg-blue-50')}>
+                      <td className="font-mono text-sm text-slate-600"><DrillDownChevron isExpanded={isExpanded(e.code)} /> {e.code}</td>
+                      <td className="font-medium text-slate-800">{e.name}</td>
+                      <td className="text-slate-600">{e.department}</td>
+                      <td className="text-slate-500">{e.designation || '—'}</td>
+                      <td>
+                        <span className={`badge text-xs ${e.employment_type === 'Permanent' ? 'bg-green-100 text-green-700' : 'bg-amber-100 text-amber-700'}`}>
+                          {e.employment_type || 'Permanent'}
+                        </span>
+                      </td>
+                      <td className="text-slate-500">{e.shift_code || 'DAY'}</td>
+                      <td className="text-right font-medium">{e.gross_salary ? fmtINR(e.gross_salary) : <span className="text-slate-300">Not Set</span>}</td>
+                      <td className="text-center">{e.pf_applicable !== 0 ? <span className="text-green-500 text-xs">✓</span> : <span className="text-slate-300 text-xs">—</span>}</td>
+                      <td className="text-center">{e.esi_applicable !== 0 ? <span className="text-green-500 text-xs">✓</span> : <span className="text-slate-300 text-xs">—</span>}</td>
+                      <td>
+                        <div className="flex gap-1.5">
+                          <button onClick={(ev) => { ev.stopPropagation(); setProfileEmp(e) }} className="text-xs py-0.5 px-2 bg-blue-50 text-blue-700 rounded hover:bg-blue-100 border border-blue-200">Profile</button>
+                          <button onClick={(ev) => { ev.stopPropagation(); setEditEmp(e) }} className="btn-secondary text-xs py-0.5 px-2">Edit</button>
+                          <button onClick={(ev) => { ev.stopPropagation(); setSalaryEmp(e) }} className="text-xs py-0.5 px-2 bg-brand-50 text-brand-600 rounded hover:bg-brand-100 border border-brand-200">₹</button>
+                        </div>
+                      </td>
+                    </tr>
+                    {isExpanded(e.code) && (
+                      <DrillDownRow colSpan={10}>
+                        <EmployeeQuickView
+                          employeeCode={e.code}
+                          contextContent={
+                            <div>
+                              <div className="text-xs font-semibold text-slate-500 mb-2">Quick Actions</div>
+                              <div className="flex gap-2">
+                                <button onClick={() => setProfileEmp(e)} className="text-xs py-1.5 px-3 bg-blue-50 text-blue-700 rounded-lg hover:bg-blue-100 border border-blue-200 font-medium">View Full Profile</button>
+                                <button onClick={() => setEditEmp(e)} className="text-xs py-1.5 px-3 bg-slate-50 text-slate-700 rounded-lg hover:bg-slate-100 border border-slate-200 font-medium">Edit Details</button>
+                                <button onClick={() => setSalaryEmp(e)} className="text-xs py-1.5 px-3 bg-green-50 text-green-700 rounded-lg hover:bg-green-100 border border-green-200 font-medium">Salary Structure</button>
+                              </div>
+                            </div>
+                          }
+                        />
+                      </DrillDownRow>
+                    )}
+                  </React.Fragment>
                 ))}
               </tbody>
             </table>

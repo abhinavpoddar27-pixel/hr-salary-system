@@ -10,6 +10,9 @@ import Modal from '../components/ui/Modal'
 import { Abbr } from '../components/ui/Tooltip'
 import AbbreviationLegend from '../components/ui/AbbreviationLegend'
 import clsx from 'clsx'
+import useExpandableRows from '../hooks/useExpandableRows'
+import DrillDownRow, { DrillDownChevron } from '../components/ui/DrillDownRow'
+import EmployeeQuickView from '../components/ui/EmployeeQuickView'
 
 const LOAN_TYPES = ['Salary Advance', 'Personal Loan', 'Festival Advance', 'Emergency']
 const STATUS_COLORS = {
@@ -27,6 +30,7 @@ export default function Loans() {
   const [showCreate, setShowCreate] = useState(false)
   const [showDetail, setShowDetail] = useState(null)
   const [filterType, setFilterType] = useState('')
+  const { toggle: toggleDrill, isExpanded: isDrillExpanded } = useExpandableRows()
 
   const { data: res, isLoading } = useQuery({
     queryKey: ['loans'],
@@ -167,11 +171,17 @@ export default function Loans() {
                   No loans found. Click "+ New Loan" to create one.
                 </td></tr>
               ) : loans.map(l => (
-                <tr key={l.id}>
+                <React.Fragment key={l.id}>
+                <tr onClick={() => toggleDrill(l.id)} className="cursor-pointer hover:bg-blue-50/50 transition-colors">
                   <td className="text-slate-400 text-xs">{l.id}</td>
                   <td>
-                    <div className="font-medium text-sm">{l.employee_name || l.employee_code}</div>
-                    <div className="text-xs text-slate-400 font-mono">{l.employee_code}</div>
+                    <div className="flex items-center gap-1">
+                      <DrillDownChevron isExpanded={isDrillExpanded(l.id)} />
+                      <div>
+                        <div className="font-medium text-sm">{l.employee_name || l.employee_code}</div>
+                        <div className="text-xs text-slate-400 font-mono">{l.employee_code}</div>
+                      </div>
+                    </div>
                   </td>
                   <td className="text-sm">{l.department}</td>
                   <td>
@@ -214,6 +224,27 @@ export default function Loans() {
                     </div>
                   </td>
                 </tr>
+                {isDrillExpanded(l.id) && (
+                  <DrillDownRow colSpan={11}>
+                    <EmployeeQuickView
+                      employeeCode={l.employee_code}
+                      contextContent={
+                        <div>
+                          <div className="text-xs font-semibold text-slate-500 mb-2">Loan Details</div>
+                          <div className="grid grid-cols-2 gap-2 text-xs">
+                            <div><span className="text-slate-400">Loan Type:</span> <span className="font-medium">{l.loan_type}</span></div>
+                            <div><span className="text-slate-400">Principal:</span> <span className="font-mono">₹{Number(l.principal_amount || 0).toLocaleString('en-IN')}</span></div>
+                            <div><span className="text-slate-400">EMI:</span> <span className="font-mono">₹{Number(l.emi_amount || 0).toLocaleString('en-IN')}</span></div>
+                            <div><span className="text-slate-400">Remaining:</span> <span className="font-mono">₹{Number(l.remaining_balance || 0).toLocaleString('en-IN')}</span></div>
+                            <div><span className="text-slate-400">Tenure:</span> <span>{l.tenure_months} months</span></div>
+                            <div><span className="text-slate-400">Status:</span> <span className="font-medium">{l.status}</span></div>
+                          </div>
+                        </div>
+                      }
+                    />
+                  </DrillDownRow>
+                )}
+                </React.Fragment>
               ))}
             </tbody>
           </table>

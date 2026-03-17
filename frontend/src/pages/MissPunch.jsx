@@ -9,6 +9,9 @@ import { Abbr } from '../components/ui/Tooltip'
 import AbbreviationLegend from '../components/ui/AbbreviationLegend'
 import CalendarView from '../components/ui/CalendarView'
 import clsx from 'clsx'
+import useExpandableRows from '../hooks/useExpandableRows'
+import DrillDownRow, { DrillDownChevron } from '../components/ui/DrillDownRow'
+import EmployeeQuickView from '../components/ui/EmployeeQuickView'
 
 const SOURCES = ['Gate Register', 'Production Office', 'Supervisor Confirmed', 'Other']
 const ISSUE_LABELS = { MISSING_IN: 'Missing IN', MISSING_OUT: 'Missing OUT', NO_PUNCH: 'No Punch', NIGHT_UNPAIRED: 'Night Unpaired' }
@@ -74,6 +77,7 @@ export default function MissPunch() {
   const [sortField, setSortField] = useState('date')
   const [sortDir, setSortDir] = useState('asc')
   const [calendarEmployee, setCalendarEmployee] = useState(null)
+  const { toggle, isExpanded } = useExpandableRows()
   const [filterDate, setFilterDate] = useState('')
 
   const { data: res, isLoading, refetch } = useQuery({
@@ -273,11 +277,14 @@ export default function MissPunch() {
                 ) : (
                   records.map(rec => (
                     <React.Fragment key={rec.id}>
-                      <tr className={clsx(
-                        rec.miss_punch_resolved && 'opacity-50',
-                        editId === rec.id && 'hidden',
-                        'transition-all duration-100'
-                      )}>
+                      <tr 
+                        onClick={() => editId !== rec.id && toggle(rec.id)}
+                        className={clsx(
+                          rec.miss_punch_resolved && 'opacity-50',
+                          editId === rec.id && 'hidden',
+                          'transition-all duration-100 cursor-pointer hover:bg-blue-50/50',
+                          isExpanded(rec.id) && 'bg-blue-50/70'
+                        )}>
                         <td>
                           {!rec.miss_punch_resolved && (
                             <input type="checkbox" checked={selected.has(rec.id)} onChange={() => {
@@ -289,8 +296,13 @@ export default function MissPunch() {
                           )}
                         </td>
                         <td>
-                          <div className="font-medium text-sm">{rec.employee_name || rec.employee_code}</div>
-                          <div className="text-xs text-slate-400 font-mono">{rec.employee_code}</div>
+                          <div className="flex items-center gap-1.5">
+                            <DrillDownChevron isExpanded={isExpanded(rec.id)} />
+                            <div>
+                              <div className="font-medium text-sm">{rec.employee_name || rec.employee_code}</div>
+                              <div className="text-xs text-slate-400 font-mono">{rec.employee_code}</div>
+                            </div>
+                          </div>
                         </td>
                         <td className="text-slate-600">{rec.department}</td>
                         <td className="font-mono text-sm">{fmtDate(rec.date)}</td>
@@ -329,6 +341,28 @@ export default function MissPunch() {
                           )}
                         </td>
                       </tr>
+                      {isExpanded(rec.id) && (
+                        <DrillDownRow colSpan={10}>
+                          <EmployeeQuickView
+                            employeeCode={rec.employee_code}
+                            contextContent={
+                              <div>
+                                <div className="text-xs font-semibold text-slate-500 mb-2">Miss Punch Details</div>
+                                <div className="grid grid-cols-2 gap-2 text-xs">
+                                  <div><span className="text-slate-400">Date:</span> <span className="font-medium">{fmtDate(rec.date)}</span></div>
+                                  <div><span className="text-slate-400">Issue:</span> <span className="font-medium">{ISSUE_LABELS[rec.miss_punch_type] || rec.miss_punch_type}</span></div>
+                                  <div><span className="text-slate-400">Original IN:</span> <span className="font-mono">{rec.in_time_original || '—'}</span></div>
+                                  <div><span className="text-slate-400">Original OUT:</span> <span className="font-mono">{rec.out_time_original || '—'}</span></div>
+                                  <div><span className="text-slate-400">Final IN:</span> <span className="font-mono">{rec.in_time_final || '—'}</span></div>
+                                  <div><span className="text-slate-400">Final OUT:</span> <span className="font-mono">{rec.out_time_final || '—'}</span></div>
+                                  {rec.correction_source && <div><span className="text-slate-400">Source:</span> <span className="font-medium">{rec.correction_source}</span></div>}
+                                  {rec.correction_remark && <div><span className="text-slate-400">Remark:</span> <span>{rec.correction_remark}</span></div>}
+                                </div>
+                              </div>
+                            }
+                          />
+                        </DrillDownRow>
+                      )}
                       {editId === rec.id && (
                         <EditRow
                           record={rec}

@@ -9,6 +9,9 @@ import { Abbr, Tip } from '../components/ui/Tooltip'
 import AbbreviationLegend from '../components/ui/AbbreviationLegend'
 import CalendarView from '../components/ui/CalendarView'
 import clsx from 'clsx'
+import useExpandableRows from '../hooks/useExpandableRows'
+import DrillDownRow, { DrillDownChevron } from '../components/ui/DrillDownRow'
+import EmployeeQuickView from '../components/ui/EmployeeQuickView'
 
 function ConfidenceBadge({ confidence }) {
   if (confidence === 'high') return <span className="badge-green">High ✓ Auto-paired</span>
@@ -20,6 +23,7 @@ export default function NightShift() {
   const { selectedMonth, selectedYear } = useAppStore()
   const [filter, setFilter] = useState('all')
   const [calendarEmployee, setCalendarEmployee] = useState(null)
+  const { toggle, isExpanded } = useExpandableRows()
 
   const { data: res, isLoading, refetch } = useQuery({
     queryKey: ['night-shifts', selectedMonth, selectedYear],
@@ -144,13 +148,21 @@ export default function NightShift() {
                   </td></tr>
                 ) : (
                   filtered.map(pair => (
-                    <tr key={pair.id} className={clsx(
+                    <React.Fragment key={pair.id}>
+                    <tr onClick={() => toggle(pair.id)} className={clsx(
                       pair.is_confirmed && 'bg-green-50/30',
-                      pair.is_rejected && 'opacity-40 line-through'
+                      pair.is_rejected && 'opacity-40 line-through',
+                      'cursor-pointer hover:bg-blue-50/50',
+                      isExpanded(pair.id) && 'bg-blue-50/70'
                     )}>
                       <td>
-                        <div className="font-medium text-sm">{pair.employee_name || pair.employee_code}</div>
-                        <div className="text-xs text-slate-400 font-mono">{pair.employee_code}</div>
+                        <div className="flex items-center gap-1.5">
+                          <DrillDownChevron isExpanded={isExpanded(pair.id)} />
+                          <div>
+                            <div className="font-medium text-sm">{pair.employee_name || pair.employee_code}</div>
+                            <div className="text-xs text-slate-400 font-mono">{pair.employee_code}</div>
+                          </div>
+                        </div>
                       </td>
                       <td className="text-slate-600">{pair.department}</td>
                       <td className="font-mono">{fmtDate(pair.in_date)}</td>
@@ -187,6 +199,28 @@ export default function NightShift() {
                         </button>
                       </td>
                     </tr>
+                    {isExpanded(pair.id) && (
+                      <DrillDownRow colSpan={11}>
+                        <EmployeeQuickView
+                          employeeCode={pair.employee_code}
+                          contextContent={
+                            <div>
+                              <div className="text-xs font-semibold text-slate-500 mb-2">Night Shift Details</div>
+                              <div className="grid grid-cols-2 gap-2 text-xs">
+                                <div><span className="text-slate-400">IN Date:</span> <span className="font-medium">{fmtDate(pair.in_date)}</span></div>
+                                <div><span className="text-slate-400">IN Time:</span> <span className="font-mono text-purple-700">{pair.in_time}</span></div>
+                                <div><span className="text-slate-400">OUT Date:</span> <span className="font-medium">{fmtDate(pair.out_date)}</span></div>
+                                <div><span className="text-slate-400">OUT Time:</span> <span className="font-mono text-purple-700">{pair.out_time}</span></div>
+                                <div><span className="text-slate-400">Total Hours:</span> <span className="font-bold">{pair.calculated_hours?.toFixed(1)}h</span></div>
+                                <div><span className="text-slate-400">Confidence:</span> <span className="font-medium">{pair.confidence}</span></div>
+                                <div><span className="text-slate-400">Status:</span> <span className="font-medium">{pair.is_confirmed ? 'Confirmed' : pair.is_rejected ? 'Rejected' : 'Pending'}</span></div>
+                              </div>
+                            </div>
+                          }
+                        />
+                      </DrillDownRow>
+                    )}
+                    </React.Fragment>
                   ))
                 )}
               </tbody>
