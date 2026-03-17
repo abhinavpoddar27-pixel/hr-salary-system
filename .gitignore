@@ -11,3 +11,4 @@ uploads/
 # frontend/dist/ is committed so Railway can serve it directly
 .env
 *.env.local
+scripts/master-data-extracted.json
