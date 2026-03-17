@@ -27,15 +27,17 @@ function isPermanentDept(deptName) {
 
 /**
  * Compute organisation overview for a given month
+ * Only counts ACTIVE employees (excludes Inactive/Exited)
  */
 function computeOrgOverview(db, month, year) {
-  // Get all processed records for this month
+  // Get all processed records for this month — only active employees
   const records = db.prepare(`
     SELECT ap.*, e.department, e.company, e.employment_type, e.contractor_group
     FROM attendance_processed ap
     LEFT JOIN employees e ON ap.employee_code = e.code
     WHERE ap.month = ? AND ap.year = ?
     AND ap.is_night_out_only = 0
+    AND (e.status IS NULL OR e.status NOT IN ('Inactive', 'Exited'))
   `).all(month, year);
 
   if (records.length === 0) return null;
@@ -341,11 +343,13 @@ function computeAttrition(db, month, year) {
  * Compute chronic absenteeism report
  */
 function computeChronicAbsentees(db, month, year) {
-  // Get attendance rates for all employees this month
+  // Get attendance rates for active employees this month
   const records = db.prepare(`
-    SELECT employee_code, status_final, status_original, date
-    FROM attendance_processed
-    WHERE month = ? AND year = ? AND is_night_out_only = 0
+    SELECT ap.employee_code, ap.status_final, ap.status_original, ap.date
+    FROM attendance_processed ap
+    LEFT JOIN employees e ON ap.employee_code = e.code
+    WHERE ap.month = ? AND ap.year = ? AND ap.is_night_out_only = 0
+    AND (e.status IS NULL OR e.status NOT IN ('Inactive', 'Exited'))
   `).all(month, year);
 
   const byEmp = {};
@@ -390,6 +394,7 @@ function computePunctualityReport(db, month, year) {
     LEFT JOIN employees e ON ap.employee_code = e.code
     WHERE ap.month = ? AND ap.year = ? AND ap.is_night_out_only = 0
     AND (ap.status_final IN ('P','WOP') OR ap.status_original IN ('P','WOP'))
+    AND (e.status IS NULL OR e.status NOT IN ('Inactive', 'Exited'))
   `).all(month, year);
 
   const byEmp = {};
@@ -524,6 +529,7 @@ function computeOvertimeReport(db, month, year) {
     LEFT JOIN employees e ON ap.employee_code = e.code
     WHERE ap.month = ? AND ap.year = ? AND ap.is_night_out_only = 0
     AND ap.overtime_minutes > 0
+    AND (e.status IS NULL OR e.status NOT IN ('Inactive', 'Exited'))
   `).all(month, year);
 
   const byEmp = {};
@@ -586,6 +592,7 @@ function computeWorkingHoursReport(db, month, year) {
     LEFT JOIN employees e ON ap.employee_code = e.code
     WHERE ap.month = ? AND ap.year = ? AND ap.is_night_out_only = 0
     AND ap.actual_hours > 0
+    AND (e.status IS NULL OR e.status NOT IN ('Inactive', 'Exited'))
   `).all(month, year);
 
   // Histogram buckets

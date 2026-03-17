@@ -1,18 +1,51 @@
-import React, { useState } from 'react'
+import React, { useState, useMemo } from 'react'
 import { useQuery } from '@tanstack/react-query'
+import { Routes, Route, NavLink, Navigate } from 'react-router-dom'
 import {
   AreaChart, Area, BarChart, Bar, XAxis, YAxis, CartesianGrid,
-  Tooltip, Legend, ResponsiveContainer, PieChart, Pie, Cell, LineChart, Line
+  Tooltip, Legend, ResponsiveContainer, PieChart, Pie, Cell
 } from 'recharts'
-import { getHeadcountTrend, getAttritionData, getOrgOverview } from '../utils/api'
+import {
+  getHeadcountTrend, getAttritionData, getOrgOverview,
+  detectInactiveEmployees, getInactiveEmployees, reactivateEmployee
+} from '../utils/api'
 import { useAppStore } from '../store/appStore'
-import StatCard from '../components/common/StatCard'
+import { useMutation, useQueryClient } from '@tanstack/react-query'
+import toast from 'react-hot-toast'
+import clsx from 'clsx'
 
 const COLORS_PIE = ['#3b82f6', '#22c55e', '#f59e0b', '#ef4444', '#8b5cf6', '#06b6d4', '#ec4899']
 
-export default function WorkforceAnalytics() {
+function KPI({ label, value, sub, color = 'blue', icon }) {
+  const colors = {
+    blue: 'from-blue-500 to-blue-600', green: 'from-emerald-500 to-emerald-600',
+    red: 'from-red-500 to-red-600', amber: 'from-amber-500 to-amber-600',
+    purple: 'from-purple-500 to-purple-600', cyan: 'from-cyan-500 to-cyan-600',
+  }
+  return (
+    <div className="card p-4 flex items-start gap-3">
+      <div className={clsx('w-10 h-10 rounded-xl bg-gradient-to-br flex items-center justify-center text-white text-lg shrink-0', colors[color] || colors.blue)}>{icon}</div>
+      <div className="min-w-0">
+        <div className="text-2xl font-bold text-slate-800">{value}</div>
+        <div className="text-xs font-medium text-slate-500 uppercase tracking-wider">{label}</div>
+        {sub && <div className="text-xs text-slate-400 mt-0.5">{sub}</div>}
+      </div>
+    </div>
+  )
+}
+
+const TABS = [
+  { id: 'headcount', label: 'Headcount & Composition', path: '/workforce/headcount' },
+  { id: 'attrition', label: 'Hiring & Attrition', path: '/workforce/attrition' },
+  { id: 'contractors', label: 'Contractor Management', path: '/workforce/contractors' },
+]
+
+// ═══════════════════════════════════════════════════════════
+// HEADCOUNT TAB — enhanced with detailed drill-down
+// ═══════════════════════════════════════════════════════════
+function HeadcountTab() {
   const { selectedMonth, selectedYear } = useAppStore()
-  const [activeTab, setActiveTab] = useState('headcount')
+  const [expandedMonth, setExpandedMonth] = useState(null)
 
   const { data: trendRes } = useQuery({
     queryKey: ['headcount-trend', selectedMonth, selectedYear],
@@ -21,13 +54,405 @@ export default function WorkforceAnalytics() {
   })
   const trend = trendRes?.data?.data || []
 
+  const { data: overviewRes } = useQuery({
+    queryKey: ['org-overview', selectedMonth, selectedYear],
+    queryFn: () => getOrgOverview(selectedMonth, selectedYear),
+    retry: 0
+  })
+  const overview = overviewRes?.data?.data || {}
+
+  // For attrition data to get join/exit details when a month row is expanded
+  const expandedM = expandedMonth ? trend.find(t => t.monthLabel === expandedMonth) : null
+  const { data: expandedAttritionRes } = useQuery({
+    queryKey: ['attrition-detail', expandedM?.month, expandedM?.year],
+    queryFn: () => getAttritionData(expandedM?.month, expandedM?.year),
+    enabled: !!expandedM,
+    retry: 0
+  })
+  const expandedAttrition = expandedAttritionRes?.data?.data || {}
+
+  const permCount = overview.permanentCount || 0
+  const contractCount = overview.contractorCount || 0
+
+  // Departments data
+  const departments = useMemo(() => {
+    return (overview.departments || []).sort((a, b) => b.headcount - a.headcount)
+  }, [overview.departments])
+
+  const deptData = departments.map(d => ({
+    name: d.department?.split(' ').slice(0, 2).join(' ') || 'N/A',
+    full: d.department,
+    headcount: d.headcount || d.totalEmployees || 0
+  }))
+
+  const latestMonth = trend[trend.length - 1] || {}
+  const prevMonth = trend[trend.length - 2] || {}
+  const delta = (latestMonth.totalEmployees || 0) - (prevMonth.totalEmployees || 0)
+
+  return (
+    <div className="space-y-6">
+      {/* KPIs */}
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+        <KPI icon="👥" label="Total Headcount" value={overview.totalEmployees || overview.totalHeadcount || 0}
+          sub={delta > 0 ? `+${delta} vs prev month` : delta < 0 ? `${delta} vs prev month` : 'No change'} color="blue" />
+        <KPI icon="🏢" label="Permanent" value={permCount} sub={`${permCount + contractCount > 0 ? Math.round(permCount / (permCount + contractCount) * 100) : 0}% of total`} color="green" />
+        <KPI icon="📋" label="Contractors" value={contractCount} sub={`${permCount + contractCount > 0 ? Math.round(contractCount / (permCount + contractCount) * 100) : 0}% of total`} color="amber" />
+        <KPI icon="📊" label="Departments" value={departments.length} color="purple" />
+      </div>
+
+      {/* Trend Chart */}
+      <div className="card">
+        <div className="card-header"><h3 className="font-semibold text-slate-700">Headcount Over Time (Last 12 Months)</h3></div>
+        <div className="p-4">
+          {trend.length === 0 ? (
+            <div className="text-center py-8 text-slate-400">Process multiple months to see trend data</div>
+          ) : (
+            <ResponsiveContainer width="100%" height={300}>
+              <AreaChart data={trend} margin={{ top: 5, right: 20, left: 0, bottom: 5 }}>
+                <defs>
+                  <linearGradient id="totalGrad" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="5%" stopColor="#3b82f6" stopOpacity={0.2} />
+                    <stop offset="95%" stopColor="#3b82f6" stopOpacity={0} />
+                  </linearGradient>
+                  <linearGradient id="permGrad" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="5%" stopColor="#22c55e" stopOpacity={0.15} />
+                    <stop offset="95%" stopColor="#22c55e" stopOpacity={0} />
+                  </linearGradient>
+                </defs>
+                <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" />
+                <XAxis dataKey="monthLabel" tick={{ fontSize: 11 }} />
+                <YAxis tick={{ fontSize: 11 }} />
+                <Tooltip />
+                <Legend />
+                <Area type="monotone" dataKey="totalEmployees" name="Total" stroke="#3b82f6" fill="url(#totalGrad)" strokeWidth={2} dot={{ r: 3 }} />
+                <Area type="monotone" dataKey="permanentCount" name="Permanent" stroke="#22c55e" fill="url(#permGrad)" strokeWidth={2} dot={{ r: 3 }} />
+                <Area type="monotone" dataKey="contractorCount" name="Contractor" stroke="#f59e0b" fill="none" strokeWidth={2} strokeDasharray="4 2" dot={{ r: 3 }} />
+              </AreaChart>
+            </ResponsiveContainer>
+          )}
+        </div>
+      </div>
+
+      {/* Month-over-month table with drill-down */}
+      {trend.length > 0 && (
+        <div className="card overflow-hidden">
+          <div className="card-header">
+            <h3 className="font-semibold text-slate-700">Month-over-Month Changes</h3>
+            <p className="text-xs text-slate-400 mt-0.5">Click any row to see detailed joins/exits</p>
+          </div>
+          <div className="overflow-x-auto">
+            <table className="table-compact w-full">
+              <thead>
+                <tr>
+                  <th>Month</th>
+                  <th className="text-center">Total</th>
+                  <th className="text-center">Permanent</th>
+                  <th className="text-center">Contractor</th>
+                  <th className="text-center">New Joins</th>
+                  <th className="text-center">Exits</th>
+                  <th className="text-center">Net Change</th>
+                </tr>
+              </thead>
+              <tbody>
+                {[...trend].reverse().map((t, i) => (
+                  <React.Fragment key={i}>
+                    <tr className={clsx('cursor-pointer hover:bg-slate-50 transition-colors',
+                      expandedMonth === t.monthLabel && 'bg-blue-50')}
+                      onClick={() => setExpandedMonth(expandedMonth === t.monthLabel ? null : t.monthLabel)}
+                    >
+                      <td className="font-medium">
+                        <span className="mr-1.5 text-xs text-slate-400">{expandedMonth === t.monthLabel ? '▼' : '▶'}</span>
+                        {t.monthLabel}
+                      </td>
+                      <td className="text-center font-bold text-brand-600">{t.totalEmployees}</td>
+                      <td className="text-center text-green-700">{t.permanentCount}</td>
+                      <td className="text-center text-amber-600">{t.contractorCount}</td>
+                      <td className="text-center text-green-700">{t.newJoins > 0 ? `+${t.newJoins}` : '—'}</td>
+                      <td className="text-center text-red-600">{t.exits > 0 ? `-${t.exits}` : '—'}</td>
+                      <td className="text-center">
+                        {t.netChange > 0 ? (
+                          <span className="text-green-600 font-semibold">+{t.netChange}</span>
+                        ) : t.netChange < 0 ? (
+                          <span className="text-red-600 font-semibold">{t.netChange}</span>
+                        ) : <span className="text-slate-400">—</span>}
+                      </td>
+                    </tr>
+                    {expandedMonth === t.monthLabel && (
+                      <tr>
+                        <td colSpan={7} className="p-0 bg-slate-50">
+                          <div className="p-4 space-y-4 animate-slide-up">
+                            {/* Department breakdown for this month */}
+                            {t.byCompany && t.byCompany.length > 0 && (
+                              <div>
+                                <h4 className="text-xs font-bold text-slate-500 uppercase mb-2">Company Breakdown</h4>
+                                <div className="flex gap-3">
+                                  {t.byCompany.map((c, ci) => (
+                                    <div key={ci} className="bg-white rounded-lg p-2.5 border text-center min-w-[100px]">
+                                      <div className="text-lg font-bold text-slate-800">{c.count}</div>
+                                      <div className="text-xs text-slate-500">{c.company || 'Unknown'}</div>
+                                    </div>
+                                  ))}
+                                </div>
+                              </div>
+                            )}
+
+                            {/* Joins and Exits details */}
+                            {expandedM?.monthLabel === t.monthLabel && (
+                              <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+                                {/* New Joins */}
+                                <div>
+                                  <h4 className="text-xs font-bold text-green-600 uppercase mb-2">
+                                    New Joins ({expandedAttrition.newJoins || t.newJoins || 0})
+                                  </h4>
+                                  {(expandedAttrition.newJoinDetails || []).length > 0 ? (
+                                    <div className="bg-white rounded-lg border overflow-hidden">
+                                      <table className="w-full text-xs">
+                                        <thead><tr className="border-b bg-green-50">
+                                          <th className="py-1.5 px-2 text-left text-green-700">Name</th>
+                                          <th className="py-1.5 px-2 text-left text-green-700">Code</th>
+                                          <th className="py-1.5 px-2 text-left text-green-700">Department</th>
+                                        </tr></thead>
+                                        <tbody>
+                                          {expandedAttrition.newJoinDetails.map((e, ei) => (
+                                            <tr key={ei} className="border-b border-slate-100">
+                                              <td className="py-1 px-2 font-medium">{e.name}</td>
+                                              <td className="py-1 px-2 font-mono text-slate-500">{e.code}</td>
+                                              <td className="py-1 px-2">{e.department}</td>
+                                            </tr>
+                                          ))}
+                                        </tbody>
+                                      </table>
+                                    </div>
+                                  ) : (
+                                    <div className="text-xs text-slate-400 py-2">No new joins this month</div>
+                                  )}
+                                </div>
+
+                                {/* Exits */}
+                                <div>
+                                  <h4 className="text-xs font-bold text-red-600 uppercase mb-2">
+                                    Exits ({expandedAttrition.exits || t.exits || 0})
+                                  </h4>
+                                  {(expandedAttrition.exitDetails || []).length > 0 ? (
+                                    <div className="bg-white rounded-lg border overflow-hidden">
+                                      <table className="w-full text-xs">
+                                        <thead><tr className="border-b bg-red-50">
+                                          <th className="py-1.5 px-2 text-left text-red-700">Name</th>
+                                          <th className="py-1.5 px-2 text-left text-red-700">Code</th>
+                                          <th className="py-1.5 px-2 text-left text-red-700">Department</th>
+                                        </tr></thead>
+                                        <tbody>
+                                          {expandedAttrition.exitDetails.map((e, ei) => (
+                                            <tr key={ei} className="border-b border-slate-100">
+                                              <td className="py-1 px-2 font-medium">{e.name}</td>
+                                              <td className="py-1 px-2 font-mono text-slate-500">{e.code}</td>
+                                              <td className="py-1 px-2">{e.department}</td>
+                                            </tr>
+                                          ))}
+                                        </tbody>
+                                      </table>
+                                    </div>
+                                  ) : (
+                                    <div className="text-xs text-slate-400 py-2">No exits this month</div>
+                                  )}
+                                </div>
+                              </div>
+                            )}
+                          </div>
+                        </td>
+                      </tr>
+                    )}
+                  </React.Fragment>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {/* Department Headcount Bar */}
+      {deptData.length > 0 && (
+        <div className="card">
+          <div className="card-header"><h3 className="font-semibold text-slate-700">Headcount by Department</h3></div>
+          <div className="p-4">
+            <ResponsiveContainer width="100%" height={280}>
+              <BarChart data={deptData} margin={{ bottom: 60 }}>
+                <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" />
+                <XAxis dataKey="name" angle={-30} textAnchor="end" tick={{ fontSize: 11 }} />
+                <YAxis tick={{ fontSize: 11 }} />
+                <Tooltip />
+                <Bar dataKey="headcount" name="Employees" radius={[4, 4, 0, 0]}>
+                  {deptData.map((_, i) => <Cell key={i} fill={COLORS_PIE[i % COLORS_PIE.length]} />)}
+                </Bar>
+              </BarChart>
+            </ResponsiveContainer>
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
+// ═══════════════════════════════════════════════════════════
+// ATTRITION TAB — detailed view with permanent vs contractor
+// ═══════════════════════════════════════════════════════════
+function AttritionTab() {
+  const { selectedMonth, selectedYear } = useAppStore()
+  const qc = useQueryClient()
+
   const { data: attritionRes } = useQuery({
     queryKey: ['attrition', selectedMonth, selectedYear],
     queryFn: () => getAttritionData(selectedMonth, selectedYear),
-    retry: 0,
-    enabled: activeTab === 'attrition'
+    retry: 0
   })
   const attrition = attritionRes?.data?.data || {}
+
+  const { data: inactiveRes, refetch: refetchInactive } = useQuery({
+    queryKey: ['inactive-employees'],
+    queryFn: getInactiveEmployees,
+    retry: 0
+  })
+  const inactive = inactiveRes?.data?.data || []
+
+  const detectMutation = useMutation({
+    mutationFn: () => detectInactiveEmployees(selectedMonth, selectedYear, 14),
+    onSuccess: (res) => {
+      const count = res?.data?.markedInactive || 0
+      toast.success(`Detected ${count} inactive employees`)
+      refetchInactive()
+      qc.invalidateQueries(['org-overview'])
+      qc.invalidateQueries(['headcount-trend'])
+    }
+  })
+
+  const reactivateMutation = useMutation({
+    mutationFn: (code) => reactivateEmployee(code),
+    onSuccess: () => { toast.success('Employee reactivated'); refetchInactive() }
+  })
+
+  return (
+    <div className="space-y-6">
+      <div className="grid grid-cols-2 lg:grid-cols-5 gap-3">
+        <KPI icon="📊" label="Opening HC" value={attrition.openingHeadcount || 0} sub="prev month" color="blue" />
+        <KPI icon="✅" label="New Joins" value={attrition.newJoins || 0} color="green" />
+        <KPI icon="🚪" label="Exits" value={attrition.exits || 0} color="red" />
+        <KPI icon="📉" label="Attrition Rate" value={`${attrition.attritionRate?.toFixed(1) || 0}%`}
+          sub={`Annual: ${attrition.annualisedAttritionRate?.toFixed(1) || 0}%`}
+          color={parseFloat(attrition.attritionRate || 0) > 5 ? 'red' : 'green'} />
+        <KPI icon="📈" label="Net Change" value={attrition.netChange > 0 ? `+${attrition.netChange}` : attrition.netChange || 0}
+          color={attrition.netChange >= 0 ? 'green' : 'red'} />
+      </div>
+
+      <div className="card p-4 bg-amber-50 border border-amber-200">
+        <p className="text-sm text-amber-800">
+          <strong>Note:</strong> Contractor attrition is typically higher than permanent workforce.
+          Exits are detected by comparing attendance across months. Use &quot;Detect Inactive&quot; to auto-mark employees absent 14+ days.
+        </p>
+      </div>
+
+      {/* Inactive Detection */}
+      <div className="card overflow-hidden">
+        <div className="card-header flex items-center justify-between">
+          <div>
+            <h3 className="font-semibold text-slate-700">Inactive Employee Detection</h3>
+            <p className="text-xs text-slate-400 mt-0.5">Employees absent 14+ consecutive days — auto-marked as Inactive</p>
+          </div>
+          <button onClick={() => detectMutation.mutate()} disabled={detectMutation.isPending}
+            className="btn-primary text-sm">
+            {detectMutation.isPending ? 'Scanning...' : 'Detect Inactive'}
+          </button>
+        </div>
+        {inactive.length > 0 && (
+          <div className="overflow-x-auto">
+            <table className="table-compact w-full">
+              <thead>
+                <tr>
+                  <th>Code</th><th>Name</th><th>Department</th><th>Type</th>
+                  <th>Inactive Since</th><th>Status</th><th>Action</th>
+                </tr>
+              </thead>
+              <tbody>
+                {inactive.map((e, i) => (
+                  <tr key={i}>
+                    <td className="font-mono text-sm">{e.code}</td>
+                    <td className="font-medium">{e.name}</td>
+                    <td>{e.department}</td>
+                    <td><span className={clsx('text-xs px-2 py-0.5 rounded-full',
+                      e.employment_type === 'Permanent' ? 'bg-green-100 text-green-700' : 'bg-amber-100 text-amber-700'
+                    )}>{e.employment_type}</span></td>
+                    <td className="text-slate-500">{e.inactive_since || '—'}</td>
+                    <td><span className="text-xs px-2 py-0.5 rounded-full bg-red-100 text-red-700">{e.status}</span></td>
+                    <td>
+                      <button onClick={() => reactivateMutation.mutate(e.code)}
+                        disabled={reactivateMutation.isPending}
+                        className="text-xs text-blue-600 hover:text-blue-800 font-medium">
+                        Reactivate
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+        {inactive.length === 0 && (
+          <div className="text-center py-6 text-slate-400 text-sm">No inactive employees detected. Run detection to scan.</div>
+        )}
+      </div>
+
+      {/* New Joins Detail */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        {(attrition.newJoinDetails || []).length > 0 && (
+          <div className="card overflow-hidden">
+            <div className="card-header"><h3 className="font-semibold text-green-700">New Joins — {attrition.newJoins}</h3></div>
+            <div className="overflow-x-auto">
+              <table className="table-compact w-full">
+                <thead><tr><th>Employee</th><th>Code</th><th>Department</th><th>Company</th></tr></thead>
+                <tbody>
+                  {attrition.newJoinDetails.map((e, i) => (
+                    <tr key={i}>
+                      <td className="font-medium">{e.name}</td>
+                      <td className="text-slate-500 font-mono text-xs">{e.code}</td>
+                      <td>{e.department}</td>
+                      <td>{e.company}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )}
+
+        {(attrition.exitDetails || []).length > 0 && (
+          <div className="card overflow-hidden">
+            <div className="card-header"><h3 className="font-semibold text-red-700">Exits — {attrition.exits}</h3></div>
+            <div className="overflow-x-auto">
+              <table className="table-compact w-full">
+                <thead><tr><th>Employee</th><th>Code</th><th>Department</th><th>Company</th></tr></thead>
+                <tbody>
+                  {attrition.exitDetails.map((e, i) => (
+                    <tr key={i}>
+                      <td className="font-medium">{e.name}</td>
+                      <td className="text-slate-500 font-mono text-xs">{e.code}</td>
+                      <td>{e.department}</td>
+                      <td>{e.company}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  )
+}
+
+// ═══════════════════════════════════════════════════════════
+// CONTRACTOR MANAGEMENT TAB
+// ═══════════════════════════════════════════════════════════
+function ContractorTab() {
+  const { selectedMonth, selectedYear } = useAppStore()
 
   const { data: overviewRes } = useQuery({
     queryKey: ['org-overview', selectedMonth, selectedYear],
@@ -36,271 +461,184 @@ export default function WorkforceAnalytics() {
   })
   const overview = overviewRes?.data?.data || {}
 
-  // Contractor vs Permanent ratio
   const permCount = overview.permanentCount || 0
   const contractCount = overview.contractorCount || 0
+  const total = permCount + contractCount
+
   const pieData = [
     { name: 'Permanent', value: permCount },
     { name: 'Contractor', value: contractCount }
   ]
 
-  // Department headcount pie
-  const deptPie = Object.values(overview.departments || {}).map(d => ({
-    name: d.department?.split(' ').slice(0, 2).join(' '),
-    value: d.totalEmployees
-  }))
+  const departments = useMemo(() => {
+    return (overview.departments || []).sort((a, b) => b.headcount - a.headcount)
+  }, [overview.departments])
 
-  const TABS = [
-    { id: 'headcount', label: 'Headcount Trend' },
-    { id: 'attrition', label: 'Attrition' },
-    { id: 'workforce', label: 'Workforce Mix' },
-  ]
-
-  const latestMonth = trend[trend.length - 1] || {}
-  const prevMonth = trend[trend.length - 2] || {}
-  const delta = (latestMonth.totalEmployees || 0) - (prevMonth.totalEmployees || 0)
+  const contractorDepts = departments.filter(d => d.isContractor)
+  const permanentDepts = departments.filter(d => !d.isContractor)
 
   return (
-    <div className="p-6 space-y-6">
+    <div className="space-y-6">
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+        <KPI icon="🏢" label="Permanent HC" value={permCount} sub={`${total > 0 ? Math.round(permCount / total * 100) : 0}%`} color="green" />
+        <KPI icon="📋" label="Contractor HC" value={contractCount} sub={`${total > 0 ? Math.round(contractCount / total * 100) : 0}%`} color="amber" />
+        <KPI icon="🏭" label="Contractor Groups" value={contractorDepts.length} color="purple" />
+        <KPI icon="📊" label="Perm Depts" value={permanentDepts.length} color="blue" />
+      </div>
+
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        {/* Pie Chart */}
+        <div className="card">
+          <div className="card-header"><h3 className="font-semibold text-slate-700">Workforce Composition</h3></div>
+          <div className="p-4 flex items-center justify-center gap-8">
+            <PieChart width={220} height={220}>
+              <Pie data={pieData} cx={110} cy={110} innerRadius={60} outerRadius={90} dataKey="value" paddingAngle={3}>
+                {pieData.map((_, i) => <Cell key={i} fill={['#22c55e', '#f59e0b'][i]} />)}
+              </Pie>
+              <Tooltip />
+            </PieChart>
+            <div className="space-y-3">
+              {pieData.map((d, i) => (
+                <div key={i} className="flex items-center gap-2 text-sm">
+                  <span className={`w-3 h-3 rounded-full inline-block ${i === 0 ? 'bg-green-500' : 'bg-amber-500'}`} />
+                  <span className="text-slate-700">{d.name}</span>
+                  <span className="font-bold ml-1">{d.value}</span>
+                  <span className="text-slate-400">({total > 0 ? Math.round(d.value / total * 100) : 0}%)</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+
+        {/* Department headcount bar */}
+        <div className="card">
+          <div className="card-header"><h3 className="font-semibold text-slate-700">Department Distribution</h3></div>
+          <div className="p-4">
+            <ResponsiveContainer width="100%" height={260}>
+              <BarChart data={departments.slice(0, 12).map(d => ({
+                name: d.department?.split(' ').slice(0, 2).join(' '),
+                value: d.headcount,
+                isContractor: d.isContractor
+              }))} margin={{ bottom: 60 }}>
+                <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" />
+                <XAxis dataKey="name" angle={-30} textAnchor="end" tick={{ fontSize: 11 }} />
+                <YAxis tick={{ fontSize: 11 }} /><Tooltip />
+                <Bar dataKey="value" name="Employees" radius={[4, 4, 0, 0]}>
+                  {departments.slice(0, 12).map((d, i) => (
+                    <Cell key={i} fill={d.isContractor ? '#f59e0b' : '#3b82f6'} />
+                  ))}
+                </Bar>
+              </BarChart>
+            </ResponsiveContainer>
+          </div>
+        </div>
+      </div>
+
+      {/* Contractor Groups Table */}
+      {contractorDepts.length > 0 && (
+        <div className="card overflow-hidden">
+          <div className="card-header"><h3 className="font-semibold text-amber-700">Contractor Groups — {contractorDepts.length}</h3></div>
+          <div className="overflow-x-auto">
+            <table className="table-compact w-full">
+              <thead>
+                <tr>
+                  <th>Contractor Group</th>
+                  <th className="text-center">Headcount</th>
+                  <th className="text-center">Attendance %</th>
+                  <th className="text-center">Present Days</th>
+                  <th className="text-center">Absent Days</th>
+                  <th className="text-center">Avg Hours</th>
+                  <th className="text-center">Late</th>
+                </tr>
+              </thead>
+              <tbody>
+                {contractorDepts.map((d, i) => (
+                  <tr key={i}>
+                    <td className="font-medium text-slate-800">{d.department}</td>
+                    <td className="text-center font-bold">{d.headcount}</td>
+                    <td className="text-center">
+                      <span className={clsx('px-2 py-0.5 rounded-full text-xs font-bold',
+                        d.attendanceRate >= 85 ? 'bg-green-100 text-green-700' : d.attendanceRate >= 70 ? 'bg-amber-100 text-amber-700' : 'bg-red-100 text-red-700'
+                      )}>{d.attendanceRate}%</span>
+                    </td>
+                    <td className="text-center text-green-700">{d.presentDays}</td>
+                    <td className="text-center text-red-600">{d.absentDays}</td>
+                    <td className="text-center">{d.avgActualHours || '—'}</td>
+                    <td className="text-center text-amber-600">{d.punctualityIssues || 0}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {/* Permanent Departments Table */}
+      {permanentDepts.length > 0 && (
+        <div className="card overflow-hidden">
+          <div className="card-header"><h3 className="font-semibold text-blue-700">Permanent Departments — {permanentDepts.length}</h3></div>
+          <div className="overflow-x-auto">
+            <table className="table-compact w-full">
+              <thead>
+                <tr>
+                  <th>Department</th>
+                  <th className="text-center">Headcount</th>
+                  <th className="text-center">Attendance %</th>
+                  <th className="text-center">Present Days</th>
+                  <th className="text-center">Absent Days</th>
+                  <th className="text-center">Avg Hours</th>
+                  <th className="text-center">Late</th>
+                </tr>
+              </thead>
+              <tbody>
+                {permanentDepts.map((d, i) => (
+                  <tr key={i}>
+                    <td className="font-medium text-slate-800">{d.department}</td>
+                    <td className="text-center font-bold">{d.headcount}</td>
+                    <td className="text-center">
+                      <span className={clsx('px-2 py-0.5 rounded-full text-xs font-bold',
+                        d.attendanceRate >= 85 ? 'bg-green-100 text-green-700' : d.attendanceRate >= 70 ? 'bg-amber-100 text-amber-700' : 'bg-red-100 text-red-700'
+                      )}>{d.attendanceRate}%</span>
+                    </td>
+                    <td className="text-center text-green-700">{d.presentDays}</td>
+                    <td className="text-center text-red-600">{d.absentDays}</td>
+                    <td className="text-center">{d.avgActualHours || '—'}</td>
+                    <td className="text-center text-amber-600">{d.punctualityIssues || 0}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
+// ═══════════════════════════════════════════════════════════
+// MAIN WORKFORCE COMPONENT WITH ROUTES
+// ═══════════════════════════════════════════════════════════
+export default function WorkforceAnalytics() {
+  return (
+    <div className="p-6 space-y-5 animate-fade-in">
       <div>
-        <h2 className="text-lg font-bold text-slate-800">Workforce Analytics</h2>
-        <p className="text-sm text-slate-500">Headcount trends, attrition, and workforce composition</p>
+        <h2 className="section-title">Workforce Analytics</h2>
+        <p className="section-subtitle mt-1">Headcount trends, attrition analysis, and contractor management</p>
       </div>
-
-      {/* KPIs */}
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-        <StatCard
-          label="Total Headcount"
-          value={overview.totalEmployees || 0}
-          trend={delta !== 0 ? delta : null}
-          trendLabel={delta > 0 ? `+${delta} this month` : `${delta} this month`}
-          color="blue"
-        />
-        <StatCard label="Permanent" value={permCount} color="green" />
-        <StatCard label="Contractors" value={contractCount} color="amber" />
-        <StatCard
-          label="Attrition Rate"
-          value={`${attrition.attritionRate?.toFixed(1) || 0}%`}
-          color={parseFloat(attrition.attritionRate || 0) > 5 ? 'red' : 'green'}
-        />
-      </div>
-
-      {/* Tabs */}
-      <div className="border-b border-slate-200 flex gap-0">
+      <div className="border-b border-slate-200 flex gap-0 overflow-x-auto">
         {TABS.map(t => (
-          <button
-            key={t.id}
-            onClick={() => setActiveTab(t.id)}
-            className={`px-5 py-2.5 text-sm font-medium border-b-2 transition-colors ${
-              activeTab === t.id ? 'border-brand-600 text-brand-600' : 'border-transparent text-slate-500 hover:text-slate-700'
-            }`}
-          >
-            {t.label}
-          </button>
+          <NavLink key={t.id} to={t.path}
+            className={({ isActive }) => clsx('px-5 py-2.5 text-sm font-medium border-b-2 transition-colors whitespace-nowrap',
+              isActive ? 'border-blue-600 text-blue-600' : 'border-transparent text-slate-500 hover:text-slate-700'
+            )}>{t.label}</NavLink>
         ))}
       </div>
-
-      {/* Headcount Trend */}
-      {activeTab === 'headcount' && (
-        <div className="space-y-6">
-          <div className="card">
-            <div className="card-header">
-              <h3 className="font-semibold text-slate-700">Headcount Over Time (Last 12 Months)</h3>
-            </div>
-            <div className="p-4">
-              {trend.length === 0 ? (
-                <div className="text-center py-8 text-slate-400">Process multiple months to see trend data</div>
-              ) : (
-                <ResponsiveContainer width="100%" height={300}>
-                  <AreaChart data={trend} margin={{ top: 5, right: 20, left: 0, bottom: 5 }}>
-                    <defs>
-                      <linearGradient id="totalGrad" x1="0" y1="0" x2="0" y2="1">
-                        <stop offset="5%" stopColor="#3b82f6" stopOpacity={0.2} />
-                        <stop offset="95%" stopColor="#3b82f6" stopOpacity={0} />
-                      </linearGradient>
-                      <linearGradient id="permGrad" x1="0" y1="0" x2="0" y2="1">
-                        <stop offset="5%" stopColor="#22c55e" stopOpacity={0.15} />
-                        <stop offset="95%" stopColor="#22c55e" stopOpacity={0} />
-                      </linearGradient>
-                    </defs>
-                    <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" />
-                    <XAxis dataKey="monthLabel" tick={{ fontSize: 11 }} />
-                    <YAxis tick={{ fontSize: 11 }} />
-                    <Tooltip />
-                    <Legend />
-                    <Area type="monotone" dataKey="totalEmployees" name="Total" stroke="#3b82f6" fill="url(#totalGrad)" strokeWidth={2} dot={{ r: 3 }} />
-                    <Area type="monotone" dataKey="permanentCount" name="Permanent" stroke="#22c55e" fill="url(#permGrad)" strokeWidth={2} dot={{ r: 3 }} />
-                    <Area type="monotone" dataKey="contractorCount" name="Contractor" stroke="#f59e0b" fill="none" strokeWidth={2} strokeDasharray="4 2" dot={{ r: 3 }} />
-                  </AreaChart>
-                </ResponsiveContainer>
-              )}
-            </div>
-          </div>
-
-          {/* Month-over-month table */}
-          {trend.length > 0 && (
-            <div className="card overflow-hidden">
-              <div className="card-header">
-                <h3 className="font-semibold text-slate-700">Month-over-Month Changes</h3>
-              </div>
-              <div className="overflow-x-auto">
-                <table className="table-compact w-full">
-                  <thead>
-                    <tr>
-                      <th>Month</th>
-                      <th className="text-center">Total</th>
-                      <th className="text-center">Permanent</th>
-                      <th className="text-center">Contractor</th>
-                      <th className="text-center">New Joins</th>
-                      <th className="text-center">Exits</th>
-                      <th className="text-center">Net Change</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {[...trend].reverse().map((t, i) => (
-                      <tr key={i}>
-                        <td className="font-medium">{t.monthLabel}</td>
-                        <td className="text-center font-bold text-brand-600">{t.totalEmployees}</td>
-                        <td className="text-center text-green-700">{t.permanentCount}</td>
-                        <td className="text-center text-amber-600">{t.contractorCount}</td>
-                        <td className="text-center text-green-700">{t.newJoins > 0 ? `+${t.newJoins}` : '—'}</td>
-                        <td className="text-center text-red-600">{t.exits > 0 ? `-${t.exits}` : '—'}</td>
-                        <td className="text-center">
-                          {t.netChange > 0 ? (
-                            <span className="text-green-600 font-semibold">+{t.netChange}</span>
-                          ) : t.netChange < 0 ? (
-                            <span className="text-red-600 font-semibold">{t.netChange}</span>
-                          ) : <span className="text-slate-400">—</span>}
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            </div>
-          )}
-        </div>
-      )}
-
-      {/* Attrition Tab */}
-      {activeTab === 'attrition' && (
-        <div className="space-y-6">
-          <div className="grid grid-cols-3 gap-4">
-            <div className="card p-4 text-center">
-              <div className="text-3xl font-bold text-green-600">{attrition.newJoins || 0}</div>
-              <div className="text-sm text-slate-500 mt-1">New Joins This Month</div>
-            </div>
-            <div className="card p-4 text-center">
-              <div className="text-3xl font-bold text-red-500">{attrition.exits || 0}</div>
-              <div className="text-sm text-slate-500 mt-1">Exits This Month</div>
-            </div>
-            <div className="card p-4 text-center">
-              <div className={`text-3xl font-bold ${parseFloat(attrition.attritionRate || 0) > 5 ? 'text-red-500' : 'text-green-600'}`}>
-                {attrition.attritionRate?.toFixed(2) || 0}%
-              </div>
-              <div className="text-sm text-slate-500 mt-1">Attrition Rate</div>
-            </div>
-          </div>
-
-          {/* New Joins */}
-          {(attrition.newJoinDetails || []).length > 0 && (
-            <div className="card overflow-hidden">
-              <div className="card-header">
-                <h3 className="font-semibold text-green-700">New Joins</h3>
-              </div>
-              <div className="overflow-x-auto">
-                <table className="table-compact w-full">
-                  <thead><tr><th>Employee</th><th>Code</th><th>Department</th><th>Company</th></tr></thead>
-                  <tbody>
-                    {attrition.newJoinDetails.map((e, i) => (
-                      <tr key={i}>
-                        <td className="font-medium">{e.name}</td>
-                        <td className="text-slate-500">{e.code}</td>
-                        <td>{e.department}</td>
-                        <td>{e.company}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            </div>
-          )}
-
-          {/* Exits */}
-          {(attrition.exitDetails || []).length > 0 && (
-            <div className="card overflow-hidden">
-              <div className="card-header">
-                <h3 className="font-semibold text-red-700">Exits</h3>
-              </div>
-              <div className="overflow-x-auto">
-                <table className="table-compact w-full">
-                  <thead><tr><th>Employee</th><th>Code</th><th>Department</th><th>Company</th></tr></thead>
-                  <tbody>
-                    {attrition.exitDetails.map((e, i) => (
-                      <tr key={i}>
-                        <td className="font-medium">{e.name}</td>
-                        <td className="text-slate-500">{e.code}</td>
-                        <td>{e.department}</td>
-                        <td>{e.company}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            </div>
-          )}
-        </div>
-      )}
-
-      {/* Workforce Mix Tab */}
-      {activeTab === 'workforce' && (
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-          {/* Permanent vs Contractor */}
-          <div className="card">
-            <div className="card-header">
-              <h3 className="font-semibold text-slate-700">Permanent vs Contractor</h3>
-            </div>
-            <div className="p-4 flex items-center justify-center gap-8">
-              <PieChart width={220} height={220}>
-                <Pie data={pieData} cx={110} cy={110} innerRadius={60} outerRadius={90} dataKey="value" paddingAngle={3}>
-                  {pieData.map((_, i) => <Cell key={i} fill={['#3b82f6', '#f59e0b'][i]} />)}
-                </Pie>
-                <Tooltip />
-              </PieChart>
-              <div className="space-y-2">
-                {pieData.map((d, i) => (
-                  <div key={i} className="flex items-center gap-2 text-sm">
-                    <span className={`w-3 h-3 rounded-full inline-block ${i === 0 ? 'bg-blue-500' : 'bg-amber-500'}`} />
-                    <span className="text-slate-700">{d.name}</span>
-                    <span className="font-bold ml-1">{d.value}</span>
-                    <span className="text-slate-400">({((d.value / (permCount + contractCount)) * 100).toFixed(0)}%)</span>
-                  </div>
-                ))}
-              </div>
-            </div>
-          </div>
-
-          {/* Department Distribution */}
-          <div className="card">
-            <div className="card-header">
-              <h3 className="font-semibold text-slate-700">Headcount by Department</h3>
-            </div>
-            <div className="p-4">
-              <ResponsiveContainer width="100%" height={260}>
-                <BarChart data={deptPie} margin={{ bottom: 60 }}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" />
-                  <XAxis dataKey="name" angle={-30} textAnchor="end" tick={{ fontSize: 11 }} />
-                  <YAxis tick={{ fontSize: 11 }} />
-                  <Tooltip />
-                  <Bar dataKey="value" name="Employees" radius={[4, 4, 0, 0]}>
-                    {deptPie.map((_, i) => <Cell key={i} fill={COLORS_PIE[i % COLORS_PIE.length]} />)}
-                  </Bar>
-                </BarChart>
-              </ResponsiveContainer>
-            </div>
-          </div>
-        </div>
-      )}
+      <Routes>
+        <Route index element={<Navigate to="headcount" replace />} />
+        <Route path="headcount" element={<HeadcountTab />} />
+        <Route path="attrition" element={<AttritionTab />} />
+        <Route path="contractors" element={<ContractorTab />} />
+      </Routes>
     </div>
   )
 }

@@ -1,10 +1,17 @@
 import React, { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
+import { Routes, Route, NavLink, Navigate } from 'react-router-dom'
 import toast from 'react-hot-toast'
-import { getShifts, createShift, updateShift, getHolidays, createHoliday, deleteHoliday, getPolicyConfig, updatePolicyConfig } from '../utils/api'
+import {
+  getShifts, createShift, updateShift,
+  getHolidays, createHoliday, deleteHoliday,
+  getPolicyConfig, updatePolicyConfig,
+  getUsageLogs, getUsageLogsSummary,
+  getUsers, createUser, getAuditTrail
+} from '../utils/api'
 import { useAppStore } from '../store/appStore'
+import clsx from 'clsx'
 
-const MONTH_NAMES = ['', 'January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December']
 const DAYS = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday']
 
 // ─── Shift Tab ─────────────────────────────────────────────────────
@@ -81,7 +88,6 @@ function ShiftsTab() {
         </table>
       </div>
 
-      {/* Create/Edit Form */}
       {(showCreate || editId) && (
         <div className="card p-5">
           <h4 className="font-semibold text-slate-700 mb-4">{editId ? 'Edit Shift' : 'New Shift'}</h4>
@@ -165,7 +171,6 @@ function HolidaysTab() {
 
   return (
     <div className="space-y-4">
-      {/* Add Holiday Form */}
       <div className="card p-4">
         <h4 className="font-semibold text-slate-700 mb-3">Add Holiday</h4>
         <div className="grid grid-cols-5 gap-3">
@@ -294,6 +299,14 @@ function PolicyTab() {
         { key: 'early_out_grace_minutes', label: 'Early Out Grace (min)', hint: 'Early departure grace period' },
         { key: 'half_day_late_minutes', label: 'Half Day if Late (min)', hint: 'Mark half day if late > this' }
       ]
+    },
+    {
+      title: 'Salary Advance',
+      keys: [
+        { key: 'advance_cutoff_date', label: 'Advance Cutoff Day', hint: 'Count working days from 1st to this date (default: 15)' },
+        { key: 'advance_min_working_days', label: 'Min Working Days', hint: 'Min days to qualify for advance (default: 9)' },
+        { key: 'advance_fraction', label: 'Advance Fraction', hint: '0.3333 = 1/3 of gross salary' }
+      ]
     }
   ]
 
@@ -326,41 +339,313 @@ function PolicyTab() {
   )
 }
 
-// ─── Main Component ────────────────────────────────────────────────
-export default function Settings() {
-  const [activeTab, setActiveTab] = useState('shifts')
+// ─── Audit Trail Tab ───────────────────────────────────────────────
+function AuditTab() {
+  const { selectedMonth, selectedYear } = useAppStore()
 
-  const TABS = [
-    { id: 'shifts', label: '🕐 Shifts' },
-    { id: 'holidays', label: '📅 Holidays' },
-    { id: 'policy', label: '⚙️ Policy Config' }
-  ]
+  const { data: auditRes, isLoading } = useQuery({
+    queryKey: ['audit-trail', selectedMonth, selectedYear],
+    queryFn: () => getAuditTrail(selectedMonth, selectedYear),
+    retry: 0
+  })
+  const audits = auditRes?.data?.data || []
 
   return (
-    <div className="p-6 space-y-6">
-      <div>
-        <h2 className="text-lg font-bold text-slate-800">Settings</h2>
-        <p className="text-sm text-slate-500">Shift master, holidays, and salary policy configuration</p>
+    <div className="space-y-4">
+      <p className="text-sm text-slate-500">Audit trail of key actions for {selectedMonth}/{selectedYear}</p>
+      <div className="card overflow-hidden">
+        <div className="overflow-x-auto">
+          <table className="table-compact w-full">
+            <thead>
+              <tr>
+                <th>Date</th><th>User</th><th>Action</th><th>Details</th>
+              </tr>
+            </thead>
+            <tbody>
+              {isLoading ? (
+                <tr><td colSpan={4} className="text-center py-8 text-slate-400">Loading...</td></tr>
+              ) : audits.length === 0 ? (
+                <tr><td colSpan={4} className="text-center py-8 text-slate-400">No audit entries</td></tr>
+              ) : audits.map((a, i) => (
+                <tr key={i}>
+                  <td className="text-xs font-mono">{a.created_at?.replace('T', ' ').split('.')[0]}</td>
+                  <td className="font-medium">{a.performed_by || '—'}</td>
+                  <td>{a.action}</td>
+                  <td className="text-sm text-slate-500 max-w-xs truncate">{a.details}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// ─── Usage Logs Tab (Admin Only) ──────────────────────────────────
+function UsageLogsTab() {
+  const [page, setPage] = useState(1)
+  const [filters, setFilters] = useState({ username: '', action: '', dateFrom: '', dateTo: '' })
+
+  const { data: logsRes, isLoading } = useQuery({
+    queryKey: ['usage-logs', page, filters],
+    queryFn: () => getUsageLogs({ page, limit: 50, ...filters }),
+    retry: 0
+  })
+  const logs = logsRes?.data?.data || []
+  const pagination = logsRes?.data?.pagination || {}
+
+  const { data: summaryRes } = useQuery({
+    queryKey: ['usage-logs-summary'],
+    queryFn: getUsageLogsSummary,
+    retry: 0
+  })
+  const summary = summaryRes?.data?.data || {}
+
+  return (
+    <div className="space-y-4">
+      <p className="text-sm text-slate-500">All API activity logs — admin only</p>
+
+      {/* Summary Cards */}
+      {summary.userSummary && (
+        <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+          {summary.userSummary.slice(0, 4).map((u, i) => (
+            <div key={i} className="card p-3">
+              <div className="text-xl font-bold text-slate-800">{u.total_actions}</div>
+              <div className="text-xs text-slate-500">{u.username} ({u.role})</div>
+              <div className="text-xs text-slate-400 mt-0.5">Last: {u.last_active?.split('T')[0]}</div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* Feature usage */}
+      {summary.featureUsage && summary.featureUsage.length > 0 && (
+        <div className="card p-4">
+          <h4 className="text-sm font-bold text-slate-600 mb-2">Top Features</h4>
+          <div className="flex flex-wrap gap-2">
+            {summary.featureUsage.slice(0, 10).map((f, i) => (
+              <span key={i} className="bg-slate-100 text-xs px-3 py-1.5 rounded-full font-mono">
+                {f.path} <span className="font-bold text-blue-600">{f.count}</span>
+              </span>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Filters */}
+      <div className="flex gap-3 items-end">
+        <div>
+          <label className="label">User</label>
+          <input type="text" value={filters.username} onChange={e => setFilters(f => ({ ...f, username: e.target.value }))}
+            className="input text-sm w-32" placeholder="username" />
+        </div>
+        <div>
+          <label className="label">Action</label>
+          <select value={filters.action} onChange={e => setFilters(f => ({ ...f, action: e.target.value }))} className="select text-sm w-28">
+            <option value="">All</option>
+            <option value="GET">GET</option>
+            <option value="POST">POST</option>
+            <option value="PUT">PUT</option>
+            <option value="DELETE">DELETE</option>
+          </select>
+        </div>
+        <div>
+          <label className="label">From</label>
+          <input type="date" value={filters.dateFrom} onChange={e => setFilters(f => ({ ...f, dateFrom: e.target.value }))} className="input text-sm" />
+        </div>
+        <div>
+          <label className="label">To</label>
+          <input type="date" value={filters.dateTo} onChange={e => setFilters(f => ({ ...f, dateTo: e.target.value }))} className="input text-sm" />
+        </div>
+        <button onClick={() => setPage(1)} className="btn-secondary text-sm">Filter</button>
       </div>
 
-      {/* Tabs */}
-      <div className="border-b border-slate-200 flex gap-0">
-        {TABS.map(t => (
-          <button
-            key={t.id}
-            onClick={() => setActiveTab(t.id)}
-            className={`px-5 py-2.5 text-sm font-medium border-b-2 transition-colors ${
-              activeTab === t.id ? 'border-brand-600 text-brand-600' : 'border-transparent text-slate-500 hover:text-slate-700'
-            }`}
-          >
-            {t.label}
-          </button>
+      {/* Logs Table */}
+      <div className="card overflow-hidden">
+        <div className="overflow-x-auto">
+          <table className="table-compact w-full">
+            <thead>
+              <tr>
+                <th>Time</th><th>User</th><th>Role</th>
+                <th>Method</th><th>Path</th><th>IP</th>
+              </tr>
+            </thead>
+            <tbody>
+              {isLoading ? (
+                <tr><td colSpan={6} className="text-center py-8 text-slate-400">Loading logs...</td></tr>
+              ) : logs.length === 0 ? (
+                <tr><td colSpan={6} className="text-center py-8 text-slate-400">No logs found</td></tr>
+              ) : logs.map((l, i) => (
+                <tr key={i}>
+                  <td className="text-xs font-mono whitespace-nowrap">{l.created_at?.replace('T', ' ').split('.')[0]}</td>
+                  <td className="font-medium text-sm">{l.username}</td>
+                  <td><span className={clsx('text-xs px-2 py-0.5 rounded-full',
+                    l.role === 'admin' ? 'bg-purple-100 text-purple-700' : l.role === 'hr' ? 'bg-blue-100 text-blue-700' : 'bg-slate-100 text-slate-600'
+                  )}>{l.role}</span></td>
+                  <td><span className={clsx('text-xs font-mono font-bold',
+                    l.method === 'GET' ? 'text-green-600' : l.method === 'POST' ? 'text-blue-600' : l.method === 'PUT' ? 'text-amber-600' : 'text-red-600'
+                  )}>{l.method}</span></td>
+                  <td className="font-mono text-xs text-slate-500 max-w-xs truncate">{l.path}</td>
+                  <td className="text-xs text-slate-400">{l.ip_address}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      {/* Pagination */}
+      {pagination.totalPages > 1 && (
+        <div className="flex justify-center gap-2 items-center">
+          <button onClick={() => setPage(p => Math.max(1, p - 1))} disabled={page <= 1} className="btn-secondary text-sm">Prev</button>
+          <span className="text-sm text-slate-500">Page {page} of {pagination.totalPages} ({pagination.total} entries)</span>
+          <button onClick={() => setPage(p => Math.min(pagination.totalPages, p + 1))} disabled={page >= pagination.totalPages} className="btn-secondary text-sm">Next</button>
+        </div>
+      )}
+    </div>
+  )
+}
+
+// ─── User Management Tab (Admin Only) ──────────────────────────────
+function UserManagementTab() {
+  const qc = useQueryClient()
+  const [showCreate, setShowCreate] = useState(false)
+  const [form, setForm] = useState({ username: '', password: '', role: 'viewer' })
+
+  const { data: usersRes, isLoading } = useQuery({
+    queryKey: ['users'],
+    queryFn: getUsers,
+    retry: 0
+  })
+  const users = usersRes?.data?.data || []
+
+  const createMutation = useMutation({
+    mutationFn: (d) => createUser(d),
+    onSuccess: () => {
+      toast.success('User created')
+      qc.invalidateQueries(['users'])
+      setShowCreate(false)
+      setForm({ username: '', password: '', role: 'viewer' })
+    }
+  })
+
+  return (
+    <div className="space-y-4">
+      <div className="flex justify-between items-center">
+        <p className="text-sm text-slate-500">Manage system users and their roles</p>
+        <button onClick={() => setShowCreate(!showCreate)} className="btn-primary text-sm">+ Add User</button>
+      </div>
+
+      {showCreate && (
+        <div className="card p-5">
+          <h4 className="font-semibold text-slate-700 mb-3">Create New User</h4>
+          <div className="grid grid-cols-3 gap-3">
+            <div>
+              <label className="label">Username</label>
+              <input type="text" value={form.username} onChange={e => setForm(f => ({ ...f, username: e.target.value }))} className="input" placeholder="johndoe" />
+            </div>
+            <div>
+              <label className="label">Password</label>
+              <input type="password" value={form.password} onChange={e => setForm(f => ({ ...f, password: e.target.value }))} className="input" placeholder="Min 6 characters" />
+            </div>
+            <div>
+              <label className="label">Role</label>
+              <select value={form.role} onChange={e => setForm(f => ({ ...f, role: e.target.value }))} className="select">
+                <option value="viewer">Viewer (Read Only)</option>
+                <option value="hr">HR (Read/Write)</option>
+                <option value="admin">Admin (Full Access)</option>
+              </select>
+            </div>
+          </div>
+          <div className="mt-3 text-xs text-slate-400">
+            <strong>Roles:</strong> Viewer = read only | HR = payroll + employee management | Admin = full access including settings
+          </div>
+          <div className="flex gap-2 mt-3">
+            <button onClick={() => createMutation.mutate(form)} disabled={!form.username || !form.password || createMutation.isPending} className="btn-primary text-sm">
+              {createMutation.isPending ? 'Creating...' : 'Create User'}
+            </button>
+            <button onClick={() => setShowCreate(false)} className="btn-secondary text-sm">Cancel</button>
+          </div>
+        </div>
+      )}
+
+      <div className="card overflow-hidden">
+        <div className="overflow-x-auto">
+          <table className="table-compact w-full">
+            <thead>
+              <tr>
+                <th>ID</th><th>Username</th><th>Role</th><th>Created</th>
+              </tr>
+            </thead>
+            <tbody>
+              {isLoading ? (
+                <tr><td colSpan={4} className="text-center py-8 text-slate-400">Loading...</td></tr>
+              ) : users.length === 0 ? (
+                <tr><td colSpan={4} className="text-center py-8 text-slate-400">No users found</td></tr>
+              ) : users.map(u => (
+                <tr key={u.id}>
+                  <td className="text-slate-400">{u.id}</td>
+                  <td className="font-medium">{u.username}</td>
+                  <td>
+                    <span className={clsx('text-xs px-2 py-0.5 rounded-full font-medium',
+                      u.role === 'admin' ? 'bg-purple-100 text-purple-700' :
+                      u.role === 'hr' ? 'bg-blue-100 text-blue-700' :
+                      'bg-slate-100 text-slate-600'
+                    )}>{u.role}</span>
+                  </td>
+                  <td className="text-slate-400 text-sm">{u.created_at?.split('T')[0] || '—'}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// ─── Main Settings Component with Routes ────────────────────────────
+const SETTINGS_TABS = [
+  { id: 'shifts', label: '🕐 Shifts', path: '/settings/shifts' },
+  { id: 'holidays', label: '📅 Holidays', path: '/settings/holidays' },
+  { id: 'policy', label: '⚙️ Policy', path: '/settings/policy' },
+  { id: 'audit', label: '📋 Audit Trail', path: '/settings/audit' },
+  { id: 'usage-logs', label: '📊 Usage Logs', path: '/settings/usage-logs', adminOnly: true },
+  { id: 'users', label: '👥 Users', path: '/settings/users', adminOnly: true },
+]
+
+export default function Settings() {
+  const { user } = useAppStore()
+  const userRole = user?.role || 'viewer'
+
+  const visibleTabs = SETTINGS_TABS.filter(t => !t.adminOnly || userRole === 'admin')
+
+  return (
+    <div className="p-6 space-y-6 animate-fade-in">
+      <div>
+        <h2 className="section-title">Settings</h2>
+        <p className="section-subtitle mt-1">Shift master, holidays, salary policy, and system configuration</p>
+      </div>
+
+      <div className="border-b border-slate-200 flex gap-0 overflow-x-auto">
+        {visibleTabs.map(t => (
+          <NavLink key={t.id} to={t.path}
+            className={({ isActive }) => clsx('px-5 py-2.5 text-sm font-medium border-b-2 transition-colors whitespace-nowrap',
+              isActive ? 'border-blue-600 text-blue-600' : 'border-transparent text-slate-500 hover:text-slate-700'
+            )}>{t.label}</NavLink>
         ))}
       </div>
 
-      {activeTab === 'shifts' && <ShiftsTab />}
-      {activeTab === 'holidays' && <HolidaysTab />}
-      {activeTab === 'policy' && <PolicyTab />}
+      <Routes>
+        <Route index element={<Navigate to="shifts" replace />} />
+        <Route path="shifts" element={<ShiftsTab />} />
+        <Route path="holidays" element={<HolidaysTab />} />
+        <Route path="policy" element={<PolicyTab />} />
+        <Route path="audit" element={<AuditTab />} />
+        <Route path="usage-logs" element={<UsageLogsTab />} />
+        <Route path="users" element={<UserManagementTab />} />
+      </Routes>
     </div>
   )
 }

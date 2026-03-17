@@ -264,4 +264,114 @@ router.get('/employee/:code', (req, res) => {
   });
 });
 
+// ─────────────────────────────────────────────────────────
+// POST /api/analytics/detect-inactive
+// Auto-detect employees inactive for 14+ consecutive days
+// Mark them as "Left" so they are excluded from workforce
+// ─────────────────────────────────────────────────────────
+router.post('/detect-inactive', (req, res) => {
+  const db = getDb();
+  const { month, year, inactiveDays = 14 } = req.body;
+
+  if (!month || !year) return res.status(400).json({ success: false, error: 'month and year required' });
+
+  const m = parseInt(month);
+  const y = parseInt(year);
+  const monthStr = String(m).padStart(2, '0');
+
+  // Get all employee codes that appear in attendance for this month
+  const allEmps = db.prepare(`
+    SELECT DISTINCT ap.employee_code, e.id as emp_id, e.name, e.department, e.employment_type, e.status
+    FROM attendance_processed ap
+    LEFT JOIN employees e ON ap.employee_code = e.code
+    WHERE ap.month = ? AND ap.year = ? AND ap.is_night_out_only = 0
+  `).all(m, y);
+
+  const markedInactive = [];
+
+  for (const emp of allEmps) {
+    // Skip already marked as exited
+    if (emp.status === 'Exited') continue;
+
+    // Find last date with P, ½P, WOP status
+    const lastPresent = db.prepare(`
+      SELECT MAX(date) as last_date FROM attendance_processed
+      WHERE employee_code = ? AND is_night_out_only = 0
+      AND (status_final IN ('P','½P','WOP','WO½P') OR status_original IN ('P','½P','WOP','WO½P'))
+    `).get(emp.employee_code);
+
+    // Find latest attendance record date
+    const latestRecord = db.prepare(`
+      SELECT MAX(date) as last_date FROM attendance_processed
+      WHERE employee_code = ? AND is_night_out_only = 0 AND month = ? AND year = ?
+    `).get(emp.employee_code, m, y);
+
+    if (!lastPresent?.last_date && latestRecord?.last_date) {
+      // Never showed up at all — definitely inactive
+      db.prepare(`
+        UPDATE employees SET status = 'Inactive', auto_inactive = 1,
+        inactive_since = ?, updated_at = datetime('now')
+        WHERE code = ? AND status NOT IN ('Exited', 'Inactive')
+      `).run(latestRecord.last_date, emp.employee_code);
+      markedInactive.push({ code: emp.employee_code, name: emp.name, department: emp.department, type: emp.employment_type, reason: 'Never present in period', lastPresent: null });
+      continue;
+    }
+
+    if (lastPresent?.last_date && latestRecord?.last_date) {
+      const lastPresentDate = new Date(lastPresent.last_date + 'T12:00:00');
+      const latestDate = new Date(latestRecord.last_date + 'T12:00:00');
+      const diffDays = Math.floor((latestDate - lastPresentDate) / (1000 * 60 * 60 * 24));
+
+      if (diffDays >= parseInt(inactiveDays)) {
+        db.prepare(`
+          UPDATE employees SET status = 'Inactive', auto_inactive = 1,
+          inactive_since = ?, updated_at = datetime('now')
+          WHERE code = ? AND status NOT IN ('Exited', 'Inactive')
+        `).run(lastPresent.last_date, emp.employee_code);
+        markedInactive.push({
+          code: emp.employee_code, name: emp.name, department: emp.department,
+          type: emp.employment_type, reason: `Absent ${diffDays} consecutive days`,
+          lastPresent: lastPresent.last_date
+        });
+      }
+    }
+  }
+
+  res.json({
+    success: true,
+    total: allEmps.length,
+    markedInactive: markedInactive.length,
+    details: markedInactive
+  });
+});
+
+// GET /api/analytics/inactive-employees
+// List all auto-detected inactive employees
+router.get('/inactive-employees', (req, res) => {
+  const db = getDb();
+
+  const inactive = db.prepare(`
+    SELECT code, name, department, employment_type, status, inactive_since, auto_inactive
+    FROM employees
+    WHERE status = 'Inactive' OR auto_inactive = 1
+    ORDER BY department, name
+  `).all();
+
+  res.json({ success: true, data: inactive, total: inactive.length });
+});
+
+// POST /api/analytics/reactivate-employee
+// Reactivate an employee that was auto-marked inactive
+router.post('/reactivate-employee', (req, res) => {
+  const db = getDb();
+  const { code } = req.body;
+
+  db.prepare(`
+    UPDATE employees SET status = 'Active', auto_inactive = 0, inactive_since = NULL, updated_at = datetime('now')
+    WHERE code = ?
+  `).run(code);
+
+  res.json({ success: true, message: `Employee ${code} reactivated` });
+});
+
 module.exports = router;

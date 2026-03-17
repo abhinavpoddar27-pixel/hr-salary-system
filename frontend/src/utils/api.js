@@ -119,6 +119,13 @@ export const getAlerts = (month, year, unread) => api.get('/analytics/alerts', {
 export const generateAlerts = (month, year) => api.post('/analytics/alerts/generate', { month, year })
 export const markAlertRead = (id) => api.put(`/analytics/alerts/${id}/read`)
 export const getEmployeeProfile = (code) => api.get(`/analytics/employee/${code}`)
+export const detectInactiveEmployees = (month, year, inactiveDays) => api.post('/analytics/detect-inactive', { month, year, inactiveDays })
+export const getInactiveEmployees = () => api.get('/analytics/inactive-employees')
+export const reactivateEmployee = (code) => api.post('/analytics/reactivate-employee', { code })
+
+// ── Usage Logs (admin only) ──────────────────────────
+export const getUsageLogs = (params) => api.get('/usage-logs', { params })
+export const getUsageLogsSummary = () => api.get('/usage-logs/summary')
 
 // ── Leaves ────────────────────────────────────────────
 export const getLeaveApplications = (params) => api.get('/leaves', { params })

@@ -8,10 +8,33 @@ import AbbreviationLegend from '../components/ui/AbbreviationLegend'
 import clsx from 'clsx'
 import api from '../utils/api'
 
+/* ── Reusable sortable table hook ────────────────────── */
+function useSortable(defaultKey = '', defaultDir = 'asc') {
+  const [sortKey, setSortKey] = useState(defaultKey)
+  const [sortDir, setSortDir] = useState(defaultDir)
+  const toggle = (key) => {
+    if (sortKey === key) setSortDir(d => d === 'asc' ? 'desc' : 'asc')
+    else { setSortKey(key); setSortDir('asc') }
+  }
+  const indicator = (key) => sortKey === key ? (sortDir === 'asc' ? ' ▲' : ' ▼') : ''
+  const sortFn = (a, b) => {
+    if (!sortKey) return 0
+    let va = a[sortKey], vb = b[sortKey]
+    if (typeof va === 'string') va = va.toLowerCase()
+    if (typeof vb === 'string') vb = vb.toLowerCase()
+    if (va < vb) return sortDir === 'asc' ? -1 : 1
+    if (va > vb) return sortDir === 'asc' ? 1 : -1
+    return 0
+  }
+  return { sortKey, sortDir, toggle, indicator, sortFn }
+}
+
 export default function SalaryAdvance() {
   const { selectedMonth, selectedYear } = useAppStore()
   const [selected, setSelected] = useState(new Set())
   const [filterView, setFilterView] = useState('all')
+  const [search, setSearch] = useState('')
+  const sort = useSortable('employee_name')
 
   const { data: res, isLoading, refetch } = useQuery({
     queryKey: ['advance-list', selectedMonth, selectedYear],
@@ -23,11 +46,20 @@ export default function SalaryAdvance() {
   const totals = res?.data?.totals || {}
 
   const records = useMemo(() => {
-    if (filterView === 'eligible') return allRecords.filter(r => r.is_eligible && !r.paid)
-    if (filterView === 'paid') return allRecords.filter(r => r.paid)
-    if (filterView === 'ineligible') return allRecords.filter(r => !r.is_eligible)
-    return allRecords
-  }, [allRecords, filterView])
+    let filtered = allRecords
+    if (filterView === 'eligible') filtered = filtered.filter(r => r.is_eligible && !r.paid)
+    if (filterView === 'paid') filtered = filtered.filter(r => r.paid)
+    if (filterView === 'ineligible') filtered = filtered.filter(r => !r.is_eligible)
+    if (search) {
+      const q = search.toLowerCase()
+      filtered = filtered.filter(r =>
+        (r.employee_name || '').toLowerCase().includes(q) ||
+        (r.employee_code || '').toLowerCase().includes(q) ||
+        (r.department || '').toLowerCase().includes(q)
+      )
+    }
+    return [...filtered].sort(sort.sortFn)
+  }, [allRecords, filterView, search, sort.sortKey, sort.sortDir])
 
   const calculateMutation = useMutation({
     mutationFn: () => api.post('/advance/calculate', { month: selectedMonth, year: selectedYear }),
@@ -53,6 +85,12 @@ export default function SalaryAdvance() {
 
   const eligibleUnpaid = allRecords.filter(r => r.is_eligible && !r.paid)
 
+  const SortHeader = ({ k, children, className = '' }) => (
+    <th onClick={() => sort.toggle(k)} className={clsx('cursor-pointer select-none hover:text-blue-600', className)}>
+      {children}{sort.indicator(k)}
+    </th>
+  )
+
   return (
     <div className="animate-fade-in">
       <div className="p-6 space-y-5 max-w-screen-xl">
@@ -62,17 +100,20 @@ export default function SalaryAdvance() {
             <p className="section-subtitle mt-1">
               {monthYearLabel(selectedMonth, selectedYear)} — Calculate and process salary advances (1/3 gross for eligible employees).
             </p>
+            <p className="text-xs text-slate-400 mt-1">
+              Use the month selector in the header to view/calculate advances for any month.
+            </p>
           </div>
           <button onClick={() => calculateMutation.mutate()} disabled={calculateMutation.isPending} className="btn-primary">
-            {calculateMutation.isPending ? 'Calculating...' : 'Calculate Advances'}
+            {calculateMutation.isPending ? 'Calculating...' : `Calculate Advances for ${monthYearLabel(selectedMonth, selectedYear)}`}
           </button>
         </div>
 
         {/* Info Card */}
         <div className="card p-4 bg-blue-50/50 border-blue-200">
           <p className="text-sm text-blue-800">
-            <span className="font-semibold">Policy:</span> Advance is processed on the 19th. Employees with &gt;9 working days
-            (1st–15th) receive 1/3 of gross salary. Advance is auto-recovered during final salary computation.
+            <span className="font-semibold">Policy:</span> Employees with &ge;9 working days (1st–15th) receive 1/3 of gross salary as advance.
+            Advance is auto-recovered during final salary computation. Select any month using the header dropdown to calculate or view advances.
           </p>
         </div>
 
@@ -99,7 +140,7 @@ export default function SalaryAdvance() {
           </div>
         )}
 
-        {/* Filter tabs + batch actions */}
+        {/* Filter tabs + search + batch actions */}
         {allRecords.length > 0 && (
           <div className="flex gap-3 items-end flex-wrap">
             <div className="flex gap-1">
@@ -119,6 +160,13 @@ export default function SalaryAdvance() {
                 </button>
               ))}
             </div>
+            <input
+              type="text"
+              placeholder="Search name, code, dept..."
+              value={search}
+              onChange={e => setSearch(e.target.value)}
+              className="input w-48 text-xs"
+            />
             {selected.size > 0 && (
               <button onClick={() => batchPaidMutation.mutate()} disabled={batchPaidMutation.isPending} className="btn-primary text-sm">
                 Mark {selected.size} as Paid
@@ -131,8 +179,9 @@ export default function SalaryAdvance() {
         {allRecords.length === 0 && !isLoading ? (
           <div className="card p-8 text-center">
             <div className="text-4xl mb-3">₹</div>
-            <h3 className="font-semibold text-slate-700 mb-2">No advance data</h3>
+            <h3 className="font-semibold text-slate-700 mb-2">No advance data for {monthYearLabel(selectedMonth, selectedYear)}</h3>
             <p className="text-slate-500">Click "Calculate Advances" to process salary advances for this month.</p>
+            <p className="text-xs text-slate-400 mt-2">Make sure attendance data has been imported for this month first.</p>
           </div>
         ) : records.length > 0 && (
           <div className="card overflow-hidden">
@@ -149,13 +198,13 @@ export default function SalaryAdvance() {
                         else setSelected(new Set())
                       }} className="rounded" />
                     </th>
-                    <th><Abbr code="Emp">Employee</Abbr></th>
-                    <th><Abbr code="Dept">Dept</Abbr></th>
-                    <th>Working Days (1st-15th)</th>
-                    <th>Eligible</th>
-                    <th>Advance Amount</th>
+                    <SortHeader k="employee_name"><Abbr code="Emp">Employee</Abbr></SortHeader>
+                    <SortHeader k="department"><Abbr code="Dept">Dept</Abbr></SortHeader>
+                    <SortHeader k="working_days_1_to_15" className="text-center">Working Days (1st-15th)</SortHeader>
+                    <SortHeader k="is_eligible" className="text-center">Eligible</SortHeader>
+                    <SortHeader k="advance_amount" className="text-center">Advance Amount</SortHeader>
                     <th>Status</th>
-                    <th>Paid Date</th>
+                    <SortHeader k="paid_date">Paid Date</SortHeader>
                     <th>Recovered</th>
                     <th></th>
                   </tr>
@@ -178,14 +227,14 @@ export default function SalaryAdvance() {
                       </td>
                       <td className="text-xs text-slate-600">{r.department}</td>
                       <td className="text-center font-mono font-medium">{r.working_days_1_to_15}</td>
-                      <td>
+                      <td className="text-center">
                         {r.is_eligible ? (
                           <span className="badge-green text-xs">Yes</span>
                         ) : (
                           <span className="badge-red text-xs">No</span>
                         )}
                       </td>
-                      <td className="font-mono font-bold">{r.is_eligible ? fmtINR(r.advance_amount) : '—'}</td>
+                      <td className="font-mono font-bold text-center">{r.is_eligible ? fmtINR(r.advance_amount) : '—'}</td>
                       <td>
                         {r.paid ? (
                           <span className="badge-green text-xs">Paid</span>

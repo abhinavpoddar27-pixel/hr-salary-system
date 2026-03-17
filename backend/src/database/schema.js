@@ -485,6 +485,24 @@ function initSchema(db) {
     );
 
     -- ─────────────────────────────────────────────────────────
+    -- USAGE LOGS (admin-only visibility)
+    -- ─────────────────────────────────────────────────────────
+
+    CREATE TABLE IF NOT EXISTS usage_logs (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id INTEGER,
+      username TEXT,
+      role TEXT,
+      action TEXT NOT NULL,
+      method TEXT,
+      path TEXT,
+      ip_address TEXT,
+      user_agent TEXT,
+      details TEXT,
+      created_at TEXT DEFAULT (datetime('now'))
+    );
+
+    -- ─────────────────────────────────────────────────────────
     -- POLICY CONFIG
     -- ─────────────────────────────────────────────────────────
 
@@ -659,6 +677,8 @@ function initSchema(db) {
   safeAddColumn('employees', 'category', 'TEXT');
   safeAddColumn('employees', 'photo_path', 'TEXT');
   safeAddColumn('employees', 'notes', 'TEXT');
+  safeAddColumn('employees', 'inactive_since', 'TEXT');
+  safeAddColumn('employees', 'auto_inactive', 'INTEGER DEFAULT 0');
 
   // monthly_imports: daily vs monthly import type
   safeAddColumn('monthly_imports', 'import_type', "TEXT DEFAULT 'monthly'");

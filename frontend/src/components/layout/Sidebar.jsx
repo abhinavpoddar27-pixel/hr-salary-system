@@ -7,15 +7,19 @@ const nav = [
   { label: 'Dashboard', icon: '🏠', to: '/' },
   { label: 'Daily MIS', icon: '📊', to: '/daily-mis' },
   {
-    label: 'Salary Processing', icon: '💰', to: '/pipeline',
+    label: 'Payroll', icon: '💰', to: '/pipeline',
     children: [
-      { label: 'Stage 1: Import', icon: '📥', to: '/pipeline/import' },
-      { label: 'Stage 2: Miss Punches', icon: '🔍', to: '/pipeline/miss-punch' },
-      { label: 'Stage 3: Shift Check', icon: '🕐', to: '/pipeline/shift-check' },
-      { label: 'Stage 4: Night Shift', icon: '🌙', to: '/pipeline/night-shift' },
-      { label: 'Stage 5: Corrections', icon: '✏️', to: '/pipeline/corrections' },
-      { label: 'Stage 6: Day Calc', icon: '📅', to: '/pipeline/day-calc' },
-      { label: 'Stage 7: Salary', icon: '₹', to: '/pipeline/salary' },
+      { label: '1. Import', icon: '📥', to: '/pipeline/import' },
+      { label: '2. Miss Punches', icon: '🔍', to: '/pipeline/miss-punch' },
+      { label: '3. Shift Check', icon: '🕐', to: '/pipeline/shift-check' },
+      { label: '4. Night Shift', icon: '🌙', to: '/pipeline/night-shift' },
+      { label: '5. Corrections', icon: '✏️', to: '/pipeline/corrections' },
+      { label: '6. Day Calc', icon: '📅', to: '/pipeline/day-calc' },
+      { label: '7. Salary', icon: '₹', to: '/pipeline/salary' },
+      { label: 'Salary Advance', icon: '💵', to: '/salary-advance' },
+      { label: 'Salary Input', icon: '📝', to: '/salary-input' },
+      { label: 'Loans', icon: '🏦', to: '/loans' },
+      { label: 'Leave Management', icon: '📋', to: '/leave-management' },
     ]
   },
   {
@@ -27,7 +31,7 @@ const nav = [
     ]
   },
   {
-    label: 'Attendance Analytics', icon: '📊', to: '/analytics',
+    label: 'Attendance Analytics', icon: '📈', to: '/analytics',
     children: [
       { label: 'Overview', to: '/analytics/overview' },
       { label: 'Absenteeism', to: '/analytics/absenteeism' },
@@ -45,10 +49,6 @@ const nav = [
       { label: 'Compliance Calendar', to: '/compliance/calendar' },
     ]
   },
-  { label: 'Salary Advance', icon: '₹', to: '/salary-advance' },
-  { label: 'Salary Input', icon: '📝', to: '/salary-input' },
-  { label: 'Loans', icon: '🏦', to: '/loans' },
-  { label: 'Leave Management', icon: '📋', to: '/leave-management' },
   { label: 'Reports', icon: '📋', to: '/reports' },
   { label: 'Alerts', icon: '🔔', to: '/alerts' },
   { label: 'Employees', icon: '👤', to: '/employees' },
@@ -59,15 +59,20 @@ const nav = [
       { label: 'Holiday Master', to: '/settings/holidays' },
       { label: 'Policy Config', to: '/settings/policy' },
       { label: 'Audit Trail', to: '/settings/audit' },
+      { label: 'Usage Logs', to: '/settings/usage-logs', adminOnly: true },
+      { label: 'User Management', to: '/settings/users', adminOnly: true },
     ]
   },
 ]
 
-function NavItem({ item, collapsed, depth = 0 }) {
+function NavItem({ item, collapsed, depth = 0, userRole }) {
   const [open, setOpen] = React.useState(false)
   const location = useLocation()
   const isActive = location.pathname === item.to || location.pathname.startsWith(item.to + '/')
   const hasChildren = item.children && item.children.length > 0
+
+  // Hide admin-only items from non-admin users
+  if (item.adminOnly && userRole !== 'admin') return null
 
   // Auto-open active parent
   React.useEffect(() => {
@@ -75,6 +80,7 @@ function NavItem({ item, collapsed, depth = 0 }) {
   }, [isActive])
 
   if (hasChildren) {
+    const visibleChildren = item.children.filter(c => !c.adminOnly || userRole === 'admin')
     return (
       <li>
         <button
@@ -91,8 +97,8 @@ function NavItem({ item, collapsed, depth = 0 }) {
         </button>
         {!collapsed && open && (
           <ul className="mt-1 ml-4 space-y-0.5 border-l-2 border-slate-100 pl-3">
-            {item.children.map(child => (
-              <NavItem key={child.to} item={child} collapsed={collapsed} depth={depth + 1} />
+            {visibleChildren.map(child => (
+              <NavItem key={child.to} item={child} collapsed={collapsed} depth={depth + 1} userRole={userRole} />
             ))}
           </ul>
         )}
@@ -119,8 +125,9 @@ function NavItem({ item, collapsed, depth = 0 }) {
 }
 
 export default function Sidebar() {
-  const { sidebarCollapsed, toggleSidebar, alertCount } = useAppStore()
+  const { sidebarCollapsed, toggleSidebar, alertCount, user } = useAppStore()
   const collapsed = sidebarCollapsed
+  const userRole = user?.role || 'viewer'
 
   return (
     <aside className={clsx(
@@ -133,7 +140,7 @@ export default function Sidebar() {
         {!collapsed && (
           <div className="min-w-0">
             <div className="text-sm font-semibold text-slate-800 truncate">Asian Lakto</div>
-            <div className="text-xs text-slate-400">HR & Salary System</div>
+            <div className="text-xs text-slate-400">HR & Payroll System</div>
           </div>
         )}
         <button onClick={toggleSidebar} className="ml-auto text-slate-400 hover:text-slate-600 shrink-0">
@@ -145,7 +152,7 @@ export default function Sidebar() {
       <nav className="flex-1 overflow-y-auto px-2 py-3">
         <ul className="space-y-0.5">
           {nav.map(item => (
-            <NavItem key={item.to} item={item} collapsed={collapsed} />
+            <NavItem key={item.to} item={item} collapsed={collapsed} userRole={userRole} />
           ))}
         </ul>
       </nav>
@@ -154,7 +161,7 @@ export default function Sidebar() {
       {!collapsed && (
         <div className="px-4 py-3 border-t border-slate-100">
           <p className="text-xs text-slate-400">Indriyan Beverages</p>
-          <p className="text-xs text-slate-300">v1.0.0</p>
+          <p className="text-xs text-slate-300">v1.1.0 • {user?.username || 'user'} ({userRole})</p>
         </div>
       )}
     </aside>

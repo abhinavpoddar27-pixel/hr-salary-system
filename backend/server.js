@@ -31,6 +31,21 @@ const db = getDb();
   }
 })();
 
+// ── Seed HR user if not exists ───────────────────────────────
+(function seedHRUser() {
+  const hrUser = db.prepare("SELECT id FROM users WHERE username = 'hr'").get();
+  if (!hrUser) {
+    const hrPassword = 'HR@Asian2025';
+    const hash = bcrypt.hashSync(hrPassword, 10);
+    db.prepare("INSERT OR IGNORE INTO users (username, password_hash, role) VALUES (?, ?, 'hr')")
+      .run('hr', hash);
+    console.log('👤 HR user created:');
+    console.log(`   Username: hr`);
+    console.log(`   Password: ${hrPassword}`);
+    console.log('   Role: hr (read/write, no admin settings)\n');
+  }
+})();
+
 const app = express();
 const PORT = process.env.PORT || 3001;
 const IS_PROD = process.env.NODE_ENV === 'production';
@@ -56,6 +71,29 @@ app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 // ── Auth middleware ────────────────────────────────────────────
 const { requireAuth } = require('./src/middleware/auth');
 
+// ── Usage Logging Middleware ─────────────────────────────────────
+app.use('/api', (req, res, next) => {
+  // Log all API requests after auth resolves
+  const start = Date.now();
+  res.on('finish', () => {
+    try {
+      if (req.user && req.path !== '/health') {
+        db.prepare(`
+          INSERT INTO usage_logs (user_id, username, role, action, method, path, ip_address, user_agent, details)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `).run(
+          req.user.id, req.user.username, req.user.role,
+          `${req.method} ${req.path}`, req.method, req.originalUrl,
+          req.ip || req.connection?.remoteAddress || '',
+          (req.headers['user-agent'] || '').substring(0, 200),
+          JSON.stringify({ status: res.statusCode, duration: Date.now() - start })
+        );
+      }
+    } catch (e) { /* ignore logging errors */ }
+  });
+  next();
+});
+
 // ── API Routes ─────────────────────────────────────────────────
 // Auth is public
 app.use('/api/auth', require('./src/routes/auth'));
@@ -75,6 +113,7 @@ app.use('/api/loans',       requireAuth, require('./src/routes/loans'));
 app.use('/api/leaves',      requireAuth, require('./src/routes/leaves'));
 app.use('/api/notifications', requireAuth, require('./src/routes/notifications'));
 app.use('/api/lifecycle',   requireAuth, require('./src/routes/lifecycle'));
+app.use('/api/usage-logs',  requireAuth, require('./src/routes/usage-logs'));
 
 // Health check (public)
 app.get('/api/health', (req, res) => {
