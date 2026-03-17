@@ -122,6 +122,24 @@ app.get('/api/health', (req, res) => {
   res.json({ success: true, message: 'HR Salary System API running', timestamp: new Date().toISOString() });
 });
 
+// Version endpoint (public) — for deployment diagnostics
+app.get('/api/version', (req, res) => {
+  const distIndex = path.join(__dirname, '../frontend/dist/index.html');
+  let frontendBundle = 'unknown';
+  try {
+    const html = fs.readFileSync(distIndex, 'utf8');
+    const m = html.match(/index-([A-Za-z0-9_-]+)\.js/);
+    if (m) frontendBundle = m[1];
+  } catch (e) {}
+  res.json({
+    version: '1.1.0',
+    deployedAt: new Date().toISOString(),
+    commit: '0d1807d',
+    frontendBundle,
+    nodeEnv: process.env.NODE_ENV || 'development'
+  });
+});
+
 // ── Serve React frontend in production ────────────────────────
 if (IS_PROD) {
   const distPath = path.join(__dirname, '../frontend/dist');
