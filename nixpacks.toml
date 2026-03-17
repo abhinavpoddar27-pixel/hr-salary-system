@@ -1,0 +1,15 @@
+[phases.setup]
+nixPkgs = ["nodejs_20"]
+
+[phases.install]
+cmds = [
+  "npm install",
+  "npm install --prefix backend",
+  "cd frontend && npm install --include=dev"
+]
+
+[phases.build]
+cmds = ["npm run build --prefix frontend"]
+
+[start]
+cmd = "NODE_ENV=production node backend/server.js"
