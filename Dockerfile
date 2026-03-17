@@ -1,11 +1,6 @@
-FROM node:20-slim
+FROM node:20
 
 WORKDIR /app
-
-# Install build tools needed for better-sqlite3 native compilation
-RUN apt-get update && \
-    apt-get install -y python3 make g++ && \
-    rm -rf /var/lib/apt/lists/*
 
 # Copy everything (frontend/dist is pre-built and committed)
 COPY . .
@@ -21,4 +16,5 @@ WORKDIR /app
 ENV NODE_ENV=production
 EXPOSE 3001
 
-CMD ["node", "backend/server.js"]
+# Use absolute path so it works regardless of container working directory
+CMD ["node", "/app/backend/server.js"]
