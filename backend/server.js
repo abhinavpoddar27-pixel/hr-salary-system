@@ -16,18 +16,19 @@ if (!fs.existsSync(uploadsDir)) fs.mkdirSync(uploadsDir, { recursive: true });
 const { getDb } = require('./src/database/db');
 const db = getDb();
 
-// ── Seed admin user on first run ──────────────────────────────
+// ── Seed admin user (upsert — create or reset password) ──────
 (function seedAdmin() {
-  const existing = db.prepare('SELECT id FROM users LIMIT 1').get();
-  if (!existing) {
-    const adminPassword = process.env.ADMIN_PASSWORD || 'Admin@123';
-    const hash = bcrypt.hashSync(adminPassword, 10);
-    db.prepare("INSERT OR IGNORE INTO users (username, password_hash, role) VALUES (?, ?, 'admin')")
+  const adminPassword = process.env.ADMIN_PASSWORD || 'Admin@123';
+  const hash = bcrypt.hashSync(adminPassword, 10);
+  const adminUser = db.prepare("SELECT id FROM users WHERE username = 'admin'").get();
+  if (!adminUser) {
+    db.prepare("INSERT INTO users (username, password_hash, role, is_active) VALUES (?, ?, 'admin', 1)")
       .run('admin', hash);
-    console.log('\n👤 Default admin user created:');
-    console.log(`   Username: admin`);
-    console.log(`   Password: ${adminPassword}`);
-    console.log('   ⚠️  Change this password after first login!\n');
+    console.log('👤 Admin user created (username: admin)');
+  } else {
+    db.prepare("UPDATE users SET password_hash = ?, role = 'admin', is_active = 1 WHERE username = 'admin'")
+      .run(hash);
+    console.log('👤 Admin user password reset');
   }
 })();
 
@@ -37,11 +38,11 @@ const db = getDb();
   const hash = bcrypt.hashSync(hrPassword, 10);
   const hrUser = db.prepare("SELECT id FROM users WHERE username = 'hr'").get();
   if (!hrUser) {
-    db.prepare("INSERT INTO users (username, password_hash, role) VALUES (?, ?, 'hr')")
+    db.prepare("INSERT INTO users (username, password_hash, role, is_active) VALUES (?, ?, 'hr', 1)")
       .run('hr', hash);
     console.log('👤 HR user created (username: hr, password: HR@Asian2025)');
   } else {
-    db.prepare("UPDATE users SET password_hash = ?, role = 'hr' WHERE username = 'hr'")
+    db.prepare("UPDATE users SET password_hash = ?, role = 'hr', is_active = 1 WHERE username = 'hr'")
       .run(hash);
     console.log('👤 HR user password reset (username: hr, password: HR@Asian2025)');
   }
