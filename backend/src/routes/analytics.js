@@ -268,6 +268,7 @@ router.get('/employee/:code', (req, res) => {
 // POST /api/analytics/detect-inactive
 // Auto-detect employees inactive for 14+ consecutive days
 // Mark them as "Left" so they are excluded from workforce
+// Also auto-reactivate employees who have returned
 // ─────────────────────────────────────────────────────────
 router.post('/detect-inactive', (req, res) => {
   const db = getDb();
@@ -277,43 +278,120 @@ router.post('/detect-inactive', (req, res) => {
 
   const m = parseInt(month);
   const y = parseInt(year);
-  const monthStr = String(m).padStart(2, '0');
 
+  const result = runDetectLeftLogic(db, m, y, parseInt(inactiveDays));
+
+  res.json({
+    success: true,
+    total: result.total,
+    markedLeft: result.markedLeft.length,
+    reactivated: result.reactivated.length,
+    markedLeftDetails: result.markedLeft,
+    reactivatedDetails: result.reactivated
+  });
+});
+
+// ─────────────────────────────────────────────────────────
+// POST /api/analytics/auto-detect-left
+// Lighter version that auto-runs after import
+// ─────────────────────────────────────────────────────────
+router.post('/auto-detect-left', (req, res) => {
+  const db = getDb();
+  const { month, year } = req.body;
+
+  if (!month || !year) return res.status(400).json({ success: false, error: 'month and year required' });
+
+  const m = parseInt(month);
+  const y = parseInt(year);
+
+  const result = runDetectLeftLogic(db, m, y, 14);
+
+  res.json({
+    success: true,
+    summary: {
+      totalEmployees: result.total,
+      markedLeft: result.markedLeft.length,
+      reactivated: result.reactivated.length
+    },
+    markedLeft: result.markedLeft,
+    reactivated: result.reactivated
+  });
+});
+
+/**
+ * Shared logic for detecting left employees and auto-reactivating returned ones.
+ * @param {Object} db - database instance
+ * @param {number} m - month
+ * @param {number} y - year
+ * @param {number} inactiveDays - threshold days for marking as Left
+ * @returns {{ total: number, markedLeft: Array, reactivated: Array }}
+ */
+function runDetectLeftLogic(db, m, y, inactiveDays) {
   // Get all employee codes that appear in attendance for this month
   const allEmps = db.prepare(`
-    SELECT DISTINCT ap.employee_code, e.id as emp_id, e.name, e.department, e.employment_type, e.status
+    SELECT DISTINCT ap.employee_code, e.id as emp_id, e.name, e.department, e.employment_type, e.status, e.inactive_since
     FROM attendance_processed ap
     LEFT JOIN employees e ON ap.employee_code = e.code
     WHERE ap.month = ? AND ap.year = ? AND ap.is_night_out_only = 0
   `).all(m, y);
 
-  const markedInactive = [];
+  const markedLeft = [];
+  const reactivated = [];
 
   for (const emp of allEmps) {
     // Skip already marked as exited
     if (emp.status === 'Exited') continue;
 
-    // Find last date with P, ½P, WOP status
+    // ── Auto-reactivation check ──
+    // If employee is currently 'Left' or 'Inactive', check if they have NEW present records after inactive_since
+    if ((emp.status === 'Left' || emp.status === 'Inactive') && emp.inactive_since) {
+      const newPresent = db.prepare(`
+        SELECT COUNT(*) as cnt FROM attendance_processed
+        WHERE employee_code = ? AND is_night_out_only = 0
+        AND date > ?
+        AND (COALESCE(status_final, status_original) IN ('P','½P','WOP','WO½P'))
+      `).get(emp.employee_code, emp.inactive_since);
+
+      if (newPresent && newPresent.cnt > 0) {
+        db.prepare(`
+          UPDATE employees SET status = 'Active', auto_inactive = 0, was_left_returned = 1,
+          updated_at = datetime('now')
+          WHERE code = ?
+        `).run(emp.employee_code);
+        reactivated.push({
+          code: emp.employee_code, name: emp.name, department: emp.department,
+          type: emp.employment_type, previousStatus: emp.status,
+          inactiveSince: emp.inactive_since, newPresentDays: newPresent.cnt
+        });
+        continue;
+      }
+    }
+
+    // Skip employees already marked as Left or Inactive (not reactivated above)
+    if (emp.status === 'Left' || emp.status === 'Inactive') continue;
+
+    // ── Mark as Left check ──
+    // Find last date with P, ½P, WOP status (across all months)
     const lastPresent = db.prepare(`
       SELECT MAX(date) as last_date FROM attendance_processed
       WHERE employee_code = ? AND is_night_out_only = 0
-      AND (status_final IN ('P','½P','WOP','WO½P') OR status_original IN ('P','½P','WOP','WO½P'))
+      AND (COALESCE(status_final, status_original) IN ('P','½P','WOP','WO½P'))
     `).get(emp.employee_code);
 
-    // Find latest attendance record date
+    // Find latest attendance record date for this month
     const latestRecord = db.prepare(`
       SELECT MAX(date) as last_date FROM attendance_processed
       WHERE employee_code = ? AND is_night_out_only = 0 AND month = ? AND year = ?
     `).get(emp.employee_code, m, y);
 
     if (!lastPresent?.last_date && latestRecord?.last_date) {
-      // Never showed up at all — definitely inactive
+      // Never showed up at all — definitely left
       db.prepare(`
-        UPDATE employees SET status = 'Inactive', auto_inactive = 1,
+        UPDATE employees SET status = 'Left', auto_inactive = 1,
         inactive_since = ?, updated_at = datetime('now')
-        WHERE code = ? AND status NOT IN ('Exited', 'Inactive')
+        WHERE code = ? AND status NOT IN ('Exited', 'Left', 'Inactive')
       `).run(latestRecord.last_date, emp.employee_code);
-      markedInactive.push({ code: emp.employee_code, name: emp.name, department: emp.department, type: emp.employment_type, reason: 'Never present in period', lastPresent: null });
+      markedLeft.push({ code: emp.employee_code, name: emp.name, department: emp.department, type: emp.employment_type, reason: 'Never present in period', lastPresent: null });
       continue;
     }
 
@@ -322,13 +400,13 @@ router.post('/detect-inactive', (req, res) => {
       const latestDate = new Date(latestRecord.last_date + 'T12:00:00');
       const diffDays = Math.floor((latestDate - lastPresentDate) / (1000 * 60 * 60 * 24));
 
-      if (diffDays >= parseInt(inactiveDays)) {
+      if (diffDays >= inactiveDays) {
         db.prepare(`
-          UPDATE employees SET status = 'Inactive', auto_inactive = 1,
+          UPDATE employees SET status = 'Left', auto_inactive = 1,
           inactive_since = ?, updated_at = datetime('now')
-          WHERE code = ? AND status NOT IN ('Exited', 'Inactive')
+          WHERE code = ? AND status NOT IN ('Exited', 'Left', 'Inactive')
         `).run(lastPresent.last_date, emp.employee_code);
-        markedInactive.push({
+        markedLeft.push({
           code: emp.employee_code, name: emp.name, department: emp.department,
           type: emp.employment_type, reason: `Absent ${diffDays} consecutive days`,
           lastPresent: lastPresent.last_date
@@ -337,13 +415,8 @@ router.post('/detect-inactive', (req, res) => {
     }
   }
 
-  res.json({
-    success: true,
-    total: allEmps.length,
-    markedInactive: markedInactive.length,
-    details: markedInactive
-  });
-});
+  return { total: allEmps.length, markedLeft, reactivated };
+}
 
 // GET /api/analytics/inactive-employees
 // List all auto-detected inactive employees
@@ -351,9 +424,9 @@ router.get('/inactive-employees', (req, res) => {
   const db = getDb();
 
   const inactive = db.prepare(`
-    SELECT code, name, department, employment_type, status, inactive_since, auto_inactive
+    SELECT code, name, department, employment_type, status, inactive_since, auto_inactive, was_left_returned
     FROM employees
-    WHERE status = 'Inactive' OR auto_inactive = 1
+    WHERE status IN ('Inactive', 'Left') OR auto_inactive = 1
     ORDER BY department, name
   `).all();
 

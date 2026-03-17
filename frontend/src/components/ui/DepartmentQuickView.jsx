@@ -1,5 +1,6 @@
 import React from 'react'
 import { useQuery } from '@tanstack/react-query'
+import clsx from 'clsx'
 import { getDepartmentDeepDive } from '../../utils/api'
 import { useAppStore } from '../../store/appStore'
 import { fmtINR, fmtPct } from '../../utils/formatters'
@@ -23,7 +24,7 @@ export default function DepartmentQuickView({
   const month = propMonth || selectedMonth
   const year = propYear || selectedYear
 
-  const { data: res, isLoading } = useQuery({
+  const { data: res, isLoading, error } = useQuery({
     queryKey: ['dept-drilldown', department, month, year],
     queryFn: () => getDepartmentDeepDive(department, month, year),
     enabled: !!department,
@@ -31,10 +32,19 @@ export default function DepartmentQuickView({
   })
 
   if (isLoading) return <Skeleton variant="card" />
+  if (error) return <div className="text-xs text-red-500 py-2">Failed to load department data. Please try again.</div>
 
   const dept = res?.data?.data || res?.data || {}
   const employees = dept.employees || []
-  const stats = dept.stats || dept
+
+  // Compute aggregate stats from employees array
+  const avgAttendance = employees.length > 0
+    ? employees.reduce((s, e) => s + (e.attendanceRate || 0), 0) / employees.length
+    : 0
+  const avgHrs = employees.length > 0
+    ? employees.reduce((s, e) => s + (e.avgHours || 0), 0) / employees.length
+    : 0
+  const totalOt = employees.reduce((s, e) => s + (e.otHours || 0), 0)
 
   return (
     <div>
@@ -46,20 +56,14 @@ export default function DepartmentQuickView({
         <div>
           <div className="font-semibold text-sm text-slate-800">{department}</div>
           <div className="text-xs text-slate-500">
-            {employees.length || stats.headcount || 0} employees
+            {employees.length || dept.headcount || 0} employees
           </div>
         </div>
         {/* Quick Stats */}
         <div className="flex gap-3 ml-auto">
-          {stats.attendance_rate != null && (
-            <MiniStat label="Attendance" value={fmtPct(stats.attendance_rate)} />
-          )}
-          {stats.avg_hours != null && (
-            <MiniStat label="Avg Hours" value={`${Number(stats.avg_hours).toFixed(1)}h`} />
-          )}
-          {stats.total_ot_hours != null && (
-            <MiniStat label="OT Hours" value={Number(stats.total_ot_hours).toFixed(0)} />
-          )}
+          {employees.length > 0 && <MiniStat label="Attendance" value={fmtPct(avgAttendance)} />}
+          {employees.length > 0 && <MiniStat label="Avg Hours" value={`${avgHrs.toFixed(1)}h`} />}
+          {totalOt > 0 && <MiniStat label="OT Hours" value={totalOt.toFixed(0)} />}
         </div>
       </div>
 
@@ -75,6 +79,7 @@ export default function DepartmentQuickView({
                 <th className="text-right">Present</th>
                 <th className="text-right">Absent</th>
                 <th className="text-right">Late</th>
+                <th className="text-right">Att. Rate</th>
                 <th className="text-right">Avg Hrs</th>
                 <th className="text-right">OT Hrs</th>
               </tr>
@@ -88,8 +93,17 @@ export default function DepartmentQuickView({
                   <td className="text-right text-green-600">{e.days_present ?? e.present ?? '—'}</td>
                   <td className="text-right text-red-600">{e.days_absent ?? e.absent ?? '—'}</td>
                   <td className="text-right text-orange-600">{e.late_count ?? e.late ?? '—'}</td>
-                  <td className="text-right">{e.avg_hours != null ? Number(e.avg_hours).toFixed(1) : '—'}</td>
-                  <td className="text-right text-purple-600">{e.ot_hours != null ? Number(e.ot_hours).toFixed(1) : '—'}</td>
+                  <td className="text-right">
+                    <span className={clsx('px-1.5 py-0.5 rounded text-xs font-medium',
+                      (e.attendanceRate || 0) >= 85 ? 'bg-green-100 text-green-700' :
+                      (e.attendanceRate || 0) >= 70 ? 'bg-yellow-100 text-yellow-700' :
+                      'bg-red-100 text-red-700'
+                    )}>
+                      {fmtPct(e.attendanceRate || 0)}
+                    </span>
+                  </td>
+                  <td className="text-right">{(e.avgHours ?? e.avg_hours) != null ? Number(e.avgHours ?? e.avg_hours).toFixed(1) : '—'}</td>
+                  <td className="text-right text-purple-600">{(e.otHours ?? e.ot_hours) != null ? Number(e.otHours ?? e.ot_hours).toFixed(1) : '—'}</td>
                 </tr>
               ))}
             </tbody>

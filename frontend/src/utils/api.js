@@ -58,6 +58,7 @@ export const confirmNightShift = (id) => api.post(`/attendance/night-shifts/${id
 export const rejectNightShift = (id) => api.post(`/attendance/night-shifts/${id}/reject`)
 export const updateAttendanceRecord = (id, data) => api.put(`/attendance/record/${id}`, data)
 export const getAttendanceRegister = (params) => api.get('/attendance/register', { params })
+export const getMonthlyAttendanceSummary = (month, year) => api.get('/attendance/monthly-summary', { params: { month, year } })
 export const getValidationStatus = (params) => api.get('/attendance/validation-status', { params })
 export const getEmployeeDailyAttendance = (code, month, year) => api.get(`/attendance/daily/${code}`, { params: { month, year } })
 export const updateRecordShift = (id, data) => api.put(`/attendance/record/${id}/shift`, data)

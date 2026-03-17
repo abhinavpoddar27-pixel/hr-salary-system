@@ -232,6 +232,47 @@ router.put('/record/:id', (req, res) => {
 });
 
 /**
+ * GET /api/attendance/monthly-summary
+ * Return per-employee attendance summary for a month
+ * Used by Stage 5 to auto-display all employees
+ */
+router.get('/monthly-summary', (req, res) => {
+  const db = getDb();
+  const { month, year } = req.query;
+
+  if (!month || !year) {
+    return res.status(400).json({ success: false, error: 'month and year required' });
+  }
+
+  const records = db.prepare(`
+    SELECT
+      ap.employee_code,
+      e.name as employee_name,
+      e.department,
+      e.status as employee_status,
+      COUNT(CASE WHEN ap.is_night_out_only = 0 THEN 1 END) as total_records,
+      SUM(CASE WHEN ap.is_night_out_only = 0 AND (COALESCE(ap.status_final, ap.status_original) IN ('P','WOP')) THEN 1
+               WHEN ap.is_night_out_only = 0 AND (COALESCE(ap.status_final, ap.status_original) IN ('½P','WO½P')) THEN 0.5
+               ELSE 0 END) as present_days,
+      SUM(CASE WHEN ap.is_night_out_only = 0 AND COALESCE(ap.status_final, ap.status_original) = 'A' THEN 1 ELSE 0 END) as absent_days,
+      SUM(CASE WHEN ap.is_night_out_only = 0 AND COALESCE(ap.status_final, ap.status_original) IN ('½P','WO½P') THEN 1 ELSE 0 END) as half_days,
+      SUM(CASE WHEN ap.is_night_out_only = 0 AND COALESCE(ap.status_final, ap.status_original) IN ('WO','WOP','WO½P') THEN 1 ELSE 0 END) as week_offs,
+      SUM(CASE WHEN ap.is_late_arrival = 1 THEN 1 ELSE 0 END) as late_days,
+      SUM(CASE WHEN ap.is_night_out_only = 0 AND (ap.correction_remark IS NOT NULL AND ap.correction_remark != '') THEN 1 ELSE 0 END) as corrected_records,
+      ROUND(AVG(CASE WHEN ap.actual_hours > 0 THEN ap.actual_hours END), 1) as avg_hours,
+      SUM(CASE WHEN ap.is_miss_punch = 1 AND ap.miss_punch_resolved = 0 THEN 1 ELSE 0 END) as unresolved_miss_punches,
+      SUM(CASE WHEN ap.is_night_shift = 1 AND ap.is_night_out_only = 0 THEN 1 ELSE 0 END) as night_shifts
+    FROM attendance_processed ap
+    LEFT JOIN employees e ON ap.employee_code = e.code
+    WHERE ap.month = ? AND ap.year = ?
+    GROUP BY ap.employee_code
+    ORDER BY e.department, e.name
+  `).all(month, year);
+
+  res.json({ success: true, data: records });
+});
+
+/**
  * GET /api/attendance/register
  * Get full month grid for one employee
  */

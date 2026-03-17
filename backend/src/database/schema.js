@@ -679,6 +679,7 @@ function initSchema(db) {
   safeAddColumn('employees', 'notes', 'TEXT');
   safeAddColumn('employees', 'inactive_since', 'TEXT');
   safeAddColumn('employees', 'auto_inactive', 'INTEGER DEFAULT 0');
+  safeAddColumn('employees', 'was_left_returned', 'INTEGER DEFAULT 0');
 
   // monthly_imports: daily vs monthly import type
   safeAddColumn('monthly_imports', 'import_type', "TEXT DEFAULT 'monthly'");

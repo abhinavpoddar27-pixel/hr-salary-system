@@ -49,7 +49,7 @@ function computeOrgOverview(db, month, year, startDate, endDate) {
     LEFT JOIN employees e ON ap.employee_code = e.code
     WHERE ${dc.clause}
     AND ap.is_night_out_only = 0
-    AND (e.status IS NULL OR e.status NOT IN ('Inactive', 'Exited'))
+    AND (e.status IS NULL OR e.status NOT IN ('Inactive', 'Exited', 'Left'))
   `).all(...dc.args);
 
   if (records.length === 0) return null;
@@ -222,14 +222,14 @@ function computeHeadcountTrend(db, months) {
         SELECT COUNT(*) as count FROM employees
         WHERE date_of_joining <= ?
         AND (date_of_exit IS NULL OR date_of_exit = '' OR date_of_exit > ?)
-        AND status != 'Inactive'
+        AND status NOT IN ('Inactive', 'Left', 'Exited')
       `).get(monthEnd, monthStart)?.count || 0;
 
       byCompany = db.prepare(`
         SELECT COUNT(*) as count, company FROM employees
         WHERE date_of_joining <= ?
         AND (date_of_exit IS NULL OR date_of_exit = '' OR date_of_exit > ?)
-        AND status != 'Inactive'
+        AND status NOT IN ('Inactive', 'Left', 'Exited')
         GROUP BY company
       `).all(monthEnd, monthStart);
     }
@@ -256,7 +256,7 @@ function computeHeadcountTrend(db, months) {
         SELECT department FROM employees
         WHERE date_of_joining <= ?
         AND (date_of_exit IS NULL OR date_of_exit = '' OR date_of_exit > ?)
-        AND status != 'Inactive'
+        AND status NOT IN ('Inactive', 'Left', 'Exited')
       `).all(monthEnd, monthStart);
       for (const emp of emps) {
         if (isContractorDept(emp.department)) contCount++;
@@ -288,7 +288,7 @@ function computeHeadcountTrend(db, months) {
       const ms = String(trend[i-1].month).padStart(2,'0');
       return db.prepare(`
         SELECT code as employee_code FROM employees
-        WHERE date_of_joining <= ? AND (date_of_exit IS NULL OR date_of_exit = '' OR date_of_exit > ?) AND status != 'Inactive'
+        WHERE date_of_joining <= ? AND (date_of_exit IS NULL OR date_of_exit = '' OR date_of_exit > ?) AND status NOT IN ('Inactive', 'Left', 'Exited')
       `).all(`${trend[i-1].year}-${ms}-31`, `${trend[i-1].year}-${ms}-01`).map(r => r.employee_code);
     };
     const getCurr = () => {
@@ -300,7 +300,7 @@ function computeHeadcountTrend(db, months) {
       const ms = String(trend[i].month).padStart(2,'0');
       return db.prepare(`
         SELECT code as employee_code FROM employees
-        WHERE date_of_joining <= ? AND (date_of_exit IS NULL OR date_of_exit = '' OR date_of_exit > ?) AND status != 'Inactive'
+        WHERE date_of_joining <= ? AND (date_of_exit IS NULL OR date_of_exit = '' OR date_of_exit > ?) AND status NOT IN ('Inactive', 'Left', 'Exited')
       `).all(`${trend[i].year}-${ms}-31`, `${trend[i].year}-${ms}-01`).map(r => r.employee_code);
     };
 
@@ -376,7 +376,7 @@ function computeChronicAbsentees(db, month, year, startDate, endDate) {
     FROM attendance_processed ap
     LEFT JOIN employees e ON ap.employee_code = e.code
     WHERE ${dc.clause} AND ap.is_night_out_only = 0
-    AND (e.status IS NULL OR e.status NOT IN ('Inactive', 'Exited'))
+    AND (e.status IS NULL OR e.status NOT IN ('Inactive', 'Exited', 'Left'))
   `).all(...dc.args);
 
   const byEmp = {};
@@ -422,7 +422,7 @@ function computePunctualityReport(db, month, year, startDate, endDate) {
     LEFT JOIN employees e ON ap.employee_code = e.code
     WHERE ${dc.clause} AND ap.is_night_out_only = 0
     AND (ap.status_final IN ('P','WOP') OR ap.status_original IN ('P','WOP'))
-    AND (e.status IS NULL OR e.status NOT IN ('Inactive', 'Exited'))
+    AND (e.status IS NULL OR e.status NOT IN ('Inactive', 'Exited', 'Left'))
   `).all(...dc.args);
 
   const byEmp = {};
@@ -558,7 +558,7 @@ function computeOvertimeReport(db, month, year, startDate, endDate) {
     LEFT JOIN employees e ON ap.employee_code = e.code
     WHERE ${dc.clause} AND ap.is_night_out_only = 0
     AND ap.overtime_minutes > 0
-    AND (e.status IS NULL OR e.status NOT IN ('Inactive', 'Exited'))
+    AND (e.status IS NULL OR e.status NOT IN ('Inactive', 'Exited', 'Left'))
   `).all(...dc.args);
 
   const byEmp = {};
@@ -622,7 +622,7 @@ function computeWorkingHoursReport(db, month, year, startDate, endDate) {
     LEFT JOIN employees e ON ap.employee_code = e.code
     WHERE ${dc.clause} AND ap.is_night_out_only = 0
     AND ap.actual_hours > 0
-    AND (e.status IS NULL OR e.status NOT IN ('Inactive', 'Exited'))
+    AND (e.status IS NULL OR e.status NOT IN ('Inactive', 'Exited', 'Left'))
   `).all(...dc.args);
 
   // Histogram buckets

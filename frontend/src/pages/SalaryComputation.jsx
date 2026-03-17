@@ -36,6 +36,7 @@ export default function SalaryComputation() {
     if (filterView === 'held') filtered = filtered.filter(s => s.salary_held)
     if (filterView === 'changed') filtered = filtered.filter(s => s.gross_changed)
     if (filterView === 'active') filtered = filtered.filter(s => !s.salary_held)
+    if (filterView === 'returning') filtered = filtered.filter(s => s.was_left_returned)
     return filtered
   }, [allSalaries, filterDept, filterView])
 
@@ -81,6 +82,7 @@ export default function SalaryComputation() {
 
   const heldCount = allSalaries.filter(s => s.salary_held).length
   const changedCount = allSalaries.filter(s => s.gross_changed).length
+  const returningCount = allSalaries.filter(s => s.was_left_returned).length
 
   return (
     <div className="animate-fade-in">
@@ -153,6 +155,7 @@ export default function SalaryComputation() {
                 { key: 'active', label: 'Active', count: allSalaries.length - heldCount },
                 { key: 'held', label: 'Held', count: heldCount },
                 { key: 'changed', label: 'Changed', count: changedCount },
+                ...(returningCount > 0 ? [{ key: 'returning', label: 'Returning', count: returningCount }] : []),
               ].map(f => (
                 <button key={f.key}
                   onClick={() => setFilterView(f.key)}
@@ -233,6 +236,11 @@ export default function SalaryComputation() {
                             {s.gross_changed ? (
                               <span className="salary-change-flag w-5 h-5 flex items-center justify-center rounded text-xs font-bold shrink-0 print-visible" title={`Gross changed: ${fmtINR(s.prev_month_gross)} → ${fmtINR(s.gross_salary)}`}>
                                 ◆
+                              </span>
+                            ) : null}
+                            {s.was_left_returned ? (
+                              <span className="bg-orange-100 text-orange-700 w-5 h-5 flex items-center justify-center rounded text-xs font-bold shrink-0" title="Returning employee - was previously marked as Left">
+                                ⚠
                               </span>
                             ) : null}
                             <div>

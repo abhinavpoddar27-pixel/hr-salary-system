@@ -212,7 +212,7 @@ router.get('/salary-register', (req, res) => {
 
   const records = db.prepare(`
     SELECT sc.*, e.name as employee_name, e.department, e.designation,
-           e.bank_account, e.ifsc,
+           e.bank_account, e.ifsc, e.was_left_returned, e.status as employee_status,
            dc.total_payable_days, dc.days_present, dc.days_absent, dc.lop_days, dc.paid_sundays,
            dc.days_half_present, dc.ot_hours
     FROM salary_computations sc

@@ -170,6 +170,94 @@ router.post('/upload', upload.array('files', 20), async (req, res) => {
     }
   }
 
+  // Auto-detect left employees after successful import (non-blocking)
+  const successfulImports = results.filter(r => r.success);
+  if (successfulImports.length > 0) {
+    setTimeout(() => {
+      try {
+        const dbRef = getDb();
+        // Gather unique month/year combos from successful imports
+        const monthYearPairs = new Map();
+        for (const r of successfulImports) {
+          const key = `${r.month}-${r.year}`;
+          if (!monthYearPairs.has(key)) monthYearPairs.set(key, { month: r.month, year: r.year });
+        }
+
+        for (const { month: im, year: iy } of monthYearPairs.values()) {
+          const allEmps = dbRef.prepare(`
+            SELECT DISTINCT ap.employee_code, e.id as emp_id, e.name, e.department, e.employment_type, e.status, e.inactive_since
+            FROM attendance_processed ap
+            LEFT JOIN employees e ON ap.employee_code = e.code
+            WHERE ap.month = ? AND ap.year = ? AND ap.is_night_out_only = 0
+          `).all(im, iy);
+
+          for (const emp of allEmps) {
+            if (emp.status === 'Exited') continue;
+
+            // Auto-reactivation: if Left/Inactive and has new present records after inactive_since
+            if ((emp.status === 'Left' || emp.status === 'Inactive') && emp.inactive_since) {
+              const newPresent = dbRef.prepare(`
+                SELECT COUNT(*) as cnt FROM attendance_processed
+                WHERE employee_code = ? AND is_night_out_only = 0
+                AND date > ?
+                AND (COALESCE(status_final, status_original) IN ('P','½P','WOP','WO½P'))
+              `).get(emp.employee_code, emp.inactive_since);
+
+              if (newPresent && newPresent.cnt > 0) {
+                dbRef.prepare(`
+                  UPDATE employees SET status = 'Active', auto_inactive = 0, was_left_returned = 1,
+                  updated_at = datetime('now')
+                  WHERE code = ?
+                `).run(emp.employee_code);
+                continue;
+              }
+            }
+
+            if (emp.status === 'Left' || emp.status === 'Inactive') continue;
+
+            // Mark as Left if absent 14+ consecutive days
+            const lastPresent = dbRef.prepare(`
+              SELECT MAX(date) as last_date FROM attendance_processed
+              WHERE employee_code = ? AND is_night_out_only = 0
+              AND (COALESCE(status_final, status_original) IN ('P','½P','WOP','WO½P'))
+            `).get(emp.employee_code);
+
+            const latestRecord = dbRef.prepare(`
+              SELECT MAX(date) as last_date FROM attendance_processed
+              WHERE employee_code = ? AND is_night_out_only = 0 AND month = ? AND year = ?
+            `).get(emp.employee_code, im, iy);
+
+            if (!lastPresent?.last_date && latestRecord?.last_date) {
+              dbRef.prepare(`
+                UPDATE employees SET status = 'Left', auto_inactive = 1,
+                inactive_since = ?, updated_at = datetime('now')
+                WHERE code = ? AND status NOT IN ('Exited', 'Left', 'Inactive')
+              `).run(latestRecord.last_date, emp.employee_code);
+              continue;
+            }
+
+            if (lastPresent?.last_date && latestRecord?.last_date) {
+              const lastPresentDate = new Date(lastPresent.last_date + 'T12:00:00');
+              const latestDate = new Date(latestRecord.last_date + 'T12:00:00');
+              const diffDays = Math.floor((latestDate - lastPresentDate) / (1000 * 60 * 60 * 24));
+
+              if (diffDays >= 14) {
+                dbRef.prepare(`
+                  UPDATE employees SET status = 'Left', auto_inactive = 1,
+                  inactive_since = ?, updated_at = datetime('now')
+                  WHERE code = ? AND status NOT IN ('Exited', 'Left', 'Inactive')
+                `).run(lastPresent.last_date, emp.employee_code);
+              }
+            }
+          }
+        }
+        console.log('✅ Auto-detect left employees completed after import');
+      } catch (err) {
+        console.error('Auto-detect left error:', err.message);
+      }
+    }, 100);
+  }
+
   res.json({ success: true, results });
 });
 
