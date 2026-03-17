@@ -134,7 +134,7 @@ app.get('/api/version', (req, res) => {
   res.json({
     version: '1.1.0',
     deployedAt: new Date().toISOString(),
-    commit: '0d1807d',
+    commit: 'bebc936',
     frontendBundle,
     nodeEnv: process.env.NODE_ENV || 'development'
   });
