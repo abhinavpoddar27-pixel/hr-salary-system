@@ -1,12 +1,5 @@
 [phases.install]
-cmds = [
-  "npm install",
-  "npm install --prefix backend",
-  "npm install --prefix frontend"
-]
-
-[phases.build]
-cmds = ["npm run build --prefix frontend"]
+cmds = ["npm install --prefix backend"]
 
 [start]
 cmd = "NODE_ENV=production node backend/server.js"

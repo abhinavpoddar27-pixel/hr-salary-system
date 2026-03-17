@@ -8,7 +8,6 @@ data/*.db-shm
 uploads/
 *.log
 .DS_Store
-dist/
-frontend/dist/
+# frontend/dist/ is committed so Railway can serve it directly
 .env
 *.env.local
