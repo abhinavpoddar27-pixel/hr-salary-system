@@ -2,6 +2,11 @@ FROM node:20-slim
 
 WORKDIR /app
 
+# Install build tools needed for better-sqlite3 native compilation
+RUN apt-get update && \
+    apt-get install -y python3 make g++ && \
+    rm -rf /var/lib/apt/lists/*
+
 # Copy everything (frontend/dist is pre-built and committed)
 COPY . .
 
