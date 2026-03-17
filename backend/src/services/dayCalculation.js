@@ -291,6 +291,10 @@ function calculateDays(employeeCode, month, year, company, attendanceRecords, le
     daysPresent + daysHalfPresent + paidSundays + paidHolidays - lopDays
   );
 
+  // Extra Duty: if payable days exceed calendar days of the month
+  // e.g., 32 payable in a 31-day month = 1 extra duty day (from WOP / OT shifts)
+  const extraDutyDays = Math.max(0, Math.round((finalPayable - daysInMonth) * 100) / 100);
+
   return {
     employeeCode,
     month,
@@ -312,6 +316,7 @@ function calculateDays(employeeCode, month, year, company, attendanceRecords, le
     slUsed: 0, // SL handled separately
     lopDays: Math.round(lopDays * 100) / 100,
     totalPayableDays: Math.round(finalPayable * 100) / 100,
+    extraDutyDays,
     otHours: Math.round(otHours * 100) / 100,
     otDays: Math.round(otHours / 12 * 100) / 100,
     lateCount,
@@ -330,14 +335,14 @@ function saveDayCalculation(db, calcResult) {
       days_present, days_half_present, days_wop, days_absent,
       paid_sundays, unpaid_sundays, paid_holidays,
       cl_used, el_used, sl_used, lop_days,
-      total_payable_days, ot_hours, ot_days, late_count, week_breakdown
+      total_payable_days, extra_duty_days, ot_hours, ot_days, late_count, week_breakdown
     ) VALUES (
       ?, ?, ?, ?,
       ?, ?, ?, ?,
       ?, ?, ?, ?,
       ?, ?, ?,
       ?, ?, ?, ?,
-      ?, ?, ?, ?, ?
+      ?, ?, ?, ?, ?, ?
     )
     ON CONFLICT(employee_code, month, year, company) DO UPDATE SET
       total_calendar_days = excluded.total_calendar_days,
@@ -356,6 +361,7 @@ function saveDayCalculation(db, calcResult) {
       sl_used = excluded.sl_used,
       lop_days = excluded.lop_days,
       total_payable_days = excluded.total_payable_days,
+      extra_duty_days = excluded.extra_duty_days,
       ot_hours = excluded.ot_hours,
       ot_days = excluded.ot_days,
       late_count = excluded.late_count,
@@ -369,7 +375,7 @@ function saveDayCalculation(db, calcResult) {
     calcResult.daysPresent, calcResult.daysHalfPresent, calcResult.daysWOP, calcResult.daysAbsent,
     calcResult.paidSundays, calcResult.unpaidSundays, calcResult.paidHolidays,
     calcResult.clUsed, calcResult.elUsed, calcResult.slUsed, calcResult.lopDays,
-    calcResult.totalPayableDays, calcResult.otHours, calcResult.otDays,
+    calcResult.totalPayableDays, calcResult.extraDutyDays || 0, calcResult.otHours, calcResult.otDays,
     calcResult.lateCount,
     calcResult.weekBreakdown
   );

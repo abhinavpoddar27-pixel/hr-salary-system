@@ -1,7 +1,7 @@
 import React, { useState, useMemo } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import toast from 'react-hot-toast'
-import api, { getDayCalculations, calculateDays } from '../utils/api'
+import api, { getDayCalculations, calculateDays, getEmployeeDailyAttendance } from '../utils/api'
 import { useAppStore } from '../store/appStore'
 import PipelineProgress from '../components/pipeline/PipelineProgress'
 import { Abbr, Tip } from '../components/ui/Tooltip'
@@ -16,11 +16,20 @@ function SortIcon({ field, sortField, sortDir }) {
   return <span className="text-blue-500 ml-1">{sortDir === 'asc' ? '↑' : '↓'}</span>
 }
 
+function DaySummaryBox({ label, value, color = 'slate', subtext }) {
+  return (
+    <div className={clsx('rounded-lg p-2.5 border text-center min-w-[80px]', `bg-${color}-50 border-${color}-200`)}>
+      <div className="text-[10px] font-medium text-slate-500 uppercase tracking-wider">{label}</div>
+      <div className={clsx('text-lg font-bold', `text-${color}-700`)}>{value}</div>
+      {subtext && <div className="text-[10px] text-slate-400">{subtext}</div>}
+    </div>
+  )
+}
+
 export default function DayCalculation() {
   const { selectedMonth, selectedYear } = useAppStore()
   const queryClient = useQueryClient()
   const [expandedRow, setExpandedRow] = useState(null)
-  const [calendarEmployee, setCalendarEmployee] = useState(null)
   const [search, setSearch] = useState('')
   const [filterDept, setFilterDept] = useState('')
   const [sortField, setSortField] = useState('employee')
@@ -34,9 +43,11 @@ export default function DayCalculation() {
 
   const rawCalcs = res?.data?.data || []
 
+  const daysInMonth = new Date(selectedYear, selectedMonth, 0).getDate()
+  const monthNames = ['', 'January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December']
+
   const calcs = useMemo(() => {
     let result = [...rawCalcs]
-    // Search filter
     if (search) {
       const s = search.toLowerCase()
       result = result.filter(r =>
@@ -44,11 +55,9 @@ export default function DayCalculation() {
         (r.employee_code || '').toLowerCase().includes(s)
       )
     }
-    // Department filter
     if (filterDept) {
       result = result.filter(r => (r.department || '').toLowerCase().includes(filterDept.toLowerCase()))
     }
-    // Sort
     result.sort((a, b) => {
       let cmp = 0
       switch (sortField) {
@@ -72,6 +81,9 @@ export default function DayCalculation() {
           break
         case 'working':
           cmp = (a.total_working_days || 0) - (b.total_working_days || 0)
+          break
+        case 'extraDuty':
+          cmp = (a.extra_duty_days || 0) - (b.extra_duty_days || 0)
           break
         default: cmp = 0
       }
@@ -119,20 +131,26 @@ export default function DayCalculation() {
     el: acc.el + (r.el_used || 0),
     lop: acc.lop + (r.lop_days || 0),
     payable: acc.payable + (r.total_payable_days || 0),
-  }), { present: 0, half: 0, absent: 0, paidSundays: 0, holidays: 0, cl: 0, el: 0, lop: 0, payable: 0 })
+    extraDuty: acc.extraDuty + (r.extra_duty_days || 0),
+    wop: acc.wop + (r.days_wop || 0),
+  }), { present: 0, half: 0, absent: 0, paidSundays: 0, holidays: 0, cl: 0, el: 0, lop: 0, payable: 0, extraDuty: 0, wop: 0 })
 
   const zeroDayCount = rawCalcs.filter(r => (r.days_present || 0) === 0 && (r.days_half_present || 0) === 0).length
   const lopCount = rawCalcs.filter(r => (r.lop_days || 0) > 0).length
+  const extraDutyCount = rawCalcs.filter(r => (r.extra_duty_days || 0) > 0).length
 
   return (
     <div className="animate-fade-in">
       <PipelineProgress stageStatus={{ 1: 'done', 2: 'done', 3: 'done', 4: 'done', 5: 'done', 6: 'active' }} />
 
-      <div className="p-6 space-y-5 max-w-screen-xl">
+      <div className="p-6 space-y-5 max-w-screen-2xl">
         <div className="flex items-start justify-between">
           <div>
             <h2 className="section-title">Stage 6: Day Calculation & Leave Adjustment</h2>
-            <p className="section-subtitle mt-1">Calculate paid days using Sunday granting rules, leave deductions, and holiday adjustments.</p>
+            <p className="section-subtitle mt-1">
+              Calculate paid days using Sunday granting rules, leave deductions, and holiday adjustments.
+              <span className="ml-2 text-xs text-slate-400">({monthNames[selectedMonth]} {selectedYear} — {daysInMonth} days)</span>
+            </p>
           </div>
           <button
             onClick={() => calcMutation.mutate()}
@@ -145,16 +163,17 @@ export default function DayCalculation() {
 
         {/* Summary Stats */}
         {rawCalcs.length > 0 && (
-          <div className="grid grid-cols-2 md:grid-cols-6 gap-3">
+          <div className="grid grid-cols-2 md:grid-cols-5 lg:grid-cols-9 gap-3">
             {[
               { label: 'Total Employees', value: rawCalcs.length, color: 'blue' },
-              { label: 'Avg Present Days', value: (totals.present / (calcs.length || 1)).toFixed(1), color: 'green' },
-              { label: 'Total Paid Sundays', value: totals.paidSundays.toFixed(0), color: 'indigo' },
-              { label: 'Total Late Days', value: rawCalcs.reduce((s, r) => s + (r.late_count || 0), 0), color: 'amber' },
-              { label: 'Total LOP Days', value: totals.lop.toFixed(1), color: 'red' },
+              { label: 'Avg Present', value: (totals.present / (calcs.length || 1)).toFixed(1), color: 'green' },
+              { label: 'Paid Sundays', value: totals.paidSundays.toFixed(0), color: 'indigo' },
+              { label: 'Total Late', value: rawCalcs.reduce((s, r) => s + (r.late_count || 0), 0), color: 'amber' },
+              { label: 'Total LOP', value: totals.lop.toFixed(1), color: 'red' },
               { label: 'Late Deductions', value: rawCalcs.filter(r => (r.late_deduction_days || 0) > 0).length, color: 'orange' },
-              { label: 'Avg Payable Days', value: (totals.payable / (calcs.length || 1)).toFixed(1), color: 'emerald' },
-              { label: '0-Day Employees', value: zeroDayCount, color: zeroDayCount > 0 ? 'red' : 'slate' },
+              { label: 'Avg Payable', value: (totals.payable / (calcs.length || 1)).toFixed(1), color: 'emerald' },
+              { label: 'Extra Duty', value: `${extraDutyCount} emp`, color: extraDutyCount > 0 ? 'cyan' : 'slate' },
+              { label: '0-Day Emp', value: zeroDayCount, color: zeroDayCount > 0 ? 'red' : 'slate' },
             ].map(s => (
               <div key={s.label} className={clsx('stat-card border-l-4', `border-l-${s.color}-400`)}>
                 <span className="text-xs font-semibold text-slate-400 uppercase tracking-wider">{s.label}</span>
@@ -179,20 +198,8 @@ export default function DayCalculation() {
               Showing {calcs.length} of {rawCalcs.length} employees
               {lopCount > 0 && <span className="ml-2 text-amber-600">| {lopCount} with LOP</span>}
               {zeroDayCount > 0 && <span className="ml-2 text-red-600">| {zeroDayCount} with 0 days</span>}
+              {extraDutyCount > 0 && <span className="ml-2 text-cyan-600">| {extraDutyCount} with Extra Duty</span>}
             </div>
-          </div>
-        )}
-
-        {/* Calendar Panel */}
-        {calendarEmployee && (
-          <div className="card p-5 animate-slide-up">
-            <div className="flex items-center justify-between mb-3">
-              <h3 className="text-sm font-bold text-slate-700">
-                Daily Attendance: {calendarEmployee.name} ({calendarEmployee.code})
-              </h3>
-              <button onClick={() => setCalendarEmployee(null)} className="btn-ghost text-xs">Close</button>
-            </div>
-            <CalendarView employeeCode={calendarEmployee.code} month={selectedMonth} year={selectedYear} />
           </div>
         )}
 
@@ -220,53 +227,63 @@ export default function DayCalculation() {
                       <SortIcon field="employee" sortField={sortField} sortDir={sortDir} />
                     </th>
                     <th><Abbr code="Dept">Dept</Abbr></th>
-                    <th><Tip text="Total calendar days in the month">Cal Days</Tip></th>
-                    <th><Tip text="Total Sundays in the month (excluded from working days)">Sun</Tip></th>
-                    <th><Tip text="Working days = Calendar days - Sundays - Holidays. Sundays are NOT counted as absent.">Work Days</Tip></th>
+                    <th><Tip text="Total calendar days in the month">Cal</Tip></th>
+                    <th><Tip text="Total Sundays in the month">Sun</Tip></th>
+                    <th className="cursor-pointer select-none" onClick={() => toggleSort('working')}>
+                      <Tip text="Working days = Calendar - Sundays - Holidays">Work</Tip>
+                      <SortIcon field="working" sortField={sortField} sortDir={sortDir} />
+                    </th>
                     <th className="cursor-pointer select-none" onClick={() => toggleSort('present')}>
-                      <Tip text="Full days present (with both IN and OUT punch)"><Abbr code="P">Present</Abbr></Tip>
+                      <Tip text="Full days present"><Abbr code="P">Pres</Abbr></Tip>
                       <SortIcon field="present" sortField={sortField} sortDir={sortDir} />
                     </th>
-                    <th><Tip text="Half-day present (only partial attendance)"><Abbr code="½P">½ Day</Abbr></Tip></th>
+                    <th><Tip text="Half-day present"><Abbr code="½P">½D</Abbr></Tip></th>
+                    <th><Tip text="Worked on weekly off (extra duty days)"><Abbr code="WOP">WOP</Abbr></Tip></th>
                     <th className="cursor-pointer select-none" onClick={() => toggleSort('absent')}>
-                      <Tip text="Absent days (working days with no attendance). Sundays and holidays are NOT counted as absent."><Abbr code="A">Absent</Abbr></Tip>
+                      <Tip text="Absent days"><Abbr code="A">Abs</Abbr></Tip>
                       <SortIcon field="absent" sortField={sortField} sortDir={sortDir} />
                     </th>
                     <th className="cursor-pointer select-none" onClick={() => toggleSort('late')}>
-                      <Tip text="Number of late arrivals in the month">Late</Tip>
+                      <Tip text="Late arrivals">Late</Tip>
                       <SortIcon field="late" sortField={sortField} sortDir={sortDir} />
                     </th>
-                    <th><Tip text="Paid Sundays granted based on weekly attendance (6 days = free, 4-5 = CL/EL deducted, <4 = unpaid)">Paid Sun</Tip></th>
-                    <th><Tip text="Paid holidays (gazetted holidays falling in the month)">Hol</Tip></th>
-                    <th><Tip text="Casual Leave used to cover Sunday granting shortfall"><Abbr code="CL">CL</Abbr></Tip></th>
-                    <th><Tip text="Earned Leave used to cover Sunday granting shortfall"><Abbr code="EL">EL</Abbr></Tip></th>
+                    <th><Tip text="Paid Sundays granted">P.Sun</Tip></th>
+                    <th><Tip text="Paid holidays">Hol</Tip></th>
+                    <th><Tip text="CL used for Sunday granting"><Abbr code="CL">CL</Abbr></Tip></th>
+                    <th><Tip text="EL used for Sunday granting"><Abbr code="EL">EL</Abbr></Tip></th>
                     <th className="cursor-pointer select-none" onClick={() => toggleSort('lop')}>
-                      <Tip text="Loss of Pay days — remaining absent days after leave adjustment"><Abbr code="LOP">LOP</Abbr></Tip>
+                      <Tip text="Loss of Pay"><Abbr code="LOP">LOP</Abbr></Tip>
                       <SortIcon field="lop" sortField={sortField} sortDir={sortDir} />
                     </th>
                     <th className="cursor-pointer select-none bg-blue-50 text-blue-700" onClick={() => toggleSort('payable')}>
-                      <Tip text="Total Payable Days = Present + ½Days×0.5 + Paid Sundays + Holidays + CL + EL">Payable</Tip>
+                      <Tip text="Total Payable Days">Payable</Tip>
                       <SortIcon field="payable" sortField={sortField} sortDir={sortDir} />
                     </th>
-                    <th><Tip text="View weekly breakdown and daily attendance calendar">Actions</Tip></th>
+                    <th className="cursor-pointer select-none bg-cyan-50 text-cyan-700" onClick={() => toggleSort('extraDuty')}>
+                      <Tip text="Extra Duty Days = Payable - Calendar Days (when payable exceeds month days)">Extra Duty</Tip>
+                      <SortIcon field="extraDuty" sortField={sortField} sortDir={sortDir} />
+                    </th>
                   </tr>
                 </thead>
                 <tbody>
                   {calcs.map(r => {
                     const isZeroDay = (r.days_present || 0) === 0 && (r.days_half_present || 0) === 0
                     const hasLOP = (r.lop_days || 0) > 0
+                    const hasExtraDuty = (r.extra_duty_days || 0) > 0
                     return (
                       <React.Fragment key={r.id}>
                         <tr onClick={() => setExpandedRow(expandedRow === r.id ? null : r.id)} className={clsx(
                           'transition-colors cursor-pointer hover:bg-blue-50/50',
                           expandedRow === r.id && 'bg-blue-50/70',
-                          isZeroDay && !expandedRow && 'bg-red-50/60',
-                          !isZeroDay && hasLOP && !expandedRow && 'bg-amber-50/40'
+                          isZeroDay && expandedRow !== r.id && 'bg-red-50/60',
+                          !isZeroDay && hasLOP && expandedRow !== r.id && 'bg-amber-50/40',
+                          !isZeroDay && !hasLOP && hasExtraDuty && expandedRow !== r.id && 'bg-cyan-50/30'
                         )}>
                           <td>
                             <div className="flex items-center gap-1.5">
                               <DrillDownChevron isExpanded={expandedRow === r.id} />
                               {isZeroDay && <span className="w-2 h-2 rounded-full bg-red-500 shrink-0" title="0 working days" />}
+                              {hasExtraDuty && <span className="w-2 h-2 rounded-full bg-cyan-500 shrink-0" title="Extra duty" />}
                               <div>
                                 <div className="font-medium text-sm">{r.employee_name || r.employee_code}</div>
                                 <div className="text-xs text-slate-400 font-mono">{r.employee_code}</div>
@@ -278,7 +295,8 @@ export default function DayCalculation() {
                           <td>{r.total_sundays}</td>
                           <td className="font-medium text-slate-700">{r.total_working_days || (r.total_calendar_days - r.total_sundays - (r.paid_holidays || 0))}</td>
                           <td className="text-green-600 font-medium">{r.days_present}</td>
-                          <td className="text-yellow-600">{r.days_half_present}</td>
+                          <td className="text-yellow-600">{r.days_half_present || 0}</td>
+                          <td className={clsx('font-medium', (r.days_wop || 0) > 0 ? 'text-cyan-600' : 'text-slate-400')}>{r.days_wop || 0}</td>
                           <td className={clsx('font-medium', r.days_absent > 0 ? 'text-red-600' : 'text-slate-400')}>{r.days_absent}</td>
                           <td className={clsx('font-medium', (r.late_count || 0) >= 5 ? 'text-red-600' : (r.late_count || 0) > 0 ? 'text-amber-600' : 'text-slate-400')}>
                             <div className="flex items-center gap-1">
@@ -293,106 +311,19 @@ export default function DayCalculation() {
                           <td className="text-orange-600">{r.el_used || 0}</td>
                           <td className={clsx('font-medium', r.lop_days > 0 ? 'text-red-600' : 'text-slate-400')}>{r.lop_days}</td>
                           <td className="bg-blue-50 font-bold text-blue-700 text-sm">{r.total_payable_days}</td>
-                          <td>
-                            <div className="flex items-center gap-1">
-                              <button
-                                onClick={() => setExpandedRow(expandedRow === r.id ? null : r.id)}
-                                className="btn-ghost text-xs px-1.5 py-0.5 text-blue-600"
-                                title="Week breakdown"
-                              >
-                                {expandedRow === r.id ? '▲' : '▼'}
-                              </button>
-                              <button
-                                onClick={(e) => { e.stopPropagation(); setCalendarEmployee({ code: r.employee_code, name: r.employee_name || r.employee_code }); }}
-                                className="btn-ghost text-xs px-1.5 py-0.5 text-blue-600"
-                                title="Daily attendance calendar"
-                              >
-                                📅
-                              </button>
-                            </div>
+                          <td className={clsx('font-bold text-sm', hasExtraDuty ? 'bg-cyan-50 text-cyan-700' : 'text-slate-300')}>
+                            {hasExtraDuty ? r.extra_duty_days : '—'}
                           </td>
                         </tr>
                         {expandedRow === r.id && (
-                          <DrillDownRow colSpan={16}>
-                            <EmployeeQuickView
-                              employeeCode={r.employee_code}
-                              contextContent={r.week_breakdown && (
-                                <div>
-                              <p className="text-xs font-semibold text-slate-600 mb-2">Week-by-Week Sunday Granting:</p>
-                              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-2">
-                                {(() => {
-                                  try {
-                                    const weeks = typeof r.week_breakdown === 'string' ? JSON.parse(r.week_breakdown) : r.week_breakdown
-                                    return weeks.map((w, i) => (
-                                      <div key={i} className={clsx('rounded-lg p-2 text-xs border', w.sundayPaid ? 'bg-green-50 border-green-200' : 'bg-red-50 border-red-200')}>
-                                        <div className="font-semibold mb-1">Sunday: {w.sundayDate}</div>
-                                        <div>Worked: <strong>{w.workedDays}/{w.availableDays}</strong></div>
-                                        {w.clUsed > 0 && <div>CL used: {w.clUsed}</div>}
-                                        {w.elUsed > 0 && <div>EL used: {w.elUsed}</div>}
-                                        {w.lop > 0 && <div className="text-red-600">LOP: {w.lop}</div>}
-                                        <div className={clsx('font-medium mt-1', w.sundayPaid ? 'text-green-600' : 'text-red-600')}>
-                                          {w.sundayPaid ? '✓ Paid Sunday' : '✗ Unpaid Sunday'}
-                                        </div>
-                                      </div>
-                                    ))
-                                  } catch (e) { return <div className="text-slate-400">No breakdown data</div> }
-                                })()}
-                              </div>
-                                </div>
-                              )}
+                          <DrillDownRow colSpan={17}>
+                            <DrillDownContent
+                              r={r}
+                              selectedMonth={selectedMonth}
+                              selectedYear={selectedYear}
+                              daysInMonth={daysInMonth}
+                              lateDeductionMutation={lateDeductionMutation}
                             />
-                            {(r.late_count || 0) >= 5 && (
-                              <div className="mt-3 p-3 bg-amber-50 border border-amber-200 rounded-lg">
-                                <p className="text-xs font-semibold text-amber-800 mb-2">
-                                  ⚠ This employee was late {r.late_count} times. Apply late deduction?
-                                </p>
-                                <div className="flex items-center gap-3">
-                                  <div>
-                                    <label className="label text-xs">Deduction (days)</label>
-                                    <input
-                                      type="number"
-                                      min="0"
-                                      max="5"
-                                      step="0.5"
-                                      defaultValue={r.late_deduction_days || 1}
-                                      id={`late-ded-${r.employee_code}`}
-                                      className="input w-20 text-xs"
-                                    />
-                                  </div>
-                                  <div className="flex-1">
-                                    <label className="label text-xs">Remark</label>
-                                    <input
-                                      type="text"
-                                      defaultValue={r.late_deduction_remark || `Late coming deduction for ${r.late_count} late arrivals`}
-                                      id={`late-remark-${r.employee_code}`}
-                                      className="input text-xs"
-                                      placeholder="Late deduction remark..."
-                                    />
-                                  </div>
-                                  <button
-                                    onClick={() => {
-                                      const days = parseFloat(document.getElementById(`late-ded-${r.employee_code}`).value) || 0
-                                      const remark = document.getElementById(`late-remark-${r.employee_code}`).value
-                                      lateDeductionMutation.mutate({ code: r.employee_code, deductionDays: days, remark })
-                                    }}
-                                    className="btn-primary text-xs mt-5"
-                                  >
-                                    Apply Deduction
-                                  </button>
-                                  {r.late_deduction_days > 0 && (
-                                    <button
-                                      onClick={() => lateDeductionMutation.mutate({ code: r.employee_code, deductionDays: 0, remark: '' })}
-                                      className="btn-secondary text-xs mt-5"
-                                    >
-                                      Remove
-                                    </button>
-                                  )}
-                                </div>
-                                {r.late_deduction_remark && (
-                                  <p className="text-xs text-amber-600 mt-1 italic">Current: {r.late_deduction_remark}</p>
-                                )}
-                              </div>
-                            )}
                           </DrillDownRow>
                         )}
                       </React.Fragment>
@@ -407,6 +338,7 @@ export default function DayCalculation() {
                     <td />
                     <td className="text-green-600">{totals.present}</td>
                     <td className="text-yellow-600">{totals.half}</td>
+                    <td className="text-cyan-600">{totals.wop.toFixed(1)}</td>
                     <td className="text-red-600">{totals.absent}</td>
                     <td className="text-amber-600">{calcs.reduce((s, r) => s + (r.late_count || 0), 0)}</td>
                     <td className="text-blue-600">{totals.paidSundays}</td>
@@ -415,7 +347,7 @@ export default function DayCalculation() {
                     <td className="text-orange-600">{totals.el}</td>
                     <td className="text-red-600">{totals.lop.toFixed(1)}</td>
                     <td className="bg-blue-100 text-blue-700">{totals.payable.toFixed(1)}</td>
-                    <td />
+                    <td className={clsx(totals.extraDuty > 0 ? 'bg-cyan-100 text-cyan-700' : 'text-slate-300')}>{totals.extraDuty > 0 ? totals.extraDuty.toFixed(1) : '—'}</td>
                   </tr>
                 </tfoot>
               </table>
@@ -427,11 +359,11 @@ export default function DayCalculation() {
         {rawCalcs.length > 0 && (
           <div className="card p-5">
             <h3 className="text-sm font-bold text-slate-700 mb-3">How Day Calculation Works</h3>
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-xs text-slate-600">
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 text-xs text-slate-600">
               <div>
                 <p className="font-semibold text-slate-700 mb-1">Working Days</p>
                 <p>Working Days = Calendar Days − Sundays − Holidays</p>
-                <p className="text-slate-500 mt-1">Sundays and holidays are <strong>never</strong> counted as absent. They are handled separately through the Sunday granting system.</p>
+                <p className="text-slate-500 mt-1">Sundays and holidays are <strong>never</strong> counted as absent.</p>
               </div>
               <div>
                 <p className="font-semibold text-slate-700 mb-1">Sunday Granting Rules</p>
@@ -439,18 +371,28 @@ export default function DayCalculation() {
                 <ul className="list-disc list-inside mt-1 space-y-0.5">
                   <li><strong>6 days</strong> → Free paid Sunday</li>
                   <li><strong>4–5 days</strong> → Paid Sunday but CL/EL deducted for gap</li>
-                  <li><strong>&lt;4 days</strong> → Unpaid Sunday (no pay, no leave deduction)</li>
+                  <li><strong>&lt;4 days</strong> → Unpaid Sunday</li>
                 </ul>
               </div>
               <div>
                 <p className="font-semibold text-slate-700 mb-1">Payable Days Formula</p>
-                <p>Payable = Present + (½Days × 0.5) + Paid Sundays + Holidays + CL + EL</p>
-                <p className="text-slate-500 mt-1">LOP = Absent days that could not be covered by CL/EL.</p>
+                <p>Payable = Present + ½Days + Paid Sundays + Holidays − LOP</p>
+                <p className="text-slate-500 mt-1">LOP = absent days not covered by CL/EL.</p>
+              </div>
+              <div>
+                <p className="font-semibold text-cyan-700 mb-1">🌟 Extra Duty</p>
+                <p>If <strong>Payable Days &gt; Calendar Days</strong> ({daysInMonth} for {monthNames[selectedMonth]}), the excess is Extra Duty.</p>
+                <p className="text-slate-500 mt-1">Happens when employee works on weekly offs (WOP) resulting in more payable days than the month has.</p>
               </div>
               <div>
                 <p className="font-semibold text-slate-700 mb-1">Row Highlights</p>
-                <p className="flex items-center gap-2"><span className="w-3 h-3 rounded bg-red-100 border border-red-200" /> 0-day employees (no attendance at all)</p>
-                <p className="flex items-center gap-2 mt-1"><span className="w-3 h-3 rounded bg-amber-100 border border-amber-200" /> Employees with LOP days</p>
+                <p className="flex items-center gap-2"><span className="w-3 h-3 rounded bg-red-100 border border-red-200" /> 0-day employees</p>
+                <p className="flex items-center gap-2 mt-1"><span className="w-3 h-3 rounded bg-amber-100 border border-amber-200" /> Employees with LOP</p>
+                <p className="flex items-center gap-2 mt-1"><span className="w-3 h-3 rounded bg-cyan-100 border border-cyan-200" /> Extra duty employees</p>
+              </div>
+              <div>
+                <p className="font-semibold text-slate-700 mb-1">Left Employees</p>
+                <p className="text-slate-500">Employees marked as "Left" are automatically excluded from day calculations and salary processing.</p>
               </div>
             </div>
           </div>
@@ -458,6 +400,196 @@ export default function DayCalculation() {
 
         <AbbreviationLegend keys={['P', 'A', '½P', 'WO', 'WOP', 'CL', 'EL', 'SL', 'LOP', 'LWP', 'OT', 'PF', 'ESI', 'PT', 'Dept', 'Att', 'Hrs']} />
       </div>
+    </div>
+  )
+}
+
+/* ─── Drill-Down Content ─────────────────────────────────────────── */
+
+function DrillDownContent({ r, selectedMonth, selectedYear, daysInMonth, lateDeductionMutation }) {
+  const hasExtraDuty = (r.extra_duty_days || 0) > 0
+
+  // Parse week breakdown
+  let weeks = []
+  try {
+    weeks = typeof r.week_breakdown === 'string' ? JSON.parse(r.week_breakdown) : (r.week_breakdown || [])
+  } catch (e) { weeks = [] }
+
+  return (
+    <div className="space-y-4">
+      {/* ─── Top Summary Bar ─── */}
+      <div className="flex flex-wrap gap-2">
+        <DaySummaryBox label="Calendar" value={r.total_calendar_days} color="slate" subtext={`${r.total_sundays} Sun`} />
+        <DaySummaryBox label="Working" value={r.total_working_days || (r.total_calendar_days - r.total_sundays - (r.paid_holidays || 0))} color="slate" />
+        <DaySummaryBox label="Present" value={r.days_present} color="green" subtext={r.days_half_present > 0 ? `+${r.days_half_present} half` : ''} />
+        <DaySummaryBox label="WOP" value={r.days_wop || 0} color="cyan" subtext="Weekly off worked" />
+        <DaySummaryBox label="Absent" value={r.days_absent} color="red" />
+        <DaySummaryBox label="Paid Sun" value={r.paid_sundays} color="indigo" subtext={r.unpaid_sundays > 0 ? `${r.unpaid_sundays} unpaid` : 'All paid'} />
+        <DaySummaryBox label="Holidays" value={r.paid_holidays} color="purple" />
+        <DaySummaryBox label="CL Used" value={r.cl_used || 0} color="orange" />
+        <DaySummaryBox label="EL Used" value={r.el_used || 0} color="orange" />
+        <DaySummaryBox label="LOP" value={r.lop_days || 0} color={r.lop_days > 0 ? 'red' : 'slate'} />
+        <DaySummaryBox label="Late" value={r.late_count || 0} color={(r.late_count || 0) >= 5 ? 'red' : 'amber'} subtext={r.late_deduction_days > 0 ? `-${r.late_deduction_days}d ded.` : ''} />
+        <DaySummaryBox label="OT Hours" value={(r.ot_hours || 0).toFixed(1)} color="blue" subtext={`${(r.ot_days || 0).toFixed(1)} OT days`} />
+        <DaySummaryBox label="Payable" value={r.total_payable_days} color="blue" subtext={`of ${daysInMonth} days`} />
+        {hasExtraDuty && (
+          <DaySummaryBox label="Extra Duty" value={r.extra_duty_days} color="cyan" subtext={`${r.total_payable_days} > ${daysInMonth}`} />
+        )}
+        {r.gross_salary > 0 && (
+          <DaySummaryBox label="Gross Salary" value={`₹${(r.gross_salary || 0).toLocaleString('en-IN')}`} color="emerald" subtext={`₹${Math.round((r.gross_salary || 0) / 26).toLocaleString('en-IN')}/day`} />
+        )}
+      </div>
+
+      {/* ─── Extra Duty Alert ─── */}
+      {hasExtraDuty && (
+        <div className="p-3 bg-cyan-50 border border-cyan-200 rounded-lg">
+          <p className="text-sm font-semibold text-cyan-800">
+            🌟 Extra Duty: {r.extra_duty_days} day(s)
+          </p>
+          <p className="text-xs text-cyan-600 mt-1">
+            This employee has {r.total_payable_days} payable days in a {daysInMonth}-day month.
+            The {r.extra_duty_days} extra day(s) are from working on weekly offs (WOP: {r.days_wop || 0} days).
+            Extra duty may qualify for additional compensation.
+          </p>
+        </div>
+      )}
+
+      {/* ─── Employee Quick View + Week Breakdown ─── */}
+      <EmployeeQuickView
+        employeeCode={r.employee_code}
+        contextContent={
+          <div className="space-y-4">
+            {/* Payable Days Formula */}
+            <div className="p-3 bg-slate-50 border border-slate-200 rounded-lg">
+              <p className="text-xs font-semibold text-slate-700 mb-2">📊 Payable Days Calculation:</p>
+              <div className="text-xs text-slate-600 font-mono space-y-1">
+                <div className="flex justify-between">
+                  <span>Full Present Days</span><span className="font-bold text-green-700">{r.days_present}</span>
+                </div>
+                {(r.days_half_present || 0) > 0 && (
+                  <div className="flex justify-between">
+                    <span>+ Half Days (×0.5)</span><span>{r.days_half_present}</span>
+                  </div>
+                )}
+                <div className="flex justify-between">
+                  <span>+ Paid Sundays</span><span className="text-indigo-600">{r.paid_sundays}</span>
+                </div>
+                {(r.paid_holidays || 0) > 0 && (
+                  <div className="flex justify-between">
+                    <span>+ Paid Holidays</span><span className="text-purple-600">{r.paid_holidays}</span>
+                  </div>
+                )}
+                {(r.lop_days || 0) > 0 && (
+                  <div className="flex justify-between text-red-600">
+                    <span>− LOP Days</span><span>{r.lop_days}</span>
+                  </div>
+                )}
+                {(r.late_deduction_days || 0) > 0 && (
+                  <div className="flex justify-between text-red-600">
+                    <span>− Late Deduction</span><span>{r.late_deduction_days}</span>
+                  </div>
+                )}
+                <div className="border-t border-slate-300 pt-1 flex justify-between font-bold text-blue-700">
+                  <span>= Total Payable</span><span>{r.total_payable_days} days</span>
+                </div>
+                {hasExtraDuty && (
+                  <div className="flex justify-between font-bold text-cyan-700 mt-1">
+                    <span>→ Extra Duty ({r.total_payable_days} − {daysInMonth})</span><span>{r.extra_duty_days} days</span>
+                  </div>
+                )}
+              </div>
+            </div>
+
+            {/* Week Breakdown */}
+            {weeks.length > 0 && (
+              <div>
+                <p className="text-xs font-semibold text-slate-600 mb-2">📅 Week-by-Week Sunday Granting:</p>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+                  {weeks.map((w, i) => (
+                    <div key={i} className={clsx(
+                      'rounded-lg p-2.5 text-xs border',
+                      w.sundayPaid ? 'bg-green-50 border-green-200' : 'bg-red-50 border-red-200'
+                    )}>
+                      <div className="flex items-center justify-between mb-1">
+                        <span className="font-semibold">Week {i + 1}: Sun {w.sundayDate?.slice(5)}</span>
+                        <span className={clsx('font-bold text-xs px-1.5 py-0.5 rounded', w.sundayPaid ? 'bg-green-200 text-green-800' : 'bg-red-200 text-red-800')}>
+                          {w.sundayPaid ? '✓ Paid' : '✗ Unpaid'}
+                        </span>
+                      </div>
+                      <div className="flex gap-3 text-slate-600">
+                        <span>Worked: <strong>{w.workedDays}/{w.availableDays}</strong></span>
+                        {w.clUsed > 0 && <span className="text-orange-600">CL: {w.clUsed}</span>}
+                        {w.elUsed > 0 && <span className="text-orange-600">EL: {w.elUsed}</span>}
+                        {w.lop > 0 && <span className="text-red-600">LOP: {w.lop}</span>}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* Daily Attendance Calendar */}
+            <div>
+              <p className="text-xs font-semibold text-slate-600 mb-2">📆 Daily Attendance Calendar:</p>
+              <CalendarView employeeCode={r.employee_code} month={selectedMonth} year={selectedYear} />
+            </div>
+          </div>
+        }
+      />
+
+      {/* ─── Late Deduction Panel ─── */}
+      {(r.late_count || 0) >= 5 && (
+        <div className="p-3 bg-amber-50 border border-amber-200 rounded-lg">
+          <p className="text-xs font-semibold text-amber-800 mb-2">
+            ⚠ This employee was late {r.late_count} times. Apply late deduction?
+          </p>
+          <div className="flex items-center gap-3">
+            <div>
+              <label className="label text-xs">Deduction (days)</label>
+              <input
+                type="number"
+                min="0"
+                max="5"
+                step="0.5"
+                defaultValue={r.late_deduction_days || 1}
+                id={`late-ded-${r.employee_code}`}
+                className="input w-20 text-xs"
+              />
+            </div>
+            <div className="flex-1">
+              <label className="label text-xs">Remark</label>
+              <input
+                type="text"
+                defaultValue={r.late_deduction_remark || `Late coming deduction for ${r.late_count} late arrivals`}
+                id={`late-remark-${r.employee_code}`}
+                className="input text-xs"
+                placeholder="Late deduction remark..."
+              />
+            </div>
+            <button
+              onClick={() => {
+                const days = parseFloat(document.getElementById(`late-ded-${r.employee_code}`).value) || 0
+                const remark = document.getElementById(`late-remark-${r.employee_code}`).value
+                lateDeductionMutation.mutate({ code: r.employee_code, deductionDays: days, remark })
+              }}
+              className="btn-primary text-xs mt-5"
+            >
+              Apply Deduction
+            </button>
+            {r.late_deduction_days > 0 && (
+              <button
+                onClick={() => lateDeductionMutation.mutate({ code: r.employee_code, deductionDays: 0, remark: '' })}
+                className="btn-secondary text-xs mt-5"
+              >
+                Remove
+              </button>
+            )}
+          </div>
+          {r.late_deduction_remark && (
+            <p className="text-xs text-amber-600 mt-1 italic">Current: {r.late_deduction_remark}</p>
+          )}
+        </div>
+      )}
     </div>
   )
 }

@@ -14,11 +14,14 @@ router.post('/calculate-days', (req, res) => {
 
   if (!month || !year) return res.status(400).json({ success: false, error: 'month and year required' });
 
+  // Get employee codes from attendance, but exclude employees marked as 'Left'
   const empCodes = db.prepare(`
-    SELECT DISTINCT employee_code
-    FROM attendance_processed
-    WHERE month = ? AND year = ? ${company ? 'AND company = ?' : ''}
-    AND is_night_out_only = 0
+    SELECT DISTINCT ap.employee_code
+    FROM attendance_processed ap
+    LEFT JOIN employees e ON ap.employee_code = e.code
+    WHERE ap.month = ? AND ap.year = ? ${company ? 'AND ap.company = ?' : ''}
+    AND ap.is_night_out_only = 0
+    AND (e.status IS NULL OR e.status != 'Left')
   `).all(...[month, year, company].filter(Boolean)).map(r => r.employee_code);
 
   const monthStr = String(month).padStart(2,'0');
@@ -103,9 +106,14 @@ router.get('/day-calculations', (req, res) => {
     SELECT dc.*,
       COALESCE(NULLIF(e.name, ''), ar_name.employee_name, dc.employee_code) as employee_name,
       COALESCE(NULLIF(e.department, ''), ar_name.department) as department,
-      e.designation
+      e.designation, e.status as employee_status,
+      e.date_of_joining, e.date_of_exit,
+      ss.gross_salary
     FROM day_calculations dc
     LEFT JOIN employees e ON dc.employee_code = e.code
+    LEFT JOIN salary_structures ss ON ss.employee_id = e.id AND ss.id = (
+      SELECT id FROM salary_structures WHERE employee_id = e.id ORDER BY effective_from DESC LIMIT 1
+    )
     LEFT JOIN (
       SELECT employee_code, employee_name, department
       FROM attendance_raw
@@ -114,6 +122,7 @@ router.get('/day-calculations', (req, res) => {
     ) ar_name ON dc.employee_code = ar_name.employee_code
     WHERE dc.month = ? AND dc.year = ?
     ${company ? 'AND dc.company = ?' : ''}
+    AND (e.status IS NULL OR e.status != 'Left')
     ORDER BY department, employee_name
   `).all(...[month, year, company].filter(Boolean));
 
@@ -168,6 +177,7 @@ router.post('/compute-salary', (req, res) => {
     INNER JOIN day_calculations dc ON e.code = dc.employee_code
     WHERE dc.month = ? AND dc.year = ?
     ${company ? 'AND dc.company = ?' : ''}
+    AND (e.status IS NULL OR e.status != 'Left')
   `).all(...[month, year, company].filter(Boolean));
 
   const results = [];
@@ -247,6 +257,7 @@ router.get('/salary-register', (req, res) => {
     ) ar_name ON sc.employee_code = ar_name.employee_code
     WHERE sc.month = ? AND sc.year = ?
     ${company ? 'AND sc.company = ?' : ''}
+    AND (e.status IS NULL OR e.status != 'Left')
     ORDER BY department, employee_name
   `).all(...[month, year, company].filter(Boolean));
 

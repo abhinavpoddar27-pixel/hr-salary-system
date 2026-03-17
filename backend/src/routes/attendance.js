@@ -265,6 +265,7 @@ router.get('/monthly-summary', (req, res) => {
     FROM attendance_processed ap
     LEFT JOIN employees e ON ap.employee_code = e.code
     WHERE ap.month = ? AND ap.year = ?
+    AND (e.status IS NULL OR e.status != 'Left')
     GROUP BY ap.employee_code
     ORDER BY e.department, e.name
   `).all(month, year);

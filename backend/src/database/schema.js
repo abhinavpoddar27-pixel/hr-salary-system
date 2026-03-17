@@ -697,6 +697,9 @@ function initSchema(db) {
   safeAddColumn('day_calculations', 'late_deduction_days', 'REAL DEFAULT 0');
   safeAddColumn('day_calculations', 'late_deduction_remark', "TEXT DEFAULT ''");
 
+  // day_calculations: extra duty (payable > calendar days)
+  safeAddColumn('day_calculations', 'extra_duty_days', 'REAL DEFAULT 0');
+
   console.log('✅ Database schema initialized');
 }
 
