@@ -1,11 +1,18 @@
 const express = require('express');
 const router = express.Router();
 const { getDb } = require('../database/db');
-const { getDailySummary, getNightShiftReport, getDepartmentBreakdown } = require('../services/dailyMIS');
+const {
+  getDailySummary,
+  getNightShiftReport,
+  getDepartmentBreakdown,
+  getShiftWiseBreakdown,
+  getDepartmentTypeBreakdown,
+  getWorkerTypeBreakdown,
+} = require('../services/dailyMIS');
 
 /**
  * GET /api/daily-mis/summary
- * Get daily summary for a specific date (default: today)
+ * Enhanced daily summary with shift/dept-type/worker-type breakdowns
  */
 router.get('/summary', (req, res) => {
   const db = getDb();
@@ -13,13 +20,21 @@ router.get('/summary', (req, res) => {
 
   const summary = getDailySummary(db, date);
   const departments = getDepartmentBreakdown(db, date);
+  const deptTypeBreakdown = getDepartmentTypeBreakdown(db, date);
 
-  res.json({ success: true, data: { ...summary, departments } });
+  res.json({
+    success: true,
+    data: {
+      ...summary,
+      departments,
+      deptTypeBreakdown,
+    },
+  });
 });
 
 /**
  * GET /api/daily-mis/night-shift
- * Get previous night shift report
+ * Previous night shift report with classification
  */
 router.get('/night-shift', (req, res) => {
   const db = getDb();
@@ -30,8 +45,32 @@ router.get('/night-shift', (req, res) => {
 });
 
 /**
+ * GET /api/daily-mis/shift-breakdown
+ * Detailed day-shift vs night-shift breakdown
+ */
+router.get('/shift-breakdown', (req, res) => {
+  const db = getDb();
+  const date = req.query.date || new Date().toISOString().split('T')[0];
+
+  const breakdown = getShiftWiseBreakdown(db, date);
+  res.json({ success: true, data: breakdown });
+});
+
+/**
+ * GET /api/daily-mis/worker-breakdown
+ * Permanent vs contractor breakdown with department details
+ */
+router.get('/worker-breakdown', (req, res) => {
+  const db = getDb();
+  const date = req.query.date || new Date().toISOString().split('T')[0];
+
+  const breakdown = getWorkerTypeBreakdown(db, date);
+  res.json({ success: true, data: breakdown });
+});
+
+/**
  * GET /api/daily-mis/punched-in
- * Get currently punched-in employees (no out time)
+ * Currently punched-in employees (no out time)
  */
 router.get('/punched-in', (req, res) => {
   const db = getDb();
@@ -54,13 +93,12 @@ router.get('/punched-in', (req, res) => {
 
 /**
  * GET /api/daily-mis/absentees
- * Get absentees for a date
+ * Absentees for a date
  */
 router.get('/absentees', (req, res) => {
   const db = getDb();
   const date = req.query.date || new Date().toISOString().split('T')[0];
 
-  // Get all active employees
   const allEmployees = db.prepare(`
     SELECT code, name, department, designation FROM employees
     WHERE status != 'Inactive'
@@ -68,15 +106,13 @@ router.get('/absentees', (req, res) => {
     AND (date_of_exit IS NULL OR date_of_exit >= ?)
   `).all(date, date);
 
-  // Get employees with attendance today
   const presentCodes = new Set(
     db.prepare(`
       SELECT DISTINCT employee_code FROM attendance_processed
-      WHERE date = ? AND status IN ('P', '½P', 'WOP') AND is_night_out_only = 0
+      WHERE date = ? AND status IN ('P', '\u00bdP', 'WOP') AND is_night_out_only = 0
     `).all(date).map(r => r.employee_code)
   );
 
-  // Check if it's a Sunday or holiday
   const dayOfWeek = new Date(date + 'T12:00:00').getDay();
   const isSunday = dayOfWeek === 0;
   const isHoliday = !!db.prepare('SELECT id FROM holidays WHERE date = ?').get(date);
@@ -90,13 +126,13 @@ router.get('/absentees', (req, res) => {
     data: absentees,
     count: absentees.length,
     isSunday,
-    isHoliday
+    isHoliday,
   });
 });
 
 /**
  * GET /api/daily-mis/dates
- * Get dates with available attendance data
+ * Dates with available attendance data
  */
 router.get('/dates', (req, res) => {
   const db = getDb();

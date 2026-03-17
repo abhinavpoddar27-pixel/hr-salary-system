@@ -20,6 +20,17 @@ function isContractorDept(deptName) {
   return CONTRACTOR_KEYWORDS.some(k => upper.includes(k));
 }
 
+/**
+ * Build a WHERE clause for date filtering.
+ * Supports either month/year or startDate/endDate range.
+ */
+function dateClause(month, year, startDate, endDate) {
+  if (startDate && endDate) {
+    return { clause: 'ap.date >= ? AND ap.date <= ?', args: [startDate, endDate] };
+  }
+  return { clause: 'ap.month = ? AND ap.year = ?', args: [month, year] };
+}
+
 function isPermanentDept(deptName) {
   if (!deptName) return false;
   return PERMANENT_DEPTS.some(p => p.toUpperCase() === deptName.toUpperCase());
@@ -29,16 +40,17 @@ function isPermanentDept(deptName) {
  * Compute organisation overview for a given month
  * Only counts ACTIVE employees (excludes Inactive/Exited)
  */
-function computeOrgOverview(db, month, year) {
+function computeOrgOverview(db, month, year, startDate, endDate) {
   // Get all processed records for this month — only active employees
+  const dc = dateClause(month, year, startDate, endDate);
   const records = db.prepare(`
     SELECT ap.*, e.department, e.company, e.employment_type, e.contractor_group
     FROM attendance_processed ap
     LEFT JOIN employees e ON ap.employee_code = e.code
-    WHERE ap.month = ? AND ap.year = ?
+    WHERE ${dc.clause}
     AND ap.is_night_out_only = 0
     AND (e.status IS NULL OR e.status NOT IN ('Inactive', 'Exited'))
-  `).all(month, year);
+  `).all(...dc.args);
 
   if (records.length === 0) return null;
 
@@ -125,10 +137,24 @@ function computeOrgOverview(db, month, year) {
   })).sort((a, b) => b.headcount - a.headcount);
 
   // Salary outflow
-  const salaryData = db.prepare(`
-    SELECT SUM(net_salary) as total, SUM(gross_earned) as gross
-    FROM salary_computations WHERE month = ? AND year = ?
-  `).get(month, year);
+  let salaryData;
+  if (startDate && endDate) {
+    salaryData = db.prepare(`
+      SELECT SUM(net_salary) as total, SUM(gross_earned) as gross
+      FROM salary_computations sc
+      WHERE EXISTS (
+        SELECT 1 FROM attendance_processed ap2
+        WHERE ap2.employee_code = sc.employee_code
+        AND ap2.date >= ? AND ap2.date <= ?
+        AND sc.month = ap2.month AND sc.year = ap2.year
+      )
+    `).get(startDate, endDate);
+  } else {
+    salaryData = db.prepare(`
+      SELECT SUM(net_salary) as total, SUM(gross_earned) as gross
+      FROM salary_computations WHERE month = ? AND year = ?
+    `).get(month, year);
+  }
 
   // Total present / absent day counts
   let totalPresentDays = 0, totalAbsentDays = 0;
@@ -342,15 +368,16 @@ function computeAttrition(db, month, year) {
 /**
  * Compute chronic absenteeism report
  */
-function computeChronicAbsentees(db, month, year) {
+function computeChronicAbsentees(db, month, year, startDate, endDate) {
   // Get attendance rates for active employees this month
+  const dc = dateClause(month, year, startDate, endDate);
   const records = db.prepare(`
     SELECT ap.employee_code, ap.status_final, ap.status_original, ap.date
     FROM attendance_processed ap
     LEFT JOIN employees e ON ap.employee_code = e.code
-    WHERE ap.month = ? AND ap.year = ? AND ap.is_night_out_only = 0
+    WHERE ${dc.clause} AND ap.is_night_out_only = 0
     AND (e.status IS NULL OR e.status NOT IN ('Inactive', 'Exited'))
-  `).all(month, year);
+  `).all(...dc.args);
 
   const byEmp = {};
   for (const r of records) {
@@ -386,16 +413,17 @@ function computeChronicAbsentees(db, month, year) {
 /**
  * Compute punctuality analysis
  */
-function computePunctualityReport(db, month, year) {
+function computePunctualityReport(db, month, year, startDate, endDate) {
+  const dc = dateClause(month, year, startDate, endDate);
   const records = db.prepare(`
     SELECT ap.employee_code, ap.is_late_arrival, ap.late_by_minutes, ap.date,
            e.name, e.department, e.company
     FROM attendance_processed ap
     LEFT JOIN employees e ON ap.employee_code = e.code
-    WHERE ap.month = ? AND ap.year = ? AND ap.is_night_out_only = 0
+    WHERE ${dc.clause} AND ap.is_night_out_only = 0
     AND (ap.status_final IN ('P','WOP') OR ap.status_original IN ('P','WOP'))
     AND (e.status IS NULL OR e.status NOT IN ('Inactive', 'Exited'))
-  `).all(month, year);
+  `).all(...dc.args);
 
   const byEmp = {};
   for (const r of records) {
@@ -521,16 +549,17 @@ function generateAlerts(db, month, year) {
 /**
  * Compute overtime analysis
  */
-function computeOvertimeReport(db, month, year) {
+function computeOvertimeReport(db, month, year, startDate, endDate) {
+  const dc = dateClause(month, year, startDate, endDate);
   const records = db.prepare(`
     SELECT ap.employee_code, ap.overtime_minutes, ap.actual_hours, ap.date,
            e.name, e.department, e.company
     FROM attendance_processed ap
     LEFT JOIN employees e ON ap.employee_code = e.code
-    WHERE ap.month = ? AND ap.year = ? AND ap.is_night_out_only = 0
+    WHERE ${dc.clause} AND ap.is_night_out_only = 0
     AND ap.overtime_minutes > 0
     AND (e.status IS NULL OR e.status NOT IN ('Inactive', 'Exited'))
-  `).all(month, year);
+  `).all(...dc.args);
 
   const byEmp = {};
   for (const r of records) {
@@ -584,16 +613,17 @@ function computeOvertimeReport(db, month, year) {
 /**
  * Compute working hours distribution
  */
-function computeWorkingHoursReport(db, month, year) {
+function computeWorkingHoursReport(db, month, year, startDate, endDate) {
+  const dc = dateClause(month, year, startDate, endDate);
   const records = db.prepare(`
     SELECT ap.employee_code, ap.actual_hours, ap.date,
            e.name, e.department
     FROM attendance_processed ap
     LEFT JOIN employees e ON ap.employee_code = e.code
-    WHERE ap.month = ? AND ap.year = ? AND ap.is_night_out_only = 0
+    WHERE ${dc.clause} AND ap.is_night_out_only = 0
     AND ap.actual_hours > 0
     AND (e.status IS NULL OR e.status NOT IN ('Inactive', 'Exited'))
-  `).all(month, year);
+  `).all(...dc.args);
 
   // Histogram buckets
   const buckets = { '<6h': 0, '6-7h': 0, '7-8h': 0, '8-9h': 0, '9-10h': 0, '10-11h': 0, '11-12h': 0, '>12h': 0 };
@@ -638,14 +668,15 @@ function computeWorkingHoursReport(db, month, year) {
 /**
  * Department deep-dive: employee-level stats for a specific department
  */
-function computeDepartmentDeepDive(db, department, month, year) {
+function computeDepartmentDeepDive(db, department, month, year, startDate, endDate) {
+  const dc = dateClause(month, year, startDate, endDate);
   const records = db.prepare(`
     SELECT ap.*, e.name, e.department, e.designation
     FROM attendance_processed ap
     LEFT JOIN employees e ON ap.employee_code = e.code
-    WHERE ap.month = ? AND ap.year = ? AND ap.is_night_out_only = 0
+    WHERE ${dc.clause} AND ap.is_night_out_only = 0
     AND e.department = ?
-  `).all(month, year, department);
+  `).all(...dc.args, department);
 
   if (records.length === 0) return { department, employees: [] };
 

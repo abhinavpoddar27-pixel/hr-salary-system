@@ -273,7 +273,7 @@ export default function DayCalculation() {
                                 {expandedRow === r.id ? '▲' : '▼'}
                               </button>
                               <button
-                                onClick={() => setCalendarEmployee({ code: r.employee_code, name: r.employee_name || r.employee_code })}
+                                onClick={(e) => { e.stopPropagation(); setCalendarEmployee({ code: r.employee_code, name: r.employee_name || r.employee_code }); }}
                                 className="btn-ghost text-xs px-1.5 py-0.5 text-blue-600"
                                 title="Daily attendance calendar"
                               >

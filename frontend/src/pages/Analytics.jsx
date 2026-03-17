@@ -80,21 +80,25 @@ const TABS = [
 // OVERVIEW TAB
 // ═══════════════════════════════════════════════════════════
 function OverviewTab() {
-  const { selectedMonth, selectedYear } = useAppStore()
+  const { selectedMonth, selectedYear, dateRangeMode, dateRangeStart, dateRangeEnd } = useAppStore()
   const [expandedDept, setExpandedDept] = useState(null)
   const empExpand = useExpandableRows()
   const sort = useSortable('headcount', 'desc')
 
   const { data: overviewRes, isLoading } = useQuery({
-    queryKey: ['org-overview', selectedMonth, selectedYear],
-    queryFn: () => getOrgOverview(selectedMonth, selectedYear),
+    queryKey: ['org-overview', selectedMonth, selectedYear, dateRangeMode, dateRangeStart, dateRangeEnd],
+    queryFn: () => dateRangeMode === 'custom' && dateRangeStart && dateRangeEnd
+      ? getOrgOverview(null, null, dateRangeStart, dateRangeEnd)
+      : getOrgOverview(selectedMonth, selectedYear),
     retry: 0
   })
   const overview = overviewRes?.data?.data || {}
 
   const { data: deptRes } = useQuery({
-    queryKey: ['dept-deepdive', expandedDept, selectedMonth, selectedYear],
-    queryFn: () => getDepartmentDeepDive(expandedDept, selectedMonth, selectedYear),
+    queryKey: ['dept-deepdive', expandedDept, selectedMonth, selectedYear, dateRangeMode, dateRangeStart, dateRangeEnd],
+    queryFn: () => dateRangeMode === 'custom' && dateRangeStart && dateRangeEnd
+      ? getDepartmentDeepDive(expandedDept, null, null, dateRangeStart, dateRangeEnd)
+      : getDepartmentDeepDive(expandedDept, selectedMonth, selectedYear),
     enabled: !!expandedDept,
     retry: 0
   })
@@ -114,6 +118,11 @@ function OverviewTab() {
 
   return (
     <div className="space-y-5">
+      {dateRangeMode === 'custom' && dateRangeStart && dateRangeEnd && (
+        <div className="bg-blue-50 border border-blue-200 rounded-lg px-3 py-2 text-xs text-blue-700">
+          📅 Showing data for custom range: <strong>{new Date(dateRangeStart + 'T12:00:00').toLocaleDateString('en-IN', {day: '2-digit', month: 'short', year: 'numeric'})}</strong> to <strong>{new Date(dateRangeEnd + 'T12:00:00').toLocaleDateString('en-IN', {day: '2-digit', month: 'short', year: 'numeric'})}</strong>
+        </div>
+      )}
       {isLoading && <div className="text-center py-8 text-slate-400">Loading analytics...</div>}
       <div className="grid grid-cols-2 lg:grid-cols-6 gap-3">
         <KPI icon="👥" label="Active Employees" value={overview.totalHeadcount || 0} sub={`${overview.permanentCount || 0} perm / ${overview.contractorCount || 0} cont`} color="blue" />
@@ -254,13 +263,15 @@ function OverviewTab() {
 // ABSENTEEISM TAB
 // ═══════════════════════════════════════════════════════════
 function AbsenteeismTab() {
-  const { selectedMonth, selectedYear } = useAppStore()
+  const { selectedMonth, selectedYear, dateRangeMode, dateRangeStart, dateRangeEnd } = useAppStore()
   const { toggle, isExpanded } = useExpandableRows()
   const sort = useSortable('attendanceRate', 'asc')
 
   const { data: res, isLoading } = useQuery({
-    queryKey: ['chronic-absentees', selectedMonth, selectedYear],
-    queryFn: () => getChronicAbsentees(selectedMonth, selectedYear),
+    queryKey: ['chronic-absentees', selectedMonth, selectedYear, dateRangeMode, dateRangeStart, dateRangeEnd],
+    queryFn: () => dateRangeMode === 'custom' && dateRangeStart && dateRangeEnd
+      ? getChronicAbsentees(null, null, dateRangeStart, dateRangeEnd)
+      : getChronicAbsentees(selectedMonth, selectedYear),
     retry: 0
   })
   const absentees = useMemo(() => [...(res?.data?.data || [])].sort(sort.sortFn), [res, sort.sortKey, sort.sortDir])
@@ -269,6 +280,11 @@ function AbsenteeismTab() {
 
   return (
     <div className="space-y-5">
+      {dateRangeMode === 'custom' && dateRangeStart && dateRangeEnd && (
+        <div className="bg-blue-50 border border-blue-200 rounded-lg px-3 py-2 text-xs text-blue-700">
+          📅 Showing data for custom range: <strong>{new Date(dateRangeStart + 'T12:00:00').toLocaleDateString('en-IN', {day: '2-digit', month: 'short', year: 'numeric'})}</strong> to <strong>{new Date(dateRangeEnd + 'T12:00:00').toLocaleDateString('en-IN', {day: '2-digit', month: 'short', year: 'numeric'})}</strong>
+        </div>
+      )}
       <div className="grid grid-cols-3 gap-3">
         <KPI icon="⚠️" label="Chronic Absentees" value={absentees.length} sub="<50% attendance" color="red" />
         <KPI icon="🔴" label="Critical" value={critical.length} sub="<25% attendance" color="red" />
@@ -339,15 +355,17 @@ function AbsenteeismTab() {
 // PUNCTUALITY TAB
 // ═══════════════════════════════════════════════════════════
 function PunctualityTab() {
-  const { selectedMonth, selectedYear } = useAppStore()
+  const { selectedMonth, selectedYear, dateRangeMode, dateRangeStart, dateRangeEnd } = useAppStore()
   const sort = useSortable('lateRate', 'desc')
   const deptSort = useSortable('lateRate', 'desc')
   const empExpand = useExpandableRows()
   const deptExpand = useExpandableRows()
 
   const { data: res, isLoading } = useQuery({
-    queryKey: ['punctuality', selectedMonth, selectedYear],
-    queryFn: () => getPunctualityReport(selectedMonth, selectedYear),
+    queryKey: ['punctuality', selectedMonth, selectedYear, dateRangeMode, dateRangeStart, dateRangeEnd],
+    queryFn: () => dateRangeMode === 'custom' && dateRangeStart && dateRangeEnd
+      ? getPunctualityReport(null, null, dateRangeStart, dateRangeEnd)
+      : getPunctualityReport(selectedMonth, selectedYear),
     retry: 0
   })
   const data = res?.data?.data || {}
@@ -360,6 +378,11 @@ function PunctualityTab() {
 
   return (
     <div className="space-y-5">
+      {dateRangeMode === 'custom' && dateRangeStart && dateRangeEnd && (
+        <div className="bg-blue-50 border border-blue-200 rounded-lg px-3 py-2 text-xs text-blue-700">
+          📅 Showing data for custom range: <strong>{new Date(dateRangeStart + 'T12:00:00').toLocaleDateString('en-IN', {day: '2-digit', month: 'short', year: 'numeric'})}</strong> to <strong>{new Date(dateRangeEnd + 'T12:00:00').toLocaleDateString('en-IN', {day: '2-digit', month: 'short', year: 'numeric'})}</strong>
+        </div>
+      )}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
         <KPI icon="⏰" label="Habitual Latecomers" value={habituals.length} sub="Late >=50% of days" color="red" />
         <KPI icon="⏳" label="Avg Late" value={`${avgLateMin} min`} color="amber" />
@@ -480,15 +503,17 @@ function PunctualityTab() {
 // OVERTIME TAB
 // ═══════════════════════════════════════════════════════════
 function OvertimeTab() {
-  const { selectedMonth, selectedYear } = useAppStore()
+  const { selectedMonth, selectedYear, dateRangeMode, dateRangeStart, dateRangeEnd } = useAppStore()
   const sort = useSortable('totalOTMinutes', 'desc')
   const deptSort = useSortable('totalHours', 'desc')
   const empExpand = useExpandableRows()
   const deptExpand = useExpandableRows()
 
   const { data: res, isLoading } = useQuery({
-    queryKey: ['overtime-report', selectedMonth, selectedYear],
-    queryFn: () => getOvertimeReport(selectedMonth, selectedYear),
+    queryKey: ['overtime-report', selectedMonth, selectedYear, dateRangeMode, dateRangeStart, dateRangeEnd],
+    queryFn: () => dateRangeMode === 'custom' && dateRangeStart && dateRangeEnd
+      ? getOvertimeReport(null, null, dateRangeStart, dateRangeEnd)
+      : getOvertimeReport(selectedMonth, selectedYear),
     retry: 0
   })
   const data = res?.data?.data || {}
@@ -497,6 +522,11 @@ function OvertimeTab() {
 
   return (
     <div className="space-y-5">
+      {dateRangeMode === 'custom' && dateRangeStart && dateRangeEnd && (
+        <div className="bg-blue-50 border border-blue-200 rounded-lg px-3 py-2 text-xs text-blue-700">
+          📅 Showing data for custom range: <strong>{new Date(dateRangeStart + 'T12:00:00').toLocaleDateString('en-IN', {day: '2-digit', month: 'short', year: 'numeric'})}</strong> to <strong>{new Date(dateRangeEnd + 'T12:00:00').toLocaleDateString('en-IN', {day: '2-digit', month: 'short', year: 'numeric'})}</strong>
+        </div>
+      )}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
         <KPI icon="⏱" label="Total OT Hours" value={data.totalOTHours || 0} color="purple" />
         <KPI icon="👥" label="Employees with OT" value={data.employeesWithOT || 0} color="blue" />
@@ -615,15 +645,17 @@ function OvertimeTab() {
 // WORKING HOURS TAB
 // ═══════════════════════════════════════════════════════════
 function WorkingHoursTab() {
-  const { selectedMonth, selectedYear } = useAppStore()
+  const { selectedMonth, selectedYear, dateRangeMode, dateRangeStart, dateRangeEnd } = useAppStore()
   const topSort = useSortable('avgHours', 'desc')
   const lowSort = useSortable('avgHours', 'asc')
   const topExpand = useExpandableRows()
   const lowExpand = useExpandableRows()
 
   const { data: res, isLoading } = useQuery({
-    queryKey: ['working-hours', selectedMonth, selectedYear],
-    queryFn: () => getWorkingHoursReport(selectedMonth, selectedYear),
+    queryKey: ['working-hours', selectedMonth, selectedYear, dateRangeMode, dateRangeStart, dateRangeEnd],
+    queryFn: () => dateRangeMode === 'custom' && dateRangeStart && dateRangeEnd
+      ? getWorkingHoursReport(null, null, dateRangeStart, dateRangeEnd)
+      : getWorkingHoursReport(selectedMonth, selectedYear),
     retry: 0
   })
   const data = res?.data?.data || {}
@@ -633,6 +665,11 @@ function WorkingHoursTab() {
 
   return (
     <div className="space-y-5">
+      {dateRangeMode === 'custom' && dateRangeStart && dateRangeEnd && (
+        <div className="bg-blue-50 border border-blue-200 rounded-lg px-3 py-2 text-xs text-blue-700">
+          📅 Showing data for custom range: <strong>{new Date(dateRangeStart + 'T12:00:00').toLocaleDateString('en-IN', {day: '2-digit', month: 'short', year: 'numeric'})}</strong> to <strong>{new Date(dateRangeEnd + 'T12:00:00').toLocaleDateString('en-IN', {day: '2-digit', month: 'short', year: 'numeric'})}</strong>
+        </div>
+      )}
       <div className="grid grid-cols-2 lg:grid-cols-3 gap-3">
         <KPI icon="⏱" label="Avg Hours/Day" value={data.avgHoursPerDay || '—'} color="blue" />
         <KPI icon="📊" label="Total Records" value={(data.totalRecords || 0).toLocaleString()} color="green" />

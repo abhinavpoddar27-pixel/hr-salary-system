@@ -275,7 +275,7 @@ export default function SalaryComputation() {
                               Slip
                             </button>
                             <button
-                              onClick={() => setCalendarEmployee({ code: s.employee_code, name: s.employee_name || s.employee_code })}
+                              onClick={(e) => { e.stopPropagation(); setCalendarEmployee({ code: s.employee_code, name: s.employee_name || s.employee_code }); }}
                               className="btn-ghost text-xs px-1 text-blue-600" title="Calendar"
                             >
                               Cal

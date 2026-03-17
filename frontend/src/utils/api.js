@@ -88,19 +88,23 @@ export const getPayslip = (code, month, year) => api.get(`/payroll/payslip/${cod
 export const updateManualDeductions = (code, data) => api.put(`/payroll/salary/${code}/manual-deductions`, data)
 export const finaliseSalary = (data) => api.post('/payroll/finalise', data)
 
+// ── Daily MIS ────────────────────────────────────────
+export const getDailyShiftBreakdown = (date) => api.get('/daily-mis/shift-breakdown', { params: { date } })
+export const getDailyWorkerBreakdown = (date) => api.get('/daily-mis/worker-breakdown', { params: { date } })
+
 // ── Analytics ──────────────────────────────────────────
-export const getOrgOverview = (month, year) => api.get('/analytics/overview', { params: { month, year } })
+export const getOrgOverview = (month, year, startDate, endDate) => api.get('/analytics/overview', { params: { month, year, startDate, endDate } })
 export const getHeadcountTrend = (month, year, months) => api.get('/analytics/headcount-trend', { params: { month, year, months } })
 export const getAttritionData = (month, year) => api.get('/analytics/attrition', { params: { month, year } })
 export const getAttrition = (month, year) => api.get('/analytics/attrition', { params: { month, year } })
-export const getChronicAbsentees = (month, year) => api.get('/analytics/absentees', { params: { month, year } })
+export const getChronicAbsentees = (month, year, startDate, endDate) => api.get('/analytics/absentees', { params: { month, year, startDate, endDate } })
 export const getAbsentees = (month, year) => api.get('/analytics/absentees', { params: { month, year } })
-export const getPunctualityReport = (month, year) => api.get('/analytics/punctuality', { params: { month, year } })
+export const getPunctualityReport = (month, year, startDate, endDate) => api.get('/analytics/punctuality', { params: { month, year, startDate, endDate } })
 export const getDepartmentStats = (month, year) => api.get('/analytics/departments', { params: { month, year } })
-export const getAttendanceHeatmap = (month, year) => api.get('/analytics/heatmap', { params: { month, year } })
-export const getOvertimeReport = (month, year) => api.get('/analytics/overtime', { params: { month, year } })
-export const getWorkingHoursReport = (month, year) => api.get('/analytics/working-hours', { params: { month, year } })
-export const getDepartmentDeepDive = (dept, month, year) => api.get(`/analytics/department/${encodeURIComponent(dept)}`, { params: { month, year } })
+export const getAttendanceHeatmap = (month, year, startDate, endDate) => api.get('/analytics/heatmap', { params: { month, year, startDate, endDate } })
+export const getOvertimeReport = (month, year, startDate, endDate) => api.get('/analytics/overtime', { params: { month, year, startDate, endDate } })
+export const getWorkingHoursReport = (month, year, startDate, endDate) => api.get('/analytics/working-hours', { params: { month, year, startDate, endDate } })
+export const getDepartmentDeepDive = (dept, month, year, startDate, endDate) => api.get(`/analytics/department/${encodeURIComponent(dept)}`, { params: { month, year, startDate, endDate } })
 export const releaseHeldSalary = (code, month, year) => api.put(`/payroll/salary/${code}/hold-release`, { month, year })
 
 // ── Loans ────────────────────────────────────────────────

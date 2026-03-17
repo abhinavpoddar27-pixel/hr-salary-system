@@ -352,7 +352,7 @@ export default function ShiftVerification() {
                       <td className="font-mono text-sm">{r.actual_hours ? `${r.actual_hours.toFixed(1)}h` : '—'}</td>
                       <td>
                         <button
-                          onClick={() => setCalendarEmployee({ code: r.employee_code, name: r.employee_name || r.employee_code })}
+                          onClick={(e) => { e.stopPropagation(); setCalendarEmployee({ code: r.employee_code, name: r.employee_name || r.employee_code }); }}
                           className="btn-ghost text-xs px-2 py-1 text-blue-600"
                           title="View daily attendance"
                         >

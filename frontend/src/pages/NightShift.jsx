@@ -191,7 +191,7 @@ export default function NightShift() {
                       </td>
                       <td>
                         <button
-                          onClick={() => setCalendarEmployee({ code: pair.employee_code, name: pair.employee_name || pair.employee_code })}
+                          onClick={(e) => { e.stopPropagation(); setCalendarEmployee({ code: pair.employee_code, name: pair.employee_name || pair.employee_code }); }}
                           className="btn-ghost text-xs px-2 py-1 text-blue-600"
                           title="View daily attendance"
                         >

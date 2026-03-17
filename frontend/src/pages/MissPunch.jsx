@@ -326,7 +326,7 @@ export default function MissPunch() {
                         </td>
                         <td>
                           <button
-                            onClick={() => setCalendarEmployee({ code: rec.employee_code, name: rec.employee_name || rec.employee_code })}
+                            onClick={(e) => { e.stopPropagation(); setCalendarEmployee({ code: rec.employee_code, name: rec.employee_name || rec.employee_code }); }}
                             className="btn-ghost text-xs px-2 py-1 text-blue-600"
                             title="View daily attendance calendar"
                           >

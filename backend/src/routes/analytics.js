@@ -10,8 +10,8 @@ const {
 // GET org overview
 router.get('/overview', (req, res) => {
   const db = getDb();
-  const { month, year } = req.query;
-  const data = computeOrgOverview(db, parseInt(month), parseInt(year));
+  const { month, year, startDate, endDate } = req.query;
+  const data = computeOrgOverview(db, parseInt(month), parseInt(year), startDate, endDate);
   res.json({ success: true, data });
 });
 
@@ -47,16 +47,16 @@ router.get('/attrition', (req, res) => {
 // GET chronic absentees
 router.get('/absentees', (req, res) => {
   const db = getDb();
-  const { month, year } = req.query;
-  const data = computeChronicAbsentees(db, parseInt(month), parseInt(year));
+  const { month, year, startDate, endDate } = req.query;
+  const data = computeChronicAbsentees(db, parseInt(month), parseInt(year), startDate, endDate);
   res.json({ success: true, data });
 });
 
 // GET punctuality report
 router.get('/punctuality', (req, res) => {
   const db = getDb();
-  const { month, year } = req.query;
-  const data = computePunctualityReport(db, parseInt(month), parseInt(year));
+  const { month, year, startDate, endDate } = req.query;
+  const data = computePunctualityReport(db, parseInt(month), parseInt(year), startDate, endDate);
   res.json({ success: true, data });
 });
 
@@ -107,24 +107,24 @@ router.get('/departments', (req, res) => {
 // GET overtime report
 router.get('/overtime', (req, res) => {
   const db = getDb();
-  const { month, year } = req.query;
-  const data = computeOvertimeReport(db, parseInt(month), parseInt(year));
+  const { month, year, startDate, endDate } = req.query;
+  const data = computeOvertimeReport(db, parseInt(month), parseInt(year), startDate, endDate);
   res.json({ success: true, data });
 });
 
 // GET working hours distribution
 router.get('/working-hours', (req, res) => {
   const db = getDb();
-  const { month, year } = req.query;
-  const data = computeWorkingHoursReport(db, parseInt(month), parseInt(year));
+  const { month, year, startDate, endDate } = req.query;
+  const data = computeWorkingHoursReport(db, parseInt(month), parseInt(year), startDate, endDate);
   res.json({ success: true, data });
 });
 
 // GET department deep-dive
 router.get('/department/:name', (req, res) => {
   const db = getDb();
-  const { month, year } = req.query;
-  const data = computeDepartmentDeepDive(db, req.params.name, parseInt(month), parseInt(year));
+  const { month, year, startDate, endDate } = req.query;
+  const data = computeDepartmentDeepDive(db, req.params.name, parseInt(month), parseInt(year), startDate, endDate);
   res.json({ success: true, data });
 });
 
