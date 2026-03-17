@@ -320,10 +320,15 @@ function extractEmployees(records) {
     if (!empMap[r.employeeCode]) {
       empMap[r.employeeCode] = {
         code: r.employeeCode,
-        name: r.employeeName,
+        name: r.employeeName || r.employeeCode,
         department: r.department,
         company: r.company
       };
+    } else if (!empMap[r.employeeCode].name || empMap[r.employeeCode].name === empMap[r.employeeCode].code) {
+      // If we previously had no name, update if we find one now
+      if (r.employeeName && r.employeeName.trim()) {
+        empMap[r.employeeCode].name = r.employeeName;
+      }
     }
   }
   return Object.values(empMap);

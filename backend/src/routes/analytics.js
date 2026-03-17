@@ -9,259 +9,331 @@ const {
 
 // GET org overview
 router.get('/overview', (req, res) => {
-  const db = getDb();
-  const { month, year, startDate, endDate } = req.query;
-  const data = computeOrgOverview(db, parseInt(month), parseInt(year), startDate, endDate);
-  res.json({ success: true, data });
+  try {
+    const db = getDb();
+    const { month, year, startDate, endDate } = req.query;
+    const data = computeOrgOverview(db, parseInt(month), parseInt(year), startDate, endDate);
+    res.json({ success: true, data: data || {} });
+  } catch (err) {
+    console.error('Analytics overview error:', err.message);
+    res.status(500).json({ success: false, error: 'Failed to compute overview: ' + err.message });
+  }
 });
 
 // GET headcount trend (last 6 months)
 router.get('/headcount-trend', (req, res) => {
-  const db = getDb();
-  const { month, year, months: numMonths = 6 } = req.query;
+  try {
+    const db = getDb();
+    const { month, year, months: numMonths = 6 } = req.query;
 
-  const endMonth = parseInt(month);
-  const endYear = parseInt(year);
-  const monthsArray = [];
+    const endMonth = parseInt(month);
+    const endYear = parseInt(year);
+    if (isNaN(endMonth) || isNaN(endYear)) {
+      return res.json({ success: true, data: [] });
+    }
+    const monthsArray = [];
 
-  for (let i = parseInt(numMonths) - 1; i >= 0; i--) {
-    let m = endMonth - i;
-    let y = endYear;
-    while (m <= 0) { m += 12; y--; }
-    while (m > 12) { m -= 12; y++; }
-    monthsArray.push({ month: m, year: y });
+    for (let i = parseInt(numMonths) - 1; i >= 0; i--) {
+      let m = endMonth - i;
+      let y = endYear;
+      while (m <= 0) { m += 12; y--; }
+      while (m > 12) { m -= 12; y++; }
+      monthsArray.push({ month: m, year: y });
+    }
+
+    const trend = computeHeadcountTrend(db, monthsArray);
+    res.json({ success: true, data: trend });
+  } catch (err) {
+    console.error('Headcount trend error:', err.message);
+    res.status(500).json({ success: false, error: 'Failed to compute headcount trend: ' + err.message });
   }
-
-  const trend = computeHeadcountTrend(db, monthsArray);
-  res.json({ success: true, data: trend });
 });
 
 // GET attrition analysis
 router.get('/attrition', (req, res) => {
-  const db = getDb();
-  const { month, year } = req.query;
-  const data = computeAttrition(db, parseInt(month), parseInt(year));
-  res.json({ success: true, data });
+  try {
+    const db = getDb();
+    const { month, year } = req.query;
+    const data = computeAttrition(db, parseInt(month), parseInt(year));
+    res.json({ success: true, data });
+  } catch (err) {
+    console.error('Attrition error:', err.message);
+    res.status(500).json({ success: false, error: 'Failed to compute attrition: ' + err.message });
+  }
 });
 
 // GET chronic absentees
 router.get('/absentees', (req, res) => {
-  const db = getDb();
-  const { month, year, startDate, endDate } = req.query;
-  const data = computeChronicAbsentees(db, parseInt(month), parseInt(year), startDate, endDate);
-  res.json({ success: true, data });
+  try {
+    const db = getDb();
+    const { month, year, startDate, endDate } = req.query;
+    const data = computeChronicAbsentees(db, parseInt(month), parseInt(year), startDate, endDate);
+    res.json({ success: true, data: data || [] });
+  } catch (err) {
+    console.error('Absentees error:', err.message);
+    res.status(500).json({ success: false, error: 'Failed to compute absentees: ' + err.message });
+  }
 });
 
 // GET punctuality report
 router.get('/punctuality', (req, res) => {
-  const db = getDb();
-  const { month, year, startDate, endDate } = req.query;
-  const data = computePunctualityReport(db, parseInt(month), parseInt(year), startDate, endDate);
-  res.json({ success: true, data });
+  try {
+    const db = getDb();
+    const { month, year, startDate, endDate } = req.query;
+    const data = computePunctualityReport(db, parseInt(month), parseInt(year), startDate, endDate);
+    res.json({ success: true, data: data || {} });
+  } catch (err) {
+    console.error('Punctuality error:', err.message);
+    res.status(500).json({ success: false, error: 'Failed to compute punctuality report: ' + err.message });
+  }
 });
 
 // GET department stats
 router.get('/departments', (req, res) => {
-  const db = getDb();
-  const { month, year } = req.query;
+  try {
+    const db = getDb();
+    const { month, year } = req.query;
 
-  const records = db.prepare(`
-    SELECT ap.employee_code, ap.status_final, ap.status_original, ap.date,
-           ap.is_late_arrival, ap.late_by_minutes, ap.overtime_minutes, ap.actual_hours,
-           e.department, e.company
-    FROM attendance_processed ap
-    LEFT JOIN employees e ON ap.employee_code = e.code
-    WHERE ap.month = ? AND ap.year = ? AND ap.is_night_out_only = 0
-  `).all(month, year);
+    const records = db.prepare(`
+      SELECT ap.employee_code, ap.status_final, ap.status_original, ap.date,
+             ap.is_late_arrival, ap.late_by_minutes, ap.overtime_minutes, ap.actual_hours,
+             e.department, e.company
+      FROM attendance_processed ap
+      LEFT JOIN employees e ON ap.employee_code = e.code
+      WHERE ap.month = ? AND ap.year = ? AND ap.is_night_out_only = 0
+    `).all(month, year);
 
-  const deptMap = {};
-  for (const r of records) {
-    const dept = r.department || 'Unknown';
-    if (!deptMap[dept]) deptMap[dept] = { department: dept, employees: new Set(), totalDays: 0, presentDays: 0, lateDays: 0, otMinutes: 0, totalHours: 0, hoursCount: 0 };
-    deptMap[dept].employees.add(r.employee_code);
+    const deptMap = {};
+    for (const r of records) {
+      const dept = r.department || 'Unknown';
+      if (!deptMap[dept]) deptMap[dept] = { department: dept, employees: new Set(), totalDays: 0, presentDays: 0, lateDays: 0, otMinutes: 0, totalHours: 0, hoursCount: 0 };
+      deptMap[dept].employees.add(r.employee_code);
 
-    const dow = new Date(r.date + 'T12:00:00').getDay();
-    if (dow !== 0) {
-      deptMap[dept].totalDays++;
-      const status = r.status_final || r.status_original || '';
-      if (status === 'P' || status === 'WOP') deptMap[dept].presentDays += 1;
-      else if (status === '½P' || status === 'WO½P') deptMap[dept].presentDays += 0.5;
+      const dow = new Date(r.date + 'T12:00:00').getDay();
+      if (dow !== 0) {
+        deptMap[dept].totalDays++;
+        const status = r.status_final || r.status_original || '';
+        if (status === 'P' || status === 'WOP') deptMap[dept].presentDays += 1;
+        else if (status === '½P' || status === 'WO½P') deptMap[dept].presentDays += 0.5;
+      }
+      if (r.is_late_arrival) deptMap[dept].lateDays++;
+      if (r.overtime_minutes) deptMap[dept].otMinutes += r.overtime_minutes;
+      if (r.actual_hours) { deptMap[dept].totalHours += r.actual_hours; deptMap[dept].hoursCount++; }
     }
-    if (r.is_late_arrival) deptMap[dept].lateDays++;
-    if (r.overtime_minutes) deptMap[dept].otMinutes += r.overtime_minutes;
-    if (r.actual_hours) { deptMap[dept].totalHours += r.actual_hours; deptMap[dept].hoursCount++; }
+
+    const departments = Object.values(deptMap).map(d => ({
+      department: d.department,
+      headcount: d.employees.size,
+      attendanceRate: d.totalDays > 0 ? Math.round(d.presentDays / d.totalDays * 1000) / 10 : 0,
+      punctualityRate: d.totalDays > 0 ? Math.round((1 - d.lateDays / d.presentDays) * 1000) / 10 : 100,
+      avgHoursPerDay: d.hoursCount > 0 ? Math.round(d.totalHours / d.hoursCount * 100) / 100 : 0,
+      totalOtHours: Math.round(d.otMinutes / 60 * 10) / 10
+    })).sort((a, b) => b.headcount - a.headcount);
+
+    res.json({ success: true, data: departments });
+  } catch (err) {
+    console.error('Department stats error:', err.message);
+    res.status(500).json({ success: false, error: 'Failed to compute department stats: ' + err.message });
   }
-
-  const departments = Object.values(deptMap).map(d => ({
-    department: d.department,
-    headcount: d.employees.size,
-    attendanceRate: d.totalDays > 0 ? Math.round(d.presentDays / d.totalDays * 1000) / 10 : 0,
-    punctualityRate: d.totalDays > 0 ? Math.round((1 - d.lateDays / d.presentDays) * 1000) / 10 : 100,
-    avgHoursPerDay: d.hoursCount > 0 ? Math.round(d.totalHours / d.hoursCount * 100) / 100 : 0,
-    totalOtHours: Math.round(d.otMinutes / 60 * 10) / 10
-  })).sort((a, b) => b.headcount - a.headcount);
-
-  res.json({ success: true, data: departments });
 });
 
 // GET overtime report
 router.get('/overtime', (req, res) => {
-  const db = getDb();
-  const { month, year, startDate, endDate } = req.query;
-  const data = computeOvertimeReport(db, parseInt(month), parseInt(year), startDate, endDate);
-  res.json({ success: true, data });
+  try {
+    const db = getDb();
+    const { month, year, startDate, endDate } = req.query;
+    const data = computeOvertimeReport(db, parseInt(month), parseInt(year), startDate, endDate);
+    res.json({ success: true, data: data || {} });
+  } catch (err) {
+    console.error('Overtime report error:', err.message);
+    res.status(500).json({ success: false, error: 'Failed to compute overtime report: ' + err.message });
+  }
 });
 
 // GET working hours distribution
 router.get('/working-hours', (req, res) => {
-  const db = getDb();
-  const { month, year, startDate, endDate } = req.query;
-  const data = computeWorkingHoursReport(db, parseInt(month), parseInt(year), startDate, endDate);
-  res.json({ success: true, data });
+  try {
+    const db = getDb();
+    const { month, year, startDate, endDate } = req.query;
+    const data = computeWorkingHoursReport(db, parseInt(month), parseInt(year), startDate, endDate);
+    res.json({ success: true, data: data || {} });
+  } catch (err) {
+    console.error('Working hours error:', err.message);
+    res.status(500).json({ success: false, error: 'Failed to compute working hours report: ' + err.message });
+  }
 });
 
 // GET department deep-dive
 router.get('/department/:name', (req, res) => {
-  const db = getDb();
-  const { month, year, startDate, endDate } = req.query;
-  const data = computeDepartmentDeepDive(db, req.params.name, parseInt(month), parseInt(year), startDate, endDate);
-  res.json({ success: true, data });
+  try {
+    const db = getDb();
+    const { month, year, startDate, endDate } = req.query;
+    const data = computeDepartmentDeepDive(db, req.params.name, parseInt(month), parseInt(year), startDate, endDate);
+    res.json({ success: true, data: data || { department: req.params.name, employees: [] } });
+  } catch (err) {
+    console.error('Department deep-dive error:', err.message);
+    res.status(500).json({ success: false, error: 'Failed to compute department deep-dive: ' + err.message });
+  }
 });
 
 // GET attendance heatmap (employee × day for selected month)
 router.get('/heatmap', (req, res) => {
-  const db = getDb();
-  const { month, year } = req.query;
+  try {
+    const db = getDb();
+    const { month, year } = req.query;
 
-  if (!month || !year) {
-    return res.json({ success: true, data: { employees: [] } });
-  }
-
-  // Get all attendance records for the month
-  const records = db.prepare(`
-    SELECT ap.employee_code, e.name, ap.date, ap.is_night_out_only,
-           COALESCE(ap.status_final, ap.status_original, '') as status
-    FROM attendance_processed ap
-    LEFT JOIN employees e ON ap.employee_code = e.code
-    WHERE ap.month = ? AND ap.year = ?
-    ORDER BY e.department, e.name, ap.date
-  `).all(month, year);
-
-  // Group by employee
-  const empMap = {};
-  for (const r of records) {
-    if (r.is_night_out_only) continue;
-    if (!empMap[r.employee_code]) {
-      empMap[r.employee_code] = { code: r.employee_code, name: r.name || r.employee_code, days: [] };
+    if (!month || !year) {
+      return res.json({ success: true, data: { employees: [] } });
     }
-    const day = parseInt(r.date.split('-')[2]);
-    empMap[r.employee_code].days[day - 1] = { day, status: r.status };
-  }
 
-  const employees = Object.values(empMap);
-  res.json({ success: true, data: { employees } });
+    // Get all attendance records for the month
+    const records = db.prepare(`
+      SELECT ap.employee_code, e.name, ap.date, ap.is_night_out_only,
+             COALESCE(ap.status_final, ap.status_original, '') as status
+      FROM attendance_processed ap
+      LEFT JOIN employees e ON ap.employee_code = e.code
+      WHERE ap.month = ? AND ap.year = ?
+      ORDER BY e.department, e.name, ap.date
+    `).all(month, year);
+
+    // Group by employee
+    const empMap = {};
+    for (const r of records) {
+      if (r.is_night_out_only) continue;
+      if (!empMap[r.employee_code]) {
+        empMap[r.employee_code] = { code: r.employee_code, name: r.name || r.employee_code, days: [] };
+      }
+      const day = parseInt(r.date.split('-')[2]);
+      empMap[r.employee_code].days[day - 1] = { day, status: r.status };
+    }
+
+    const employees = Object.values(empMap);
+    res.json({ success: true, data: { employees } });
+  } catch (err) {
+    console.error('Heatmap error:', err.message);
+    res.status(500).json({ success: false, error: 'Failed to compute heatmap: ' + err.message });
+  }
 });
 
 // GET alerts
 router.get('/alerts', (req, res) => {
-  const db = getDb();
-  const { month, year, unread } = req.query;
+  try {
+    const db = getDb();
+    const { month, year, unread } = req.query;
 
-  let query = `SELECT a.*,
-    a.type as alert_type,
-    COALESCE(a.description, a.title) as message,
-    e.name as employee_name
-    FROM alerts a
-    LEFT JOIN employees e ON a.employee_code = e.code
-    WHERE 1=1`;
-  const params = [];
+    let query = `SELECT a.*,
+      a.type as alert_type,
+      COALESCE(a.description, a.title) as message,
+      e.name as employee_name
+      FROM alerts a
+      LEFT JOIN employees e ON a.employee_code = e.code
+      WHERE 1=1`;
+    const params = [];
 
-  if (month) { query += ' AND a.month = ?'; params.push(month); }
-  if (year) { query += ' AND a.year = ?'; params.push(year); }
-  if (unread === 'true') { query += ' AND a.is_read = 0'; }
+    if (month) { query += ' AND a.month = ?'; params.push(month); }
+    if (year) { query += ' AND a.year = ?'; params.push(year); }
+    if (unread === 'true') { query += ' AND a.is_read = 0'; }
 
-  query += ` ORDER BY CASE LOWER(a.severity)
-    WHEN 'critical' THEN 1 WHEN 'high' THEN 2 WHEN 'medium' THEN 3 WHEN 'low' THEN 4 ELSE 5
-    END, a.created_at DESC`;
+    query += ` ORDER BY CASE LOWER(a.severity)
+      WHEN 'critical' THEN 1 WHEN 'high' THEN 2 WHEN 'medium' THEN 3 WHEN 'low' THEN 4 ELSE 5
+      END, a.created_at DESC`;
 
-  const alerts = db.prepare(query).all(...params);
+    const alerts = db.prepare(query).all(...params);
 
-  const counts = {
-    total: alerts.length,
-    critical: alerts.filter(a => a.severity?.toLowerCase() === 'critical').length,
-    high: alerts.filter(a => a.severity?.toLowerCase() === 'high').length,
-    unread: alerts.filter(a => !a.is_read).length
-  };
+    const counts = {
+      total: alerts.length,
+      critical: alerts.filter(a => a.severity?.toLowerCase() === 'critical').length,
+      high: alerts.filter(a => a.severity?.toLowerCase() === 'high').length,
+      unread: alerts.filter(a => !a.is_read).length
+    };
 
-  res.json({ success: true, data: alerts, counts });
+    res.json({ success: true, data: alerts, counts });
+  } catch (err) {
+    console.error('Alerts error:', err.message);
+    res.status(500).json({ success: false, error: 'Failed to fetch alerts: ' + err.message });
+  }
 });
 
 // POST generate alerts for a month
 router.post('/alerts/generate', (req, res) => {
-  const db = getDb();
-  const { month, year } = req.body;
+  try {
+    const db = getDb();
+    const { month, year } = req.body;
 
-  const alerts = generateAlerts(db, parseInt(month), parseInt(year));
-  res.json({ success: true, count: alerts.length, alerts });
+    const alerts = generateAlerts(db, parseInt(month), parseInt(year));
+    res.json({ success: true, count: alerts.length, alerts });
+  } catch (err) {
+    console.error('Generate alerts error:', err.message);
+    res.status(500).json({ success: false, error: 'Failed to generate alerts: ' + err.message });
+  }
 });
 
 // PUT mark alert as read
 router.put('/alerts/:id/read', (req, res) => {
-  const db = getDb();
-  db.prepare('UPDATE alerts SET is_read = 1 WHERE id = ?').run(req.params.id);
-  res.json({ success: true });
+  try {
+    const db = getDb();
+    db.prepare('UPDATE alerts SET is_read = 1 WHERE id = ?').run(req.params.id);
+    res.json({ success: true });
+  } catch (err) {
+    console.error('Mark alert read error:', err.message);
+    res.status(500).json({ success: false, error: 'Failed to mark alert as read: ' + err.message });
+  }
 });
 
 // GET employee profile with historical data
 router.get('/employee/:code', (req, res) => {
-  const db = getDb();
-  const { code } = req.params;
+  try {
+    const db = getDb();
+    const { code } = req.params;
 
-  const employee = db.prepare('SELECT * FROM employees WHERE code = ?').get(code);
-  if (!employee) return res.status(404).json({ success: false, error: 'Employee not found' });
+    const employee = db.prepare('SELECT * FROM employees WHERE code = ?').get(code);
+    if (!employee) return res.status(404).json({ success: false, error: 'Employee not found' });
 
-  // Last 6 months attendance history
-  const history = db.prepare(`
-    SELECT month, year,
-      SUM(CASE WHEN is_night_out_only = 0 AND (status_final IN ('P','WOP') OR status_original IN ('P','WOP')) THEN 1.0
-               WHEN is_night_out_only = 0 AND (status_final IN ('½P','WO½P') OR status_original IN ('½P','WO½P')) THEN 0.5
-               ELSE 0 END) as present_days,
-      SUM(CASE WHEN is_night_out_only = 0 AND strftime('%w', date) != '0' THEN 1 ELSE 0 END) as working_days,
-      SUM(CASE WHEN is_late_arrival = 1 THEN 1 ELSE 0 END) as late_count,
-      AVG(CASE WHEN actual_hours > 0 THEN actual_hours END) as avg_hours
-    FROM attendance_processed
-    WHERE employee_code = ? AND is_night_out_only = 0
-    GROUP BY year, month
-    ORDER BY year DESC, month DESC
-    LIMIT 12
-  `).all(code);
+    // Last 6 months attendance history
+    const history = db.prepare(`
+      SELECT month, year,
+        SUM(CASE WHEN is_night_out_only = 0 AND (status_final IN ('P','WOP') OR status_original IN ('P','WOP')) THEN 1.0
+                 WHEN is_night_out_only = 0 AND (status_final IN ('½P','WO½P') OR status_original IN ('½P','WO½P')) THEN 0.5
+                 ELSE 0 END) as present_days,
+        SUM(CASE WHEN is_night_out_only = 0 AND strftime('%w', date) != '0' THEN 1 ELSE 0 END) as working_days,
+        SUM(CASE WHEN is_late_arrival = 1 THEN 1 ELSE 0 END) as late_count,
+        AVG(CASE WHEN actual_hours > 0 THEN actual_hours END) as avg_hours
+      FROM attendance_processed
+      WHERE employee_code = ? AND is_night_out_only = 0
+      GROUP BY year, month
+      ORDER BY year DESC, month DESC
+      LIMIT 12
+    `).all(code);
 
-  // Current month daily attendance
-  const now = new Date();
-  const attendance = db.prepare(`
-    SELECT date, status_final, status_original, in_time_final, out_time_final,
-           actual_hours, is_night_shift, is_late_arrival, late_by_minutes
-    FROM attendance_processed
-    WHERE employee_code = ? AND is_night_out_only = 0
-    ORDER BY date DESC LIMIT 60
-  `).all(code);
+    // Current month daily attendance
+    const attendance = db.prepare(`
+      SELECT date, status_final, status_original, in_time_final, out_time_final,
+             actual_hours, is_night_shift, is_late_arrival, late_by_minutes
+      FROM attendance_processed
+      WHERE employee_code = ? AND is_night_out_only = 0
+      ORDER BY date DESC LIMIT 60
+    `).all(code);
 
-  // Salary history
-  const salaryHistory = db.prepare(`
-    SELECT month, year, gross_earned, net_salary, total_deductions
-    FROM salary_computations WHERE employee_code = ?
-    ORDER BY year DESC, month DESC LIMIT 12
-  `).all(code);
+    // Salary history
+    const salaryHistory = db.prepare(`
+      SELECT month, year, gross_earned, net_salary, total_deductions
+      FROM salary_computations WHERE employee_code = ?
+      ORDER BY year DESC, month DESC LIMIT 12
+    `).all(code);
 
-  // Leave balances
-  const leaveBalances = db.prepare(`
-    SELECT * FROM leave_balances WHERE employee_id = ? ORDER BY year DESC
-  `).all(employee.id);
+    // Leave balances
+    const leaveBalances = db.prepare(`
+      SELECT * FROM leave_balances WHERE employee_id = ? ORDER BY year DESC
+    `).all(employee.id);
 
-  res.json({
-    success: true,
-    data: { employee, history, attendance, salaryHistory, leaveBalances }
-  });
+    res.json({
+      success: true,
+      data: { employee, history, attendance, salaryHistory, leaveBalances }
+    });
+  } catch (err) {
+    console.error('Employee profile error:', err.message);
+    res.status(500).json({ success: false, error: 'Failed to fetch employee profile: ' + err.message });
+  }
 });
 
 // ─────────────────────────────────────────────────────────
@@ -271,24 +343,29 @@ router.get('/employee/:code', (req, res) => {
 // Also auto-reactivate employees who have returned
 // ─────────────────────────────────────────────────────────
 router.post('/detect-inactive', (req, res) => {
-  const db = getDb();
-  const { month, year, inactiveDays = 14 } = req.body;
+  try {
+    const db = getDb();
+    const { month, year, inactiveDays = 14 } = req.body;
 
-  if (!month || !year) return res.status(400).json({ success: false, error: 'month and year required' });
+    if (!month || !year) return res.status(400).json({ success: false, error: 'month and year required' });
 
-  const m = parseInt(month);
-  const y = parseInt(year);
+    const m = parseInt(month);
+    const y = parseInt(year);
 
-  const result = runDetectLeftLogic(db, m, y, parseInt(inactiveDays));
+    const result = runDetectLeftLogic(db, m, y, parseInt(inactiveDays));
 
-  res.json({
-    success: true,
-    total: result.total,
-    markedLeft: result.markedLeft.length,
-    reactivated: result.reactivated.length,
-    markedLeftDetails: result.markedLeft,
-    reactivatedDetails: result.reactivated
-  });
+    res.json({
+      success: true,
+      total: result.total,
+      markedLeft: result.markedLeft.length,
+      reactivated: result.reactivated.length,
+      markedLeftDetails: result.markedLeft,
+      reactivatedDetails: result.reactivated
+    });
+  } catch (err) {
+    console.error('Detect inactive error:', err.message);
+    res.status(500).json({ success: false, error: 'Failed to detect inactive employees: ' + err.message });
+  }
 });
 
 // ─────────────────────────────────────────────────────────
@@ -296,26 +373,31 @@ router.post('/detect-inactive', (req, res) => {
 // Lighter version that auto-runs after import
 // ─────────────────────────────────────────────────────────
 router.post('/auto-detect-left', (req, res) => {
-  const db = getDb();
-  const { month, year } = req.body;
+  try {
+    const db = getDb();
+    const { month, year } = req.body;
 
-  if (!month || !year) return res.status(400).json({ success: false, error: 'month and year required' });
+    if (!month || !year) return res.status(400).json({ success: false, error: 'month and year required' });
 
-  const m = parseInt(month);
-  const y = parseInt(year);
+    const m = parseInt(month);
+    const y = parseInt(year);
 
-  const result = runDetectLeftLogic(db, m, y, 14);
+    const result = runDetectLeftLogic(db, m, y, 14);
 
-  res.json({
-    success: true,
-    summary: {
-      totalEmployees: result.total,
-      markedLeft: result.markedLeft.length,
-      reactivated: result.reactivated.length
-    },
-    markedLeft: result.markedLeft,
-    reactivated: result.reactivated
-  });
+    res.json({
+      success: true,
+      summary: {
+        totalEmployees: result.total,
+        markedLeft: result.markedLeft.length,
+        reactivated: result.reactivated.length
+      },
+      markedLeft: result.markedLeft,
+      reactivated: result.reactivated
+    });
+  } catch (err) {
+    console.error('Auto-detect left error:', err.message);
+    res.status(500).json({ success: false, error: 'Failed to auto-detect left employees: ' + err.message });
+  }
 });
 
 /**
@@ -421,30 +503,40 @@ function runDetectLeftLogic(db, m, y, inactiveDays) {
 // GET /api/analytics/inactive-employees
 // List all auto-detected inactive employees
 router.get('/inactive-employees', (req, res) => {
-  const db = getDb();
+  try {
+    const db = getDb();
 
-  const inactive = db.prepare(`
-    SELECT code, name, department, employment_type, status, inactive_since, auto_inactive, was_left_returned
-    FROM employees
-    WHERE status IN ('Inactive', 'Left') OR auto_inactive = 1
-    ORDER BY department, name
-  `).all();
+    const inactive = db.prepare(`
+      SELECT code, name, department, employment_type, status, inactive_since, auto_inactive, was_left_returned
+      FROM employees
+      WHERE status IN ('Inactive', 'Left') OR auto_inactive = 1
+      ORDER BY department, name
+    `).all();
 
-  res.json({ success: true, data: inactive, total: inactive.length });
+    res.json({ success: true, data: inactive, total: inactive.length });
+  } catch (err) {
+    console.error('Inactive employees error:', err.message);
+    res.status(500).json({ success: false, error: 'Failed to fetch inactive employees: ' + err.message });
+  }
 });
 
 // POST /api/analytics/reactivate-employee
 // Reactivate an employee that was auto-marked inactive
 router.post('/reactivate-employee', (req, res) => {
-  const db = getDb();
-  const { code } = req.body;
+  try {
+    const db = getDb();
+    const { code } = req.body;
 
-  db.prepare(`
-    UPDATE employees SET status = 'Active', auto_inactive = 0, inactive_since = NULL, updated_at = datetime('now')
-    WHERE code = ?
-  `).run(code);
+    db.prepare(`
+      UPDATE employees SET status = 'Active', auto_inactive = 0, inactive_since = NULL, updated_at = datetime('now')
+      WHERE code = ?
+    `).run(code);
 
-  res.json({ success: true, message: `Employee ${code} reactivated` });
+    res.json({ success: true, message: `Employee ${code} reactivated` });
+  } catch (err) {
+    console.error('Reactivate employee error:', err.message);
+    res.status(500).json({ success: false, error: 'Failed to reactivate employee: ' + err.message });
+  }
 });
 
 module.exports = router;

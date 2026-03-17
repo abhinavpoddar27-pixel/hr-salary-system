@@ -687,10 +687,15 @@ function initSchema(db) {
   // ── Add new policy config keys if missing ─────────────────────
   const insertPolicyIfMissing = db.prepare('INSERT OR IGNORE INTO policy_config (key, value, description) VALUES (?, ?, ?)');
   insertPolicyIfMissing.run('salary_hold_min_days', '5', 'Minimum payable days below which salary is held');
-  insertPolicyIfMissing.run('advance_cutoff_date', '15', 'Attendance data cutoff date for advance calculation');
-  insertPolicyIfMissing.run('advance_min_working_days', '9', 'Minimum working days (1st-15th) for advance eligibility');
-  insertPolicyIfMissing.run('advance_fraction', '0.3333', 'Fraction of gross salary paid as advance');
+  insertPolicyIfMissing.run('advance_cutoff_date', '20', 'Attendance data cutoff date for advance calculation (1st to 20th)');
+  insertPolicyIfMissing.run('advance_min_working_days', '0', 'Minimum working days for advance eligibility (0 = any working days)');
+  insertPolicyIfMissing.run('advance_fraction', '0.50', 'Fraction of gross salary paid as advance (>=15 days)');
   insertPolicyIfMissing.run('advance_process_date', '19', 'Date of month when advance processing starts');
+
+  // day_calculations: late deduction support
+  safeAddColumn('day_calculations', 'late_count', 'INTEGER DEFAULT 0');
+  safeAddColumn('day_calculations', 'late_deduction_days', 'REAL DEFAULT 0');
+  safeAddColumn('day_calculations', 'late_deduction_remark', "TEXT DEFAULT ''");
 
   console.log('✅ Database schema initialized');
 }

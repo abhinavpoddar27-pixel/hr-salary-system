@@ -100,12 +100,21 @@ router.get('/day-calculations', (req, res) => {
   const { month, year, company } = req.query;
 
   const records = db.prepare(`
-    SELECT dc.*, e.name as employee_name, e.department, e.designation
+    SELECT dc.*,
+      COALESCE(NULLIF(e.name, ''), ar_name.employee_name, dc.employee_code) as employee_name,
+      COALESCE(NULLIF(e.department, ''), ar_name.department) as department,
+      e.designation
     FROM day_calculations dc
     LEFT JOIN employees e ON dc.employee_code = e.code
+    LEFT JOIN (
+      SELECT employee_code, employee_name, department
+      FROM attendance_raw
+      WHERE employee_name IS NOT NULL AND employee_name != ''
+      GROUP BY employee_code
+    ) ar_name ON dc.employee_code = ar_name.employee_code
     WHERE dc.month = ? AND dc.year = ?
     ${company ? 'AND dc.company = ?' : ''}
-    ORDER BY e.department, e.name
+    ORDER BY department, employee_name
   `).all(...[month, year, company].filter(Boolean));
 
   res.json({ success: true, data: records });
@@ -120,9 +129,17 @@ router.get('/day-calculations/:code', (req, res) => {
   const { code } = req.params;
 
   const record = db.prepare(`
-    SELECT dc.*, e.name as employee_name, e.department
+    SELECT dc.*,
+      COALESCE(NULLIF(e.name, ''), ar_name.employee_name, dc.employee_code) as employee_name,
+      COALESCE(NULLIF(e.department, ''), ar_name.department) as department
     FROM day_calculations dc
     LEFT JOIN employees e ON dc.employee_code = e.code
+    LEFT JOIN (
+      SELECT employee_code, employee_name, department
+      FROM attendance_raw
+      WHERE employee_name IS NOT NULL AND employee_name != ''
+      GROUP BY employee_code
+    ) ar_name ON dc.employee_code = ar_name.employee_code
     WHERE dc.employee_code = ? AND dc.month = ? AND dc.year = ?
   `).get(code, month, year);
 
@@ -211,16 +228,26 @@ router.get('/salary-register', (req, res) => {
   const { month, year, company } = req.query;
 
   const records = db.prepare(`
-    SELECT sc.*, e.name as employee_name, e.department, e.designation,
+    SELECT sc.*,
+           COALESCE(NULLIF(e.name, ''), ar_name.employee_name, sc.employee_code) as employee_name,
+           COALESCE(NULLIF(e.department, ''), ar_name.department) as department,
+           e.designation,
            e.bank_account, e.ifsc, e.was_left_returned, e.status as employee_status,
            dc.total_payable_days, dc.days_present, dc.days_absent, dc.lop_days, dc.paid_sundays,
-           dc.days_half_present, dc.ot_hours
+           dc.days_half_present, dc.ot_hours,
+           dc.late_count, dc.late_deduction_days, dc.late_deduction_remark
     FROM salary_computations sc
     LEFT JOIN employees e ON sc.employee_code = e.code
     LEFT JOIN day_calculations dc ON sc.employee_code = dc.employee_code AND sc.month = dc.month AND sc.year = dc.year
+    LEFT JOIN (
+      SELECT employee_code, employee_name, department
+      FROM attendance_raw
+      WHERE employee_name IS NOT NULL AND employee_name != ''
+      GROUP BY employee_code
+    ) ar_name ON sc.employee_code = ar_name.employee_code
     WHERE sc.month = ? AND sc.year = ?
     ${company ? 'AND sc.company = ?' : ''}
-    ORDER BY e.department, e.name
+    ORDER BY department, employee_name
   `).all(...[month, year, company].filter(Boolean));
 
   const activeRecords = records.filter(r => !r.salary_held);
@@ -310,6 +337,39 @@ router.post('/finalise', (req, res) => {
   db.prepare(`UPDATE monthly_imports SET is_finalised = 1, finalised_at = datetime('now') WHERE month = ? AND year = ?`).run(month, year);
 
   res.json({ success: true, message: 'Salary finalised' });
+});
+
+/**
+ * PUT /api/payroll/day-calculations/:code/late-deduction
+ * HR can apply late deduction for employees with >5 late days
+ */
+router.put('/day-calculations/:code/late-deduction', (req, res) => {
+  const db = getDb();
+  const { code } = req.params;
+  const { month, year, deductionDays, remark } = req.body;
+
+  // Validate
+  if (deductionDays < 0 || deductionDays > 5) {
+    return res.status(400).json({ success: false, error: 'Deduction must be 0-5 days' });
+  }
+
+  // Update day calculation
+  const dc = db.prepare('SELECT * FROM day_calculations WHERE employee_code = ? AND month = ? AND year = ?').get(code, month, year);
+  if (!dc) return res.status(404).json({ success: false, error: 'Day calculation not found' });
+
+  const newPayable = Math.max(0, (dc.total_payable_days || 0) - deductionDays + (dc.late_deduction_days || 0));
+  const newLOP = Math.max(0, (dc.lop_days || 0) + deductionDays - (dc.late_deduction_days || 0));
+
+  db.prepare(`
+    UPDATE day_calculations SET
+      late_deduction_days = ?,
+      late_deduction_remark = ?,
+      total_payable_days = ?,
+      lop_days = ?
+    WHERE employee_code = ? AND month = ? AND year = ?
+  `).run(deductionDays, remark || `Late deduction: ${deductionDays} day(s) for ${dc.late_count || 0} late arrivals`, newPayable, newLOP, code, month, year);
+
+  res.json({ success: true, message: `Late deduction of ${deductionDays} day(s) applied for ${code}` });
 });
 
 module.exports = router;

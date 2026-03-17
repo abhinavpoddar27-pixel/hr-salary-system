@@ -100,14 +100,14 @@ router.post('/upload', upload.array('files', 20), async (req, res) => {
         const employees = extractEmployees(records);
         const upsertEmp = db.prepare(`
           INSERT INTO employees (code, name, department, company, status, is_data_complete)
-          VALUES (?, ?, ?, ?, 'Active', 0)
+          VALUES (?, COALESCE(NULLIF(?, ''), ?), ?, ?, 'Active', 0)
           ON CONFLICT(code) DO UPDATE SET
             name = COALESCE(NULLIF(excluded.name, ''), employees.name),
             department = COALESCE(NULLIF(excluded.department, ''), employees.department),
             updated_at = datetime('now')
         `);
         const empTxn = db.transaction((emps) => {
-          for (const e of emps) upsertEmp.run(e.code, e.name, e.department, e.company);
+          for (const e of emps) upsertEmp.run(e.code, e.name, e.code, e.department, e.company);
         });
         empTxn(employees);
 

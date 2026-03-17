@@ -116,8 +116,8 @@ export default function SalaryAdvance() {
         {/* Info Card */}
         <div className="card p-4 bg-blue-50/50 border-blue-200">
           <p className="text-sm text-blue-800">
-            <span className="font-semibold">Policy:</span> Employees with &ge;9 working days (1st–15th) receive 1/3 of gross salary as advance.
-            Advance is auto-recovered during final salary computation. Select any month using the header dropdown to calculate or view advances.
+            <span className="font-semibold">Policy:</span> Attendance counted from 1st to 20th. If &ge;15 working days &rarr; advance = 50% of gross salary. If &lt;15 days &rarr; advance = 75% of pro-rata salary due. Advance recovered from final salary.
+            Select any month using the header dropdown to calculate or view advances.
           </p>
         </div>
 
@@ -204,7 +204,7 @@ export default function SalaryAdvance() {
                     </th>
                     <SortHeader k="employee_name"><Abbr code="Emp">Employee</Abbr></SortHeader>
                     <SortHeader k="department"><Abbr code="Dept">Dept</Abbr></SortHeader>
-                    <SortHeader k="working_days_1_to_15" className="text-center">Working Days (1st-15th)</SortHeader>
+                    <SortHeader k="working_days_1_to_15" className="text-center">Days (1st-20th)</SortHeader>
                     <SortHeader k="is_eligible" className="text-center">Eligible</SortHeader>
                     <SortHeader k="advance_amount" className="text-center">Advance Amount</SortHeader>
                     <th>Status</th>
@@ -278,7 +278,7 @@ export default function SalaryAdvance() {
                             <div className="text-xs space-y-2">
                               <p className="font-semibold text-slate-600">Advance Details</p>
                               <div className="grid grid-cols-2 gap-2">
-                                <div className="flex justify-between"><span className="text-slate-500">Working Days (1st-15th)</span><span className="font-mono font-medium">{r.working_days_1_to_15}</span></div>
+                                <div className="flex justify-between"><span className="text-slate-500">Working Days (1st-20th)</span><span className="font-mono font-medium">{r.working_days_1_to_15}</span></div>
                                 <div className="flex justify-between"><span className="text-slate-500">Eligible</span><span className={r.is_eligible ? 'text-green-600 font-medium' : 'text-red-600 font-medium'}>{r.is_eligible ? 'Yes' : 'No'}</span></div>
                                 <div className="flex justify-between"><span className="text-slate-500">Advance Amount</span><span className="font-mono font-bold">{r.is_eligible ? fmtINR(r.advance_amount) : '—'}</span></div>
                                 <div className="flex justify-between"><span className="text-slate-500">Status</span><span className="font-medium">{r.paid ? 'Paid' : r.is_eligible ? 'Pending' : '—'}</span></div>

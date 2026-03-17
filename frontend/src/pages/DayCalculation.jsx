@@ -1,7 +1,7 @@
 import React, { useState, useMemo } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import toast from 'react-hot-toast'
-import { getDayCalculations, calculateDays } from '../utils/api'
+import api, { getDayCalculations, calculateDays } from '../utils/api'
 import { useAppStore } from '../store/appStore'
 import PipelineProgress from '../components/pipeline/PipelineProgress'
 import { Abbr, Tip } from '../components/ui/Tooltip'
@@ -64,6 +64,9 @@ export default function DayCalculation() {
         case 'payable':
           cmp = (a.total_payable_days || 0) - (b.total_payable_days || 0)
           break
+        case 'late':
+          cmp = (a.late_count || 0) - (b.late_count || 0)
+          break
         case 'lop':
           cmp = (a.lop_days || 0) - (b.lop_days || 0)
           break
@@ -90,6 +93,20 @@ export default function DayCalculation() {
       queryClient.invalidateQueries(['org-overview'])
     },
     onError: (err) => toast.error(err.response?.data?.error || 'Calculation failed')
+  })
+
+  const lateDeductionMutation = useMutation({
+    mutationFn: ({ code, deductionDays, remark }) => api.put(`/payroll/day-calculations/${code}/late-deduction`, {
+      month: selectedMonth,
+      year: selectedYear,
+      deductionDays,
+      remark
+    }),
+    onSuccess: (res) => {
+      toast.success(res.data.message || 'Late deduction applied')
+      refetch()
+    },
+    onError: (err) => toast.error(err.response?.data?.error || 'Failed to apply late deduction')
   })
 
   const totals = calcs.reduce((acc, r) => ({
@@ -133,7 +150,9 @@ export default function DayCalculation() {
               { label: 'Total Employees', value: rawCalcs.length, color: 'blue' },
               { label: 'Avg Present Days', value: (totals.present / (calcs.length || 1)).toFixed(1), color: 'green' },
               { label: 'Total Paid Sundays', value: totals.paidSundays.toFixed(0), color: 'indigo' },
+              { label: 'Total Late Days', value: rawCalcs.reduce((s, r) => s + (r.late_count || 0), 0), color: 'amber' },
               { label: 'Total LOP Days', value: totals.lop.toFixed(1), color: 'red' },
+              { label: 'Late Deductions', value: rawCalcs.filter(r => (r.late_deduction_days || 0) > 0).length, color: 'orange' },
               { label: 'Avg Payable Days', value: (totals.payable / (calcs.length || 1)).toFixed(1), color: 'emerald' },
               { label: '0-Day Employees', value: zeroDayCount, color: zeroDayCount > 0 ? 'red' : 'slate' },
             ].map(s => (
@@ -213,6 +232,10 @@ export default function DayCalculation() {
                       <Tip text="Absent days (working days with no attendance). Sundays and holidays are NOT counted as absent."><Abbr code="A">Absent</Abbr></Tip>
                       <SortIcon field="absent" sortField={sortField} sortDir={sortDir} />
                     </th>
+                    <th className="cursor-pointer select-none" onClick={() => toggleSort('late')}>
+                      <Tip text="Number of late arrivals in the month">Late</Tip>
+                      <SortIcon field="late" sortField={sortField} sortDir={sortDir} />
+                    </th>
                     <th><Tip text="Paid Sundays granted based on weekly attendance (6 days = free, 4-5 = CL/EL deducted, <4 = unpaid)">Paid Sun</Tip></th>
                     <th><Tip text="Paid holidays (gazetted holidays falling in the month)">Hol</Tip></th>
                     <th><Tip text="Casual Leave used to cover Sunday granting shortfall"><Abbr code="CL">CL</Abbr></Tip></th>
@@ -257,6 +280,13 @@ export default function DayCalculation() {
                           <td className="text-green-600 font-medium">{r.days_present}</td>
                           <td className="text-yellow-600">{r.days_half_present}</td>
                           <td className={clsx('font-medium', r.days_absent > 0 ? 'text-red-600' : 'text-slate-400')}>{r.days_absent}</td>
+                          <td className={clsx('font-medium', (r.late_count || 0) >= 5 ? 'text-red-600' : (r.late_count || 0) > 0 ? 'text-amber-600' : 'text-slate-400')}>
+                            <div className="flex items-center gap-1">
+                              {r.late_count || 0}
+                              {(r.late_count || 0) >= 5 && <span className="text-red-500" title="Late deduction recommended">⚠</span>}
+                              {r.late_deduction_days > 0 && <span className="text-xs bg-red-100 text-red-700 px-1 rounded">-{r.late_deduction_days}d</span>}
+                            </div>
+                          </td>
                           <td className="text-blue-600">{r.paid_sundays}</td>
                           <td className="text-purple-600">{r.paid_holidays}</td>
                           <td className="text-orange-600">{r.cl_used || 0}</td>
@@ -283,7 +313,7 @@ export default function DayCalculation() {
                           </td>
                         </tr>
                         {expandedRow === r.id && (
-                          <DrillDownRow colSpan={15}>
+                          <DrillDownRow colSpan={16}>
                             <EmployeeQuickView
                               employeeCode={r.employee_code}
                               contextContent={r.week_breakdown && (
@@ -311,6 +341,58 @@ export default function DayCalculation() {
                                 </div>
                               )}
                             />
+                            {(r.late_count || 0) >= 5 && (
+                              <div className="mt-3 p-3 bg-amber-50 border border-amber-200 rounded-lg">
+                                <p className="text-xs font-semibold text-amber-800 mb-2">
+                                  ⚠ This employee was late {r.late_count} times. Apply late deduction?
+                                </p>
+                                <div className="flex items-center gap-3">
+                                  <div>
+                                    <label className="label text-xs">Deduction (days)</label>
+                                    <input
+                                      type="number"
+                                      min="0"
+                                      max="5"
+                                      step="0.5"
+                                      defaultValue={r.late_deduction_days || 1}
+                                      id={`late-ded-${r.employee_code}`}
+                                      className="input w-20 text-xs"
+                                    />
+                                  </div>
+                                  <div className="flex-1">
+                                    <label className="label text-xs">Remark</label>
+                                    <input
+                                      type="text"
+                                      defaultValue={r.late_deduction_remark || `Late coming deduction for ${r.late_count} late arrivals`}
+                                      id={`late-remark-${r.employee_code}`}
+                                      className="input text-xs"
+                                      placeholder="Late deduction remark..."
+                                    />
+                                  </div>
+                                  <button
+                                    onClick={() => {
+                                      const days = parseFloat(document.getElementById(`late-ded-${r.employee_code}`).value) || 0
+                                      const remark = document.getElementById(`late-remark-${r.employee_code}`).value
+                                      lateDeductionMutation.mutate({ code: r.employee_code, deductionDays: days, remark })
+                                    }}
+                                    className="btn-primary text-xs mt-5"
+                                  >
+                                    Apply Deduction
+                                  </button>
+                                  {r.late_deduction_days > 0 && (
+                                    <button
+                                      onClick={() => lateDeductionMutation.mutate({ code: r.employee_code, deductionDays: 0, remark: '' })}
+                                      className="btn-secondary text-xs mt-5"
+                                    >
+                                      Remove
+                                    </button>
+                                  )}
+                                </div>
+                                {r.late_deduction_remark && (
+                                  <p className="text-xs text-amber-600 mt-1 italic">Current: {r.late_deduction_remark}</p>
+                                )}
+                              </div>
+                            )}
                           </DrillDownRow>
                         )}
                       </React.Fragment>
@@ -326,6 +408,7 @@ export default function DayCalculation() {
                     <td className="text-green-600">{totals.present}</td>
                     <td className="text-yellow-600">{totals.half}</td>
                     <td className="text-red-600">{totals.absent}</td>
+                    <td className="text-amber-600">{calcs.reduce((s, r) => s + (r.late_count || 0), 0)}</td>
                     <td className="text-blue-600">{totals.paidSundays}</td>
                     <td className="text-purple-600">{totals.holidays}</td>
                     <td className="text-orange-600">{totals.cl}</td>

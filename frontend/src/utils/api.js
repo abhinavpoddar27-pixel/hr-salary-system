@@ -83,6 +83,7 @@ export const deleteEmployeeDocument = (id) => api.delete(`/employees/documents/$
 export const calculateDays = (data) => api.post('/payroll/calculate-days', data)
 export const getDayCalculations = (params) => api.get('/payroll/day-calculations', { params })
 export const getDayCalculation = (code, month, year) => api.get(`/payroll/day-calculations/${code}`, { params: { month, year } })
+export const applyLateDeduction = (code, data) => api.put(`/payroll/day-calculations/${code}/late-deduction`, data)
 export const computeSalary = (data) => api.post('/payroll/compute-salary', data)
 export const getSalaryRegister = (month, year, company) => api.get('/payroll/salary-register', { params: { month, year, company } })
 export const getPayslip = (code, month, year) => api.get(`/payroll/payslip/${code}`, { params: { month, year } })

@@ -116,6 +116,7 @@ function calculateDays(employeeCode, month, year, company, attendanceRecords, le
   let daysWOP = 0;
   let daysAbsent = 0;
   let otHours = 0;
+  let lateCount = 0;
 
   for (const dateStr of allDates) {
     const isSunday = getDayOfWeek(dateStr) === 0;
@@ -140,6 +141,9 @@ function calculateDays(employeeCode, month, year, company, attendanceRecords, le
       if (!isSunday && !isHoliday) daysAbsent++;
     }
     // WO status on Sunday/weekly off is expected — don't count as absent
+
+    // Count late arrivals
+    if (rec.is_late_arrival) lateCount++;
 
     // OT hours
     if (rec.overtime_minutes) otHours += rec.overtime_minutes / 60;
@@ -310,6 +314,7 @@ function calculateDays(employeeCode, month, year, company, attendanceRecords, le
     totalPayableDays: Math.round(finalPayable * 100) / 100,
     otHours: Math.round(otHours * 100) / 100,
     otDays: Math.round(otHours / 12 * 100) / 100,
+    lateCount,
     weekBreakdown: JSON.stringify(weekBreakdown)
   };
 }
@@ -325,14 +330,14 @@ function saveDayCalculation(db, calcResult) {
       days_present, days_half_present, days_wop, days_absent,
       paid_sundays, unpaid_sundays, paid_holidays,
       cl_used, el_used, sl_used, lop_days,
-      total_payable_days, ot_hours, ot_days, week_breakdown
+      total_payable_days, ot_hours, ot_days, late_count, week_breakdown
     ) VALUES (
       ?, ?, ?, ?,
       ?, ?, ?, ?,
       ?, ?, ?, ?,
       ?, ?, ?,
       ?, ?, ?, ?,
-      ?, ?, ?, ?
+      ?, ?, ?, ?, ?
     )
     ON CONFLICT(employee_code, month, year, company) DO UPDATE SET
       total_calendar_days = excluded.total_calendar_days,
@@ -353,6 +358,7 @@ function saveDayCalculation(db, calcResult) {
       total_payable_days = excluded.total_payable_days,
       ot_hours = excluded.ot_hours,
       ot_days = excluded.ot_days,
+      late_count = excluded.late_count,
       week_breakdown = excluded.week_breakdown,
       is_approved = 0
   `);
@@ -364,6 +370,7 @@ function saveDayCalculation(db, calcResult) {
     calcResult.paidSundays, calcResult.unpaidSundays, calcResult.paidHolidays,
     calcResult.clUsed, calcResult.elUsed, calcResult.slUsed, calcResult.lopDays,
     calcResult.totalPayableDays, calcResult.otHours, calcResult.otDays,
+    calcResult.lateCount,
     calcResult.weekBreakdown
   );
 

@@ -2,11 +2,15 @@
  * Advance Calculation Service
  *
  * Calculate advance eligibility for all ACTIVE employees.
- * Employees with >=9 working days (1st-15th) receive 1/3 of gross salary as advance.
- * Advance is recovered from the final salary of the same month.
  *
- * NOTE: The 19th date restriction has been removed — advance can be calculated on any date.
- * Inactive/Exited employees are excluded from calculation.
+ * NEW RULES (effective March 2026):
+ * - Attendance is counted from 1st to 20th of each month.
+ * - If employee has >=15 working days (1st-20th): advance = 50% of gross monthly salary.
+ * - If employee has <15 but >0 working days: advance = 75% of pro-rata salary (gross × workingDays/26 × 0.75).
+ * - Employees with 0 working days are not eligible.
+ * - Inactive, Exited, and Left employees are excluded from calculation.
+ *
+ * Advance is recovered from the final salary of the same month.
  */
 
 function getPolicyValue(db, key, defaultVal) {
@@ -18,24 +22,22 @@ function getPolicyValue(db, key, defaultVal) {
  * Calculate advance eligibility for all active employees in a month
  */
 function calculateAdvances(db, month, year) {
-  const cutoffDate = parseInt(getPolicyValue(db, 'advance_cutoff_date', 15));
-  const minWorkingDays = parseInt(getPolicyValue(db, 'advance_min_working_days', 9));
-  const advanceFraction = parseFloat(getPolicyValue(db, 'advance_fraction', 0.3333));
+  const cutoffDate = parseInt(getPolicyValue(db, 'advance_cutoff_date', 20));
 
   // Get all ACTIVE employees with attendance in this month
-  // Excludes Inactive and Exited employees
+  // Excludes Inactive, Exited, and Left employees
   const employees = db.prepare(`
     SELECT DISTINCT e.id, e.code, e.name, e.department, e.designation, e.gross_salary
     FROM employees e
     INNER JOIN attendance_processed ap ON e.code = ap.employee_code
     WHERE ap.month = ? AND ap.year = ?
-    AND (e.status IS NULL OR e.status NOT IN ('Inactive', 'Exited'))
+    AND (e.status IS NULL OR e.status NOT IN ('Inactive', 'Exited', 'Left'))
   `).all(month, year);
 
   const results = [];
 
   for (const emp of employees) {
-    // Count working days from 1st to cutoff date
+    // Count working days from 1st to cutoff date (20th)
     const monthStr = String(month).padStart(2, '0');
     const startDate = `${year}-${monthStr}-01`;
     const endDate = `${year}-${monthStr}-${String(cutoffDate).padStart(2, '0')}`;
@@ -49,11 +51,15 @@ function calculateAdvances(db, month, year) {
     `).get(emp.code, month, year, startDate, endDate);
 
     const workingDays = workingDaysResult?.count || 0;
-    const isEligible = workingDays >= minWorkingDays;
 
-    // Get gross salary for this employee
+    // Eligibility: employee must have any working days from 1st to 20th
+    let isEligible = workingDays > 0;
     let advanceAmount = 0;
+
     if (isEligible) {
+      // Determine gross monthly salary
+      let grossMonthly = 0;
+
       // Try salary structure first
       const salStruct = db.prepare(`
         SELECT * FROM salary_structures
@@ -62,13 +68,29 @@ function calculateAdvances(db, month, year) {
       `).get(emp.id, `${year}-${monthStr}-01`);
 
       if (salStruct) {
-        const grossMonthly = (salStruct.basic || 0) + (salStruct.da || 0) +
+        grossMonthly = (salStruct.basic || 0) + (salStruct.da || 0) +
           (salStruct.hra || 0) + (salStruct.conveyance || 0) +
           (salStruct.special_allowance || 0) + (salStruct.other_allowances || 0);
-        advanceAmount = Math.round(grossMonthly * advanceFraction);
       } else if (emp.gross_salary > 0) {
         // Fallback to employee master gross
-        advanceAmount = Math.round(emp.gross_salary * advanceFraction);
+        grossMonthly = emp.gross_salary;
+      }
+
+      if (grossMonthly > 0) {
+        if (workingDays >= 15) {
+          // 50% of gross monthly salary
+          advanceAmount = Math.round(grossMonthly * 0.50);
+        } else if (workingDays > 0) {
+          // Pro-rata salary for actual days worked, then 75% of that
+          const proRataSalary = (grossMonthly / 26) * workingDays;
+          advanceAmount = Math.round(proRataSalary * 0.75);
+        } else {
+          // No working days = not eligible
+          isEligible = false;
+        }
+      } else {
+        // No salary info — not eligible
+        isEligible = false;
       }
     }
 
