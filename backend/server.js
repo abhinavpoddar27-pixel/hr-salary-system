@@ -1,3 +1,19 @@
+// ── Crash handlers (must be first) ────────────────────────────
+console.log('[BOOT] Starting HR Salary System...');
+console.log('[BOOT] Node version:', process.version);
+console.log('[BOOT] Platform:', process.platform, process.arch);
+console.log('[BOOT] CWD:', process.cwd());
+console.log('[BOOT] ENV: NODE_ENV=%s PORT=%s DATA_DIR=%s', process.env.NODE_ENV, process.env.PORT, process.env.DATA_DIR);
+process.on('uncaughtException', (err) => {
+  console.error('[FATAL] Uncaught exception:', err.message);
+  console.error(err.stack);
+  process.exit(1);
+});
+process.on('unhandledRejection', (reason) => {
+  console.error('[FATAL] Unhandled rejection:', reason);
+  process.exit(1);
+});
+
 try { require('express-async-errors'); } catch (e) { console.warn('⚠️  express-async-errors not found, async errors may not be caught'); }
 const express = require('express');
 const cors = require('cors');
@@ -5,16 +21,23 @@ const cookieParser = require('cookie-parser');
 const path = require('path');
 const fs = require('fs');
 const bcrypt = require('bcryptjs');
+console.log('[BOOT] Core modules loaded');
 
 // ── Directory setup ───────────────────────────────────────────
 const DATA_DIR = process.env.DATA_DIR || path.join(__dirname, 'data');
 const uploadsDir = process.env.UPLOADS_DIR || path.join(__dirname, 'uploads');
+console.log('[BOOT] DATA_DIR:', DATA_DIR, 'exists:', fs.existsSync(DATA_DIR));
+console.log('[BOOT] UPLOADS_DIR:', uploadsDir);
 if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
 if (!fs.existsSync(uploadsDir)) fs.mkdirSync(uploadsDir, { recursive: true });
+console.log('[BOOT] Directories ensured');
 
 // ── Database init (must be before routes) ─────────────────────
+console.log('[BOOT] Loading better-sqlite3...');
 const { getDb } = require('./src/database/db');
+console.log('[BOOT] Initializing database...');
 const db = getDb();
+console.log('[BOOT] Database initialized');
 
 // ── Seed admin user (create if missing, never overwrite custom password) ──
 (function seedAdmin() {
