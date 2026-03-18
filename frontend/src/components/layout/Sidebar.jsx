@@ -50,6 +50,7 @@ const nav = [
     ]
   },
   { label: 'Reports', icon: '📋', to: '/reports' },
+  { label: 'Finance Audit', icon: '🏦', to: '/finance-audit' },
   { label: 'Alerts', icon: '🔔', to: '/alerts' },
   { label: 'Employees', icon: '👤', to: '/employees' },
   {

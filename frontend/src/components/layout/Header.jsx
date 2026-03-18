@@ -10,7 +10,7 @@ import toast from 'react-hot-toast'
 const MONTH_ONLY_ROUTES = [
   '/import', '/miss-punch', '/shift-verification', '/night-shift',
   '/attendance-register', '/day-calculation', '/salary-computation',
-  '/salary-input', '/salary-advance', '/leave-management', '/reports', '/compliance'
+  '/salary-input', '/salary-advance', '/leave-management', '/reports', '/compliance', '/finance-audit'
 ]
 
 // Routes that don't need any date selector

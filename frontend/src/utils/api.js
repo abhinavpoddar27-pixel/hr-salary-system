@@ -203,4 +203,12 @@ export const getComplianceItems = (year) => api.get('/settings/compliance', { pa
 export const updateComplianceItem = (id, data) => api.put(`/settings/compliance/${id}`, data)
 export const generateComplianceCalendar = (year) => api.post(`/settings/compliance/generate/${year}`)
 
+// ── Finance Audit ────────────────────────────────────────
+export const getFinanceReport = (month, year, company) => api.get('/finance-audit/report', { params: { month, year, company } })
+export const submitDayCorrection = (data) => api.post('/finance-audit/day-correction', data)
+export const submitPunchCorrection = (data) => api.post('/finance-audit/punch-correction', data)
+export const getCorrectionHistory = (code, month, year) => api.get(`/finance-audit/corrections/${code}`, { params: { month, year } })
+export const getCorrectionsSummary = (month, year) => api.get('/finance-audit/corrections-summary', { params: { month, year } })
+export const getCorrectionReasons = () => api.get('/finance-audit/reasons')
+
 export default api

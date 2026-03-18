@@ -1,1 +1,0 @@
-import{M as a,B as i,X as s,Y as t,O as e}from"./Skeleton-DFQ0-wYD.js";var x=a({chartName:"BarChart",GraphicalChild:i,defaultTooltipEventType:"axis",validateTooltipEventTypes:["axis","item"],axisComponents:[{axisType:"xAxis",AxisComp:s},{axisType:"yAxis",AxisComp:t}],formatAxisMap:e});export{x as B};

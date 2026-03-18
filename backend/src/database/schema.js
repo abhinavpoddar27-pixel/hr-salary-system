@@ -779,6 +779,68 @@ function initSchema(db) {
   safeCreateIndex(`CREATE INDEX IF NOT EXISTS idx_audit_log_changed_by
     ON audit_log(changed_by, changed_at)`);
 
+  // ── Phase 3: Finance Audit Module ───────────────────────────────
+
+  // Day corrections: HR adjustments to system-computed payable days
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS day_corrections (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      employee_id INTEGER REFERENCES employees(id),
+      employee_code TEXT NOT NULL,
+      month INTEGER NOT NULL,
+      year INTEGER NOT NULL,
+      company TEXT,
+      original_system_days REAL NOT NULL,
+      corrected_days REAL NOT NULL,
+      correction_delta REAL NOT NULL,
+      correction_reason TEXT NOT NULL,
+      correction_notes TEXT,
+      corrected_by TEXT NOT NULL,
+      corrected_at TEXT DEFAULT (datetime('now')),
+      is_applied INTEGER DEFAULT 0,
+      applied_at TEXT,
+      UNIQUE(employee_code, month, year, company)
+    );
+  `);
+
+  // Punch corrections: manual punch additions for missing biometric data
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS punch_corrections (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      employee_id INTEGER REFERENCES employees(id),
+      employee_code TEXT NOT NULL,
+      date TEXT NOT NULL,
+      original_in_time TEXT,
+      original_out_time TEXT,
+      corrected_in_time TEXT,
+      corrected_out_time TEXT,
+      punch_type TEXT NOT NULL,
+      reason TEXT NOT NULL,
+      evidence_notes TEXT,
+      added_by TEXT NOT NULL,
+      added_at TEXT DEFAULT (datetime('now')),
+      applied_to_processed INTEGER DEFAULT 0,
+      attendance_processed_id INTEGER,
+      UNIQUE(employee_code, date)
+    );
+  `);
+
+  // Audit log: add employee_code and action_type for faster lookups
+  safeAddColumn('audit_log', 'employee_code', 'TEXT');
+  safeAddColumn('audit_log', 'action_type', 'TEXT');
+
+  // Finance audit indexes
+  safeCreateIndex(`CREATE INDEX IF NOT EXISTS idx_day_corrections_month
+    ON day_corrections(month, year, company)`);
+  safeCreateIndex(`CREATE INDEX IF NOT EXISTS idx_day_corrections_employee
+    ON day_corrections(employee_code, month, year)`);
+  safeCreateIndex(`CREATE INDEX IF NOT EXISTS idx_punch_corrections_date
+    ON punch_corrections(date, employee_code)`);
+  safeCreateIndex(`CREATE INDEX IF NOT EXISTS idx_audit_log_emp_code
+    ON audit_log(employee_code, changed_at)`);
+  safeCreateIndex(`CREATE INDEX IF NOT EXISTS idx_audit_log_action_type
+    ON audit_log(action_type, changed_at)`);
+
   console.log('✅ Database schema initialized');
 }
 
