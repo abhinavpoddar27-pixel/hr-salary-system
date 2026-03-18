@@ -203,8 +203,15 @@ if (IS_PROD) {
         }
       }
     }));
-    // SPA fallback — send index.html for all non-API routes
+    // SPA fallback — send index.html for navigation requests only
+    // Do NOT serve index.html for missing static assets (.js, .css, .png, etc.)
+    // as this causes "text/html is not a valid JavaScript MIME type" errors
     app.get('*', (req, res) => {
+      const ext = path.extname(req.path);
+      if (ext && ext !== '.html') {
+        // This is a request for a static asset that doesn't exist (stale cache)
+        return res.status(404).send('Not found');
+      }
       res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
       res.sendFile(path.join(distPath, 'index.html'));
     });
