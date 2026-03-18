@@ -167,13 +167,14 @@ function computeEmployeeSalary(db, employee, month, year, company) {
   const otRate = parseFloat(getPolicyValue(db, 'ot_rate_multiplier', 2));
   const holdMinDays = parseFloat(getPolicyValue(db, 'salary_hold_min_days', 5));
 
-  // Gross monthly salary
+  // Gross monthly salary — use gross_salary field first, fall back to component sum
   const basicMonthly = salStruct.basic || 0;
   const daMonthly = salStruct.da || 0;
   const hraMonthly = salStruct.hra || 0;
   const conveyanceMonthly = salStruct.conveyance || 0;
   const otherMonthly = salStruct.other_allowances || 0;
-  const grossMonthly = basicMonthly + daMonthly + hraMonthly + conveyanceMonthly + otherMonthly;
+  const componentSum = basicMonthly + daMonthly + hraMonthly + conveyanceMonthly + otherMonthly;
+  const grossMonthly = componentSum > 0 ? componentSum : (salStruct.gross_salary || employee.gross_salary || 0);
 
   // Per-day rate
   const perDayRate = grossMonthly / divisor;

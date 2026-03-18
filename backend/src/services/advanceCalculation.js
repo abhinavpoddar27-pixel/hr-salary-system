@@ -116,9 +116,11 @@ function calculateAdvances(db, month, year) {
       `).get(emp.id, `${year}-${monthStr}-01`);
 
       if (salStruct) {
-        grossMonthly = (salStruct.basic || 0) + (salStruct.da || 0) +
+        // Use gross_salary field first (always set), fall back to component sum
+        const componentSum = (salStruct.basic || 0) + (salStruct.da || 0) +
           (salStruct.hra || 0) + (salStruct.conveyance || 0) +
           (salStruct.special_allowance || 0) + (salStruct.other_allowances || 0);
+        grossMonthly = salStruct.gross_salary > 0 ? salStruct.gross_salary : (componentSum > 0 ? componentSum : emp.gross_salary || 0);
       } else if (emp.gross_salary > 0) {
         grossMonthly = emp.gross_salary;
       }
