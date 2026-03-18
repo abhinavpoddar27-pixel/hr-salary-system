@@ -264,8 +264,8 @@ export default function AttendanceRegister() {
   }
 
   function SortIcon({ col }) {
-    if (sortKey !== col) return <span className="text-slate-300 ml-0.5">&#8645;</span>
-    return <span className="text-blue-600 ml-0.5">{sortDir === 'asc' ? '&#9650;' : '&#9660;'}</span>
+    if (sortKey !== col) return <span className="text-slate-300 ml-1 text-[10px]">{'\u2195'}</span>
+    return <span className="text-blue-600 ml-1 text-[10px]">{sortDir === 'asc' ? '\u25B2' : '\u25BC'}</span>
   }
 
   /* ── Summary stats ── */

@@ -244,6 +244,81 @@ router.get('/monthly-summary', (req, res) => {
     return res.status(400).json({ success: false, error: 'month and year required' });
   }
 
+  // Auto-recalculate metrics if most records have NULL actual_hours (one-time fix for pre-existing data)
+  const nullHoursCount = db.prepare(`
+    SELECT COUNT(*) as cnt FROM attendance_processed
+    WHERE month = ? AND year = ? AND actual_hours IS NULL AND is_night_out_only = 0
+    AND COALESCE(in_time_final, in_time_original) IS NOT NULL
+    AND COALESCE(out_time_final, out_time_original) IS NOT NULL
+  `).get(month, year);
+
+  if (nullHoursCount.cnt > 10) {
+    // Auto-recalculate in background
+    const recsToFix = db.prepare(`
+      SELECT ap.id, ap.in_time_original, ap.out_time_original, ap.in_time_final, ap.out_time_final,
+             ap.status_original, ap.is_night_shift, ap.is_night_out_only,
+             e.default_shift_id
+      FROM attendance_processed ap
+      LEFT JOIN employees e ON ap.employee_code = e.code
+      WHERE ap.month = ? AND ap.year = ?
+    `).all(month, year);
+
+    const allShifts = db.prepare('SELECT * FROM shifts').all();
+    const shiftById = {};
+    const shiftByCode = {};
+    for (const s of allShifts) { shiftById[s.id] = s; shiftByCode[s.code] = s; }
+    const defaultDayShift = shiftByCode['DAY'] || allShifts[0];
+    const defaultNightShift = shiftByCode['NIGHT'];
+
+    const fixStmt = db.prepare(`
+      UPDATE attendance_processed SET
+        actual_hours = COALESCE(?, actual_hours),
+        is_late_arrival = CASE WHEN actual_hours IS NULL THEN ? ELSE is_late_arrival END,
+        late_by_minutes = CASE WHEN actual_hours IS NULL THEN ? ELSE late_by_minutes END,
+        is_night_shift = CASE WHEN ? = 1 THEN 1 ELSE is_night_shift END
+      WHERE id = ?
+    `);
+
+    const fixTxn = db.transaction(() => {
+      for (const rec of recsToFix) {
+        if (rec.is_night_out_only) continue;
+        const inTime = rec.in_time_final || rec.in_time_original;
+        const outTime = rec.out_time_final || rec.out_time_original;
+        if (!inTime) continue;
+
+        let actualHours = null;
+        if (inTime && outTime) {
+          const [ih, im] = inTime.split(':').map(Number);
+          const [oh, om] = outTime.split(':').map(Number);
+          if (!isNaN(ih) && !isNaN(oh)) {
+            let hrs = (oh * 60 + om - (ih * 60 + im)) / 60;
+            if (hrs < 0) hrs += 24;
+            actualHours = Math.round(hrs * 100) / 100;
+          }
+        }
+
+        const [inH] = inTime.split(':').map(Number);
+        const isNight = (!isNaN(inH) && (inH >= 18 || inH < 6)) || rec.is_night_shift === 1;
+        const empShift = rec.default_shift_id ? shiftById[rec.default_shift_id] : null;
+        const shift = isNight ? (defaultNightShift || empShift || defaultDayShift) : (empShift || defaultDayShift);
+
+        let isLate = 0, lateBy = 0;
+        if (inTime && shift?.start_time && (rec.status_original === 'P' || rec.status_original === 'WOP')) {
+          const [sh, sm] = shift.start_time.split(':').map(Number);
+          if (!isNaN(inH) && !isNaN(sh)) {
+            let diffMin = (inH * 60 + (parseInt(inTime.split(':')[1]) || 0)) - (sh * 60 + sm);
+            if (isNight && diffMin < -600) diffMin += 1440;
+            if (!isNight && diffMin < 0) diffMin = 0;
+            if (diffMin > (shift.grace_minutes || 9)) { isLate = 1; lateBy = diffMin; }
+          }
+        }
+
+        fixStmt.run(actualHours, isLate, lateBy, isNight ? 1 : 0, rec.id);
+      }
+    });
+    fixTxn();
+  }
+
   const records = db.prepare(`
     SELECT
       ap.employee_code,
