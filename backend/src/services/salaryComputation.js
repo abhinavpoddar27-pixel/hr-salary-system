@@ -101,13 +101,22 @@ function getLoanDeductions(db, employeeCode, month, year) {
  * Compute salary for one employee for a month.
  */
 function computeEmployeeSalary(db, employee, month, year, company) {
-  // Get day calculation for this employee (try with company first, then without)
-  let dayCalc = db.prepare(`
-    SELECT * FROM day_calculations
-    WHERE employee_code = ? AND month = ? AND year = ?
-    ${company ? 'AND company = ?' : ''}
-    LIMIT 1
-  `).get(...[employee.code, month, year, company].filter(Boolean));
+  // Get day calculation for this employee — try with company, then without
+  let dayCalc = null;
+  if (company) {
+    dayCalc = db.prepare(`
+      SELECT * FROM day_calculations
+      WHERE employee_code = ? AND month = ? AND year = ? AND company = ?
+      LIMIT 1
+    `).get(employee.code, month, year, company);
+  }
+  if (!dayCalc) {
+    dayCalc = db.prepare(`
+      SELECT * FROM day_calculations
+      WHERE employee_code = ? AND month = ? AND year = ?
+      LIMIT 1
+    `).get(employee.code, month, year);
+  }
 
   if (!dayCalc) {
     return {
