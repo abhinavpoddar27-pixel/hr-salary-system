@@ -160,6 +160,7 @@ app.use('/api/notifications', requireAuth, require('./src/routes/notifications')
 app.use('/api/lifecycle',   requireAuth, require('./src/routes/lifecycle'));
 app.use('/api/usage-logs',  requireAuth, require('./src/routes/usage-logs'));
 app.use('/api/finance-audit', requireAuth, require('./src/routes/financeAudit'));
+app.use('/api/session-analytics', requireAuth, require('./src/routes/sessionAnalytics'));
 
 // Health check (public)
 app.get('/api/health', (req, res) => {

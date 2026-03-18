@@ -841,6 +841,49 @@ function initSchema(db) {
   safeCreateIndex(`CREATE INDEX IF NOT EXISTS idx_audit_log_action_type
     ON audit_log(action_type, changed_at)`);
 
+  // ── Phase 4: Session tracking for user behavior analytics ──────
+
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS session_events (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id INTEGER,
+      username TEXT NOT NULL,
+      session_id TEXT NOT NULL,
+      event_type TEXT NOT NULL,
+      page TEXT,
+      element_id TEXT,
+      element_type TEXT,
+      label TEXT,
+      data TEXT,
+      timestamp TEXT NOT NULL,
+      created_at TEXT DEFAULT (datetime('now'))
+    );
+  `);
+
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS session_daily_summary (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      username TEXT NOT NULL,
+      date TEXT NOT NULL,
+      total_sessions INTEGER DEFAULT 0,
+      total_duration_ms INTEGER DEFAULT 0,
+      total_events INTEGER DEFAULT 0,
+      pages_visited TEXT,
+      top_features TEXT,
+      error_count INTEGER DEFAULT 0,
+      UNIQUE(username, date)
+    );
+  `);
+
+  safeCreateIndex(`CREATE INDEX IF NOT EXISTS idx_session_events_user
+    ON session_events(username, timestamp)`);
+  safeCreateIndex(`CREATE INDEX IF NOT EXISTS idx_session_events_session
+    ON session_events(session_id)`);
+  safeCreateIndex(`CREATE INDEX IF NOT EXISTS idx_session_events_type
+    ON session_events(event_type, timestamp)`);
+  safeCreateIndex(`CREATE INDEX IF NOT EXISTS idx_session_events_page
+    ON session_events(page, timestamp)`);
+
   console.log('✅ Database schema initialized');
 }
 

@@ -211,4 +211,10 @@ export const getCorrectionHistory = (code, month, year) => api.get(`/finance-aud
 export const getCorrectionsSummary = (month, year) => api.get('/finance-audit/corrections-summary', { params: { month, year } })
 export const getCorrectionReasons = () => api.get('/finance-audit/reasons')
 
+// ── Session Analytics (admin only) ──────────────────────
+export const getSessionOverview = (days) => api.get('/session-analytics/overview', { params: { days } })
+export const getSessionUsers = (days) => api.get('/session-analytics/users', { params: { days } })
+export const getSessionPages = (days) => api.get('/session-analytics/pages', { params: { days } })
+export const getSessionErrors = (days) => api.get('/session-analytics/errors', { params: { days } })
+
 export default api

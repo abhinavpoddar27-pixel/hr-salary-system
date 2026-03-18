@@ -53,6 +53,7 @@ const nav = [
   { label: 'Finance Audit', icon: '🏦', to: '/finance-audit' },
   { label: 'Alerts', icon: '🔔', to: '/alerts' },
   { label: 'Employees', icon: '👤', to: '/employees' },
+  { label: 'Session Analytics', icon: '📊', to: '/session-analytics', adminOnly: true },
   {
     label: 'Settings', icon: '⚙️', to: '/settings',
     children: [

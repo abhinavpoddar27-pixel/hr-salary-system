@@ -1,9 +1,10 @@
-import React, { Suspense } from 'react'
-import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
+import React, { Suspense, useEffect } from 'react'
+import { BrowserRouter, Routes, Route, Navigate, useLocation } from 'react-router-dom'
 import Sidebar from './components/layout/Sidebar'
 import Header from './components/layout/Header'
 import ErrorBoundary from './components/ui/ErrorBoundary'
 import { useAppStore } from './store/appStore'
+import { tracker } from './utils/sessionTracker'
 
 // Public page
 const Login = React.lazy(() => import('./pages/Login'))
@@ -30,6 +31,7 @@ const DailyMIS = React.lazy(() => import('./pages/DailyMIS'))
 const Loans = React.lazy(() => import('./pages/Loans'))
 const LeaveManagement = React.lazy(() => import('./pages/LeaveManagement'))
 const FinanceAudit = React.lazy(() => import('./pages/FinanceAudit'))
+const SessionAnalytics = React.lazy(() => import('./pages/SessionAnalytics'))
 
 function PageLoader() {
   return (
@@ -67,9 +69,30 @@ function RequireAuth({ children }) {
   return children
 }
 
+// ── Session tracker: init/destroy on auth, track route changes ──
+function RouteTracker() {
+  const location = useLocation()
+  const isAuthenticated = useAppStore(s => s.isAuthenticated)
+
+  useEffect(() => {
+    try {
+      if (isAuthenticated) { tracker.init() }
+      else { tracker.destroy() }
+    } catch (e) { /* silent */ }
+    return () => { try { tracker.destroy() } catch (e) { /* silent */ } }
+  }, [isAuthenticated])
+
+  useEffect(() => {
+    try { if (isAuthenticated) tracker.trackPageView(location.pathname) } catch (e) { /* silent */ }
+  }, [location.pathname, isAuthenticated])
+
+  return null
+}
+
 export default function App() {
   return (
     <BrowserRouter>
+      <RouteTracker />
       <Suspense fallback={<PageLoader />}>
         <Routes>
           {/* Public */}
@@ -95,6 +118,7 @@ export default function App() {
           <Route path="/compliance/*" element={<RequireAuth><Layout title="Compliance"><Compliance /></Layout></RequireAuth>} />
           <Route path="/reports" element={<RequireAuth><Layout title="Reports"><Reports /></Layout></RequireAuth>} />
           <Route path="/finance-audit" element={<RequireAuth><Layout title="Finance Audit"><FinanceAudit /></Layout></RequireAuth>} />
+          <Route path="/session-analytics" element={<RequireAuth><Layout title="Session Analytics"><SessionAnalytics /></Layout></RequireAuth>} />
           <Route path="/employees" element={<RequireAuth><Layout title="Employee Master"><Employees /></Layout></RequireAuth>} />
           <Route path="/alerts" element={<RequireAuth><Layout title="Alerts"><Alerts /></Layout></RequireAuth>} />
           <Route path="/settings/*" element={<RequireAuth><Layout title="Settings"><Settings /></Layout></RequireAuth>} />
