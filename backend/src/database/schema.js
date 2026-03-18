@@ -641,6 +641,37 @@ function initSchema(db) {
     holidays2025.forEach(h => insertHoliday.run(...h));
   }
 
+  // ── Company Configuration ────────────────────────────────────────
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS company_config (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      company_name TEXT NOT NULL UNIQUE,
+      short_name TEXT,
+      pf_establishment_code TEXT,
+      esi_code TEXT,
+      address_line1 TEXT,
+      address_line2 TEXT,
+      city TEXT,
+      state TEXT,
+      pin TEXT,
+      pan TEXT,
+      tan TEXT,
+      bank_name TEXT,
+      bank_account TEXT,
+      bank_ifsc TEXT,
+      logo_path TEXT,
+      created_at TEXT DEFAULT (datetime('now'))
+    );
+  `);
+
+  // Seed company config if empty
+  const companyCount = db.prepare('SELECT COUNT(*) as cnt FROM company_config').get();
+  if (companyCount.cnt === 0) {
+    const insertCompany = db.prepare(`INSERT OR IGNORE INTO company_config (company_name, short_name, state, city) VALUES (?, ?, ?, ?)`);
+    insertCompany.run('Indriyan Beverages Pvt Ltd', 'IBPL', 'Punjab', 'Mohali');
+    insertCompany.run('Asian Lakto Ind Ltd', 'ALIL', 'Punjab', 'Mohali');
+  }
+
   // ── Migrations: Add new columns to existing tables ──────────────
 
   const safeAddColumn = (table, column, type) => {
@@ -691,6 +722,9 @@ function initSchema(db) {
   insertPolicyIfMissing.run('advance_min_working_days', '0', 'Minimum working days for advance eligibility (0 = any working days)');
   insertPolicyIfMissing.run('advance_fraction', '0.50', 'Fraction of gross salary paid as advance (>=15 days)');
   insertPolicyIfMissing.run('advance_process_date', '19', 'Date of month when advance processing starts');
+
+  // users: RBAC company access
+  safeAddColumn('users', 'allowed_companies', "TEXT DEFAULT '*'");
 
   // day_calculations: late deduction support
   safeAddColumn('day_calculations', 'late_count', 'INTEGER DEFAULT 0');

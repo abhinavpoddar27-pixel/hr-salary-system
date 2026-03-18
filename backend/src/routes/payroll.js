@@ -383,4 +383,281 @@ router.put('/day-calculations/:code/late-deduction', (req, res) => {
   res.json({ success: true, message: `Late deduction of ${deductionDays} day(s) applied for ${code}` });
 });
 
+/**
+ * GET /api/payroll/payslips/bulk
+ * Get all payslip data for a month (for client-side bulk PDF generation)
+ */
+router.get('/payslips/bulk', (req, res) => {
+  const db = getDb();
+  const { month, year, company } = req.query;
+
+  if (!month || !year) return res.status(400).json({ success: false, error: 'month and year required' });
+
+  const employees = db.prepare(`
+    SELECT DISTINCT sc.employee_code
+    FROM salary_computations sc
+    LEFT JOIN employees e ON sc.employee_code = e.code
+    WHERE sc.month = ? AND sc.year = ? AND sc.net_salary > 0
+    ${company ? 'AND sc.company = ?' : ''}
+    AND (e.status IS NULL OR e.status != 'Left')
+    ORDER BY sc.employee_code
+  `).all(...[month, year, company].filter(Boolean));
+
+  const payslips = [];
+  for (const emp of employees) {
+    const ps = generatePayslipData(db, emp.employee_code, parseInt(month), parseInt(year));
+    if (ps) payslips.push(ps);
+  }
+
+  // Fetch company config for headers
+  const companyConfig = company
+    ? db.prepare('SELECT * FROM company_config WHERE company_name = ?').get(company)
+    : null;
+
+  res.json({ success: true, data: payslips, companyConfig, count: payslips.length });
+});
+
+/**
+ * GET /api/payroll/month-end-checklist
+ * Pre-finalization validation checklist
+ */
+router.get('/month-end-checklist', (req, res) => {
+  const db = getDb();
+  const { month, year } = req.query;
+
+  if (!month || !year) return res.status(400).json({ success: false, error: 'month and year required' });
+
+  const items = [];
+
+  // 1. Check pipeline stages
+  const imports = db.prepare('SELECT * FROM monthly_imports WHERE month = ? AND year = ?').all(month, year);
+  if (imports.length === 0) {
+    items.push({ id: 'import', label: 'Attendance data imported', status: 'error', count: 0, detail: 'No import found for this month', link: '/pipeline/import' });
+  } else {
+    for (const imp of imports) {
+      const stages = [
+        { key: 'stage_1_done', label: 'Import', num: 1 },
+        { key: 'stage_2_done', label: 'Miss Punch', num: 2 },
+        { key: 'stage_3_done', label: 'Shift Check', num: 3 },
+        { key: 'stage_4_done', label: 'Night Shift', num: 4 },
+        { key: 'stage_5_done', label: 'Corrections', num: 5 },
+        { key: 'stage_6_done', label: 'Day Calculation', num: 6 },
+        { key: 'stage_7_done', label: 'Salary Computation', num: 7 },
+      ];
+      for (const s of stages) {
+        if (!imp[s.key]) {
+          items.push({
+            id: `stage_${s.num}_${imp.company}`,
+            label: `Stage ${s.num}: ${s.label} (${imp.company || 'All'})`,
+            status: 'warning',
+            count: 0,
+            detail: 'Stage not completed',
+            link: `/pipeline/${['import','miss-punch','shift-check','night-shift','corrections','day-calc','salary'][s.num-1]}`
+          });
+        }
+      }
+    }
+    if (items.filter(i => i.id.startsWith('stage_')).length === 0) {
+      items.push({ id: 'pipeline', label: 'All pipeline stages completed', status: 'ok', count: imports.length, detail: `${imports.length} company imports processed` });
+    }
+  }
+
+  // 2. Unresolved miss punches
+  const unresolvedMP = db.prepare(`
+    SELECT COUNT(*) as cnt FROM attendance_processed
+    WHERE month = ? AND year = ? AND is_miss_punch = 1 AND miss_punch_resolved = 0
+  `).get(month, year);
+  items.push({
+    id: 'miss_punches',
+    label: 'Unresolved miss punches',
+    status: unresolvedMP.cnt > 0 ? 'warning' : 'ok',
+    count: unresolvedMP.cnt,
+    detail: unresolvedMP.cnt > 0 ? `${unresolvedMP.cnt} miss punches need resolution` : 'All miss punches resolved',
+    link: '/pipeline/miss-punch'
+  });
+
+  // 3. Unconfirmed night shifts
+  const unconfirmedNS = db.prepare(`
+    SELECT COUNT(*) as cnt FROM night_shift_pairs
+    WHERE month = ? AND year = ? AND is_confirmed = 0 AND is_rejected = 0
+  `).get(month, year);
+  items.push({
+    id: 'night_shifts',
+    label: 'Unconfirmed night shift pairs',
+    status: unconfirmedNS.cnt > 0 ? 'warning' : 'ok',
+    count: unconfirmedNS.cnt,
+    detail: unconfirmedNS.cnt > 0 ? `${unconfirmedNS.cnt} night shift pairs need confirmation` : 'All night shifts confirmed',
+    link: '/pipeline/night-shift'
+  });
+
+  // 4. Employees missing salary structure
+  const missingSS = db.prepare(`
+    SELECT COUNT(DISTINCT dc.employee_code) as cnt
+    FROM day_calculations dc
+    LEFT JOIN employees e ON dc.employee_code = e.code
+    LEFT JOIN salary_structures ss ON ss.employee_id = e.id
+    WHERE dc.month = ? AND dc.year = ? AND ss.id IS NULL
+  `).get(month, year);
+  items.push({
+    id: 'salary_structure',
+    label: 'Employees missing salary structure',
+    status: missingSS.cnt > 0 ? 'warning' : 'ok',
+    count: missingSS.cnt,
+    detail: missingSS.cnt > 0 ? `${missingSS.cnt} employees have no salary structure` : 'All employees have salary structures',
+    link: '/employees'
+  });
+
+  // 5. Employees missing bank details
+  const missingBank = db.prepare(`
+    SELECT COUNT(*) as cnt FROM salary_computations sc
+    LEFT JOIN employees e ON sc.employee_code = e.code
+    WHERE sc.month = ? AND sc.year = ? AND sc.net_salary > 0 AND sc.salary_held = 0
+    AND (e.account_number IS NULL OR e.account_number = '') AND (e.bank_account IS NULL OR e.bank_account = '')
+  `).get(month, year);
+  items.push({
+    id: 'bank_details',
+    label: 'Employees missing bank details',
+    status: missingBank.cnt > 0 ? 'warning' : 'ok',
+    count: missingBank.cnt,
+    detail: missingBank.cnt > 0 ? `${missingBank.cnt} employees need bank details for NEFT` : 'All employees have bank details',
+    link: '/employees'
+  });
+
+  // 6. Held salaries
+  const heldSalaries = db.prepare(`
+    SELECT COUNT(*) as cnt FROM salary_computations
+    WHERE month = ? AND year = ? AND salary_held = 1 AND (hold_released IS NULL OR hold_released = 0)
+  `).get(month, year);
+  items.push({
+    id: 'held_salaries',
+    label: 'Held salaries not released',
+    status: heldSalaries.cnt > 0 ? 'warning' : 'ok',
+    count: heldSalaries.cnt,
+    detail: heldSalaries.cnt > 0 ? `${heldSalaries.cnt} salaries are on hold` : 'No held salaries',
+    link: '/pipeline/salary'
+  });
+
+  // 7. Already finalised check
+  const finalised = db.prepare(`
+    SELECT COUNT(*) as cnt FROM salary_computations
+    WHERE month = ? AND year = ? AND is_finalised = 1
+  `).get(month, year);
+  if (finalised.cnt > 0) {
+    items.push({
+      id: 'finalised',
+      label: 'Salary already finalised',
+      status: 'ok',
+      count: finalised.cnt,
+      detail: `${finalised.cnt} records already finalised`
+    });
+  }
+
+  const warnings = items.filter(i => i.status === 'warning').length;
+  const errors = items.filter(i => i.status === 'error').length;
+
+  res.json({ success: true, data: items, summary: { total: items.length, ok: items.filter(i => i.status === 'ok').length, warnings, errors } });
+});
+
+/**
+ * GET /api/payroll/salary-comparison
+ * Month-over-month salary comparison for anomaly detection
+ */
+router.get('/salary-comparison', (req, res) => {
+  const db = getDb();
+  const { month, year, company } = req.query;
+
+  if (!month || !year) return res.status(400).json({ success: false, error: 'month and year required' });
+
+  // Calculate previous month
+  let prevMonth = parseInt(month) - 1;
+  let prevYear = parseInt(year);
+  if (prevMonth === 0) { prevMonth = 12; prevYear--; }
+
+  const currentData = db.prepare(`
+    SELECT sc.employee_code, e.name as employee_name, e.department,
+           sc.gross_salary, sc.gross_earned, sc.net_salary, sc.payable_days,
+           sc.pf_employee, sc.esi_employee, sc.total_deductions,
+           sc.gross_changed, sc.salary_held
+    FROM salary_computations sc
+    LEFT JOIN employees e ON sc.employee_code = e.code
+    WHERE sc.month = ? AND sc.year = ?
+    ${company ? 'AND sc.company = ?' : ''}
+  `).all(...[month, year, company].filter(Boolean));
+
+  const prevData = db.prepare(`
+    SELECT sc.employee_code, sc.gross_salary as prev_gross, sc.net_salary as prev_net,
+           sc.payable_days as prev_payable_days, sc.gross_earned as prev_gross_earned
+    FROM salary_computations sc
+    WHERE sc.month = ? AND sc.year = ?
+    ${company ? 'AND sc.company = ?' : ''}
+  `).all(...[prevMonth, prevYear, company].filter(Boolean));
+
+  const prevMap = {};
+  for (const p of prevData) prevMap[p.employee_code] = p;
+
+  const comparisons = [];
+  for (const curr of currentData) {
+    const prev = prevMap[curr.employee_code];
+    const flags = [];
+
+    if (!prev) {
+      flags.push('NEW');
+    } else {
+      const netChange = prev.prev_net > 0 ? ((curr.net_salary - prev.prev_net) / prev.prev_net) * 100 : 0;
+      if (Math.abs(netChange) > 30) flags.push('LARGE_CHANGE');
+      else if (Math.abs(netChange) > 20) flags.push('MODERATE_CHANGE');
+      if (curr.gross_changed) flags.push('GROSS_CHANGED');
+
+      curr.prev_net = prev.prev_net;
+      curr.prev_gross = prev.prev_gross;
+      curr.prev_payable_days = prev.prev_payable_days;
+      curr.net_change_pct = Math.round(netChange * 100) / 100;
+    }
+
+    if (curr.salary_held) flags.push('HELD');
+    curr.flags = flags;
+
+    if (flags.length > 0) comparisons.push(curr);
+  }
+
+  // Check for employees in previous month but missing this month
+  const currentCodes = new Set(currentData.map(c => c.employee_code));
+  for (const prev of prevData) {
+    if (!currentCodes.has(prev.employee_code)) {
+      const emp = db.prepare('SELECT name, department FROM employees WHERE code = ?').get(prev.employee_code);
+      comparisons.push({
+        employee_code: prev.employee_code,
+        employee_name: emp?.name || prev.employee_code,
+        department: emp?.department || '',
+        net_salary: 0,
+        prev_net: prev.prev_net,
+        prev_gross: prev.prev_gross,
+        net_change_pct: -100,
+        flags: ['MISSING'],
+      });
+    }
+  }
+
+  // Sort by severity
+  const flagOrder = { MISSING: 0, LARGE_CHANGE: 1, HELD: 2, NEW: 3, GROSS_CHANGED: 4, MODERATE_CHANGE: 5 };
+  comparisons.sort((a, b) => {
+    const aMin = Math.min(...a.flags.map(f => flagOrder[f] ?? 99));
+    const bMin = Math.min(...b.flags.map(f => flagOrder[f] ?? 99));
+    return aMin - bMin;
+  });
+
+  res.json({
+    success: true,
+    data: comparisons,
+    summary: {
+      total: comparisons.length,
+      new: comparisons.filter(c => c.flags.includes('NEW')).length,
+      missing: comparisons.filter(c => c.flags.includes('MISSING')).length,
+      largeChange: comparisons.filter(c => c.flags.includes('LARGE_CHANGE')).length,
+      held: comparisons.filter(c => c.flags.includes('HELD')).length,
+    },
+    period: { current: { month, year }, previous: { month: prevMonth, year: prevYear } }
+  });
+});
+
 module.exports = router;

@@ -1,7 +1,7 @@
 import React, { useState, useMemo } from 'react'
 import { useQuery, useMutation } from '@tanstack/react-query'
 import toast from 'react-hot-toast'
-import { getSalaryRegister, computeSalary, finaliseSalary, getPayslip } from '../utils/api'
+import { getSalaryRegister, computeSalary, finaliseSalary, getPayslip, getMonthEndChecklist, getSalaryComparison } from '../utils/api'
 import { useAppStore } from '../store/appStore'
 import PipelineProgress from '../components/pipeline/PipelineProgress'
 import { fmtINR, monthYearLabel } from '../utils/formatters'
@@ -13,6 +13,7 @@ import clsx from 'clsx'
 import DrillDownRow, { DrillDownChevron } from '../components/ui/DrillDownRow'
 import EmployeeQuickView from '../components/ui/EmployeeQuickView'
 import api from '../utils/api'
+import { downloadPayslipPDF } from '../utils/payslipPdf'
 
 export default function SalaryComputation() {
   const { selectedMonth, selectedYear } = useAppStore()
@@ -68,6 +69,37 @@ export default function SalaryComputation() {
     enabled: !!payslipEmployee
   })
   const payslip = payslipRes?.data?.data
+
+  // Month-end checklist
+  const { data: checklistRes } = useQuery({
+    queryKey: ['month-end-checklist', selectedMonth, selectedYear],
+    queryFn: () => getMonthEndChecklist(selectedMonth, selectedYear),
+    retry: 0
+  })
+  const checklist = checklistRes?.data?.data || []
+  const checklistSummary = checklistRes?.data?.summary || {}
+
+  // Salary comparison
+  const [showComparison, setShowComparison] = useState(false)
+  const { data: comparisonRes, isLoading: comparisonLoading } = useQuery({
+    queryKey: ['salary-comparison', selectedMonth, selectedYear],
+    queryFn: () => getSalaryComparison(selectedMonth, selectedYear),
+    enabled: showComparison,
+    retry: 0
+  })
+  const comparisonData = comparisonRes?.data?.data || []
+  const comparisonSummary = comparisonRes?.data?.summary || {}
+
+  const [pdfLoading, setPdfLoading] = useState(false)
+  async function handleDownloadPayslip() {
+    if (!payslip) return
+    setPdfLoading(true)
+    try {
+      await downloadPayslipPDF(payslip, null)
+      toast.success('Payslip PDF downloaded')
+    } catch { toast.error('PDF generation failed') }
+    finally { setPdfLoading(false) }
+  }
 
   const computedTotals = useMemo(() => {
     const active = allSalaries.filter(s => !s.salary_held)
@@ -139,6 +171,100 @@ export default function SalaryComputation() {
                 {!changedCount && !heldCount && <span className="text-sm text-slate-400">None</span>}
               </div>
             </div>
+          </div>
+        )}
+
+        {/* Month-End Checklist */}
+        {checklist.length > 0 && (
+          <div className="card p-4">
+            <div className="flex items-center justify-between mb-3">
+              <h3 className="text-sm font-bold text-slate-700">Pre-Finalization Checklist</h3>
+              <div className="flex gap-2 text-xs">
+                {checklistSummary.warnings > 0 && <span className="px-2 py-0.5 bg-amber-100 text-amber-700 rounded-full font-medium">{checklistSummary.warnings} warning{checklistSummary.warnings > 1 ? 's' : ''}</span>}
+                {checklistSummary.errors > 0 && <span className="px-2 py-0.5 bg-red-100 text-red-700 rounded-full font-medium">{checklistSummary.errors} error{checklistSummary.errors > 1 ? 's' : ''}</span>}
+              </div>
+            </div>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+              {checklist.map(item => (
+                <div key={item.id} className={clsx('flex items-center gap-2 px-3 py-2 rounded-lg text-xs', item.status === 'ok' && 'bg-green-50', item.status === 'warning' && 'bg-amber-50', item.status === 'error' && 'bg-red-50')}>
+                  <span>{item.status === 'ok' ? '✅' : item.status === 'warning' ? '⚠️' : '❌'}</span>
+                  <div className="flex-1">
+                    <span className="font-medium">{item.label}</span>
+                    {item.count > 0 && item.status !== 'ok' && <span className="ml-1 text-slate-500">({item.count})</span>}
+                  </div>
+                  {item.link && item.status !== 'ok' && (
+                    <a href={item.link} className="text-blue-600 hover:underline text-xs">Fix</a>
+                  )}
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* Salary Comparison Toggle */}
+        {allSalaries.length > 0 && (
+          <div className="flex gap-2">
+            <button onClick={() => setShowComparison(!showComparison)} className={clsx('btn-ghost text-xs px-3 py-1.5 rounded-lg border', showComparison ? 'bg-blue-50 border-blue-200 text-blue-700' : 'border-slate-200')}>
+              {showComparison ? 'Hide Comparison' : 'Month-over-Month Comparison'}
+            </button>
+          </div>
+        )}
+
+        {/* Salary Comparison Panel */}
+        {showComparison && (
+          <div className="card p-4 animate-slide-up">
+            <div className="flex items-center justify-between mb-3">
+              <h3 className="text-sm font-bold text-slate-700">Salary Comparison — Anomalies</h3>
+              {comparisonSummary.total > 0 && (
+                <div className="flex gap-2 text-xs">
+                  {comparisonSummary.new > 0 && <span className="px-2 py-0.5 bg-blue-100 text-blue-700 rounded-full">{comparisonSummary.new} new</span>}
+                  {comparisonSummary.missing > 0 && <span className="px-2 py-0.5 bg-red-100 text-red-700 rounded-full">{comparisonSummary.missing} missing</span>}
+                  {comparisonSummary.largeChange > 0 && <span className="px-2 py-0.5 bg-amber-100 text-amber-700 rounded-full">{comparisonSummary.largeChange} large change</span>}
+                </div>
+              )}
+            </div>
+            {comparisonLoading ? <div className="text-center text-slate-400 py-4">Loading...</div> : comparisonData.length === 0 ? (
+              <div className="text-center text-green-600 py-4 text-sm">No anomalies detected — all salaries are within normal range.</div>
+            ) : (
+              <div className="overflow-x-auto">
+                <table className="table-compact w-full text-xs">
+                  <thead>
+                    <tr><th>Employee</th><th>Dept</th><th className="text-right">Prev Net</th><th className="text-right">Curr Net</th><th className="text-right">Change</th><th>Flags</th></tr>
+                  </thead>
+                  <tbody>
+                    {comparisonData.map(c => (
+                      <tr key={c.employee_code} className={clsx(
+                        c.flags.includes('MISSING') && 'bg-red-50',
+                        c.flags.includes('LARGE_CHANGE') && 'bg-amber-50',
+                        c.flags.includes('NEW') && 'bg-blue-50'
+                      )}>
+                        <td><span className="font-medium">{c.employee_name}</span><br/><span className="text-slate-400 font-mono">{c.employee_code}</span></td>
+                        <td>{c.department}</td>
+                        <td className="text-right font-mono">{c.prev_net ? fmtINR(c.prev_net) : '—'}</td>
+                        <td className="text-right font-mono">{fmtINR(c.net_salary)}</td>
+                        <td className={clsx('text-right font-mono', c.net_change_pct > 20 && 'text-green-600', c.net_change_pct < -20 && 'text-red-600')}>
+                          {c.net_change_pct !== undefined ? `${c.net_change_pct > 0 ? '+' : ''}${c.net_change_pct}%` : '—'}
+                        </td>
+                        <td>
+                          <div className="flex gap-1 flex-wrap">
+                            {c.flags.map(f => (
+                              <span key={f} className={clsx('px-1.5 py-0.5 rounded text-[10px] font-medium',
+                                f === 'MISSING' && 'bg-red-100 text-red-700',
+                                f === 'LARGE_CHANGE' && 'bg-amber-100 text-amber-700',
+                                f === 'NEW' && 'bg-blue-100 text-blue-700',
+                                f === 'HELD' && 'bg-amber-100 text-amber-700',
+                                f === 'GROSS_CHANGED' && 'bg-purple-100 text-purple-700',
+                                f === 'MODERATE_CHANGE' && 'bg-yellow-100 text-yellow-700'
+                              )}>{f.replace('_', ' ')}</span>
+                            ))}
+                          </div>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
           </div>
         )}
 
@@ -409,7 +535,8 @@ export default function SalaryComputation() {
             </ModalBody>
           )}
           <ModalFooter>
-            <button onClick={() => window.print()} className="btn-primary text-sm">Print</button>
+            <button onClick={handleDownloadPayslip} disabled={pdfLoading} className="btn-primary text-sm">{pdfLoading ? 'Generating...' : 'Download PDF'}</button>
+            <button onClick={() => window.print()} className="btn-secondary text-sm">Print</button>
             <button onClick={() => setPayslipEmployee(null)} className="btn-ghost text-sm">Close</button>
           </ModalFooter>
         </Modal>

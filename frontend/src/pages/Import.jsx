@@ -2,12 +2,98 @@ import React, { useState, useCallback } from 'react'
 import { useDropzone } from 'react-dropzone'
 import { useQueryClient } from '@tanstack/react-query'
 import toast from 'react-hot-toast'
-import { uploadFiles, getImportHistory } from '../utils/api'
+import { uploadFiles, getImportHistory, getImportReconciliation } from '../utils/api'
 import { useQuery } from '@tanstack/react-query'
 import { useAppStore } from '../store/appStore'
 import PipelineProgress from '../components/pipeline/PipelineProgress'
 import { fmtDate, fmtDateTime, monthYearLabel } from '../utils/formatters'
 import clsx from 'clsx'
+
+function ReconciliationPanel({ month, year }) {
+  const [showRecon, setShowRecon] = useState(false)
+  const { data: reconRes, isLoading } = useQuery({
+    queryKey: ['reconciliation', month, year],
+    queryFn: () => getImportReconciliation(month, year),
+    enabled: showRecon,
+    retry: 0
+  })
+  const recon = reconRes?.data?.data || null
+  const summary = reconRes?.data?.summary || {}
+
+  if (!showRecon) {
+    return (
+      <button onClick={() => setShowRecon(true)} className="btn-ghost text-xs border border-slate-200 px-3 py-1.5 rounded-lg">
+        Show Import Reconciliation
+      </button>
+    )
+  }
+
+  return (
+    <div className="card p-4 animate-slide-up">
+      <div className="flex items-center justify-between mb-3">
+        <h3 className="text-sm font-bold text-slate-700">Import Reconciliation</h3>
+        <button onClick={() => setShowRecon(false)} className="btn-ghost text-xs">Hide</button>
+      </div>
+      {isLoading ? <div className="text-center text-slate-400 py-4">Loading...</div> : !recon ? (
+        <div className="text-center text-slate-400 py-4 text-sm">No import data for this month</div>
+      ) : (
+        <div className="space-y-3">
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+            <div className="bg-green-50 rounded-lg px-3 py-2 text-center">
+              <div className="text-lg font-bold text-green-700">{summary.matched}</div>
+              <div className="text-xs text-green-600">Matched</div>
+            </div>
+            <div className={clsx('rounded-lg px-3 py-2 text-center', summary.newInEesl > 0 ? 'bg-amber-50' : 'bg-slate-50')}>
+              <div className={clsx('text-lg font-bold', summary.newInEesl > 0 ? 'text-amber-700' : 'text-slate-400')}>{summary.newInEesl}</div>
+              <div className="text-xs text-slate-500">New in EESL</div>
+            </div>
+            <div className={clsx('rounded-lg px-3 py-2 text-center', summary.missingFromEesl > 0 ? 'bg-red-50' : 'bg-slate-50')}>
+              <div className={clsx('text-lg font-bold', summary.missingFromEesl > 0 ? 'text-red-600' : 'text-slate-400')}>{summary.missingFromEesl}</div>
+              <div className="text-xs text-slate-500">Missing from EESL</div>
+            </div>
+            <div className="bg-blue-50 rounded-lg px-3 py-2 text-center">
+              <div className="text-lg font-bold text-blue-700">{summary.totalRecords}</div>
+              <div className="text-xs text-blue-600">Total Records</div>
+            </div>
+          </div>
+
+          {recon.newInEesl?.length > 0 && (
+            <div className="bg-amber-50 rounded-lg p-3">
+              <h4 className="text-xs font-semibold text-amber-800 mb-1">New Employees in EESL (not in master)</h4>
+              <div className="space-y-0.5 max-h-32 overflow-y-auto">
+                {recon.newInEesl.map(e => (
+                  <div key={e.code} className="text-xs text-amber-700"><span className="font-mono">{e.code}</span> — {e.name} ({e.department})</div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {recon.missingFromEesl?.length > 0 && (
+            <div className="bg-red-50 rounded-lg p-3">
+              <h4 className="text-xs font-semibold text-red-800 mb-1">Active Employees Missing from EESL</h4>
+              <div className="space-y-0.5 max-h-32 overflow-y-auto">
+                {recon.missingFromEesl.map(e => (
+                  <div key={e.code} className="text-xs text-red-700"><span className="font-mono">{e.code}</span> — {e.name} ({e.department})</div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {recon.zeroPunch?.length > 0 && (
+            <div className="bg-slate-50 rounded-lg p-3">
+              <h4 className="text-xs font-semibold text-slate-700 mb-1">Zero Punch Employees ({recon.zeroPunch.length})</h4>
+              <div className="space-y-0.5 max-h-24 overflow-y-auto">
+                {recon.zeroPunch.map(e => (
+                  <div key={e.code} className="text-xs text-slate-600"><span className="font-mono">{e.code}</span> — {e.name}</div>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  )
+}
 
 export default function Import() {
   const { selectedMonth, selectedYear } = useAppStore()
@@ -206,6 +292,9 @@ export default function Import() {
             </div>
           </div>
         )}
+
+        {/* Reconciliation Panel */}
+        <ReconciliationPanel month={selectedMonth} year={selectedYear} />
 
         {/* Import History */}
         {history.length > 0 && (

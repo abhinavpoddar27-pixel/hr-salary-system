@@ -4,13 +4,16 @@ import toast from 'react-hot-toast'
 import {
   getAttendanceSummaryReport, getMissPunchReport, getSalaryRegister,
   getBankTransferSheet, getPFStatement, getESIStatement, getAuditTrail,
-  getHeadcountReport
+  getHeadcountReport, getPFECR, downloadPFECR, getESIContribution,
+  downloadESIContribution, getBankSalaryFile, downloadBankSalaryFile,
+  getBulkPayslips, getCompanyConfig
 } from '../utils/api'
 import { useAppStore } from '../store/appStore'
 import { fmtINR, fmtDate } from '../utils/formatters'
 import useExpandableRows from '../hooks/useExpandableRows'
 import DrillDownRow, { DrillDownChevron } from '../components/ui/DrillDownRow'
 import EmployeeQuickView from '../components/ui/EmployeeQuickView'
+import { downloadBulkPayslipsPDF } from '../utils/payslipPdf'
 
 const MONTH_NAMES = ['', 'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
 
@@ -121,14 +124,84 @@ export default function Reports() {
   })
   const auditData = auditRes?.data?.data || []
 
+  // PF ECR
+  const { data: ecrRes, isLoading: ecrLoading } = useQuery({
+    queryKey: ['pf-ecr', selectedMonth, selectedYear, companyFilter],
+    queryFn: () => getPFECR(selectedMonth, selectedYear, companyFilter),
+    enabled: activeReport === 'pf-ecr',
+    retry: 0
+  })
+  const ecrData = ecrRes?.data?.data || []
+  const ecrTotals = ecrRes?.data?.totals || {}
+
+  // ESI Contribution
+  const { data: esiContribRes, isLoading: esiContribLoading } = useQuery({
+    queryKey: ['esi-contrib', selectedMonth, selectedYear, companyFilter],
+    queryFn: () => getESIContribution(selectedMonth, selectedYear, companyFilter),
+    enabled: activeReport === 'esi-contrib',
+    retry: 0
+  })
+  const esiContribData = esiContribRes?.data?.data || []
+  const esiContribTotals = esiContribRes?.data?.totals || {}
+
+  // Bank Salary File
+  const { data: bankFileRes, isLoading: bankFileLoading } = useQuery({
+    queryKey: ['bank-file', selectedMonth, selectedYear, companyFilter],
+    queryFn: () => getBankSalaryFile(selectedMonth, selectedYear, companyFilter),
+    enabled: activeReport === 'bank-file',
+    retry: 0
+  })
+  const bankFileData = bankFileRes?.data?.data || []
+  const bankFileMissing = bankFileRes?.data?.missing || []
+  const bankFileTotals = bankFileRes?.data?.totals || {}
+
+  const [bulkPdfLoading, setBulkPdfLoading] = useState(false)
+
+  async function handleDownloadFile(downloadFn, month, year, company) {
+    try {
+      const response = await downloadFn(month, year, company)
+      const contentDisposition = response.headers['content-disposition'] || ''
+      const filenameMatch = contentDisposition.match(/filename="?(.+?)"?$/i)
+      const filename = filenameMatch ? filenameMatch[1] : 'export.txt'
+
+      const blob = new Blob([response.data])
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a'); a.href = url; a.download = filename; a.click()
+      URL.revokeObjectURL(url)
+      toast.success(`Downloaded ${filename}`)
+    } catch (err) {
+      toast.error('Download failed')
+    }
+  }
+
+  async function handleBulkPayslips() {
+    setBulkPdfLoading(true)
+    try {
+      const res = await getBulkPayslips(selectedMonth, selectedYear, companyFilter)
+      const payslips = res.data?.data || []
+      const companyConf = res.data?.companyConfig || null
+      if (payslips.length === 0) { toast.error('No payslips to generate'); return }
+      await downloadBulkPayslipsPDF(payslips, companyConf, selectedMonth, selectedYear)
+      toast.success(`Generated ${payslips.length} payslips`)
+    } catch (err) {
+      toast.error('Failed to generate payslips')
+    } finally {
+      setBulkPdfLoading(false)
+    }
+  }
+
   const REPORTS = [
-    { id: 'attendance', label: '📋 Attendance Summary', desc: 'Per-employee present/absent/LOP summary' },
-    { id: 'misspunch', label: '⏰ Miss Punch', desc: 'All miss punch cases and resolutions' },
-    { id: 'salary', label: '💰 Salary Register', desc: 'Full salary register with all components' },
-    { id: 'bank', label: '🏦 Bank NEFT', desc: 'Bank transfer sheet for net pay' },
-    { id: 'pf', label: '🔵 PF Statement', desc: 'Provident Fund challan data' },
-    { id: 'esi', label: '🟣 ESI Statement', desc: 'ESI challan data' },
-    { id: 'audit', label: '🔍 Audit Trail', desc: 'All field-level changes with before/after' },
+    { id: 'attendance', label: 'Attendance Summary', desc: 'Per-employee present/absent/LOP summary' },
+    { id: 'misspunch', label: 'Miss Punch', desc: 'All miss punch cases and resolutions' },
+    { id: 'salary', label: 'Salary Register', desc: 'Full salary register with all components' },
+    { id: 'bank', label: 'Bank NEFT', desc: 'Bank transfer sheet for net pay' },
+    { id: 'pf', label: 'PF Statement', desc: 'Provident Fund challan data' },
+    { id: 'esi', label: 'ESI Statement', desc: 'ESI challan data' },
+    { id: 'pf-ecr', label: 'PF ECR File', desc: 'EPFO Electronic Challan Return format' },
+    { id: 'esi-contrib', label: 'ESI Contribution File', desc: 'ESIC portal upload format' },
+    { id: 'bank-file', label: 'Bank Salary File', desc: 'PNB bulk salary upload CSV' },
+    { id: 'payslips', label: 'Payslips (Bulk PDF)', desc: 'Download all employee payslips' },
+    { id: 'audit', label: 'Audit Trail', desc: 'All field-level changes with before/after' },
   ]
 
   const monthLabel = `${MONTH_NAMES[selectedMonth]}_${selectedYear}`
@@ -617,6 +690,185 @@ export default function Reports() {
                   </div>
                 </div>
               )}
+            </div>
+          )}
+
+          {/* PF ECR File */}
+          {activeReport === 'pf-ecr' && (
+            <div className="space-y-4">
+              <div className="flex items-center justify-between">
+                <h3 className="text-base font-bold text-slate-800">PF ECR File — {MONTH_NAMES[selectedMonth]} {selectedYear}</h3>
+                <button
+                  onClick={() => handleDownloadFile(downloadPFECR, selectedMonth, selectedYear, companyFilter)}
+                  className="btn-primary text-sm"
+                >
+                  Download ECR (.txt)
+                </button>
+              </div>
+              {ecrData.length > 0 && (
+                <div className="grid grid-cols-4 gap-3">
+                  <div className="card p-3 text-center"><div className="font-bold text-slate-700">{ecrTotals.count}</div><div className="text-xs text-slate-500">Employees</div></div>
+                  <div className="card p-3 text-center"><div className="font-bold text-blue-600">{fmtINR(ecrTotals.totalEEPF)}</div><div className="text-xs text-slate-500">EE PF</div></div>
+                  <div className="card p-3 text-center"><div className="font-bold text-green-600">{fmtINR(ecrTotals.totalEPS)}</div><div className="text-xs text-slate-500">EPS</div></div>
+                  <div className="card p-3 text-center"><div className="font-bold text-purple-600">{fmtINR(ecrTotals.totalERPF)}</div><div className="text-xs text-slate-500">ER PF Diff</div></div>
+                </div>
+              )}
+              {ecrLoading ? <div className="card p-8 text-center text-slate-400">Loading...</div> : (
+                <div className="card overflow-hidden">
+                  <div className="overflow-x-auto">
+                    <table className="table-compact w-full text-xs">
+                      <thead>
+                        <tr><th>UAN</th><th>Name</th><th className="text-right">Gross</th><th className="text-right">EPF Wages</th><th className="text-right">EE PF</th><th className="text-right">EPS</th><th className="text-right">ER Diff</th><th className="text-center">NCP Days</th></tr>
+                      </thead>
+                      <tbody>
+                        {ecrData.length === 0 ? (
+                          <tr><td colSpan={8} className="text-center py-6 text-slate-400">No PF data. Run salary computation first.</td></tr>
+                        ) : ecrData.map((e, i) => (
+                          <tr key={e.employee_code || i}>
+                            <td className="font-mono text-xs">{e.uan || <span className="text-red-400">Missing</span>}</td>
+                            <td className="font-medium">{e.employee_name}</td>
+                            <td className="text-right">{fmtINR(e.gross_earned)}</td>
+                            <td className="text-right">{fmtINR(e.pf_wages)}</td>
+                            <td className="text-right text-blue-600">{fmtINR(e.pf_employee)}</td>
+                            <td className="text-right text-green-600">{fmtINR(e.eps)}</td>
+                            <td className="text-right text-purple-600">{fmtINR((e.pf_employer || 0) - (e.eps || 0))}</td>
+                            <td className="text-center">{Math.max(0, Math.round((e.total_calendar_days || 30) - (e.total_sundays || 0) - (e.total_holidays || 0) - (e.payable_days || 0)))}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* ESI Contribution File */}
+          {activeReport === 'esi-contrib' && (
+            <div className="space-y-4">
+              <div className="flex items-center justify-between">
+                <h3 className="text-base font-bold text-slate-800">ESI Contribution File — {MONTH_NAMES[selectedMonth]} {selectedYear}</h3>
+                <button
+                  onClick={() => handleDownloadFile(downloadESIContribution, selectedMonth, selectedYear, companyFilter)}
+                  className="btn-primary text-sm"
+                >
+                  Download ESI File (.txt)
+                </button>
+              </div>
+              {esiContribData.length > 0 && (
+                <div className="grid grid-cols-3 gap-3">
+                  <div className="card p-3 text-center"><div className="font-bold text-slate-700">{esiContribTotals.count}</div><div className="text-xs text-slate-500">Employees</div></div>
+                  <div className="card p-3 text-center"><div className="font-bold text-blue-600">{fmtINR(esiContribTotals.totalEEESI)}</div><div className="text-xs text-slate-500">IP Contribution</div></div>
+                  <div className="card p-3 text-center"><div className="font-bold text-green-600">{fmtINR(esiContribTotals.totalERESI)}</div><div className="text-xs text-slate-500">ER Contribution</div></div>
+                </div>
+              )}
+              {esiContribLoading ? <div className="card p-8 text-center text-slate-400">Loading...</div> : (
+                <div className="card overflow-hidden">
+                  <div className="overflow-x-auto">
+                    <table className="table-compact w-full text-xs">
+                      <thead>
+                        <tr><th>IP Number</th><th>Name</th><th className="text-center">Days</th><th className="text-right">Total Wages</th><th className="text-right">IP Contribution</th><th className="text-center">Reason</th></tr>
+                      </thead>
+                      <tbody>
+                        {esiContribData.length === 0 ? (
+                          <tr><td colSpan={6} className="text-center py-6 text-slate-400">No ESI data</td></tr>
+                        ) : esiContribData.map((e, i) => (
+                          <tr key={e.employee_code || i}>
+                            <td className="font-mono text-xs">{e.esi_number || <span className="text-red-400">Missing</span>}</td>
+                            <td className="font-medium">{e.employee_name}</td>
+                            <td className="text-center">{Math.round(e.payable_days || 0)}</td>
+                            <td className="text-right">{fmtINR(e.esi_wages)}</td>
+                            <td className="text-right text-blue-600">{fmtINR(e.esi_employee)}</td>
+                            <td className="text-center">{e.date_of_joining && new Date(e.date_of_joining) >= new Date(selectedYear, selectedMonth - 1, 1) ? '1' : '0'}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Bank Salary File */}
+          {activeReport === 'bank-file' && (
+            <div className="space-y-4">
+              <div className="flex items-center justify-between">
+                <h3 className="text-base font-bold text-slate-800">Bank Salary Upload File — {MONTH_NAMES[selectedMonth]} {selectedYear}</h3>
+                <button
+                  onClick={() => handleDownloadFile(downloadBankSalaryFile, selectedMonth, selectedYear, companyFilter)}
+                  className="btn-primary text-sm"
+                >
+                  Download Bank File (.csv)
+                </button>
+              </div>
+              <div className="grid grid-cols-3 gap-3">
+                <div className="card p-3 text-center"><div className="font-bold text-green-700">{fmtINR(bankFileTotals.totalAmount || 0)}</div><div className="text-xs text-slate-500">Total Transfer Amount</div></div>
+                <div className="card p-3 text-center"><div className="font-bold text-slate-700">{bankFileTotals.count || 0}</div><div className="text-xs text-slate-500">Employees</div></div>
+                {bankFileTotals.missingCount > 0 && (
+                  <div className="card p-3 text-center bg-red-50 border-red-200"><div className="font-bold text-red-600">{bankFileTotals.missingCount}</div><div className="text-xs text-red-500">Missing Bank Details</div></div>
+                )}
+              </div>
+              {bankFileMissing.length > 0 && (
+                <div className="card p-4 bg-amber-50 border-amber-200">
+                  <h4 className="text-sm font-semibold text-amber-800 mb-2">Employees with Missing Bank Details</h4>
+                  <div className="space-y-1">
+                    {bankFileMissing.map(m => (
+                      <div key={m.employee_code} className="text-xs text-amber-700">
+                        <span className="font-mono">{m.employee_code}</span> — {m.employee_name} ({m.department}) — Net: {fmtINR(m.net_salary)}
+                        {m.missing_account && <span className="ml-1 badge badge-red text-xs">No Account</span>}
+                        {m.missing_ifsc && <span className="ml-1 badge badge-red text-xs">No IFSC</span>}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+              {bankFileLoading ? <div className="card p-8 text-center text-slate-400">Loading...</div> : (
+                <div className="card overflow-hidden">
+                  <div className="overflow-x-auto">
+                    <table className="table-compact w-full text-xs">
+                      <thead>
+                        <tr><th>Sr</th><th>Name</th><th>Account Number</th><th>IFSC</th><th className="text-right">Amount</th></tr>
+                      </thead>
+                      <tbody>
+                        {bankFileData.length === 0 ? (
+                          <tr><td colSpan={5} className="text-center py-6 text-slate-400">No data</td></tr>
+                        ) : bankFileData.map((e, i) => (
+                          <tr key={e.employee_code || i}>
+                            <td>{i + 1}</td>
+                            <td className="font-medium">{e.employee_name}</td>
+                            <td className="font-mono">{e.account_number}</td>
+                            <td className="font-mono text-xs">{e.ifsc_code}</td>
+                            <td className="text-right font-bold text-green-700">{fmtINR(e.net_salary)}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Bulk Payslips */}
+          {activeReport === 'payslips' && (
+            <div className="space-y-4">
+              <div className="flex items-center justify-between">
+                <h3 className="text-base font-bold text-slate-800">Payslips — {MONTH_NAMES[selectedMonth]} {selectedYear}</h3>
+                <button
+                  onClick={handleBulkPayslips}
+                  disabled={bulkPdfLoading}
+                  className="btn-primary text-sm"
+                >
+                  {bulkPdfLoading ? 'Generating PDF...' : 'Download All Payslips (PDF)'}
+                </button>
+              </div>
+              <div className="card p-6 text-center">
+                <div className="text-3xl mb-3">PDF</div>
+                <p className="text-slate-600 mb-2">Generate a single PDF containing all employee payslips for {MONTH_NAMES[selectedMonth]} {selectedYear}.</p>
+                <p className="text-xs text-slate-400">Each payslip will be on a separate page with company header, earnings, deductions, and attendance summary.</p>
+                {companyFilter && <p className="text-xs text-blue-600 mt-2">Filtered to: {companyFilter}</p>}
+              </div>
             </div>
           )}
 

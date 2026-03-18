@@ -618,7 +618,7 @@ function UsageLogsTab() {
 function UserManagementTab() {
   const qc = useQueryClient()
   const [showCreate, setShowCreate] = useState(false)
-  const [form, setForm] = useState({ username: '', password: '', role: 'viewer' })
+  const [form, setForm] = useState({ username: '', password: '', role: 'viewer', allowedCompanies: ['*'] })
 
   const { data: usersRes, isLoading } = useQuery({
     queryKey: ['users'],
@@ -633,7 +633,7 @@ function UserManagementTab() {
       toast.success('User created')
       qc.invalidateQueries(['users'])
       setShowCreate(false)
-      setForm({ username: '', password: '', role: 'viewer' })
+      setForm({ username: '', password: '', role: 'viewer', allowedCompanies: ['*'] })
     }
   })
 
@@ -664,6 +664,22 @@ function UserManagementTab() {
                 <option value="admin">Admin (Full Access)</option>
               </select>
             </div>
+            <div>
+              <label className="label">Company Access</label>
+              <select
+                value={form.allowedCompanies?.includes('*') ? '*' : form.allowedCompanies?.join(',') || '*'}
+                onChange={e => {
+                  const v = e.target.value
+                  setForm(f => ({ ...f, allowedCompanies: v === '*' ? ['*'] : v.split(',') }))
+                }}
+                className="select"
+              >
+                <option value="*">All Companies</option>
+                <option value="Indriyan Beverages Pvt Ltd">Indriyan Beverages Only</option>
+                <option value="Asian Lakto Ind Ltd">Asian Lakto Only</option>
+                <option value="Indriyan Beverages Pvt Ltd,Asian Lakto Ind Ltd">Both (Explicit)</option>
+              </select>
+            </div>
           </div>
           <div className="mt-3 text-xs text-slate-400">
             <strong>Roles:</strong> Viewer = read only | HR = payroll + employee management | Admin = full access including settings
@@ -682,14 +698,14 @@ function UserManagementTab() {
           <table className="table-compact w-full">
             <thead>
               <tr>
-                <th>ID</th><th>Username</th><th>Role</th><th>Created</th>
+                <th>ID</th><th>Username</th><th>Role</th><th>Companies</th><th>Created</th>
               </tr>
             </thead>
             <tbody>
               {isLoading ? (
-                <tr><td colSpan={4} className="text-center py-8 text-slate-400">Loading...</td></tr>
+                <tr><td colSpan={5} className="text-center py-8 text-slate-400">Loading...</td></tr>
               ) : users.length === 0 ? (
-                <tr><td colSpan={4} className="text-center py-8 text-slate-400">No users found</td></tr>
+                <tr><td colSpan={5} className="text-center py-8 text-slate-400">No users found</td></tr>
               ) : users.map(u => (
                 <tr key={u.id}>
                   <td className="text-slate-400">{u.id}</td>
@@ -700,6 +716,12 @@ function UserManagementTab() {
                       u.role === 'hr' ? 'bg-blue-100 text-blue-700' :
                       'bg-slate-100 text-slate-600'
                     )}>{u.role}</span>
+                  </td>
+                  <td className="text-xs">
+                    {u.allowedCompanies?.includes('*')
+                      ? <span className="text-green-600">All</span>
+                      : (u.allowedCompanies || []).map(c => <div key={c} className="text-slate-600">{c.replace(' Pvt Ltd', '').replace(' Ind Ltd', '')}</div>)
+                    }
                   </td>
                   <td className="text-slate-400 text-sm">{u.created_at?.split('T')[0] || '—'}</td>
                 </tr>

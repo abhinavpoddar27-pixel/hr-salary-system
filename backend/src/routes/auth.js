@@ -43,10 +43,19 @@ router.post('/login', (req, res) => {
     maxAge: 12 * 60 * 60 * 1000 // 12h
   });
 
+  // Parse allowed companies
+  const ac = user.allowed_companies || '*';
+  const allowedCompanies = ac === '*' ? ['*'] : ac.split(',').map(c => c.trim()).filter(Boolean);
+
   res.json({
     success: true,
     token,
-    user: { id: user.id, username: user.username, role: user.role }
+    user: {
+      id: user.id,
+      username: user.username,
+      role: user.role,
+      allowedCompanies
+    }
   });
 });
 
@@ -59,8 +68,12 @@ router.post('/logout', (req, res) => {
 // GET /api/auth/me  (protected)
 router.get('/me', requireAuth, (req, res) => {
   const db = getDb();
-  const user = db.prepare('SELECT id, username, role, last_login FROM users WHERE id = ?').get(req.user.id);
+  const user = db.prepare('SELECT id, username, role, last_login, allowed_companies FROM users WHERE id = ?').get(req.user.id);
   if (!user) return res.status(404).json({ success: false, error: 'User not found' });
+
+  const ac = user.allowed_companies || '*';
+  user.allowedCompanies = ac === '*' ? ['*'] : ac.split(',').map(c => c.trim()).filter(Boolean);
+
   res.json({ success: true, user });
 });
 
@@ -91,7 +104,12 @@ router.get('/users', requireAuth, (req, res) => {
     return res.status(403).json({ success: false, error: 'Admin access required' });
   }
   const db = getDb();
-  const users = db.prepare('SELECT id, username, role, is_active, created_at, last_login FROM users ORDER BY created_at').all();
+  const users = db.prepare('SELECT id, username, role, is_active, allowed_companies, created_at, last_login FROM users ORDER BY created_at').all();
+  // Parse allowed_companies for each user
+  for (const u of users) {
+    const ac = u.allowed_companies || '*';
+    u.allowedCompanies = ac === '*' ? ['*'] : ac.split(',').map(c => c.trim()).filter(Boolean);
+  }
   res.json({ success: true, data: users });
 });
 
@@ -100,7 +118,7 @@ router.post('/users', requireAuth, (req, res) => {
   if (req.user.role !== 'admin') {
     return res.status(403).json({ success: false, error: 'Admin access required' });
   }
-  const { username, password, role } = req.body;
+  const { username, password, role, allowedCompanies } = req.body;
   if (!username || !password) {
     return res.status(400).json({ success: false, error: 'Username and password required' });
   }
@@ -108,11 +126,55 @@ router.post('/users', requireAuth, (req, res) => {
   const existing = db.prepare('SELECT id FROM users WHERE username = ?').get(username.trim().toLowerCase());
   if (existing) return res.status(400).json({ success: false, error: 'Username already exists' });
 
+  // Format allowed_companies: array → comma-separated string, or '*'
+  let ac = '*';
+  if (allowedCompanies && Array.isArray(allowedCompanies)) {
+    if (allowedCompanies.includes('*')) ac = '*';
+    else ac = allowedCompanies.join(',');
+  }
+
   const hash = bcrypt.hashSync(password, 10);
-  const result = db.prepare('INSERT INTO users (username, password_hash, role) VALUES (?, ?, ?)').run(
-    username.trim().toLowerCase(), hash, role || 'viewer'
+  const result = db.prepare('INSERT INTO users (username, password_hash, role, allowed_companies) VALUES (?, ?, ?, ?)').run(
+    username.trim().toLowerCase(), hash, role || 'viewer', ac
   );
   res.json({ success: true, id: result.lastInsertRowid });
+});
+
+// PUT /api/auth/users/:id  (admin only — update user)
+router.put('/users/:id', requireAuth, (req, res) => {
+  if (req.user.role !== 'admin') {
+    return res.status(403).json({ success: false, error: 'Admin access required' });
+  }
+
+  const db = getDb();
+  const { id } = req.params;
+  const { role, is_active, allowedCompanies, password } = req.body;
+
+  const updates = [];
+  const values = [];
+
+  if (role !== undefined) { updates.push('role = ?'); values.push(role); }
+  if (is_active !== undefined) { updates.push('is_active = ?'); values.push(is_active ? 1 : 0); }
+  if (allowedCompanies !== undefined) {
+    let ac = '*';
+    if (Array.isArray(allowedCompanies)) {
+      ac = allowedCompanies.includes('*') ? '*' : allowedCompanies.join(',');
+    } else if (typeof allowedCompanies === 'string') {
+      ac = allowedCompanies;
+    }
+    updates.push('allowed_companies = ?');
+    values.push(ac);
+  }
+  if (password) {
+    updates.push('password_hash = ?');
+    values.push(bcrypt.hashSync(password, 10));
+  }
+
+  if (updates.length === 0) return res.status(400).json({ success: false, error: 'No fields to update' });
+
+  values.push(id);
+  db.prepare(`UPDATE users SET ${updates.join(', ')} WHERE id = ?`).run(...values);
+  res.json({ success: true, message: 'User updated' });
 });
 
 module.exports = router;

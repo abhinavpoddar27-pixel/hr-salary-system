@@ -1,6 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const { getDb } = require('../database/db');
+const { generatePFECR, generateESIFile, generateBankFile } = require('../services/exportFormats');
 
 // GET monthly attendance summary
 router.get('/attendance-summary', (req, res) => {
@@ -226,6 +227,101 @@ router.get('/audit-trail', (req, res) => {
 
   const data = db.prepare(query).all(...params);
   res.json({ success: true, data });
+});
+
+// GET PF ECR file (EPFO format)
+router.get('/pf-ecr', (req, res) => {
+  const db = getDb();
+  const { month, year, company, download } = req.query;
+  if (!month || !year) return res.status(400).json({ success: false, error: 'month and year required' });
+
+  const result = generatePFECR(db, parseInt(month), parseInt(year), company);
+
+  if (download === 'true') {
+    res.setHeader('Content-Type', 'text/plain');
+    res.setHeader('Content-Disposition', `attachment; filename="${result.filename}"`);
+    return res.send(result.content);
+  }
+
+  res.json({ success: true, data: result.employees, totals: result.totals, filename: result.filename, month, year });
+});
+
+// GET ESI contribution file (ESIC format)
+router.get('/esi-contribution', (req, res) => {
+  const db = getDb();
+  const { month, year, company, download } = req.query;
+  if (!month || !year) return res.status(400).json({ success: false, error: 'month and year required' });
+
+  const result = generateESIFile(db, parseInt(month), parseInt(year), company);
+
+  if (download === 'true') {
+    res.setHeader('Content-Type', 'text/plain');
+    res.setHeader('Content-Disposition', `attachment; filename="${result.filename}"`);
+    return res.send(result.content);
+  }
+
+  res.json({ success: true, data: result.employees, totals: result.totals, filename: result.filename, month, year });
+});
+
+// GET bank salary upload file (PNB/generic CSV format)
+router.get('/bank-salary-file', (req, res) => {
+  const db = getDb();
+  const { month, year, company, download } = req.query;
+  if (!month || !year) return res.status(400).json({ success: false, error: 'month and year required' });
+
+  const result = generateBankFile(db, parseInt(month), parseInt(year), company);
+
+  if (download === 'true') {
+    res.setHeader('Content-Type', 'text/csv');
+    res.setHeader('Content-Disposition', `attachment; filename="${result.filename}"`);
+    return res.send(result.content);
+  }
+
+  res.json({
+    success: true,
+    data: result.employees,
+    missing: result.missing,
+    totals: result.totals,
+    filename: result.filename,
+    month, year
+  });
+});
+
+// GET company config (for export headers, PF/ESI codes)
+router.get('/company-config', (req, res) => {
+  const db = getDb();
+  const { company } = req.query;
+
+  if (company) {
+    const config = db.prepare('SELECT * FROM company_config WHERE company_name = ?').get(company);
+    return res.json({ success: true, data: config });
+  }
+
+  const configs = db.prepare('SELECT * FROM company_config ORDER BY company_name').all();
+  res.json({ success: true, data: configs });
+});
+
+// PUT company config
+router.put('/company-config/:id', (req, res) => {
+  const db = getDb();
+  const { id } = req.params;
+  const fields = ['short_name', 'pf_establishment_code', 'esi_code', 'address_line1', 'address_line2',
+    'city', 'state', 'pin', 'pan', 'tan', 'bank_name', 'bank_account', 'bank_ifsc'];
+
+  const updates = [];
+  const values = [];
+  for (const f of fields) {
+    if (req.body[f] !== undefined) {
+      updates.push(`${f} = ?`);
+      values.push(req.body[f]);
+    }
+  }
+
+  if (updates.length === 0) return res.status(400).json({ success: false, error: 'No fields to update' });
+
+  values.push(id);
+  db.prepare(`UPDATE company_config SET ${updates.join(', ')} WHERE id = ?`).run(...values);
+  res.json({ success: true, message: 'Company config updated' });
 });
 
 module.exports = router;

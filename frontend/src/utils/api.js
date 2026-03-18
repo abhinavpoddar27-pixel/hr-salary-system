@@ -162,6 +162,27 @@ export const getBankTransfer = (month, year, company) => api.get('/reports/bank-
 export const getHeadcountReport = (month, year) => api.get('/reports/headcount', { params: { month, year } })
 export const getAuditTrail = (month, year) => api.get('/reports/audit-trail', { params: { month, year } })
 
+// ── Government Export Files ─────────────────────────────
+export const getPFECR = (month, year, company) => api.get('/reports/pf-ecr', { params: { month, year, company } })
+export const downloadPFECR = (month, year, company) => api.get('/reports/pf-ecr', { params: { month, year, company, download: 'true' }, responseType: 'blob' })
+export const getESIContribution = (month, year, company) => api.get('/reports/esi-contribution', { params: { month, year, company } })
+export const downloadESIContribution = (month, year, company) => api.get('/reports/esi-contribution', { params: { month, year, company, download: 'true' }, responseType: 'blob' })
+export const getBankSalaryFile = (month, year, company) => api.get('/reports/bank-salary-file', { params: { month, year, company } })
+export const downloadBankSalaryFile = (month, year, company) => api.get('/reports/bank-salary-file', { params: { month, year, company, download: 'true' }, responseType: 'blob' })
+export const getCompanyConfig = (company) => api.get('/reports/company-config', { params: { company } })
+export const updateCompanyConfig = (id, data) => api.put(`/reports/company-config/${id}`, data)
+
+// ── Payroll Extended ──────────────────────────────────
+export const getBulkPayslips = (month, year, company) => api.get('/payroll/payslips/bulk', { params: { month, year, company } })
+export const getMonthEndChecklist = (month, year) => api.get('/payroll/month-end-checklist', { params: { month, year } })
+export const getSalaryComparison = (month, year, company) => api.get('/payroll/salary-comparison', { params: { month, year, company } })
+
+// ── Import Reconciliation ─────────────────────────────
+export const getImportReconciliation = (month, year, company) => api.get(`/import/reconciliation/${month}/${year}`, { params: { company } })
+
+// ── User Management Extended ──────────────────────────
+export const updateUser = (id, data) => api.put(`/auth/users/${id}`, data)
+
 // ── Settings ───────────────────────────────────────────
 export const getShifts = () => api.get('/settings/shifts')
 export const createShift = (data) => api.post('/settings/shifts', data)

@@ -375,4 +375,84 @@ router.delete('/:importId', (req, res) => {
   res.json({ success: true, message: 'Import deleted successfully' });
 });
 
+/**
+ * GET /api/import/reconciliation/:month/:year
+ * Post-import reconciliation: compare EESL data with employee master
+ */
+router.get('/reconciliation/:month/:year', (req, res) => {
+  const db = getDb();
+  const { month, year } = req.params;
+  const { company } = req.query;
+
+  // Employees found in EESL attendance data for this month
+  const eeslEmployees = db.prepare(`
+    SELECT DISTINCT ap.employee_code, ap.company,
+           COALESCE(ar.employee_name, '') as eesl_name,
+           COALESCE(ar.department, '') as eesl_department,
+           COUNT(ap.id) as punch_records,
+           SUM(CASE WHEN ap.status_final IN ('P', 'WOP', '½P', 'WO½P') AND ap.is_night_out_only = 0 THEN 1 ELSE 0 END) as present_records
+    FROM attendance_processed ap
+    LEFT JOIN attendance_raw ar ON ar.employee_code = ap.employee_code AND ar.company = ap.company
+    WHERE ap.month = ? AND ap.year = ?
+    ${company ? 'AND ap.company = ?' : ''}
+    AND ap.is_night_out_only = 0
+    GROUP BY ap.employee_code, ap.company
+  `).all(...[month, year, company].filter(Boolean));
+
+  // Active employees in master
+  const masterEmployees = db.prepare(`
+    SELECT code, name, department, company, status
+    FROM employees
+    WHERE status = 'Active'
+    ${company ? 'AND company = ?' : ''}
+  `).all(...(company ? [company] : []));
+
+  const eeslCodes = new Set(eeslEmployees.map(e => e.employee_code));
+  const masterCodes = new Set(masterEmployees.map(e => e.code));
+
+  // Matched: in both EESL and master
+  const matched = eeslEmployees.filter(e => masterCodes.has(e.employee_code));
+
+  // New in EESL (not in master)
+  const newInEesl = eeslEmployees.filter(e => !masterCodes.has(e.employee_code));
+
+  // Missing from EESL (in master but not in EESL)
+  const missingFromEesl = masterEmployees.filter(e => !eeslCodes.has(e.code));
+
+  // Zero punch employees (in EESL but 0 present records)
+  const zeroPunch = eeslEmployees.filter(e => e.present_records === 0);
+
+  // Company-wise breakdown
+  const byCompany = {};
+  for (const e of eeslEmployees) {
+    const c = e.company || 'Unknown';
+    if (!byCompany[c]) byCompany[c] = { total: 0, matched: 0, new: 0, records: 0 };
+    byCompany[c].total++;
+    byCompany[c].records += e.punch_records;
+    if (masterCodes.has(e.employee_code)) byCompany[c].matched++;
+    else byCompany[c].new++;
+  }
+
+  res.json({
+    success: true,
+    data: {
+      matched: matched.map(e => ({ code: e.employee_code, name: e.eesl_name, company: e.company, records: e.punch_records, present: e.present_records })),
+      newInEesl: newInEesl.map(e => ({ code: e.employee_code, name: e.eesl_name, company: e.company, department: e.eesl_department, records: e.punch_records })),
+      missingFromEesl: missingFromEesl.map(e => ({ code: e.code, name: e.name, company: e.company, department: e.department })),
+      zeroPunch: zeroPunch.map(e => ({ code: e.employee_code, name: e.eesl_name, company: e.company })),
+      byCompany,
+    },
+    summary: {
+      eeslTotal: eeslEmployees.length,
+      masterTotal: masterEmployees.length,
+      matched: matched.length,
+      newInEesl: newInEesl.length,
+      missingFromEesl: missingFromEesl.length,
+      zeroPunch: zeroPunch.length,
+      totalRecords: eeslEmployees.reduce((s, e) => s + e.punch_records, 0),
+    },
+    month, year
+  });
+});
+
 module.exports = router;

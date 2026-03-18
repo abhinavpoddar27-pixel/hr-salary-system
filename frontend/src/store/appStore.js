@@ -17,7 +17,10 @@ export const useAppStore = create(
       setAuth: (user, token) => {
         localStorage.setItem('hr_token', token)
         localStorage.setItem('hr_user', JSON.stringify(user))
-        set({ user, token, isAuthenticated: true })
+        // Auto-set company if user has only one allowed company
+        const ac = user.allowedCompanies || ['*']
+        const autoCompany = (ac.length === 1 && ac[0] !== '*') ? ac[0] : ''
+        set({ user, token, isAuthenticated: true, selectedCompany: autoCompany })
       },
       clearAuth: () => {
         localStorage.removeItem('hr_token')
