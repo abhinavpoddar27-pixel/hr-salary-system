@@ -102,7 +102,7 @@ export default function SalaryAdvance() {
           <div>
             <h2 className="section-title">Salary Advance</h2>
             <p className="section-subtitle mt-1">
-              {monthYearLabel(selectedMonth, selectedYear)} — Calculate and process salary advances (1/3 gross for eligible employees).
+              {monthYearLabel(selectedMonth, selectedYear)} — Calculate and process salary advances (50% gross for eligible employees).
             </p>
             <p className="text-xs text-slate-400 mt-1">
               Use the month selector in the header to view/calculate advances for any month.
