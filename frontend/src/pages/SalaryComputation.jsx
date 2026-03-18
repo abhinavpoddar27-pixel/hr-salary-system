@@ -41,14 +41,26 @@ export default function SalaryComputation() {
     return filtered
   }, [allSalaries, filterDept, filterView])
 
+  const [computeResult, setComputeResult] = useState(null)
   const computeMutation = useMutation({
     mutationFn: () => computeSalary({ month: selectedMonth, year: selectedYear }),
     onSuccess: (r) => {
       const d = r.data
-      let msg = `Salary computed for ${d.processed} employees`
-      if (d.excluded?.length) msg += ` | ${d.excluded.length} excluded (0 days)`
-      if (d.held?.length) msg += ` | ${d.held.length} held`
-      toast.success(msg)
+      setComputeResult(d)
+      if (d.processed > 0) {
+        let msg = `Salary computed for ${d.processed} employees`
+        if (d.held?.length) msg += ` | ${d.held.length} held`
+        toast.success(msg)
+      }
+      if (d.excluded?.length) {
+        toast(`${d.excluded.length} employee(s) skipped — missing salary structure or day calculation`, { icon: '⚠️', duration: 6000 })
+      }
+      if (d.errors > 0) {
+        toast.error(`${d.errors} error(s) during computation`)
+      }
+      if (d.processed === 0 && !d.excluded?.length && d.errors === 0) {
+        toast.error('No employees found. Ensure Day Calculation (Stage 6) is complete.')
+      }
       refetch()
     }
   })
@@ -313,6 +325,33 @@ export default function SalaryComputation() {
               <button onClick={() => setCalendarEmployee(null)} className="btn-ghost text-xs">Close</button>
             </div>
             <CalendarView employeeCode={calendarEmployee.code} month={selectedMonth} year={selectedYear} />
+          </div>
+        )}
+
+        {/* Excluded/Error employees after compute */}
+        {computeResult && (computeResult.excluded?.length > 0 || computeResult.errorDetails?.length > 0) && (
+          <div className="card p-4 bg-amber-50 border-amber-200">
+            <h4 className="text-sm font-bold text-amber-800 mb-2">
+              {computeResult.excluded?.length || 0} employee(s) skipped during salary computation
+            </h4>
+            <div className="space-y-1 max-h-48 overflow-y-auto">
+              {(computeResult.excluded || []).map(e => (
+                <div key={e.code} className="flex items-center justify-between text-xs bg-white rounded-lg px-3 py-1.5 border border-amber-100">
+                  <div>
+                    <span className="font-mono text-slate-500">{e.code}</span>
+                    <span className="ml-2 font-medium text-slate-700">{e.name}</span>
+                    <span className="ml-2 text-amber-600">{e.reason}</span>
+                  </div>
+                  <a href="/employees" className="text-blue-600 hover:underline text-xs shrink-0 ml-2">Set Salary</a>
+                </div>
+              ))}
+              {(computeResult.errorDetails || []).map(e => (
+                <div key={e.employeeCode} className="flex items-center text-xs bg-red-50 rounded-lg px-3 py-1.5 border border-red-100">
+                  <span className="font-mono text-slate-500">{e.employeeCode}</span>
+                  <span className="ml-2 text-red-600">{e.error}</span>
+                </div>
+              ))}
+            </div>
           </div>
         )}
 

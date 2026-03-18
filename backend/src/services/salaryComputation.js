@@ -101,14 +101,21 @@ function getLoanDeductions(db, employeeCode, month, year) {
  * Compute salary for one employee for a month.
  */
 function computeEmployeeSalary(db, employee, month, year, company) {
-  // Get day calculation for this employee
-  const dayCalc = db.prepare(`
+  // Get day calculation for this employee (try with company first, then without)
+  let dayCalc = db.prepare(`
     SELECT * FROM day_calculations
-    WHERE employee_code = ? AND month = ? AND year = ? AND company = ?
-  `).get(employee.code, month, year, company);
+    WHERE employee_code = ? AND month = ? AND year = ?
+    ${company ? 'AND company = ?' : ''}
+    LIMIT 1
+  `).get(...[employee.code, month, year, company].filter(Boolean));
 
   if (!dayCalc) {
-    return { success: false, error: 'Day calculation not found. Run Stage 6 first.' };
+    return {
+      success: false,
+      excluded: true,
+      employeeCode: employee.code,
+      reason: 'No day calculation — run Stage 6 first'
+    };
   }
 
   // ── Zero-day check ──
@@ -132,7 +139,12 @@ function computeEmployeeSalary(db, employee, month, year, company) {
   `).get(employee.id, monthStr);
 
   if (!salStruct) {
-    return { success: false, error: 'Salary structure not found. Configure in Settings > Employee Master.' };
+    return {
+      success: false,
+      excluded: true,
+      employeeCode: employee.code,
+      reason: 'No salary structure — set gross salary in Employees page'
+    };
   }
 
   // Policy values
