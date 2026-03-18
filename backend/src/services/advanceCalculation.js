@@ -127,12 +127,12 @@ function calculateAdvances(db, month, year) {
 
       if (grossMonthly > 0) {
         if (workingDays >= 15) {
-          // 55% of gross monthly salary
-          advanceAmount = Math.round(grossMonthly * advanceFractionHigh);
+          // 55% of gross monthly salary, rounded to nearest ₹100
+          advanceAmount = Math.round(grossMonthly * advanceFractionHigh / 100) * 100;
         } else if (workingDays > 0) {
-          // Pro-rata: (gross / 26) × workingDays × 80%
+          // Pro-rata: (gross / 26) × workingDays × 80%, rounded to nearest ₹100
           const proRataSalary = (grossMonthly / 26) * workingDays;
-          advanceAmount = Math.round(proRataSalary * advanceFractionLow);
+          advanceAmount = Math.round(proRataSalary * advanceFractionLow / 100) * 100;
         } else {
           isEligible = false;
         }
