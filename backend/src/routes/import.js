@@ -3,7 +3,7 @@ const router = express.Router();
 const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
-const { getDb } = require('../database/db');
+const { getDb, logAudit } = require('../database/db');
 const { parseEESLFile, extractEmployees, getImportSummary } = require('../services/parser');
 const { pairNightShifts, applyPairingToDb } = require('../services/nightShift');
 const { detectMissPunches, applyMissPunchFlags } = require('../services/missPunch');
@@ -51,10 +51,11 @@ router.post('/upload', upload.array('files', 20), async (req, res) => {
 
         // Check for existing import
         const existing = db.prepare(
-          'SELECT id FROM monthly_imports WHERE month = ? AND year = ? AND company = ?'
+          'SELECT id, reimport_count FROM monthly_imports WHERE month = ? AND year = ? AND company = ?'
         ).get(month, year, company);
 
         const overwrite = req.body.overwrite === 'true';
+        const isReimport = !!(existing && overwrite);
 
         if (existing && !overwrite) {
           results.push({
@@ -67,25 +68,102 @@ router.post('/upload', upload.array('files', 20), async (req, res) => {
           continue;
         }
 
-        // Delete existing data if overwriting
-        if (existing && overwrite) {
-          db.prepare('DELETE FROM attendance_raw WHERE import_id = ?').run(existing.id);
-          db.prepare('DELETE FROM attendance_processed WHERE month = ? AND year = ? AND company = ?').run(month, year, company);
-          db.prepare('DELETE FROM night_shift_pairs WHERE month = ? AND year = ? AND company = ?').run(month, year, company);
-          db.prepare('DELETE FROM monthly_imports WHERE id = ?').run(existing.id);
+        let importId;
+        let upsertStats = { inserted: 0, updated: 0 };
+
+        if (isReimport) {
+          // ── REIMPORT: Upsert strategy ──
+          // 1. Update the monthly_imports record (keep same ID, bump reimport count)
+          importId = existing.id;
+          db.prepare(`
+            UPDATE monthly_imports SET
+              file_name = ?, record_count = ?, employee_count = ?,
+              sheet_name = ?, reimport_count = reimport_count + 1,
+              last_reimported_at = datetime('now'), imported_at = datetime('now'),
+              stage_1_done = 1, stage_2_done = 0, stage_3_done = 0,
+              stage_4_done = 0, stage_5_done = 0, stage_6_done = 0, stage_7_done = 0
+            WHERE id = ?
+          `).run(file.originalname, records.length, sheet.employeeCount, sheet.sheetName, importId);
+
+          // 2. attendance_raw: append-only archive (new import_id via a fresh sub-record)
+          //    We keep old raw records for history. Insert new ones with same import_id.
+          //    But first, clear old raw records for this import (they're archived by the audit trail)
+          db.prepare('DELETE FROM attendance_raw WHERE import_id = ?').run(importId);
+
+          // 3. Clear night shift pairs (will be re-detected)
+          db.prepare('DELETE FROM night_shift_pairs WHERE month = ? AND year = ? AND company = ?')
+            .run(month, year, company);
+
+          // 4. Upsert attendance_processed with audit logging
+          const getExisting = db.prepare(`
+            SELECT id, status_final, in_time_final, out_time_final
+            FROM attendance_processed WHERE employee_code = ? AND date = ? AND company = ?
+          `);
+          const updateProcessed = db.prepare(`
+            UPDATE attendance_processed SET
+              raw_id = NULL, employee_id = ?, status_original = ?, status_final = ?,
+              in_time_original = ?, in_time_final = ?,
+              out_time_original = ?, out_time_final = ?,
+              actual_hours = NULL, is_night_shift = 0, night_pair_date = NULL,
+              night_pair_confidence = NULL, is_night_out_only = 0,
+              is_miss_punch = 0, miss_punch_type = NULL, miss_punch_resolved = 0,
+              correction_source = NULL, correction_remark = NULL,
+              is_late_arrival = 0, late_by_minutes = 0,
+              is_early_departure = 0, early_by_minutes = 0,
+              is_overtime = 0, overtime_minutes = 0,
+              stage_2_done = 0, stage_3_done = 0, stage_4_done = 0, stage_5_done = 0
+            WHERE employee_code = ? AND date = ? AND company = ?
+          `);
+          const insertProcessed = db.prepare(`
+            INSERT INTO attendance_processed (
+              employee_id, employee_code, date, status_original, status_final,
+              in_time_original, in_time_final, out_time_original, out_time_final,
+              actual_hours, month, year, company
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?)
+          `);
+
+          const upsertTxn = db.transaction((recs) => {
+            for (const r of recs) {
+              const empRow = db.prepare('SELECT id FROM employees WHERE code = ?').get(r.employeeCode);
+              const empId = empRow ? empRow.id : null;
+              const existingRec = getExisting.get(r.employeeCode, r.date, r.company);
+
+              if (existingRec) {
+                // Log changes to audit_log before overwriting
+                if (existingRec.status_final !== r.status || existingRec.in_time_final !== r.inTime || existingRec.out_time_final !== r.outTime) {
+                  logAudit('attendance_processed', existingRec.id, 'reimport',
+                    JSON.stringify({ status: existingRec.status_final, in: existingRec.in_time_final, out: existingRec.out_time_final }),
+                    JSON.stringify({ status: r.status, in: r.inTime, out: r.outTime }),
+                    'reimport', `EESL reimport: ${file.originalname}`
+                  );
+                  updateProcessed.run(empId, r.status, r.status, r.inTime, r.inTime, r.outTime, r.outTime,
+                    r.employeeCode, r.date, r.company);
+                  upsertStats.updated++;
+                }
+                // If data is identical, skip (no-op)
+              } else {
+                insertProcessed.run(empId, r.employeeCode, r.date, r.status, r.status,
+                  r.inTime, r.inTime, r.outTime, r.outTime, month, year, r.company);
+                upsertStats.inserted++;
+              }
+            }
+          });
+          upsertTxn(records);
+
+        } else {
+          // ── FRESH IMPORT: Standard insert ──
+          const importInsert = db.prepare(`
+            INSERT INTO monthly_imports (month, year, file_name, record_count, employee_count, sheet_name, company, status, stage_1_done)
+            VALUES (?, ?, ?, ?, ?, ?, ?, 'imported', 1)
+          `);
+          const importRow = importInsert.run(month, year, file.originalname, records.length, sheet.employeeCount, sheet.sheetName, company);
+          importId = importRow.lastInsertRowid;
+          upsertStats.inserted = records.length;
         }
 
-        // Insert import record
-        const importInsert = db.prepare(`
-          INSERT INTO monthly_imports (month, year, file_name, record_count, employee_count, sheet_name, company, status, stage_1_done)
-          VALUES (?, ?, ?, ?, ?, ?, ?, 'imported', 1)
-        `);
-        const importRow = importInsert.run(month, year, file.originalname, records.length, sheet.employeeCount, sheet.sheetName, company);
-        const importId = importRow.lastInsertRowid;
-
-        // Insert raw records in batches
+        // Insert raw records (always — serves as append-only archive)
         const insertRaw = db.prepare(`
-          INSERT INTO attendance_raw (import_id, employee_code, employee_name, department, company, date, day_of_week, status_code, in_time, out_time, total_hours_eesl)
+          INSERT OR IGNORE INTO attendance_raw (import_id, employee_code, employee_name, department, company, date, day_of_week, status_code, in_time, out_time, total_hours_eesl)
           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         `);
 
@@ -111,24 +189,26 @@ router.post('/upload', upload.array('files', 20), async (req, res) => {
         });
         empTxn(employees);
 
-        // Insert processed records
-        const insertProcessed = db.prepare(`
-          INSERT INTO attendance_processed (
-            raw_id, employee_id, employee_code, date, status_original, status_final,
-            in_time_original, in_time_final, out_time_original, out_time_final,
-            actual_hours, month, year, company
-          )
-          SELECT ar.id, e.id, ar.employee_code, ar.date,
-            ar.status_code, ar.status_code,
-            ar.in_time, ar.in_time,
-            ar.out_time, ar.out_time,
-            NULL,
-            ?, ?, ?
-          FROM attendance_raw ar
-          LEFT JOIN employees e ON ar.employee_code = e.code
-          WHERE ar.import_id = ?
-        `);
-        insertProcessed.run(month, year, company, importId);
+        // For fresh imports only: bulk insert processed records
+        if (!isReimport) {
+          const bulkInsertProcessed = db.prepare(`
+            INSERT OR IGNORE INTO attendance_processed (
+              raw_id, employee_id, employee_code, date, status_original, status_final,
+              in_time_original, in_time_final, out_time_original, out_time_final,
+              actual_hours, month, year, company
+            )
+            SELECT ar.id, e.id, ar.employee_code, ar.date,
+              ar.status_code, ar.status_code,
+              ar.in_time, ar.in_time,
+              ar.out_time, ar.out_time,
+              NULL,
+              ?, ?, ?
+            FROM attendance_raw ar
+            LEFT JOIN employees e ON ar.employee_code = e.code
+            WHERE ar.import_id = ?
+          `);
+          bulkInsertProcessed.run(month, year, company, importId);
+        }
 
         // Auto-run night shift pairing
         const processedRecords = db.prepare(`
@@ -234,8 +314,10 @@ router.post('/upload', upload.array('files', 20), async (req, res) => {
           success: true,
           importId,
           month, year, company,
+          isReimport,
           employeeCount: sheet.employeeCount,
           recordCount: records.length,
+          upsertStats,
           nightShiftPairs: pairs.length,
           missPunches: missPunches.length,
           boundaryFlags: boundaryFlags.length,

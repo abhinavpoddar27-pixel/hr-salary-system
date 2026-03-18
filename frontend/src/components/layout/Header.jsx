@@ -1,10 +1,23 @@
 import React, { useState } from 'react'
-import { Link, useNavigate } from 'react-router-dom'
+import { Link, useNavigate, useLocation } from 'react-router-dom'
 import { useAppStore } from '../../store/appStore'
 import { logout } from '../../utils/api'
 import { MONTH_OPTIONS, YEAR_OPTIONS, monthYearLabel } from '../../utils/formatters'
 import NotificationBell from './NotificationBell'
 import toast from 'react-hot-toast'
+
+// Routes that only work with single month (pipeline stages + payroll)
+const MONTH_ONLY_ROUTES = [
+  '/import', '/miss-punch', '/shift-verification', '/night-shift',
+  '/attendance-register', '/day-calculation', '/salary-computation',
+  '/salary-input', '/salary-advance', '/leave-management', '/reports', '/compliance'
+]
+
+// Routes that don't need any date selector
+const NO_DATE_ROUTES = ['/employees', '/loans', '/alerts', '/login']
+
+// Max custom range: 6 months in milliseconds
+const MAX_RANGE_MS = 6 * 31 * 24 * 60 * 60 * 1000
 
 export default function Header({ title }) {
   const {
@@ -14,7 +27,14 @@ export default function Header({ title }) {
     alertCount, user, clearAuth
   } = useAppStore()
   const navigate = useNavigate()
+  const location = useLocation()
   const [showUserMenu, setShowUserMenu] = useState(false)
+
+  // Determine date selector visibility based on current route
+  const currentPath = location.pathname
+  const hideSelector = NO_DATE_ROUTES.some(r => currentPath === r || currentPath.startsWith(r + '/'))
+  const monthOnly = MONTH_ONLY_ROUTES.some(r => currentPath === r || currentPath.startsWith(r + '/'))
+  const showCustomToggle = !hideSelector && !monthOnly
 
   async function handleLogout() {
     try { await logout() } catch {}
@@ -29,65 +49,93 @@ export default function Header({ title }) {
         <h1 className="text-base font-semibold text-slate-800">{title || 'HR & Salary System'}</h1>
       </div>
 
-      {/* Period selector with mode toggle */}
-      <div className="flex items-center gap-2">
-        {/* Mode toggle */}
-        <div className="flex bg-slate-100 rounded-lg p-0.5">
-          <button
-            onClick={() => setDateRangeMode('month')}
-            className={`px-2 py-1 text-xs font-medium rounded-md transition-all ${
-              dateRangeMode === 'month' ? 'bg-white text-slate-800 shadow-sm' : 'text-slate-500 hover:text-slate-700'
-            }`}
-          >
-            Month
-          </button>
-          <button
-            onClick={() => setDateRangeMode('custom')}
-            className={`px-2 py-1 text-xs font-medium rounded-md transition-all ${
-              dateRangeMode === 'custom' ? 'bg-white text-slate-800 shadow-sm' : 'text-slate-500 hover:text-slate-700'
-            }`}
-          >
-            Custom
-          </button>
-        </div>
+      {/* Period selector with mode toggle — hidden on date-independent routes */}
+      {!hideSelector && (
+        <div className="flex items-center gap-2">
+          {/* Mode toggle — only show on analytics/dashboard routes */}
+          {showCustomToggle && (
+            <div className="flex bg-slate-100 rounded-lg p-0.5">
+              <button
+                onClick={() => setDateRangeMode('month')}
+                className={`px-2 py-1 text-xs font-medium rounded-md transition-all ${
+                  dateRangeMode === 'month' ? 'bg-white text-slate-800 shadow-sm' : 'text-slate-500 hover:text-slate-700'
+                }`}
+              >
+                Month
+              </button>
+              <button
+                onClick={() => setDateRangeMode('custom')}
+                className={`px-2 py-1 text-xs font-medium rounded-md transition-all ${
+                  dateRangeMode === 'custom' ? 'bg-white text-slate-800 shadow-sm' : 'text-slate-500 hover:text-slate-700'
+                }`}
+              >
+                Custom
+              </button>
+            </div>
+          )}
 
-        {dateRangeMode === 'month' ? (
-          <div className="flex items-center gap-2 bg-slate-50 border border-slate-200 rounded-lg px-3 py-1.5">
-            <span className="text-xs text-slate-500 font-medium">Period:</span>
-            <select
-              value={selectedMonth}
-              onChange={e => setMonthYear(parseInt(e.target.value), selectedYear)}
-              className="text-sm font-medium text-slate-700 bg-transparent border-none focus:outline-none cursor-pointer"
-            >
-              {MONTH_OPTIONS.map(m => <option key={m.value} value={m.value}>{m.label}</option>)}
-            </select>
-            <select
-              value={selectedYear}
-              onChange={e => setMonthYear(selectedMonth, parseInt(e.target.value))}
-              className="text-sm font-medium text-slate-700 bg-transparent border-none focus:outline-none cursor-pointer"
-            >
-              {YEAR_OPTIONS.map(y => <option key={y.value} value={y.value}>{y.label}</option>)}
-            </select>
-          </div>
-        ) : (
-          <div className="flex items-center gap-2 bg-slate-50 border border-slate-200 rounded-lg px-3 py-1.5">
-            <span className="text-xs text-slate-500 font-medium">From:</span>
-            <input
-              type="date"
-              value={dateRangeStart}
-              onChange={e => setDateRange(e.target.value, dateRangeEnd)}
-              className="text-sm font-medium text-slate-700 bg-transparent border-none focus:outline-none cursor-pointer"
-            />
-            <span className="text-xs text-slate-400">to</span>
-            <input
-              type="date"
-              value={dateRangeEnd}
-              onChange={e => setDateRange(dateRangeStart, e.target.value)}
-              className="text-sm font-medium text-slate-700 bg-transparent border-none focus:outline-none cursor-pointer"
-            />
-          </div>
-        )}
-      </div>
+          {(dateRangeMode === 'month' || monthOnly) ? (
+            <div className="flex items-center gap-2 bg-slate-50 border border-slate-200 rounded-lg px-3 py-1.5">
+              <span className="text-xs text-slate-500 font-medium">Period:</span>
+              <select
+                value={selectedMonth}
+                onChange={e => setMonthYear(parseInt(e.target.value), selectedYear)}
+                className="text-sm font-medium text-slate-700 bg-transparent border-none focus:outline-none cursor-pointer"
+              >
+                {MONTH_OPTIONS.map(m => <option key={m.value} value={m.value}>{m.label}</option>)}
+              </select>
+              <select
+                value={selectedYear}
+                onChange={e => setMonthYear(selectedMonth, parseInt(e.target.value))}
+                className="text-sm font-medium text-slate-700 bg-transparent border-none focus:outline-none cursor-pointer"
+              >
+                {YEAR_OPTIONS.map(y => <option key={y.value} value={y.value}>{y.label}</option>)}
+              </select>
+            </div>
+          ) : (
+            <div className="flex items-center gap-2 bg-slate-50 border border-slate-200 rounded-lg px-3 py-1.5">
+              <span className="text-xs text-slate-500 font-medium">From:</span>
+              <input
+                type="date"
+                value={dateRangeStart}
+                onChange={e => {
+                  const newStart = e.target.value
+                  // Validate: start must be before end (if end is set)
+                  if (dateRangeEnd && newStart > dateRangeEnd) {
+                    toast.error('Start date must be before end date')
+                    return
+                  }
+                  // Validate: max 6 month range
+                  if (dateRangeEnd && (new Date(dateRangeEnd) - new Date(newStart)) > MAX_RANGE_MS) {
+                    toast.error('Custom range cannot exceed 6 months')
+                    return
+                  }
+                  setDateRange(newStart, dateRangeEnd)
+                }}
+                className="text-sm font-medium text-slate-700 bg-transparent border-none focus:outline-none cursor-pointer"
+              />
+              <span className="text-xs text-slate-400">to</span>
+              <input
+                type="date"
+                value={dateRangeEnd}
+                onChange={e => {
+                  const newEnd = e.target.value
+                  if (dateRangeStart && newEnd < dateRangeStart) {
+                    toast.error('End date must be after start date')
+                    return
+                  }
+                  if (dateRangeStart && (new Date(newEnd) - new Date(dateRangeStart)) > MAX_RANGE_MS) {
+                    toast.error('Custom range cannot exceed 6 months')
+                    return
+                  }
+                  setDateRange(dateRangeStart, newEnd)
+                }}
+                className="text-sm font-medium text-slate-700 bg-transparent border-none focus:outline-none cursor-pointer"
+              />
+            </div>
+          )}
+        </div>
+      )}
 
       {/* Company Selector (RBAC) */}
       {(() => {
@@ -111,14 +159,16 @@ export default function Header({ title }) {
       {/* Notifications */}
       <NotificationBell />
 
-      <div className="text-xs text-slate-400 border-l border-slate-200 pl-4 hidden sm:block">
-        {dateRangeMode === 'month'
-          ? monthYearLabel(selectedMonth, selectedYear)
-          : dateRangeStart && dateRangeEnd
-            ? `${new Date(dateRangeStart + 'T12:00:00').toLocaleDateString('en-IN', { day: '2-digit', month: 'short' })} – ${new Date(dateRangeEnd + 'T12:00:00').toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })}`
-            : 'Select dates'
-        }
-      </div>
+      {!hideSelector && (
+        <div className="text-xs text-slate-400 border-l border-slate-200 pl-4 hidden sm:block">
+          {(dateRangeMode === 'month' || monthOnly)
+            ? monthYearLabel(selectedMonth, selectedYear)
+            : dateRangeStart && dateRangeEnd
+              ? `${new Date(dateRangeStart + 'T12:00:00').toLocaleDateString('en-IN', { day: '2-digit', month: 'short' })} – ${new Date(dateRangeEnd + 'T12:00:00').toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })}`
+              : 'Select dates'
+          }
+        </div>
+      )}
 
       {/* User menu */}
       <div className="relative border-l border-slate-200 pl-4">

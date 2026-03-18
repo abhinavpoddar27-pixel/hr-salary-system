@@ -754,6 +754,31 @@ function initSchema(db) {
   // day_calculations: extra duty (payable > calendar days)
   safeAddColumn('day_calculations', 'extra_duty_days', 'REAL DEFAULT 0');
 
+  // ── Phase 1: Data integrity & deduplication ─────────────────────
+
+  // monthly_imports: track reimports
+  safeAddColumn('monthly_imports', 'reimport_count', 'INTEGER DEFAULT 0');
+  safeAddColumn('monthly_imports', 'last_reimported_at', 'TEXT');
+
+  // Unique indexes to prevent duplicate attendance records
+  const safeCreateIndex = (sql) => {
+    try { db.exec(sql); } catch (e) { /* index already exists — ignore */ }
+  };
+
+  // Within a single import, one record per employee per date
+  safeCreateIndex(`CREATE UNIQUE INDEX IF NOT EXISTS idx_attendance_raw_dedup
+    ON attendance_raw(import_id, employee_code, date)`);
+
+  // Across all imports, one processed record per employee per date per company
+  safeCreateIndex(`CREATE UNIQUE INDEX IF NOT EXISTS idx_attendance_processed_dedup
+    ON attendance_processed(employee_code, date, company)`);
+
+  // Performance indexes for audit queries
+  safeCreateIndex(`CREATE INDEX IF NOT EXISTS idx_audit_log_employee
+    ON audit_log(table_name, changed_at)`);
+  safeCreateIndex(`CREATE INDEX IF NOT EXISTS idx_audit_log_changed_by
+    ON audit_log(changed_by, changed_at)`);
+
   console.log('✅ Database schema initialized');
 }
 
