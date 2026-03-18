@@ -1,0 +1,1 @@
+import{k as a,B as i,X as s,Y as t,l as e}from"./DepartmentQuickView-Cn9-zmYm.js";var x=a({chartName:"BarChart",GraphicalChild:i,defaultTooltipEventType:"axis",validateTooltipEventTypes:["axis","item"],axisComponents:[{axisType:"xAxis",AxisComp:s},{axisType:"yAxis",AxisComp:t}],formatAxisMap:e});export{x as B};
