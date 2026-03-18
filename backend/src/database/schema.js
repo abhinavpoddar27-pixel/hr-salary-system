@@ -723,6 +723,16 @@ function initSchema(db) {
   insertPolicyIfMissing.run('advance_fraction', '0.50', 'Fraction of gross salary paid as advance (>=15 days)');
   insertPolicyIfMissing.run('advance_process_date', '19', 'Date of month when advance processing starts');
 
+  // salary_advances: add remark column for advance actions
+  safeAddColumn('salary_advances', 'remark', "TEXT DEFAULT ''");
+
+  // Update advance policy config
+  const insertPolicyIfMissing2 = db.prepare('INSERT OR IGNORE INTO policy_config (key, value, description) VALUES (?, ?, ?)');
+  insertPolicyIfMissing2.run('advance_fraction', '0.55', 'Fraction of gross salary paid as advance (>=15 days) — 55%');
+  insertPolicyIfMissing2.run('advance_fraction_low', '0.80', 'Fraction of pro-rata salary for advance (<15 days) — 80%');
+  // Update existing advance_fraction from 0.50 to 0.55
+  db.prepare("UPDATE policy_config SET value = '0.55', description = 'Fraction of gross salary paid as advance (>=15 days) — 55%' WHERE key = 'advance_fraction' AND value = '0.50'").run();
+
   // shifts: update grace from 30 to 9 minutes (per actual plant policy)
   db.prepare("UPDATE shifts SET grace_minutes = 9 WHERE grace_minutes = 30").run();
 

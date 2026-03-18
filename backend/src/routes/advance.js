@@ -114,4 +114,50 @@ router.get('/recovery', (req, res) => {
   res.json({ success: true, data: records });
 });
 
+/**
+ * PUT /api/advance/:id/set-remark
+ * Set remark on advance: NO_ADVANCE, REDUCED, or clear
+ */
+router.put('/:id/set-remark', (req, res) => {
+  const db = getDb();
+  const { id } = req.params;
+  const { remark, reducedAmount } = req.body;
+
+  if (remark === 'NO_ADVANCE') {
+    db.prepare(`UPDATE salary_advances SET remark = 'NO_ADVANCE', paid = 0, advance_amount = 0 WHERE id = ?`).run(id);
+  } else if (remark === 'REDUCED') {
+    if (!reducedAmount || reducedAmount <= 0) return res.status(400).json({ success: false, error: 'Reduced amount required' });
+    db.prepare(`UPDATE salary_advances SET remark = 'REDUCED', advance_amount = ? WHERE id = ?`).run(Math.round(reducedAmount), id);
+  } else {
+    // Clear remark (recalculate will restore original amount)
+    db.prepare(`UPDATE salary_advances SET remark = '' WHERE id = ?`).run(id);
+  }
+
+  res.json({ success: true, message: `Remark set: ${remark || 'cleared'}` });
+});
+
+/**
+ * PUT /api/advance/batch-remark
+ * Set remark on multiple advances at once
+ */
+router.put('/batch-remark', (req, res) => {
+  const db = getDb();
+  const { ids, remark, reducedAmount } = req.body;
+
+  const txn = db.transaction(() => {
+    for (const id of ids) {
+      if (remark === 'NO_ADVANCE') {
+        db.prepare(`UPDATE salary_advances SET remark = 'NO_ADVANCE', paid = 0, advance_amount = 0 WHERE id = ?`).run(id);
+      } else if (remark === 'REDUCED') {
+        db.prepare(`UPDATE salary_advances SET remark = 'REDUCED', advance_amount = ? WHERE id = ?`).run(Math.round(reducedAmount || 0), id);
+      } else {
+        db.prepare(`UPDATE salary_advances SET remark = '' WHERE id = ?`).run(id);
+      }
+    }
+  });
+  txn();
+
+  res.json({ success: true, message: `Remark set on ${ids.length} records` });
+});
+
 module.exports = router;
