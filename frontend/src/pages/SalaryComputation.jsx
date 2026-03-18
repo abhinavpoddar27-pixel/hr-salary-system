@@ -1,7 +1,7 @@
 import React, { useState, useMemo } from 'react'
 import { useQuery, useMutation } from '@tanstack/react-query'
 import toast from 'react-hot-toast'
-import { getSalaryRegister, computeSalary, finaliseSalary, getPayslip, getMonthEndChecklist, getSalaryComparison } from '../utils/api'
+import { getSalaryRegister, computeSalary, finaliseSalary, getPayslip, getMonthEndChecklist, getSalaryComparison, getBulkPayslips } from '../utils/api'
 import { useAppStore } from '../store/appStore'
 import PipelineProgress from '../components/pipeline/PipelineProgress'
 import { fmtINR, monthYearLabel } from '../utils/formatters'
@@ -103,6 +103,7 @@ export default function SalaryComputation() {
   const comparisonSummary = comparisonRes?.data?.summary || {}
 
   const [pdfLoading, setPdfLoading] = useState(false)
+  const [bulkPdfLoading, setBulkPdfLoading] = useState(false)
   async function handleDownloadPayslip() {
     if (!payslip) return
     setPdfLoading(true)
@@ -111,6 +112,20 @@ export default function SalaryComputation() {
       toast.success('Payslip PDF downloaded')
     } catch { toast.error('PDF generation failed') }
     finally { setPdfLoading(false) }
+  }
+
+  async function handleBulkPDF() {
+    setBulkPdfLoading(true)
+    try {
+      const res = await getBulkPayslips(selectedMonth, selectedYear, selectedCompany)
+      const slips = res?.data?.data || []
+      if (slips.length === 0) { toast.error('No payslips to download'); return }
+      for (const slip of slips) {
+        try { await downloadPayslipPDF(slip, null) } catch {}
+      }
+      toast.success(`${slips.length} payslip PDFs generated`)
+    } catch { toast.error('Bulk PDF generation failed') }
+    finally { setBulkPdfLoading(false) }
   }
 
   const computedTotals = useMemo(() => {
@@ -145,6 +160,12 @@ export default function SalaryComputation() {
             {allSalaries.length > 0 && !allSalaries[0]?.is_finalised && (
               <button onClick={() => finaliseMutation.mutate()} disabled={finaliseMutation.isPending} className="btn-success">
                 Finalise
+              </button>
+            )}
+            {allSalaries.length > 0 && (
+              <button onClick={handleBulkPDF} disabled={bulkPdfLoading}
+                className="px-3 py-2 text-sm bg-slate-100 text-slate-700 rounded-lg hover:bg-slate-200 transition-colors">
+                {bulkPdfLoading ? 'Generating...' : 'Bulk PDF'}
               </button>
             )}
           </div>

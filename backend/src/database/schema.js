@@ -884,6 +884,26 @@ function initSchema(db) {
   safeCreateIndex(`CREATE INDEX IF NOT EXISTS idx_session_events_page
     ON session_events(page, timestamp)`);
 
+  // ── Phase 5: Shift roster for rotating shift management ────────
+
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS shift_roster (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      employee_code TEXT NOT NULL,
+      week_start TEXT NOT NULL,
+      shift_id INTEGER REFERENCES shifts(id),
+      shift_code TEXT NOT NULL,
+      assigned_by TEXT,
+      created_at TEXT DEFAULT (datetime('now')),
+      UNIQUE(employee_code, week_start)
+    );
+  `);
+
+  safeCreateIndex(`CREATE INDEX IF NOT EXISTS idx_shift_roster_employee
+    ON shift_roster(employee_code, week_start)`);
+  safeCreateIndex(`CREATE INDEX IF NOT EXISTS idx_shift_roster_week
+    ON shift_roster(week_start, shift_code)`);
+
   console.log('✅ Database schema initialized');
 }
 

@@ -211,6 +211,14 @@ export const getCorrectionHistory = (code, month, year) => api.get(`/finance-aud
 export const getCorrectionsSummary = (month, year) => api.get('/finance-audit/corrections-summary', { params: { month, year } })
 export const getCorrectionReasons = () => api.get('/finance-audit/reasons')
 
+// ── Phase 5 Features ────────────────────────────────────
+export const accrueLeaves = (month, year) => api.post('/features/accrue-leaves', { month, year })
+export const getShiftRoster = (params) => api.get('/features/shift-roster', { params })
+export const saveShiftRoster = (assignments) => api.post('/features/shift-roster', { assignments })
+export const autoGenerateRoster = (weekStart, pattern) => api.post('/features/shift-roster/auto-generate', { weekStart, pattern })
+export const generateComplianceAlerts = (month, year) => api.post('/features/compliance-alerts', { month, year })
+export const getAttritionRisk = (month, year) => api.get('/features/attrition-risk', { params: { month, year } })
+
 // ── Session Analytics (admin only) ──────────────────────
 export const getSessionOverview = (days) => api.get('/session-analytics/overview', { params: { days } })
 export const getSessionUsers = (days) => api.get('/session-analytics/users', { params: { days } })

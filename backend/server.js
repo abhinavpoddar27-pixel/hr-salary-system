@@ -161,6 +161,7 @@ app.use('/api/lifecycle',   requireAuth, require('./src/routes/lifecycle'));
 app.use('/api/usage-logs',  requireAuth, require('./src/routes/usage-logs'));
 app.use('/api/finance-audit', requireAuth, require('./src/routes/financeAudit'));
 app.use('/api/session-analytics', requireAuth, require('./src/routes/sessionAnalytics'));
+app.use('/api/features',          requireAuth, require('./src/routes/phase5'));
 
 // Health check (public)
 app.get('/api/health', (req, res) => {
