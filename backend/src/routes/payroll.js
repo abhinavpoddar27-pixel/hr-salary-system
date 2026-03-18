@@ -187,7 +187,7 @@ router.post('/compute-salary', (req, res) => {
 
   const txn = db.transaction(() => {
     for (const emp of employees) {
-      const comp = computeEmployeeSalary(db, emp, parseInt(month), parseInt(year), company || emp.company || '');
+      const comp = computeEmployeeSalary(db, emp, parseInt(month), parseInt(year), company || '');
       if (comp.success) {
         saveSalaryComputation(db, comp);
         results.push(comp);
