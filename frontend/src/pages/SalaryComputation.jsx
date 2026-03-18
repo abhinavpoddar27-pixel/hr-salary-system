@@ -403,19 +403,24 @@ export default function SalaryComputation() {
                         <td>
                           <div className="flex items-center gap-1.5">
                             <DrillDownChevron isExpanded={showDetails === s.employee_code} />
-                            {s.gross_changed ? (
-                              <span className="salary-change-flag w-5 h-5 flex items-center justify-center rounded text-xs font-bold shrink-0 print-visible" title={`Gross changed: ${fmtINR(s.prev_month_gross)} → ${fmtINR(s.gross_salary)}`}>
-                                ◆
-                              </span>
-                            ) : null}
-                            {s.was_left_returned ? (
-                              <span className="bg-orange-100 text-orange-700 w-5 h-5 flex items-center justify-center rounded text-xs font-bold shrink-0" title="Returning employee - was previously marked as Left">
-                                ⚠
-                              </span>
-                            ) : null}
                             <div>
                               <div className="font-medium text-sm">{s.employee_name || s.employee_code}</div>
                               <div className="text-xs text-slate-400 font-mono">{s.employee_code}</div>
+                              {s.gross_changed ? (
+                                <div className="text-[10px] mt-0.5 px-1.5 py-0.5 rounded bg-blue-50 text-blue-700 border border-blue-200 inline-block">
+                                  Gross changed: {fmtINR(s.prev_month_gross)} → {fmtINR(s.gross_salary)}
+                                </div>
+                              ) : null}
+                              {s.was_left_returned ? (
+                                <div className="text-[10px] mt-0.5 px-1.5 py-0.5 rounded bg-orange-50 text-orange-700 border border-orange-200 inline-block">
+                                  Returning — was previously marked as Left
+                                </div>
+                              ) : null}
+                              {s.salary_held ? (
+                                <div className="text-[10px] mt-0.5 px-1.5 py-0.5 rounded bg-amber-50 text-amber-700 border border-amber-200 inline-block">
+                                  Held: {s.hold_reason}
+                                </div>
+                              ) : null}
                             </div>
                           </div>
                         </td>
