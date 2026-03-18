@@ -32,7 +32,9 @@ export default function CalendarView({ employeeCode, month, year, data: external
     staleTime: 60000,
   });
 
-  const attendanceData = externalData || fetchedData?.data || [];
+  const attendanceData = externalData || fetchedData?.data?.data || fetchedData?.data || [];
+  // Ensure attendanceData is always an array (API returns { success, data: [...] })
+  const safeData = Array.isArray(attendanceData) ? attendanceData : [];
 
   if (isLoading) return <Skeleton variant="card" />;
 
@@ -42,7 +44,7 @@ export default function CalendarView({ employeeCode, month, year, data: external
 
   // Build lookup map
   const dayMap = {};
-  for (const rec of attendanceData) {
+  for (const rec of safeData) {
     const day = parseInt(rec.date?.split('-')[2], 10);
     if (day) dayMap[day] = rec;
   }

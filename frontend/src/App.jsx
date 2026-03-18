@@ -2,6 +2,7 @@ import React, { Suspense } from 'react'
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
 import Sidebar from './components/layout/Sidebar'
 import Header from './components/layout/Header'
+import ErrorBoundary from './components/ui/ErrorBoundary'
 import { useAppStore } from './store/appStore'
 
 // Public page
@@ -47,9 +48,11 @@ function Layout({ children, title }) {
       <div className="flex-1 flex flex-col overflow-hidden">
         <Header title={title} />
         <main className="flex-1 overflow-y-auto">
-          <Suspense fallback={<PageLoader />}>
-            {children}
-          </Suspense>
+          <ErrorBoundary>
+            <Suspense fallback={<PageLoader />}>
+              {children}
+            </Suspense>
+          </ErrorBoundary>
         </main>
       </div>
     </div>
