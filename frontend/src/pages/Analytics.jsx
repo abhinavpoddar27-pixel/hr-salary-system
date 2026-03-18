@@ -226,6 +226,7 @@ function OverviewTab() {
                                     <DrillDownRow colSpan={7}>
                                       <EmployeeQuickView
                                         employeeCode={emp.code}
+                                        showBehavioral
                                         contextContent={
                                           <div>
                                             <div className="text-xs font-semibold text-slate-500 mb-2">Department Overview Stats</div>
@@ -323,6 +324,7 @@ function AbsenteeismTab() {
                     <DrillDownRow colSpan={7}>
                       <EmployeeQuickView
                         employeeCode={a.code}
+                        showBehavioral
                         contextContent={
                           <div>
                             <div className="text-xs font-semibold text-slate-500 mb-2">Absence Details</div>
@@ -441,6 +443,7 @@ function PunctualityTab() {
                     <DrillDownRow colSpan={8}>
                       <EmployeeQuickView
                         employeeCode={e.code}
+                        showBehavioral
                         contextContent={
                           <div>
                             <div className="text-xs font-semibold text-slate-500 mb-2">Late Arrival Pattern</div>
@@ -582,6 +585,7 @@ function OvertimeTab() {
                     <DrillDownRow colSpan={8}>
                       <EmployeeQuickView
                         employeeCode={e.code}
+                        showBehavioral
                         contextContent={
                           <div>
                             <div className="text-xs font-semibold text-slate-500 mb-2">Overtime Details</div>
@@ -718,6 +722,7 @@ function WorkingHoursTab() {
                       <DrillDownRow colSpan={4}>
                         <EmployeeQuickView
                           employeeCode={e.code}
+                          showBehavioral
                           contextContent={
                             <div>
                               <div className="text-xs font-semibold text-slate-500 mb-2">Working Hours Details</div>
@@ -761,6 +766,7 @@ function WorkingHoursTab() {
                       <DrillDownRow colSpan={4}>
                         <EmployeeQuickView
                           employeeCode={e.code}
+                          showBehavioral
                           contextContent={
                             <div>
                               <div className="text-xs font-semibold text-slate-500 mb-2">Working Hours Details</div>

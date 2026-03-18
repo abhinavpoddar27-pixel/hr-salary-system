@@ -243,9 +243,15 @@ router.post('/upload', upload.array('files', 20), async (req, res) => {
         const defaultDayShift = shiftByCode['DAY'] || allShifts[0];
         const defaultNightShift = shiftByCode['NIGHT'];
 
+        // Get OT threshold from policy config
+        const otThresholdRow = db.prepare("SELECT value FROM policy_config WHERE key = 'ot_threshold_hours'").get();
+        const otThresholdHours = parseFloat(otThresholdRow?.value || '12');
+
         const updatePost = db.prepare(`
           UPDATE attendance_processed SET
             actual_hours = ?, is_late_arrival = ?, late_by_minutes = ?,
+            is_early_departure = ?, early_by_minutes = ?,
+            is_overtime = ?, overtime_minutes = ?,
             is_night_shift = CASE WHEN ? = 1 THEN 1 ELSE is_night_shift END,
             shift_id = COALESCE(shift_id, ?), shift_detected = COALESCE(shift_detected, ?)
           WHERE id = ?
@@ -278,14 +284,16 @@ router.post('/upload', upload.array('files', 20), async (req, res) => {
             const empShift = rec.default_shift_id ? shiftById[rec.default_shift_id] : null;
             const shift = isNight ? (defaultNightShift || empShift || defaultDayShift) : (empShift || defaultDayShift);
 
-            // Detect late arrival (grace = 9 minutes after shift start)
-            let isLate = 0, lateBy = 0;
             const status = rec.status_original;
-            if (inTime && shift && shift.start_time && (status === 'P' || status === 'WOP')) {
+            const isPresent = status === 'P' || status === 'WOP';
+            const inMin = inH * 60 + (parseInt(inTime.split(':')[1]) || 0);
+
+            // Detect late arrival
+            let isLate = 0, lateBy = 0;
+            if (inTime && shift && shift.start_time && isPresent) {
               const [sh, sm] = shift.start_time.split(':').map(Number);
               if (!isNaN(inH) && !isNaN(sh)) {
-                let diffMin = (inH * 60 + (parseInt(inTime.split(':')[1]) || 0)) - (sh * 60 + sm);
-                // Handle overnight wrap
+                let diffMin = inMin - (sh * 60 + sm);
                 if (isNight && diffMin < -600) diffMin += 1440;
                 if (!isNight && diffMin < 0) diffMin = 0;
                 const grace = shift.grace_minutes || 9;
@@ -296,8 +304,37 @@ router.post('/upload', upload.array('files', 20), async (req, res) => {
               }
             }
 
+            // Detect early departure
+            let isEarly = 0, earlyBy = 0;
+            if (outTime && shift && shift.end_time && isPresent && status !== '½P' && status !== 'WO½P') {
+              const [oh2, om2] = outTime.split(':').map(Number);
+              const [eh, em] = shift.end_time.split(':').map(Number);
+              if (!isNaN(oh2) && !isNaN(eh)) {
+                let outMin = oh2 * 60 + om2;
+                let endMin = eh * 60 + em;
+                // Handle overnight shift end (e.g., end_time=08:00 for night shift)
+                if (isNight && endMin < 720) endMin += 1440;
+                if (isNight && outMin < 720) outMin += 1440;
+                const diffMin = endMin - outMin;
+                const grace = shift.grace_minutes || 9;
+                if (diffMin > grace) {
+                  isEarly = 1;
+                  earlyBy = diffMin;
+                }
+              }
+            }
+
+            // Detect overtime
+            let isOT = 0, otMinutes = 0;
+            if (actualHours && actualHours > otThresholdHours && isPresent) {
+              isOT = 1;
+              otMinutes = Math.round((actualHours - otThresholdHours) * 60);
+            }
+
             updatePost.run(
               actualHours, isLate, lateBy,
+              isEarly, earlyBy,
+              isOT, otMinutes,
               isNight ? 1 : 0,
               shift?.id || null, shift?.name || null,
               rec.id

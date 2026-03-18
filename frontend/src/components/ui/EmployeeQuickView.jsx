@@ -1,10 +1,12 @@
-import React from 'react'
+import React, { useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { getEmployee, getPayslip } from '../../utils/api'
 import { useAppStore } from '../../store/appStore'
 import { fmtINR } from '../../utils/formatters'
 import CalendarView from './CalendarView'
+import BehavioralProfile from './BehavioralProfile'
 import Skeleton from './Skeleton'
+import clsx from 'clsx'
 
 /**
  * EmployeeQuickView — Standardized employee detail panel for inline drill-down.
@@ -19,6 +21,7 @@ import Skeleton from './Skeleton'
  *   showPayslip   — If true, fetch and show payslip breakdown.
  *   compact       — If true, hide calendar and show minimal info.
  *   extraInfo     — Optional object with additional key-value pairs to display.
+ *   showBehavioral — If true, show a "Behavioral" tab with full pattern analysis.
  */
 export default function EmployeeQuickView({
   employeeCode,
@@ -26,9 +29,11 @@ export default function EmployeeQuickView({
   year: propYear,
   contextContent,
   showPayslip = false,
+  showBehavioral = false,
   compact = false,
   extraInfo,
 }) {
+  const [activeTab, setActiveTab] = useState('context')
   const { selectedMonth, selectedYear } = useAppStore()
   const month = propMonth || selectedMonth
   const year = propYear || selectedYear
@@ -105,10 +110,32 @@ export default function EmployeeQuickView({
         )}
       </div>
 
-      {/* Right: Context-specific content OR Payslip */}
-      {(contextContent || showPayslip) && (
+      {/* Right: Context-specific content, Behavioral Profile, or Payslip */}
+      {(contextContent || showPayslip || showBehavioral) && (
         <div className="flex-1 min-w-0">
-          {contextContent}
+          {/* Tab switcher when behavioral profile is enabled */}
+          {showBehavioral && contextContent && (
+            <div className="flex gap-0 border-b border-slate-200 mb-3">
+              <button onClick={() => setActiveTab('context')}
+                className={clsx('px-3 py-1.5 text-xs font-medium border-b-2 transition-colors',
+                  activeTab === 'context' ? 'border-blue-600 text-blue-600' : 'border-transparent text-slate-400 hover:text-slate-600')}>
+                Details
+              </button>
+              <button onClick={() => setActiveTab('behavioral')}
+                className={clsx('px-3 py-1.5 text-xs font-medium border-b-2 transition-colors',
+                  activeTab === 'behavioral' ? 'border-blue-600 text-blue-600' : 'border-transparent text-slate-400 hover:text-slate-600')}>
+                Behavioral Profile
+              </button>
+            </div>
+          )}
+          {activeTab === 'context' && contextContent}
+          {activeTab === 'behavioral' && showBehavioral && (
+            <BehavioralProfile employeeCode={employeeCode} month={month} year={year} />
+          )}
+          {/* When no context but behavioral is on, show it directly */}
+          {!contextContent && showBehavioral && (
+            <BehavioralProfile employeeCode={employeeCode} month={month} year={year} />
+          )}
           {showPayslip && payslip && <PayslipBreakdown payslip={payslip} loading={payLoading} />}
         </div>
       )}

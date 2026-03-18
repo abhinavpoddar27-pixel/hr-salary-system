@@ -6,6 +6,7 @@ const {
   computeChronicAbsentees, computePunctualityReport, computeOvertimeReport,
   computeWorkingHoursReport, computeDepartmentDeepDive, generateAlerts
 } = require('../services/analytics');
+const { detectPatterns, detectAllPatterns, generateNarrative } = require('../services/behavioralPatterns');
 
 // GET org overview
 router.get('/overview', (req, res) => {
@@ -125,7 +126,7 @@ router.get('/departments', (req, res) => {
       department: d.department,
       headcount: d.employees.size,
       attendanceRate: d.totalDays > 0 ? Math.round(d.presentDays / d.totalDays * 1000) / 10 : 0,
-      punctualityRate: d.totalDays > 0 ? Math.round((1 - d.lateDays / d.presentDays) * 1000) / 10 : 100,
+      punctualityRate: d.presentDays > 0 ? Math.round((1 - d.lateDays / d.presentDays) * 1000) / 10 : 100,
       avgHoursPerDay: d.hoursCount > 0 ? Math.round(d.totalHours / d.hoursCount * 100) / 100 : 0,
       totalOtHours: Math.round(d.otMinutes / 60 * 10) / 10
     })).sort((a, b) => b.headcount - a.headcount);
@@ -536,6 +537,175 @@ router.post('/reactivate-employee', (req, res) => {
   } catch (err) {
     console.error('Reactivate employee error:', err.message);
     res.status(500).json({ success: false, error: 'Failed to reactivate employee: ' + err.message });
+  }
+});
+
+// ─────────────────────────────────────────────────────────
+// GET /api/analytics/patterns
+// Behavioral pattern detection for all employees in a month
+// ─────────────────────────────────────────────────────────
+router.get('/patterns', (req, res) => {
+  try {
+    const db = getDb();
+    const { month, year } = req.query;
+    if (!month || !year) return res.json({ success: true, data: { employees: [], summary: [] } });
+
+    const data = detectAllPatterns(db, parseInt(month), parseInt(year));
+    res.json({ success: true, data });
+  } catch (err) {
+    console.error('Pattern detection error:', err.message);
+    res.status(500).json({ success: false, error: 'Failed to detect patterns: ' + err.message });
+  }
+});
+
+// ─────────────────────────────────────────────────────────
+// GET /api/analytics/employee/:code/profile
+// Full behavioral profile for a single employee
+// ─────────────────────────────────────────────────────────
+router.get('/employee/:code/profile', (req, res) => {
+  try {
+    const db = getDb();
+    const { code } = req.params;
+    const { month, year } = req.query;
+
+    const employee = db.prepare('SELECT * FROM employees WHERE code = ?').get(code);
+    if (!employee) return res.status(404).json({ success: false, error: 'Employee not found' });
+
+    const m = parseInt(month) || new Date().getMonth() + 1;
+    const y = parseInt(year) || new Date().getFullYear();
+
+    // Current month patterns
+    const patternResult = detectPatterns(db, code, m, y);
+
+    // Narrative assessment
+    const narrative = generateNarrative(db, code, m, y);
+
+    // 6-month history for trend charts
+    const history = db.prepare(`
+      SELECT month, year,
+        COUNT(CASE WHEN is_night_out_only = 0 AND strftime('%w', date) != '0' THEN 1 END) as total_days,
+        SUM(CASE WHEN is_night_out_only = 0 AND (status_final IN ('P','WOP') OR status_original IN ('P','WOP')) THEN 1.0
+                 WHEN is_night_out_only = 0 AND (status_final IN ('½P','WO½P') OR status_original IN ('½P','WO½P')) THEN 0.5
+                 ELSE 0 END) as present_days,
+        SUM(CASE WHEN is_late_arrival = 1 THEN 1 ELSE 0 END) as late_count,
+        SUM(CASE WHEN is_early_departure = 1 THEN 1 ELSE 0 END) as early_count,
+        SUM(CASE WHEN is_overtime = 1 THEN overtime_minutes ELSE 0 END) as ot_minutes,
+        AVG(CASE WHEN actual_hours > 0 THEN actual_hours END) as avg_hours
+      FROM attendance_processed
+      WHERE employee_code = ? AND is_night_out_only = 0
+      GROUP BY year, month
+      ORDER BY year DESC, month DESC
+      LIMIT 6
+    `).all(code);
+
+    // Department average for comparison
+    const deptAvg = db.prepare(`
+      SELECT
+        AVG(sub.att_rate) as avg_att_rate,
+        AVG(sub.late_rate) as avg_late_rate,
+        AVG(sub.avg_hrs) as avg_hours
+      FROM (
+        SELECT ap.employee_code,
+          CAST(SUM(CASE WHEN (status_final IN ('P','WOP') OR status_original IN ('P','WOP')) THEN 1.0
+                       WHEN (status_final IN ('½P','WO½P') OR status_original IN ('½P','WO½P')) THEN 0.5 ELSE 0 END) AS REAL)
+            / NULLIF(COUNT(CASE WHEN strftime('%w', ap.date) != '0' THEN 1 END), 0) as att_rate,
+          CAST(SUM(CASE WHEN ap.is_late_arrival = 1 THEN 1 ELSE 0 END) AS REAL)
+            / NULLIF(SUM(CASE WHEN (status_final IN ('P','WOP') OR status_original IN ('P','WOP')) THEN 1 ELSE 0 END), 0) as late_rate,
+          AVG(CASE WHEN ap.actual_hours > 0 THEN ap.actual_hours END) as avg_hrs
+        FROM attendance_processed ap
+        LEFT JOIN employees e ON ap.employee_code = e.code
+        WHERE ap.month = ? AND ap.year = ? AND ap.is_night_out_only = 0
+        AND e.department = (SELECT department FROM employees WHERE code = ?)
+        GROUP BY ap.employee_code
+      ) sub
+    `).get(m, y, code);
+
+    // Arrival time distribution for the month
+    const arrivalDist = db.prepare(`
+      SELECT in_time_final, in_time_original, date
+      FROM attendance_processed
+      WHERE employee_code = ? AND month = ? AND year = ? AND is_night_out_only = 0
+      AND (status_final IN ('P','WOP') OR status_original IN ('P','WOP'))
+      ORDER BY date
+    `).all(code, m, y);
+
+    res.json({
+      success: true,
+      data: {
+        employee: {
+          code: employee.code, name: employee.name, department: employee.department,
+          company: employee.company, designation: employee.designation,
+          shiftCode: employee.shift_code, dateOfJoining: employee.date_of_joining
+        },
+        month: m, year: y,
+        patterns: patternResult?.patterns || [],
+        stats: patternResult?.stats || {},
+        narrative,
+        history: history.reverse(),
+        departmentAvg: {
+          attendanceRate: deptAvg?.avg_att_rate ? Math.round(deptAvg.avg_att_rate * 1000) / 10 : null,
+          lateRate: deptAvg?.avg_late_rate ? Math.round(deptAvg.avg_late_rate * 1000) / 10 : null,
+          avgHours: deptAvg?.avg_hours ? Math.round(deptAvg.avg_hours * 100) / 100 : null
+        },
+        arrivalTimes: arrivalDist.map(r => ({
+          date: r.date,
+          time: r.in_time_final || r.in_time_original
+        }))
+      }
+    });
+  } catch (err) {
+    console.error('Employee profile error:', err.message);
+    res.status(500).json({ success: false, error: 'Failed to fetch employee profile: ' + err.message });
+  }
+});
+
+// ─────────────────────────────────────────────────────────
+// GET /api/analytics/working-hours-by-dept
+// Working hours breakdown grouped by department
+// ─────────────────────────────────────────────────────────
+router.get('/working-hours-by-dept', (req, res) => {
+  try {
+    const db = getDb();
+    const { month, year } = req.query;
+    if (!month || !year) return res.json({ success: true, data: [] });
+
+    const records = db.prepare(`
+      SELECT ap.employee_code, ap.actual_hours, e.department
+      FROM attendance_processed ap
+      LEFT JOIN employees e ON ap.employee_code = e.code
+      WHERE ap.month = ? AND ap.year = ? AND ap.is_night_out_only = 0
+      AND ap.actual_hours > 0
+      AND (e.status IS NULL OR e.status NOT IN ('Inactive', 'Exited', 'Left'))
+    `).all(month, year);
+
+    const deptMap = {};
+    for (const r of records) {
+      const dept = r.department || 'Unknown';
+      if (!deptMap[dept]) deptMap[dept] = { employees: new Set(), totalHours: 0, records: 0, buckets: { '<6h': 0, '6-8h': 0, '8-10h': 0, '10-12h': 0, '>12h': 0 } };
+      deptMap[dept].employees.add(r.employee_code);
+      deptMap[dept].totalHours += r.actual_hours;
+      deptMap[dept].records++;
+      const h = r.actual_hours;
+      if (h < 6) deptMap[dept].buckets['<6h']++;
+      else if (h < 8) deptMap[dept].buckets['6-8h']++;
+      else if (h < 10) deptMap[dept].buckets['8-10h']++;
+      else if (h < 12) deptMap[dept].buckets['10-12h']++;
+      else deptMap[dept].buckets['>12h']++;
+    }
+
+    const departments = Object.entries(deptMap).map(([dept, d]) => ({
+      department: dept,
+      headcount: d.employees.size,
+      avgHours: d.records > 0 ? Math.round(d.totalHours / d.records * 100) / 100 : 0,
+      totalHours: Math.round(d.totalHours),
+      totalRecords: d.records,
+      distribution: d.buckets
+    })).sort((a, b) => b.headcount - a.headcount);
+
+    res.json({ success: true, data: departments });
+  } catch (err) {
+    console.error('Working hours by dept error:', err.message);
+    res.status(500).json({ success: false, error: 'Failed to compute dept working hours: ' + err.message });
   }
 });
 
