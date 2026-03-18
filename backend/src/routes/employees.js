@@ -224,7 +224,7 @@ router.put('/:code/salary', (req, res) => {
       WHERE id=?`).run(
         gross, basic, da, hra, specialAllow, otherAllow,
         basicPct, hraPct, daPct,
-        pf_applicable ?? 1, esi_applicable ?? 1, pt_applicable ?? 1, pf_wage_ceiling || 15000,
+        pf_applicable ?? 0, esi_applicable ?? 0, pt_applicable ?? 1, pf_wage_ceiling || 15000,
         existing.id
     );
   } else {
@@ -403,8 +403,8 @@ router.post('/bulk-import', (req, res) => {
 
         const gross = emp.gross_salary || 0;
         const basic = emp.basic || 0;
-        const pfApplicable = emp.pf_applicable || (basic > 0 && basic <= 15000 ? 1 : 0);
-        const esiApplicable = emp.esi_applicable || (gross > 0 && gross <= 21000 ? 1 : 0);
+        const pfApplicable = emp.pf_applicable !== undefined ? emp.pf_applicable : 0;
+        const esiApplicable = emp.esi_applicable !== undefined ? emp.esi_applicable : 0;
         const ptApplicable = gross >= 15000 ? 1 : 0;
 
         const basicPct = gross > 0 ? Math.round(basic / gross * 100) : 50;

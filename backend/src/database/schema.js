@@ -50,8 +50,8 @@ function initSchema(db) {
       phone TEXT,
       email TEXT,
       gross_salary REAL DEFAULT 0,
-      pf_applicable INTEGER DEFAULT 1,
-      esi_applicable INTEGER DEFAULT 1,
+      pf_applicable INTEGER DEFAULT 0,
+      esi_applicable INTEGER DEFAULT 0,
       pt_applicable INTEGER DEFAULT 1,
       status TEXT DEFAULT 'Active',
       is_data_complete INTEGER DEFAULT 0,
@@ -83,8 +83,8 @@ function initSchema(db) {
       basic_percent REAL DEFAULT 50,
       da_percent REAL DEFAULT 0,
       hra_percent REAL DEFAULT 20,
-      pf_applicable INTEGER DEFAULT 1,
-      esi_applicable INTEGER DEFAULT 1,
+      pf_applicable INTEGER DEFAULT 0,
+      esi_applicable INTEGER DEFAULT 0,
       pt_applicable INTEGER DEFAULT 1,
       pf_wage_ceiling REAL DEFAULT 15000,
       created_at TEXT DEFAULT (datetime('now')),
@@ -725,6 +725,13 @@ function initSchema(db) {
 
   // shifts: update grace from 30 to 9 minutes (per actual plant policy)
   db.prepare("UPDATE shifts SET grace_minutes = 9 WHERE grace_minutes = 30").run();
+
+  // PF/ESI: disabled by default — set all existing records to 0 unless explicitly set via master import
+  // This runs idempotently on every startup but only affects defaults
+  db.prepare("UPDATE employees SET pf_applicable = 0 WHERE pf_applicable = 1 AND (uan IS NULL OR uan = '') AND (pf_number IS NULL OR pf_number = '')").run();
+  db.prepare("UPDATE employees SET esi_applicable = 0 WHERE esi_applicable = 1 AND (esi_number IS NULL OR esi_number = '')").run();
+  db.prepare("UPDATE salary_structures SET pf_applicable = 0 WHERE pf_applicable = 1 AND employee_id IN (SELECT id FROM employees WHERE (uan IS NULL OR uan = '') AND (pf_number IS NULL OR pf_number = ''))").run();
+  db.prepare("UPDATE salary_structures SET esi_applicable = 0 WHERE esi_applicable = 1 AND employee_id IN (SELECT id FROM employees WHERE (esi_number IS NULL OR esi_number = ''))").run();
 
   // users: RBAC company access
   safeAddColumn('users', 'allowed_companies', "TEXT DEFAULT '*'");

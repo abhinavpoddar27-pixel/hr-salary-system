@@ -95,8 +95,8 @@ const txn = db.transaction(() => {
       // PF/ESI inference from salary levels
       const gross = emp.gross_salary || 0;
       const basic = emp.basic || 0;
-      const pfApplicable = emp.pf_applicable || (basic > 0 && basic <= 15000 ? 1 : 0);
-      const esiApplicable = emp.esi_applicable || (gross > 0 && gross <= 21000 ? 1 : 0);
+      const pfApplicable = emp.pf_applicable !== undefined ? emp.pf_applicable : 0;
+      const esiApplicable = emp.esi_applicable !== undefined ? emp.esi_applicable : 0;
       const ptApplicable = gross >= 15000 ? 1 : 0;
 
       // Compute salary percentages

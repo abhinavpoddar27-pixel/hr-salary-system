@@ -151,8 +151,8 @@ router.put('/approve/:id', (req, res) => {
       newStructure.hra || 0,
       newStructure.conveyance || 0,
       newStructure.other_allowances || 0,
-      newStructure.pf_applicable !== undefined ? newStructure.pf_applicable : 1,
-      newStructure.esi_applicable !== undefined ? newStructure.esi_applicable : 1,
+      newStructure.pf_applicable !== undefined ? newStructure.pf_applicable : 0,
+      newStructure.esi_applicable !== undefined ? newStructure.esi_applicable : 0,
       effectiveFrom
     );
 
