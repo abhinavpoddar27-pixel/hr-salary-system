@@ -192,7 +192,7 @@ router.post('/upload', upload.array('files', 20), async (req, res) => {
 
             // Detect night shift from in_time (>= 18:00 or < 06:00)
             const [inH] = inTime.split(':').map(Number);
-            const isNight = (!isNaN(inH) && (inH >= 18 || inH < 6)) || rec.is_night_shift === 1;
+            const isNight = (!isNaN(inH) && (inH >= 19 || inH < 6)) || rec.is_night_shift === 1;
 
             // Pick shift based on time
             const empShift = rec.default_shift_id ? shiftById[rec.default_shift_id] : null;

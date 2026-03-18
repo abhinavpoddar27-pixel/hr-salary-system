@@ -298,7 +298,7 @@ router.get('/monthly-summary', (req, res) => {
         }
 
         const [inH] = inTime.split(':').map(Number);
-        const isNight = (!isNaN(inH) && (inH >= 18 || inH < 6)) || rec.is_night_shift === 1;
+        const isNight = (!isNaN(inH) && (inH >= 19 || inH < 6)) || rec.is_night_shift === 1;
         const empShift = rec.default_shift_id ? shiftById[rec.default_shift_id] : null;
         const shift = isNight ? (defaultNightShift || empShift || defaultDayShift) : (empShift || defaultDayShift);
 
@@ -338,7 +338,7 @@ router.get('/monthly-summary', (req, res) => {
       SUM(CASE WHEN ap.is_miss_punch = 1 AND ap.miss_punch_resolved = 0 THEN 1 ELSE 0 END) as unresolved_miss_punches,
       SUM(CASE WHEN ap.is_night_out_only = 0 AND (
         ap.is_night_shift = 1
-        OR (COALESCE(ap.in_time_final, ap.in_time_original) >= '18:00')
+        OR (COALESCE(ap.in_time_final, ap.in_time_original) >= '19:00')
         OR (COALESCE(ap.in_time_final, ap.in_time_original) < '06:00' AND COALESCE(ap.in_time_final, ap.in_time_original) != '')
       ) THEN 1 ELSE 0 END) as night_shifts
     FROM attendance_processed ap
@@ -529,7 +529,7 @@ router.post('/recalculate-metrics', (req, res) => {
       }
 
       const [inH] = inTime.split(':').map(Number);
-      const isNight = (!isNaN(inH) && (inH >= 18 || inH < 6)) || rec.is_night_shift === 1;
+      const isNight = (!isNaN(inH) && (inH >= 19 || inH < 6)) || rec.is_night_shift === 1;
 
       const empShift = rec.default_shift_id ? shiftById[rec.default_shift_id] : null;
       const shift = isNight ? (defaultNightShift || empShift || defaultDayShift) : (empShift || defaultDayShift);

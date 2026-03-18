@@ -186,14 +186,19 @@ export default function SalaryComputation() {
             </div>
             <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
               {checklist.map(item => (
-                <div key={item.id} className={clsx('flex items-center gap-2 px-3 py-2 rounded-lg text-xs', item.status === 'ok' && 'bg-green-50', item.status === 'warning' && 'bg-amber-50', item.status === 'error' && 'bg-red-50')}>
-                  <span>{item.status === 'ok' ? '✅' : item.status === 'warning' ? '⚠️' : '❌'}</span>
-                  <div className="flex-1">
-                    <span className="font-medium">{item.label}</span>
-                    {item.count > 0 && item.status !== 'ok' && <span className="ml-1 text-slate-500">({item.count})</span>}
+                <div key={item.id} className={clsx('px-3 py-2 rounded-lg text-xs', item.status === 'ok' && 'bg-green-50', item.status === 'warning' && 'bg-amber-50', item.status === 'error' && 'bg-red-50')}>
+                  <div className="flex items-center gap-2">
+                    <span>{item.status === 'ok' ? '✅' : item.status === 'warning' ? '⚠️' : '❌'}</span>
+                    <div className="flex-1">
+                      <span className="font-medium">{item.label}</span>
+                      {item.count > 0 && item.status !== 'ok' && <span className="ml-1 text-slate-500">({item.count})</span>}
+                    </div>
+                    {item.link && item.status !== 'ok' && (
+                      <a href={item.link} className="text-blue-600 hover:underline text-xs shrink-0">Fix</a>
+                    )}
                   </div>
-                  {item.link && item.status !== 'ok' && (
-                    <a href={item.link} className="text-blue-600 hover:underline text-xs">Fix</a>
+                  {item.detail && item.status !== 'ok' && (
+                    <div className="mt-1 ml-6 text-[11px] text-slate-500 leading-snug">{item.detail}</div>
                   )}
                 </div>
               ))}

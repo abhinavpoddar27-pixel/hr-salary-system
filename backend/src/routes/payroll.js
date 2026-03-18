@@ -482,21 +482,25 @@ router.get('/month-end-checklist', (req, res) => {
     link: '/pipeline/night-shift'
   });
 
-  // 4. Employees missing salary structure
-  const missingSS = db.prepare(`
-    SELECT COUNT(DISTINCT dc.employee_code) as cnt
+  // 4. Employees missing salary structure — include names
+  const missingSSRows = db.prepare(`
+    SELECT DISTINCT dc.employee_code, COALESCE(e.name, dc.employee_code) as employee_name, e.department
     FROM day_calculations dc
     LEFT JOIN employees e ON dc.employee_code = e.code
     LEFT JOIN salary_structures ss ON ss.employee_id = e.id
     WHERE dc.month = ? AND dc.year = ? AND ss.id IS NULL
-  `).get(month, year);
+    ORDER BY e.department, e.name
+  `).all(month, year);
+  const missingSS = { cnt: missingSSRows.length };
+  const missingSSNames = missingSSRows.slice(0, 10).map(r => `${r.employee_name} (${r.employee_code})`).join(', ');
   items.push({
     id: 'salary_structure',
     label: 'Employees missing salary structure',
     status: missingSS.cnt > 0 ? 'warning' : 'ok',
     count: missingSS.cnt,
-    detail: missingSS.cnt > 0 ? `${missingSS.cnt} employees have no salary structure` : 'All employees have salary structures',
-    link: '/employees'
+    detail: missingSS.cnt > 0 ? `${missingSSNames}${missingSSRows.length > 10 ? ` +${missingSSRows.length - 10} more` : ''}` : 'All employees have salary structures',
+    link: '/employees',
+    employees: missingSSRows,
   });
 
   // 5. Employees missing bank details
