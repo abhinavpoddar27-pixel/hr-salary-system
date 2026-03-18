@@ -109,7 +109,7 @@ router.get('/absentees', (req, res) => {
   const presentCodes = new Set(
     db.prepare(`
       SELECT DISTINCT employee_code FROM attendance_processed
-      WHERE date = ? AND status IN ('P', '\u00bdP', 'WOP') AND is_night_out_only = 0
+      WHERE date = ? AND COALESCE(status_final, status_original) IN ('P', '\u00bdP', 'WOP') AND is_night_out_only = 0
     `).all(date).map(r => r.employee_code)
   );
 

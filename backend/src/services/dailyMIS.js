@@ -57,13 +57,13 @@ function getDailySummary(db, date) {
   // Present today
   const present = db.prepare(`
     SELECT COUNT(DISTINCT employee_code) as count FROM attendance_processed
-    WHERE date = ? AND status IN ('P', '\u00bdP', 'WOP') AND is_night_out_only = 0
+    WHERE date = ? AND COALESCE(status_final, status_original) IN ('P', '\u00bdP', 'WOP') AND is_night_out_only = 0
   `).get(date);
 
   // Absent today
   const absent = db.prepare(`
     SELECT COUNT(DISTINCT employee_code) as count FROM attendance_processed
-    WHERE date = ? AND status = 'A' AND is_night_out_only = 0
+    WHERE date = ? AND COALESCE(status_final, status_original) = 'A' AND is_night_out_only = 0
   `).get(date);
 
   // Currently punched in (in_time but no out_time)
@@ -88,7 +88,7 @@ function getDailySummary(db, date) {
   const missPunches = db.prepare(`
     SELECT COUNT(*) as count FROM attendance_processed
     WHERE date = ? AND (status_code LIKE '%MISS%' OR in_time_original IS NULL OR out_time_original IS NULL)
-    AND status != 'A' AND is_night_out_only = 0
+    AND COALESCE(status_final, status_original) != 'A' AND is_night_out_only = 0
   `).get(date);
 
   // ── Night shift count for the selected date ──
@@ -109,7 +109,7 @@ function getDailySummary(db, date) {
     SELECT ap.employee_code, e.department, ap.in_time_original, ap.is_night_shift, ap.shift_detected
     FROM attendance_processed ap
     LEFT JOIN employees e ON ap.employee_code = e.code
-    WHERE ap.date = ? AND ap.status IN ('P', '\u00bdP', 'WOP') AND ap.is_night_out_only = 0
+    WHERE ap.date = ? AND COALESCE(ap.status_final, ap.status_original) IN ('P', '\u00bdP', 'WOP') AND ap.is_night_out_only = 0
   `).all(date);
 
   // Classification counts
@@ -223,7 +223,7 @@ function getDepartmentBreakdown(db, date) {
            SUM(CASE WHEN ap.is_late_arrival = 1 THEN 1 ELSE 0 END) as late
     FROM attendance_processed ap
     LEFT JOIN employees e ON ap.employee_code = e.code
-    WHERE ap.date = ? AND ap.status IN ('P', '\u00bdP', 'WOP') AND ap.is_night_out_only = 0
+    WHERE ap.date = ? AND COALESCE(ap.status_final, ap.status_original) IN ('P', '\u00bdP', 'WOP') AND ap.is_night_out_only = 0
     GROUP BY e.department
     ORDER BY e.department
   `).all(date);
@@ -281,10 +281,10 @@ function getShiftWiseBreakdown(db, date) {
     SELECT ap.employee_code, e.name as employee_name, e.department, e.designation,
            ap.in_time_original as in_time, ap.out_time_original as out_time,
            ap.actual_hours, ap.shift_detected, ap.is_night_shift,
-           ap.is_late_arrival, ap.late_by_minutes, ap.status
+           ap.is_late_arrival, ap.late_by_minutes, COALESCE(ap.status_final, ap.status_original) as status
     FROM attendance_processed ap
     LEFT JOIN employees e ON ap.employee_code = e.code
-    WHERE ap.date = ? AND ap.status IN ('P', '\u00bdP', 'WOP') AND ap.is_night_out_only = 0
+    WHERE ap.date = ? AND COALESCE(ap.status_final, ap.status_original) IN ('P', '\u00bdP', 'WOP') AND ap.is_night_out_only = 0
     ORDER BY e.department, e.name
   `).all(date);
 
@@ -377,7 +377,7 @@ function getWorkerTypeBreakdown(db, date) {
     SELECT DISTINCT ap.employee_code, e.department
     FROM attendance_processed ap
     LEFT JOIN employees e ON ap.employee_code = e.code
-    WHERE ap.date = ? AND ap.status IN ('P', '\u00bdP', 'WOP') AND ap.is_night_out_only = 0
+    WHERE ap.date = ? AND COALESCE(ap.status_final, ap.status_original) IN ('P', '\u00bdP', 'WOP') AND ap.is_night_out_only = 0
   `).all(date);
   const presentSet = new Set(presentRows.map(r => r.employee_code));
 
