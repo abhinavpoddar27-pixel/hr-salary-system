@@ -723,6 +723,9 @@ function initSchema(db) {
   insertPolicyIfMissing.run('advance_fraction', '0.50', 'Fraction of gross salary paid as advance (>=15 days)');
   insertPolicyIfMissing.run('advance_process_date', '19', 'Date of month when advance processing starts');
 
+  // shifts: update grace from 30 to 9 minutes (per actual plant policy)
+  db.prepare("UPDATE shifts SET grace_minutes = 9 WHERE grace_minutes = 30").run();
+
   // users: RBAC company access
   safeAddColumn('users', 'allowed_companies', "TEXT DEFAULT '*'");
 

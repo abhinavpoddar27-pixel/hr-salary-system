@@ -145,6 +145,87 @@ router.post('/upload', upload.array('files', 20), async (req, res) => {
         const missPunches = detectMissPunches(updatedProcessed);
         applyMissPunchFlags(db, missPunches);
 
+        // ── Post-import: calculate actual_hours, detect late arrivals & night shifts ──
+        const postProcessRecords = db.prepare(`
+          SELECT ap.id, ap.in_time_original, ap.out_time_original, ap.in_time_final, ap.out_time_final,
+                 ap.status_original, ap.is_night_shift, ap.is_night_out_only,
+                 e.default_shift_id, e.shift_code
+          FROM attendance_processed ap
+          LEFT JOIN employees e ON ap.employee_code = e.code
+          WHERE ap.month = ? AND ap.year = ? AND ap.company = ?
+        `).all(month, year, company);
+
+        // Get all shifts for lookup
+        const allShifts = db.prepare('SELECT * FROM shifts').all();
+        const shiftByCode = {};
+        const shiftById = {};
+        for (const s of allShifts) { shiftByCode[s.code] = s; shiftById[s.id] = s; }
+        const defaultDayShift = shiftByCode['DAY'] || allShifts[0];
+        const defaultNightShift = shiftByCode['NIGHT'];
+
+        const updatePost = db.prepare(`
+          UPDATE attendance_processed SET
+            actual_hours = ?, is_late_arrival = ?, late_by_minutes = ?,
+            is_night_shift = CASE WHEN ? = 1 THEN 1 ELSE is_night_shift END,
+            shift_id = COALESCE(shift_id, ?), shift_detected = COALESCE(shift_detected, ?)
+          WHERE id = ?
+        `);
+
+        const postTxn = db.transaction(() => {
+          for (const rec of postProcessRecords) {
+            if (rec.is_night_out_only) continue;
+            const inTime = rec.in_time_final || rec.in_time_original;
+            const outTime = rec.out_time_final || rec.out_time_original;
+            if (!inTime) continue;
+
+            // Calculate actual hours
+            let actualHours = null;
+            if (inTime && outTime) {
+              const [ih, im] = inTime.split(':').map(Number);
+              const [oh, om] = outTime.split(':').map(Number);
+              if (!isNaN(ih) && !isNaN(oh)) {
+                let hrs = (oh * 60 + om - (ih * 60 + im)) / 60;
+                if (hrs < 0) hrs += 24;
+                actualHours = Math.round(hrs * 100) / 100;
+              }
+            }
+
+            // Detect night shift from in_time (>= 18:00 or < 06:00)
+            const [inH] = inTime.split(':').map(Number);
+            const isNight = (!isNaN(inH) && (inH >= 18 || inH < 6)) || rec.is_night_shift === 1;
+
+            // Pick shift based on time
+            const empShift = rec.default_shift_id ? shiftById[rec.default_shift_id] : null;
+            const shift = isNight ? (defaultNightShift || empShift || defaultDayShift) : (empShift || defaultDayShift);
+
+            // Detect late arrival (grace = 9 minutes after shift start)
+            let isLate = 0, lateBy = 0;
+            const status = rec.status_original;
+            if (inTime && shift && shift.start_time && (status === 'P' || status === 'WOP')) {
+              const [sh, sm] = shift.start_time.split(':').map(Number);
+              if (!isNaN(inH) && !isNaN(sh)) {
+                let diffMin = (inH * 60 + (parseInt(inTime.split(':')[1]) || 0)) - (sh * 60 + sm);
+                // Handle overnight wrap
+                if (isNight && diffMin < -600) diffMin += 1440;
+                if (!isNight && diffMin < 0) diffMin = 0;
+                const grace = shift.grace_minutes || 9;
+                if (diffMin > grace) {
+                  isLate = 1;
+                  lateBy = diffMin;
+                }
+              }
+            }
+
+            updatePost.run(
+              actualHours, isLate, lateBy,
+              isNight ? 1 : 0,
+              shift?.id || null, shift?.name || null,
+              rec.id
+            );
+          }
+        });
+        postTxn();
+
         const summary = getImportSummary(parseResult);
 
         results.push({

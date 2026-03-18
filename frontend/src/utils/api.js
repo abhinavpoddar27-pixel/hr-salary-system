@@ -62,6 +62,7 @@ export const getMonthlyAttendanceSummary = (month, year) => api.get('/attendance
 export const getValidationStatus = (params) => api.get('/attendance/validation-status', { params })
 export const getEmployeeDailyAttendance = (code, month, year) => api.get(`/attendance/daily/${code}`, { params: { month, year } })
 export const updateRecordShift = (id, data) => api.put(`/attendance/record/${id}/shift`, data)
+export const recalculateMetrics = (month, year) => api.post('/attendance/recalculate-metrics', { month, year })
 
 // ── Employees ──────────────────────────────────────────
 export const getEmployees = (params) => api.get('/employees', { params })

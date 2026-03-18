@@ -1,7 +1,7 @@
 import React, { useState, useMemo } from 'react'
 import { useQuery, useMutation } from '@tanstack/react-query'
 import toast from 'react-hot-toast'
-import { getAttendanceRegister, updateAttendanceRecord, getMonthlyAttendanceSummary } from '../utils/api'
+import { getAttendanceRegister, updateAttendanceRecord, getMonthlyAttendanceSummary, recalculateMetrics } from '../utils/api'
 import { useAppStore } from '../store/appStore'
 import PipelineProgress from '../components/pipeline/PipelineProgress'
 import { statusColor } from '../utils/formatters'
@@ -194,6 +194,8 @@ export default function AttendanceRegister() {
   const [filterDept, setFilterDept] = useState('')
   const [searchTerm, setSearchTerm] = useState('')
   const [editRecord, setEditRecord] = useState(null)
+  const [sortKey, setSortKey] = useState('department')
+  const [sortDir, setSortDir] = useState('asc')
 
   /* ── Fetch all employees summary (auto-loads on mount) ── */
   const { data: summaryRes, isLoading, refetch: refetchSummary } = useQuery({
@@ -211,6 +213,14 @@ export default function AttendanceRegister() {
     onSuccess: () => {
       toast.success('Record updated')
       setEditRecord(null)
+      refetchSummary()
+    },
+  })
+
+  const recalcMutation = useMutation({
+    mutationFn: () => recalculateMetrics(selectedMonth, selectedYear),
+    onSuccess: (r) => {
+      toast.success(`Recalculated metrics for ${r.data.updated} records`)
       refetchSummary()
     },
   })
@@ -234,8 +244,29 @@ export default function AttendanceRegister() {
         e.employee_code?.toLowerCase().includes(term)
       )
     }
-    return filtered
-  }, [allEmployees, filterDept, searchTerm])
+    // Sort
+    const sorted = [...filtered].sort((a, b) => {
+      let aVal = a[sortKey], bVal = b[sortKey]
+      if (typeof aVal === 'string') aVal = (aVal || '').toLowerCase()
+      if (typeof bVal === 'string') bVal = (bVal || '').toLowerCase()
+      if (aVal == null) aVal = sortDir === 'asc' ? Infinity : -Infinity
+      if (bVal == null) bVal = sortDir === 'asc' ? Infinity : -Infinity
+      if (aVal < bVal) return sortDir === 'asc' ? -1 : 1
+      if (aVal > bVal) return sortDir === 'asc' ? 1 : -1
+      return 0
+    })
+    return sorted
+  }, [allEmployees, filterDept, searchTerm, sortKey, sortDir])
+
+  function handleSort(key) {
+    if (sortKey === key) setSortDir(d => d === 'asc' ? 'desc' : 'asc')
+    else { setSortKey(key); setSortDir('asc') }
+  }
+
+  function SortIcon({ col }) {
+    if (sortKey !== col) return <span className="text-slate-300 ml-0.5">&#8645;</span>
+    return <span className="text-blue-600 ml-0.5">{sortDir === 'asc' ? '&#9650;' : '&#9660;'}</span>
+  }
 
   /* ── Summary stats ── */
   const stats = useMemo(() => {
@@ -273,11 +304,21 @@ export default function AttendanceRegister() {
       <div className="p-6 space-y-5 max-w-screen-2xl">
 
         {/* ── Header ── */}
-        <div>
-          <h2 className="section-title">Stage 5: Corrections & Attendance Register</h2>
-          <p className="section-subtitle mt-1">
-            All employees for {MONTH_NAMES[selectedMonth]} {selectedYear}. Click a row to expand daily detail and make corrections.
-          </p>
+        <div className="flex items-start justify-between">
+          <div>
+            <h2 className="section-title">Stage 5: Corrections & Attendance Register</h2>
+            <p className="section-subtitle mt-1">
+              All employees for {MONTH_NAMES[selectedMonth]} {selectedYear}. Click a row to expand daily detail and make corrections. Click column headers to sort.
+            </p>
+          </div>
+          <button
+            onClick={() => recalcMutation.mutate()}
+            disabled={recalcMutation.isPending}
+            className="btn-secondary text-xs whitespace-nowrap"
+            title="Recalculate actual hours, late arrivals, and night shift flags for all records"
+          >
+            {recalcMutation.isPending ? 'Recalculating...' : 'Recalculate Metrics'}
+          </button>
         </div>
 
         {/* ── Summary stat cards ── */}
@@ -335,17 +376,17 @@ export default function AttendanceRegister() {
               <thead>
                 <tr className="bg-slate-50 border-b border-slate-200">
                   <th className="px-3 py-2.5 text-left w-8"></th>
-                  <th className="px-3 py-2.5 text-left text-xs font-semibold text-slate-500 uppercase tracking-wider"><Abbr code="Emp">Employee Code</Abbr></th>
-                  <th className="px-3 py-2.5 text-left text-xs font-semibold text-slate-500 uppercase tracking-wider">Employee Name</th>
-                  <th className="px-3 py-2.5 text-left text-xs font-semibold text-slate-500 uppercase tracking-wider"><Abbr code="Dept">Department</Abbr></th>
-                  <th className="px-3 py-2.5 text-center text-xs font-semibold text-slate-500 uppercase tracking-wider"><Abbr code="P">Present</Abbr></th>
-                  <th className="px-3 py-2.5 text-center text-xs font-semibold text-slate-500 uppercase tracking-wider"><Abbr code="A">Absent</Abbr></th>
-                  <th className="px-3 py-2.5 text-center text-xs font-semibold text-slate-500 uppercase tracking-wider"><Abbr code="½P">Half Day</Abbr></th>
-                  <th className="px-3 py-2.5 text-center text-xs font-semibold text-slate-500 uppercase tracking-wider">Late Days</th>
-                  <th className="px-3 py-2.5 text-center text-xs font-semibold text-slate-500 uppercase tracking-wider"><Abbr code="Hrs">Avg Hours</Abbr></th>
-                  <th className="px-3 py-2.5 text-center text-xs font-semibold text-slate-500 uppercase tracking-wider">Miss Punches</th>
-                  <th className="px-3 py-2.5 text-center text-xs font-semibold text-slate-500 uppercase tracking-wider">Corrections</th>
-                  <th className="px-3 py-2.5 text-center text-xs font-semibold text-slate-500 uppercase tracking-wider">Night Shifts</th>
+                  <th className="px-3 py-2.5 text-left text-xs font-semibold text-slate-500 uppercase tracking-wider cursor-pointer select-none hover:text-blue-600" onClick={() => handleSort('employee_code')}><Abbr code="Emp">Code</Abbr><SortIcon col="employee_code" /></th>
+                  <th className="px-3 py-2.5 text-left text-xs font-semibold text-slate-500 uppercase tracking-wider cursor-pointer select-none hover:text-blue-600" onClick={() => handleSort('employee_name')}>Name<SortIcon col="employee_name" /></th>
+                  <th className="px-3 py-2.5 text-left text-xs font-semibold text-slate-500 uppercase tracking-wider cursor-pointer select-none hover:text-blue-600" onClick={() => handleSort('department')}><Abbr code="Dept">Dept</Abbr><SortIcon col="department" /></th>
+                  <th className="px-3 py-2.5 text-center text-xs font-semibold text-slate-500 uppercase tracking-wider cursor-pointer select-none hover:text-blue-600" onClick={() => handleSort('present_days')}><Abbr code="P">Present</Abbr><SortIcon col="present_days" /></th>
+                  <th className="px-3 py-2.5 text-center text-xs font-semibold text-slate-500 uppercase tracking-wider cursor-pointer select-none hover:text-blue-600" onClick={() => handleSort('absent_days')}><Abbr code="A">Absent</Abbr><SortIcon col="absent_days" /></th>
+                  <th className="px-3 py-2.5 text-center text-xs font-semibold text-slate-500 uppercase tracking-wider cursor-pointer select-none hover:text-blue-600" onClick={() => handleSort('half_days')}><Abbr code="½P">Half</Abbr><SortIcon col="half_days" /></th>
+                  <th className="px-3 py-2.5 text-center text-xs font-semibold text-slate-500 uppercase tracking-wider cursor-pointer select-none hover:text-blue-600" onClick={() => handleSort('late_days')}>Late<SortIcon col="late_days" /></th>
+                  <th className="px-3 py-2.5 text-center text-xs font-semibold text-slate-500 uppercase tracking-wider cursor-pointer select-none hover:text-blue-600" onClick={() => handleSort('avg_hours')}><Abbr code="Hrs">Avg Hrs</Abbr><SortIcon col="avg_hours" /></th>
+                  <th className="px-3 py-2.5 text-center text-xs font-semibold text-slate-500 uppercase tracking-wider cursor-pointer select-none hover:text-blue-600" onClick={() => handleSort('unresolved_miss_punches')}>Miss P.<SortIcon col="unresolved_miss_punches" /></th>
+                  <th className="px-3 py-2.5 text-center text-xs font-semibold text-slate-500 uppercase tracking-wider cursor-pointer select-none hover:text-blue-600" onClick={() => handleSort('corrected_records')}>Corr.<SortIcon col="corrected_records" /></th>
+                  <th className="px-3 py-2.5 text-center text-xs font-semibold text-slate-500 uppercase tracking-wider cursor-pointer select-none hover:text-blue-600" onClick={() => handleSort('night_shifts')}>Night<SortIcon col="night_shifts" /></th>
                   <th className="px-3 py-2.5 text-center text-xs font-semibold text-slate-500 uppercase tracking-wider">Status</th>
                 </tr>
               </thead>

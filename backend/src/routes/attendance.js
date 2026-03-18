@@ -257,11 +257,15 @@ router.get('/monthly-summary', (req, res) => {
       SUM(CASE WHEN ap.is_night_out_only = 0 AND COALESCE(ap.status_final, ap.status_original) = 'A' THEN 1 ELSE 0 END) as absent_days,
       SUM(CASE WHEN ap.is_night_out_only = 0 AND COALESCE(ap.status_final, ap.status_original) IN ('½P','WO½P') THEN 1 ELSE 0 END) as half_days,
       SUM(CASE WHEN ap.is_night_out_only = 0 AND COALESCE(ap.status_final, ap.status_original) IN ('WO','WOP','WO½P') THEN 1 ELSE 0 END) as week_offs,
-      SUM(CASE WHEN ap.is_late_arrival = 1 THEN 1 ELSE 0 END) as late_days,
+      SUM(CASE WHEN ap.is_late_arrival = 1 AND ap.is_night_out_only = 0 THEN 1 ELSE 0 END) as late_days,
       SUM(CASE WHEN ap.is_night_out_only = 0 AND (ap.correction_remark IS NOT NULL AND ap.correction_remark != '') THEN 1 ELSE 0 END) as corrected_records,
-      ROUND(AVG(CASE WHEN ap.actual_hours > 0 THEN ap.actual_hours END), 1) as avg_hours,
+      ROUND(AVG(CASE WHEN ap.actual_hours > 0 AND ap.is_night_out_only = 0 THEN ap.actual_hours END), 1) as avg_hours,
       SUM(CASE WHEN ap.is_miss_punch = 1 AND ap.miss_punch_resolved = 0 THEN 1 ELSE 0 END) as unresolved_miss_punches,
-      SUM(CASE WHEN ap.is_night_shift = 1 AND ap.is_night_out_only = 0 THEN 1 ELSE 0 END) as night_shifts
+      SUM(CASE WHEN ap.is_night_out_only = 0 AND (
+        ap.is_night_shift = 1
+        OR (COALESCE(ap.in_time_final, ap.in_time_original) >= '18:00')
+        OR (COALESCE(ap.in_time_final, ap.in_time_original) < '06:00' AND COALESCE(ap.in_time_final, ap.in_time_original) != '')
+      ) THEN 1 ELSE 0 END) as night_shifts
     FROM attendance_processed ap
     LEFT JOIN employees e ON ap.employee_code = e.code
     WHERE ap.month = ? AND ap.year = ?
@@ -393,6 +397,91 @@ router.get('/validation-status', (req, res) => {
       isReadyToProcess: totalIssues === 0
     }
   });
+});
+
+/**
+ * POST /api/attendance/recalculate-metrics
+ * Recalculate actual_hours, late arrivals, and night shift flags for existing data
+ */
+router.post('/recalculate-metrics', (req, res) => {
+  const db = getDb();
+  const { month, year } = req.body;
+
+  if (!month || !year) return res.status(400).json({ success: false, error: 'month and year required' });
+
+  const records = db.prepare(`
+    SELECT ap.id, ap.in_time_original, ap.out_time_original, ap.in_time_final, ap.out_time_final,
+           ap.status_original, ap.is_night_shift, ap.is_night_out_only,
+           e.default_shift_id, e.shift_code
+    FROM attendance_processed ap
+    LEFT JOIN employees e ON ap.employee_code = e.code
+    WHERE ap.month = ? AND ap.year = ?
+  `).all(month, year);
+
+  const allShifts = db.prepare('SELECT * FROM shifts').all();
+  const shiftByCode = {};
+  const shiftById = {};
+  for (const s of allShifts) { shiftByCode[s.code] = s; shiftById[s.id] = s; }
+  const defaultDayShift = shiftByCode['DAY'] || allShifts[0];
+  const defaultNightShift = shiftByCode['NIGHT'];
+
+  const updateStmt = db.prepare(`
+    UPDATE attendance_processed SET
+      actual_hours = COALESCE(?, actual_hours),
+      is_late_arrival = ?, late_by_minutes = ?,
+      is_night_shift = CASE WHEN ? = 1 THEN 1 ELSE is_night_shift END,
+      shift_id = COALESCE(shift_id, ?), shift_detected = COALESCE(shift_detected, ?)
+    WHERE id = ?
+  `);
+
+  let updated = 0;
+  const txn = db.transaction(() => {
+    for (const rec of records) {
+      if (rec.is_night_out_only) continue;
+      const inTime = rec.in_time_final || rec.in_time_original;
+      const outTime = rec.out_time_final || rec.out_time_original;
+      if (!inTime) continue;
+
+      let actualHours = null;
+      if (inTime && outTime) {
+        const [ih, im] = inTime.split(':').map(Number);
+        const [oh, om] = outTime.split(':').map(Number);
+        if (!isNaN(ih) && !isNaN(oh)) {
+          let hrs = (oh * 60 + om - (ih * 60 + im)) / 60;
+          if (hrs < 0) hrs += 24;
+          actualHours = Math.round(hrs * 100) / 100;
+        }
+      }
+
+      const [inH] = inTime.split(':').map(Number);
+      const isNight = (!isNaN(inH) && (inH >= 18 || inH < 6)) || rec.is_night_shift === 1;
+
+      const empShift = rec.default_shift_id ? shiftById[rec.default_shift_id] : null;
+      const shift = isNight ? (defaultNightShift || empShift || defaultDayShift) : (empShift || defaultDayShift);
+
+      let isLate = 0, lateBy = 0;
+      const status = rec.status_original;
+      if (inTime && shift && shift.start_time && (status === 'P' || status === 'WOP')) {
+        const [sh, sm] = shift.start_time.split(':').map(Number);
+        if (!isNaN(inH) && !isNaN(sh)) {
+          let diffMin = (inH * 60 + (parseInt(inTime.split(':')[1]) || 0)) - (sh * 60 + sm);
+          if (isNight && diffMin < -600) diffMin += 1440;
+          if (!isNight && diffMin < 0) diffMin = 0;
+          const grace = shift.grace_minutes || 9;
+          if (diffMin > grace) {
+            isLate = 1;
+            lateBy = diffMin;
+          }
+        }
+      }
+
+      updateStmt.run(actualHours, isLate, lateBy, isNight ? 1 : 0, shift?.id || null, shift?.name || null, rec.id);
+      updated++;
+    }
+  });
+  txn();
+
+  res.json({ success: true, message: `Recalculated metrics for ${updated} records`, updated });
 });
 
 module.exports = router;

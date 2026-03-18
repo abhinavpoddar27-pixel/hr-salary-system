@@ -25,18 +25,21 @@ export default function CalendarView({ employeeCode, month, year, data: external
   const [hoveredDay, setHoveredDay] = useState(null);
   const [hoverPos, setHoverPos] = useState({ top: 0, left: 0 });
 
-  const { data: fetchedData, isLoading } = useQuery({
+  const { data: fetchedData, isLoading, error } = useQuery({
     queryKey: ['daily-attendance', employeeCode, month, year],
     queryFn: () => getEmployeeDailyAttendance(employeeCode, month, year),
-    enabled: !externalData && !!employeeCode,
+    enabled: !externalData && !!employeeCode && !!month && !!year,
     staleTime: 60000,
+    retry: 1,
   });
 
-  const attendanceData = externalData || fetchedData?.data?.data || fetchedData?.data || [];
-  // Ensure attendanceData is always an array (API returns { success, data: [...] })
-  const safeData = Array.isArray(attendanceData) ? attendanceData : [];
+  // Handle axios response shape: { data: { success, data: [...] } }
+  const rawData = externalData || fetchedData?.data?.data || fetchedData?.data || [];
+  const safeData = Array.isArray(rawData) ? rawData : (Array.isArray(rawData?.data) ? rawData.data : []);
 
   if (isLoading) return <Skeleton variant="card" />;
+  if (error) return <div className="text-xs text-red-500 p-2">Failed to load calendar data</div>;
+  if (!month || !year) return <div className="text-xs text-slate-400 p-2">Select a month and year</div>;
 
   // Build calendar grid
   const firstDay = new Date(year, month - 1, 1).getDay();
