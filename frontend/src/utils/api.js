@@ -94,6 +94,7 @@ export const finaliseSalary = (data) => api.post('/payroll/finalise', data)
 // ── Daily MIS ────────────────────────────────────────
 export const getDailyShiftBreakdown = (date) => api.get('/daily-mis/shift-breakdown', { params: { date } })
 export const getDailyWorkerBreakdown = (date) => api.get('/daily-mis/worker-breakdown', { params: { date } })
+export const getPreviousDayReport = (date) => api.get('/daily-mis/previous-day-report', { params: { date } })
 
 // ── Analytics ──────────────────────────────────────────
 export const getOrgOverview = (month, year, startDate, endDate) => api.get('/analytics/overview', { params: { month, year, startDate, endDate } })

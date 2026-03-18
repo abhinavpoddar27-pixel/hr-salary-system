@@ -8,6 +8,7 @@ const {
   getShiftWiseBreakdown,
   getDepartmentTypeBreakdown,
   getWorkerTypeBreakdown,
+  getPreviousDayReport,
 } = require('../services/dailyMIS');
 
 /**
@@ -148,6 +149,19 @@ router.get('/dates', (req, res) => {
 
   const dates = db.prepare(query).all(...params).map(r => r.date);
   res.json({ success: true, data: dates });
+});
+
+/**
+ * GET /api/daily-mis/previous-day-report
+ * Complete attendance report for previous day — split by day/night shift
+ */
+router.get('/previous-day-report', (req, res) => {
+  const db = getDb();
+  const { date } = req.query;
+  if (!date) return res.status(400).json({ success: false, error: 'date required' });
+
+  const report = getPreviousDayReport(db, date);
+  res.json({ success: true, data: report });
 });
 
 module.exports = router;

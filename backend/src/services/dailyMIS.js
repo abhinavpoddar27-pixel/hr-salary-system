@@ -143,11 +143,16 @@ function getDailySummary(db, date) {
     else totalPermanent++;
   }
 
+  // Not yet punched: active employees with no attendance record today
+  const todayPunchedCodes = new Set(presentEmployees.map(e => e.employee_code));
+  const notYetPunched = allActive.filter(e => !todayPunchedCodes.has(e.code));
+
   return {
     date,
     totalEmployees: totalEmployees?.count || 0,
     present: present?.count || 0,
     absent: absent?.count || 0,
+    notYetPunched: notYetPunched.length,
     punchedIn: punchedIn.length,
     punchedInList: punchedIn,
     lateArrivals: lateArrivals?.count || 0,
@@ -424,6 +429,126 @@ function getWorkerTypeBreakdown(db, date) {
   };
 }
 
+// ───────────────────────────────────────────────────────────────
+// 7. getPreviousDayReport — Complete day report for yesterday
+//    Splits into day shift and night shift with full employee lists
+// ───────────────────────────────────────────────────────────────
+function getPreviousDayReport(db, todayDate) {
+  const prevDate = new Date(todayDate + 'T12:00:00');
+  prevDate.setDate(prevDate.getDate() - 1);
+  const prevDateStr = prevDate.toISOString().split('T')[0];
+
+  // All attendance records for previous day
+  const records = db.prepare(`
+    SELECT ap.employee_code, e.name as employee_name, e.department, e.designation,
+           COALESCE(ap.in_time_final, ap.in_time_original) as in_time,
+           COALESCE(ap.out_time_final, ap.out_time_original) as out_time,
+           COALESCE(ap.status_final, ap.status_original) as status,
+           ap.actual_hours, ap.is_night_shift, ap.shift_detected,
+           ap.is_late_arrival, ap.late_by_minutes,
+           ap.overtime_minutes, ap.is_miss_punch, ap.miss_punch_type
+    FROM attendance_processed ap
+    LEFT JOIN employees e ON ap.employee_code = e.code
+    WHERE ap.date = ? AND ap.is_night_out_only = 0
+    ORDER BY e.department, e.name
+  `).all(prevDateStr);
+
+  // Active employee count for that date
+  const totalActive = db.prepare(`
+    SELECT COUNT(*) as count FROM employees
+    WHERE status != 'Inactive'
+    AND (date_of_joining IS NULL OR date_of_joining <= ?)
+    AND (date_of_exit IS NULL OR date_of_exit >= ?)
+  `).get(prevDateStr, prevDateStr);
+
+  // Classify each record
+  const dayShiftEmps = [];
+  const nightShiftEmps = [];
+
+  for (const rec of records) {
+    const enriched = classifyEmployee(rec);
+    if (isNightShiftRecord(rec)) {
+      nightShiftEmps.push(enriched);
+    } else {
+      dayShiftEmps.push(enriched);
+    }
+  }
+
+  // Present = P, WOP, ½P
+  const presentStatuses = ['P', 'WOP', '\u00bdP', 'WO\u00bdP'];
+  const presentRecords = records.filter(r => presentStatuses.includes(r.status));
+  const absentRecords = records.filter(r => r.status === 'A');
+  const halfDayRecords = records.filter(r => r.status === '\u00bdP' || r.status === 'WO\u00bdP');
+  const lateRecords = records.filter(r => r.is_late_arrival === 1);
+
+  // Avg hours (only where actual_hours > 0)
+  const hoursRecords = records.filter(r => r.actual_hours > 0);
+  const avgHours = hoursRecords.length > 0
+    ? Math.round(hoursRecords.reduce((s, r) => s + r.actual_hours, 0) / hoursRecords.length * 10) / 10
+    : 0;
+  const totalHours = Math.round(hoursRecords.reduce((s, r) => s + r.actual_hours, 0) * 10) / 10;
+  const totalOT = Math.round(records.reduce((s, r) => s + (r.overtime_minutes || 0), 0) / 60 * 10) / 10;
+
+  const total = totalActive?.count || 0;
+  const attendanceRate = total > 0 ? Math.round(presentRecords.length / total * 100 * 10) / 10 : 0;
+
+  // Department breakdown
+  const deptMap = {};
+  for (const rec of records) {
+    const dept = rec.department || 'Unknown';
+    if (!deptMap[dept]) deptMap[dept] = { department: dept, total: 0, present: 0, absent: 0, late: 0, halfDay: 0, hours: 0, hoursCount: 0, is_admin: isAdminDept(dept), is_contractor: isContractorDept(dept) };
+    deptMap[dept].total++;
+    if (presentStatuses.includes(rec.status)) deptMap[dept].present++;
+    if (rec.status === 'A') deptMap[dept].absent++;
+    if (rec.is_late_arrival) deptMap[dept].late++;
+    if (rec.status === '\u00bdP' || rec.status === 'WO\u00bdP') deptMap[dept].halfDay++;
+    if (rec.actual_hours > 0) { deptMap[dept].hours += rec.actual_hours; deptMap[dept].hoursCount++; }
+  }
+  const departments = Object.values(deptMap).map(d => ({
+    ...d,
+    avgHours: d.hoursCount > 0 ? Math.round(d.hours / d.hoursCount * 10) / 10 : 0,
+    rate: d.total > 0 ? Math.round(d.present / d.total * 100 * 10) / 10 : 0,
+  })).sort((a, b) => b.total - a.total);
+
+  // Shift stats builder
+  const buildShiftStats = (emps) => {
+    const h = emps.filter(e => e.actual_hours > 0);
+    return {
+      count: emps.length,
+      lateCount: emps.filter(e => e.is_late_arrival).length,
+      avgHours: h.length > 0 ? Math.round(h.reduce((s, e) => s + e.actual_hours, 0) / h.length * 10) / 10 : 0,
+      totalHours: Math.round(h.reduce((s, e) => s + e.actual_hours, 0) * 10) / 10,
+      adminCount: emps.filter(e => e.is_admin).length,
+      mfgCount: emps.filter(e => !e.is_admin).length,
+      permanentCount: emps.filter(e => !e.is_contractor).length,
+      contractorCount: emps.filter(e => e.is_contractor).length,
+      employees: emps,
+    };
+  };
+
+  return {
+    date: prevDateStr,
+    summary: {
+      total,
+      present: presentRecords.length,
+      absent: absentRecords.length,
+      halfDay: halfDayRecords.length,
+      late: lateRecords.length,
+      avgHours,
+      nightShiftCount: nightShiftEmps.length,
+      attendanceRate,
+    },
+    dayShift: buildShiftStats(dayShiftEmps),
+    nightShift: buildShiftStats(nightShiftEmps),
+    departments,
+    totals: {
+      totalHours,
+      otHours: totalOT,
+      manDaysUtilized: Math.round(presentRecords.length * 10) / 10,
+    },
+  };
+}
+
 module.exports = {
   getDailySummary,
   getNightShiftReport,
@@ -431,4 +556,5 @@ module.exports = {
   getShiftWiseBreakdown,
   getDepartmentTypeBreakdown,
   getWorkerTypeBreakdown,
+  getPreviousDayReport,
 };
