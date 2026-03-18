@@ -5,6 +5,8 @@ import toast from 'react-hot-toast'
 import { uploadFiles, getImportHistory, getImportReconciliation } from '../utils/api'
 import { useQuery } from '@tanstack/react-query'
 import { useAppStore } from '../store/appStore'
+import DateSelector from '../components/common/DateSelector'
+import useDateSelector from '../hooks/useDateSelector'
 import PipelineProgress from '../components/pipeline/PipelineProgress'
 import { fmtDate, fmtDateTime, monthYearLabel } from '../utils/formatters'
 import clsx from 'clsx'
@@ -96,7 +98,7 @@ function ReconciliationPanel({ month, year }) {
 }
 
 export default function Import() {
-  const { selectedMonth, selectedYear } = useAppStore()
+  const { month, year, dateProps } = useDateSelector({ mode: 'month', syncToStore: true })
   const queryClient = useQueryClient()
   const [uploading, setUploading] = useState(false)
   const [uploadResults, setUploadResults] = useState(null)
@@ -172,6 +174,8 @@ export default function Import() {
           <h2 className="text-lg font-bold text-slate-800">Stage 1: Import Attendance Data</h2>
           <p className="text-sm text-slate-500 mt-1">Upload EESL biometric attendance .xls files. Both Sheet1 (Asian Lakto Ind Ltd) and Sheet2 (Default) will be parsed automatically.</p>
         </div>
+
+        <DateSelector {...dateProps} />
 
         {/* File Drop Zone */}
         <div className="card">
@@ -294,7 +298,7 @@ export default function Import() {
         )}
 
         {/* Reconciliation Panel */}
-        <ReconciliationPanel month={selectedMonth} year={selectedYear} />
+        <ReconciliationPanel month={month} year={year} />
 
         {/* Import History */}
         {history.length > 0 && (

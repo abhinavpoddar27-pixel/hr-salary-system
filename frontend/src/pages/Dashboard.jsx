@@ -2,9 +2,10 @@ import React from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { Link } from 'react-router-dom'
 import { BarChart, Bar, LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell } from 'recharts'
-import { useAppStore } from '../store/appStore'
 import { getOrgOverview, getHeadcountTrend, getAlerts, generateAlerts } from '../utils/api'
 import StatCard from '../components/common/StatCard'
+import DateSelector from '../components/common/DateSelector'
+import useDateSelector from '../hooks/useDateSelector'
 import { fmtINR, fmtPct, monthYearLabel, attendanceRateColor, severityIcon, severityColor, fmtDate } from '../utils/formatters'
 import clsx from 'clsx'
 import useExpandableRows from '../hooks/useExpandableRows'
@@ -12,7 +13,8 @@ import DrillDownRow, { DrillDownChevron } from '../components/ui/DrillDownRow'
 import DepartmentQuickView from '../components/ui/DepartmentQuickView'
 
 export default function Dashboard() {
-  const { selectedMonth, selectedYear } = useAppStore()
+  const { month, year, dateProps } = useDateSelector({ mode: 'month', syncToStore: true })
+  const selectedMonth = month, selectedYear = year
 
   const { data: overviewRes, isLoading: ovLoading } = useQuery({
     queryKey: ['org-overview', selectedMonth, selectedYear],
@@ -49,7 +51,8 @@ export default function Dashboard() {
 
   return (
     <div className="p-6 space-y-6 max-w-screen-2xl">
-      {/* Header */}
+      {/* Date selector + Header */}
+      <DateSelector {...dateProps} />
       <div className="flex items-center justify-between">
         <div>
           <h2 className="text-xl font-bold text-slate-800">Organisation Overview</h2>

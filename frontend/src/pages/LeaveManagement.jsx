@@ -2,6 +2,8 @@ import React, { useState, useMemo } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { getLeaveApplications, submitLeaveApplication, approveLeave, rejectLeave, getEmployees, getLeaveSummary } from '../utils/api'
 import { useAppStore } from '../store/appStore'
+import DateSelector from '../components/common/DateSelector'
+import useDateSelector from '../hooks/useDateSelector'
 import Modal from '../components/ui/Modal'
 import clsx from 'clsx'
 import toast from 'react-hot-toast'
@@ -114,7 +116,7 @@ function ApplyLeaveModal({ show, onClose, employees }) {
 }
 
 export default function LeaveManagement() {
-  const { selectedMonth, selectedYear } = useAppStore()
+  const { month, year, dateProps } = useDateSelector({ mode: 'month', syncToStore: true })
   const queryClient = useQueryClient()
   const [statusFilter, setStatusFilter] = useState('All')
   const [typeFilter, setTypeFilter] = useState('All')
@@ -125,9 +127,9 @@ export default function LeaveManagement() {
   const { toggle: toggleDrill, isExpanded: isDrillExpanded } = useExpandableRows()
 
   const { data: leavesRes, isLoading } = useQuery({
-    queryKey: ['leave-applications', selectedMonth, selectedYear, statusFilter !== 'All' ? statusFilter : undefined],
+    queryKey: ['leave-applications', month, year, statusFilter !== 'All' ? statusFilter : undefined],
     queryFn: () => getLeaveApplications({
-      month: selectedMonth, year: selectedYear,
+      month: month, year: year,
       ...(statusFilter !== 'All' ? { status: statusFilter } : {})
     })
   })
@@ -188,6 +190,7 @@ export default function LeaveManagement() {
           <h2 className="text-lg font-bold text-slate-800">Leave Management</h2>
           <p className="text-sm text-slate-500">Manage leave applications and approvals</p>
         </div>
+        <DateSelector {...dateProps} />
         <button className="btn btn-primary" onClick={() => setShowApply(true)}>
           + Apply Leave
         </button>

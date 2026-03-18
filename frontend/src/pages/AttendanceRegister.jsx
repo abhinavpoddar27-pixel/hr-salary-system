@@ -3,6 +3,8 @@ import { useQuery, useMutation } from '@tanstack/react-query'
 import toast from 'react-hot-toast'
 import { getAttendanceRegister, updateAttendanceRecord, getMonthlyAttendanceSummary, recalculateMetrics } from '../utils/api'
 import { useAppStore } from '../store/appStore'
+import DateSelector from '../components/common/DateSelector'
+import useDateSelector from '../hooks/useDateSelector'
 import PipelineProgress from '../components/pipeline/PipelineProgress'
 import { statusColor } from '../utils/formatters'
 import { Abbr } from '../components/ui/Tooltip'
@@ -189,7 +191,7 @@ const MONTH_NAMES = ['','Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','O
 const COL_SPAN = 13
 
 export default function AttendanceRegister() {
-  const { selectedMonth, selectedYear } = useAppStore()
+  const { month, year, dateProps } = useDateSelector({ mode: 'month', syncToStore: true })
   const { toggle, isExpanded } = useExpandableRows()
   const [filterDept, setFilterDept] = useState('')
   const [searchTerm, setSearchTerm] = useState('')
@@ -199,8 +201,8 @@ export default function AttendanceRegister() {
 
   /* ── Fetch all employees summary (auto-loads on mount) ── */
   const { data: summaryRes, isLoading, refetch: refetchSummary } = useQuery({
-    queryKey: ['monthly-attendance-summary', selectedMonth, selectedYear],
-    queryFn: () => getMonthlyAttendanceSummary(selectedMonth, selectedYear),
+    queryKey: ['monthly-attendance-summary', month, year],
+    queryFn: () => getMonthlyAttendanceSummary(month, year),
     staleTime: 120000,
     keepPreviousData: true,
   })
@@ -218,7 +220,7 @@ export default function AttendanceRegister() {
   })
 
   const recalcMutation = useMutation({
-    mutationFn: () => recalculateMetrics(selectedMonth, selectedYear),
+    mutationFn: () => recalculateMetrics(month, year),
     onSuccess: (r) => {
       toast.success(`Recalculated metrics for ${r.data.updated} records`)
       refetchSummary()
@@ -308,9 +310,10 @@ export default function AttendanceRegister() {
           <div>
             <h2 className="section-title">Stage 5: Corrections & Attendance Register</h2>
             <p className="section-subtitle mt-1">
-              All employees for {MONTH_NAMES[selectedMonth]} {selectedYear}. Click a row to expand daily detail and make corrections. Click column headers to sort.
+              All employees for {MONTH_NAMES[month]} {year}. Click a row to expand daily detail and make corrections. Click column headers to sort.
             </p>
           </div>
+          <DateSelector {...dateProps} />
           <button
             onClick={() => recalcMutation.mutate()}
             disabled={recalcMutation.isPending}
@@ -491,8 +494,8 @@ export default function AttendanceRegister() {
                         <DrillDownRow colSpan={COL_SPAN}>
                           <ExpandedEmployeeDetail
                             emp={emp}
-                            month={selectedMonth}
-                            year={selectedYear}
+                            month={month}
+                            year={year}
                             onEditRecord={setEditRecord}
                           />
                         </DrillDownRow>

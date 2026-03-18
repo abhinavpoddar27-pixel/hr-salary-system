@@ -9,8 +9,9 @@ import {
   getHeadcountTrend, getAttritionData, getOrgOverview,
   detectInactiveEmployees, getInactiveEmployees, reactivateEmployee
 } from '../utils/api'
-import { useAppStore } from '../store/appStore'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
+import DateSelector from '../components/common/DateSelector'
+import useDateSelector from '../hooks/useDateSelector'
 import toast from 'react-hot-toast'
 import clsx from 'clsx'
 import useExpandableRows from '../hooks/useExpandableRows'
@@ -47,8 +48,7 @@ const TABS = [
 // ═══════════════════════════════════════════════════════════
 // HEADCOUNT TAB — enhanced with detailed drill-down
 // ═══════════════════════════════════════════════════════════
-function HeadcountTab() {
-  const { selectedMonth, selectedYear } = useAppStore()
+function HeadcountTab({ selectedMonth, selectedYear }) {
   const [expandedMonth, setExpandedMonth] = useState(null)
 
   const { data: trendRes } = useQuery({
@@ -297,8 +297,7 @@ function HeadcountTab() {
 // ═══════════════════════════════════════════════════════════
 // ATTRITION TAB — detailed view with permanent vs contractor
 // ═══════════════════════════════════════════════════════════
-function AttritionTab() {
-  const { selectedMonth, selectedYear } = useAppStore()
+function AttritionTab({ selectedMonth, selectedYear }) {
   const qc = useQueryClient()
   const inactiveExpand = useExpandableRows()
   const joinExpand = useExpandableRows()
@@ -485,8 +484,7 @@ function AttritionTab() {
 // ═══════════════════════════════════════════════════════════
 // CONTRACTOR MANAGEMENT TAB
 // ═══════════════════════════════════════════════════════════
-function ContractorTab() {
-  const { selectedMonth, selectedYear } = useAppStore()
+function ContractorTab({ selectedMonth, selectedYear }) {
   const contractorExpand = useExpandableRows()
   const permanentExpand = useExpandableRows()
 
@@ -669,12 +667,16 @@ function ContractorTab() {
 // MAIN WORKFORCE COMPONENT WITH ROUTES
 // ═══════════════════════════════════════════════════════════
 export default function WorkforceAnalytics() {
+  const { month, year, dateProps } = useDateSelector({ mode: 'month', syncToStore: true })
+  const dp = { selectedMonth: month, selectedYear: year }
+
   return (
     <div className="p-6 space-y-5 animate-fade-in">
       <div>
         <h2 className="section-title">Workforce Analytics</h2>
         <p className="section-subtitle mt-1">Headcount trends, attrition analysis, and contractor management</p>
       </div>
+      <DateSelector {...dateProps} />
       <div className="border-b border-slate-200 flex gap-0 overflow-x-auto">
         {TABS.map(t => (
           <NavLink key={t.id} to={t.path}
@@ -685,9 +687,9 @@ export default function WorkforceAnalytics() {
       </div>
       <Routes>
         <Route index element={<Navigate to="headcount" replace />} />
-        <Route path="headcount" element={<HeadcountTab />} />
-        <Route path="attrition" element={<AttritionTab />} />
-        <Route path="contractors" element={<ContractorTab />} />
+        <Route path="headcount" element={<HeadcountTab {...dp} />} />
+        <Route path="attrition" element={<AttritionTab {...dp} />} />
+        <Route path="contractors" element={<ContractorTab {...dp} />} />
       </Routes>
     </div>
   )

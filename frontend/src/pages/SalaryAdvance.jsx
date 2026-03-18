@@ -2,6 +2,8 @@ import React, { useState, useMemo } from 'react'
 import { useQuery, useMutation } from '@tanstack/react-query'
 import toast from 'react-hot-toast'
 import { useAppStore } from '../store/appStore'
+import DateSelector from '../components/common/DateSelector'
+import useDateSelector from '../hooks/useDateSelector'
 import { fmtINR, monthYearLabel, fmtDate } from '../utils/formatters'
 import { Abbr } from '../components/ui/Tooltip'
 import AbbreviationLegend from '../components/ui/AbbreviationLegend'
@@ -35,7 +37,7 @@ function useSortable(defaultKey = '', defaultDir = 'asc') {
 }
 
 export default function SalaryAdvance() {
-  const { selectedMonth, selectedYear } = useAppStore()
+  const { month, year, dateProps } = useDateSelector({ mode: 'month', syncToStore: true })
   const [selected, setSelected] = useState(new Set())
   const [filterView, setFilterView] = useState('all')
   const [search, setSearch] = useState('')
@@ -45,8 +47,8 @@ export default function SalaryAdvance() {
   const { toggle: toggleRow, isExpanded } = useExpandableRows()
 
   const { data: res, isLoading, refetch } = useQuery({
-    queryKey: ['advance-list', selectedMonth, selectedYear],
-    queryFn: () => api.get('/advance/list', { params: { month: selectedMonth, year: selectedYear } }),
+    queryKey: ['advance-list', month, year],
+    queryFn: () => api.get('/advance/list', { params: { month: month, year: year } }),
     retry: 0
   })
 
@@ -71,7 +73,7 @@ export default function SalaryAdvance() {
   }, [allRecords, filterView, search, sort.sortKey, sort.sortDir])
 
   const calculateMutation = useMutation({
-    mutationFn: () => api.post('/advance/calculate', { month: selectedMonth, year: selectedYear }),
+    mutationFn: () => api.post('/advance/calculate', { month: month, year: year }),
     onSuccess: (r) => {
       toast.success(`Advance calculated: ${r.data.eligible} eligible of ${r.data.total} | Total: ${fmtINR(r.data.totalAdvanceAmount)}`)
       refetch()
@@ -128,7 +130,7 @@ export default function SalaryAdvance() {
 
     const html = `<div style="font-family:Arial;font-size:11px;padding:20px">
       <h2 style="text-align:center;margin-bottom:4px">Salary Advance Register</h2>
-      <p style="text-align:center;color:#666;margin-top:0">${MONTHS[selectedMonth]} ${selectedYear}</p>
+      <p style="text-align:center;color:#666;margin-top:0">${MONTHS[month]} ${year}</p>
       <table style="width:100%;border-collapse:collapse;margin-top:12px">
         <thead><tr style="background:#f0f0f0">
           <th style="padding:6px;border:1px solid #ddd">Sr</th>
@@ -154,7 +156,7 @@ export default function SalaryAdvance() {
     document.body.appendChild(container)
     try {
       await html2pdf().set({
-        margin: [8, 8, 8, 8], filename: `Advance_Register_${MONTHS[selectedMonth]}_${selectedYear}.pdf`,
+        margin: [8, 8, 8, 8], filename: `Advance_Register_${MONTHS[month]}_${year}.pdf`,
         image: { type: 'jpeg', quality: 0.95 }, html2canvas: { scale: 2 },
         jsPDF: { unit: 'mm', format: 'a4', orientation: 'portrait' }
       }).from(container).save()
@@ -169,9 +171,10 @@ export default function SalaryAdvance() {
           <div>
             <h2 className="section-title">Salary Advance</h2>
             <p className="section-subtitle mt-1">
-              {monthYearLabel(selectedMonth, selectedYear)} — Calculate and process salary advances (55% gross for eligible employees).
+              {monthYearLabel(month, year)} — Calculate and process salary advances (55% gross for eligible employees).
             </p>
           </div>
+          <DateSelector {...dateProps} />
           <div className="flex gap-2">
             <button onClick={handleExportPDF} className="btn-secondary text-xs">Export PDF</button>
             <button onClick={() => calculateMutation.mutate()} disabled={calculateMutation.isPending} className="btn-primary">
@@ -252,7 +255,7 @@ export default function SalaryAdvance() {
         {allRecords.length === 0 && !isLoading ? (
           <div className="card p-8 text-center">
             <div className="text-4xl mb-3">₹</div>
-            <h3 className="font-semibold text-slate-700 mb-2">No advance data for {monthYearLabel(selectedMonth, selectedYear)}</h3>
+            <h3 className="font-semibold text-slate-700 mb-2">No advance data for {monthYearLabel(month, year)}</h3>
             <p className="text-slate-500">Click "Calculate Advances" to process salary advances for this month.</p>
           </div>
         ) : records.length > 0 && (

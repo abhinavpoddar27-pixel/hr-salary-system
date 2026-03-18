@@ -10,7 +10,8 @@ import {
   getAttendanceHeatmap, getOvertimeReport, getWorkingHoursReport,
   getDepartmentDeepDive
 } from '../utils/api'
-import { useAppStore } from '../store/appStore'
+import DateSelector from '../components/common/DateSelector'
+import useDateSelector from '../hooks/useDateSelector'
 import { Abbr } from '../components/ui/Tooltip'
 import AbbreviationLegend from '../components/ui/AbbreviationLegend'
 import useExpandableRows from '../hooks/useExpandableRows'
@@ -79,8 +80,7 @@ const TABS = [
 // ═══════════════════════════════════════════════════════════
 // OVERVIEW TAB
 // ═══════════════════════════════════════════════════════════
-function OverviewTab() {
-  const { selectedMonth, selectedYear, dateRangeMode, dateRangeStart, dateRangeEnd } = useAppStore()
+function OverviewTab({ selectedMonth, selectedYear, dateRangeMode, dateRangeStart, dateRangeEnd }) {
   const [expandedDept, setExpandedDept] = useState(null)
   const empExpand = useExpandableRows()
   const sort = useSortable('headcount', 'desc')
@@ -263,8 +263,7 @@ function OverviewTab() {
 // ═══════════════════════════════════════════════════════════
 // ABSENTEEISM TAB
 // ═══════════════════════════════════════════════════════════
-function AbsenteeismTab() {
-  const { selectedMonth, selectedYear, dateRangeMode, dateRangeStart, dateRangeEnd } = useAppStore()
+function AbsenteeismTab({ selectedMonth, selectedYear, dateRangeMode, dateRangeStart, dateRangeEnd }) {
   const { toggle, isExpanded } = useExpandableRows()
   const sort = useSortable('attendanceRate', 'asc')
 
@@ -356,8 +355,7 @@ function AbsenteeismTab() {
 // ═══════════════════════════════════════════════════════════
 // PUNCTUALITY TAB
 // ═══════════════════════════════════════════════════════════
-function PunctualityTab() {
-  const { selectedMonth, selectedYear, dateRangeMode, dateRangeStart, dateRangeEnd } = useAppStore()
+function PunctualityTab({ selectedMonth, selectedYear, dateRangeMode, dateRangeStart, dateRangeEnd }) {
   const sort = useSortable('lateRate', 'desc')
   const deptSort = useSortable('lateRate', 'desc')
   const empExpand = useExpandableRows()
@@ -505,8 +503,7 @@ function PunctualityTab() {
 // ═══════════════════════════════════════════════════════════
 // OVERTIME TAB
 // ═══════════════════════════════════════════════════════════
-function OvertimeTab() {
-  const { selectedMonth, selectedYear, dateRangeMode, dateRangeStart, dateRangeEnd } = useAppStore()
+function OvertimeTab({ selectedMonth, selectedYear, dateRangeMode, dateRangeStart, dateRangeEnd }) {
   const sort = useSortable('totalOTMinutes', 'desc')
   const deptSort = useSortable('totalHours', 'desc')
   const empExpand = useExpandableRows()
@@ -648,8 +645,7 @@ function OvertimeTab() {
 // ═══════════════════════════════════════════════════════════
 // WORKING HOURS TAB
 // ═══════════════════════════════════════════════════════════
-function WorkingHoursTab() {
-  const { selectedMonth, selectedYear, dateRangeMode, dateRangeStart, dateRangeEnd } = useAppStore()
+function WorkingHoursTab({ selectedMonth, selectedYear, dateRangeMode, dateRangeStart, dateRangeEnd }) {
   const topSort = useSortable('avgHours', 'desc')
   const lowSort = useSortable('avgHours', 'asc')
   const topExpand = useExpandableRows()
@@ -795,12 +791,16 @@ function WorkingHoursTab() {
 // MAIN ANALYTICS COMPONENT
 // ═══════════════════════════════════════════════════════════
 export default function Analytics() {
+  const { month, year, dateRangeMode, dateRangeStart, dateRangeEnd, dateProps } = useDateSelector({ mode: 'range', syncToStore: true })
+  const dp = { selectedMonth: month, selectedYear: year, dateRangeMode, dateRangeStart, dateRangeEnd }
+
   return (
     <div className="p-6 space-y-5 animate-fade-in">
       <div>
         <h2 className="section-title">Attendance Analytics</h2>
         <p className="section-subtitle mt-1">Organisation-wide insights (active employees only, inactive/left excluded)</p>
       </div>
+      <DateSelector {...dateProps} />
       <div className="border-b border-slate-200 flex gap-0 overflow-x-auto">
         {TABS.map(t => (
           <NavLink key={t.id} to={t.path}
@@ -811,11 +811,11 @@ export default function Analytics() {
       </div>
       <Routes>
         <Route index element={<Navigate to="overview" replace />} />
-        <Route path="overview" element={<OverviewTab />} />
-        <Route path="absenteeism" element={<AbsenteeismTab />} />
-        <Route path="punctuality" element={<PunctualityTab />} />
-        <Route path="overtime" element={<OvertimeTab />} />
-        <Route path="hours" element={<WorkingHoursTab />} />
+        <Route path="overview" element={<OverviewTab {...dp} />} />
+        <Route path="absenteeism" element={<AbsenteeismTab {...dp} />} />
+        <Route path="punctuality" element={<PunctualityTab {...dp} />} />
+        <Route path="overtime" element={<OvertimeTab {...dp} />} />
+        <Route path="hours" element={<WorkingHoursTab {...dp} />} />
       </Routes>
     </div>
   )

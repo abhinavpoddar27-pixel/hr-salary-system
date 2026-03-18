@@ -2,6 +2,8 @@ import React, { useState, useMemo } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { getFinanceReport, submitDayCorrection, getCorrectionHistory, getCorrectionsSummary } from '../utils/api'
 import { useAppStore } from '../store/appStore'
+import DateSelector from '../components/common/DateSelector'
+import useDateSelector from '../hooks/useDateSelector'
 import { fmtINR, fmtINR2, monthYearLabel } from '../utils/formatters'
 import Modal from '../components/ui/Modal'
 import useExpandableRows from '../hooks/useExpandableRows'
@@ -43,7 +45,8 @@ function SortTh({ sort, k, children, className = '' }) {
 // FINANCE REPORT TAB
 // ═══════════════════════════════════════════════════════════
 function ReportTab() {
-  const { selectedMonth, selectedYear, selectedCompany } = useAppStore()
+  const { selectedCompany } = useAppStore()
+  const { month, year } = useDateSelector({ mode: 'month', syncToStore: true })
   const queryClient = useQueryClient()
   const sort = useSortable('department', 'asc')
   const expand = useExpandableRows()
@@ -52,8 +55,8 @@ function ReportTab() {
   const [filter, setFilter] = useState('all') // all | flagged | new | held
 
   const { data: res, isLoading } = useQuery({
-    queryKey: ['finance-report', selectedMonth, selectedYear, selectedCompany],
-    queryFn: () => getFinanceReport(selectedMonth, selectedYear, selectedCompany),
+    queryKey: ['finance-report', month, year, selectedCompany],
+    queryFn: () => getFinanceReport(month, year, selectedCompany),
     retry: 0
   })
 
@@ -86,8 +89,8 @@ function ReportTab() {
     }
     corrMutation.mutate({
       employeeCode: correctionModal.code,
-      month: selectedMonth,
-      year: selectedYear,
+      month: month,
+      year: year,
       correctedDays: parseFloat(corrForm.correctedDays),
       reason: corrForm.reason,
       notes: corrForm.notes
@@ -215,7 +218,7 @@ function ReportTab() {
             <div className="bg-slate-50 rounded-lg p-3">
               <div className="text-xs text-slate-500">System-computed payable days</div>
               <div className="text-2xl font-bold text-slate-800">{correctionModal.systemDays ?? '—'}</div>
-              <div className="text-xs text-slate-400">{monthYearLabel(selectedMonth, selectedYear)}</div>
+              <div className="text-xs text-slate-400">{monthYearLabel(month, year)}</div>
             </div>
             <div>
               <label className="text-xs font-medium text-slate-600 block mb-1">Corrected Days</label>
@@ -255,10 +258,10 @@ function ReportTab() {
 
 // ── Correction Detail (inline drill-down) ──────────────
 function CorrectionDetail({ code, row }) {
-  const { selectedMonth, selectedYear } = useAppStore()
+  const { month, year } = useDateSelector({ mode: 'month', syncToStore: true })
   const { data: res } = useQuery({
-    queryKey: ['correction-history', code, selectedMonth, selectedYear],
-    queryFn: () => getCorrectionHistory(code, selectedMonth, selectedYear),
+    queryKey: ['correction-history', code, month, year],
+    queryFn: () => getCorrectionHistory(code, month, year),
     staleTime: 60000
   })
   const data = res?.data?.data || {}
@@ -326,10 +329,10 @@ function CorrectionDetail({ code, row }) {
 // CORRECTIONS SUMMARY TAB (admin only)
 // ═══════════════════════════════════════════════════════════
 function CorrectionsSummaryTab() {
-  const { selectedMonth, selectedYear } = useAppStore()
+  const { month, year } = useDateSelector({ mode: 'month', syncToStore: true })
   const { data: res, isLoading } = useQuery({
-    queryKey: ['corrections-summary', selectedMonth, selectedYear],
-    queryFn: () => getCorrectionsSummary(selectedMonth, selectedYear),
+    queryKey: ['corrections-summary', month, year],
+    queryFn: () => getCorrectionsSummary(month, year),
     retry: 0
   })
   const summary = res?.data?.data || []
@@ -398,6 +401,7 @@ function CorrectionsSummaryTab() {
 // ═══════════════════════════════════════════════════════════
 export default function FinanceAudit() {
   const { user } = useAppStore()
+  const { month, year, dateProps } = useDateSelector({ mode: 'month', syncToStore: true })
   const [activeTab, setActiveTab] = useState('report')
   const isAdmin = user?.role === 'admin'
 
@@ -413,6 +417,8 @@ export default function FinanceAudit() {
           <h2 className="section-title">Finance Audit</h2>
           <p className="section-subtitle mt-1">Verify salary computations, review corrections, and detect anomalies</p>
         </div>
+
+        <DateSelector {...dateProps} />
 
         <div className="border-b border-slate-200 flex gap-0">
           {tabs.map(t => (

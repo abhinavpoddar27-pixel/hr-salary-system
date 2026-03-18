@@ -3,6 +3,8 @@ import { useQuery, useMutation } from '@tanstack/react-query'
 import toast from 'react-hot-toast'
 import { getSalaryRegister, computeSalary, finaliseSalary, getPayslip, getMonthEndChecklist, getSalaryComparison, getBulkPayslips } from '../utils/api'
 import { useAppStore } from '../store/appStore'
+import DateSelector from '../components/common/DateSelector'
+import useDateSelector from '../hooks/useDateSelector'
 import PipelineProgress from '../components/pipeline/PipelineProgress'
 import { fmtINR, monthYearLabel } from '../utils/formatters'
 import { Abbr } from '../components/ui/Tooltip'
@@ -16,7 +18,7 @@ import api from '../utils/api'
 import { downloadPayslipPDF } from '../utils/payslipPdf'
 
 export default function SalaryComputation() {
-  const { selectedMonth, selectedYear } = useAppStore()
+  const { month, year, dateProps } = useDateSelector({ mode: 'month', syncToStore: true })
   const [showDetails, setShowDetails] = useState(null)
   const [calendarEmployee, setCalendarEmployee] = useState(null)
   const [payslipEmployee, setPayslipEmployee] = useState(null)
@@ -24,8 +26,8 @@ export default function SalaryComputation() {
   const [filterView, setFilterView] = useState('all')
 
   const { data: res, isLoading, refetch } = useQuery({
-    queryKey: ['salary-register', selectedMonth, selectedYear],
-    queryFn: () => getSalaryRegister(selectedMonth, selectedYear),
+    queryKey: ['salary-register', month, year],
+    queryFn: () => getSalaryRegister(month, year),
     retry: 0
   })
 
@@ -43,7 +45,7 @@ export default function SalaryComputation() {
 
   const [computeResult, setComputeResult] = useState(null)
   const computeMutation = useMutation({
-    mutationFn: () => computeSalary({ month: selectedMonth, year: selectedYear }),
+    mutationFn: () => computeSalary({ month: month, year: year }),
     onSuccess: (r) => {
       const d = r.data
       setComputeResult(d)
@@ -66,26 +68,26 @@ export default function SalaryComputation() {
   })
 
   const finaliseMutation = useMutation({
-    mutationFn: () => finaliseSalary({ month: selectedMonth, year: selectedYear }),
+    mutationFn: () => finaliseSalary({ month: month, year: year }),
     onSuccess: () => { toast.success('Salary finalised!'); refetch() }
   })
 
   const releaseHoldMutation = useMutation({
-    mutationFn: (code) => api.put(`/payroll/salary/${code}/hold-release`, { month: selectedMonth, year: selectedYear }),
+    mutationFn: (code) => api.put(`/payroll/salary/${code}/hold-release`, { month: month, year: year }),
     onSuccess: () => { toast.success('Salary hold released'); refetch() }
   })
 
   const { data: payslipRes } = useQuery({
-    queryKey: ['payslip', payslipEmployee, selectedMonth, selectedYear],
-    queryFn: () => getPayslip(payslipEmployee, selectedMonth, selectedYear),
+    queryKey: ['payslip', payslipEmployee, month, year],
+    queryFn: () => getPayslip(payslipEmployee, month, year),
     enabled: !!payslipEmployee
   })
   const payslip = payslipRes?.data?.data
 
   // Month-end checklist
   const { data: checklistRes } = useQuery({
-    queryKey: ['month-end-checklist', selectedMonth, selectedYear],
-    queryFn: () => getMonthEndChecklist(selectedMonth, selectedYear),
+    queryKey: ['month-end-checklist', month, year],
+    queryFn: () => getMonthEndChecklist(month, year),
     retry: 0
   })
   const checklist = checklistRes?.data?.data || []
@@ -94,8 +96,8 @@ export default function SalaryComputation() {
   // Salary comparison
   const [showComparison, setShowComparison] = useState(false)
   const { data: comparisonRes, isLoading: comparisonLoading } = useQuery({
-    queryKey: ['salary-comparison', selectedMonth, selectedYear],
-    queryFn: () => getSalaryComparison(selectedMonth, selectedYear),
+    queryKey: ['salary-comparison', month, year],
+    queryFn: () => getSalaryComparison(month, year),
     enabled: showComparison,
     retry: 0
   })
@@ -117,7 +119,7 @@ export default function SalaryComputation() {
   async function handleBulkPDF() {
     setBulkPdfLoading(true)
     try {
-      const res = await getBulkPayslips(selectedMonth, selectedYear, selectedCompany)
+      const res = await getBulkPayslips(month, year, selectedCompany)
       const slips = res?.data?.data || []
       if (slips.length === 0) { toast.error('No payslips to download'); return }
       for (const slip of slips) {
@@ -151,8 +153,9 @@ export default function SalaryComputation() {
         <div className="flex items-start justify-between">
           <div>
             <h2 className="section-title">Stage 7: Salary Computation</h2>
-            <p className="section-subtitle mt-1">{monthYearLabel(selectedMonth, selectedYear)} — Compute, review, and finalise salary.</p>
+            <p className="section-subtitle mt-1">{monthYearLabel(month, year)} — Compute, review, and finalise salary.</p>
           </div>
+          <DateSelector {...dateProps} />
           <div className="flex gap-2">
             <button onClick={() => computeMutation.mutate()} disabled={computeMutation.isPending} className="btn-primary">
               {computeMutation.isPending ? 'Computing...' : 'Compute Salary'}
@@ -345,7 +348,7 @@ export default function SalaryComputation() {
               </h3>
               <button onClick={() => setCalendarEmployee(null)} className="btn-ghost text-xs">Close</button>
             </div>
-            <CalendarView employeeCode={calendarEmployee.code} month={selectedMonth} year={selectedYear} />
+            <CalendarView employeeCode={calendarEmployee.code} month={month} year={year} />
           </div>
         )}
 

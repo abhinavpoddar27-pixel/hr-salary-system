@@ -9,6 +9,8 @@ import {
   getBulkPayslips, getCompanyConfig
 } from '../utils/api'
 import { useAppStore } from '../store/appStore'
+import DateSelector from '../components/common/DateSelector'
+import useDateSelector from '../hooks/useDateSelector'
 import { fmtINR, fmtDate } from '../utils/formatters'
 import useExpandableRows from '../hooks/useExpandableRows'
 import DrillDownRow, { DrillDownChevron } from '../components/ui/DrillDownRow'
@@ -52,7 +54,7 @@ function ReportCard({ title, description, icon, children }) {
 }
 
 export default function Reports() {
-  const { selectedMonth, selectedYear } = useAppStore()
+  const { month, year, dateProps } = useDateSelector({ mode: 'month', syncToStore: true })
   const [activeReport, setActiveReport] = useState('attendance')
   const [companyFilter, setCompanyFilter] = useState('')
   const { toggle, isExpanded, collapseAll } = useExpandableRows()
@@ -62,8 +64,8 @@ export default function Reports() {
 
   // Attendance Summary
   const { data: attRes, isLoading: attLoading } = useQuery({
-    queryKey: ['report-attendance', selectedMonth, selectedYear, companyFilter],
-    queryFn: () => getAttendanceSummaryReport(selectedMonth, selectedYear, companyFilter),
+    queryKey: ['report-attendance', month, year, companyFilter],
+    queryFn: () => getAttendanceSummaryReport(month, year, companyFilter),
     enabled: activeReport === 'attendance',
     retry: 0
   })
@@ -71,8 +73,8 @@ export default function Reports() {
 
   // Miss Punch Report
   const { data: mpRes, isLoading: mpLoading } = useQuery({
-    queryKey: ['report-misspunch', selectedMonth, selectedYear],
-    queryFn: () => getMissPunchReport(selectedMonth, selectedYear),
+    queryKey: ['report-misspunch', month, year],
+    queryFn: () => getMissPunchReport(month, year),
     enabled: activeReport === 'misspunch',
     retry: 0
   })
@@ -80,8 +82,8 @@ export default function Reports() {
 
   // Salary Register
   const { data: salRes, isLoading: salLoading } = useQuery({
-    queryKey: ['salary-register', selectedMonth, selectedYear, companyFilter],
-    queryFn: () => getSalaryRegister(selectedMonth, selectedYear, companyFilter),
+    queryKey: ['salary-register', month, year, companyFilter],
+    queryFn: () => getSalaryRegister(month, year, companyFilter),
     enabled: activeReport === 'salary',
     retry: 0
   })
@@ -90,8 +92,8 @@ export default function Reports() {
 
   // Bank NEFT
   const { data: bankRes, isLoading: bankLoading } = useQuery({
-    queryKey: ['bank-neft', selectedMonth, selectedYear, companyFilter],
-    queryFn: () => getBankTransferSheet(selectedMonth, selectedYear, companyFilter),
+    queryKey: ['bank-neft', month, year, companyFilter],
+    queryFn: () => getBankTransferSheet(month, year, companyFilter),
     enabled: activeReport === 'bank',
     retry: 0
   })
@@ -99,8 +101,8 @@ export default function Reports() {
 
   // PF Statement
   const { data: pfRes, isLoading: pfLoading } = useQuery({
-    queryKey: ['pf-report', selectedMonth, selectedYear],
-    queryFn: () => getPFStatement(selectedMonth, selectedYear),
+    queryKey: ['pf-report', month, year],
+    queryFn: () => getPFStatement(month, year),
     enabled: activeReport === 'pf',
     retry: 0
   })
@@ -108,8 +110,8 @@ export default function Reports() {
 
   // ESI Statement
   const { data: esiRes, isLoading: esiLoading } = useQuery({
-    queryKey: ['esi-report', selectedMonth, selectedYear],
-    queryFn: () => getESIStatement(selectedMonth, selectedYear),
+    queryKey: ['esi-report', month, year],
+    queryFn: () => getESIStatement(month, year),
     enabled: activeReport === 'esi',
     retry: 0
   })
@@ -117,8 +119,8 @@ export default function Reports() {
 
   // Audit Trail
   const { data: auditRes, isLoading: auditLoading } = useQuery({
-    queryKey: ['audit-trail', selectedMonth, selectedYear],
-    queryFn: () => getAuditTrail(selectedMonth, selectedYear),
+    queryKey: ['audit-trail', month, year],
+    queryFn: () => getAuditTrail(month, year),
     enabled: activeReport === 'audit',
     retry: 0
   })
@@ -126,8 +128,8 @@ export default function Reports() {
 
   // PF ECR
   const { data: ecrRes, isLoading: ecrLoading } = useQuery({
-    queryKey: ['pf-ecr', selectedMonth, selectedYear, companyFilter],
-    queryFn: () => getPFECR(selectedMonth, selectedYear, companyFilter),
+    queryKey: ['pf-ecr', month, year, companyFilter],
+    queryFn: () => getPFECR(month, year, companyFilter),
     enabled: activeReport === 'pf-ecr',
     retry: 0
   })
@@ -136,8 +138,8 @@ export default function Reports() {
 
   // ESI Contribution
   const { data: esiContribRes, isLoading: esiContribLoading } = useQuery({
-    queryKey: ['esi-contrib', selectedMonth, selectedYear, companyFilter],
-    queryFn: () => getESIContribution(selectedMonth, selectedYear, companyFilter),
+    queryKey: ['esi-contrib', month, year, companyFilter],
+    queryFn: () => getESIContribution(month, year, companyFilter),
     enabled: activeReport === 'esi-contrib',
     retry: 0
   })
@@ -146,8 +148,8 @@ export default function Reports() {
 
   // Bank Salary File
   const { data: bankFileRes, isLoading: bankFileLoading } = useQuery({
-    queryKey: ['bank-file', selectedMonth, selectedYear, companyFilter],
-    queryFn: () => getBankSalaryFile(selectedMonth, selectedYear, companyFilter),
+    queryKey: ['bank-file', month, year, companyFilter],
+    queryFn: () => getBankSalaryFile(month, year, companyFilter),
     enabled: activeReport === 'bank-file',
     retry: 0
   })
@@ -177,11 +179,11 @@ export default function Reports() {
   async function handleBulkPayslips() {
     setBulkPdfLoading(true)
     try {
-      const res = await getBulkPayslips(selectedMonth, selectedYear, companyFilter)
+      const res = await getBulkPayslips(month, year, companyFilter)
       const payslips = res.data?.data || []
       const companyConf = res.data?.companyConfig || null
       if (payslips.length === 0) { toast.error('No payslips to generate'); return }
-      await downloadBulkPayslipsPDF(payslips, companyConf, selectedMonth, selectedYear)
+      await downloadBulkPayslipsPDF(payslips, companyConf, month, year)
       toast.success(`Generated ${payslips.length} payslips`)
     } catch (err) {
       toast.error('Failed to generate payslips')
@@ -204,11 +206,12 @@ export default function Reports() {
     { id: 'audit', label: 'Audit Trail', desc: 'All field-level changes with before/after' },
   ]
 
-  const monthLabel = `${MONTH_NAMES[selectedMonth]}_${selectedYear}`
+  const monthLabel = `${MONTH_NAMES[month]}_${year}`
 
   return (
     <div className="p-6">
-      <div className="flex gap-6">
+      <DateSelector {...dateProps} />
+      <div className="flex gap-6 mt-4">
         {/* Left: report list */}
         <div className="w-60 flex-shrink-0">
           <h2 className="text-sm font-bold text-slate-600 uppercase tracking-wide mb-3">Reports</h2>
@@ -234,7 +237,7 @@ export default function Reports() {
           {activeReport === 'attendance' && (
             <div className="space-y-4">
               <div className="flex items-center justify-between">
-                <h3 className="text-base font-bold text-slate-800">Attendance Summary — {MONTH_NAMES[selectedMonth]} {selectedYear}</h3>
+                <h3 className="text-base font-bold text-slate-800">Attendance Summary — {MONTH_NAMES[month]} {year}</h3>
                 <button
                   onClick={() => exportToCSV(attData, [
                     { key: 'employee_code', label: 'Code' },
@@ -326,7 +329,7 @@ export default function Reports() {
           {activeReport === 'misspunch' && (
             <div className="space-y-4">
               <div className="flex items-center justify-between">
-                <h3 className="text-base font-bold text-slate-800">Miss Punch Report — {MONTH_NAMES[selectedMonth]} {selectedYear}</h3>
+                <h3 className="text-base font-bold text-slate-800">Miss Punch Report — {MONTH_NAMES[month]} {year}</h3>
                 <button onClick={() => exportToCSV(mpData, [
                   { key: 'employee_code', label: 'Code' }, { key: 'employee_name', label: 'Name' },
                   { key: 'date', label: 'Date' }, { key: 'miss_punch_type', label: 'Issue' },
@@ -413,7 +416,7 @@ export default function Reports() {
           {activeReport === 'salary' && (
             <div className="space-y-4">
               <div className="flex items-center justify-between">
-                <h3 className="text-base font-bold text-slate-800">Salary Register — {MONTH_NAMES[selectedMonth]} {selectedYear}</h3>
+                <h3 className="text-base font-bold text-slate-800">Salary Register — {MONTH_NAMES[month]} {year}</h3>
                 <button onClick={() => exportToCSV(salData, [
                   { key: 'employee_code', label: 'Code' }, { key: 'employee_name', label: 'Name' },
                   { key: 'department', label: 'Dept' }, { key: 'gross_salary', label: 'Gross' },
@@ -490,7 +493,7 @@ export default function Reports() {
           {activeReport === 'bank' && (
             <div className="space-y-4">
               <div className="flex items-center justify-between">
-                <h3 className="text-base font-bold text-slate-800">Bank Transfer Sheet — {MONTH_NAMES[selectedMonth]} {selectedYear}</h3>
+                <h3 className="text-base font-bold text-slate-800">Bank Transfer Sheet — {MONTH_NAMES[month]} {year}</h3>
                 <button onClick={() => exportToCSV(bankData, [
                   { key: 'employee_code', label: 'Emp Code' }, { key: 'employee_name', label: 'Name' },
                   { key: 'account_number', label: 'Account No.' }, { key: 'bank_name', label: 'Bank' },
@@ -562,7 +565,7 @@ export default function Reports() {
           {activeReport === 'pf' && (
             <div className="space-y-4">
               <div className="flex items-center justify-between">
-                <h3 className="text-base font-bold text-slate-800">PF Statement — {MONTH_NAMES[selectedMonth]} {selectedYear}</h3>
+                <h3 className="text-base font-bold text-slate-800">PF Statement — {MONTH_NAMES[month]} {year}</h3>
                 <button onClick={() => exportToCSV(pfData.employees || [], [
                   { key: 'employee_code', label: 'Code' }, { key: 'employee_name', label: 'Name' },
                   { key: 'uan', label: 'UAN' }, { key: 'pf_wages', label: 'PF Wages' },
@@ -632,7 +635,7 @@ export default function Reports() {
           {activeReport === 'esi' && (
             <div className="space-y-4">
               <div className="flex items-center justify-between">
-                <h3 className="text-base font-bold text-slate-800">ESI Statement — {MONTH_NAMES[selectedMonth]} {selectedYear}</h3>
+                <h3 className="text-base font-bold text-slate-800">ESI Statement — {MONTH_NAMES[month]} {year}</h3>
                 <button onClick={() => exportToCSV(esiData.employees || [], [
                   { key: 'employee_code', label: 'Code' }, { key: 'employee_name', label: 'Name' },
                   { key: 'esi_number', label: 'ESI No.' }, { key: 'esi_wages', label: 'ESI Wages' },
@@ -697,9 +700,9 @@ export default function Reports() {
           {activeReport === 'pf-ecr' && (
             <div className="space-y-4">
               <div className="flex items-center justify-between">
-                <h3 className="text-base font-bold text-slate-800">PF ECR File — {MONTH_NAMES[selectedMonth]} {selectedYear}</h3>
+                <h3 className="text-base font-bold text-slate-800">PF ECR File — {MONTH_NAMES[month]} {year}</h3>
                 <button
-                  onClick={() => handleDownloadFile(downloadPFECR, selectedMonth, selectedYear, companyFilter)}
+                  onClick={() => handleDownloadFile(downloadPFECR, month, year, companyFilter)}
                   className="btn-primary text-sm"
                 >
                   Download ECR (.txt)
@@ -747,9 +750,9 @@ export default function Reports() {
           {activeReport === 'esi-contrib' && (
             <div className="space-y-4">
               <div className="flex items-center justify-between">
-                <h3 className="text-base font-bold text-slate-800">ESI Contribution File — {MONTH_NAMES[selectedMonth]} {selectedYear}</h3>
+                <h3 className="text-base font-bold text-slate-800">ESI Contribution File — {MONTH_NAMES[month]} {year}</h3>
                 <button
-                  onClick={() => handleDownloadFile(downloadESIContribution, selectedMonth, selectedYear, companyFilter)}
+                  onClick={() => handleDownloadFile(downloadESIContribution, month, year, companyFilter)}
                   className="btn-primary text-sm"
                 >
                   Download ESI File (.txt)
@@ -779,7 +782,7 @@ export default function Reports() {
                             <td className="text-center">{Math.round(e.payable_days || 0)}</td>
                             <td className="text-right">{fmtINR(e.esi_wages)}</td>
                             <td className="text-right text-blue-600">{fmtINR(e.esi_employee)}</td>
-                            <td className="text-center">{e.date_of_joining && new Date(e.date_of_joining) >= new Date(selectedYear, selectedMonth - 1, 1) ? '1' : '0'}</td>
+                            <td className="text-center">{e.date_of_joining && new Date(e.date_of_joining) >= new Date(year, month - 1, 1) ? '1' : '0'}</td>
                           </tr>
                         ))}
                       </tbody>
@@ -794,9 +797,9 @@ export default function Reports() {
           {activeReport === 'bank-file' && (
             <div className="space-y-4">
               <div className="flex items-center justify-between">
-                <h3 className="text-base font-bold text-slate-800">Bank Salary Upload File — {MONTH_NAMES[selectedMonth]} {selectedYear}</h3>
+                <h3 className="text-base font-bold text-slate-800">Bank Salary Upload File — {MONTH_NAMES[month]} {year}</h3>
                 <button
-                  onClick={() => handleDownloadFile(downloadBankSalaryFile, selectedMonth, selectedYear, companyFilter)}
+                  onClick={() => handleDownloadFile(downloadBankSalaryFile, month, year, companyFilter)}
                   className="btn-primary text-sm"
                 >
                   Download Bank File (.csv)
@@ -854,7 +857,7 @@ export default function Reports() {
           {activeReport === 'payslips' && (
             <div className="space-y-4">
               <div className="flex items-center justify-between">
-                <h3 className="text-base font-bold text-slate-800">Payslips — {MONTH_NAMES[selectedMonth]} {selectedYear}</h3>
+                <h3 className="text-base font-bold text-slate-800">Payslips — {MONTH_NAMES[month]} {year}</h3>
                 <button
                   onClick={handleBulkPayslips}
                   disabled={bulkPdfLoading}
@@ -865,7 +868,7 @@ export default function Reports() {
               </div>
               <div className="card p-6 text-center">
                 <div className="text-3xl mb-3">PDF</div>
-                <p className="text-slate-600 mb-2">Generate a single PDF containing all employee payslips for {MONTH_NAMES[selectedMonth]} {selectedYear}.</p>
+                <p className="text-slate-600 mb-2">Generate a single PDF containing all employee payslips for {MONTH_NAMES[month]} {year}.</p>
                 <p className="text-xs text-slate-400">Each payslip will be on a separate page with company header, earnings, deductions, and attendance summary.</p>
                 {companyFilter && <p className="text-xs text-blue-600 mt-2">Filtered to: {companyFilter}</p>}
               </div>
@@ -876,7 +879,7 @@ export default function Reports() {
           {activeReport === 'audit' && (
             <div className="space-y-4">
               <div className="flex items-center justify-between">
-                <h3 className="text-base font-bold text-slate-800">Audit Trail — {MONTH_NAMES[selectedMonth]} {selectedYear}</h3>
+                <h3 className="text-base font-bold text-slate-800">Audit Trail — {MONTH_NAMES[month]} {year}</h3>
                 <button onClick={() => exportToCSV(auditData, [
                   { key: 'created_at', label: 'Timestamp' }, { key: 'table_name', label: 'Table' },
                   { key: 'record_id', label: 'Record ID' }, { key: 'field_name', label: 'Field' },

@@ -3,6 +3,8 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import toast from 'react-hot-toast'
 import { getComplianceItems, updateComplianceItem, generateComplianceCalendar, getPFStatement, getESIStatement } from '../utils/api'
 import { useAppStore } from '../store/appStore'
+import DateSelector from '../components/common/DateSelector'
+import useDateSelector from '../hooks/useDateSelector'
 import { fmtDate, fmtINR } from '../utils/formatters'
 import useExpandableRows from '../hooks/useExpandableRows'
 import DrillDownRow, { DrillDownChevron } from '../components/ui/DrillDownRow'
@@ -89,7 +91,7 @@ function EditComplianceModal({ item, onClose, onSave }) {
 }
 
 export default function Compliance() {
-  const { selectedMonth, selectedYear } = useAppStore()
+  const { month, year, dateProps } = useDateSelector({ mode: 'month', syncToStore: true })
   const qc = useQueryClient()
   const [activeTab, setActiveTab] = useState('calendar')
   const [editItem, setEditItem] = useState(null)
@@ -99,36 +101,36 @@ export default function Compliance() {
   const { toggle: esiToggle, isExpanded: esiIsExpanded } = useExpandableRows()
 
   const { data: compRes, isLoading } = useQuery({
-    queryKey: ['compliance', selectedYear],
-    queryFn: () => getComplianceItems(selectedYear),
+    queryKey: ['compliance', year],
+    queryFn: () => getComplianceItems(year),
     retry: 0
   })
   const items = compRes?.data?.data || []
 
   const { data: pfRes } = useQuery({
-    queryKey: ['pf-statement', selectedMonth, selectedYear],
-    queryFn: () => getPFStatement(selectedMonth, selectedYear),
+    queryKey: ['pf-statement', month, year],
+    queryFn: () => getPFStatement(month, year),
     retry: 0,
     enabled: activeTab === 'pf'
   })
   const pfData = pfRes?.data?.data || {}
 
   const { data: esiRes } = useQuery({
-    queryKey: ['esi-statement', selectedMonth, selectedYear],
-    queryFn: () => getESIStatement(selectedMonth, selectedYear),
+    queryKey: ['esi-statement', month, year],
+    queryFn: () => getESIStatement(month, year),
     retry: 0,
     enabled: activeTab === 'esi'
   })
   const esiData = esiRes?.data?.data || {}
 
   const generateMutation = useMutation({
-    mutationFn: () => generateComplianceCalendar(selectedYear),
-    onSuccess: () => { toast.success('Compliance calendar generated'); qc.invalidateQueries(['compliance', selectedYear]) }
+    mutationFn: () => generateComplianceCalendar(year),
+    onSuccess: () => { toast.success('Compliance calendar generated'); qc.invalidateQueries(['compliance', year]) }
   })
 
   const updateMutation = useMutation({
     mutationFn: ({ id, data }) => updateComplianceItem(id, data),
-    onSuccess: () => { toast.success('Updated'); setEditItem(null); qc.invalidateQueries(['compliance', selectedYear]) }
+    onSuccess: () => { toast.success('Updated'); setEditItem(null); qc.invalidateQueries(['compliance', year]) }
   })
 
   const filteredItems = items.filter(i => {
@@ -152,8 +154,9 @@ export default function Compliance() {
           <h2 className="text-lg font-bold text-slate-800">Compliance</h2>
           <p className="text-sm text-slate-500">PF/ESI filings, statutory compliance tracking</p>
         </div>
+        <DateSelector {...dateProps} />
         <button onClick={() => generateMutation.mutate()} className="btn-primary" disabled={generateMutation.isPending}>
-          {generateMutation.isPending ? 'Generating...' : `Generate Calendar ${selectedYear}`}
+          {generateMutation.isPending ? 'Generating...' : `Generate Calendar ${year}`}
         </button>
       </div>
 
@@ -211,7 +214,7 @@ export default function Compliance() {
             ) : items.length === 0 ? (
               <div className="p-8 text-center text-slate-400">
                 <div className="text-4xl mb-2">📋</div>
-                <p>No compliance items found. Click "Generate Calendar {selectedYear}" to create them.</p>
+                <p>No compliance items found. Click "Generate Calendar {year}" to create them.</p>
               </div>
             ) : (
               <div className="overflow-x-auto">
@@ -266,7 +269,7 @@ export default function Compliance() {
 
           <div className="card overflow-hidden">
             <div className="card-header">
-              <h3 className="font-semibold text-slate-700">PF Statement — {MONTH_NAMES[selectedMonth]} {selectedYear}</h3>
+              <h3 className="font-semibold text-slate-700">PF Statement — {MONTH_NAMES[month]} {year}</h3>
               <div className="text-sm text-slate-500">{pfData.employees?.length || 0} employees</div>
             </div>
             <div className="overflow-x-auto">
@@ -373,7 +376,7 @@ export default function Compliance() {
 
           <div className="card overflow-hidden">
             <div className="card-header">
-              <h3 className="font-semibold text-slate-700">ESI Statement — {MONTH_NAMES[selectedMonth]} {selectedYear}</h3>
+              <h3 className="font-semibold text-slate-700">ESI Statement — {MONTH_NAMES[month]} {year}</h3>
               <div className="text-sm text-slate-500">{esiData.employees?.length || 0} employees under ESI</div>
             </div>
             <div className="overflow-x-auto">

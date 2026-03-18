@@ -3,6 +3,8 @@ import { useQuery, useMutation } from '@tanstack/react-query'
 import toast from 'react-hot-toast'
 import { getNightShifts, confirmNightShift, rejectNightShift } from '../utils/api'
 import { useAppStore } from '../store/appStore'
+import DateSelector from '../components/common/DateSelector'
+import useDateSelector from '../hooks/useDateSelector'
 import PipelineProgress from '../components/pipeline/PipelineProgress'
 import { fmtDate } from '../utils/formatters'
 import { Abbr, Tip } from '../components/ui/Tooltip'
@@ -20,14 +22,14 @@ function ConfidenceBadge({ confidence }) {
 }
 
 export default function NightShift() {
-  const { selectedMonth, selectedYear } = useAppStore()
+  const { month, year, dateProps } = useDateSelector({ mode: 'month', syncToStore: true })
   const [filter, setFilter] = useState('all')
   const [calendarEmployee, setCalendarEmployee] = useState(null)
   const { toggle, isExpanded } = useExpandableRows()
 
   const { data: res, isLoading, refetch } = useQuery({
-    queryKey: ['night-shifts', selectedMonth, selectedYear],
-    queryFn: () => getNightShifts({ month: selectedMonth, year: selectedYear }),
+    queryKey: ['night-shifts', month, year],
+    queryFn: () => getNightShifts({ month: month, year: year }),
     retry: 0
   })
 
@@ -63,6 +65,8 @@ export default function NightShift() {
             High-confidence pairs are auto-confirmed. Medium and low pairs need your review.
           </p>
         </div>
+
+        <DateSelector {...dateProps} />
 
         {/* Stats */}
         <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
@@ -108,7 +112,7 @@ export default function NightShift() {
               </h3>
               <button onClick={() => setCalendarEmployee(null)} className="btn-ghost text-xs">Close</button>
             </div>
-            <CalendarView employeeCode={calendarEmployee.code} month={selectedMonth} year={selectedYear} />
+            <CalendarView employeeCode={calendarEmployee.code} month={month} year={year} />
           </div>
         )}
 

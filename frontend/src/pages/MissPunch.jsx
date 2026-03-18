@@ -3,6 +3,8 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import toast from 'react-hot-toast'
 import { getMissPunches, resolveMissPunch, bulkResolveMissPunches } from '../utils/api'
 import { useAppStore } from '../store/appStore'
+import DateSelector from '../components/common/DateSelector'
+import useDateSelector from '../hooks/useDateSelector'
 import PipelineProgress from '../components/pipeline/PipelineProgress'
 import { fmtDate, statusColor } from '../utils/formatters'
 import { Abbr } from '../components/ui/Tooltip'
@@ -65,7 +67,7 @@ function EditRow({ record, onSave, onCancel }) {
 }
 
 export default function MissPunch() {
-  const { selectedMonth, selectedYear } = useAppStore()
+  const { month, year, dateProps } = useDateSelector({ mode: 'month', syncToStore: true })
   const queryClient = useQueryClient()
   const [editId, setEditId] = useState(null)
   const [selected, setSelected] = useState(new Set())
@@ -81,8 +83,8 @@ export default function MissPunch() {
   const [filterDate, setFilterDate] = useState('')
 
   const { data: res, isLoading, refetch } = useQuery({
-    queryKey: ['miss-punches', selectedMonth, selectedYear, filterDept, filterType, filterResolved],
-    queryFn: () => getMissPunches({ month: selectedMonth, year: selectedYear, department: filterDept, resolved: filterResolved }),
+    queryKey: ['miss-punches', month, year, filterDept, filterType, filterResolved],
+    queryFn: () => getMissPunches({ month: month, year: year, department: filterDept, resolved: filterResolved }),
     retry: 0
   })
 
@@ -160,6 +162,7 @@ export default function MissPunch() {
             <h2 className="section-title">Stage 2: Miss Punch Detection & Rectification</h2>
             <p className="section-subtitle mt-1">Review and correct missing IN/OUT punches. Night shift records are automatically handled in Stage 4.</p>
           </div>
+          <DateSelector {...dateProps} />
           <div className="flex gap-2">
             {selected.size > 0 && (
               <button onClick={handleBulkResolve} className="btn-primary">
@@ -222,7 +225,7 @@ export default function MissPunch() {
               </h3>
               <button onClick={() => setCalendarEmployee(null)} className="btn-ghost text-xs">Close</button>
             </div>
-            <CalendarView employeeCode={calendarEmployee.code} month={selectedMonth} year={selectedYear} />
+            <CalendarView employeeCode={calendarEmployee.code} month={month} year={year} />
           </div>
         )}
 

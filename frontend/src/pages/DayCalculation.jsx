@@ -3,6 +3,8 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import toast from 'react-hot-toast'
 import api, { getDayCalculations, calculateDays, getEmployeeDailyAttendance } from '../utils/api'
 import { useAppStore } from '../store/appStore'
+import DateSelector from '../components/common/DateSelector'
+import useDateSelector from '../hooks/useDateSelector'
 import PipelineProgress from '../components/pipeline/PipelineProgress'
 import { Abbr, Tip } from '../components/ui/Tooltip'
 import AbbreviationLegend from '../components/ui/AbbreviationLegend'
@@ -27,7 +29,7 @@ function DaySummaryBox({ label, value, color = 'slate', subtext }) {
 }
 
 export default function DayCalculation() {
-  const { selectedMonth, selectedYear } = useAppStore()
+  const { month, year, dateProps } = useDateSelector({ mode: 'month', syncToStore: true })
   const queryClient = useQueryClient()
   const [expandedRow, setExpandedRow] = useState(null)
   const [search, setSearch] = useState('')
@@ -36,14 +38,14 @@ export default function DayCalculation() {
   const [sortDir, setSortDir] = useState('asc')
 
   const { data: res, isLoading, refetch } = useQuery({
-    queryKey: ['day-calculations', selectedMonth, selectedYear],
-    queryFn: () => getDayCalculations({ month: selectedMonth, year: selectedYear }),
+    queryKey: ['day-calculations', month, year],
+    queryFn: () => getDayCalculations({ month, year }),
     retry: 0
   })
 
   const rawCalcs = res?.data?.data || []
 
-  const daysInMonth = new Date(selectedYear, selectedMonth, 0).getDate()
+  const daysInMonth = new Date(year, month, 0).getDate()
   const monthNames = ['', 'January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December']
 
   const calcs = useMemo(() => {
@@ -98,7 +100,7 @@ export default function DayCalculation() {
   }
 
   const calcMutation = useMutation({
-    mutationFn: () => calculateDays({ month: selectedMonth, year: selectedYear }),
+    mutationFn: () => calculateDays({ month, year }),
     onSuccess: (res) => {
       toast.success(`Day calculation complete for ${res.data.processed} employees`)
       refetch()
@@ -109,8 +111,8 @@ export default function DayCalculation() {
 
   const lateDeductionMutation = useMutation({
     mutationFn: ({ code, deductionDays, remark }) => api.put(`/payroll/day-calculations/${code}/late-deduction`, {
-      month: selectedMonth,
-      year: selectedYear,
+      month,
+      year,
       deductionDays,
       remark
     }),
@@ -149,9 +151,10 @@ export default function DayCalculation() {
             <h2 className="section-title">Stage 6: Day Calculation & Leave Adjustment</h2>
             <p className="section-subtitle mt-1">
               Calculate paid days using Sunday granting rules, leave deductions, and holiday adjustments.
-              <span className="ml-2 text-xs text-slate-400">({monthNames[selectedMonth]} {selectedYear} — {daysInMonth} days)</span>
+              <span className="ml-2 text-xs text-slate-400">({monthNames[month]} {year} — {daysInMonth} days)</span>
             </p>
           </div>
+          <DateSelector {...dateProps} />
           <button
             onClick={() => calcMutation.mutate()}
             disabled={calcMutation.isPending}
@@ -319,8 +322,8 @@ export default function DayCalculation() {
                           <DrillDownRow colSpan={17}>
                             <DrillDownContent
                               r={r}
-                              selectedMonth={selectedMonth}
-                              selectedYear={selectedYear}
+                              selectedMonth={month}
+                              selectedYear={year}
                               daysInMonth={daysInMonth}
                               lateDeductionMutation={lateDeductionMutation}
                             />
@@ -381,7 +384,7 @@ export default function DayCalculation() {
               </div>
               <div>
                 <p className="font-semibold text-cyan-700 mb-1">🌟 Extra Duty</p>
-                <p>If <strong>Payable Days &gt; Calendar Days</strong> ({daysInMonth} for {monthNames[selectedMonth]}), the excess is Extra Duty.</p>
+                <p>If <strong>Payable Days &gt; Calendar Days</strong> ({daysInMonth} for {monthNames[month]}), the excess is Extra Duty.</p>
                 <p className="text-slate-500 mt-1">Happens when employee works on weekly offs (WOP) resulting in more payable days than the month has.</p>
               </div>
               <div>
