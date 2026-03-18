@@ -429,36 +429,28 @@ router.get('/month-end-checklist', (req, res) => {
 
   const items = [];
 
-  // 1. Check pipeline stages
+  // 1. Check pipeline stages by verifying actual data existence (more reliable than stage flags)
   const imports = db.prepare('SELECT * FROM monthly_imports WHERE month = ? AND year = ?').all(month, year);
   if (imports.length === 0) {
     items.push({ id: 'import', label: 'Attendance data imported', status: 'error', count: 0, detail: 'No import found for this month', link: '/pipeline/import' });
   } else {
-    for (const imp of imports) {
-      const stages = [
-        { key: 'stage_1_done', label: 'Import', num: 1 },
-        { key: 'stage_2_done', label: 'Miss Punch', num: 2 },
-        { key: 'stage_3_done', label: 'Shift Check', num: 3 },
-        { key: 'stage_4_done', label: 'Night Shift', num: 4 },
-        { key: 'stage_5_done', label: 'Corrections', num: 5 },
-        { key: 'stage_6_done', label: 'Day Calculation', num: 6 },
-        { key: 'stage_7_done', label: 'Salary Computation', num: 7 },
-      ];
-      for (const s of stages) {
-        if (!imp[s.key]) {
-          items.push({
-            id: `stage_${s.num}_${imp.company}`,
-            label: `Stage ${s.num}: ${s.label} (${imp.company || 'All'})`,
-            status: 'warning',
-            count: 0,
-            detail: 'Stage not completed',
-            link: `/pipeline/${['import','miss-punch','shift-check','night-shift','corrections','day-calc','salary'][s.num-1]}`
-          });
-        }
-      }
+    // Check actual data presence rather than per-row flags (flags may not be set on all import rows)
+    const hasAttendance = db.prepare('SELECT COUNT(*) as cnt FROM attendance_processed WHERE month = ? AND year = ?').get(month, year).cnt > 0;
+    const hasDayCalc = db.prepare('SELECT COUNT(*) as cnt FROM day_calculations WHERE month = ? AND year = ?').get(month, year).cnt > 0;
+    const hasSalary = db.prepare('SELECT COUNT(*) as cnt FROM salary_computations WHERE month = ? AND year = ?').get(month, year).cnt > 0;
+
+    if (hasAttendance) {
+      items.push({ id: 'pipeline_import', label: 'Attendance data imported', status: 'ok', count: imports.length, detail: `${imports.length} import(s) for this month` });
     }
-    if (items.filter(i => i.id.startsWith('stage_')).length === 0) {
-      items.push({ id: 'pipeline', label: 'All pipeline stages completed', status: 'ok', count: imports.length, detail: `${imports.length} company imports processed` });
+    if (!hasDayCalc) {
+      items.push({ id: 'pipeline_daycalc', label: 'Day Calculation (Stage 6)', status: 'warning', count: 0, detail: 'Run day calculation before salary', link: '/pipeline/day-calc' });
+    } else {
+      items.push({ id: 'pipeline_daycalc', label: 'Day calculation completed', status: 'ok', count: 0 });
+    }
+    if (!hasSalary) {
+      items.push({ id: 'pipeline_salary', label: 'Salary Computation (Stage 7)', status: 'warning', count: 0, detail: 'Run salary computation', link: '/pipeline/salary' });
+    } else {
+      items.push({ id: 'pipeline_salary', label: 'Salary computed', status: 'ok', count: 0 });
     }
   }
 
