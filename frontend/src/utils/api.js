@@ -184,6 +184,8 @@ export const getSalaryComparison = (month, year, company) => api.get('/payroll/s
 
 // ── Import Reconciliation ─────────────────────────────
 export const getImportReconciliation = (month, year, company) => api.get(`/import/reconciliation/${month}/${year}`, { params: { company } })
+export const updateDepartmentsFromReconciliation = (corrections) => api.post('/import/reconciliation/update-departments', { corrections })
+export const addEmployeesToMaster = (employees) => api.post('/import/reconciliation/add-to-master', { employees })
 
 // ── User Management Extended ──────────────────────────
 export const updateUser = (id, data) => api.put(`/auth/users/${id}`, data)

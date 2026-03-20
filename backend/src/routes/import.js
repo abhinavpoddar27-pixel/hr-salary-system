@@ -47,7 +47,21 @@ router.post('/upload', upload.array('files', 20), async (req, res) => {
 
       // Process each sheet independently
       for (const sheet of sheets) {
-        const { company, records } = sheet;
+        let { company, records } = sheet;
+
+        // If parser couldn't detect company, resolve from employee master using first known employee code
+        if (!company) {
+          const sampleCodes = [...new Set(records.map(r => r.employeeCode))].slice(0, 10);
+          for (const code of sampleCodes) {
+            const emp = db.prepare('SELECT company FROM employees WHERE code = ? AND company IS NOT NULL').get(code);
+            if (emp?.company) { company = emp.company; break; }
+          }
+          // If still unknown, use sheet name as last resort
+          company = company || sheet.sheetName;
+          // Update records and sheet with resolved company
+          sheet.company = company;
+          for (const r of records) { if (!r.company) r.company = company; }
+        }
 
         // Check for existing import
         const existing = db.prepare(
@@ -585,14 +599,22 @@ router.get('/reconciliation/:month/:year', (req, res) => {
   const { company } = req.query;
 
   // Employees found in EESL attendance data for this month
+  // Use subquery for raw data to avoid cartesian join inflation
   const eeslEmployees = db.prepare(`
-    SELECT DISTINCT ap.employee_code, ap.company,
-           COALESCE(ar.employee_name, '') as eesl_name,
-           COALESCE(ar.department, '') as eesl_department,
+    SELECT ap.employee_code, ap.company,
+           COALESCE(raw_info.employee_name, e.name, '') as eesl_name,
+           COALESCE(raw_info.department, e.department, '') as eesl_department,
            COUNT(ap.id) as punch_records,
-           SUM(CASE WHEN ap.status_final IN ('P', 'WOP', '½P', 'WO½P') AND ap.is_night_out_only = 0 THEN 1 ELSE 0 END) as present_records
+           SUM(CASE WHEN ap.status_final IN ('P', 'WOP', '½P', 'WO½P') THEN 1 ELSE 0 END) as present_records
     FROM attendance_processed ap
-    LEFT JOIN attendance_raw ar ON ar.employee_code = ap.employee_code AND ar.company = ap.company
+    LEFT JOIN employees e ON e.code = ap.employee_code
+    LEFT JOIN (
+      SELECT employee_code, company,
+             MAX(employee_name) as employee_name,
+             MAX(department) as department
+      FROM attendance_raw
+      GROUP BY employee_code, company
+    ) raw_info ON raw_info.employee_code = ap.employee_code AND raw_info.company = ap.company
     WHERE ap.month = ? AND ap.year = ?
     ${company ? 'AND ap.company = ?' : ''}
     AND ap.is_night_out_only = 0
@@ -653,6 +675,86 @@ router.get('/reconciliation/:month/:year', (req, res) => {
     },
     month, year
   });
+});
+
+/**
+ * POST /api/import/reconciliation/update-departments
+ * Bulk update employee departments from reconciliation corrections.
+ * HR corrects departments in EESL; this endpoint syncs those corrections to the master.
+ * Also updates attendance_raw records for consistency.
+ */
+router.post('/reconciliation/update-departments', (req, res) => {
+  const db = getDb();
+  const { corrections } = req.body;
+  // corrections: [{ code, department, company? }]
+
+  if (!corrections || !Array.isArray(corrections) || corrections.length === 0) {
+    return res.status(400).json({ success: false, error: 'No corrections provided' });
+  }
+
+  const updateEmp = db.prepare(`
+    UPDATE employees SET department = ?, updated_at = datetime('now') WHERE code = ?
+  `);
+  const updateRaw = db.prepare(`
+    UPDATE attendance_raw SET department = ? WHERE employee_code = ?
+  `);
+
+  let updated = 0;
+  const txn = db.transaction(() => {
+    for (const c of corrections) {
+      if (!c.code || !c.department) continue;
+      const dept = String(c.department).trim();
+      const result = updateEmp.run(dept, c.code);
+      if (result.changes > 0) {
+        updated++;
+        updateRaw.run(dept, c.code);
+        logAudit('employees', null, 'department_correction',
+          null, JSON.stringify({ code: c.code, department: dept }),
+          req.user?.username || 'hr', 'Department corrected from reconciliation'
+        );
+      }
+    }
+  });
+  txn();
+
+  res.json({ success: true, updated, message: `Updated ${updated} employee department(s)` });
+});
+
+/**
+ * POST /api/import/reconciliation/add-to-master
+ * Add new EESL employees to the master with their EESL department.
+ */
+router.post('/reconciliation/add-to-master', (req, res) => {
+  const db = getDb();
+  const { employees } = req.body;
+  // employees: [{ code, name, department, company }]
+
+  if (!employees || !Array.isArray(employees) || employees.length === 0) {
+    return res.status(400).json({ success: false, error: 'No employees provided' });
+  }
+
+  const upsertEmp = db.prepare(`
+    INSERT INTO employees (code, name, department, company, status, is_data_complete)
+    VALUES (?, ?, ?, ?, 'Active', 0)
+    ON CONFLICT(code) DO UPDATE SET
+      name = COALESCE(NULLIF(excluded.name, ''), employees.name),
+      department = COALESCE(NULLIF(excluded.department, ''), employees.department),
+      company = COALESCE(NULLIF(excluded.company, ''), employees.company),
+      status = 'Active',
+      updated_at = datetime('now')
+  `);
+
+  let added = 0;
+  const txn = db.transaction(() => {
+    for (const e of employees) {
+      if (!e.code) continue;
+      upsertEmp.run(e.code, e.name || e.code, e.department || '', e.company || '');
+      added++;
+    }
+  });
+  txn();
+
+  res.json({ success: true, added, message: `Added/updated ${added} employee(s) in master` });
 });
 
 module.exports = router;

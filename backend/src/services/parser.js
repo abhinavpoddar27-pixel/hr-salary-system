@@ -154,7 +154,16 @@ function parseSheet(ws, sheetName) {
     return records;
   }
 
-  const company = getCellValue(ws, 3, 4) || sheetName;
+  // Company: try col 4, then scan cols 4-15 for any non-null value after "Company:" label
+  let company = getCellValue(ws, 3, 4);
+  if (!company) {
+    for (let c = 5; c <= 15; c++) {
+      const val = getCellValue(ws, 3, c);
+      if (val && !val.toLowerCase().includes('printed')) { company = val; break; }
+    }
+  }
+  // If still empty, leave as null — import route will resolve from employee master
+  company = company || null;
   const { month, year } = dateInfo;
 
   // Build column → day map from Row 6
@@ -182,7 +191,19 @@ function parseSheet(ws, sheetName) {
     // Employee block start: "Emp. Code :"
     if (col0.startsWith('Emp. Code')) {
       const empCode = getCellValue(ws, r, 3);
-      const empName = getCellValue(ws, r, 13);
+      // Dynamically find employee name: scan for "Emp.  Name" label, then read the next non-null cell
+      let empName = null;
+      for (let nc = 4; nc <= range.e.c; nc++) {
+        const cellVal = getCellValue(ws, r, nc);
+        if (cellVal && cellVal.includes('Name')) {
+          // Name value is in the next non-null cell after the label
+          for (let nameCol = nc + 1; nameCol <= Math.min(nc + 8, range.e.c); nameCol++) {
+            const nameVal = getCellValue(ws, r, nameCol);
+            if (nameVal) { empName = nameVal; break; }
+          }
+          break;
+        }
+      }
 
       if (!empCode) continue;
 
