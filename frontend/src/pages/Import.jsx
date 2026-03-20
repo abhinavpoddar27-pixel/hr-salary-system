@@ -2,7 +2,7 @@ import React, { useState, useCallback } from 'react'
 import { useDropzone } from 'react-dropzone'
 import { useQueryClient } from '@tanstack/react-query'
 import toast from 'react-hot-toast'
-import { uploadFiles, getImportHistory, getImportReconciliation } from '../utils/api'
+import { uploadFiles, getImportHistory, getImportReconciliation, updateDepartmentsFromReconciliation, addEmployeesToMaster } from '../utils/api'
 import { useQuery } from '@tanstack/react-query'
 import { useAppStore } from '../store/appStore'
 import DateSelector from '../components/common/DateSelector'
@@ -13,6 +13,9 @@ import clsx from 'clsx'
 
 function ReconciliationPanel({ month, year }) {
   const [showRecon, setShowRecon] = useState(false)
+  const [deptEdits, setDeptEdits] = useState({}) // { code: editedDept }
+  const [saving, setSaving] = useState(false)
+  const queryClient = useQueryClient()
   const { data: reconRes, isLoading } = useQuery({
     queryKey: ['reconciliation', month, year],
     queryFn: () => getImportReconciliation(month, year),
@@ -21,6 +24,53 @@ function ReconciliationPanel({ month, year }) {
   })
   const recon = reconRes?.data?.data || null
   const summary = reconRes?.data?.summary || {}
+
+  const handleDeptEdit = (code, dept) => {
+    setDeptEdits(prev => ({ ...prev, [code]: dept }))
+  }
+
+  const handleSaveDeptCorrections = async () => {
+    const corrections = Object.entries(deptEdits)
+      .filter(([_, dept]) => dept && dept.trim())
+      .map(([code, department]) => ({ code, department: department.trim() }))
+
+    if (corrections.length === 0) return toast.error('No department changes to save')
+
+    setSaving(true)
+    try {
+      const res = await updateDepartmentsFromReconciliation(corrections)
+      toast.success(res.data.message)
+      setDeptEdits({})
+      queryClient.invalidateQueries(['reconciliation'])
+    } catch (err) {
+      toast.error('Failed: ' + (err.response?.data?.error || err.message))
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  const handleAddAllToMaster = async () => {
+    if (!recon?.newInEesl?.length) return
+    setSaving(true)
+    try {
+      const employees = recon.newInEesl.map(e => ({
+        code: e.code,
+        name: e.name,
+        department: deptEdits[e.code] || e.department,
+        company: e.company
+      }))
+      const res = await addEmployeesToMaster(employees)
+      toast.success(res.data.message)
+      setDeptEdits({})
+      queryClient.invalidateQueries(['reconciliation'])
+    } catch (err) {
+      toast.error('Failed: ' + (err.response?.data?.error || err.message))
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  const hasDeptEdits = Object.keys(deptEdits).length > 0
 
   if (!showRecon) {
     return (
@@ -61,10 +111,29 @@ function ReconciliationPanel({ month, year }) {
 
           {recon.newInEesl?.length > 0 && (
             <div className="bg-amber-50 rounded-lg p-3">
-              <h4 className="text-xs font-semibold text-amber-800 mb-1">New Employees in EESL (not in master)</h4>
-              <div className="space-y-0.5 max-h-32 overflow-y-auto">
+              <div className="flex items-center justify-between mb-2">
+                <h4 className="text-xs font-semibold text-amber-800">New Employees in EESL (not in master)</h4>
+                <button
+                  onClick={handleAddAllToMaster}
+                  disabled={saving}
+                  className="text-xs bg-amber-600 text-white px-2.5 py-1 rounded-md hover:bg-amber-700 disabled:opacity-50"
+                >
+                  {saving ? 'Saving...' : `Add All ${recon.newInEesl.length} to Master`}
+                </button>
+              </div>
+              <div className="space-y-1 max-h-48 overflow-y-auto">
                 {recon.newInEesl.map(e => (
-                  <div key={e.code} className="text-xs text-amber-700"><span className="font-mono">{e.code}</span> — {e.name} ({e.department})</div>
+                  <div key={e.code} className="flex items-center gap-2 text-xs text-amber-700">
+                    <span className="font-mono w-14 shrink-0">{e.code}</span>
+                    <span className="truncate flex-1">{e.name}</span>
+                    <input
+                      type="text"
+                      value={deptEdits[e.code] !== undefined ? deptEdits[e.code] : (e.department || '')}
+                      onChange={ev => handleDeptEdit(e.code, ev.target.value)}
+                      placeholder="Department"
+                      className="w-36 px-1.5 py-0.5 border border-amber-300 rounded text-xs bg-white focus:outline-none focus:ring-1 focus:ring-amber-400"
+                    />
+                  </div>
                 ))}
               </div>
             </div>
@@ -72,12 +141,34 @@ function ReconciliationPanel({ month, year }) {
 
           {recon.missingFromEesl?.length > 0 && (
             <div className="bg-red-50 rounded-lg p-3">
-              <h4 className="text-xs font-semibold text-red-800 mb-1">Active Employees Missing from EESL</h4>
-              <div className="space-y-0.5 max-h-32 overflow-y-auto">
+              <h4 className="text-xs font-semibold text-red-800 mb-2">Active Employees Missing from EESL</h4>
+              <div className="space-y-1 max-h-48 overflow-y-auto">
                 {recon.missingFromEesl.map(e => (
-                  <div key={e.code} className="text-xs text-red-700"><span className="font-mono">{e.code}</span> — {e.name} ({e.department})</div>
+                  <div key={e.code} className="flex items-center gap-2 text-xs text-red-700">
+                    <span className="font-mono w-14 shrink-0">{e.code}</span>
+                    <span className="truncate flex-1">{e.name}</span>
+                    <input
+                      type="text"
+                      value={deptEdits[e.code] !== undefined ? deptEdits[e.code] : (e.department || '')}
+                      onChange={ev => handleDeptEdit(e.code, ev.target.value)}
+                      placeholder="Department"
+                      className="w-36 px-1.5 py-0.5 border border-red-300 rounded text-xs bg-white focus:outline-none focus:ring-1 focus:ring-red-400"
+                    />
+                  </div>
                 ))}
               </div>
+            </div>
+          )}
+
+          {hasDeptEdits && (
+            <div className="flex justify-end">
+              <button
+                onClick={handleSaveDeptCorrections}
+                disabled={saving}
+                className="text-xs bg-blue-600 text-white px-3 py-1.5 rounded-md hover:bg-blue-700 disabled:opacity-50"
+              >
+                {saving ? 'Saving...' : `Save ${Object.keys(deptEdits).length} Department Correction(s) to Master`}
+              </button>
             </div>
           )}
 
