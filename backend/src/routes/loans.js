@@ -1,6 +1,6 @@
 const express = require('express');
 const router = express.Router();
-const { getDb } = require('../database/db');
+const { getDb, logAudit } = require('../database/db');
 const {
   LOAN_TYPES, createLoan, approveLoan, getLoans, getLoanDetails,
   getEmployeeLoans, getPendingDeductions, getLoanStats
@@ -61,6 +61,30 @@ router.post('/', (req, res) => {
   } catch (err) {
     res.status(400).json({ success: false, error: err.message });
   }
+});
+
+/**
+ * GET /api/loans/monthly-recovery/:month/:year
+ * All installments due for a given month/year with employee details
+ */
+router.get('/monthly-recovery/:month/:year', (req, res) => {
+  const db = getDb();
+  const month = parseInt(req.params.month);
+  const year = parseInt(req.params.year);
+
+  const repayments = db.prepare(`
+    SELECT lr.*, l.loan_type, l.principal_amount, l.emi_amount as loan_emi,
+           l.status as loan_status, e.name as employee_name, e.department, e.designation
+    FROM loan_repayments lr
+    JOIN loans l ON lr.loan_id = l.id
+    LEFT JOIN employees e ON l.employee_code = e.code
+    WHERE lr.month = ? AND lr.year = ? AND lr.status = 'Pending'
+    AND l.status = 'Active'
+    ORDER BY e.department, e.name
+  `).all(month, year);
+
+  const totalAmount = repayments.reduce((s, r) => s + r.emi_amount, 0);
+  res.json({ success: true, data: repayments, totalAmount: Math.round(totalAmount * 100) / 100 });
 });
 
 /**
@@ -190,6 +214,115 @@ router.post('/process-deductions', (req, res) => {
     totalDeducted: Math.round(pending.reduce((s, p) => s + p.emi_amount, 0) * 100) / 100,
     message: `${pending.length} loan deductions processed`
   });
+});
+
+/**
+ * POST /api/loans/:id/recover
+ * Record manual recovery for a loan installment
+ * Body: { amount, month, year, remarks }
+ */
+router.post('/:id/recover', (req, res) => {
+  try {
+    const db = getDb();
+    const loanId = parseInt(req.params.id);
+    const { amount, month, year, remarks } = req.body;
+
+    if (!amount || !month || !year) {
+      return res.status(400).json({ success: false, error: 'amount, month and year are required' });
+    }
+
+    const loan = db.prepare('SELECT * FROM loans WHERE id = ?').get(loanId);
+    if (!loan) return res.status(404).json({ success: false, error: 'Loan not found' });
+
+    const txn = db.transaction(() => {
+      // Find the pending repayment for that month/year, or create one
+      let repayment = db.prepare(`
+        SELECT * FROM loan_repayments
+        WHERE loan_id = ? AND month = ? AND year = ? AND status = 'Pending'
+      `).get(loanId, month, year);
+
+      if (!repayment) {
+        // Create an ad-hoc repayment entry
+        const insertResult = db.prepare(`
+          INSERT INTO loan_repayments (loan_id, employee_code, month, year, emi_amount, principal_component, interest_component, status)
+          VALUES (?, ?, ?, ?, ?, ?, 0, 'Pending')
+        `).run(loanId, loan.employee_code, month, year, amount, amount);
+        repayment = { id: insertResult.lastInsertRowid };
+      }
+
+      // Update repayment: mark as Recovered
+      db.prepare(`
+        UPDATE loan_repayments
+        SET amount_recovered = ?, status = 'Recovered', recovery_date = datetime('now'),
+            remarks = ?
+        WHERE id = ?
+      `).run(amount, remarks || '', repayment.id);
+
+      // Update loan totals
+      db.prepare(`
+        UPDATE loans SET
+          total_recovered = total_recovered + ?,
+          remaining_balance = remaining_balance - ?,
+          updated_at = datetime('now')
+        WHERE id = ?
+      `).run(amount, amount, loanId);
+
+      // Check if loan is fully repaid
+      const updated = db.prepare('SELECT remaining_balance FROM loans WHERE id = ?').get(loanId);
+      if (updated.remaining_balance <= 0) {
+        db.prepare(`
+          UPDATE loans SET status = 'Closed', remaining_balance = 0, updated_at = datetime('now')
+          WHERE id = ?
+        `).run(loanId);
+      }
+
+      logAudit('loan_repayments', repayment.id, 'status', 'Pending', 'Recovered', 'loan_recovery',
+        `Manual recovery ₹${amount} for ${month}/${year}. ${remarks || ''}`);
+    });
+    txn();
+
+    res.json({ success: true, message: `Recovery of ₹${amount} recorded successfully` });
+  } catch (err) {
+    res.status(400).json({ success: false, error: err.message });
+  }
+});
+
+/**
+ * POST /api/loans/:id/skip
+ * Skip a monthly installment
+ * Body: { month, year, reason }
+ */
+router.post('/:id/skip', (req, res) => {
+  try {
+    const db = getDb();
+    const loanId = parseInt(req.params.id);
+    const { month, year, reason } = req.body;
+
+    if (!month || !year) {
+      return res.status(400).json({ success: false, error: 'month and year are required' });
+    }
+
+    const repayment = db.prepare(`
+      SELECT * FROM loan_repayments
+      WHERE loan_id = ? AND month = ? AND year = ? AND status = 'Pending'
+    `).get(loanId, month, year);
+
+    if (!repayment) {
+      return res.status(404).json({ success: false, error: 'No pending repayment found for that month/year' });
+    }
+
+    db.prepare(`
+      UPDATE loan_repayments SET status = 'Skipped', remarks = ?
+      WHERE id = ?
+    `).run(reason || '', repayment.id);
+
+    logAudit('loan_repayments', repayment.id, 'status', 'Pending', 'Skipped', 'loan_skip',
+      `Installment skipped for ${month}/${year}. Reason: ${reason || 'Not specified'}`);
+
+    res.json({ success: true, message: `Installment for ${month}/${year} skipped` });
+  } catch (err) {
+    res.status(400).json({ success: false, error: err.message });
+  }
 });
 
 module.exports = router;

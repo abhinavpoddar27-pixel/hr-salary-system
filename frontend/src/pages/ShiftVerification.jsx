@@ -3,6 +3,7 @@ import { useQuery, useMutation } from '@tanstack/react-query'
 import toast from 'react-hot-toast'
 import { getProcessedRecords, getShifts, updateRecordShift } from '../utils/api'
 import { useAppStore } from '../store/appStore'
+import CompanyFilter from '../components/shared/CompanyFilter'
 import DateSelector from '../components/common/DateSelector'
 import useDateSelector from '../hooks/useDateSelector'
 import PipelineProgress from '../components/pipeline/PipelineProgress'
@@ -65,6 +66,7 @@ function SortIcon({ field, sortField, sortDir }) {
 
 export default function ShiftVerification() {
   const { month, year, dateProps } = useDateSelector({ mode: 'month', syncToStore: true })
+  const { selectedCompany } = useAppStore()
   const [selected, setSelected] = useState(new Set())
   const [batchShift, setBatchShift] = useState('')
   const [calendarEmployee, setCalendarEmployee] = useState(null)
@@ -75,8 +77,8 @@ export default function ShiftVerification() {
   const { toggle, isExpanded } = useExpandableRows()
 
   const { data: res, isLoading, refetch } = useQuery({
-    queryKey: ['processed-records-shift', month, year],
-    queryFn: () => getProcessedRecords({ month: month, year: year }),
+    queryKey: ['processed-records-shift', month, year, selectedCompany],
+    queryFn: () => getProcessedRecords({ month: month, year: year, company: selectedCompany }),
     retry: 0
   })
 
@@ -154,7 +156,10 @@ export default function ShiftVerification() {
             <h2 className="section-title">Stage 3: Shift Verification</h2>
             <p className="section-subtitle mt-1">Click the shift pills to assign the correct shift. Late arrivals and shift mismatches are highlighted.</p>
           </div>
-          <DateSelector {...dateProps} />
+          <div className="flex items-center gap-3">
+            <CompanyFilter />
+            <DateSelector {...dateProps} />
+          </div>
           <div className="flex gap-2 items-center">
             <label className="flex items-center gap-2 text-sm text-slate-600">
               <input type="checkbox" checked={showAll} onChange={e => setShowAll(e.target.checked)} className="rounded" />

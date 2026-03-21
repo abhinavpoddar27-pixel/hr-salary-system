@@ -18,6 +18,8 @@ import useExpandableRows from '../hooks/useExpandableRows'
 import DrillDownRow, { DrillDownChevron } from '../components/ui/DrillDownRow'
 import EmployeeQuickView from '../components/ui/EmployeeQuickView'
 import DepartmentQuickView from '../components/ui/DepartmentQuickView'
+import CompanyFilter from '../components/shared/CompanyFilter'
+import { useAppStore } from '../store/appStore'
 import clsx from 'clsx'
 
 const CHART_COLORS = ['#3b82f6', '#22c55e', '#f59e0b', '#ef4444', '#8b5cf6', '#06b6d4', '#ec4899', '#14b8a6']
@@ -80,25 +82,25 @@ const TABS = [
 // ═══════════════════════════════════════════════════════════
 // OVERVIEW TAB
 // ═══════════════════════════════════════════════════════════
-function OverviewTab({ selectedMonth, selectedYear, dateRangeMode, dateRangeStart, dateRangeEnd }) {
+function OverviewTab({ selectedMonth, selectedYear, dateRangeMode, dateRangeStart, dateRangeEnd, selectedCompany }) {
   const [expandedDept, setExpandedDept] = useState(null)
   const empExpand = useExpandableRows()
   const sort = useSortable('headcount', 'desc')
 
   const { data: overviewRes, isLoading } = useQuery({
-    queryKey: ['org-overview', selectedMonth, selectedYear, dateRangeMode, dateRangeStart, dateRangeEnd],
+    queryKey: ['org-overview', selectedMonth, selectedYear, dateRangeMode, dateRangeStart, dateRangeEnd, selectedCompany],
     queryFn: () => dateRangeMode === 'custom' && dateRangeStart && dateRangeEnd
-      ? getOrgOverview(null, null, dateRangeStart, dateRangeEnd)
-      : getOrgOverview(selectedMonth, selectedYear),
+      ? getOrgOverview(null, null, dateRangeStart, dateRangeEnd, selectedCompany)
+      : getOrgOverview(selectedMonth, selectedYear, selectedCompany),
     retry: 0
   })
   const overview = overviewRes?.data?.data || {}
 
   const { data: deptRes } = useQuery({
-    queryKey: ['dept-deepdive', expandedDept, selectedMonth, selectedYear, dateRangeMode, dateRangeStart, dateRangeEnd],
+    queryKey: ['dept-deepdive', expandedDept, selectedMonth, selectedYear, dateRangeMode, dateRangeStart, dateRangeEnd, selectedCompany],
     queryFn: () => dateRangeMode === 'custom' && dateRangeStart && dateRangeEnd
-      ? getDepartmentDeepDive(expandedDept, null, null, dateRangeStart, dateRangeEnd)
-      : getDepartmentDeepDive(expandedDept, selectedMonth, selectedYear),
+      ? getDepartmentDeepDive(expandedDept, null, null, dateRangeStart, dateRangeEnd, selectedCompany)
+      : getDepartmentDeepDive(expandedDept, selectedMonth, selectedYear, selectedCompany),
     enabled: !!expandedDept,
     retry: 0
   })
@@ -263,15 +265,15 @@ function OverviewTab({ selectedMonth, selectedYear, dateRangeMode, dateRangeStar
 // ═══════════════════════════════════════════════════════════
 // ABSENTEEISM TAB
 // ═══════════════════════════════════════════════════════════
-function AbsenteeismTab({ selectedMonth, selectedYear, dateRangeMode, dateRangeStart, dateRangeEnd }) {
+function AbsenteeismTab({ selectedMonth, selectedYear, dateRangeMode, dateRangeStart, dateRangeEnd, selectedCompany }) {
   const { toggle, isExpanded } = useExpandableRows()
   const sort = useSortable('attendanceRate', 'asc')
 
   const { data: res, isLoading } = useQuery({
-    queryKey: ['chronic-absentees', selectedMonth, selectedYear, dateRangeMode, dateRangeStart, dateRangeEnd],
+    queryKey: ['chronic-absentees', selectedMonth, selectedYear, dateRangeMode, dateRangeStart, dateRangeEnd, selectedCompany],
     queryFn: () => dateRangeMode === 'custom' && dateRangeStart && dateRangeEnd
-      ? getChronicAbsentees(null, null, dateRangeStart, dateRangeEnd)
-      : getChronicAbsentees(selectedMonth, selectedYear),
+      ? getChronicAbsentees(null, null, dateRangeStart, dateRangeEnd, selectedCompany)
+      : getChronicAbsentees(selectedMonth, selectedYear, selectedCompany),
     retry: 0
   })
   const absentees = useMemo(() => [...(res?.data?.data || [])].sort(sort.sortFn), [res, sort.sortKey, sort.sortDir])
@@ -355,17 +357,17 @@ function AbsenteeismTab({ selectedMonth, selectedYear, dateRangeMode, dateRangeS
 // ═══════════════════════════════════════════════════════════
 // PUNCTUALITY TAB
 // ═══════════════════════════════════════════════════════════
-function PunctualityTab({ selectedMonth, selectedYear, dateRangeMode, dateRangeStart, dateRangeEnd }) {
+function PunctualityTab({ selectedMonth, selectedYear, dateRangeMode, dateRangeStart, dateRangeEnd, selectedCompany }) {
   const sort = useSortable('lateRate', 'desc')
   const deptSort = useSortable('lateRate', 'desc')
   const empExpand = useExpandableRows()
   const deptExpand = useExpandableRows()
 
   const { data: res, isLoading } = useQuery({
-    queryKey: ['punctuality', selectedMonth, selectedYear, dateRangeMode, dateRangeStart, dateRangeEnd],
+    queryKey: ['punctuality', selectedMonth, selectedYear, dateRangeMode, dateRangeStart, dateRangeEnd, selectedCompany],
     queryFn: () => dateRangeMode === 'custom' && dateRangeStart && dateRangeEnd
-      ? getPunctualityReport(null, null, dateRangeStart, dateRangeEnd)
-      : getPunctualityReport(selectedMonth, selectedYear),
+      ? getPunctualityReport(null, null, dateRangeStart, dateRangeEnd, selectedCompany)
+      : getPunctualityReport(selectedMonth, selectedYear, selectedCompany),
     retry: 0
   })
   const data = res?.data?.data || {}
@@ -503,17 +505,17 @@ function PunctualityTab({ selectedMonth, selectedYear, dateRangeMode, dateRangeS
 // ═══════════════════════════════════════════════════════════
 // OVERTIME TAB
 // ═══════════════════════════════════════════════════════════
-function OvertimeTab({ selectedMonth, selectedYear, dateRangeMode, dateRangeStart, dateRangeEnd }) {
+function OvertimeTab({ selectedMonth, selectedYear, dateRangeMode, dateRangeStart, dateRangeEnd, selectedCompany }) {
   const sort = useSortable('totalOTMinutes', 'desc')
   const deptSort = useSortable('totalHours', 'desc')
   const empExpand = useExpandableRows()
   const deptExpand = useExpandableRows()
 
   const { data: res, isLoading } = useQuery({
-    queryKey: ['overtime-report', selectedMonth, selectedYear, dateRangeMode, dateRangeStart, dateRangeEnd],
+    queryKey: ['overtime-report', selectedMonth, selectedYear, dateRangeMode, dateRangeStart, dateRangeEnd, selectedCompany],
     queryFn: () => dateRangeMode === 'custom' && dateRangeStart && dateRangeEnd
-      ? getOvertimeReport(null, null, dateRangeStart, dateRangeEnd)
-      : getOvertimeReport(selectedMonth, selectedYear),
+      ? getOvertimeReport(null, null, dateRangeStart, dateRangeEnd, selectedCompany)
+      : getOvertimeReport(selectedMonth, selectedYear, selectedCompany),
     retry: 0
   })
   const data = res?.data?.data || {}
@@ -645,17 +647,17 @@ function OvertimeTab({ selectedMonth, selectedYear, dateRangeMode, dateRangeStar
 // ═══════════════════════════════════════════════════════════
 // WORKING HOURS TAB
 // ═══════════════════════════════════════════════════════════
-function WorkingHoursTab({ selectedMonth, selectedYear, dateRangeMode, dateRangeStart, dateRangeEnd }) {
+function WorkingHoursTab({ selectedMonth, selectedYear, dateRangeMode, dateRangeStart, dateRangeEnd, selectedCompany }) {
   const topSort = useSortable('avgHours', 'desc')
   const lowSort = useSortable('avgHours', 'asc')
   const topExpand = useExpandableRows()
   const lowExpand = useExpandableRows()
 
   const { data: res, isLoading } = useQuery({
-    queryKey: ['working-hours', selectedMonth, selectedYear, dateRangeMode, dateRangeStart, dateRangeEnd],
+    queryKey: ['working-hours', selectedMonth, selectedYear, dateRangeMode, dateRangeStart, dateRangeEnd, selectedCompany],
     queryFn: () => dateRangeMode === 'custom' && dateRangeStart && dateRangeEnd
-      ? getWorkingHoursReport(null, null, dateRangeStart, dateRangeEnd)
-      : getWorkingHoursReport(selectedMonth, selectedYear),
+      ? getWorkingHoursReport(null, null, dateRangeStart, dateRangeEnd, selectedCompany)
+      : getWorkingHoursReport(selectedMonth, selectedYear, selectedCompany),
     retry: 0
   })
   const data = res?.data?.data || {}
@@ -792,7 +794,8 @@ function WorkingHoursTab({ selectedMonth, selectedYear, dateRangeMode, dateRange
 // ═══════════════════════════════════════════════════════════
 export default function Analytics() {
   const { month, year, dateRangeMode, dateRangeStart, dateRangeEnd, dateProps } = useDateSelector({ mode: 'range', syncToStore: true })
-  const dp = { selectedMonth: month, selectedYear: year, dateRangeMode, dateRangeStart, dateRangeEnd }
+  const { selectedCompany } = useAppStore()
+  const dp = { selectedMonth: month, selectedYear: year, dateRangeMode, dateRangeStart, dateRangeEnd, selectedCompany }
 
   return (
     <div className="p-6 space-y-5 animate-fade-in">
@@ -800,7 +803,10 @@ export default function Analytics() {
         <h2 className="section-title">Attendance Analytics</h2>
         <p className="section-subtitle mt-1">Organisation-wide insights (active employees only, inactive/left excluded)</p>
       </div>
-      <DateSelector {...dateProps} />
+      <div className="flex items-center gap-3">
+        <CompanyFilter />
+        <DateSelector {...dateProps} />
+      </div>
       <div className="border-b border-slate-200 flex gap-0 overflow-x-auto">
         {TABS.map(t => (
           <NavLink key={t.id} to={t.path}

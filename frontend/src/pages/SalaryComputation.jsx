@@ -3,6 +3,7 @@ import { useQuery, useMutation } from '@tanstack/react-query'
 import toast from 'react-hot-toast'
 import { getSalaryRegister, computeSalary, finaliseSalary, getPayslip, getMonthEndChecklist, getSalaryComparison, getBulkPayslips } from '../utils/api'
 import { useAppStore } from '../store/appStore'
+import CompanyFilter from '../components/shared/CompanyFilter'
 import DateSelector from '../components/common/DateSelector'
 import useDateSelector from '../hooks/useDateSelector'
 import PipelineProgress from '../components/pipeline/PipelineProgress'
@@ -19,6 +20,7 @@ import { downloadPayslipPDF } from '../utils/payslipPdf'
 
 export default function SalaryComputation() {
   const { month, year, dateProps } = useDateSelector({ mode: 'month', syncToStore: true })
+  const { selectedCompany } = useAppStore()
   const [showDetails, setShowDetails] = useState(null)
   const [calendarEmployee, setCalendarEmployee] = useState(null)
   const [payslipEmployee, setPayslipEmployee] = useState(null)
@@ -26,8 +28,8 @@ export default function SalaryComputation() {
   const [filterView, setFilterView] = useState('all')
 
   const { data: res, isLoading, refetch } = useQuery({
-    queryKey: ['salary-register', month, year],
-    queryFn: () => getSalaryRegister(month, year),
+    queryKey: ['salary-register', month, year, selectedCompany],
+    queryFn: () => getSalaryRegister(month, year, selectedCompany),
     retry: 0
   })
 
@@ -45,7 +47,7 @@ export default function SalaryComputation() {
 
   const [computeResult, setComputeResult] = useState(null)
   const computeMutation = useMutation({
-    mutationFn: () => computeSalary({ month: month, year: year }),
+    mutationFn: () => computeSalary({ month: month, year: year, company: selectedCompany }),
     onSuccess: (r) => {
       const d = r.data
       setComputeResult(d)
@@ -68,12 +70,12 @@ export default function SalaryComputation() {
   })
 
   const finaliseMutation = useMutation({
-    mutationFn: () => finaliseSalary({ month: month, year: year }),
+    mutationFn: () => finaliseSalary({ month: month, year: year, company: selectedCompany }),
     onSuccess: () => { toast.success('Salary finalised!'); refetch() }
   })
 
   const releaseHoldMutation = useMutation({
-    mutationFn: (code) => api.put(`/payroll/salary/${code}/hold-release`, { month: month, year: year }),
+    mutationFn: (code) => api.put(`/payroll/salary/${code}/hold-release`, { month: month, year: year, company: selectedCompany }),
     onSuccess: () => { toast.success('Salary hold released'); refetch() }
   })
 
@@ -86,8 +88,8 @@ export default function SalaryComputation() {
 
   // Month-end checklist
   const { data: checklistRes } = useQuery({
-    queryKey: ['month-end-checklist', month, year],
-    queryFn: () => getMonthEndChecklist(month, year),
+    queryKey: ['month-end-checklist', month, year, selectedCompany],
+    queryFn: () => getMonthEndChecklist(month, year, selectedCompany),
     retry: 0
   })
   const checklist = checklistRes?.data?.data || []
@@ -96,8 +98,8 @@ export default function SalaryComputation() {
   // Salary comparison
   const [showComparison, setShowComparison] = useState(false)
   const { data: comparisonRes, isLoading: comparisonLoading } = useQuery({
-    queryKey: ['salary-comparison', month, year],
-    queryFn: () => getSalaryComparison(month, year),
+    queryKey: ['salary-comparison', month, year, selectedCompany],
+    queryFn: () => getSalaryComparison(month, year, selectedCompany),
     enabled: showComparison,
     retry: 0
   })
@@ -155,7 +157,10 @@ export default function SalaryComputation() {
             <h2 className="section-title">Stage 7: Salary Computation</h2>
             <p className="section-subtitle mt-1">{monthYearLabel(month, year)} — Compute, review, and finalise salary.</p>
           </div>
-          <DateSelector {...dateProps} />
+          <div className="flex items-center gap-3">
+            <CompanyFilter />
+            <DateSelector {...dateProps} />
+          </div>
           <div className="flex gap-2">
             <button onClick={() => computeMutation.mutate()} disabled={computeMutation.isPending} className="btn-primary">
               {computeMutation.isPending ? 'Computing...' : 'Compute Salary'}

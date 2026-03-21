@@ -2,6 +2,7 @@ import React, { useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { getAlerts } from '../utils/api'
 import { useAppStore } from '../store/appStore'
+import CompanyFilter from '../components/shared/CompanyFilter'
 import { fmtDate } from '../utils/formatters'
 import EmployeeQuickView from '../components/ui/EmployeeQuickView'
 
@@ -68,15 +69,15 @@ function AlertCard({ alert, isExpanded, onToggle }) {
 }
 
 export default function Alerts() {
-  const { selectedMonth, selectedYear } = useAppStore()
+  const { selectedMonth, selectedYear, selectedCompany } = useAppStore()
   const [severityFilter, setSeverityFilter] = useState('all')
   const [typeFilter, setTypeFilter] = useState('all')
   const [search, setSearch] = useState('')
   const [expandedAlert, setExpandedAlert] = useState(null)
 
   const { data: alertsRes, isLoading, refetch } = useQuery({
-    queryKey: ['alerts', selectedMonth, selectedYear],
-    queryFn: () => getAlerts(selectedMonth, selectedYear),
+    queryKey: ['alerts', selectedMonth, selectedYear, selectedCompany],
+    queryFn: () => getAlerts(selectedMonth, selectedYear, undefined, { company: selectedCompany }),
     retry: 0
   })
   const alerts = alertsRes?.data?.data || []
@@ -113,7 +114,10 @@ export default function Alerts() {
             System-generated alerts for {['', 'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'][selectedMonth]} {selectedYear}
           </p>
         </div>
-        <button onClick={refetch} className="btn-secondary text-sm">↻ Refresh</button>
+        <div className="flex items-center gap-3">
+          <CompanyFilter />
+          <button onClick={refetch} className="btn-secondary text-sm">↻ Refresh</button>
+        </div>
       </div>
 
       {/* Summary Cards */}

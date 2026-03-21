@@ -5,6 +5,8 @@ import { fmtINR } from '../utils/formatters'
 import { Abbr } from '../components/ui/Tooltip'
 import AbbreviationLegend from '../components/ui/AbbreviationLegend'
 import Modal, { ModalBody, ModalFooter } from '../components/ui/Modal'
+import { useAppStore } from '../store/appStore'
+import CompanyFilter from '../components/shared/CompanyFilter'
 import clsx from 'clsx'
 import useExpandableRows from '../hooks/useExpandableRows'
 import DrillDownRow, { DrillDownChevron } from '../components/ui/DrillDownRow'
@@ -12,6 +14,7 @@ import EmployeeQuickView from '../components/ui/EmployeeQuickView'
 import api from '../utils/api'
 
 export default function SalaryInput() {
+  const { selectedCompany } = useAppStore()
   const [filterDept, setFilterDept] = useState('')
   const [editEmployee, setEditEmployee] = useState(null)
   const [editForm, setEditForm] = useState({ basic: 0, da: 0, hra: 0, conveyance: 0, other_allowances: 0, pf_applicable: 1, esi_applicable: 1 })
@@ -21,20 +24,20 @@ export default function SalaryInput() {
 
   // All employees with salary structures
   const { data: empRes, refetch: refetchEmps } = useQuery({
-    queryKey: ['salary-input-all'],
-    queryFn: () => api.get('/salary-input/all')
+    queryKey: ['salary-input-all', selectedCompany],
+    queryFn: () => api.get('/salary-input/all', { params: { company: selectedCompany } })
   })
 
   // Pending change requests
   const { data: pendingRes, refetch: refetchPending } = useQuery({
-    queryKey: ['salary-input-pending'],
-    queryFn: () => api.get('/salary-input/pending-changes')
+    queryKey: ['salary-input-pending', selectedCompany],
+    queryFn: () => api.get('/salary-input/pending-changes', { params: { company: selectedCompany } })
   })
 
   // All history
   const { data: historyRes } = useQuery({
-    queryKey: ['salary-input-history'],
-    queryFn: () => api.get('/salary-input/all-changes'),
+    queryKey: ['salary-input-history', selectedCompany],
+    queryFn: () => api.get('/salary-input/all-changes', { params: { company: selectedCompany } }),
     enabled: tab === 'history'
   })
 
@@ -90,9 +93,12 @@ export default function SalaryInput() {
   return (
     <div className="animate-fade-in">
       <div className="p-6 space-y-5 max-w-screen-xl">
-        <div>
-          <h2 className="section-title">Salary Input & Changes</h2>
-          <p className="section-subtitle mt-1">View and manage employee salary structures. Changes require admin approval.</p>
+        <div className="flex items-start justify-between">
+          <div>
+            <h2 className="section-title">Salary Input & Changes</h2>
+            <p className="section-subtitle mt-1">View and manage employee salary structures. Changes require admin approval.</p>
+          </div>
+          <CompanyFilter />
         </div>
 
         {/* Tabs */}

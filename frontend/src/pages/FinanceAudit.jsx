@@ -1,6 +1,6 @@
 import React, { useState, useMemo } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { getFinanceReport, submitDayCorrection, getCorrectionHistory, getCorrectionsSummary } from '../utils/api'
+import { getFinanceReport, submitDayCorrection, getCorrectionHistory, getCorrectionsSummary, getManualAttendanceFlags, verifyManualFlag } from '../utils/api'
 import { useAppStore } from '../store/appStore'
 import DateSelector from '../components/common/DateSelector'
 import useDateSelector from '../hooks/useDateSelector'
@@ -10,6 +10,7 @@ import useExpandableRows from '../hooks/useExpandableRows'
 import DrillDownRow, { DrillDownChevron } from '../components/ui/DrillDownRow'
 import EmployeeQuickView from '../components/ui/EmployeeQuickView'
 import ErrorBoundary from '../components/ui/ErrorBoundary'
+import CompanyFilter from '../components/shared/CompanyFilter'
 import clsx from 'clsx'
 import toast from 'react-hot-toast'
 
@@ -397,16 +398,167 @@ function CorrectionsSummaryTab() {
 }
 
 // ═══════════════════════════════════════════════════════════
+// MANUAL ATTENDANCE FLAGS TAB
+// ═══════════════════════════════════════════════════════════
+function ManualFlagsTab() {
+  const { selectedCompany } = useAppStore()
+  const { month, year } = useDateSelector({ mode: 'month', syncToStore: true })
+  const queryClient = useQueryClient()
+  const [verifyingId, setVerifyingId] = useState(null)
+  const [financeRemarks, setFinanceRemarks] = useState('')
+
+  const { data: res, isLoading } = useQuery({
+    queryKey: ['manual-flags', month, year, selectedCompany],
+    queryFn: () => getManualAttendanceFlags({ month, year, company: selectedCompany }),
+    retry: 0
+  })
+  const flags = res?.data?.data || res?.data || []
+
+  const verifyMutation = useMutation({
+    mutationFn: ({ id, finance_remarks }) => verifyManualFlag(id, { finance_remarks }),
+    onSuccess: (res) => {
+      toast.success(res?.data?.message || 'Flag verified')
+      setVerifyingId(null)
+      setFinanceRemarks('')
+      queryClient.invalidateQueries({ queryKey: ['manual-flags'] })
+    },
+    onError: () => toast.error('Failed to verify flag')
+  })
+
+  const unverifiedCount = flags.filter(f => !f.verified && !f.verified_by).length
+
+  return (
+    <div className="space-y-4">
+      {/* Summary */}
+      <div className="grid grid-cols-3 gap-3">
+        <KPI label="Total Flags" value={flags.length} color="blue" />
+        <KPI label="Unverified" value={unverifiedCount} color="amber" />
+        <KPI label="Verified" value={flags.length - unverifiedCount} color="green" />
+      </div>
+
+      {isLoading && <div className="text-center py-8 text-slate-400">Loading manual flags...</div>}
+
+      {!isLoading && flags.length === 0 && (
+        <div className="text-center py-8 text-slate-400">No manual attendance flags for this period.</div>
+      )}
+
+      {flags.length > 0 && (
+        <div className="card overflow-hidden">
+          <div className="overflow-x-auto">
+            <table className="table-compact w-full">
+              <thead>
+                <tr>
+                  <th>Code</th>
+                  <th>Name</th>
+                  <th>Date</th>
+                  <th>Evidence Type</th>
+                  <th>Reason</th>
+                  <th>Marked By</th>
+                  <th>When</th>
+                  <th className="text-center">Verified</th>
+                  <th>Finance Remarks</th>
+                  <th className="text-center">Actions</th>
+                </tr>
+              </thead>
+              <tbody>
+                {flags.map((f) => {
+                  const isVerified = f.verified || !!f.verified_by
+                  return (
+                    <tr key={f.id} className={clsx(isVerified && 'bg-green-50/40')}>
+                      <td className="font-mono text-xs">{f.employee_code}</td>
+                      <td className="text-sm font-medium">{f.employee_name || f.employee_code}</td>
+                      <td className="text-xs">{f.date}</td>
+                      <td>
+                        <span className="text-xs px-1.5 py-0.5 rounded bg-slate-100 text-slate-600">
+                          {f.evidence_type || f.type || '—'}
+                        </span>
+                      </td>
+                      <td className="text-xs text-slate-600 max-w-[200px] truncate">{f.reason || '—'}</td>
+                      <td className="text-xs text-slate-500">{f.marked_by || f.added_by || '—'}</td>
+                      <td className="text-xs text-slate-400">{f.created_at ? new Date(f.created_at).toLocaleDateString() : '—'}</td>
+                      <td className="text-center">
+                        {isVerified ? (
+                          <div>
+                            <span className="text-green-600 text-sm">&#10003;</span>
+                            <div className="text-[10px] text-slate-400">{f.verified_by}</div>
+                          </div>
+                        ) : (
+                          <span className="text-slate-300 text-sm">&#x2014;</span>
+                        )}
+                      </td>
+                      <td className="text-xs text-slate-500 max-w-[180px] truncate">{f.finance_remarks || '—'}</td>
+                      <td className="text-center">
+                        {!isVerified && (
+                          <>
+                            {verifyingId === f.id ? (
+                              <div className="flex items-center gap-1" onClick={e => e.stopPropagation()}>
+                                <input
+                                  type="text"
+                                  value={financeRemarks}
+                                  onChange={e => setFinanceRemarks(e.target.value)}
+                                  className="input text-xs w-32"
+                                  placeholder="Remarks..."
+                                  autoFocus
+                                />
+                                <button
+                                  onClick={() => verifyMutation.mutate({ id: f.id, finance_remarks: financeRemarks })}
+                                  disabled={verifyMutation.isPending}
+                                  className="text-xs px-2 py-1 rounded bg-green-100 text-green-700 hover:bg-green-200 transition-colors"
+                                >
+                                  {verifyMutation.isPending ? '...' : 'OK'}
+                                </button>
+                                <button
+                                  onClick={() => { setVerifyingId(null); setFinanceRemarks('') }}
+                                  className="text-xs px-1.5 py-1 rounded bg-slate-100 text-slate-500 hover:bg-slate-200 transition-colors"
+                                >
+                                  X
+                                </button>
+                              </div>
+                            ) : (
+                              <button
+                                onClick={() => { setVerifyingId(f.id); setFinanceRemarks(f.finance_remarks || '') }}
+                                className="text-xs px-2 py-1 rounded bg-blue-100 text-blue-700 hover:bg-blue-200 transition-colors"
+                              >
+                                Verify
+                              </button>
+                            )}
+                          </>
+                        )}
+                      </td>
+                    </tr>
+                  )
+                })}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
+// ═══════════════════════════════════════════════════════════
 // MAIN FINANCE AUDIT COMPONENT
 // ═══════════════════════════════════════════════════════════
 export default function FinanceAudit() {
-  const { user } = useAppStore()
+  const { user, selectedCompany } = useAppStore()
   const { month, year, dateProps } = useDateSelector({ mode: 'month', syncToStore: true })
   const [activeTab, setActiveTab] = useState('report')
   const isAdmin = user?.role === 'admin'
 
+  // Fetch manual flags count for badge
+  const { data: flagsRes } = useQuery({
+    queryKey: ['manual-flags', month, year, selectedCompany],
+    queryFn: () => getManualAttendanceFlags({ month, year, company: selectedCompany }),
+    retry: 0,
+    staleTime: 60000
+  })
+  const flagsData = flagsRes?.data?.data || flagsRes?.data || []
+  const unverifiedFlagCount = flagsData.filter(f => !f.verified && !f.verified_by).length
+
   const tabs = [
     { id: 'report', label: 'Finance Report' },
+    { id: 'manual-flags', label: `Manual Flags${unverifiedFlagCount > 0 ? ` (${unverifiedFlagCount})` : ''}` },
     ...(isAdmin ? [{ id: 'corrections', label: 'Corrections Summary' }] : [])
   ]
 
@@ -418,7 +570,10 @@ export default function FinanceAudit() {
           <p className="section-subtitle mt-1">Verify salary computations, review corrections, and detect anomalies</p>
         </div>
 
-        <DateSelector {...dateProps} />
+        <div className="flex items-center gap-3">
+          <CompanyFilter />
+          <DateSelector {...dateProps} />
+        </div>
 
         <div className="border-b border-slate-200 flex gap-0">
           {tabs.map(t => (
@@ -426,11 +581,15 @@ export default function FinanceAudit() {
               className={clsx('px-5 py-2.5 text-sm font-medium border-b-2 transition-colors',
                 activeTab === t.id ? 'border-blue-600 text-blue-600' : 'border-transparent text-slate-500 hover:text-slate-700')}>
               {t.label}
+              {t.id === 'manual-flags' && unverifiedFlagCount > 0 && (
+                <span className="ml-1.5 bg-amber-100 text-amber-700 text-[10px] px-1.5 py-0.5 rounded-full font-bold">{unverifiedFlagCount}</span>
+              )}
             </button>
           ))}
         </div>
 
         {activeTab === 'report' && <ReportTab />}
+        {activeTab === 'manual-flags' && <ManualFlagsTab />}
         {activeTab === 'corrections' && isAdmin && <CorrectionsSummaryTab />}
       </div>
     </ErrorBoundary>

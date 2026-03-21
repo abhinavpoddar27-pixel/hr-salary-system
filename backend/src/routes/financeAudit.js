@@ -510,6 +510,288 @@ router.get('/corrections-summary', (req, res) => {
 });
 
 // ─────────────────────────────────────────────────────────
+// POST /api/finance-audit/corrections/apply-leave
+// Apply leave to an absent day (convert A → CL/EL/SL)
+// ─────────────────────────────────────────────────────────
+router.post('/corrections/apply-leave', (req, res) => {
+  try {
+    const db = getDb();
+    const { employee_code, date, leave_type, month, year, reason } = req.body;
+    const username = req.user?.username || 'Unknown';
+
+    if (!employee_code || !date || !leave_type || !month || !year || !reason) {
+      return res.status(400).json({ success: false, error: 'Missing required fields: employee_code, date, leave_type, month, year, reason' });
+    }
+
+    const validLeaveTypes = ['CL', 'EL', 'SL'];
+    if (!validLeaveTypes.includes(leave_type)) {
+      return res.status(400).json({ success: false, error: 'Invalid leave_type. Must be CL, EL, or SL' });
+    }
+
+    const m = parseInt(month);
+    const y = parseInt(year);
+
+    // 1. Find the employee
+    const emp = db.prepare('SELECT id, name, company FROM employees WHERE code = ?').get(employee_code);
+    if (!emp) return res.status(404).json({ success: false, error: 'Employee not found' });
+
+    // 2. Find leave balance
+    const leaveBalance = db.prepare(
+      'SELECT id, balance, used FROM leave_balances WHERE employee_id = ? AND year = ? AND leave_type = ?'
+    ).get(emp.id, y, leave_type);
+
+    let currentBalance = leaveBalance ? leaveBalance.balance : 0;
+    let isLWP = false;
+
+    if (currentBalance <= 0) {
+      console.warn(`[apply-leave] LWP scenario: ${employee_code} has ${currentBalance} ${leave_type} balance. Proceeding anyway.`);
+      isLWP = true;
+    }
+
+    // Run all updates in a transaction
+    const applyLeave = db.transaction(() => {
+      // 3. Update attendance_processed: change status from 'A' to leave_type
+      const attendanceRecord = db.prepare(
+        'SELECT id FROM attendance_processed WHERE employee_code = ? AND date = ? AND status_final = ?'
+      ).get(employee_code, date, 'A');
+
+      if (!attendanceRecord) {
+        throw new Error(`No absent record found for ${employee_code} on ${date}`);
+      }
+
+      db.prepare(
+        'UPDATE attendance_processed SET status_final = ?, correction_source = ?, correction_remark = ? WHERE id = ?'
+      ).run(leave_type, 'leave_correction', `${reason} [by ${username}]`, attendanceRecord.id);
+
+      // 4. Update leave_balances: increment used by 1, decrement balance by 1
+      if (leaveBalance) {
+        db.prepare(
+          'UPDATE leave_balances SET used = used + 1, balance = balance - 1 WHERE id = ?'
+        ).run(leaveBalance.id);
+      } else {
+        // Create a leave balance record if none exists
+        db.prepare(
+          'INSERT INTO leave_balances (employee_id, year, leave_type, opening, accrued, used, balance) VALUES (?, ?, ?, 0, 0, 1, -1)'
+        ).run(emp.id, y, leave_type);
+      }
+
+      // Get updated balance
+      const updatedBalance = db.prepare(
+        'SELECT balance FROM leave_balances WHERE employee_id = ? AND year = ? AND leave_type = ?'
+      ).get(emp.id, y, leave_type);
+      const newBalance = updatedBalance ? updatedBalance.balance : -1;
+
+      // 5. Insert into leave_transactions
+      db.prepare(`
+        INSERT INTO leave_transactions (employee_id, employee_code, company, leave_type, transaction_type, days, balance_after, reference_month, reference_year, reason, approved_by)
+        VALUES (?, ?, ?, ?, 'Debit', 1, ?, ?, ?, ?, ?)
+      `).run(emp.id, employee_code, emp.company, leave_type, newBalance, m, y, reason, username);
+
+      // 6. Update day_calculations: reduce absent by 1, increase cl_used/el_used/sl_used by 1
+      const leaveColumn = leave_type.toLowerCase() + '_used'; // cl_used, el_used, sl_used
+      db.prepare(`
+        UPDATE day_calculations
+        SET days_absent = days_absent - 1,
+            ${leaveColumn} = ${leaveColumn} + 1,
+            total_payable_days = total_payable_days + 1
+        WHERE employee_code = ? AND month = ? AND year = ?
+      `).run(employee_code, m, y);
+
+      // 7. Audit log
+      db.prepare(`
+        INSERT INTO audit_log (table_name, record_id, field_name, old_value, new_value, changed_by, stage, remark, employee_code, action_type)
+        VALUES ('attendance_processed', ?, 'status', 'A', ?, ?, 'correction', ?, ?, 'leave_correction')
+      `).run(attendanceRecord.id, leave_type, username, reason, employee_code);
+
+      return newBalance;
+    });
+
+    const newBalance = applyLeave();
+
+    res.json({
+      success: true,
+      message: `Leave applied: ${employee_code} on ${date} changed from Absent to ${leave_type}${isLWP ? ' (LWP - negative balance)' : ''}`,
+      new_balance: newBalance
+    });
+  } catch (err) {
+    console.error('Apply leave correction error:', err.message);
+    res.status(500).json({ success: false, error: 'Failed to apply leave correction: ' + err.message });
+  }
+});
+
+// ─────────────────────────────────────────────────────────
+// POST /api/finance-audit/corrections/mark-present
+// Manual present marking with evidence tracking
+// ─────────────────────────────────────────────────────────
+router.post('/corrections/mark-present', (req, res) => {
+  try {
+    const db = getDb();
+    const { employee_code, date, month, year, in_time, out_time, reason, evidence_type } = req.body;
+    const username = req.user?.username || 'Unknown';
+
+    if (!employee_code || !date || !month || !year || !reason || !evidence_type) {
+      return res.status(400).json({ success: false, error: 'Missing required fields: employee_code, date, month, year, reason, evidence_type' });
+    }
+
+    const validEvidence = ['Gate Register', 'Shop Floor Manpower List', 'Supervisor Confirmation', 'Other'];
+    if (!validEvidence.includes(evidence_type)) {
+      return res.status(400).json({ success: false, error: 'Invalid evidence_type' });
+    }
+
+    const m = parseInt(month);
+    const y = parseInt(year);
+
+    // 1. Find employee
+    const emp = db.prepare('SELECT id, name, company FROM employees WHERE code = ?').get(employee_code);
+    if (!emp) return res.status(404).json({ success: false, error: 'Employee not found' });
+
+    const markPresent = db.transaction(() => {
+      // 2. Insert punch corrections (IN + OUT records)
+      const existing = db.prepare(
+        'SELECT id, in_time_original, out_time_original FROM attendance_processed WHERE employee_code = ? AND date = ?'
+      ).get(employee_code, date);
+
+      db.prepare(`
+        INSERT INTO punch_corrections (employee_id, employee_code, date,
+          original_in_time, original_out_time, corrected_in_time, corrected_out_time,
+          punch_type, reason, evidence_notes, added_by,
+          applied_to_processed, attendance_processed_id)
+        VALUES (?, ?, ?, ?, ?, ?, ?, 'MANUAL_PRESENT', ?, ?, ?, 1, ?)
+        ON CONFLICT(employee_code, date) DO UPDATE SET
+          corrected_in_time = excluded.corrected_in_time,
+          corrected_out_time = excluded.corrected_out_time,
+          punch_type = excluded.punch_type,
+          reason = excluded.reason,
+          evidence_notes = excluded.evidence_notes,
+          added_by = excluded.added_by,
+          added_at = datetime('now'),
+          applied_to_processed = 1
+      `).run(emp.id, employee_code, date,
+        existing?.in_time_original || null,
+        existing?.out_time_original || null,
+        in_time || null, out_time || null,
+        reason, `${evidence_type}: ${reason}`, username,
+        existing?.id || null);
+
+      // 3. Update attendance_processed: change status from 'A' to 'P'
+      if (existing) {
+        db.prepare(`
+          UPDATE attendance_processed
+          SET status_final = 'P',
+              in_time_final = COALESCE(?, in_time_final),
+              out_time_final = COALESCE(?, out_time_final),
+              correction_source = 'manual_present',
+              correction_remark = ?
+          WHERE id = ?
+        `).run(in_time || null, out_time || null,
+          `${evidence_type}: ${reason} [by ${username}]`, existing.id);
+      }
+
+      // 4. Update day_calculations: reduce absent by 1, increase present by 1
+      db.prepare(`
+        UPDATE day_calculations
+        SET days_absent = days_absent - 1,
+            days_present = days_present + 1,
+            total_payable_days = total_payable_days + 1
+        WHERE employee_code = ? AND month = ? AND year = ?
+      `).run(employee_code, m, y);
+
+      // 5. Insert into manual_attendance_flags
+      db.prepare(`
+        INSERT INTO manual_attendance_flags (employee_code, employee_name, company, date, month, year, evidence_type, reason, marked_by)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(employee_code, date) DO UPDATE SET
+          evidence_type = excluded.evidence_type,
+          reason = excluded.reason,
+          marked_by = excluded.marked_by,
+          marked_at = datetime('now'),
+          finance_verified = 0,
+          verified_by = NULL,
+          verified_at = NULL,
+          finance_remarks = NULL
+      `).run(employee_code, emp.name, emp.company, date, m, y, evidence_type, reason, username);
+
+      // 6. Audit log
+      db.prepare(`
+        INSERT INTO audit_log (table_name, record_id, field_name, old_value, new_value, changed_by, stage, remark, employee_code, action_type)
+        VALUES ('attendance_processed', ?, 'status', 'A', 'P', ?, 'correction', ?, ?, 'manual_present')
+      `).run(existing?.id || null, username,
+        `Manual present: ${evidence_type} - ${reason}`, employee_code);
+    });
+
+    markPresent();
+
+    res.json({
+      success: true,
+      message: `${employee_code} marked present on ${date} via ${evidence_type}`
+    });
+  } catch (err) {
+    console.error('Mark present correction error:', err.message);
+    res.status(500).json({ success: false, error: 'Failed to mark present: ' + err.message });
+  }
+});
+
+// ─────────────────────────────────────────────────────────
+// GET /api/finance-audit/manual-flags
+// List manual attendance flags with filters
+// ─────────────────────────────────────────────────────────
+router.get('/manual-flags', (req, res) => {
+  try {
+    const db = getDb();
+    const { month, year, company, verified } = req.query;
+
+    let sql = 'SELECT * FROM manual_attendance_flags WHERE 1=1';
+    const params = [];
+
+    if (month) { sql += ' AND month = ?'; params.push(parseInt(month)); }
+    if (year) { sql += ' AND year = ?'; params.push(parseInt(year)); }
+    if (company) { sql += ' AND company = ?'; params.push(company); }
+    if (verified !== undefined) { sql += ' AND finance_verified = ?'; params.push(parseInt(verified)); }
+
+    sql += ' ORDER BY marked_at DESC';
+
+    const flags = db.prepare(sql).all(...params);
+    res.json({ success: true, data: flags });
+  } catch (err) {
+    console.error('Manual flags error:', err.message);
+    res.status(500).json({ success: false, error: 'Failed to fetch manual flags: ' + err.message });
+  }
+});
+
+// ─────────────────────────────────────────────────────────
+// PUT /api/finance-audit/manual-flags/:id/verify
+// Finance team verifies a manual attendance flag
+// ─────────────────────────────────────────────────────────
+router.put('/manual-flags/:id/verify', (req, res) => {
+  try {
+    const db = getDb();
+    const { id } = req.params;
+    const { finance_remarks } = req.body;
+    const username = req.user?.username || 'Unknown';
+
+    const flag = db.prepare('SELECT * FROM manual_attendance_flags WHERE id = ?').get(id);
+    if (!flag) return res.status(404).json({ success: false, error: 'Manual flag not found' });
+
+    db.prepare(`
+      UPDATE manual_attendance_flags
+      SET finance_verified = 1, verified_by = ?, verified_at = datetime('now'), finance_remarks = ?
+      WHERE id = ?
+    `).run(username, finance_remarks || null, id);
+
+    // Audit log
+    db.prepare(`
+      INSERT INTO audit_log (table_name, record_id, field_name, old_value, new_value, changed_by, stage, remark, employee_code, action_type)
+      VALUES ('manual_attendance_flags', ?, 'finance_verified', '0', '1', ?, 'finance_verification', ?, ?, 'flag_verification')
+    `).run(id, username, finance_remarks || 'Verified', flag.employee_code);
+
+    res.json({ success: true, message: 'Manual attendance flag verified' });
+  } catch (err) {
+    console.error('Verify flag error:', err.message);
+    res.status(500).json({ success: false, error: 'Failed to verify flag: ' + err.message });
+  }
+});
+
+// ─────────────────────────────────────────────────────────
 // GET /api/finance-audit/reasons
 // Get valid correction reasons for dropdowns
 // ─────────────────────────────────────────────────────────

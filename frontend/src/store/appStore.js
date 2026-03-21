@@ -76,6 +76,7 @@ export const useAppStore = create(
         selectedMonth: state.selectedMonth,
         selectedYear: state.selectedYear,
         sidebarCollapsed: state.sidebarCollapsed,
+        selectedCompany: state.selectedCompany,
         dateRangeMode: state.dateRangeMode,
         dateRangeStart: state.dateRangeStart,
         dateRangeEnd: state.dateRangeEnd

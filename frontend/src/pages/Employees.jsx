@@ -1,12 +1,13 @@
 import React, { useState, useRef } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import toast from 'react-hot-toast'
-import { getEmployees, getEmployee, updateEmployee, updateSalaryStructure, getLeaveBalances, updateLeaveBalance, getEmployeeDocuments, uploadEmployeeDocument, deleteEmployeeDocument, getEmployeeLoans } from '../utils/api'
+import { getEmployees, getEmployee, updateEmployee, updateSalaryStructure, getLeaveBalances, updateLeaveBalance, getEmployeeDocuments, uploadEmployeeDocument, deleteEmployeeDocument, getEmployeeLoans, markEmployeeLeft } from '../utils/api'
 import { fmtINR } from '../utils/formatters'
 import { useAppStore } from '../store/appStore'
 import Modal from '../components/ui/Modal'
 import CalendarView from '../components/ui/CalendarView'
 import { Abbr } from '../components/ui/Tooltip'
+import CompanyFilter from '../components/shared/CompanyFilter'
 import clsx from 'clsx'
 import useExpandableRows from '../hooks/useExpandableRows'
 import DrillDownRow, { DrillDownChevron } from '../components/ui/DrillDownRow'
@@ -504,20 +505,63 @@ function EmployeeProfileModal({ employee, onClose }) {
   )
 }
 
+function MarkLeftModal({ employee, onClose }) {
+  const qc = useQueryClient()
+  const [dateOfLeaving, setDateOfLeaving] = useState(new Date().toISOString().split('T')[0])
+  const [reason, setReason] = useState('')
+
+  const mutation = useMutation({
+    mutationFn: () => markEmployeeLeft(employee.code, { date_of_leaving: dateOfLeaving, reason }),
+    onSuccess: () => { toast.success(`${employee.name} marked as left`); qc.invalidateQueries(['employees']); onClose() }
+  })
+
+  return (
+    <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4" onClick={onClose}>
+      <div className="bg-white rounded-xl shadow-2xl w-full max-w-md" onClick={e => e.stopPropagation()}>
+        <div className="p-5 border-b">
+          <h3 className="font-bold text-slate-800">Mark Employee as Left</h3>
+          <p className="text-xs text-slate-500">{employee.code} · {employee.name}</p>
+        </div>
+        <div className="p-5 space-y-4">
+          <div className="bg-red-50 border border-red-200 rounded-lg p-3 text-sm text-red-700">
+            This will deactivate the employee and close all active loans.
+          </div>
+          <div>
+            <label className="label">Date of Leaving</label>
+            <input type="date" value={dateOfLeaving} onChange={e => setDateOfLeaving(e.target.value)} className="input" />
+          </div>
+          <div>
+            <label className="label">Reason</label>
+            <input type="text" value={reason} onChange={e => setReason(e.target.value)} className="input" placeholder="e.g. Resignation, Termination..." />
+          </div>
+        </div>
+        <div className="p-5 border-t flex gap-2">
+          <button onClick={() => mutation.mutate()} disabled={mutation.isPending} className="flex-1 bg-red-600 hover:bg-red-700 text-white font-medium py-2 px-4 rounded-lg text-sm disabled:opacity-50">
+            {mutation.isPending ? 'Processing...' : 'Confirm — Mark as Left'}
+          </button>
+          <button onClick={onClose} className="btn-secondary">Cancel</button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 export default function Employees() {
-  const { selectedMonth, selectedYear } = useAppStore()
+  const { selectedMonth, selectedYear, selectedCompany } = useAppStore()
   const [search, setSearch] = useState('')
   const [deptFilter, setDeptFilter] = useState('')
   const [editEmp, setEditEmp] = useState(null)
   const [salaryEmp, setSalaryEmp] = useState(null)
   const [profileEmp, setProfileEmp] = useState(null)
+  const [statusFilter, setStatusFilter] = useState('Active')
+  const [markLeftEmp, setMarkLeftEmp] = useState(null)
   const [sortField, setSortField] = useState('name')
   const [sortDir, setSortDir] = useState('asc')
   const { toggle, isExpanded } = useExpandableRows()
 
   const { data: empsRes, isLoading } = useQuery({
-    queryKey: ['employees'],
-    queryFn: () => getEmployees({}),
+    queryKey: ['employees', selectedCompany, statusFilter],
+    queryFn: () => getEmployees({ status: statusFilter === 'All' ? undefined : statusFilter, company: selectedCompany }),
     retry: 0
   })
   const employees = empsRes?.data?.data || []
@@ -554,10 +598,11 @@ export default function Employees() {
           <h2 className="text-lg font-bold text-slate-800">Employee Master</h2>
           <p className="text-sm text-slate-500">{employees.length} employees · auto-synced from biometric data</p>
         </div>
+        <CompanyFilter />
       </div>
 
       {/* Filters */}
-      <div className="flex gap-3">
+      <div className="flex gap-3 flex-wrap items-center">
         <input
           type="search"
           placeholder="Search by name or code..."
@@ -569,7 +614,22 @@ export default function Employees() {
           <option value="">All Departments</option>
           {departments.map(d => <option key={d}>{d}</option>)}
         </select>
+        <div className="flex bg-slate-100 rounded-lg p-0.5 gap-0.5">
+          {['Active', 'Left', 'All'].map(s => (
+            <button key={s} onClick={() => setStatusFilter(s)}
+              className={clsx('px-3 py-1 text-xs font-medium rounded-md transition-colors',
+                statusFilter === s ? 'bg-white text-slate-800 shadow-sm' : 'text-slate-500 hover:text-slate-700'
+              )}>
+              {s}
+            </button>
+          ))}
+        </div>
         <div className="text-sm text-slate-400 self-center">{filtered.length} employees</div>
+        <div className="ml-auto">
+          <button onClick={() => setEditEmp({ code: '', name: '', department: '', designation: '', date_of_joining: '', employment_type: 'Permanent', shift_code: 'DAY', weekly_off_day: 0, phone: '', email: '', aadhar: '', pan: '' })} className="btn-primary text-sm">
+            + Add Employee
+          </button>
+        </div>
       </div>
 
       {/* Table */}
@@ -606,9 +666,12 @@ export default function Employees() {
                   <tr><td colSpan={10} className="text-center py-8 text-slate-400">No employees found</td></tr>
                 ) : filtered.map(e => (
                   <React.Fragment key={e.code}>
-                    <tr onClick={() => toggle(e.code)} className={clsx('cursor-pointer transition-colors hover:bg-blue-50/50', isExpanded(e.code) && 'bg-blue-50')}>
+                    <tr onClick={() => toggle(e.code)} className={clsx('cursor-pointer transition-colors hover:bg-blue-50/50', isExpanded(e.code) && 'bg-blue-50', e.status === 'Left' && 'opacity-60')}>
                       <td className="font-mono text-sm text-slate-600"><DrillDownChevron isExpanded={isExpanded(e.code)} /> {e.code}</td>
-                      <td className="font-medium text-slate-800">{e.name}</td>
+                      <td className="font-medium text-slate-800">
+                        {e.name}
+                        {e.status === 'Left' && <span className="ml-2 text-[10px] px-1.5 py-0.5 bg-red-100 text-red-600 rounded-full font-semibold align-middle">Left</span>}
+                      </td>
                       <td className="text-slate-600">{e.department}</td>
                       <td className="text-slate-500">{e.designation || '—'}</td>
                       <td>
@@ -625,6 +688,9 @@ export default function Employees() {
                           <button onClick={(ev) => { ev.stopPropagation(); setProfileEmp(e) }} className="text-xs py-0.5 px-2 bg-blue-50 text-blue-700 rounded hover:bg-blue-100 border border-blue-200">Profile</button>
                           <button onClick={(ev) => { ev.stopPropagation(); setEditEmp(e) }} className="btn-secondary text-xs py-0.5 px-2">Edit</button>
                           <button onClick={(ev) => { ev.stopPropagation(); setSalaryEmp(e) }} className="text-xs py-0.5 px-2 bg-brand-50 text-brand-600 rounded hover:bg-brand-100 border border-brand-200">₹</button>
+                          {e.status !== 'Left' && (
+                            <button onClick={(ev) => { ev.stopPropagation(); setMarkLeftEmp(e) }} className="text-xs py-0.5 px-2 bg-red-50 text-red-600 rounded hover:bg-red-100 border border-red-200">Mark Left</button>
+                          )}
                         </div>
                       </td>
                     </tr>
@@ -656,6 +722,7 @@ export default function Employees() {
       {editEmp && <EditEmployeeModal employee={editEmp} onClose={() => setEditEmp(null)} />}
       {salaryEmp && <SalaryModal employee={salaryEmp} onClose={() => setSalaryEmp(null)} />}
       {profileEmp && <EmployeeProfileModal employee={profileEmp} onClose={() => setProfileEmp(null)} />}
+      {markLeftEmp && <MarkLeftModal employee={markLeftEmp} onClose={() => setMarkLeftEmp(null)} />}
     </div>
   )
 }

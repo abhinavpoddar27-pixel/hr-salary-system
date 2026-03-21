@@ -8,6 +8,8 @@ import DrillDownRow, { DrillDownChevron } from '../components/ui/DrillDownRow'
 import EmployeeQuickView from '../components/ui/EmployeeQuickView'
 import clsx from 'clsx'
 import api, { getDailyShiftBreakdown, getDailyWorkerBreakdown, getPreviousDayReport } from '../utils/api'
+import { useAppStore } from '../store/appStore'
+import CompanyFilter from '../components/shared/CompanyFilter'
 
 // ── Helpers ──────────────────────────────────────────────────
 
@@ -66,6 +68,7 @@ function useSortable(defaultKey = 'employee_name', defaultDir = 'asc') {
 // ── Main Component ───────────────────────────────────────────
 
 export default function DailyMIS() {
+  const { selectedCompany } = useAppStore()
   const [selectedDate, setSelectedDate] = useState(new Date().toISOString().split('T')[0])
   const [mainTab, setMainTab] = useState('today') // 'today' | 'previous'
   const [todaySubTab, setTodaySubTab] = useState('punched-in')
@@ -80,46 +83,46 @@ export default function DailyMIS() {
   // ── Data Fetching: Today ────────────────────────────────────
 
   const { data: summaryRes, isLoading } = useQuery({
-    queryKey: ['daily-mis-summary', selectedDate],
-    queryFn: () => api.get('/daily-mis/summary', { params: { date: selectedDate } }),
+    queryKey: ['daily-mis-summary', selectedDate, selectedCompany],
+    queryFn: () => api.get('/daily-mis/summary', { params: { date: selectedDate, company: selectedCompany } }),
     enabled: mainTab === 'today',
   })
 
   const { data: shiftRes } = useQuery({
-    queryKey: ['daily-mis-shift', selectedDate],
-    queryFn: () => getDailyShiftBreakdown(selectedDate),
+    queryKey: ['daily-mis-shift', selectedDate, selectedCompany],
+    queryFn: () => getDailyShiftBreakdown(selectedDate, { company: selectedCompany }),
     enabled: mainTab === 'today',
   })
 
   const { data: workerRes } = useQuery({
-    queryKey: ['daily-mis-worker', selectedDate],
-    queryFn: () => getDailyWorkerBreakdown(selectedDate),
+    queryKey: ['daily-mis-worker', selectedDate, selectedCompany],
+    queryFn: () => getDailyWorkerBreakdown(selectedDate, { company: selectedCompany }),
     enabled: mainTab === 'today',
   })
 
   const { data: punchedInRes } = useQuery({
-    queryKey: ['daily-mis-punched', selectedDate],
-    queryFn: () => api.get('/daily-mis/punched-in', { params: { date: selectedDate } }),
+    queryKey: ['daily-mis-punched', selectedDate, selectedCompany],
+    queryFn: () => api.get('/daily-mis/punched-in', { params: { date: selectedDate, company: selectedCompany } }),
     enabled: mainTab === 'today' && todaySubTab === 'punched-in',
   })
 
   const { data: absentRes } = useQuery({
-    queryKey: ['daily-mis-absent', selectedDate],
-    queryFn: () => api.get('/daily-mis/absentees', { params: { date: selectedDate } }),
+    queryKey: ['daily-mis-absent', selectedDate, selectedCompany],
+    queryFn: () => api.get('/daily-mis/absentees', { params: { date: selectedDate, company: selectedCompany } }),
     enabled: mainTab === 'today' && todaySubTab === 'absentees',
   })
 
   const { data: nightRes } = useQuery({
-    queryKey: ['daily-mis-night', selectedDate],
-    queryFn: () => api.get('/daily-mis/night-shift', { params: { date: selectedDate } }),
+    queryKey: ['daily-mis-night', selectedDate, selectedCompany],
+    queryFn: () => api.get('/daily-mis/night-shift', { params: { date: selectedDate, company: selectedCompany } }),
     enabled: mainTab === 'today' && todaySubTab === 'night-detail',
   })
 
   // ── Data Fetching: Previous Day ─────────────────────────────
 
   const { data: prevDayRes, isLoading: prevLoading } = useQuery({
-    queryKey: ['daily-mis-prev', selectedDate],
-    queryFn: () => getPreviousDayReport(selectedDate),
+    queryKey: ['daily-mis-prev', selectedDate, selectedCompany],
+    queryFn: () => getPreviousDayReport(selectedDate, { company: selectedCompany }),
     enabled: mainTab === 'previous',
   })
 
@@ -150,9 +153,12 @@ export default function DailyMIS() {
             <h2 className="section-title">Daily MIS Report</h2>
             <p className="section-subtitle mt-1">Time office attendance dashboard — upload daily EESL data to update</p>
           </div>
-          <div>
-            <label className="label">Select Date</label>
-            <input type="date" value={selectedDate} onChange={e => setSelectedDate(e.target.value)} className="input" />
+          <div className="flex items-end gap-3">
+            <CompanyFilter />
+            <div>
+              <label className="label">Select Date</label>
+              <input type="date" value={selectedDate} onChange={e => setSelectedDate(e.target.value)} className="input" />
+            </div>
           </div>
         </div>
 

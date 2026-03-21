@@ -13,6 +13,7 @@ import CalendarView from '../components/ui/CalendarView'
 import useExpandableRows from '../hooks/useExpandableRows'
 import DrillDownRow, { DrillDownChevron } from '../components/ui/DrillDownRow'
 import EmployeeQuickView from '../components/ui/EmployeeQuickView'
+import CompanyFilter from '../components/shared/CompanyFilter'
 import clsx from 'clsx'
 
 /* ── CellEditor (kept from original) ──────────────────────────────── */
@@ -192,6 +193,7 @@ const COL_SPAN = 13
 
 export default function AttendanceRegister() {
   const { month, year, dateProps } = useDateSelector({ mode: 'month', syncToStore: true })
+  const { selectedCompany } = useAppStore()
   const { toggle, isExpanded } = useExpandableRows()
   const [filterDept, setFilterDept] = useState('')
   const [searchTerm, setSearchTerm] = useState('')
@@ -201,8 +203,8 @@ export default function AttendanceRegister() {
 
   /* ── Fetch all employees summary (auto-loads on mount) ── */
   const { data: summaryRes, isLoading, refetch: refetchSummary } = useQuery({
-    queryKey: ['monthly-attendance-summary', month, year],
-    queryFn: () => getMonthlyAttendanceSummary(month, year),
+    queryKey: ['monthly-attendance-summary', month, year, selectedCompany],
+    queryFn: () => getMonthlyAttendanceSummary(month, year, selectedCompany),
     staleTime: 120000,
     keepPreviousData: true,
   })
@@ -313,7 +315,10 @@ export default function AttendanceRegister() {
               All employees for {MONTH_NAMES[month]} {year}. Click a row to expand daily detail and make corrections. Click column headers to sort.
             </p>
           </div>
-          <DateSelector {...dateProps} />
+          <div className="flex items-center gap-3">
+            <CompanyFilter />
+            <DateSelector {...dateProps} />
+          </div>
           <button
             onClick={() => recalcMutation.mutate()}
             disabled={recalcMutation.isPending}

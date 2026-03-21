@@ -2,6 +2,7 @@ import React, { useState, useMemo } from 'react'
 import { useQuery, useMutation } from '@tanstack/react-query'
 import toast from 'react-hot-toast'
 import { useAppStore } from '../store/appStore'
+import CompanyFilter from '../components/shared/CompanyFilter'
 import DateSelector from '../components/common/DateSelector'
 import useDateSelector from '../hooks/useDateSelector'
 import { fmtINR, monthYearLabel, fmtDate } from '../utils/formatters'
@@ -38,6 +39,7 @@ function useSortable(defaultKey = '', defaultDir = 'asc') {
 
 export default function SalaryAdvance() {
   const { month, year, dateProps } = useDateSelector({ mode: 'month', syncToStore: true })
+  const { selectedCompany } = useAppStore()
   const [selected, setSelected] = useState(new Set())
   const [filterView, setFilterView] = useState('all')
   const [search, setSearch] = useState('')
@@ -47,8 +49,8 @@ export default function SalaryAdvance() {
   const { toggle: toggleRow, isExpanded } = useExpandableRows()
 
   const { data: res, isLoading, refetch } = useQuery({
-    queryKey: ['advance-list', month, year],
-    queryFn: () => api.get('/advance/list', { params: { month: month, year: year } }),
+    queryKey: ['advance-list', month, year, selectedCompany],
+    queryFn: () => api.get('/advance/list', { params: { month: month, year: year, company: selectedCompany } }),
     retry: 0
   })
 
@@ -73,7 +75,7 @@ export default function SalaryAdvance() {
   }, [allRecords, filterView, search, sort.sortKey, sort.sortDir])
 
   const calculateMutation = useMutation({
-    mutationFn: () => api.post('/advance/calculate', { month: month, year: year }),
+    mutationFn: () => api.post('/advance/calculate', { month: month, year: year, company: selectedCompany }),
     onSuccess: (r) => {
       toast.success(`Advance calculated: ${r.data.eligible} eligible of ${r.data.total} | Total: ${fmtINR(r.data.totalAdvanceAmount)}`)
       refetch()
@@ -174,7 +176,10 @@ export default function SalaryAdvance() {
               {monthYearLabel(month, year)} — Calculate and process salary advances (55% gross for eligible employees).
             </p>
           </div>
-          <DateSelector {...dateProps} />
+          <div className="flex items-center gap-3">
+            <CompanyFilter />
+            <DateSelector {...dateProps} />
+          </div>
           <div className="flex gap-2">
             <button onClick={handleExportPDF} className="btn-secondary text-xs">Export PDF</button>
             <button onClick={() => calculateMutation.mutate()} disabled={calculateMutation.isPending} className="btn-primary">

@@ -13,6 +13,8 @@ import { useMutation, useQueryClient } from '@tanstack/react-query'
 import DateSelector from '../components/common/DateSelector'
 import useDateSelector from '../hooks/useDateSelector'
 import toast from 'react-hot-toast'
+import CompanyFilter from '../components/shared/CompanyFilter'
+import { useAppStore } from '../store/appStore'
 import clsx from 'clsx'
 import useExpandableRows from '../hooks/useExpandableRows'
 import DrillDownRow, { DrillDownChevron } from '../components/ui/DrillDownRow'
@@ -48,19 +50,19 @@ const TABS = [
 // ═══════════════════════════════════════════════════════════
 // HEADCOUNT TAB — enhanced with detailed drill-down
 // ═══════════════════════════════════════════════════════════
-function HeadcountTab({ selectedMonth, selectedYear }) {
+function HeadcountTab({ selectedMonth, selectedYear, selectedCompany }) {
   const [expandedMonth, setExpandedMonth] = useState(null)
 
   const { data: trendRes } = useQuery({
-    queryKey: ['headcount-trend', selectedMonth, selectedYear],
-    queryFn: () => getHeadcountTrend(selectedMonth, selectedYear, 12),
+    queryKey: ['headcount-trend', selectedMonth, selectedYear, selectedCompany],
+    queryFn: () => getHeadcountTrend(selectedMonth, selectedYear, 12, selectedCompany),
     retry: 0
   })
   const trend = trendRes?.data?.data || []
 
   const { data: overviewRes } = useQuery({
-    queryKey: ['org-overview', selectedMonth, selectedYear],
-    queryFn: () => getOrgOverview(selectedMonth, selectedYear),
+    queryKey: ['org-overview', selectedMonth, selectedYear, selectedCompany],
+    queryFn: () => getOrgOverview(selectedMonth, selectedYear, selectedCompany),
     retry: 0
   })
   const overview = overviewRes?.data?.data || {}
@@ -68,8 +70,8 @@ function HeadcountTab({ selectedMonth, selectedYear }) {
   // For attrition data to get join/exit details when a month row is expanded
   const expandedM = expandedMonth ? trend.find(t => t.monthLabel === expandedMonth) : null
   const { data: expandedAttritionRes } = useQuery({
-    queryKey: ['attrition-detail', expandedM?.month, expandedM?.year],
-    queryFn: () => getAttritionData(expandedM?.month, expandedM?.year),
+    queryKey: ['attrition-detail', expandedM?.month, expandedM?.year, selectedCompany],
+    queryFn: () => getAttritionData(expandedM?.month, expandedM?.year, selectedCompany),
     enabled: !!expandedM,
     retry: 0
   })
@@ -297,22 +299,22 @@ function HeadcountTab({ selectedMonth, selectedYear }) {
 // ═══════════════════════════════════════════════════════════
 // ATTRITION TAB — detailed view with permanent vs contractor
 // ═══════════════════════════════════════════════════════════
-function AttritionTab({ selectedMonth, selectedYear }) {
+function AttritionTab({ selectedMonth, selectedYear, selectedCompany }) {
   const qc = useQueryClient()
   const inactiveExpand = useExpandableRows()
   const joinExpand = useExpandableRows()
   const exitExpand = useExpandableRows()
 
   const { data: attritionRes } = useQuery({
-    queryKey: ['attrition', selectedMonth, selectedYear],
-    queryFn: () => getAttritionData(selectedMonth, selectedYear),
+    queryKey: ['attrition', selectedMonth, selectedYear, selectedCompany],
+    queryFn: () => getAttritionData(selectedMonth, selectedYear, selectedCompany),
     retry: 0
   })
   const attrition = attritionRes?.data?.data || {}
 
   const { data: inactiveRes, refetch: refetchInactive } = useQuery({
-    queryKey: ['inactive-employees'],
-    queryFn: getInactiveEmployees,
+    queryKey: ['inactive-employees', selectedCompany],
+    queryFn: () => getInactiveEmployees(selectedCompany),
     retry: 0
   })
   const inactive = inactiveRes?.data?.data || []
@@ -484,13 +486,13 @@ function AttritionTab({ selectedMonth, selectedYear }) {
 // ═══════════════════════════════════════════════════════════
 // CONTRACTOR MANAGEMENT TAB
 // ═══════════════════════════════════════════════════════════
-function ContractorTab({ selectedMonth, selectedYear }) {
+function ContractorTab({ selectedMonth, selectedYear, selectedCompany }) {
   const contractorExpand = useExpandableRows()
   const permanentExpand = useExpandableRows()
 
   const { data: overviewRes } = useQuery({
-    queryKey: ['org-overview', selectedMonth, selectedYear],
-    queryFn: () => getOrgOverview(selectedMonth, selectedYear),
+    queryKey: ['org-overview', selectedMonth, selectedYear, selectedCompany],
+    queryFn: () => getOrgOverview(selectedMonth, selectedYear, selectedCompany),
     retry: 0
   })
   const overview = overviewRes?.data?.data || {}
@@ -668,7 +670,8 @@ function ContractorTab({ selectedMonth, selectedYear }) {
 // ═══════════════════════════════════════════════════════════
 export default function WorkforceAnalytics() {
   const { month, year, dateProps } = useDateSelector({ mode: 'month', syncToStore: true })
-  const dp = { selectedMonth: month, selectedYear: year }
+  const { selectedCompany } = useAppStore()
+  const dp = { selectedMonth: month, selectedYear: year, selectedCompany }
 
   return (
     <div className="p-6 space-y-5 animate-fade-in">
@@ -676,7 +679,10 @@ export default function WorkforceAnalytics() {
         <h2 className="section-title">Workforce Analytics</h2>
         <p className="section-subtitle mt-1">Headcount trends, attrition analysis, and contractor management</p>
       </div>
-      <DateSelector {...dateProps} />
+      <div className="flex items-center gap-3">
+        <CompanyFilter />
+        <DateSelector {...dateProps} />
+      </div>
       <div className="border-b border-slate-200 flex gap-0 overflow-x-auto">
         {TABS.map(t => (
           <NavLink key={t.id} to={t.path}

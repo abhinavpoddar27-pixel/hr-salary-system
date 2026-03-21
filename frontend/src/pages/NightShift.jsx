@@ -3,6 +3,7 @@ import { useQuery, useMutation } from '@tanstack/react-query'
 import toast from 'react-hot-toast'
 import { getNightShifts, confirmNightShift, rejectNightShift } from '../utils/api'
 import { useAppStore } from '../store/appStore'
+import CompanyFilter from '../components/shared/CompanyFilter'
 import DateSelector from '../components/common/DateSelector'
 import useDateSelector from '../hooks/useDateSelector'
 import PipelineProgress from '../components/pipeline/PipelineProgress'
@@ -23,13 +24,14 @@ function ConfidenceBadge({ confidence }) {
 
 export default function NightShift() {
   const { month, year, dateProps } = useDateSelector({ mode: 'month', syncToStore: true })
+  const { selectedCompany } = useAppStore()
   const [filter, setFilter] = useState('all')
   const [calendarEmployee, setCalendarEmployee] = useState(null)
   const { toggle, isExpanded } = useExpandableRows()
 
   const { data: res, isLoading, refetch } = useQuery({
-    queryKey: ['night-shifts', month, year],
-    queryFn: () => getNightShifts({ month: month, year: year }),
+    queryKey: ['night-shifts', month, year, selectedCompany],
+    queryFn: () => getNightShifts({ month: month, year: year, company: selectedCompany }),
     retry: 0
   })
 
@@ -66,7 +68,10 @@ export default function NightShift() {
           </p>
         </div>
 
-        <DateSelector {...dateProps} />
+        <div className="flex items-center gap-3">
+          <DateSelector {...dateProps} />
+          <CompanyFilter />
+        </div>
 
         {/* Stats */}
         <div className="grid grid-cols-2 md:grid-cols-5 gap-3">

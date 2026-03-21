@@ -6,6 +6,8 @@ import { getOrgOverview, getHeadcountTrend, getAlerts, generateAlerts } from '..
 import StatCard from '../components/common/StatCard'
 import DateSelector from '../components/common/DateSelector'
 import useDateSelector from '../hooks/useDateSelector'
+import CompanyFilter from '../components/shared/CompanyFilter'
+import { useAppStore } from '../store/appStore'
 import { fmtINR, fmtPct, monthYearLabel, attendanceRateColor, severityIcon, severityColor, fmtDate } from '../utils/formatters'
 import clsx from 'clsx'
 import useExpandableRows from '../hooks/useExpandableRows'
@@ -14,23 +16,24 @@ import DepartmentQuickView from '../components/ui/DepartmentQuickView'
 
 export default function Dashboard() {
   const { month, year, dateProps } = useDateSelector({ mode: 'month', syncToStore: true })
+  const { selectedCompany } = useAppStore()
   const selectedMonth = month, selectedYear = year
 
   const { data: overviewRes, isLoading: ovLoading } = useQuery({
-    queryKey: ['org-overview', selectedMonth, selectedYear],
-    queryFn: () => getOrgOverview(selectedMonth, selectedYear),
+    queryKey: ['org-overview', selectedMonth, selectedYear, selectedCompany],
+    queryFn: () => getOrgOverview(selectedMonth, selectedYear, { company: selectedCompany }),
     retry: 0
   })
 
   const { data: trendRes } = useQuery({
-    queryKey: ['headcount-trend', selectedMonth, selectedYear],
-    queryFn: () => getHeadcountTrend(selectedMonth, selectedYear, 6),
+    queryKey: ['headcount-trend', selectedMonth, selectedYear, selectedCompany],
+    queryFn: () => getHeadcountTrend(selectedMonth, selectedYear, 6, { company: selectedCompany }),
     retry: 0
   })
 
   const { data: alertsRes } = useQuery({
-    queryKey: ['alerts', selectedMonth, selectedYear],
-    queryFn: () => getAlerts(selectedMonth, selectedYear, true),
+    queryKey: ['alerts', selectedMonth, selectedYear, selectedCompany],
+    queryFn: () => getAlerts(selectedMonth, selectedYear, true, { company: selectedCompany }),
     retry: 0
   })
 
@@ -52,7 +55,10 @@ export default function Dashboard() {
   return (
     <div className="p-6 space-y-6 max-w-screen-2xl">
       {/* Date selector + Header */}
-      <DateSelector {...dateProps} />
+      <div className="flex items-center gap-3">
+        <DateSelector {...dateProps} />
+        <CompanyFilter />
+      </div>
       <div className="flex items-center justify-between">
         <div>
           <h2 className="text-xl font-bold text-slate-800">Organisation Overview</h2>

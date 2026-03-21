@@ -1,10 +1,11 @@
 import React, { useState, useMemo } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { getLeaveApplications, submitLeaveApplication, approveLeave, rejectLeave, getEmployees, getLeaveSummary } from '../utils/api'
+import { getLeaveApplications, submitLeaveApplication, approveLeave, rejectLeave, getEmployees, getLeaveSummary, getLeaveBalancesList, getLeaveRegister, adjustLeave, getLeaveTransactions } from '../utils/api'
 import { useAppStore } from '../store/appStore'
 import DateSelector from '../components/common/DateSelector'
 import useDateSelector from '../hooks/useDateSelector'
 import Modal from '../components/ui/Modal'
+import CompanyFilter from '../components/shared/CompanyFilter'
 import clsx from 'clsx'
 import toast from 'react-hot-toast'
 import useExpandableRows from '../hooks/useExpandableRows'
@@ -115,9 +116,18 @@ function ApplyLeaveModal({ show, onClose, employees }) {
   )
 }
 
+const MAIN_TABS = [
+  { id: 'applications', label: 'Applications' },
+  { id: 'balances', label: 'Leave Balances' },
+  { id: 'register', label: 'Leave Register' },
+  { id: 'adjustments', label: 'Adjustments' }
+]
+
 export default function LeaveManagement() {
   const { month, year, dateProps } = useDateSelector({ mode: 'month', syncToStore: true })
+  const { selectedCompany } = useAppStore()
   const queryClient = useQueryClient()
+  const [mainTab, setMainTab] = useState('applications')
   const [statusFilter, setStatusFilter] = useState('All')
   const [typeFilter, setTypeFilter] = useState('All')
   const [search, setSearch] = useState('')
@@ -126,10 +136,18 @@ export default function LeaveManagement() {
   const [rejectReason, setRejectReason] = useState('')
   const { toggle: toggleDrill, isExpanded: isDrillExpanded } = useExpandableRows()
 
+  // -- Balances tab state --
+  const [balSearch, setBalSearch] = useState('')
+
+  // -- Adjustments tab state --
+  const [adjForm, setAdjForm] = useState({ employee_code: '', leave_type: 'CL', transaction_type: 'Credit', days: 1, reason: '' })
+  const [adjViewCode, setAdjViewCode] = useState('')
+
   const { data: leavesRes, isLoading } = useQuery({
-    queryKey: ['leave-applications', month, year, statusFilter !== 'All' ? statusFilter : undefined],
+    queryKey: ['leave-applications', month, year, statusFilter !== 'All' ? statusFilter : undefined, selectedCompany],
     queryFn: () => getLeaveApplications({
       month: month, year: year,
+      company: selectedCompany,
       ...(statusFilter !== 'All' ? { status: statusFilter } : {})
     })
   })
@@ -137,10 +155,44 @@ export default function LeaveManagement() {
   const stats = leavesRes?.data?.stats || {}
 
   const { data: empRes } = useQuery({
-    queryKey: ['employees-list'],
-    queryFn: () => getEmployees({ status: 'Active' })
+    queryKey: ['employees-list', selectedCompany],
+    queryFn: () => getEmployees({ status: 'Active', company: selectedCompany })
   })
   const employees = empRes?.data?.data || []
+
+  // -- Leave Balances query --
+  const { data: balancesRes, isLoading: balLoading } = useQuery({
+    queryKey: ['leave-balances-list', year, selectedCompany, balSearch],
+    queryFn: () => getLeaveBalancesList({ company: selectedCompany, year, ...(balSearch ? { search: balSearch } : {}) }),
+    enabled: mainTab === 'balances'
+  })
+  const balances = balancesRes?.data?.data || []
+
+  // -- Leave Register query --
+  const { data: registerRes, isLoading: regLoading } = useQuery({
+    queryKey: ['leave-register', month, year, selectedCompany],
+    queryFn: () => getLeaveRegister({ month, year, company: selectedCompany }),
+    enabled: mainTab === 'register'
+  })
+  const registerData = registerRes?.data?.data || []
+
+  // -- Adjustments: mutation + transactions query --
+  const adjustMutation = useMutation({
+    mutationFn: (data) => adjustLeave(data),
+    onSuccess: () => {
+      toast.success('Leave adjustment saved')
+      queryClient.invalidateQueries({ queryKey: ['leave-balances-list'] })
+      queryClient.invalidateQueries({ queryKey: ['leave-transactions'] })
+      setAdjForm(f => ({ ...f, days: 1, reason: '' }))
+    }
+  })
+
+  const { data: txnRes, isLoading: txnLoading } = useQuery({
+    queryKey: ['leave-transactions', adjViewCode, year],
+    queryFn: () => getLeaveTransactions(adjViewCode, { year }),
+    enabled: mainTab === 'adjustments' && !!adjViewCode
+  })
+  const transactions = txnRes?.data?.data || []
 
   const approve = useMutation({
     mutationFn: (id) => approveLeave(id, { approved_by: 'admin' }),
@@ -190,11 +242,33 @@ export default function LeaveManagement() {
           <h2 className="text-lg font-bold text-slate-800">Leave Management</h2>
           <p className="text-sm text-slate-500">Manage leave applications and approvals</p>
         </div>
-        <DateSelector {...dateProps} />
-        <button className="btn btn-primary" onClick={() => setShowApply(true)}>
-          + Apply Leave
-        </button>
+        <div className="flex items-center gap-3">
+          <CompanyFilter />
+          <DateSelector {...dateProps} />
+        </div>
+        {mainTab === 'applications' && (
+          <button className="btn btn-primary" onClick={() => setShowApply(true)}>
+            + Apply Leave
+          </button>
+        )}
       </div>
+
+      {/* Main Tabs */}
+      <div className="flex bg-slate-100 rounded-lg p-0.5 w-fit">
+        {MAIN_TABS.map(t => (
+          <button
+            key={t.id}
+            onClick={() => setMainTab(t.id)}
+            className={clsx('px-4 py-1.5 text-sm font-medium rounded-md transition-all', {
+              'bg-white text-slate-800 shadow-sm': mainTab === t.id,
+              'text-slate-500 hover:text-slate-700': mainTab !== t.id
+            })}
+          >{t.label}</button>
+        ))}
+      </div>
+
+      {/* ── Applications Tab ── */}
+      {mainTab === 'applications' && <>
 
       {/* Stats */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
@@ -371,6 +445,213 @@ export default function LeaveManagement() {
           </div>
         </Modal>
       )}
+
+      </>}
+
+      {/* ── Leave Balances Tab ── */}
+      {mainTab === 'balances' && (
+        <>
+          <div className="flex items-center gap-4">
+            <input
+              type="text"
+              className="input text-sm w-64"
+              placeholder="Search by name or code..."
+              value={balSearch}
+              onChange={e => setBalSearch(e.target.value)}
+            />
+            <span className="text-sm text-slate-500">Year: {year}</span>
+          </div>
+          <div className="card overflow-hidden">
+            <div className="overflow-x-auto">
+              <table className="table-compact w-full">
+                <thead>
+                  <tr>
+                    <th>Code</th>
+                    <th>Name</th>
+                    <th>Department</th>
+                    <th>Company</th>
+                    <th className="text-center">CL</th>
+                    <th className="text-center">EL</th>
+                    <th className="text-center">SL</th>
+                    <th className="text-center">Total</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {balLoading ? (
+                    <tr><td colSpan={8} className="text-center py-8 text-slate-400">Loading...</td></tr>
+                  ) : balances.length === 0 ? (
+                    <tr><td colSpan={8} className="text-center py-8 text-slate-400">No leave balances found</td></tr>
+                  ) : (
+                    balances.map(b => (
+                      <tr key={b.employee_code}>
+                        <td className="font-medium text-slate-700">{b.employee_code}</td>
+                        <td>{b.employee_name || b.name || '-'}</td>
+                        <td className="text-sm text-slate-600">{b.department || '-'}</td>
+                        <td className="text-sm text-slate-600">{b.company || '-'}</td>
+                        <td className="text-center font-medium">{b.CL ?? b.cl ?? 0}</td>
+                        <td className="text-center font-medium">{b.EL ?? b.el ?? 0}</td>
+                        <td className="text-center font-medium">{b.SL ?? b.sl ?? 0}</td>
+                        <td className="text-center font-bold text-slate-800">{(b.CL ?? b.cl ?? 0) + (b.EL ?? b.el ?? 0) + (b.SL ?? b.sl ?? 0)}</td>
+                      </tr>
+                    ))
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </>
+      )}
+
+      {/* ── Leave Register Tab ── */}
+      {mainTab === 'register' && (
+        <div className="card overflow-hidden">
+          <div className="overflow-x-auto">
+            <table className="table-compact w-full">
+              <thead>
+                <tr>
+                  <th>Code</th>
+                  <th>Name</th>
+                  <th>Department</th>
+                  <th>Leave Type</th>
+                  <th className="text-center">Days</th>
+                  <th>Date</th>
+                  <th>Reason</th>
+                </tr>
+              </thead>
+              <tbody>
+                {regLoading ? (
+                  <tr><td colSpan={7} className="text-center py-8 text-slate-400">Loading...</td></tr>
+                ) : registerData.length === 0 ? (
+                  <tr><td colSpan={7} className="text-center py-8 text-slate-400">No leave records for this month</td></tr>
+                ) : (
+                  registerData.map((r, i) => (
+                    <tr key={i}>
+                      <td className="font-medium text-slate-700">{r.employee_code}</td>
+                      <td>{r.employee_name || r.name || '-'}</td>
+                      <td className="text-sm text-slate-600">{r.department || '-'}</td>
+                      <td>
+                        <span className="px-2 py-0.5 rounded-full text-xs font-medium bg-slate-100 text-slate-700">
+                          {r.leave_type}
+                        </span>
+                      </td>
+                      <td className="text-center font-bold text-slate-700">{r.days}</td>
+                      <td className="text-sm">{r.start_date ? new Date(r.start_date).toLocaleDateString('en-IN', { day: '2-digit', month: 'short' }) : (r.date || '-')}</td>
+                      <td className="text-sm text-slate-600 max-w-48 truncate">{r.reason || '-'}</td>
+                    </tr>
+                  ))
+                )}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {/* ── Adjustments Tab ── */}
+      {mainTab === 'adjustments' && (
+        <>
+          {/* Adjustment Form */}
+          <div className="card p-5">
+            <h3 className="text-sm font-semibold text-slate-700 mb-4">New Adjustment</h3>
+            <div className="grid grid-cols-2 lg:grid-cols-5 gap-4">
+              <div>
+                <label className="block text-xs font-medium text-slate-600 mb-1">Employee</label>
+                <select
+                  className="input w-full text-sm"
+                  value={adjForm.employee_code}
+                  onChange={e => {
+                    setAdjForm(f => ({ ...f, employee_code: e.target.value }))
+                    setAdjViewCode(e.target.value)
+                  }}
+                >
+                  <option value="">Select Employee</option>
+                  {(employees || []).map(e => <option key={e.code} value={e.code}>{e.code} - {e.name}</option>)}
+                </select>
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-slate-600 mb-1">Leave Type</label>
+                <select className="input w-full text-sm" value={adjForm.leave_type} onChange={e => setAdjForm(f => ({ ...f, leave_type: e.target.value }))}>
+                  <option value="CL">Casual Leave</option>
+                  <option value="EL">Earned Leave</option>
+                  <option value="SL">Sick Leave</option>
+                </select>
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-slate-600 mb-1">Transaction Type</label>
+                <select className="input w-full text-sm" value={adjForm.transaction_type} onChange={e => setAdjForm(f => ({ ...f, transaction_type: e.target.value }))}>
+                  <option value="Credit">Credit</option>
+                  <option value="Debit">Debit</option>
+                </select>
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-slate-600 mb-1">Days</label>
+                <input type="number" className="input w-full text-sm" value={adjForm.days} onChange={e => setAdjForm(f => ({ ...f, days: parseFloat(e.target.value) || 0 }))} min="0.5" step="0.5" />
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-slate-600 mb-1">Reason</label>
+                <input type="text" className="input w-full text-sm" value={adjForm.reason} onChange={e => setAdjForm(f => ({ ...f, reason: e.target.value }))} placeholder="Reason..." />
+              </div>
+            </div>
+            <div className="mt-4 flex justify-end">
+              <button
+                className="btn btn-primary text-sm"
+                disabled={!adjForm.employee_code || !adjForm.days || adjustMutation.isPending}
+                onClick={() => adjustMutation.mutate(adjForm)}
+              >
+                {adjustMutation.isPending ? 'Saving...' : 'Submit Adjustment'}
+              </button>
+            </div>
+          </div>
+
+          {/* Transaction History */}
+          <div className="card overflow-hidden">
+            <div className="px-4 py-3 border-b border-slate-100">
+              <h3 className="text-sm font-semibold text-slate-700">Adjustment History</h3>
+            </div>
+            {!adjViewCode ? (
+              <div className="text-center py-8 text-slate-400 text-sm">Select an employee to view history</div>
+            ) : txnLoading ? (
+              <div className="text-center py-8 text-slate-400 text-sm">Loading...</div>
+            ) : transactions.length === 0 ? (
+              <div className="text-center py-8 text-slate-400 text-sm">No transactions found</div>
+            ) : (
+              <div className="overflow-x-auto">
+                <table className="table-compact w-full">
+                  <thead>
+                    <tr>
+                      <th>Date</th>
+                      <th>Leave Type</th>
+                      <th>Type</th>
+                      <th className="text-center">Days</th>
+                      <th>Reason</th>
+                      <th>By</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {transactions.map((t, i) => (
+                      <tr key={i}>
+                        <td className="text-sm">{t.created_at ? new Date(t.created_at).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' }) : '-'}</td>
+                        <td>
+                          <span className="px-2 py-0.5 rounded-full text-xs font-medium bg-slate-100 text-slate-700">{t.leave_type}</span>
+                        </td>
+                        <td>
+                          <span className={clsx('px-2 py-0.5 rounded-full text-xs font-semibold', {
+                            'bg-green-100 text-green-700': t.transaction_type === 'Credit',
+                            'bg-red-100 text-red-700': t.transaction_type === 'Debit'
+                          })}>{t.transaction_type}</span>
+                        </td>
+                        <td className="text-center font-bold">{t.days}</td>
+                        <td className="text-sm text-slate-600 max-w-48 truncate">{t.reason || '-'}</td>
+                        <td className="text-xs text-slate-500">{t.created_by || t.adjusted_by || '-'}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+        </>
+      )}
+
     </div>
   )
 }

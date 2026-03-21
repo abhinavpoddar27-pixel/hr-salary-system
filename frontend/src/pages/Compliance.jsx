@@ -5,6 +5,7 @@ import { getComplianceItems, updateComplianceItem, generateComplianceCalendar, g
 import { useAppStore } from '../store/appStore'
 import DateSelector from '../components/common/DateSelector'
 import useDateSelector from '../hooks/useDateSelector'
+import CompanyFilter from '../components/shared/CompanyFilter'
 import { fmtDate, fmtINR } from '../utils/formatters'
 import useExpandableRows from '../hooks/useExpandableRows'
 import DrillDownRow, { DrillDownChevron } from '../components/ui/DrillDownRow'
@@ -92,6 +93,7 @@ function EditComplianceModal({ item, onClose, onSave }) {
 
 export default function Compliance() {
   const { month, year, dateProps } = useDateSelector({ mode: 'month', syncToStore: true })
+  const { selectedCompany } = useAppStore()
   const qc = useQueryClient()
   const [activeTab, setActiveTab] = useState('calendar')
   const [editItem, setEditItem] = useState(null)
@@ -101,23 +103,23 @@ export default function Compliance() {
   const { toggle: esiToggle, isExpanded: esiIsExpanded } = useExpandableRows()
 
   const { data: compRes, isLoading } = useQuery({
-    queryKey: ['compliance', year],
-    queryFn: () => getComplianceItems(year),
+    queryKey: ['compliance', year, selectedCompany],
+    queryFn: () => getComplianceItems(year, selectedCompany),
     retry: 0
   })
   const items = compRes?.data?.data || []
 
   const { data: pfRes } = useQuery({
-    queryKey: ['pf-statement', month, year],
-    queryFn: () => getPFStatement(month, year),
+    queryKey: ['pf-statement', month, year, selectedCompany],
+    queryFn: () => getPFStatement(month, year, selectedCompany),
     retry: 0,
     enabled: activeTab === 'pf'
   })
   const pfData = pfRes?.data?.data || {}
 
   const { data: esiRes } = useQuery({
-    queryKey: ['esi-statement', month, year],
-    queryFn: () => getESIStatement(month, year),
+    queryKey: ['esi-statement', month, year, selectedCompany],
+    queryFn: () => getESIStatement(month, year, selectedCompany),
     retry: 0,
     enabled: activeTab === 'esi'
   })
@@ -154,7 +156,10 @@ export default function Compliance() {
           <h2 className="text-lg font-bold text-slate-800">Compliance</h2>
           <p className="text-sm text-slate-500">PF/ESI filings, statutory compliance tracking</p>
         </div>
-        <DateSelector {...dateProps} />
+        <div className="flex items-center gap-3">
+          <CompanyFilter />
+          <DateSelector {...dateProps} />
+        </div>
         <button onClick={() => generateMutation.mutate()} className="btn-primary" disabled={generateMutation.isPending}>
           {generateMutation.isPending ? 'Generating...' : `Generate Calendar ${year}`}
         </button>

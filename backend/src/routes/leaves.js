@@ -1,6 +1,6 @@
 const express = require('express');
 const router = express.Router();
-const { getDb } = require('../database/db');
+const { getDb, logAudit } = require('../database/db');
 
 /**
  * GET /api/leaves
@@ -151,6 +151,245 @@ router.get('/summary', (req, res) => {
       employeesOnLeave: [...new Set(approved.map(l => l.employee_code))].length
     }
   });
+});
+
+/**
+ * GET /api/leaves/balances
+ * All employee leave balances
+ */
+router.get('/balances', (req, res) => {
+  const db = getDb();
+  const { company, year, department, search } = req.query;
+  const currentYear = year || new Date().getFullYear();
+
+  let query = `
+    SELECT e.code as employee_code, e.name, e.department, e.company,
+           MAX(CASE WHEN lb.leave_type = 'CL' THEN lb.balance ELSE 0 END) as CL,
+           MAX(CASE WHEN lb.leave_type = 'EL' THEN lb.balance ELSE 0 END) as EL,
+           MAX(CASE WHEN lb.leave_type = 'SL' THEN lb.balance ELSE 0 END) as SL
+    FROM employees e
+    LEFT JOIN leave_balances lb ON lb.employee_id = e.id AND lb.year = ?
+    WHERE e.status = 'Active'
+  `;
+  const params = [currentYear];
+
+  if (company) { query += ' AND e.company = ?'; params.push(company); }
+  if (department) { query += ' AND e.department = ?'; params.push(department); }
+  if (search) {
+    query += ' AND (e.code LIKE ? OR e.name LIKE ?)';
+    params.push(`%${search}%`, `%${search}%`);
+  }
+
+  query += ' GROUP BY e.code ORDER BY e.name';
+  const rows = db.prepare(query).all(...params);
+  res.json({ success: true, data: rows });
+});
+
+/**
+ * GET /api/leaves/balances/:code
+ * Single employee leave balances
+ */
+router.get('/balances/:code', (req, res) => {
+  const db = getDb();
+  const { year } = req.query;
+  const currentYear = year || new Date().getFullYear();
+
+  const rows = db.prepare(`
+    SELECT lb.leave_type, lb.opening, lb.accrued, lb.used, lb.balance
+    FROM leave_balances lb
+    JOIN employees e ON lb.employee_id = e.id
+    WHERE e.code = ? AND lb.year = ?
+  `).all(req.params.code, currentYear);
+
+  const balances = { CL: 0, EL: 0, SL: 0 };
+  for (const r of rows) {
+    balances[r.leave_type] = r.balance;
+  }
+
+  res.json({ success: true, data: balances, details: rows });
+});
+
+/**
+ * POST /api/leaves/adjust
+ * Manual leave adjustment
+ */
+router.post('/adjust', (req, res) => {
+  const db = getDb();
+  const { employee_code, leave_type, days, transaction_type, reason } = req.body;
+
+  if (!employee_code || !leave_type || days == null || !transaction_type) {
+    return res.status(400).json({ success: false, error: 'Missing required fields' });
+  }
+
+  const validTypes = ['Credit', 'Debit', 'Manual Adjustment', 'Opening Balance', 'Carry Forward'];
+  if (!validTypes.includes(transaction_type)) {
+    return res.status(400).json({ success: false, error: `Invalid transaction_type. Must be one of: ${validTypes.join(', ')}` });
+  }
+
+  const emp = db.prepare('SELECT id, company FROM employees WHERE code = ?').get(employee_code);
+  if (!emp) return res.status(404).json({ success: false, error: 'Employee not found' });
+
+  const currentYear = new Date().getFullYear();
+
+  // Ensure leave_balances row exists
+  db.prepare(`
+    INSERT OR IGNORE INTO leave_balances (employee_id, year, leave_type, opening, accrued, used, balance)
+    VALUES (?, ?, ?, 0, 0, 0, 0)
+  `).run(emp.id, currentYear, leave_type);
+
+  const bal = db.prepare(`
+    SELECT * FROM leave_balances WHERE employee_id = ? AND year = ? AND leave_type = ?
+  `).get(emp.id, currentYear, leave_type);
+
+  const oldBalance = bal.balance;
+  let newBalance = oldBalance;
+
+  if (transaction_type === 'Debit') {
+    newBalance = oldBalance - Math.abs(days);
+    db.prepare(`
+      UPDATE leave_balances SET used = used + ?, balance = ? WHERE id = ?
+    `).run(Math.abs(days), newBalance, bal.id);
+  } else {
+    // Credit, Manual Adjustment, Opening Balance, Carry Forward all add
+    newBalance = oldBalance + Math.abs(days);
+    db.prepare(`
+      UPDATE leave_balances SET balance = ? WHERE id = ?
+    `).run(newBalance, bal.id);
+  }
+
+  // Insert leave transaction
+  const now = new Date();
+  db.prepare(`
+    INSERT INTO leave_transactions (employee_id, employee_code, company, leave_type, transaction_type, days, balance_after, reference_month, reference_year, reason, approved_by)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(emp.id, employee_code, emp.company, leave_type, transaction_type, days, newBalance, now.getMonth() + 1, now.getFullYear(), reason || '', 'admin');
+
+  logAudit('leave_balances', emp.id, leave_type, oldBalance, newBalance, 'leave_adjustment', reason || '');
+
+  res.json({ success: true, message: 'Leave adjusted', oldBalance, newBalance });
+});
+
+/**
+ * GET /api/leaves/transactions/:code
+ * Leave transaction history for an employee
+ */
+router.get('/transactions/:code', (req, res) => {
+  const db = getDb();
+  const { year, leave_type } = req.query;
+
+  let query = 'SELECT * FROM leave_transactions WHERE employee_code = ?';
+  const params = [req.params.code];
+
+  if (year) { query += ' AND reference_year = ?'; params.push(year); }
+  if (leave_type) { query += ' AND leave_type = ?'; params.push(leave_type); }
+
+  query += ' ORDER BY created_at DESC';
+  const rows = db.prepare(query).all(...params);
+  res.json({ success: true, data: rows });
+});
+
+/**
+ * GET /api/leaves/register
+ * Monthly leave register — who took leave and what type
+ */
+router.get('/register', (req, res) => {
+  const db = getDb();
+  const { month, year, company } = req.query;
+
+  if (!month || !year) {
+    return res.status(400).json({ success: false, error: 'month and year are required' });
+  }
+
+  let query = `
+    SELECT lt.*, e.name as employee_name, e.department
+    FROM leave_transactions lt
+    JOIN employees e ON lt.employee_code = e.code
+    WHERE lt.reference_month = ? AND lt.reference_year = ?
+    AND lt.transaction_type = 'Debit'
+  `;
+  const params = [month, year];
+
+  if (company) { query += ' AND lt.company = ?'; params.push(company); }
+
+  query += ' ORDER BY e.name, lt.leave_type';
+  const rows = db.prepare(query).all(...params);
+  res.json({ success: true, data: rows });
+});
+
+/**
+ * POST /api/leaves/bulk-adjust
+ * Bulk leave adjustment
+ */
+router.post('/bulk-adjust', (req, res) => {
+  const db = getDb();
+  const { adjustments } = req.body;
+
+  if (!Array.isArray(adjustments) || adjustments.length === 0) {
+    return res.status(400).json({ success: false, error: 'adjustments array is required' });
+  }
+
+  const errors = [];
+  let processed = 0;
+
+  const txn = db.transaction(() => {
+    for (const adj of adjustments) {
+      try {
+        const { employee_code, leave_type, days, transaction_type, reason } = adj;
+
+        if (!employee_code || !leave_type || days == null || !transaction_type) {
+          errors.push({ employee_code, error: 'Missing required fields' });
+          continue;
+        }
+
+        const emp = db.prepare('SELECT id, company FROM employees WHERE code = ?').get(employee_code);
+        if (!emp) {
+          errors.push({ employee_code, error: 'Employee not found' });
+          continue;
+        }
+
+        const currentYear = new Date().getFullYear();
+
+        db.prepare(`
+          INSERT OR IGNORE INTO leave_balances (employee_id, year, leave_type, opening, accrued, used, balance)
+          VALUES (?, ?, ?, 0, 0, 0, 0)
+        `).run(emp.id, currentYear, leave_type);
+
+        const bal = db.prepare(`
+          SELECT * FROM leave_balances WHERE employee_id = ? AND year = ? AND leave_type = ?
+        `).get(emp.id, currentYear, leave_type);
+
+        const oldBalance = bal.balance;
+        let newBalance = oldBalance;
+
+        if (transaction_type === 'Debit') {
+          newBalance = oldBalance - Math.abs(days);
+          db.prepare(`
+            UPDATE leave_balances SET used = used + ?, balance = ? WHERE id = ?
+          `).run(Math.abs(days), newBalance, bal.id);
+        } else {
+          newBalance = oldBalance + Math.abs(days);
+          db.prepare(`
+            UPDATE leave_balances SET balance = ? WHERE id = ?
+          `).run(newBalance, bal.id);
+        }
+
+        const now = new Date();
+        db.prepare(`
+          INSERT INTO leave_transactions (employee_id, employee_code, company, leave_type, transaction_type, days, balance_after, reference_month, reference_year, reason, approved_by)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `).run(emp.id, employee_code, emp.company, leave_type, transaction_type, days, newBalance, now.getMonth() + 1, now.getFullYear(), reason || '', 'admin');
+
+        logAudit('leave_balances', emp.id, leave_type, oldBalance, newBalance, 'leave_adjustment', reason || '');
+        processed++;
+      } catch (err) {
+        errors.push({ employee_code: adj.employee_code, error: err.message });
+      }
+    }
+  });
+
+  txn();
+
+  res.json({ success: true, processed, errors });
 });
 
 module.exports = router;

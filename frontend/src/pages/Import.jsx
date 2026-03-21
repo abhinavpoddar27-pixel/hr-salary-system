@@ -5,6 +5,7 @@ import toast from 'react-hot-toast'
 import { uploadFiles, getImportHistory, getImportReconciliation, updateDepartmentsFromReconciliation, addEmployeesToMaster } from '../utils/api'
 import { useQuery } from '@tanstack/react-query'
 import { useAppStore } from '../store/appStore'
+import CompanyFilter from '../components/shared/CompanyFilter'
 import DateSelector from '../components/common/DateSelector'
 import useDateSelector from '../hooks/useDateSelector'
 import PipelineProgress from '../components/pipeline/PipelineProgress'
@@ -16,9 +17,10 @@ function ReconciliationPanel({ month, year }) {
   const [deptEdits, setDeptEdits] = useState({}) // { code: editedDept }
   const [saving, setSaving] = useState(false)
   const queryClient = useQueryClient()
+  const { selectedCompany } = useAppStore()
   const { data: reconRes, isLoading } = useQuery({
-    queryKey: ['reconciliation', month, year],
-    queryFn: () => getImportReconciliation(month, year),
+    queryKey: ['reconciliation', month, year, selectedCompany],
+    queryFn: () => getImportReconciliation(month, year, selectedCompany),
     enabled: showRecon,
     retry: 0
   })
@@ -190,6 +192,7 @@ function ReconciliationPanel({ month, year }) {
 
 export default function Import() {
   const { month, year, dateProps } = useDateSelector({ mode: 'month', syncToStore: true })
+  const { selectedCompany } = useAppStore()
   const queryClient = useQueryClient()
   const [uploading, setUploading] = useState(false)
   const [uploadResults, setUploadResults] = useState(null)
@@ -197,8 +200,8 @@ export default function Import() {
   const [overwrite, setOverwrite] = useState(false)
 
   const { data: historyRes, refetch: refetchHistory } = useQuery({
-    queryKey: ['import-history'],
-    queryFn: getImportHistory,
+    queryKey: ['import-history', selectedCompany],
+    queryFn: () => getImportHistory({ company: selectedCompany }),
     retry: 0
   })
 
@@ -266,7 +269,10 @@ export default function Import() {
           <p className="text-sm text-slate-500 mt-1">Upload EESL biometric attendance .xls files. Both Sheet1 (Asian Lakto Ind Ltd) and Sheet2 (Default) will be parsed automatically.</p>
         </div>
 
-        <DateSelector {...dateProps} />
+        <div className="flex items-center gap-3">
+          <DateSelector {...dateProps} />
+          <CompanyFilter />
+        </div>
 
         {/* File Drop Zone */}
         <div className="card">

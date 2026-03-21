@@ -241,6 +241,40 @@ router.put('/:code/salary', (req, res) => {
   res.json({ success: true, message: 'Salary structure updated' });
 });
 
+// MARK EMPLOYEE AS LEFT
+router.put('/:code/mark-left', (req, res) => {
+  const db = getDb();
+  const { code } = req.params;
+  const { date_of_leaving, reason } = req.body;
+  const markedBy = req.user?.username || 'admin';
+
+  const emp = db.prepare('SELECT * FROM employees WHERE code = ?').get(code);
+  if (!emp) return res.status(404).json({ success: false, error: 'Employee not found' });
+  if (emp.status === 'Left') return res.status(400).json({ success: false, error: 'Employee already marked as Left' });
+
+  const { logAudit } = require('../database/db');
+
+  const txn = db.transaction(() => {
+    // 1. Set status = 'Left', is_active = 0, date_of_exit
+    db.prepare(`UPDATE employees SET status = 'Left', is_data_complete = 0, date_of_exit = ?, exit_reason = ?, updated_at = datetime('now') WHERE code = ?`)
+      .run(date_of_leaving || new Date().toISOString().split('T')[0], reason || '', code);
+
+    // 2. Close any active loans — write off or close
+    const activeLoans = db.prepare("SELECT id, status FROM loans WHERE employee_code = ? AND status IN ('Active', 'Approved', 'Pending')").all(code);
+    for (const loan of activeLoans) {
+      db.prepare("UPDATE loans SET status = 'Closed', remarks = 'Auto-closed: employee left', updated_at = datetime('now') WHERE id = ?").run(loan.id);
+      // Cancel pending repayments
+      db.prepare("UPDATE loan_repayments SET status = 'Cancelled', remarks = 'Employee left' WHERE loan_id = ? AND status = 'Pending'").run(loan.id);
+    }
+
+    // 3. Audit log
+    logAudit('employees', emp.id, 'status', emp.status, 'Left', 'employee_master', `Marked as Left by ${markedBy}. Reason: ${reason || 'Not specified'}. ${activeLoans.length} loans closed.`);
+  });
+
+  txn();
+  res.json({ success: true, message: `Employee ${code} marked as Left. ${emp.name} removed from active roster.` });
+});
+
 // GET departments list
 router.get('/meta/departments', (req, res) => {
   const db = getDb();

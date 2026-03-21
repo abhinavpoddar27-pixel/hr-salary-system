@@ -103,6 +103,24 @@ function initSchema(db) {
       UNIQUE(employee_id, year, leave_type)
     );
 
+    CREATE TABLE IF NOT EXISTS leave_transactions (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      employee_id INTEGER REFERENCES employees(id),
+      employee_code TEXT NOT NULL,
+      company TEXT,
+      leave_type TEXT NOT NULL,
+      transaction_type TEXT NOT NULL,
+      days REAL NOT NULL,
+      balance_after REAL,
+      reference_month INTEGER,
+      reference_year INTEGER,
+      reason TEXT,
+      approved_by TEXT,
+      created_at TEXT DEFAULT (datetime('now'))
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_leave_transactions_employee ON leave_transactions(employee_code);
+
     -- ─────────────────────────────────────────────────────────
     -- MONTHLY PROCESSING TABLES
     -- ─────────────────────────────────────────────────────────
@@ -840,6 +858,30 @@ function initSchema(db) {
     ON audit_log(employee_code, changed_at)`);
   safeCreateIndex(`CREATE INDEX IF NOT EXISTS idx_audit_log_action_type
     ON audit_log(action_type, changed_at)`);
+
+  // ── Phase 3b: Manual attendance flags for finance verification ──
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS manual_attendance_flags (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      employee_code TEXT NOT NULL,
+      employee_name TEXT,
+      company TEXT,
+      date TEXT NOT NULL,
+      month INTEGER,
+      year INTEGER,
+      evidence_type TEXT NOT NULL,
+      reason TEXT,
+      marked_by TEXT,
+      marked_at TEXT DEFAULT (datetime('now')),
+      finance_verified INTEGER DEFAULT 0,
+      verified_by TEXT,
+      verified_at TEXT,
+      finance_remarks TEXT,
+      UNIQUE(employee_code, date)
+    );
+  `);
+  safeCreateIndex(`CREATE INDEX IF NOT EXISTS idx_manual_attendance_flags_month
+    ON manual_attendance_flags(month, year, company)`);
 
   // ── Phase 4: Session tracking for user behavior analytics ──────
 

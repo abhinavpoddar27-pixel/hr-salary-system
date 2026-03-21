@@ -3,12 +3,14 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import toast from 'react-hot-toast'
 import {
   getLoans, createLoan as createLoanApi, approveLoan, rejectLoan,
-  closeLoan, getLoanDetails, processLoanDeductions
+  closeLoan, getLoanDetails, processLoanDeductions,
+  recoverLoanInstallment, skipLoanInstallment
 } from '../utils/api'
 import { useAppStore } from '../store/appStore'
 import Modal from '../components/ui/Modal'
 import { Abbr } from '../components/ui/Tooltip'
 import AbbreviationLegend from '../components/ui/AbbreviationLegend'
+import CompanyFilter from '../components/shared/CompanyFilter'
 import clsx from 'clsx'
 import useExpandableRows from '../hooks/useExpandableRows'
 import DrillDownRow, { DrillDownChevron } from '../components/ui/DrillDownRow'
@@ -24,7 +26,7 @@ const STATUS_COLORS = {
 }
 
 export default function Loans() {
-  const { selectedMonth, selectedYear } = useAppStore()
+  const { selectedMonth, selectedYear, selectedCompany } = useAppStore()
   const qc = useQueryClient()
   const [tab, setTab] = useState('all')
   const [showCreate, setShowCreate] = useState(false)
@@ -33,8 +35,8 @@ export default function Loans() {
   const { toggle: toggleDrill, isExpanded: isDrillExpanded } = useExpandableRows()
 
   const { data: res, isLoading } = useQuery({
-    queryKey: ['loans'],
-    queryFn: () => getLoans(),
+    queryKey: ['loans', selectedCompany],
+    queryFn: () => getLoans({ company: selectedCompany }),
     retry: 0
   })
   const allLoans = res?.data?.data || []
@@ -86,7 +88,8 @@ export default function Loans() {
           <h2 className="section-title">Loan Management</h2>
           <p className="section-subtitle mt-1">Create, approve, and track employee loans with automatic EMI deductions</p>
         </div>
-        <div className="flex gap-2">
+        <div className="flex items-center gap-2">
+          <CompanyFilter />
           <button onClick={() => processDeductionsMutation.mutate()} className="btn-ghost text-sm"
             disabled={processDeductionsMutation.isPending}>
             Process Deductions ({selectedMonth}/{selectedYear})
@@ -340,12 +343,42 @@ function CreateLoanModal({ onClose, onSuccess }) {
 }
 
 function LoanDetailModal({ loanId, onClose }) {
+  const qc = useQueryClient()
   const { data: res } = useQuery({
     queryKey: ['loan-detail', loanId],
     queryFn: () => getLoanDetails(loanId),
     retry: 0
   })
   const loan = res?.data?.data
+
+  const [recoverTarget, setRecoverTarget] = useState(null) // repayment row to record recovery
+  const [recoverForm, setRecoverForm] = useState({ amount: '', remarks: '' })
+  const [skipTarget, setSkipTarget] = useState(null) // repayment row to skip
+  const [skipReason, setSkipReason] = useState('')
+
+  const recoverMutation = useMutation({
+    mutationFn: ({ loanId: lid, data }) => recoverLoanInstallment(lid, data),
+    onSuccess: () => {
+      toast.success('Recovery recorded')
+      setRecoverTarget(null)
+      setRecoverForm({ amount: '', remarks: '' })
+      qc.invalidateQueries({ queryKey: ['loan-detail', loanId] })
+      qc.invalidateQueries({ queryKey: ['loans'] })
+    },
+    onError: (err) => toast.error(err.response?.data?.error || 'Recovery failed')
+  })
+
+  const skipMutation = useMutation({
+    mutationFn: ({ loanId: lid, data }) => skipLoanInstallment(lid, data),
+    onSuccess: () => {
+      toast.success('Installment skipped')
+      setSkipTarget(null)
+      setSkipReason('')
+      qc.invalidateQueries({ queryKey: ['loan-detail', loanId] })
+      qc.invalidateQueries({ queryKey: ['loans'] })
+    },
+    onError: (err) => toast.error(err.response?.data?.error || 'Skip failed')
+  })
 
   if (!loan) return (
     <Modal title="Loan Details" onClose={onClose}>
@@ -354,6 +387,7 @@ function LoanDetailModal({ loanId, onClose }) {
   )
 
   const progressPct = loan.total_amount > 0 ? Math.round((loan.total_recovered || 0) / loan.total_amount * 100) : 0
+  const MONTHS = ['','Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec']
 
   return (
     <Modal title={`Loan #${loan.id} — ${loan.employee_name || loan.employee_code}`} onClose={onClose} size="lg">
@@ -397,7 +431,7 @@ function LoanDetailModal({ loanId, onClose }) {
         {loan.repayments && loan.repayments.length > 0 && (
           <div>
             <h4 className="text-sm font-bold text-slate-700 mb-2">Repayment Schedule</h4>
-            <div className="overflow-x-auto max-h-60 overflow-y-auto">
+            <div className="overflow-x-auto max-h-72 overflow-y-auto">
               <table className="w-full text-xs">
                 <thead className="sticky top-0 bg-white">
                   <tr className="border-b">
@@ -407,24 +441,109 @@ function LoanDetailModal({ loanId, onClose }) {
                     <th className="py-1 text-right">Principal</th>
                     <th className="py-1 text-right">Interest</th>
                     <th className="py-1">Status</th>
+                    {loan.status === 'Active' && <th className="py-1 text-right">Actions</th>}
                   </tr>
                 </thead>
                 <tbody>
                   {loan.repayments.map((r, i) => (
-                    <tr key={i} className="border-b border-slate-100">
-                      <td className="py-1 text-slate-400">{i + 1}</td>
-                      <td className="py-1">{['','Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'][r.month]} {r.year}</td>
-                      <td className="py-1 text-right font-mono">₹{r.emi_amount?.toLocaleString()}</td>
-                      <td className="py-1 text-right font-mono">₹{r.principal_component?.toLocaleString()}</td>
-                      <td className="py-1 text-right font-mono">₹{r.interest_component?.toLocaleString()}</td>
-                      <td className="py-1">
-                        <span className={clsx('px-1.5 py-0.5 rounded text-xs',
-                          r.status === 'Deducted' ? 'bg-green-100 text-green-700' :
-                          r.status === 'Cancelled' ? 'bg-slate-100 text-slate-500' :
-                          'bg-amber-100 text-amber-700'
-                        )}>{r.status}</span>
-                      </td>
-                    </tr>
+                    <React.Fragment key={i}>
+                      <tr className="border-b border-slate-100">
+                        <td className="py-1 text-slate-400">{i + 1}</td>
+                        <td className="py-1">{MONTHS[r.month]} {r.year}</td>
+                        <td className="py-1 text-right font-mono">₹{r.emi_amount?.toLocaleString()}</td>
+                        <td className="py-1 text-right font-mono">₹{r.principal_component?.toLocaleString()}</td>
+                        <td className="py-1 text-right font-mono">₹{r.interest_component?.toLocaleString()}</td>
+                        <td className="py-1">
+                          <span className={clsx('px-1.5 py-0.5 rounded text-xs',
+                            r.status === 'Deducted' || r.status === 'Recovered' ? 'bg-green-100 text-green-700' :
+                            r.status === 'Cancelled' || r.status === 'Skipped' ? 'bg-slate-100 text-slate-500' :
+                            'bg-amber-100 text-amber-700'
+                          )}>{r.status}</span>
+                        </td>
+                        {loan.status === 'Active' && (
+                          <td className="py-1 text-right">
+                            {r.status === 'Pending' && (
+                              <div className="flex gap-1 justify-end">
+                                <button
+                                  onClick={(e) => { e.stopPropagation(); setRecoverTarget(r); setRecoverForm({ amount: r.emi_amount, remarks: '' }); }}
+                                  className="px-1.5 py-0.5 bg-green-50 text-green-700 rounded hover:bg-green-100 text-[10px] font-medium">
+                                  Recover
+                                </button>
+                                <button
+                                  onClick={(e) => { e.stopPropagation(); setSkipTarget(r); setSkipReason(''); }}
+                                  className="px-1.5 py-0.5 bg-slate-50 text-slate-600 rounded hover:bg-slate-100 text-[10px] font-medium">
+                                  Skip
+                                </button>
+                              </div>
+                            )}
+                          </td>
+                        )}
+                      </tr>
+
+                      {/* Inline Recovery Form */}
+                      {recoverTarget?.id === r.id && (
+                        <tr className="bg-green-50/50">
+                          <td colSpan={loan.status === 'Active' ? 7 : 6} className="p-2">
+                            <div className="flex items-end gap-2 flex-wrap">
+                              <div>
+                                <label className="text-[10px] text-slate-500 block">Amount</label>
+                                <input type="number" value={recoverForm.amount}
+                                  onChange={e => setRecoverForm({ ...recoverForm, amount: parseFloat(e.target.value) || '' })}
+                                  className="input text-xs w-28 py-1" />
+                              </div>
+                              <div className="flex-1 min-w-[120px]">
+                                <label className="text-[10px] text-slate-500 block">Remarks</label>
+                                <input type="text" value={recoverForm.remarks}
+                                  onChange={e => setRecoverForm({ ...recoverForm, remarks: e.target.value })}
+                                  className="input text-xs py-1" placeholder="Optional remarks" />
+                              </div>
+                              <button
+                                onClick={() => recoverMutation.mutate({
+                                  loanId: loan.id,
+                                  data: { amount: recoverForm.amount, month: r.month, year: r.year, remarks: recoverForm.remarks }
+                                })}
+                                disabled={!recoverForm.amount || recoverMutation.isPending}
+                                className="px-2 py-1 bg-green-600 text-white rounded text-xs hover:bg-green-700 disabled:opacity-50">
+                                {recoverMutation.isPending ? 'Saving...' : 'Confirm'}
+                              </button>
+                              <button onClick={() => setRecoverTarget(null)}
+                                className="px-2 py-1 text-slate-500 rounded text-xs hover:bg-slate-100">
+                                Cancel
+                              </button>
+                            </div>
+                          </td>
+                        </tr>
+                      )}
+
+                      {/* Inline Skip Confirm */}
+                      {skipTarget?.id === r.id && (
+                        <tr className="bg-amber-50/50">
+                          <td colSpan={loan.status === 'Active' ? 7 : 6} className="p-2">
+                            <div className="flex items-end gap-2 flex-wrap">
+                              <div className="flex-1 min-w-[160px]">
+                                <label className="text-[10px] text-slate-500 block">Reason for skipping</label>
+                                <input type="text" value={skipReason}
+                                  onChange={e => setSkipReason(e.target.value)}
+                                  className="input text-xs py-1" placeholder="e.g. Employee on leave" />
+                              </div>
+                              <button
+                                onClick={() => skipMutation.mutate({
+                                  loanId: loan.id,
+                                  data: { month: r.month, year: r.year, reason: skipReason }
+                                })}
+                                disabled={skipMutation.isPending}
+                                className="px-2 py-1 bg-amber-600 text-white rounded text-xs hover:bg-amber-700 disabled:opacity-50">
+                                {skipMutation.isPending ? 'Saving...' : 'Confirm Skip'}
+                              </button>
+                              <button onClick={() => setSkipTarget(null)}
+                                className="px-2 py-1 text-slate-500 rounded text-xs hover:bg-slate-100">
+                                Cancel
+                              </button>
+                            </div>
+                          </td>
+                        </tr>
+                      )}
+                    </React.Fragment>
                   ))}
                 </tbody>
               </table>

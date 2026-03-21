@@ -3,6 +3,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import toast from 'react-hot-toast'
 import { getMissPunches, resolveMissPunch, bulkResolveMissPunches } from '../utils/api'
 import { useAppStore } from '../store/appStore'
+import CompanyFilter from '../components/shared/CompanyFilter'
 import DateSelector from '../components/common/DateSelector'
 import useDateSelector from '../hooks/useDateSelector'
 import PipelineProgress from '../components/pipeline/PipelineProgress'
@@ -68,6 +69,7 @@ function EditRow({ record, onSave, onCancel }) {
 
 export default function MissPunch() {
   const { month, year, dateProps } = useDateSelector({ mode: 'month', syncToStore: true })
+  const { selectedCompany } = useAppStore()
   const queryClient = useQueryClient()
   const [editId, setEditId] = useState(null)
   const [selected, setSelected] = useState(new Set())
@@ -83,8 +85,8 @@ export default function MissPunch() {
   const [filterDate, setFilterDate] = useState('')
 
   const { data: res, isLoading, refetch } = useQuery({
-    queryKey: ['miss-punches', month, year, filterDept, filterType, filterResolved],
-    queryFn: () => getMissPunches({ month: month, year: year, department: filterDept, resolved: filterResolved }),
+    queryKey: ['miss-punches', month, year, filterDept, filterType, filterResolved, selectedCompany],
+    queryFn: () => getMissPunches({ month: month, year: year, department: filterDept, resolved: filterResolved, company: selectedCompany }),
     retry: 0
   })
 
@@ -162,7 +164,10 @@ export default function MissPunch() {
             <h2 className="section-title">Stage 2: Miss Punch Detection & Rectification</h2>
             <p className="section-subtitle mt-1">Review and correct missing IN/OUT punches. Night shift records are automatically handled in Stage 4.</p>
           </div>
-          <DateSelector {...dateProps} />
+          <div className="flex items-center gap-3">
+            <CompanyFilter />
+            <DateSelector {...dateProps} />
+          </div>
           <div className="flex gap-2">
             {selected.size > 0 && (
               <button onClick={handleBulkResolve} className="btn-primary">

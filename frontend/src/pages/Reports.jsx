@@ -11,6 +11,7 @@ import {
 import { useAppStore } from '../store/appStore'
 import DateSelector from '../components/common/DateSelector'
 import useDateSelector from '../hooks/useDateSelector'
+import CompanyFilter from '../components/shared/CompanyFilter'
 import { fmtINR, fmtDate } from '../utils/formatters'
 import useExpandableRows from '../hooks/useExpandableRows'
 import DrillDownRow, { DrillDownChevron } from '../components/ui/DrillDownRow'
@@ -55,8 +56,9 @@ function ReportCard({ title, description, icon, children }) {
 
 export default function Reports() {
   const { month, year, dateProps } = useDateSelector({ mode: 'month', syncToStore: true })
+  const { selectedCompany } = useAppStore()
   const [activeReport, setActiveReport] = useState('attendance')
-  const [companyFilter, setCompanyFilter] = useState('')
+  const companyFilter = selectedCompany
   const { toggle, isExpanded, collapseAll } = useExpandableRows()
 
   // Collapse all expanded rows when switching reports
@@ -73,8 +75,8 @@ export default function Reports() {
 
   // Miss Punch Report
   const { data: mpRes, isLoading: mpLoading } = useQuery({
-    queryKey: ['report-misspunch', month, year],
-    queryFn: () => getMissPunchReport(month, year),
+    queryKey: ['report-misspunch', month, year, companyFilter],
+    queryFn: () => getMissPunchReport(month, year, companyFilter),
     enabled: activeReport === 'misspunch',
     retry: 0
   })
@@ -101,8 +103,8 @@ export default function Reports() {
 
   // PF Statement
   const { data: pfRes, isLoading: pfLoading } = useQuery({
-    queryKey: ['pf-report', month, year],
-    queryFn: () => getPFStatement(month, year),
+    queryKey: ['pf-report', month, year, companyFilter],
+    queryFn: () => getPFStatement(month, year, companyFilter),
     enabled: activeReport === 'pf',
     retry: 0
   })
@@ -110,8 +112,8 @@ export default function Reports() {
 
   // ESI Statement
   const { data: esiRes, isLoading: esiLoading } = useQuery({
-    queryKey: ['esi-report', month, year],
-    queryFn: () => getESIStatement(month, year),
+    queryKey: ['esi-report', month, year, companyFilter],
+    queryFn: () => getESIStatement(month, year, companyFilter),
     enabled: activeReport === 'esi',
     retry: 0
   })
@@ -119,8 +121,8 @@ export default function Reports() {
 
   // Audit Trail
   const { data: auditRes, isLoading: auditLoading } = useQuery({
-    queryKey: ['audit-trail', month, year],
-    queryFn: () => getAuditTrail(month, year),
+    queryKey: ['audit-trail', month, year, companyFilter],
+    queryFn: () => getAuditTrail(month, year, companyFilter),
     enabled: activeReport === 'audit',
     retry: 0
   })
@@ -210,7 +212,10 @@ export default function Reports() {
 
   return (
     <div className="p-6">
-      <DateSelector {...dateProps} />
+      <div className="flex items-center gap-3">
+        <CompanyFilter />
+        <DateSelector {...dateProps} />
+      </div>
       <div className="flex gap-6 mt-4">
         {/* Left: report list */}
         <div className="w-60 flex-shrink-0">

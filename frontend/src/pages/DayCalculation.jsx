@@ -1,8 +1,10 @@
 import React, { useState, useMemo } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import toast from 'react-hot-toast'
-import api, { getDayCalculations, calculateDays, getEmployeeDailyAttendance } from '../utils/api'
+import api, { getDayCalculations, calculateDays, getEmployeeDailyAttendance, applyLeaveCorrection, getEmployeeLeaveBalance } from '../utils/api'
+import Modal from '../components/ui/Modal'
 import { useAppStore } from '../store/appStore'
+import CompanyFilter from '../components/shared/CompanyFilter'
 import DateSelector from '../components/common/DateSelector'
 import useDateSelector from '../hooks/useDateSelector'
 import PipelineProgress from '../components/pipeline/PipelineProgress'
@@ -30,6 +32,7 @@ function DaySummaryBox({ label, value, color = 'slate', subtext }) {
 
 export default function DayCalculation() {
   const { month, year, dateProps } = useDateSelector({ mode: 'month', syncToStore: true })
+  const { selectedCompany } = useAppStore()
   const queryClient = useQueryClient()
   const [expandedRow, setExpandedRow] = useState(null)
   const [search, setSearch] = useState('')
@@ -38,8 +41,8 @@ export default function DayCalculation() {
   const [sortDir, setSortDir] = useState('asc')
 
   const { data: res, isLoading, refetch } = useQuery({
-    queryKey: ['day-calculations', month, year],
-    queryFn: () => getDayCalculations({ month, year }),
+    queryKey: ['day-calculations', month, year, selectedCompany],
+    queryFn: () => getDayCalculations({ month, year, company: selectedCompany }),
     retry: 0
   })
 
@@ -100,7 +103,7 @@ export default function DayCalculation() {
   }
 
   const calcMutation = useMutation({
-    mutationFn: () => calculateDays({ month, year }),
+    mutationFn: () => calculateDays({ month, year, company: selectedCompany }),
     onSuccess: (res) => {
       toast.success(`Day calculation complete for ${res.data.processed} employees`)
       refetch()
@@ -122,6 +125,43 @@ export default function DayCalculation() {
     },
     onError: (err) => toast.error(err.response?.data?.error || 'Failed to apply late deduction')
   })
+
+  // ── Leave Correction Modal State ──
+  const [leaveModal, setLeaveModal] = useState(null) // { code, name, days_absent }
+  const [leaveForm, setLeaveForm] = useState({ leave_type: 'CL', date: '', reason: '' })
+
+  const { data: leaveBalanceRes, isLoading: balanceLoading } = useQuery({
+    queryKey: ['leave-balance', leaveModal?.code],
+    queryFn: () => getEmployeeLeaveBalance(leaveModal.code),
+    enabled: !!leaveModal?.code,
+    staleTime: 30000
+  })
+  const leaveBalance = leaveBalanceRes?.data?.data || leaveBalanceRes?.data || {}
+
+  const leaveCorrectionMutation = useMutation({
+    mutationFn: (data) => applyLeaveCorrection(data),
+    onSuccess: (res) => {
+      toast.success(res?.data?.message || 'Leave correction applied')
+      setLeaveModal(null)
+      setLeaveForm({ leave_type: 'CL', date: '', reason: '' })
+      queryClient.invalidateQueries({ queryKey: ['day-calculations'] })
+      queryClient.invalidateQueries({ queryKey: ['leave-balance'] })
+    },
+    onError: (err) => toast.error(err.response?.data?.error || 'Failed to apply leave correction')
+  })
+
+  function handleSubmitLeaveCorrection() {
+    if (!leaveForm.date) { toast.error('Please select a date'); return }
+    if (!leaveForm.reason) { toast.error('Please enter a reason'); return }
+    leaveCorrectionMutation.mutate({
+      employee_code: leaveModal.code,
+      date: leaveForm.date,
+      leave_type: leaveForm.leave_type,
+      month,
+      year,
+      reason: leaveForm.reason
+    })
+  }
 
   const totals = calcs.reduce((acc, r) => ({
     present: acc.present + (r.days_present || 0),
@@ -154,7 +194,10 @@ export default function DayCalculation() {
               <span className="ml-2 text-xs text-slate-400">({monthNames[month]} {year} — {daysInMonth} days)</span>
             </p>
           </div>
-          <DateSelector {...dateProps} />
+          <div className="flex items-center gap-3">
+            <CompanyFilter />
+            <DateSelector {...dateProps} />
+          </div>
           <button
             onClick={() => calcMutation.mutate()}
             disabled={calcMutation.isPending}
@@ -300,7 +343,20 @@ export default function DayCalculation() {
                           <td className="text-green-600 font-medium">{r.days_present}</td>
                           <td className="text-yellow-600">{r.days_half_present || 0}</td>
                           <td className={clsx('font-medium', (r.days_wop || 0) > 0 ? 'text-cyan-600' : 'text-slate-400')}>{r.days_wop || 0}</td>
-                          <td className={clsx('font-medium', r.days_absent > 0 ? 'text-red-600' : 'text-slate-400')}>{r.days_absent}</td>
+                          <td className={clsx('font-medium', r.days_absent > 0 ? 'text-red-600' : 'text-slate-400')}>
+                            <div className="flex items-center gap-1">
+                              {r.days_absent}
+                              {r.days_absent > 0 && (
+                                <button
+                                  onClick={(e) => { e.stopPropagation(); setLeaveModal({ code: r.employee_code, name: r.employee_name || r.employee_code, days_absent: r.days_absent }) }}
+                                  className="text-[10px] px-1.5 py-0.5 rounded bg-orange-100 text-orange-700 hover:bg-orange-200 transition-colors whitespace-nowrap"
+                                  title="Apply CL/EL/SL to absent days"
+                                >
+                                  Apply Leave
+                                </button>
+                              )}
+                            </div>
+                          </td>
                           <td className={clsx('font-medium', (r.late_count || 0) >= 5 ? 'text-red-600' : (r.late_count || 0) > 0 ? 'text-amber-600' : 'text-slate-400')}>
                             <div className="flex items-center gap-1">
                               {r.late_count || 0}
@@ -403,6 +459,112 @@ export default function DayCalculation() {
 
         <AbbreviationLegend keys={['P', 'A', '½P', 'WO', 'WOP', 'CL', 'EL', 'SL', 'LOP', 'LWP', 'OT', 'PF', 'ESI', 'PT', 'Dept', 'Att', 'Hrs']} />
       </div>
+
+      {/* ── Leave Correction Modal ── */}
+      {leaveModal && (
+        <Modal open onClose={() => setLeaveModal(null)} title={`Apply Leave: ${leaveModal.name}`} size="md">
+          <div className="p-4 space-y-4">
+            {/* Employee info */}
+            <div className="bg-slate-50 rounded-lg p-3 flex items-center justify-between">
+              <div>
+                <div className="text-xs text-slate-500">Employee</div>
+                <div className="font-semibold text-slate-800">{leaveModal.name}</div>
+                <div className="text-xs text-slate-400 font-mono">{leaveModal.code}</div>
+              </div>
+              <div className="text-right">
+                <div className="text-xs text-slate-500">Absent Days</div>
+                <div className="text-xl font-bold text-red-600">{leaveModal.days_absent}</div>
+              </div>
+            </div>
+
+            {/* Leave Balances */}
+            <div className="bg-blue-50 rounded-lg p-3">
+              <div className="text-[10px] font-bold text-blue-600 uppercase mb-2">Current Leave Balance</div>
+              {balanceLoading ? (
+                <div className="text-xs text-slate-400">Loading balances...</div>
+              ) : (
+                <div className="grid grid-cols-3 gap-3 text-center">
+                  <div>
+                    <div className="text-lg font-bold text-blue-700">{leaveBalance.cl_balance ?? leaveBalance.cl ?? '—'}</div>
+                    <div className="text-[10px] text-slate-500">CL</div>
+                  </div>
+                  <div>
+                    <div className="text-lg font-bold text-green-700">{leaveBalance.el_balance ?? leaveBalance.el ?? '—'}</div>
+                    <div className="text-[10px] text-slate-500">EL</div>
+                  </div>
+                  <div>
+                    <div className="text-lg font-bold text-purple-700">{leaveBalance.sl_balance ?? leaveBalance.sl ?? '—'}</div>
+                    <div className="text-[10px] text-slate-500">SL</div>
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* Warning for zero balance */}
+            {!balanceLoading && (() => {
+              const bal = leaveForm.leave_type === 'CL' ? (leaveBalance.cl_balance ?? leaveBalance.cl ?? 0)
+                : leaveForm.leave_type === 'EL' ? (leaveBalance.el_balance ?? leaveBalance.el ?? 0)
+                : (leaveBalance.sl_balance ?? leaveBalance.sl ?? 0)
+              return bal <= 0 ? (
+                <div className="bg-amber-50 border border-amber-200 rounded-lg p-2 text-xs text-amber-700">
+                  Warning: {leaveForm.leave_type} balance is {bal} — this will create a negative balance (LWP)
+                </div>
+              ) : null
+            })()}
+
+            {/* Leave type selector */}
+            <div>
+              <label className="text-xs font-medium text-slate-600 block mb-1">Leave Type</label>
+              <select
+                value={leaveForm.leave_type}
+                onChange={e => setLeaveForm(f => ({ ...f, leave_type: e.target.value }))}
+                className="select w-full"
+              >
+                <option value="CL">CL (Casual Leave)</option>
+                <option value="EL">EL (Earned Leave)</option>
+                <option value="SL">SL (Sick Leave)</option>
+              </select>
+            </div>
+
+            {/* Date input */}
+            <div>
+              <label className="text-xs font-medium text-slate-600 block mb-1">Date to mark as leave</label>
+              <input
+                type="date"
+                value={leaveForm.date}
+                onChange={e => setLeaveForm(f => ({ ...f, date: e.target.value }))}
+                className="input w-full"
+                min={`${year}-${String(month).padStart(2, '0')}-01`}
+                max={`${year}-${String(month).padStart(2, '0')}-${String(daysInMonth).padStart(2, '0')}`}
+              />
+            </div>
+
+            {/* Reason */}
+            <div>
+              <label className="text-xs font-medium text-slate-600 block mb-1">Reason</label>
+              <input
+                type="text"
+                value={leaveForm.reason}
+                onChange={e => setLeaveForm(f => ({ ...f, reason: e.target.value }))}
+                className="input w-full"
+                placeholder="e.g. Employee applied for CL on this date"
+              />
+            </div>
+
+            {/* Actions */}
+            <div className="flex justify-end gap-2 pt-2">
+              <button onClick={() => setLeaveModal(null)} className="btn-ghost px-4 py-2 text-sm">Cancel</button>
+              <button
+                onClick={handleSubmitLeaveCorrection}
+                disabled={leaveCorrectionMutation.isPending}
+                className="btn-primary px-4 py-2 text-sm"
+              >
+                {leaveCorrectionMutation.isPending ? 'Applying...' : 'Apply Leave'}
+              </button>
+            </div>
+          </div>
+        </Modal>
+      )}
     </div>
   )
 }
