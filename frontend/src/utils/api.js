@@ -251,4 +251,15 @@ export const getSessionUsers = (days) => api.get('/session-analytics/users', { p
 export const getSessionPages = (days) => api.get('/session-analytics/pages', { params: { days } })
 export const getSessionErrors = (days) => api.get('/session-analytics/errors', { params: { days } })
 
+// Phase 6: Advanced analytics
+export const getUserSessions = (username, days) => api.get('/session-analytics/user-sessions', { params: { username, days } })
+export const getSessionReplay = (sessionId) => api.get('/session-analytics/session-replay', { params: { sessionId } })
+export const getUserJourneys = (days) => api.get('/session-analytics/user-journeys', { params: { days } })
+export const getTimeOnPage = (days) => api.get('/session-analytics/time-on-page', { params: { days } })
+export const getFeatureMatrix = (days) => api.get('/session-analytics/feature-matrix', { params: { days } })
+export const getHeatmap = (days) => api.get('/session-analytics/heatmap', { params: { days } })
+export const getLiveActivity = () => api.get('/session-analytics/live-activity')
+export const getClickDetails = (page, days) => api.get('/session-analytics/click-details', { params: { page, days } })
+export const getUserEngagement = (days) => api.get('/session-analytics/user-engagement', { params: { days } })
+
 export default api

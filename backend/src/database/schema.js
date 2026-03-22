@@ -920,11 +920,13 @@ function initSchema(db) {
   safeCreateIndex(`CREATE INDEX IF NOT EXISTS idx_session_events_user
     ON session_events(username, timestamp)`);
   safeCreateIndex(`CREATE INDEX IF NOT EXISTS idx_session_events_session
-    ON session_events(session_id)`);
+    ON session_events(session_id, timestamp)`);
   safeCreateIndex(`CREATE INDEX IF NOT EXISTS idx_session_events_type
     ON session_events(event_type, timestamp)`);
   safeCreateIndex(`CREATE INDEX IF NOT EXISTS idx_session_events_page
-    ON session_events(page, timestamp)`);
+    ON session_events(page, event_type, timestamp)`);
+  safeCreateIndex(`CREATE INDEX IF NOT EXISTS idx_session_events_username_ts
+    ON session_events(username, timestamp)`);
 
   // ── Phase 5: Shift roster for rotating shift management ────────
 
