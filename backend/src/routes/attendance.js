@@ -561,149 +561,129 @@ router.post('/recalculate-metrics', (req, res) => {
 
 /**
  * POST /api/attendance/deduplicate
- * Comprehensive cleanup: fix stale company names then remove duplicate records.
- * Step 1: Merge stale company values (Sheet1, Sheet2, Default, "null", NULL) → real company
- * Step 2: Remove exact duplicates, keeping newest per (employee_code, date, company)
+ * Comprehensive cleanup: deduplicate attendance_processed by employee+date.
+ * Disables FK checks for safe bulk cleanup, then re-enables.
  */
 router.post('/deduplicate', (req, res) => {
-  const db = getDb();
-  const { month, year } = req.body;
-  if (!month || !year) return res.status(400).json({ success: false, error: 'month and year required' });
-
-  const stats = { duplicatesRemoved: 0, companyFixed: 0, missPunchesDetected: 0 };
-
-  // Get ALL records for this month into memory for safe processing
-  const allRecs = db.prepare(
-    'SELECT id, employee_code, date, company FROM attendance_processed WHERE month = ? AND year = ?'
-  ).all(month, year);
-
-  // Determine the real company name (not stale)
-  const staleNames = new Set(['Sheet1', 'Sheet2', 'Default', 'null', '', null, undefined]);
-  const realCompanies = [...new Set(allRecs.map(r => r.company).filter(c => c && !staleNames.has(c)))];
-  const mainCompany = realCompanies[0] || 'Asian Lakto Ind Ltd';
-
-  // Group by employee_code + date → keep only one record (prefer real company, then newest id)
-  const groups = {};
-  for (const rec of allRecs) {
-    const key = rec.employee_code + '|' + rec.date;
-    if (!groups[key]) groups[key] = [];
-    groups[key].push(rec);
-  }
-
-  const toDelete = [];
-  const toUpdateCompany = [];
-
-  for (const [key, recs] of Object.entries(groups)) {
-    // Sort: prefer real company first, then by id descending (newest)
-    recs.sort((a, b) => {
-      const aReal = !staleNames.has(a.company) ? 1 : 0;
-      const bReal = !staleNames.has(b.company) ? 1 : 0;
-      if (bReal !== aReal) return bReal - aReal; // real company first
-      return b.id - a.id; // newest first
-    });
-
-    const keeper = recs[0];
-    // Mark all but keeper for deletion
-    for (let i = 1; i < recs.length; i++) {
-      toDelete.push(recs[i].id);
-    }
-    // If keeper has stale company, mark for update
-    if (staleNames.has(keeper.company)) {
-      toUpdateCompany.push(keeper.id);
-    }
-  }
-
-  // Step 1: Delete duplicate attendance_processed records
-  // First, disable FK constraints temporarily to avoid cascading issues
-  db.pragma('foreign_keys = OFF');
   try {
-  if (toDelete.length > 0) {
-    const txnDel = db.transaction(() => {
-      const del = db.prepare('DELETE FROM attendance_processed WHERE id = ?');
-      for (const id of toDelete) del.run(id);
-    });
-    txnDel();
-    stats.duplicatesRemoved = toDelete.length;
+    const db = getDb();
+    const { month, year } = req.body;
+    if (!month || !year) return res.status(400).json({ success: false, error: 'month and year required' });
 
-    // Also clean up orphaned night_shift_pairs
-    db.prepare(`DELETE FROM night_shift_pairs WHERE month = ? AND year = ? AND (
-      in_record_id NOT IN (SELECT id FROM attendance_processed) OR
-      out_record_id NOT IN (SELECT id FROM attendance_processed)
-    )`).run(month, year);
-  }
+    const stats = { duplicatesRemoved: 0, companyFixed: 0, missPunchesDetected: 0 };
 
-  // Step 2: Fix company on remaining stale records (outside transaction for try/catch)
-  if (toUpdateCompany.length > 0) {
-    const upd = db.prepare('UPDATE attendance_processed SET company = ? WHERE id = ?');
-    const del = db.prepare('DELETE FROM attendance_processed WHERE id = ?');
-    for (const id of toUpdateCompany) {
-      try {
-        upd.run(mainCompany, id);
-        stats.companyFixed++;
-      } catch (e) {
-        // UNIQUE conflict — record with mainCompany already exists, delete this stale one
-        del.run(id);
-        stats.duplicatesRemoved++;
-      }
-    }
-  }
+    // IMPORTANT: Disable FK checks for this cleanup operation
+    db.pragma('foreign_keys = OFF');
 
-  {
-
-    // Fix attendance_raw stale companies (no month/year column — join via import_id)
-    const importIds = db.prepare('SELECT id FROM monthly_imports WHERE month = ? AND year = ?').all(month, year).map(r => r.id);
-    if (importIds.length > 0) {
-      const placeholders = importIds.map(() => '?').join(',');
-      for (const stale of ['Sheet1', 'Sheet2', 'Default', 'null', '']) {
-        db.prepare(`UPDATE attendance_raw SET company = ? WHERE import_id IN (${placeholders}) AND company = ?`)
-          .run(mainCompany, ...importIds, stale);
-      }
-      db.prepare(`UPDATE attendance_raw SET company = ? WHERE import_id IN (${placeholders}) AND company IS NULL`)
-        .run(mainCompany, ...importIds);
-    }
-
-    // Fix monthly_imports — has UNIQUE(month, year, company) and FK from attendance_raw
-    const mainImport = db.prepare('SELECT id FROM monthly_imports WHERE month = ? AND year = ? AND company = ?')
-      .get(month, year, mainCompany);
-    const staleImports = db.prepare(
-      "SELECT id, company FROM monthly_imports WHERE month = ? AND year = ? AND (company IN ('Sheet1','Sheet2','Default','null','') OR company IS NULL)"
+    // Get ALL attendance_processed records for this month
+    const allRecs = db.prepare(
+      'SELECT id, employee_code, date, company FROM attendance_processed WHERE month = ? AND year = ?'
     ).all(month, year);
 
-    if (mainImport) {
-      // Real import exists — reassign attendance_raw to it, then delete stale imports
-      for (const si of staleImports) {
-        db.prepare('UPDATE attendance_raw SET import_id = ? WHERE import_id = ?').run(mainImport.id, si.id);
-        db.prepare('DELETE FROM monthly_imports WHERE id = ?').run(si.id);
-      }
-    } else if (staleImports.length > 0) {
-      // No real import — rename first stale to mainCompany, merge rest into it
-      const keeper = staleImports[0];
-      db.prepare('UPDATE monthly_imports SET company = ? WHERE id = ?').run(mainCompany, keeper.id);
-      for (let i = 1; i < staleImports.length; i++) {
-        db.prepare('UPDATE attendance_raw SET import_id = ? WHERE import_id = ?').run(keeper.id, staleImports[i].id);
-        db.prepare('DELETE FROM monthly_imports WHERE id = ?').run(staleImports[i].id);
-      }
+    // Determine real company name
+    const staleSet = new Set(['Sheet1', 'Sheet2', 'Default', 'null', '']);
+    const isStale = (c) => !c || staleSet.has(c);
+    const realCompanies = [...new Set(allRecs.map(r => r.company).filter(c => c && !isStale(c)))];
+    const mainCompany = realCompanies[0] || 'Asian Lakto Ind Ltd';
+
+    // Group by employee_code + date → keep best record, delete rest
+    const groups = {};
+    for (const rec of allRecs) {
+      const key = rec.employee_code + '|' + rec.date;
+      if (!groups[key]) groups[key] = [];
+      groups[key].push(rec);
     }
-  }
 
-  // Re-run miss punch detection on cleaned data
-  const { detectMissPunches, applyMissPunchFlags } = require('../services/missPunch');
-  db.prepare('UPDATE attendance_processed SET is_miss_punch = 0, miss_punch_type = NULL WHERE month = ? AND year = ?')
-    .run(month, year);
-  const cleanedRecords = db.prepare('SELECT * FROM attendance_processed WHERE month = ? AND year = ?').all(month, year);
-  const missPunches = detectMissPunches(cleanedRecords);
-  applyMissPunchFlags(db, missPunches);
-  stats.missPunchesDetected = missPunches.length;
+    const idsToDelete = new Set();
+    const idsToFixCompany = [];
 
-  } finally {
+    for (const recs of Object.values(groups)) {
+      // Sort: real company first, then newest
+      recs.sort((a, b) => {
+        const aR = isStale(a.company) ? 0 : 1;
+        const bR = isStale(b.company) ? 0 : 1;
+        if (bR !== aR) return bR - aR;
+        return b.id - a.id;
+      });
+      // Keep first, delete rest
+      for (let i = 1; i < recs.length; i++) idsToDelete.add(recs[i].id);
+      // Fix keeper's company if stale
+      if (isStale(recs[0].company)) idsToFixCompany.push(recs[0].id);
+    }
+
+    // Execute all changes in one transaction (FK checks OFF so no constraint issues)
+    const txn = db.transaction(() => {
+      // Delete duplicates
+      const delStmt = db.prepare('DELETE FROM attendance_processed WHERE id = ?');
+      for (const id of idsToDelete) delStmt.run(id);
+      stats.duplicatesRemoved = idsToDelete.size;
+
+      // Fix stale company names on kept records
+      const updStmt = db.prepare('UPDATE attendance_processed SET company = ? WHERE id = ?');
+      for (const id of idsToFixCompany) { updStmt.run(mainCompany, id); stats.companyFixed++; }
+
+      // Clean orphaned night_shift_pairs
+      db.prepare(`DELETE FROM night_shift_pairs WHERE month = ? AND year = ?`).run(month, year);
+
+      // Clean stale company in attendance_raw (via import_id)
+      const importIds = db.prepare('SELECT id FROM monthly_imports WHERE month = ? AND year = ?')
+        .all(month, year).map(r => r.id);
+      if (importIds.length > 0) {
+        const ph = importIds.map(() => '?').join(',');
+        for (const stale of ['Sheet1', 'Sheet2', 'Default', 'null', '']) {
+          db.prepare(`UPDATE attendance_raw SET company = ? WHERE import_id IN (${ph}) AND company = ?`)
+            .run(mainCompany, ...importIds, stale);
+        }
+        db.prepare(`UPDATE attendance_raw SET company = ? WHERE import_id IN (${ph}) AND company IS NULL`)
+          .run(mainCompany, ...importIds);
+      }
+
+      // Clean monthly_imports: merge stale → real
+      const mainImport = db.prepare('SELECT id FROM monthly_imports WHERE month = ? AND year = ? AND company = ?')
+        .get(month, year, mainCompany);
+      const staleImports = db.prepare(
+        "SELECT id FROM monthly_imports WHERE month = ? AND year = ? AND (company IN ('Sheet1','Sheet2','Default','null','') OR company IS NULL)"
+      ).all(month, year);
+
+      if (mainImport) {
+        for (const si of staleImports) {
+          db.prepare('UPDATE attendance_raw SET import_id = ? WHERE import_id = ?').run(mainImport.id, si.id);
+          db.prepare('DELETE FROM monthly_imports WHERE id = ?').run(si.id);
+        }
+      } else if (staleImports.length > 0) {
+        db.prepare('UPDATE monthly_imports SET company = ? WHERE id = ?').run(mainCompany, staleImports[0].id);
+        for (let i = 1; i < staleImports.length; i++) {
+          db.prepare('UPDATE attendance_raw SET import_id = ? WHERE import_id = ?').run(staleImports[0].id, staleImports[i].id);
+          db.prepare('DELETE FROM monthly_imports WHERE id = ?').run(staleImports[i].id);
+        }
+      }
+
+      // Re-run miss punch detection
+      db.prepare('UPDATE attendance_processed SET is_miss_punch = 0, miss_punch_type = NULL WHERE month = ? AND year = ?')
+        .run(month, year);
+    });
+    txn();
+
+    // Re-enable FK checks
     db.pragma('foreign_keys = ON');
-  }
 
-  res.json({
-    success: true,
-    message: `Fixed ${stats.companyFixed} stale company names, removed ${stats.duplicatesRemoved} duplicates, re-detected ${stats.missPunchesDetected} miss punches`,
-    stats
-  });
+    // Detect miss punches on clean data
+    const { detectMissPunches, applyMissPunchFlags } = require('../services/missPunch');
+    const cleanRecs = db.prepare('SELECT * FROM attendance_processed WHERE month = ? AND year = ?').all(month, year);
+    const missPunches = detectMissPunches(cleanRecs);
+    applyMissPunchFlags(db, missPunches);
+    stats.missPunchesDetected = missPunches.length;
+
+    res.json({
+      success: true,
+      message: `Removed ${stats.duplicatesRemoved} duplicates, fixed ${stats.companyFixed} company names, detected ${stats.missPunchesDetected} miss punches`,
+      stats
+    });
+  } catch (err) {
+    const db = getDb();
+    db.pragma('foreign_keys = ON'); // ensure re-enabled on error
+    res.status(500).json({ success: false, error: err.message });
+  }
 });
 
 module.exports = router;
