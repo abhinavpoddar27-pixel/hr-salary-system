@@ -654,30 +654,26 @@ router.post('/deduplicate', (req, res) => {
         .run(mainCompany, ...importIds);
     }
 
-    // Fix monthly_imports — has UNIQUE(month, year, company), so dedup first
-    // Check if mainCompany import already exists
+    // Fix monthly_imports — has UNIQUE(month, year, company) and FK from attendance_raw
     const mainImport = db.prepare('SELECT id FROM monthly_imports WHERE month = ? AND year = ? AND company = ?')
       .get(month, year, mainCompany);
+    const staleImports = db.prepare(
+      "SELECT id, company FROM monthly_imports WHERE month = ? AND year = ? AND (company IN ('Sheet1','Sheet2','Default','null','') OR company IS NULL)"
+    ).all(month, year);
+
     if (mainImport) {
-      // Delete all stale monthly_imports (the real one already exists)
-      for (const stale of ['Sheet1', 'Sheet2', 'Default', 'null', '']) {
-        db.prepare('DELETE FROM monthly_imports WHERE month = ? AND year = ? AND company = ?')
-          .run(month, year, stale);
+      // Real import exists — reassign attendance_raw to it, then delete stale imports
+      for (const si of staleImports) {
+        db.prepare('UPDATE attendance_raw SET import_id = ? WHERE import_id = ?').run(mainImport.id, si.id);
+        db.prepare('DELETE FROM monthly_imports WHERE id = ?').run(si.id);
       }
-      db.prepare('DELETE FROM monthly_imports WHERE month = ? AND year = ? AND company IS NULL')
-        .run(month, year);
-    } else {
-      // Keep one stale import and rename it, delete the rest
-      const staleImports = db.prepare(
-        "SELECT id, company FROM monthly_imports WHERE month = ? AND year = ? AND company IN ('Sheet1','Sheet2','Default','null','') OR (month = ? AND year = ? AND company IS NULL)"
-      ).all(month, year, month, year);
-      if (staleImports.length > 0) {
-        // Rename first one to mainCompany
-        db.prepare('UPDATE monthly_imports SET company = ? WHERE id = ?').run(mainCompany, staleImports[0].id);
-        // Delete the rest
-        for (let i = 1; i < staleImports.length; i++) {
-          db.prepare('DELETE FROM monthly_imports WHERE id = ?').run(staleImports[i].id);
-        }
+    } else if (staleImports.length > 0) {
+      // No real import — rename first stale to mainCompany, merge rest into it
+      const keeper = staleImports[0];
+      db.prepare('UPDATE monthly_imports SET company = ? WHERE id = ?').run(mainCompany, keeper.id);
+      for (let i = 1; i < staleImports.length; i++) {
+        db.prepare('UPDATE attendance_raw SET import_id = ? WHERE import_id = ?').run(keeper.id, staleImports[i].id);
+        db.prepare('DELETE FROM monthly_imports WHERE id = ?').run(staleImports[i].id);
       }
     }
   }
