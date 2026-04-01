@@ -94,18 +94,35 @@ router.post('/upload', upload.array('files', 20), async (req, res) => {
           'SELECT id, reimport_count FROM monthly_imports WHERE month = ? AND year = ? AND company = ?'
         ).get(month, year, company);
 
-        // Also check if old data exists under sheet name (legacy) — clean it up
-        if (!existing && (sheet.sheetName === 'Sheet1' || sheet.sheetName === 'Sheet2')) {
-          const legacyImport = db.prepare(
-            'SELECT id FROM monthly_imports WHERE month = ? AND year = ? AND company = ?'
-          ).get(month, year, sheet.sheetName);
-          if (legacyImport) {
-            // Migrate legacy import to correct company name
-            db.prepare('UPDATE monthly_imports SET company = ? WHERE id = ?').run(company, legacyImport.id);
-            db.prepare('UPDATE attendance_raw SET company = ? WHERE import_id = ?').run(company, legacyImport.id);
-            db.prepare('UPDATE attendance_processed SET company = ? WHERE month = ? AND year = ? AND company = ?')
-              .run(company, month, year, sheet.sheetName);
+        // Clean up legacy data: migrate any stale company names (Sheet1/Sheet2/Default/NULL) to real company
+        if (!existing) {
+          const staleNames = [sheet.sheetName, 'Sheet1', 'Sheet2', 'Default'];
+          for (const staleName of staleNames) {
+            const legacyImport = db.prepare(
+              'SELECT id FROM monthly_imports WHERE month = ? AND year = ? AND company = ?'
+            ).get(month, year, staleName);
+            if (legacyImport) {
+              db.prepare('UPDATE monthly_imports SET company = ? WHERE id = ?').run(company, legacyImport.id);
+              db.prepare('UPDATE attendance_raw SET company = ? WHERE import_id = ?').run(company, legacyImport.id);
+              db.prepare('UPDATE attendance_processed SET company = ? WHERE month = ? AND year = ? AND company = ?')
+                .run(company, month, year, staleName);
+            }
           }
+          // Also migrate records with NULL company for this month
+          db.prepare('UPDATE attendance_processed SET company = ? WHERE month = ? AND year = ? AND company IS NULL')
+            .run(company, month, year);
+          db.prepare('UPDATE attendance_raw SET company = ? WHERE month = ? AND year = ? AND company IS NULL')
+            .run(company, month, year);
+
+          // Deduplicate: if migration created conflicts with the unique index,
+          // keep only the newest record per (employee_code, date, company)
+          db.prepare(`
+            DELETE FROM attendance_processed WHERE id NOT IN (
+              SELECT MAX(id) FROM attendance_processed
+              WHERE month = ? AND year = ? AND company = ?
+              GROUP BY employee_code, date, company
+            ) AND month = ? AND year = ? AND company = ?
+          `).run(month, year, company, month, year, company);
         }
 
         // Re-check after potential migration

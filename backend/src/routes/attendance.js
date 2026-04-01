@@ -559,4 +559,37 @@ router.post('/recalculate-metrics', (req, res) => {
   res.json({ success: true, message: `Recalculated metrics for ${updated} records`, updated });
 });
 
+/**
+ * POST /api/attendance/deduplicate
+ * One-time cleanup: remove duplicate attendance_processed records.
+ * Keeps the newest record per (employee_code, date, company).
+ */
+router.post('/deduplicate', requireAdmin, (req, res) => {
+  const db = getDb();
+  const { month, year } = req.body;
+  if (!month || !year) return res.status(400).json({ success: false, error: 'month and year required' });
+
+  // Count duplicates before
+  const dupes = db.prepare(`
+    SELECT employee_code, date, company, COUNT(*) as cnt
+    FROM attendance_processed WHERE month = ? AND year = ?
+    GROUP BY employee_code, date, company HAVING cnt > 1
+  `).all(month, year);
+
+  if (dupes.length === 0) {
+    return res.json({ success: true, message: 'No duplicates found', removed: 0 });
+  }
+
+  // Delete all but the latest record per (employee_code, date, company)
+  const result = db.prepare(`
+    DELETE FROM attendance_processed WHERE id NOT IN (
+      SELECT MAX(id) FROM attendance_processed
+      WHERE month = ? AND year = ?
+      GROUP BY employee_code, date, company
+    ) AND month = ? AND year = ?
+  `).run(month, year, month, year);
+
+  res.json({ success: true, message: `Removed ${result.changes} duplicate records`, removed: result.changes, duplicateGroups: dupes.length });
+});
+
 module.exports = router;
