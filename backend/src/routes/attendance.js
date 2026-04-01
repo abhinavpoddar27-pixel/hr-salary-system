@@ -629,17 +629,40 @@ router.post('/deduplicate', (req, res) => {
       stats.companyFixed = toUpdateCompany.length;
     }
 
-    // Also fix attendance_raw and monthly_imports
+    // Fix attendance_raw stale companies
     for (const stale of ['Sheet1', 'Sheet2', 'Default', 'null', '']) {
       db.prepare('UPDATE attendance_raw SET company = ? WHERE month = ? AND year = ? AND company = ?')
-        .run(mainCompany, month, year, stale);
-      db.prepare('UPDATE monthly_imports SET company = ? WHERE month = ? AND year = ? AND company = ?')
         .run(mainCompany, month, year, stale);
     }
     db.prepare('UPDATE attendance_raw SET company = ? WHERE month = ? AND year = ? AND company IS NULL')
       .run(mainCompany, month, year);
-    db.prepare('UPDATE monthly_imports SET company = ? WHERE month = ? AND year = ? AND company IS NULL')
-      .run(mainCompany, month, year);
+
+    // Fix monthly_imports — has UNIQUE(month, year, company), so dedup first
+    // Check if mainCompany import already exists
+    const mainImport = db.prepare('SELECT id FROM monthly_imports WHERE month = ? AND year = ? AND company = ?')
+      .get(month, year, mainCompany);
+    if (mainImport) {
+      // Delete all stale monthly_imports (the real one already exists)
+      for (const stale of ['Sheet1', 'Sheet2', 'Default', 'null', '']) {
+        db.prepare('DELETE FROM monthly_imports WHERE month = ? AND year = ? AND company = ?')
+          .run(month, year, stale);
+      }
+      db.prepare('DELETE FROM monthly_imports WHERE month = ? AND year = ? AND company IS NULL')
+        .run(month, year);
+    } else {
+      // Keep one stale import and rename it, delete the rest
+      const staleImports = db.prepare(
+        "SELECT id, company FROM monthly_imports WHERE month = ? AND year = ? AND company IN ('Sheet1','Sheet2','Default','null','') OR (month = ? AND year = ? AND company IS NULL)"
+      ).all(month, year, month, year);
+      if (staleImports.length > 0) {
+        // Rename first one to mainCompany
+        db.prepare('UPDATE monthly_imports SET company = ? WHERE id = ?').run(mainCompany, staleImports[0].id);
+        // Delete the rest
+        for (let i = 1; i < staleImports.length; i++) {
+          db.prepare('DELETE FROM monthly_imports WHERE id = ?').run(staleImports[i].id);
+        }
+      }
+    }
   });
   txn();
 
