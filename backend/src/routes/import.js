@@ -123,7 +123,7 @@ router.post('/upload', upload.array('files', 20), async (req, res) => {
         if (isReimport) {
           // ── REIMPORT: Upsert strategy ──
           // 1. Update the monthly_imports record (keep same ID, bump reimport count)
-          importId = existing.id;
+          importId = existingAfterMigration.id;
           db.prepare(`
             UPDATE monthly_imports SET
               file_name = ?, record_count = ?, employee_count = ?,
