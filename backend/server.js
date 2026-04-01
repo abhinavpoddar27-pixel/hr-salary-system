@@ -90,6 +90,9 @@ app.use(cors({
   credentials: true
 }));
 
+// ── Security: hide server identity ───────────────────────────
+app.disable('x-powered-by');
+
 // ── Performance: Compression ─────────────────────────────────
 app.use(compression({
   level: 6,

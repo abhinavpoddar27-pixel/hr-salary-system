@@ -22,7 +22,7 @@ router.get('/attendance-summary', (req, res) => {
       SUM(CASE WHEN ap.is_miss_punch = 1 THEN 1 ELSE 0 END) as miss_punch_count,
       SUM(CASE WHEN ap.miss_punch_resolved = 1 THEN 1 ELSE 0 END) as miss_punch_resolved,
       COALESCE(dc.paid_sundays, 0) as paid_sundays,
-      COALESCE(dc.total_lop, 0) as lop_days,
+      COALESCE(dc.lop_days, 0) as lop_days,
       COALESCE(dc.total_payable_days, 0) as total_payable,
       COALESCE(dc.cl_used, 0) as cl_used,
       COALESCE(dc.el_used, 0) as el_used

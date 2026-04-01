@@ -87,7 +87,7 @@ function getDailySummary(db, date) {
   // Miss punches
   const missPunches = db.prepare(`
     SELECT COUNT(*) as count FROM attendance_processed
-    WHERE date = ? AND (status_code LIKE '%MISS%' OR in_time_original IS NULL OR out_time_original IS NULL)
+    WHERE date = ? AND (is_miss_punch = 1 OR in_time_original IS NULL OR out_time_original IS NULL)
     AND COALESCE(status_final, status_original) != 'A' AND is_night_out_only = 0
   `).get(date);
 
