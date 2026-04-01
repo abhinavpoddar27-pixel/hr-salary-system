@@ -580,45 +580,67 @@ router.post('/deduplicate', (req, res) => {
       AND company NOT IN ('Sheet1', 'Sheet2', 'Default', 'null', '')
   `).all(month, year).map(r => r.company);
 
-  // If we have a real company name, delete stale records that would conflict, then update the rest
+  // If we have a real company name, clean up stale records
   if (realCompanies.length > 0) {
     const mainCompany = realCompanies[0];
-    const allStale = [...staleNames, null]; // includes SQL NULL
 
-    for (const stale of allStale) {
-      const whereStale = stale === null
-        ? 'AND company IS NULL'
-        : 'AND company = ?';
-      const staleParams = stale === null ? [] : [stale];
+    // Collect IDs of real-company records for fast lookup
+    const realKeys = new Set(
+      db.prepare(`SELECT employee_code || '|' || date as k FROM attendance_processed WHERE month = ? AND year = ? AND company = ?`)
+        .all(month, year, mainCompany).map(r => r.k)
+    );
 
-      // Delete stale records where a real-company record already exists for that employee+date
-      const delResult = db.prepare(`
-        DELETE FROM attendance_processed
-        WHERE month = ? AND year = ? ${whereStale}
-          AND EXISTS (
-            SELECT 1 FROM attendance_processed ap2
-            WHERE ap2.employee_code = attendance_processed.employee_code
-              AND ap2.date = attendance_processed.date
-              AND ap2.company = ?
-          )
-      `).run(month, year, ...staleParams, mainCompany);
-      stats.duplicatesRemoved += delResult.changes;
+    // Get all stale records
+    const staleRecords = db.prepare(`
+      SELECT id, employee_code, date, company FROM attendance_processed
+      WHERE month = ? AND year = ? AND (company IN ('Sheet1','Sheet2','Default','null','') OR company IS NULL)
+    `).all(month, year);
 
-      // Update remaining stale records (no conflict) to real company
-      const updResult = db.prepare(`
-        UPDATE attendance_processed SET company = ?
-        WHERE month = ? AND year = ? ${whereStale}
-      `).run(mainCompany, month, year, ...staleParams);
-      stats.companyFixed += updResult.changes;
-
-      // Also fix attendance_raw
-      db.prepare(`UPDATE attendance_raw SET company = ? WHERE month = ? AND year = ? ${whereStale}`)
-        .run(mainCompany, month, year, ...staleParams);
-
-      // Also fix monthly_imports
-      db.prepare(`UPDATE monthly_imports SET company = ? WHERE month = ? AND year = ? ${whereStale}`)
-        .run(mainCompany, month, year, ...staleParams);
+    const toDelete = [];
+    const toUpdate = [];
+    for (const rec of staleRecords) {
+      const key = rec.employee_code + '|' + rec.date;
+      if (realKeys.has(key)) {
+        toDelete.push(rec.id); // real record exists → delete this stale one
+      } else {
+        toUpdate.push(rec.id); // no real record → update company
+        realKeys.add(key); // prevent duplicates among stale records
+      }
     }
+
+    // Delete stale duplicates
+    if (toDelete.length > 0) {
+      // Detach FK references first
+      const detachStmt = db.prepare('UPDATE attendance_processed SET raw_id = NULL WHERE id = ?');
+      const deleteStmt = db.prepare('DELETE FROM attendance_processed WHERE id = ?');
+      const txnDel = db.transaction(() => {
+        for (const id of toDelete) { detachStmt.run(id); deleteStmt.run(id); }
+      });
+      txnDel();
+      stats.duplicatesRemoved = toDelete.length;
+    }
+
+    // Update remaining stale records to real company
+    if (toUpdate.length > 0) {
+      const updateStmt = db.prepare('UPDATE attendance_processed SET company = ? WHERE id = ?');
+      const txnUpd = db.transaction(() => {
+        for (const id of toUpdate) updateStmt.run(mainCompany, id);
+      });
+      txnUpd();
+      stats.companyFixed = toUpdate.length;
+    }
+
+    // Fix stale names in attendance_raw and monthly_imports
+    for (const stale of ['Sheet1','Sheet2','Default','null','']) {
+      db.prepare('UPDATE attendance_raw SET company = ? WHERE month = ? AND year = ? AND company = ?')
+        .run(mainCompany, month, year, stale);
+      db.prepare('UPDATE monthly_imports SET company = ? WHERE month = ? AND year = ? AND company = ?')
+        .run(mainCompany, month, year, stale);
+    }
+    db.prepare('UPDATE attendance_raw SET company = ? WHERE month = ? AND year = ? AND company IS NULL')
+      .run(mainCompany, month, year);
+    db.prepare('UPDATE monthly_imports SET company = ? WHERE month = ? AND year = ? AND company IS NULL')
+      .run(mainCompany, month, year);
   }
 
   // Step 2: Now deduplicate — keep newest record per (employee_code, date, company)
