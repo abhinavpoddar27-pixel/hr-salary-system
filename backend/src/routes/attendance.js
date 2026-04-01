@@ -625,38 +625,8 @@ router.post('/deduplicate', (req, res) => {
       // Clean orphaned night_shift_pairs
       db.prepare(`DELETE FROM night_shift_pairs WHERE month = ? AND year = ?`).run(month, year);
 
-      // Clean stale company in attendance_raw (via import_id)
-      const importIds = db.prepare('SELECT id FROM monthly_imports WHERE month = ? AND year = ?')
-        .all(month, year).map(r => r.id);
-      if (importIds.length > 0) {
-        const ph = importIds.map(() => '?').join(',');
-        for (const stale of ['Sheet1', 'Sheet2', 'Default', 'null', '']) {
-          db.prepare(`UPDATE attendance_raw SET company = ? WHERE import_id IN (${ph}) AND company = ?`)
-            .run(mainCompany, ...importIds, stale);
-        }
-        db.prepare(`UPDATE attendance_raw SET company = ? WHERE import_id IN (${ph}) AND company IS NULL`)
-          .run(mainCompany, ...importIds);
-      }
-
-      // Clean monthly_imports: merge stale → real
-      const mainImport = db.prepare('SELECT id FROM monthly_imports WHERE month = ? AND year = ? AND company = ?')
-        .get(month, year, mainCompany);
-      const staleImports = db.prepare(
-        "SELECT id FROM monthly_imports WHERE month = ? AND year = ? AND (company IN ('Sheet1','Sheet2','Default','null','') OR company IS NULL)"
-      ).all(month, year);
-
-      if (mainImport) {
-        for (const si of staleImports) {
-          db.prepare('UPDATE attendance_raw SET import_id = ? WHERE import_id = ?').run(mainImport.id, si.id);
-          db.prepare('DELETE FROM monthly_imports WHERE id = ?').run(si.id);
-        }
-      } else if (staleImports.length > 0) {
-        db.prepare('UPDATE monthly_imports SET company = ? WHERE id = ?').run(mainCompany, staleImports[0].id);
-        for (let i = 1; i < staleImports.length; i++) {
-          db.prepare('UPDATE attendance_raw SET import_id = ? WHERE import_id = ?').run(staleImports[0].id, staleImports[i].id);
-          db.prepare('DELETE FROM monthly_imports WHERE id = ?').run(staleImports[i].id);
-        }
-      }
+      // Skip attendance_raw and monthly_imports cleanup — they have complex FK/unique constraints
+      // These are archival tables and don't affect the user-facing miss punch view
 
       // Re-run miss punch detection
       db.prepare('UPDATE attendance_processed SET is_miss_punch = 0, miss_punch_type = NULL WHERE month = ? AND year = ?')
