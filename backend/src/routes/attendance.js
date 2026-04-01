@@ -561,26 +561,63 @@ router.post('/recalculate-metrics', (req, res) => {
 
 /**
  * POST /api/attendance/deduplicate
- * One-time cleanup: remove duplicate attendance_processed records.
- * Keeps the newest record per (employee_code, date, company).
+ * Comprehensive cleanup: fix stale company names then remove duplicate records.
+ * Step 1: Merge stale company values (Sheet1, Sheet2, Default, "null", NULL) → real company
+ * Step 2: Remove exact duplicates, keeping newest per (employee_code, date, company)
  */
 router.post('/deduplicate', (req, res) => {
   const db = getDb();
   const { month, year } = req.body;
   if (!month || !year) return res.status(400).json({ success: false, error: 'month and year required' });
 
-  // Count duplicates before
-  const dupes = db.prepare(`
-    SELECT employee_code, date, company, COUNT(*) as cnt
-    FROM attendance_processed WHERE month = ? AND year = ?
-    GROUP BY employee_code, date, company HAVING cnt > 1
-  `).all(month, year);
+  const stats = { companyFixed: 0, duplicatesRemoved: 0 };
 
-  if (dupes.length === 0) {
-    return res.json({ success: true, message: 'No duplicates found', removed: 0 });
+  // Step 1: Determine the real company name (the one that isn't stale)
+  const staleNames = ['Sheet1', 'Sheet2', 'Default', 'null', ''];
+  const realCompanies = db.prepare(`
+    SELECT DISTINCT company FROM attendance_processed
+    WHERE month = ? AND year = ? AND company IS NOT NULL
+      AND company NOT IN ('Sheet1', 'Sheet2', 'Default', 'null', '')
+  `).all(month, year).map(r => r.company);
+
+  // If we have a real company name, migrate all stale records to it
+  if (realCompanies.length > 0) {
+    // Use the first real company as default target (most common scenario: one main company)
+    const mainCompany = realCompanies[0];
+    for (const stale of staleNames) {
+      const r1 = db.prepare('UPDATE attendance_processed SET company = ? WHERE month = ? AND year = ? AND company = ?')
+        .run(mainCompany, month, year, stale);
+      const r2 = db.prepare('UPDATE attendance_raw SET company = ? WHERE month = ? AND year = ? AND company = ?')
+        .run(mainCompany, month, year, stale);
+      stats.companyFixed += r1.changes;
+    }
+    // Also fix NULL company
+    const rNull = db.prepare('UPDATE attendance_processed SET company = ? WHERE month = ? AND year = ? AND company IS NULL')
+      .run(mainCompany, month, year);
+    stats.companyFixed += rNull.changes;
+
+    // Fix monthly_imports too
+    for (const stale of [...staleNames, null]) {
+      if (stale === null) {
+        db.prepare('UPDATE monthly_imports SET company = ? WHERE month = ? AND year = ? AND company IS NULL')
+          .run(mainCompany, month, year);
+      } else {
+        db.prepare('UPDATE monthly_imports SET company = ? WHERE month = ? AND year = ? AND company = ?')
+          .run(mainCompany, month, year, stale);
+      }
+    }
   }
 
-  // Delete all but the latest record per (employee_code, date, company)
+  // Step 2: Now deduplicate — keep newest record per (employee_code, date, company)
+  // First detach FK references
+  db.prepare(`
+    UPDATE attendance_processed SET raw_id = NULL
+    WHERE month = ? AND year = ? AND id NOT IN (
+      SELECT MAX(id) FROM attendance_processed WHERE month = ? AND year = ?
+      GROUP BY employee_code, date, company
+    )
+  `).run(month, year, month, year);
+
   const result = db.prepare(`
     DELETE FROM attendance_processed WHERE id NOT IN (
       SELECT MAX(id) FROM attendance_processed
@@ -588,8 +625,23 @@ router.post('/deduplicate', (req, res) => {
       GROUP BY employee_code, date, company
     ) AND month = ? AND year = ?
   `).run(month, year, month, year);
+  stats.duplicatesRemoved = result.changes;
 
-  res.json({ success: true, message: `Removed ${result.changes} duplicate records`, removed: result.changes, duplicateGroups: dupes.length });
+  // Step 3: Re-run miss punch detection on cleaned data
+  const { detectMissPunches, applyMissPunchFlags } = require('../services/missPunch');
+  // Reset all miss punch flags first
+  db.prepare('UPDATE attendance_processed SET is_miss_punch = 0, miss_punch_type = NULL WHERE month = ? AND year = ?')
+    .run(month, year);
+  const allRecords = db.prepare('SELECT * FROM attendance_processed WHERE month = ? AND year = ?').all(month, year);
+  const missPunches = detectMissPunches(allRecords);
+  applyMissPunchFlags(db, missPunches);
+  stats.missPunchesDetected = missPunches.length;
+
+  res.json({
+    success: true,
+    message: `Fixed ${stats.companyFixed} stale company names, removed ${stats.duplicatesRemoved} duplicates, re-detected ${stats.missPunchesDetected} miss punches`,
+    stats
+  });
 });
 
 module.exports = router;
