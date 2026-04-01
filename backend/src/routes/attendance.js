@@ -613,21 +613,34 @@ router.post('/deduplicate', (req, res) => {
     }
   }
 
-  // Execute deletions in a transaction
-  const txn = db.transaction(() => {
-    if (toDelete.length > 0) {
+  // Step 1: Delete duplicate attendance_processed records (in a transaction)
+  if (toDelete.length > 0) {
+    const txnDel = db.transaction(() => {
       const detach = db.prepare('UPDATE attendance_processed SET raw_id = NULL WHERE id = ?');
       const del = db.prepare('DELETE FROM attendance_processed WHERE id = ?');
       for (const id of toDelete) { detach.run(id); del.run(id); }
-      stats.duplicatesRemoved = toDelete.length;
-    }
+    });
+    txnDel();
+    stats.duplicatesRemoved = toDelete.length;
+  }
 
-    // Fix company on remaining stale records
-    if (toUpdateCompany.length > 0) {
-      const upd = db.prepare('UPDATE attendance_processed SET company = ? WHERE id = ?');
-      for (const id of toUpdateCompany) upd.run(mainCompany, id);
-      stats.companyFixed = toUpdateCompany.length;
+  // Step 2: Fix company on remaining stale records (outside transaction for try/catch)
+  if (toUpdateCompany.length > 0) {
+    const upd = db.prepare('UPDATE attendance_processed SET company = ? WHERE id = ?');
+    const del = db.prepare('DELETE FROM attendance_processed WHERE id = ?');
+    for (const id of toUpdateCompany) {
+      try {
+        upd.run(mainCompany, id);
+        stats.companyFixed++;
+      } catch (e) {
+        // UNIQUE conflict — record with mainCompany already exists, delete this stale one
+        del.run(id);
+        stats.duplicatesRemoved++;
+      }
     }
+  }
+
+  {
 
     // Fix attendance_raw stale companies
     for (const stale of ['Sheet1', 'Sheet2', 'Default', 'null', '']) {
@@ -663,8 +676,7 @@ router.post('/deduplicate', (req, res) => {
         }
       }
     }
-  });
-  txn();
+  }
 
   // Re-run miss punch detection on cleaned data
   const { detectMissPunches, applyMissPunchFlags } = require('../services/missPunch');
