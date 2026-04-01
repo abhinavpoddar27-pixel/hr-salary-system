@@ -49,38 +49,73 @@ router.post('/upload', upload.array('files', 20), async (req, res) => {
       for (const sheet of sheets) {
         let { company, records } = sheet;
 
-        // If parser couldn't detect company, resolve from employee master using first known employee code
-        if (!company) {
-          const sampleCodes = [...new Set(records.map(r => r.employeeCode))].slice(0, 10);
-          for (const code of sampleCodes) {
-            const emp = db.prepare('SELECT company FROM employees WHERE code = ? AND company IS NOT NULL').get(code);
+        // ── Robust company resolution ──────────────────────────
+        // Strategy: try multiple sources to determine the real company name
+        if (!company || company === sheet.sheetName) {
+          company = null;
+
+          // 1. Try employee master — scan ALL unique codes until we find a match
+          const allCodes = [...new Set(records.map(r => r.employeeCode))];
+          for (const code of allCodes) {
+            const emp = db.prepare("SELECT company FROM employees WHERE code = ? AND company IS NOT NULL AND company != ''").get(code);
             if (emp?.company) { company = emp.company; break; }
           }
-          // If still unknown, use sheet name as last resort
+
+          // 2. Try attendance_raw from previous imports — employees may have been imported before
+          if (!company) {
+            for (const code of allCodes.slice(0, 50)) {
+              const raw = db.prepare("SELECT company FROM attendance_raw WHERE employee_code = ? AND company IS NOT NULL AND company != '' LIMIT 1").get(code);
+              if (raw?.company) { company = raw.company; break; }
+            }
+          }
+
+          // 3. Try matching by sheet index — in this EESL system, Sheet1 is typically the first company
+          //    and Sheet2 is the second. Look at what companies exist in previous imports.
+          if (!company) {
+            const sheetIdx = sheets.indexOf(sheet);
+            const knownCompanies = db.prepare(
+              "SELECT DISTINCT company FROM monthly_imports WHERE company IS NOT NULL AND company NOT LIKE 'Sheet%' ORDER BY company"
+            ).all().map(c => c.company);
+            if (knownCompanies.length > 0 && sheetIdx < knownCompanies.length) {
+              company = knownCompanies[sheetIdx];
+            }
+          }
+
+          // 4. Last resort: use sheet name
           company = company || sheet.sheetName;
-          // Update records and sheet with resolved company
+
+          // Propagate resolved company to all records
           sheet.company = company;
           for (const r of records) { if (!r.company) r.company = company; }
         }
 
-        // Check for existing import
+        // ── Check for existing import — auto-upsert if same month ──
         const existing = db.prepare(
           'SELECT id, reimport_count FROM monthly_imports WHERE month = ? AND year = ? AND company = ?'
         ).get(month, year, company);
 
-        const overwrite = req.body.overwrite === 'true';
-        const isReimport = !!(existing && overwrite);
-
-        if (existing && !overwrite) {
-          results.push({
-            file: file.originalname,
-            sheet: sheet.sheetName,
-            success: false,
-            error: `Data for ${company} ${month}/${year} already exists. Set overwrite=true to replace.`,
-            existingImportId: existing.id
-          });
-          continue;
+        // Also check if old data exists under sheet name (legacy) — clean it up
+        if (!existing && (sheet.sheetName === 'Sheet1' || sheet.sheetName === 'Sheet2')) {
+          const legacyImport = db.prepare(
+            'SELECT id FROM monthly_imports WHERE month = ? AND year = ? AND company = ?'
+          ).get(month, year, sheet.sheetName);
+          if (legacyImport) {
+            // Migrate legacy import to correct company name
+            db.prepare('UPDATE monthly_imports SET company = ? WHERE id = ?').run(company, legacyImport.id);
+            db.prepare('UPDATE attendance_raw SET company = ? WHERE import_id = ?').run(company, legacyImport.id);
+            db.prepare('UPDATE attendance_processed SET company = ? WHERE month = ? AND year = ? AND company = ?')
+              .run(company, month, year, sheet.sheetName);
+          }
         }
+
+        // Re-check after potential migration
+        const existingAfterMigration = db.prepare(
+          'SELECT id, reimport_count FROM monthly_imports WHERE month = ? AND year = ? AND company = ?'
+        ).get(month, year, company);
+
+        const overwrite = req.body.overwrite === 'true';
+        // Auto-upsert: if data exists, always upsert (don't block the user)
+        const isReimport = !!existingAfterMigration;
 
         let importId;
         let upsertStats = { inserted: 0, updated: 0 };
