@@ -642,13 +642,17 @@ router.post('/deduplicate', (req, res) => {
 
   {
 
-    // Fix attendance_raw stale companies
-    for (const stale of ['Sheet1', 'Sheet2', 'Default', 'null', '']) {
-      db.prepare('UPDATE attendance_raw SET company = ? WHERE month = ? AND year = ? AND company = ?')
-        .run(mainCompany, month, year, stale);
+    // Fix attendance_raw stale companies (no month/year column — join via import_id)
+    const importIds = db.prepare('SELECT id FROM monthly_imports WHERE month = ? AND year = ?').all(month, year).map(r => r.id);
+    if (importIds.length > 0) {
+      const placeholders = importIds.map(() => '?').join(',');
+      for (const stale of ['Sheet1', 'Sheet2', 'Default', 'null', '']) {
+        db.prepare(`UPDATE attendance_raw SET company = ? WHERE import_id IN (${placeholders}) AND company = ?`)
+          .run(mainCompany, ...importIds, stale);
+      }
+      db.prepare(`UPDATE attendance_raw SET company = ? WHERE import_id IN (${placeholders}) AND company IS NULL`)
+        .run(mainCompany, ...importIds);
     }
-    db.prepare('UPDATE attendance_raw SET company = ? WHERE month = ? AND year = ? AND company IS NULL')
-      .run(mainCompany, month, year);
 
     // Fix monthly_imports — has UNIQUE(month, year, company), so dedup first
     // Check if mainCompany import already exists
