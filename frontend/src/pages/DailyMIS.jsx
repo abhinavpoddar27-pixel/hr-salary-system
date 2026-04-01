@@ -212,12 +212,10 @@ export default function DailyMIS() {
 
             {/* Department-Wise Breakdown */}
             {(adminDepts.length > 0 || mfgDepts.length > 0) && (
-              <div className="card overflow-hidden">
-                <div className="card-header"><span className="font-semibold text-slate-700">Department-Wise Breakdown</span></div>
-                <div className="card-body space-y-4">
-                  <DeptGroupTable title="Admin Departments" depts={adminDepts} badge="badge-blue" totals={deptType.admin} />
-                  <DeptGroupTable title="Manufacturing Departments" depts={mfgDepts} badge="badge-amber" totals={deptType.manufacturing} />
-                </div>
+              <div className="space-y-3">
+                <h3 className="text-sm font-bold text-slate-600 uppercase tracking-wider">Department-Wise Breakdown</h3>
+                <DeptGroupTable title="Admin Departments" depts={adminDepts} badge="badge-blue" totals={deptType.admin} />
+                <DeptGroupTable title="Manufacturing Departments" depts={mfgDepts} badge="badge-amber" totals={deptType.manufacturing} />
               </div>
             )}
 
@@ -477,37 +475,138 @@ function KpiCard({ label, value, border, valueColor = 'text-slate-800', abbr }) 
   )
 }
 
+function CircularGauge({ value, total, color, size = 80 }) {
+  const pct = total > 0 ? (value / total) * 100 : 0
+  const r = (size - 10) / 2
+  const circ = 2 * Math.PI * r
+  const offset = circ - (pct / 100) * circ
+  return (
+    <div className="relative inline-flex items-center justify-center" style={{ width: size, height: size }}>
+      <svg width={size} height={size} className="-rotate-90">
+        <circle cx={size/2} cy={size/2} r={r} fill="none" stroke="#e2e8f0" strokeWidth="6" />
+        <circle cx={size/2} cy={size/2} r={r} fill="none" stroke={color} strokeWidth="6" strokeLinecap="round"
+          strokeDasharray={circ} strokeDashoffset={offset} className="transition-all duration-700" />
+      </svg>
+      <div className="absolute text-center">
+        <div className="text-lg font-bold text-slate-800">{value}</div>
+        <div className="text-[9px] text-slate-400 -mt-0.5">of {total}</div>
+      </div>
+    </div>
+  )
+}
+
 function ShiftCard({ title, icon, data, expanded, onToggle, borderColor, bgColor }) {
   if (!data) return (
-    <div className={clsx('rounded-lg border p-4', borderColor, bgColor)}>
+    <div className={clsx('rounded-xl border-2 p-5', borderColor, bgColor)}>
       <div className="text-sm font-semibold text-slate-600">{icon}{title}</div>
       <p className="text-xs text-slate-400 mt-2">No data available</p>
     </div>
   )
+  const total = data.total || 0
+  const admin = data.admin || 0
+  const mfg = data.manufacturing || 0
+  const perm = data.permanent || 0
+  const cont = data.contractor || 0
+  const isDay = title.includes('Day')
+  const gaugeColor = isDay ? '#f59e0b' : '#818cf8'
+
+  // Group employees by department for drilldown
+  const deptMap = {}
+  if (data.employees) {
+    for (const e of data.employees) {
+      const dept = e.department || 'Unknown'
+      if (!deptMap[dept]) deptMap[dept] = []
+      deptMap[dept].push(e)
+    }
+  }
+  const deptList = Object.entries(deptMap).sort((a, b) => b[1].length - a[1].length)
+
   return (
-    <div className={clsx('rounded-lg border p-4', borderColor, bgColor)}>
-      <div className="flex items-center justify-between mb-3">
-        <div className="text-sm font-semibold text-slate-700">{icon}{title} ({data.total})</div>
-        <button onClick={onToggle} className="text-xs text-blue-600 hover:underline">{expanded ? 'Hide employees' : 'Show employees'}</button>
+    <div className={clsx('rounded-xl border-2 overflow-hidden transition-all', borderColor, bgColor)}>
+      {/* Header with gauge */}
+      <div className="p-5">
+        <div className="flex items-center gap-5">
+          <CircularGauge value={total} total={(data.admin || 0) + (data.manufacturing || 0) + (total - admin - mfg)} color={gaugeColor} size={90} />
+          <div className="flex-1 space-y-2">
+            <div className="flex items-center justify-between">
+              <h3 className="text-base font-bold text-slate-800">{icon}{title}</h3>
+              <span className={clsx('text-2xl font-black', isDay ? 'text-amber-600' : 'text-indigo-600')}>{total}</span>
+            </div>
+            {/* Stat bars */}
+            <div className="space-y-1.5">
+              <div className="flex items-center gap-2 text-xs">
+                <span className="w-12 text-slate-400 text-right">Admin</span>
+                <div className="flex-1 h-4 bg-white/70 rounded-full overflow-hidden">
+                  <div className="h-full bg-blue-400 rounded-full transition-all duration-500" style={{ width: `${total > 0 ? (admin/total)*100 : 0}%` }} />
+                </div>
+                <span className="w-8 text-right font-bold text-slate-700">{admin}</span>
+              </div>
+              <div className="flex items-center gap-2 text-xs">
+                <span className="w-12 text-slate-400 text-right">Mfg</span>
+                <div className="flex-1 h-4 bg-white/70 rounded-full overflow-hidden">
+                  <div className="h-full bg-violet-400 rounded-full transition-all duration-500" style={{ width: `${total > 0 ? (mfg/total)*100 : 0}%` }} />
+                </div>
+                <span className="w-8 text-right font-bold text-slate-700">{mfg}</span>
+              </div>
+            </div>
+            {/* Type pills */}
+            <div className="flex gap-2 pt-1">
+              <span className="inline-flex items-center gap-1 text-[11px] px-2.5 py-1 rounded-full bg-emerald-100 text-emerald-700 font-semibold">
+                <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" /> Perm: {perm}
+              </span>
+              <span className="inline-flex items-center gap-1 text-[11px] px-2.5 py-1 rounded-full bg-orange-100 text-orange-700 font-semibold">
+                <span className="w-1.5 h-1.5 rounded-full bg-orange-500" /> Cont: {cont}
+              </span>
+            </div>
+          </div>
+        </div>
       </div>
-      <div className="grid grid-cols-2 gap-2 text-xs">
-        <div className="bg-white/80 rounded px-2 py-1.5"><span className="text-slate-400">Admin:</span> <span className="font-semibold text-slate-700">{data.admin}</span></div>
-        <div className="bg-white/80 rounded px-2 py-1.5"><span className="text-slate-400">Mfg:</span> <span className="font-semibold text-slate-700">{data.manufacturing}</span></div>
-        <div className="bg-white/80 rounded px-2 py-1.5"><span className="text-slate-400">Perm:</span> <span className="font-semibold text-emerald-700">{data.permanent}</span></div>
-        <div className="bg-white/80 rounded px-2 py-1.5"><span className="text-slate-400">Cont:</span> <span className="font-semibold text-orange-700">{data.contractor}</span></div>
-      </div>
-      {expanded && data.employees?.length > 0 && (
-        <div className="mt-3 overflow-x-auto max-h-72 overflow-y-auto">
-          <table className="w-full table-compact text-xs bg-white rounded">
-            <thead className="sticky top-0 bg-white"><tr><th>Employee</th><th>Dept</th><th>IN</th><th>OUT</th><th>Hrs</th><th>Type</th></tr></thead>
+
+      {/* Toggle bar */}
+      <button onClick={onToggle} className={clsx(
+        'w-full px-5 py-2 text-xs font-semibold flex items-center justify-between transition-colors',
+        isDay ? 'bg-amber-100/60 hover:bg-amber-100 text-amber-700' : 'bg-indigo-100/60 hover:bg-indigo-100 text-indigo-700'
+      )}>
+        <span>{expanded ? 'Hide' : 'Show'} department breakdown ({deptList.length} depts)</span>
+        <span className={clsx('transition-transform', expanded && 'rotate-180')}>{'\u25BC'}</span>
+      </button>
+
+      {/* Expandable department-level employee list */}
+      {expanded && deptList.length > 0 && (
+        <div className="bg-white/90 divide-y divide-slate-100 max-h-[400px] overflow-y-auto">
+          {deptList.map(([dept, emps]) => (
+            <DeptShiftAccordion key={dept} dept={dept} employees={emps} isDay={isDay} />
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
+function DeptShiftAccordion({ dept, employees, isDay }) {
+  const [open, setOpen] = useState(false)
+  return (
+    <div>
+      <button onClick={() => setOpen(v => !v)} className="w-full flex items-center justify-between px-5 py-2.5 hover:bg-slate-50 transition-colors text-left">
+        <div className="flex items-center gap-2">
+          <span className={clsx('transition-transform text-[10px]', open && 'rotate-90')}>{'\u25B6'}</span>
+          <span className="text-xs font-semibold text-slate-700">{dept}</span>
+        </div>
+        <span className={clsx('text-xs font-bold px-2 py-0.5 rounded-full', isDay ? 'bg-amber-100 text-amber-700' : 'bg-indigo-100 text-indigo-700')}>
+          {employees.length}
+        </span>
+      </button>
+      {open && (
+        <div className="px-5 pb-3">
+          <table className="w-full table-compact text-xs">
+            <thead><tr className="text-[10px]"><th>Employee</th><th>IN</th><th>OUT</th><th>Hrs</th><th>Type</th></tr></thead>
             <tbody>
-              {data.employees.map(e => (
-                <tr key={e.employee_code}>
-                  <td><div className="font-medium">{e.employee_name || e.employee_code}</div><div className="text-[10px] text-slate-400 font-mono">{e.employee_code}</div></td>
-                  <td className="text-xs">{e.department}</td>
+              {employees.map(e => (
+                <tr key={e.employee_code} className="hover:bg-slate-50">
+                  <td><span className="font-medium">{e.employee_name || e.employee_code}</span> <span className="text-[10px] text-slate-400 font-mono ml-1">{e.employee_code}</span></td>
                   <td className="font-mono">{e.in_time || '\u2014'}</td>
                   <td className="font-mono">{e.out_time || '\u2014'}</td>
-                  <td className="font-mono">{e.actual_hours ? `${e.actual_hours.toFixed(1)}h` : '\u2014'}</td>
+                  <td className="font-mono">{e.actual_hours ? `${Number(e.actual_hours).toFixed(1)}h` : '\u2014'}</td>
                   <td>{e.is_contractor ? <span className="badge-amber text-[10px]">Cont</span> : <span className="badge-blue text-[10px]">Perm</span>}</td>
                 </tr>
               ))}
@@ -520,35 +619,59 @@ function ShiftCard({ title, icon, data, expanded, onToggle, borderColor, bgColor
 }
 
 function DeptGroupTable({ title, depts, badge, totals }) {
+  const [expanded, setExpanded] = useState(false)
   if (!depts || depts.length === 0) return null
   const totalEmployees = totals?.totalEmployees || depts.reduce((s, d) => s + (d.total || 0), 0)
   const totalPresent = totals?.present || depts.reduce((s, d) => s + (d.present || 0), 0)
+  const totalAbsent = depts.reduce((s, d) => s + (d.absent || 0), 0)
+  const totalLate = depts.reduce((s, d) => s + (d.late || 0), 0)
   const totalRate = totals?.rate ?? (totalEmployees > 0 ? Math.round(totalPresent / totalEmployees * 100 * 10) / 10 : 0)
+  const isAdmin = title.toLowerCase().includes('admin')
+
   return (
-    <div>
-      <div className="flex items-center gap-2 mb-2">
-        <h4 className="text-xs font-bold text-slate-600 uppercase tracking-wider">{title}</h4>
-        <span className={clsx('text-[10px] px-1.5 py-0.5 rounded', badge)}>{totalPresent}/{totalEmployees} &middot; {fmtPct(totalRate)}</span>
-      </div>
-      <div className="overflow-x-auto">
-        <table className="w-full table-compact text-xs">
-          <thead><tr><th>Department</th><th>Total</th><th>Perm</th><th>Cont</th><th>Present</th><th>Absent</th><th>Late</th><th>Att. Rate</th></tr></thead>
-          <tbody>
-            {depts.map(d => (
-              <tr key={d.department || 'Unknown'}>
-                <td className="font-medium">{d.department || 'Unknown'}</td>
-                <td className="font-mono">{d.total}</td>
-                <td className="font-mono text-emerald-600">{d.permanent || 0}</td>
-                <td className="font-mono text-orange-600">{d.contractor || 0}</td>
-                <td className="font-mono text-emerald-600">{d.present}</td>
-                <td className="font-mono text-red-600">{d.absent}</td>
-                <td className="font-mono text-amber-600">{d.late}</td>
-                <td><RateBar rate={d.rate} /></td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
+    <div className={clsx('rounded-xl border overflow-hidden transition-all', isAdmin ? 'border-blue-200' : 'border-amber-200')}>
+      {/* Collapsible Header */}
+      <button onClick={() => setExpanded(v => !v)} className={clsx(
+        'w-full flex items-center justify-between px-5 py-3 transition-colors',
+        isAdmin ? 'bg-blue-50/80 hover:bg-blue-50' : 'bg-amber-50/80 hover:bg-amber-50'
+      )}>
+        <div className="flex items-center gap-3">
+          <span className={clsx('text-xs transition-transform', expanded && 'rotate-90')}>{'\u25B6'}</span>
+          <h4 className="text-sm font-bold text-slate-700">{title}</h4>
+          <span className={clsx('text-[11px] px-2 py-0.5 rounded-full font-semibold', badge)}>
+            {totalPresent}/{totalEmployees} &middot; {fmtPct(totalRate)}
+          </span>
+        </div>
+        <div className="flex items-center gap-4 text-xs text-slate-500">
+          <span>Present: <strong className="text-emerald-600">{totalPresent}</strong></span>
+          <span>Absent: <strong className="text-red-600">{totalAbsent}</strong></span>
+          <span>Late: <strong className="text-amber-600">{totalLate}</strong></span>
+          <span className="text-slate-400">{depts.length} depts</span>
+        </div>
+      </button>
+
+      {/* Expandable Table */}
+      {expanded && (
+        <div className="overflow-x-auto">
+          <table className="w-full table-compact text-xs">
+            <thead><tr><th>Department</th><th>Total</th><th>Perm</th><th>Cont</th><th>Present</th><th>Absent</th><th>Late</th><th>Att. Rate</th></tr></thead>
+            <tbody>
+              {depts.map(d => (
+                <tr key={d.department || 'Unknown'} className="hover:bg-slate-50">
+                  <td className="font-medium">{d.department || 'Unknown'}</td>
+                  <td className="font-mono">{d.total}</td>
+                  <td className="font-mono text-emerald-600">{d.permanent || 0}</td>
+                  <td className="font-mono text-orange-600">{d.contractor || 0}</td>
+                  <td className="font-mono text-emerald-600">{d.present}</td>
+                  <td className="font-mono text-red-600">{d.absent}</td>
+                  <td className="font-mono text-amber-600">{d.late}</td>
+                  <td><RateBar rate={d.rate} /></td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
     </div>
   )
 }
