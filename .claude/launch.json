@@ -3,8 +3,8 @@
   "configurations": [
     {
       "name": "hr-server",
-      "runtimeExecutable": "node",
-      "runtimeArgs": ["backend/server.js"],
+      "runtimeExecutable": "bash",
+      "runtimeArgs": [".claude/start-prod.sh"],
       "port": 3001
     },
     {
