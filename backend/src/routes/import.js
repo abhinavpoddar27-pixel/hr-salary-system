@@ -134,9 +134,8 @@ router.post('/upload', upload.array('files', 20), async (req, res) => {
             WHERE id = ?
           `).run(file.originalname, records.length, sheet.employeeCount, sheet.sheetName, importId);
 
-          // 2. attendance_raw: append-only archive (new import_id via a fresh sub-record)
-          //    We keep old raw records for history. Insert new ones with same import_id.
-          //    But first, clear old raw records for this import (they're archived by the audit trail)
+          // 2. Clear old raw records — first detach from attendance_processed to avoid FK violation
+          db.prepare('UPDATE attendance_processed SET raw_id = NULL WHERE raw_id IN (SELECT id FROM attendance_raw WHERE import_id = ?)').run(importId);
           db.prepare('DELETE FROM attendance_raw WHERE import_id = ?').run(importId);
 
           // 3. Clear night shift pairs (will be re-detected)
