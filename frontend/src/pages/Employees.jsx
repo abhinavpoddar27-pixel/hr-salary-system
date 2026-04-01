@@ -1,7 +1,7 @@
 import React, { useState, useRef } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import toast from 'react-hot-toast'
-import { getEmployees, getEmployee, updateEmployee, updateSalaryStructure, getLeaveBalances, updateLeaveBalance, getEmployeeDocuments, uploadEmployeeDocument, deleteEmployeeDocument, getEmployeeLoans, markEmployeeLeft } from '../utils/api'
+import { getEmployees, getEmployee, createEmployee, updateEmployee, updateSalaryStructure, getLeaveBalances, updateLeaveBalance, getEmployeeDocuments, uploadEmployeeDocument, deleteEmployeeDocument, getEmployeeLoans, markEmployeeLeft } from '../utils/api'
 import { fmtINR } from '../utils/formatters'
 import { useAppStore } from '../store/appStore'
 import Modal from '../components/ui/Modal'
@@ -151,10 +151,13 @@ function SalaryModal({ employee, onClose }) {
 
 function EditEmployeeModal({ employee, onClose }) {
   const qc = useQueryClient()
+  const isNew = !employee.code // Adding new employee vs editing existing
   const [form, setForm] = useState({
+    code: employee.code || '',
     name: employee.name || '',
     department: employee.department || '',
     designation: employee.designation || '',
+    company: employee.company || '',
     date_of_joining: employee.date_of_joining || '',
     employment_type: employee.employment_type || 'Permanent',
     shift_code: employee.shift_code || 'DAY',
@@ -165,9 +168,10 @@ function EditEmployeeModal({ employee, onClose }) {
     pan: employee.pan || ''
   })
 
-  const updateMutation = useMutation({
-    mutationFn: (data) => updateEmployee(employee.code, data),
-    onSuccess: () => { toast.success('Employee updated'); qc.invalidateQueries(['employees']); onClose() }
+  const saveMutation = useMutation({
+    mutationFn: (data) => isNew ? createEmployee(data) : updateEmployee(employee.code, data),
+    onSuccess: () => { toast.success(isNew ? 'Employee created' : 'Employee updated'); qc.invalidateQueries(['employees']); onClose() },
+    onError: (err) => toast.error(err?.response?.data?.error || 'Save failed')
   })
 
   const DAYS = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday']
@@ -176,12 +180,18 @@ function EditEmployeeModal({ employee, onClose }) {
     <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4" onClick={onClose}>
       <div className="bg-white rounded-xl shadow-2xl w-full max-w-lg max-h-[90vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
         <div className="p-5 border-b">
-          <h3 className="font-bold text-slate-800">Edit Employee — {employee.name}</h3>
-          <p className="text-xs text-slate-500">{employee.code}</p>
+          <h3 className="font-bold text-slate-800">{isNew ? 'Add New Employee' : `Edit Employee — ${employee.name}`}</h3>
+          {!isNew && <p className="text-xs text-slate-500">{employee.code}</p>}
         </div>
         <div className="p-5 grid grid-cols-2 gap-3">
+          {isNew && (
+            <div className="col-span-2">
+              <label className="label">Employee Code *</label>
+              <input type="text" value={form.code} onChange={e => setForm(f => ({ ...f, code: e.target.value }))} className="input font-mono" placeholder="e.g. 12345" />
+            </div>
+          )}
           <div className="col-span-2">
-            <label className="label">Full Name</label>
+            <label className="label">Full Name *</label>
             <input type="text" value={form.name} onChange={e => setForm(f => ({ ...f, name: e.target.value }))} className="input" />
           </div>
           <div>
@@ -192,6 +202,12 @@ function EditEmployeeModal({ employee, onClose }) {
             <label className="label">Designation</label>
             <input type="text" value={form.designation} onChange={e => setForm(f => ({ ...f, designation: e.target.value }))} className="input" />
           </div>
+          {isNew && (
+            <div className="col-span-2">
+              <label className="label">Company</label>
+              <input type="text" value={form.company} onChange={e => setForm(f => ({ ...f, company: e.target.value }))} className="input" placeholder="e.g. Asian Lakto Ind Ltd" />
+            </div>
+          )}
           <div>
             <label className="label">Date of Joining</label>
             <input type="date" value={form.date_of_joining} onChange={e => setForm(f => ({ ...f, date_of_joining: e.target.value }))} className="input" />
@@ -232,8 +248,11 @@ function EditEmployeeModal({ employee, onClose }) {
           </div>
         </div>
         <div className="p-5 border-t flex gap-2">
-          <button onClick={() => updateMutation.mutate(form)} disabled={updateMutation.isPending} className="btn-primary flex-1">
-            {updateMutation.isPending ? 'Saving...' : 'Save'}
+          <button onClick={() => {
+            if (isNew && (!form.code || !form.name)) return toast.error('Employee code and name are required')
+            saveMutation.mutate(form)
+          }} disabled={saveMutation.isPending} className="btn-primary flex-1">
+            {saveMutation.isPending ? 'Saving...' : isNew ? 'Create Employee' : 'Save'}
           </button>
           <button onClick={onClose} className="btn-secondary">Cancel</button>
         </div>
