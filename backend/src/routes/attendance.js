@@ -570,68 +570,67 @@ router.post('/deduplicate', (req, res) => {
   const { month, year } = req.body;
   if (!month || !year) return res.status(400).json({ success: false, error: 'month and year required' });
 
-  const stats = { companyFixed: 0, duplicatesRemoved: 0 };
+  const stats = { duplicatesRemoved: 0, companyFixed: 0, missPunchesDetected: 0 };
 
-  // Step 1: Determine the real company name (the one that isn't stale)
-  const staleNames = ['Sheet1', 'Sheet2', 'Default', 'null', ''];
-  const realCompanies = db.prepare(`
-    SELECT DISTINCT company FROM attendance_processed
-    WHERE month = ? AND year = ? AND company IS NOT NULL
-      AND company NOT IN ('Sheet1', 'Sheet2', 'Default', 'null', '')
-  `).all(month, year).map(r => r.company);
+  // Get ALL records for this month into memory for safe processing
+  const allRecs = db.prepare(
+    'SELECT id, employee_code, date, company FROM attendance_processed WHERE month = ? AND year = ?'
+  ).all(month, year);
 
-  // If we have a real company name, clean up stale records
-  if (realCompanies.length > 0) {
-    const mainCompany = realCompanies[0];
+  // Determine the real company name (not stale)
+  const staleNames = new Set(['Sheet1', 'Sheet2', 'Default', 'null', '', null, undefined]);
+  const realCompanies = [...new Set(allRecs.map(r => r.company).filter(c => c && !staleNames.has(c)))];
+  const mainCompany = realCompanies[0] || 'Asian Lakto Ind Ltd';
 
-    // Collect IDs of real-company records for fast lookup
-    const realKeys = new Set(
-      db.prepare(`SELECT employee_code || '|' || date as k FROM attendance_processed WHERE month = ? AND year = ? AND company = ?`)
-        .all(month, year, mainCompany).map(r => r.k)
-    );
+  // Group by employee_code + date → keep only one record (prefer real company, then newest id)
+  const groups = {};
+  for (const rec of allRecs) {
+    const key = rec.employee_code + '|' + rec.date;
+    if (!groups[key]) groups[key] = [];
+    groups[key].push(rec);
+  }
 
-    // Get all stale records
-    const staleRecords = db.prepare(`
-      SELECT id, employee_code, date, company FROM attendance_processed
-      WHERE month = ? AND year = ? AND (company IN ('Sheet1','Sheet2','Default','null','') OR company IS NULL)
-    `).all(month, year);
+  const toDelete = [];
+  const toUpdateCompany = [];
 
-    const toDelete = [];
-    const toUpdate = [];
-    for (const rec of staleRecords) {
-      const key = rec.employee_code + '|' + rec.date;
-      if (realKeys.has(key)) {
-        toDelete.push(rec.id); // real record exists → delete this stale one
-      } else {
-        toUpdate.push(rec.id); // no real record → update company
-        realKeys.add(key); // prevent duplicates among stale records
-      }
+  for (const [key, recs] of Object.entries(groups)) {
+    // Sort: prefer real company first, then by id descending (newest)
+    recs.sort((a, b) => {
+      const aReal = !staleNames.has(a.company) ? 1 : 0;
+      const bReal = !staleNames.has(b.company) ? 1 : 0;
+      if (bReal !== aReal) return bReal - aReal; // real company first
+      return b.id - a.id; // newest first
+    });
+
+    const keeper = recs[0];
+    // Mark all but keeper for deletion
+    for (let i = 1; i < recs.length; i++) {
+      toDelete.push(recs[i].id);
     }
+    // If keeper has stale company, mark for update
+    if (staleNames.has(keeper.company)) {
+      toUpdateCompany.push(keeper.id);
+    }
+  }
 
-    // Delete stale duplicates
+  // Execute deletions in a transaction
+  const txn = db.transaction(() => {
     if (toDelete.length > 0) {
-      // Detach FK references first
-      const detachStmt = db.prepare('UPDATE attendance_processed SET raw_id = NULL WHERE id = ?');
-      const deleteStmt = db.prepare('DELETE FROM attendance_processed WHERE id = ?');
-      const txnDel = db.transaction(() => {
-        for (const id of toDelete) { detachStmt.run(id); deleteStmt.run(id); }
-      });
-      txnDel();
+      const detach = db.prepare('UPDATE attendance_processed SET raw_id = NULL WHERE id = ?');
+      const del = db.prepare('DELETE FROM attendance_processed WHERE id = ?');
+      for (const id of toDelete) { detach.run(id); del.run(id); }
       stats.duplicatesRemoved = toDelete.length;
     }
 
-    // Update remaining stale records to real company
-    if (toUpdate.length > 0) {
-      const updateStmt = db.prepare('UPDATE attendance_processed SET company = ? WHERE id = ?');
-      const txnUpd = db.transaction(() => {
-        for (const id of toUpdate) updateStmt.run(mainCompany, id);
-      });
-      txnUpd();
-      stats.companyFixed = toUpdate.length;
+    // Fix company on remaining stale records
+    if (toUpdateCompany.length > 0) {
+      const upd = db.prepare('UPDATE attendance_processed SET company = ? WHERE id = ?');
+      for (const id of toUpdateCompany) upd.run(mainCompany, id);
+      stats.companyFixed = toUpdateCompany.length;
     }
 
-    // Fix stale names in attendance_raw and monthly_imports
-    for (const stale of ['Sheet1','Sheet2','Default','null','']) {
+    // Also fix attendance_raw and monthly_imports
+    for (const stale of ['Sheet1', 'Sheet2', 'Default', 'null', '']) {
       db.prepare('UPDATE attendance_raw SET company = ? WHERE month = ? AND year = ? AND company = ?')
         .run(mainCompany, month, year, stale);
       db.prepare('UPDATE monthly_imports SET company = ? WHERE month = ? AND year = ? AND company = ?')
@@ -641,34 +640,15 @@ router.post('/deduplicate', (req, res) => {
       .run(mainCompany, month, year);
     db.prepare('UPDATE monthly_imports SET company = ? WHERE month = ? AND year = ? AND company IS NULL')
       .run(mainCompany, month, year);
-  }
+  });
+  txn();
 
-  // Step 2: Now deduplicate — keep newest record per (employee_code, date, company)
-  // First detach FK references
-  db.prepare(`
-    UPDATE attendance_processed SET raw_id = NULL
-    WHERE month = ? AND year = ? AND id NOT IN (
-      SELECT MAX(id) FROM attendance_processed WHERE month = ? AND year = ?
-      GROUP BY employee_code, date, company
-    )
-  `).run(month, year, month, year);
-
-  const result = db.prepare(`
-    DELETE FROM attendance_processed WHERE id NOT IN (
-      SELECT MAX(id) FROM attendance_processed
-      WHERE month = ? AND year = ?
-      GROUP BY employee_code, date, company
-    ) AND month = ? AND year = ?
-  `).run(month, year, month, year);
-  stats.duplicatesRemoved = result.changes;
-
-  // Step 3: Re-run miss punch detection on cleaned data
+  // Re-run miss punch detection on cleaned data
   const { detectMissPunches, applyMissPunchFlags } = require('../services/missPunch');
-  // Reset all miss punch flags first
   db.prepare('UPDATE attendance_processed SET is_miss_punch = 0, miss_punch_type = NULL WHERE month = ? AND year = ?')
     .run(month, year);
-  const allRecords = db.prepare('SELECT * FROM attendance_processed WHERE month = ? AND year = ?').all(month, year);
-  const missPunches = detectMissPunches(allRecords);
+  const cleanedRecords = db.prepare('SELECT * FROM attendance_processed WHERE month = ? AND year = ?').all(month, year);
+  const missPunches = detectMissPunches(cleanedRecords);
   applyMissPunchFlags(db, missPunches);
   stats.missPunchesDetected = missPunches.length;
 
