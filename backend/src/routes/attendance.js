@@ -613,15 +613,23 @@ router.post('/deduplicate', (req, res) => {
     }
   }
 
-  // Step 1: Delete duplicate attendance_processed records (in a transaction)
+  // Step 1: Delete duplicate attendance_processed records
+  // First, disable FK constraints temporarily to avoid cascading issues
+  db.pragma('foreign_keys = OFF');
+  try {
   if (toDelete.length > 0) {
     const txnDel = db.transaction(() => {
-      const detach = db.prepare('UPDATE attendance_processed SET raw_id = NULL WHERE id = ?');
       const del = db.prepare('DELETE FROM attendance_processed WHERE id = ?');
-      for (const id of toDelete) { detach.run(id); del.run(id); }
+      for (const id of toDelete) del.run(id);
     });
     txnDel();
     stats.duplicatesRemoved = toDelete.length;
+
+    // Also clean up orphaned night_shift_pairs
+    db.prepare(`DELETE FROM night_shift_pairs WHERE month = ? AND year = ? AND (
+      in_record_id NOT IN (SELECT id FROM attendance_processed) OR
+      out_record_id NOT IN (SELECT id FROM attendance_processed)
+    )`).run(month, year);
   }
 
   // Step 2: Fix company on remaining stale records (outside transaction for try/catch)
@@ -686,6 +694,10 @@ router.post('/deduplicate', (req, res) => {
   const missPunches = detectMissPunches(cleanedRecords);
   applyMissPunchFlags(db, missPunches);
   stats.missPunchesDetected = missPunches.length;
+
+  } finally {
+    db.pragma('foreign_keys = ON');
+  }
 
   res.json({
     success: true,
