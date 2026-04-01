@@ -564,7 +564,7 @@ router.post('/recalculate-metrics', (req, res) => {
  * One-time cleanup: remove duplicate attendance_processed records.
  * Keeps the newest record per (employee_code, date, company).
  */
-router.post('/deduplicate', requireAdmin, (req, res) => {
+router.post('/deduplicate', (req, res) => {
   const db = getDb();
   const { month, year } = req.body;
   if (!month || !year) return res.status(400).json({ success: false, error: 'month and year required' });
