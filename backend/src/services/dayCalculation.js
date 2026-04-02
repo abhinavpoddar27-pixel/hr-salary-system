@@ -61,7 +61,7 @@ function countWorkingDays(dayRecords) {
   for (const r of dayRecords) {
     const status = r.status_final || r.status_original || '';
     if (status === 'P' || status === 'WOP') days += 1;
-    else if (status === '½P' || status === 'WO½P') days += 0.5;
+    else if (status === '½P' || status === 'HP' || status === 'WO½P') days += 0.5;
   }
   return days;
 }
@@ -132,9 +132,9 @@ function calculateDays(employeeCode, month, year, company, attendanceRecords, le
     const status = rec.status_final || rec.status_original || '';
 
     if (status === 'P') daysPresent += 1;
-    else if (status === 'WOP') { daysPresent += 1; daysWOP += 1; }
-    else if (status === '½P') daysHalfPresent += 0.5;
-    else if (status === 'WO½P') { daysHalfPresent += 0.5; daysWOP += 0.5; }
+    else if (status === 'WOP') daysWOP += 1;                           // WOP counted ONLY in daysWOP, not daysPresent
+    else if (status === '½P' || status === 'HP') daysHalfPresent += 0.5;  // Handle both '½P' and 'HP' status codes
+    else if (status === 'WO½P') daysWOP += 0.5;
     else if (status === 'A') {
       // Sundays and holidays should NEVER be counted as absent days
       // They are weekly offs / public holidays, not absent days
@@ -195,7 +195,7 @@ function calculateDays(employeeCode, month, year, company, attendanceRecords, le
       }
       const status = rec.status_final || rec.status_original || '';
       if (status === 'P' || status === 'WOP') weekActualWorkingDays += 1;
-      else if (status === '½P' || status === 'WO½P') weekActualWorkingDays += 0.5;
+      else if (status === '½P' || status === 'HP' || status === 'WO½P') weekActualWorkingDays += 0.5;
     }
 
     // Normalize: if week has < 6 available working days (month start/end),
@@ -283,17 +283,20 @@ function calculateDays(employeeCode, month, year, company, attendanceRecords, le
   // Paid holidays
   const paidHolidays = holidayNonSunday.length;
 
-  // Total payable days
-  const totalPayableDays = daysPresent + daysHalfPresent + daysWOP + paidSundays + paidHolidays - lopDays;
-  // Note: daysPresent already includes WOP days (WOP = worked on weekly off = working day)
-  // Actual formula: days present + half days + paid Sundays + holidays - LOP
-  const finalPayable = Math.max(0,
-    daysPresent + daysHalfPresent + paidSundays + paidHolidays - lopDays
-  );
+  // ── Payable & Extra Duty Calculation ───────────────────────
+  // daysPresent = regular working day attendance (P status only, excludes WOP)
+  // daysWOP = weekly off worked (WOP status, Sundays/holidays worked)
+  // Gross earned = all working/attendance days + paid offs
+  const grossEarned = daysPresent + daysWOP + daysHalfPresent + paidSundays + paidHolidays;
+  const netPayable = grossEarned - lopDays;
 
-  // Extra Duty: if payable days exceed calendar days of the month
-  // e.g., 32 payable in a 31-day month = 1 extra duty day (from WOP / OT shifts)
-  const extraDutyDays = Math.max(0, Math.round((finalPayable - daysInMonth) * 100) / 100);
+  // Extra Duty: days worked beyond the regular working schedule (before LOP)
+  // = WOP days + any excess working-day attendance over scheduled working days
+  const extraWorkingDays = Math.max(0, daysPresent + daysHalfPresent - totalWorkingDays);
+  const extraDutyDays = Math.round((daysWOP + extraWorkingDays) * 100) / 100;
+
+  // Payable: capped at calendar days (extra duty is paid separately)
+  const finalPayable = Math.max(0, Math.min(daysInMonth, netPayable));
 
   return {
     employeeCode,
