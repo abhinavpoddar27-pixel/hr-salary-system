@@ -763,6 +763,7 @@ function initSchema(db) {
 
   // users: RBAC company access
   safeAddColumn('users', 'allowed_companies', "TEXT DEFAULT '*'");
+  safeAddColumn('users', 'last_active', 'TEXT');
 
   // day_calculations: late deduction support
   safeAddColumn('day_calculations', 'late_count', 'INTEGER DEFAULT 0');

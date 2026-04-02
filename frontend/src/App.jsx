@@ -5,6 +5,7 @@ import Header from './components/layout/Header'
 import ErrorBoundary from './components/ui/ErrorBoundary'
 import { useAppStore } from './store/appStore'
 import { tracker } from './utils/sessionTracker'
+import useInactivityTimeout from './hooks/useInactivityTimeout'
 
 // Public page
 const Login = React.lazy(() => import('./pages/Login'))
@@ -89,9 +90,15 @@ function RouteTracker() {
   return null
 }
 
+function InactivityGuard() {
+  useInactivityTimeout()
+  return null
+}
+
 export default function App() {
   return (
     <BrowserRouter>
+      <InactivityGuard />
       <RouteTracker />
       <Suspense fallback={<PageLoader />}>
         <Routes>

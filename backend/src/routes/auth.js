@@ -5,7 +5,8 @@ const jwt = require('jsonwebtoken');
 const { getDb } = require('../database/db');
 const { requireAuth, JWT_SECRET } = require('../middleware/auth');
 
-const TOKEN_EXPIRY = '12h';
+const TOKEN_EXPIRY = '2h';
+const INACTIVITY_TIMEOUT_MS = 15 * 60 * 1000; // 15 minutes
 
 // POST /api/auth/login
 router.post('/login', (req, res) => {
@@ -26,8 +27,8 @@ router.post('/login', (req, res) => {
     return res.status(401).json({ success: false, error: 'Invalid credentials' });
   }
 
-  // Update last login
-  db.prepare("UPDATE users SET last_login = datetime('now') WHERE id = ?").run(user.id);
+  // Update last login + last active
+  db.prepare("UPDATE users SET last_login = datetime('now'), last_active = datetime('now') WHERE id = ?").run(user.id);
 
   const token = jwt.sign(
     { id: user.id, username: user.username, role: user.role },
@@ -75,6 +76,46 @@ router.get('/me', requireAuth, (req, res) => {
   user.allowedCompanies = ac === '*' ? ['*'] : ac.split(',').map(c => c.trim()).filter(Boolean);
 
   res.json({ success: true, user });
+});
+
+// POST /api/auth/heartbeat — refresh token if user is still active
+router.post('/heartbeat', requireAuth, (req, res) => {
+  try {
+    const db = getDb();
+    // Update last_active timestamp
+    db.prepare("UPDATE users SET last_active = datetime('now') WHERE id = ?").run(req.user.id);
+
+    // Issue a fresh token (sliding window)
+    const token = jwt.sign(
+      { id: req.user.id, username: req.user.username, role: req.user.role },
+      JWT_SECRET,
+      { expiresIn: TOKEN_EXPIRY }
+    );
+
+    res.cookie('hr_token', token, {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === 'production',
+      sameSite: 'lax',
+      maxAge: 2 * 60 * 60 * 1000 // 2h
+    });
+
+    res.json({ success: true, token, expiresIn: TOKEN_EXPIRY });
+  } catch (err) {
+    res.status(500).json({ success: false, error: 'Heartbeat failed' });
+  }
+});
+
+// GET /api/auth/session-status — check if user should be considered active
+router.get('/session-status', requireAuth, (req, res) => {
+  const db = getDb();
+  const user = db.prepare('SELECT last_active FROM users WHERE id = ?').get(req.user.id);
+  if (!user) return res.status(404).json({ success: false, error: 'User not found' });
+
+  const lastActive = user.last_active ? new Date(user.last_active + 'Z').getTime() : 0;
+  const now = Date.now();
+  const inactive = (now - lastActive) > INACTIVITY_TIMEOUT_MS;
+
+  res.json({ success: true, active: !inactive, lastActive: user.last_active, timeoutMs: INACTIVITY_TIMEOUT_MS });
 });
 
 // POST /api/auth/change-password  (protected)
