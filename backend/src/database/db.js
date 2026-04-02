@@ -12,9 +12,17 @@ function getDb() {
     db.pragma('journal_mode = WAL');
     db.pragma('foreign_keys = ON');
     db.pragma('synchronous = NORMAL');
-    db.pragma('cache_size = -64000');    // 64MB cache
-    db.pragma('temp_store = MEMORY');    // Temp tables in memory
-    db.pragma('mmap_size = 268435456');  // 256MB memory-mapped I/O
+    const isProd = process.env.NODE_ENV === 'production';
+    if (isProd) {
+      // Conservative settings for Railway (limited memory)
+      db.pragma('cache_size = -8000');     // 8MB cache
+      db.pragma('temp_store = MEMORY');
+      db.pragma('mmap_size = 67108864');   // 64MB memory-mapped I/O
+    } else {
+      db.pragma('cache_size = -64000');    // 64MB cache
+      db.pragma('temp_store = MEMORY');
+      db.pragma('mmap_size = 268435456');  // 256MB memory-mapped I/O
+    }
     initSchema(db);
 
     // Performance indexes (idempotent)
