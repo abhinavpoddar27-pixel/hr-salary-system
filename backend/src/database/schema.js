@@ -788,9 +788,50 @@ function initSchema(db) {
   safeCreateIndex(`CREATE UNIQUE INDEX IF NOT EXISTS idx_attendance_raw_dedup
     ON attendance_raw(import_id, employee_code, date)`);
 
-  // Across all imports, one processed record per employee per date per company
+  // Across all imports, one processed record per employee per date (regardless of company)
+  // First clean up duplicates so the stricter unique index can be created
+  try {
+    // Check if old company-based index exists and needs migration
+    const oldIdx = db.prepare("SELECT name FROM sqlite_master WHERE type='index' AND name='idx_attendance_processed_dedup'").get();
+    if (oldIdx) {
+      // Check if there are duplicates that would violate the new stricter constraint
+      const dupeCount = db.prepare(`
+        SELECT COUNT(*) as c FROM (
+          SELECT employee_code, date, COUNT(*) as cnt
+          FROM attendance_processed
+          GROUP BY employee_code, date
+          HAVING cnt > 1
+        )
+      `).get().c;
+
+      if (dupeCount > 0) {
+        console.log(`[SCHEMA] Found ${dupeCount} duplicate employee+date combos, cleaning up...`);
+        // Keep only the record with the best (non-stale) company and highest ID
+        db.pragma('foreign_keys = OFF');
+        const dupes = db.prepare(`
+          SELECT employee_code, date FROM attendance_processed
+          GROUP BY employee_code, date HAVING COUNT(*) > 1
+        `).all();
+        const delStmt = db.prepare('DELETE FROM attendance_processed WHERE id = ?');
+        let removed = 0;
+        for (const { employee_code, date } of dupes) {
+          const recs = db.prepare(
+            'SELECT id, company FROM attendance_processed WHERE employee_code = ? AND date = ? ORDER BY id DESC'
+          ).all(employee_code, date);
+          // Keep first (newest), delete rest
+          for (let i = 1; i < recs.length; i++) { delStmt.run(recs[i].id); removed++; }
+        }
+        console.log(`[SCHEMA] Removed ${removed} duplicate records`);
+        db.pragma('foreign_keys = ON');
+      }
+
+      // Drop old index and create stricter one
+      db.exec('DROP INDEX IF EXISTS idx_attendance_processed_dedup');
+    }
+  } catch (e) { console.warn('[SCHEMA] Dedup migration:', e.message); }
+
   safeCreateIndex(`CREATE UNIQUE INDEX IF NOT EXISTS idx_attendance_processed_dedup
-    ON attendance_processed(employee_code, date, company)`);
+    ON attendance_processed(employee_code, date)`);
 
   // Performance indexes for audit queries
   safeCreateIndex(`CREATE INDEX IF NOT EXISTS idx_audit_log_employee

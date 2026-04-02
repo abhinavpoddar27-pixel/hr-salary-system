@@ -257,7 +257,7 @@ router.post('/upload', upload.array('files', 20), async (req, res) => {
         // For fresh imports only: bulk insert processed records
         if (!isReimport) {
           const bulkInsertProcessed = db.prepare(`
-            INSERT OR IGNORE INTO attendance_processed (
+            INSERT INTO attendance_processed (
               raw_id, employee_id, employee_code, date, status_original, status_final,
               in_time_original, in_time_final, out_time_original, out_time_final,
               actual_hours, month, year, company
@@ -271,6 +271,16 @@ router.post('/upload', upload.array('files', 20), async (req, res) => {
             FROM attendance_raw ar
             LEFT JOIN employees e ON ar.employee_code = e.code
             WHERE ar.import_id = ?
+            ON CONFLICT(employee_code, date) DO UPDATE SET
+              raw_id = excluded.raw_id,
+              employee_id = excluded.employee_id,
+              status_original = excluded.status_original,
+              status_final = excluded.status_final,
+              in_time_original = excluded.in_time_original,
+              in_time_final = excluded.in_time_final,
+              out_time_original = excluded.out_time_original,
+              out_time_final = excluded.out_time_final,
+              company = excluded.company
           `);
           bulkInsertProcessed.run(month, year, company, importId);
         }
