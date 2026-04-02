@@ -789,49 +789,43 @@ function initSchema(db) {
     ON attendance_raw(import_id, employee_code, date)`);
 
   // Across all imports, one processed record per employee per date (regardless of company)
-  // First clean up duplicates so the stricter unique index can be created
+  // Migrate from old (employee_code, date, company) index to stricter (employee_code, date)
   try {
-    // Check if old company-based index exists and needs migration
-    const oldIdx = db.prepare("SELECT name FROM sqlite_master WHERE type='index' AND name='idx_attendance_processed_dedup'").get();
-    if (oldIdx) {
-      // Check if there are duplicates that would violate the new stricter constraint
-      const dupeCount = db.prepare(`
-        SELECT COUNT(*) as c FROM (
-          SELECT employee_code, date, COUNT(*) as cnt
-          FROM attendance_processed
-          GROUP BY employee_code, date
-          HAVING cnt > 1
-        )
-      `).get().c;
+    // Check if stricter index already exists
+    const strictIdx = db.prepare(
+      "SELECT sql FROM sqlite_master WHERE type='index' AND name='idx_attendance_processed_dedup'"
+    ).get();
+    const needsMigration = !strictIdx || (strictIdx.sql && strictIdx.sql.includes('company'));
 
-      if (dupeCount > 0) {
-        console.log(`[SCHEMA] Found ${dupeCount} duplicate employee+date combos, cleaning up...`);
-        // Keep only the record with the best (non-stale) company and highest ID
-        db.pragma('foreign_keys = OFF');
-        const dupes = db.prepare(`
-          SELECT employee_code, date FROM attendance_processed
-          GROUP BY employee_code, date HAVING COUNT(*) > 1
-        `).all();
-        const delStmt = db.prepare('DELETE FROM attendance_processed WHERE id = ?');
-        let removed = 0;
-        for (const { employee_code, date } of dupes) {
-          const recs = db.prepare(
-            'SELECT id, company FROM attendance_processed WHERE employee_code = ? AND date = ? ORDER BY id DESC'
-          ).all(employee_code, date);
-          // Keep first (newest), delete rest
-          for (let i = 1; i < recs.length; i++) { delStmt.run(recs[i].id); removed++; }
-        }
-        console.log(`[SCHEMA] Removed ${removed} duplicate records`);
-        db.pragma('foreign_keys = ON');
-      }
+    if (needsMigration) {
+      console.log('[SCHEMA] Migrating attendance dedup index (removing company from unique constraint)...');
+      db.pragma('foreign_keys = OFF');
+
+      // Batch delete: delete all duplicates in one SQL (keep highest ID per employee+date)
+      const delResult = db.prepare(`
+        DELETE FROM attendance_processed
+        WHERE id NOT IN (
+          SELECT MAX(id) FROM attendance_processed
+          GROUP BY employee_code, date
+        )
+      `).run();
+      console.log(`[SCHEMA] Removed ${delResult.changes} duplicate records`);
 
       // Drop old index and create stricter one
       db.exec('DROP INDEX IF EXISTS idx_attendance_processed_dedup');
-    }
-  } catch (e) { console.warn('[SCHEMA] Dedup migration:', e.message); }
+      db.exec(`CREATE UNIQUE INDEX idx_attendance_processed_dedup ON attendance_processed(employee_code, date)`);
+      console.log('[SCHEMA] Stricter unique index created (employee_code, date)');
 
-  safeCreateIndex(`CREATE UNIQUE INDEX IF NOT EXISTS idx_attendance_processed_dedup
-    ON attendance_processed(employee_code, date)`);
+      db.pragma('foreign_keys = ON');
+    }
+  } catch (e) {
+    console.warn('[SCHEMA] Dedup migration error (non-fatal):', e.message);
+    // Ensure FK is back on even if migration fails — app should still start
+    try { db.pragma('foreign_keys = ON'); } catch (_) {}
+    // Fall back to old index if new one can't be created
+    safeCreateIndex(`CREATE UNIQUE INDEX IF NOT EXISTS idx_attendance_processed_dedup
+      ON attendance_processed(employee_code, date, company)`);
+  }
 
   // Performance indexes for audit queries
   safeCreateIndex(`CREATE INDEX IF NOT EXISTS idx_audit_log_employee
