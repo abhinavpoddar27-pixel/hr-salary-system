@@ -143,7 +143,17 @@ app.use('/api', (req, res, next) => {
 });
 
 // ── API Routes ─────────────────────────────────────────────────
-// Auth is public
+// Auth is public (with rate limiting on login)
+const rateLimit = require('express-rate-limit');
+const loginLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 5,
+  message: { error: 'Too many login attempts, please try again in 15 minutes' },
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: (req) => req.ip
+});
+app.post('/api/auth/login', loginLimiter);
 app.use('/api/auth', require('./src/routes/auth'));
 
 // All other API routes require authentication
