@@ -11,17 +11,25 @@ router.get('/shifts', (req, res) => {
 
 router.post('/shifts', (req, res) => {
   const db = getDb();
-  const { name, code, startTime, endTime, graceMinutes, isOvernight, breakMinutes, minHoursFullDay, minHoursHalfDay } = req.body;
+  const { name, code, startTime, endTime, graceMinutes, breakMinutes, minHoursFullDay, minHoursHalfDay } = req.body;
+  // Auto-detect overnight from start/end times (start > end means it crosses midnight)
+  const [sh] = (startTime || '').split(':').map(Number);
+  const [eh] = (endTime || '').split(':').map(Number);
+  const autoOvernight = (!isNaN(sh) && !isNaN(eh) && sh > eh) ? 1 : 0;
   const result = db.prepare('INSERT INTO shifts (name, code, start_time, end_time, grace_minutes, is_overnight, break_minutes, min_hours_full_day, min_hours_half_day) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)')
-    .run(name, code, startTime, endTime, graceMinutes || 30, isOvernight ? 1 : 0, breakMinutes || 0, minHoursFullDay || 10, minHoursHalfDay || 4);
+    .run(name, code, startTime, endTime, graceMinutes || 30, autoOvernight, breakMinutes || 0, minHoursFullDay || 10, minHoursHalfDay || 4);
   res.json({ success: true, id: result.lastInsertRowid });
 });
 
 router.put('/shifts/:id', (req, res) => {
   const db = getDb();
-  const { name, startTime, endTime, graceMinutes, isOvernight, breakMinutes, minHoursFullDay, minHoursHalfDay } = req.body;
+  const { name, startTime, endTime, graceMinutes, breakMinutes, minHoursFullDay, minHoursHalfDay } = req.body;
+  // Auto-detect overnight from start/end times
+  const [sh2] = (startTime || '').split(':').map(Number);
+  const [eh2] = (endTime || '').split(':').map(Number);
+  const autoOvernight2 = (!isNaN(sh2) && !isNaN(eh2) && sh2 > eh2) ? 1 : 0;
   db.prepare('UPDATE shifts SET name=?, start_time=?, end_time=?, grace_minutes=?, is_overnight=?, break_minutes=?, min_hours_full_day=?, min_hours_half_day=? WHERE id=?')
-    .run(name, startTime, endTime, graceMinutes, isOvernight ? 1 : 0, breakMinutes || 0, minHoursFullDay, minHoursHalfDay, req.params.id);
+    .run(name, startTime, endTime, graceMinutes, autoOvernight2, breakMinutes || 0, minHoursFullDay, minHoursHalfDay, req.params.id);
   res.json({ success: true });
 });
 

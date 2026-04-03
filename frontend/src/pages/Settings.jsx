@@ -67,7 +67,7 @@ function ShiftsTab() {
               <th className="text-center">Break (min)</th>
               <th className="text-center">Min Full Day (h)</th>
               <th className="text-center">Min Half Day (h)</th>
-              <th className="text-center">Overnight</th>
+              <th className="text-center">Night</th>
               <th>Action</th>
             </tr>
           </thead>
@@ -126,11 +126,17 @@ function ShiftsTab() {
               <label className="label">Min Hours Half Day</label>
               <input type="number" value={form.minHoursHalfDay} onChange={e => setForm(f => ({ ...f, minHoursHalfDay: parseFloat(e.target.value) }))} className="input" step="0.5" />
             </div>
-            <div className="flex items-end pb-1">
-              <label className="flex items-center gap-2 text-sm cursor-pointer">
-                <input type="checkbox" checked={form.isOvernight} onChange={e => setForm(f => ({ ...f, isOvernight: e.target.checked }))} className="rounded" />
-                Overnight Shift
-              </label>
+            <div className="flex items-end pb-2">
+              {(() => {
+                const [sh] = (form.startTime || '').split(':').map(Number);
+                const [eh] = (form.endTime || '').split(':').map(Number);
+                const autoOvernight = !isNaN(sh) && !isNaN(eh) && sh > eh;
+                return (
+                  <span className={`text-xs px-2 py-1 rounded-full ${autoOvernight ? 'bg-purple-100 text-purple-700' : 'bg-slate-100 text-slate-500'}`}>
+                    {autoOvernight ? 'Crosses midnight (auto-detected)' : 'Day shift'}
+                  </span>
+                );
+              })()}
             </div>
           </div>
           <div className="flex gap-2 mt-4">
