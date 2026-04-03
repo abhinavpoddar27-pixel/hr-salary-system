@@ -297,7 +297,14 @@ function computeEmployeeSalary(db, employee, month, year, company) {
   const advanceRecovery = autoAdvanceRecovery > 0 ? autoAdvanceRecovery : (existingComp?.advance_recovery || 0);
 
   // ─── Total Deductions & Net ───
-  const totalDeductions = pfEmployee + esiEmployee + professionalTax + tds + advanceRecovery + lopDeduction + otherDeductions + loanRecovery;
+  let totalDeductions = pfEmployee + esiEmployee + professionalTax + tds + advanceRecovery + lopDeduction + otherDeductions + loanRecovery;
+  let salaryWarning = '';
+
+  // Cap deductions at gross earned — net salary must never go negative
+  if (totalDeductions > grossEarned && grossEarned > 0) {
+    salaryWarning = 'DEDUCTIONS_EXCEED_EARNINGS';
+    totalDeductions = Math.round(grossEarned * 100) / 100;
+  }
   const netSalary = Math.max(0, Math.round((grossEarned - totalDeductions) * 100) / 100);
 
   // ─── Gross Change Detection ───
@@ -334,7 +341,8 @@ function computeEmployeeSalary(db, employee, month, year, company) {
     totalDeductions: Math.round(totalDeductions * 100) / 100,
     netSalary,
     prevMonthGross, grossChanged,
-    salaryHeld, holdReason
+    salaryHeld, holdReason,
+    salaryWarning
   };
 }
 
