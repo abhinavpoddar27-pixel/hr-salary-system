@@ -280,19 +280,21 @@ function calculateDays(employeeCode, month, year, company, attendanceRecords, le
     });
   }
 
-  // ── Shift swap adjustment ────────────────────────────────────
+  // ── Shift swap / make-up day adjustment ──────────────────────
   // In 24/7 operations, employees swap shifts/offs with each other.
-  // If total working days (P + WOP + ½P) for the month meet or exceed
-  // the required working days, waive per-week LOP since the employee
-  // made up the days in other weeks.
+  // If total attendance (P + WOP + ½P) for the month meets or exceeds
+  // the required working days, waive ALL per-week LOP — the employee
+  // made up the days in other weeks or on weekly offs.
+  // Also waive if the resulting payable days would equal or exceed the month days.
   const totalWorkedDays = daysPresent + daysWOP + daysHalfPresent;
-  if (lopDays > 0 && totalWorkedDays >= totalWorkingDays) {
+  const projectedPayable = totalWorkedDays + paidSundays + (holidayNonSunday.length) - lopDays;
+  if (lopDays > 0 && (totalWorkedDays >= totalWorkingDays || projectedPayable + lopDays >= daysInMonth)) {
     lopDays = 0;
     // Also clear per-week LOP entries in breakdown
     for (const wb of weekBreakdown) {
       if (wb.lop > 0) {
         wb.lop = 0;
-        wb.note = wb.note.replace(/LOP:.*day\(s\)/, 'LOP waived (shift swap — monthly attendance met)');
+        wb.note = wb.note.replace(/LOP:.*day\(s\)/, 'LOP waived (monthly attendance met)');
       }
     }
   }
