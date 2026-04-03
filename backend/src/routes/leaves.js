@@ -81,14 +81,25 @@ router.put('/:id/approve', (req, res) => {
   const leave = db.prepare('SELECT * FROM leave_applications WHERE id = ? AND status = ?').get(req.params.id, 'Pending');
   if (!leave) return res.status(404).json({ success: false, error: 'Leave not found or already processed' });
 
+  // Check leave balance before approving
+  let balanceWarning = null;
+  const emp = db.prepare('SELECT id FROM employees WHERE code = ?').get(leave.employee_code);
+  if (emp && ['CL', 'EL', 'SL'].includes(leave.leave_type)) {
+    const year = new Date(leave.start_date).getFullYear();
+    const bal = db.prepare('SELECT balance FROM leave_balances WHERE employee_id = ? AND year = ? AND leave_type = ?').get(emp.id, year, leave.leave_type);
+    const currentBalance = bal?.balance || 0;
+    if (currentBalance < leave.days) {
+      const newBalance = currentBalance - leave.days;
+      balanceWarning = `Employee has only ${currentBalance} day(s) of ${leave.leave_type} remaining. Balance will go negative (${newBalance} days).`;
+    }
+  }
+
   const txn = db.transaction(() => {
     db.prepare(`
       UPDATE leave_applications SET status = 'Approved', approved_by = ?, approved_at = datetime('now')
       WHERE id = ?
     `).run(approvedBy, req.params.id);
 
-    // Deduct from leave balance (CL/EL/SL)
-    const emp = db.prepare('SELECT id FROM employees WHERE code = ?').get(leave.employee_code);
     if (emp && ['CL', 'EL', 'SL'].includes(leave.leave_type)) {
       const year = new Date(leave.start_date).getFullYear();
       db.prepare(`
@@ -99,7 +110,9 @@ router.put('/:id/approve', (req, res) => {
   });
   txn();
 
-  res.json({ success: true, message: 'Leave approved' });
+  const response = { success: true, message: 'Leave approved' };
+  if (balanceWarning) response.warning = balanceWarning;
+  res.json(response);
 });
 
 /**
