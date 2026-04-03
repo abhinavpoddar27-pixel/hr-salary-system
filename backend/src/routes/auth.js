@@ -69,7 +69,7 @@ router.post('/logout', (req, res) => {
 // GET /api/auth/me  (protected)
 router.get('/me', requireAuth, (req, res) => {
   const db = getDb();
-  const user = db.prepare('SELECT id, username, role, last_login, allowed_companies FROM users WHERE id = ?').get(req.user.id);
+  const user = db.prepare('SELECT id, username, role, last_login, allowed_companies, onboarding_completed FROM users WHERE id = ?').get(req.user.id);
   if (!user) return res.status(404).json({ success: false, error: 'User not found' });
 
   const ac = user.allowed_companies || '*';
@@ -137,6 +137,13 @@ router.post('/change-password', requireAuth, (req, res) => {
   const hash = bcrypt.hashSync(newPassword, 10);
   db.prepare('UPDATE users SET password_hash = ? WHERE id = ?').run(hash, req.user.id);
   res.json({ success: true, message: 'Password updated successfully' });
+});
+
+// PATCH /api/auth/onboarding-complete
+router.patch('/onboarding-complete', requireAuth, (req, res) => {
+  const db = getDb();
+  db.prepare('UPDATE users SET onboarding_completed = 1 WHERE id = ?').run(req.user.id);
+  res.json({ success: true });
 });
 
 // GET /api/auth/users  (admin only)
