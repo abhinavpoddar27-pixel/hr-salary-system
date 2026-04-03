@@ -8,6 +8,16 @@ const { parseEESLFile, extractEmployees, getImportSummary } = require('../servic
 const { pairNightShifts, applyPairingToDb } = require('../services/nightShift');
 const { detectMissPunches, applyMissPunchFlags } = require('../services/missPunch');
 
+function friendlyParseError(errorMsg) {
+  if (!errorMsg) return 'Import failed due to an unexpected error. Please verify the file and try again.';
+  const msg = errorMsg.toLowerCase();
+  if (msg.includes('date range')) return "This file doesn't appear to be in EESL biometric format. Please upload the .xls file exported from your EESL machine.";
+  if (msg.includes('landmark') || msg.includes('day header') || msg.includes('day columns')) return "Could not find the expected data structure in this file. Make sure it's an unmodified EESL export.";
+  if (msg.includes('no employee') || msg.includes('no sheets')) return "The file was recognized but contains no employee attendance data. Check if the correct date range was exported.";
+  if (msg.includes('not supported') || msg.includes('invalid')) return "This file format is not supported. Please upload a .xls or .xlsx file from the EESL biometric system.";
+  return 'Import failed due to an unexpected error. Please verify the file and try again.';
+}
+
 const upload = multer({
   dest: path.join(__dirname, '../../../uploads'),
   fileFilter: (req, file, cb) => {
@@ -39,7 +49,7 @@ router.post('/upload', upload.array('files', 20), async (req, res) => {
       const parseResult = await parseEESLFile(file.path);
 
       if (!parseResult.success) {
-        results.push({ file: file.originalname, success: false, error: parseResult.error });
+        results.push({ file: file.originalname, success: false, error: parseResult.error, userMessage: friendlyParseError(parseResult.error) });
         continue;
       }
 
@@ -438,7 +448,7 @@ router.post('/upload', upload.array('files', 20), async (req, res) => {
       }
     } catch (err) {
       console.error('Import error for file', file.originalname, ':', err);
-      results.push({ file: file.originalname, success: false, error: err.message });
+      results.push({ file: file.originalname, success: false, error: err.message, userMessage: friendlyParseError(err.message) });
     } finally {
       // Clean up temp file
       try { fs.unlinkSync(file.path); } catch (e) {}
