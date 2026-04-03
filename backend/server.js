@@ -77,9 +77,20 @@ const PORT = process.env.PORT || 3001;
 const IS_PROD = process.env.NODE_ENV === 'production';
 
 // ── CORS ──────────────────────────────────────────────────────
-const allowedOrigins = IS_PROD
-  ? (process.env.ALLOWED_ORIGINS || '').split(',').map(s => s.trim()).filter(Boolean)
-  : ['http://localhost:5173', 'http://localhost:4173', 'http://localhost:3000'];
+let allowedOrigins;
+if (IS_PROD) {
+  const envOrigins = (process.env.ALLOWED_ORIGINS || '').split(',').map(s => s.trim()).filter(Boolean);
+  if (envOrigins.length > 0) {
+    allowedOrigins = envOrigins;
+  } else if (process.env.RAILWAY_PUBLIC_DOMAIN) {
+    allowedOrigins = [`https://${process.env.RAILWAY_PUBLIC_DOMAIN}`];
+  } else {
+    console.warn('⚠️  CORS: No ALLOWED_ORIGINS set in production — defaulting to same-origin only');
+    allowedOrigins = [];
+  }
+} else {
+  allowedOrigins = ['http://localhost:5173', 'http://localhost:4173', 'http://localhost:3000'];
+}
 
 app.use(cors({
   origin: (origin, cb) => {
