@@ -1011,6 +1011,46 @@ function initSchema(db) {
   safeCreateIndex(`CREATE INDEX IF NOT EXISTS idx_shift_roster_week
     ON shift_roster(week_start, shift_code)`);
 
+  // ── Phase 5: Finance Audit — Manual Intervention Tracking ────────
+
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS salary_manual_flags (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      employee_code TEXT NOT NULL,
+      month INTEGER NOT NULL,
+      year INTEGER NOT NULL,
+      flag_type TEXT NOT NULL,
+      field_name TEXT,
+      system_value REAL DEFAULT 0,
+      manual_value REAL DEFAULT 0,
+      delta REAL DEFAULT 0,
+      changed_by TEXT,
+      changed_at TEXT DEFAULT (datetime('now')),
+      finance_approved INTEGER DEFAULT 0,
+      approved_by TEXT,
+      approved_at TEXT,
+      notes TEXT,
+      UNIQUE(employee_code, month, year, flag_type)
+    );
+  `);
+
+  safeCreateIndex(`CREATE INDEX IF NOT EXISTS idx_salary_manual_flags_month
+    ON salary_manual_flags(employee_code, month, year)`);
+
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS finance_approvals (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      employee_code TEXT NOT NULL,
+      month INTEGER NOT NULL,
+      year INTEGER NOT NULL,
+      flag_id INTEGER REFERENCES salary_manual_flags(id),
+      status TEXT DEFAULT 'PENDING',
+      reviewed_by TEXT,
+      reviewed_at TEXT,
+      comments TEXT
+    );
+  `);
+
   console.log('✅ Database schema initialized');
 }
 

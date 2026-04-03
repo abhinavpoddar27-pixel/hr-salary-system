@@ -420,6 +420,65 @@ function saveSalaryComputation(db, comp) {
       `).run(comp.employeeCode, comp.month, comp.year);
     } catch {}
   }
+
+  // ── Auto-populate salary_manual_flags for finance audit ──
+  try {
+    populateManualFlags(db, comp);
+  } catch {}
+}
+
+/**
+ * Auto-detect and record manual interventions for finance audit
+ */
+function populateManualFlags(db, comp) {
+  const insertFlag = db.prepare(`
+    INSERT INTO salary_manual_flags (employee_code, month, year, flag_type, field_name, system_value, manual_value, delta, changed_by, notes)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'system', ?)
+    ON CONFLICT(employee_code, month, year, flag_type) DO UPDATE SET
+      system_value = excluded.system_value, manual_value = excluded.manual_value,
+      delta = excluded.delta, changed_at = datetime('now'), notes = excluded.notes
+  `);
+
+  const ec = comp.employeeCode, m = comp.month, y = comp.year;
+
+  // Manual TDS
+  if (comp.tds > 0) {
+    insertFlag.run(ec, m, y, 'MANUAL_TDS', 'tds', 0, comp.tds, comp.tds, `TDS of ${comp.tds} manually entered`);
+  }
+
+  // Manual other deductions
+  if (comp.otherDeductions > 0) {
+    insertFlag.run(ec, m, y, 'MANUAL_OTHER_DEDUCTION', 'other_deductions', 0, comp.otherDeductions, comp.otherDeductions, `Other deductions of ${comp.otherDeductions}`);
+  }
+
+  // Gross structure change from prev month
+  if (comp.grossChanged) {
+    insertFlag.run(ec, m, y, 'GROSS_STRUCTURE_CHANGE', 'gross_salary', comp.prevMonthGross, comp.grossSalary, comp.grossSalary - comp.prevMonthGross,
+      `Gross changed from ${comp.prevMonthGross} to ${comp.grossSalary}`);
+  }
+
+  // Salary held
+  if (comp.salaryHeld) {
+    insertFlag.run(ec, m, y, 'SALARY_HELD', 'salary_held', 0, 1, 0, comp.holdReason || 'Below minimum payable days');
+  }
+
+  // Day correction exists
+  try {
+    const dc = db.prepare('SELECT * FROM day_corrections WHERE employee_code = ? AND month = ? AND year = ?').get(ec, m, y);
+    if (dc) {
+      insertFlag.run(ec, m, y, 'DAY_CORRECTION', 'total_payable_days', dc.original_system_days, dc.corrected_days, dc.correction_delta,
+        `${dc.correction_reason}: ${dc.correction_notes || ''}`);
+    }
+  } catch {}
+
+  // Punch correction exists
+  try {
+    const monthStr = String(m).padStart(2, '0');
+    const pcCount = db.prepare(`SELECT COUNT(*) as cnt FROM punch_corrections WHERE employee_code = ? AND date LIKE ?`).get(ec, `${y}-${monthStr}-%`);
+    if (pcCount && pcCount.cnt > 0) {
+      insertFlag.run(ec, m, y, 'PUNCH_CORRECTION', 'punch_records', 0, pcCount.cnt, pcCount.cnt, `${pcCount.cnt} punch correction(s) this month`);
+    }
+  } catch {}
 }
 
 /**

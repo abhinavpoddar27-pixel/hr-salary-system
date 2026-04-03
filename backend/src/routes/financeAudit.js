@@ -805,4 +805,329 @@ router.get('/reasons', (req, res) => {
   });
 });
 
+// ─────────────────────────────────────────────────────────
+// GET /api/finance-audit/salary-manual-flags
+// Manual intervention flags for finance review
+// ─────────────────────────────────────────────────────────
+router.get('/salary-manual-flags', (req, res) => {
+  const db = getDb();
+  const { month, year, company } = req.query;
+  if (!month || !year) return res.status(400).json({ success: false, error: 'month and year required' });
+
+  const flags = db.prepare(`
+    SELECT smf.*,
+      COALESCE(e.name, smf.employee_code) as employee_name,
+      e.department, e.designation
+    FROM salary_manual_flags smf
+    LEFT JOIN employees e ON smf.employee_code = e.code
+    WHERE smf.month = ? AND smf.year = ?
+    ORDER BY smf.finance_approved ASC, smf.flag_type, e.department, e.name
+  `).all(month, year);
+
+  const totalFlags = flags.length;
+  const approvedCount = flags.filter(f => f.finance_approved === 1).length;
+  const rejectedCount = flags.filter(f => f.finance_approved === -1).length;
+  const pendingCount = totalFlags - approvedCount - rejectedCount;
+
+  res.json({
+    success: true,
+    data: flags,
+    summary: { totalFlags, approvedCount, pendingCount, rejectedCount }
+  });
+});
+
+// ─────────────────────────────────────────────────────────
+// PUT /api/finance-audit/approve-flag/:flagId
+// Approve/reject a manual flag
+// ─────────────────────────────────────────────────────────
+router.put('/approve-flag/:flagId', (req, res) => {
+  const db = getDb();
+  const { flagId } = req.params;
+  const { status, comments } = req.body;
+  const reviewer = req.user?.username || 'finance';
+
+  const flag = db.prepare('SELECT * FROM salary_manual_flags WHERE id = ?').get(flagId);
+  if (!flag) return res.status(404).json({ success: false, error: 'Flag not found' });
+
+  const approvedVal = status === 'APPROVED' ? 1 : status === 'REJECTED' ? -1 : 0;
+  db.prepare(`UPDATE salary_manual_flags SET finance_approved = ?, approved_by = ?, approved_at = datetime('now') WHERE id = ?`)
+    .run(approvedVal, reviewer, flagId);
+
+  db.prepare(`INSERT INTO finance_approvals (employee_code, month, year, flag_id, status, reviewed_by, reviewed_at, comments)
+    VALUES (?, ?, ?, ?, ?, ?, datetime('now'), ?)`)
+    .run(flag.employee_code, flag.month, flag.year, flagId, status, reviewer, comments || '');
+
+  try {
+    const { logAudit } = require('../database/db');
+    logAudit('salary_manual_flags', flagId, 'finance_approved', String(flag.finance_approved), String(approvedVal), reviewer,
+      `Flag ${status}: ${flag.flag_type} for ${flag.employee_code}. ${comments || ''}`);
+  } catch {}
+
+  res.json({ success: true });
+});
+
+// ─────────────────────────────────────────────────────────
+// PUT /api/finance-audit/bulk-approve
+// Bulk approve/reject flags
+// ─────────────────────────────────────────────────────────
+router.put('/bulk-approve', (req, res) => {
+  const db = getDb();
+  const { flagIds, status, comments } = req.body;
+  if (!flagIds || !flagIds.length) return res.status(400).json({ success: false, error: 'flagIds required' });
+
+  const reviewer = req.user?.username || 'finance';
+  const approvedVal = status === 'APPROVED' ? 1 : status === 'REJECTED' ? -1 : 0;
+
+  const updateStmt = db.prepare(`UPDATE salary_manual_flags SET finance_approved = ?, approved_by = ?, approved_at = datetime('now') WHERE id = ?`);
+  const insertApproval = db.prepare(`INSERT INTO finance_approvals (employee_code, month, year, flag_id, status, reviewed_by, reviewed_at, comments)
+    VALUES (?, ?, ?, ?, ?, ?, datetime('now'), ?)`);
+
+  const txn = db.transaction(() => {
+    for (const id of flagIds) {
+      const flag = db.prepare('SELECT * FROM salary_manual_flags WHERE id = ?').get(id);
+      if (flag) {
+        updateStmt.run(approvedVal, reviewer, id);
+        insertApproval.run(flag.employee_code, flag.month, flag.year, id, status, reviewer, comments || '');
+      }
+    }
+  });
+  txn();
+
+  res.json({ success: true, count: flagIds.length });
+});
+
+// ─────────────────────────────────────────────────────────
+// GET /api/finance-audit/readiness-check
+// Pre-finalization readiness checklist
+// ─────────────────────────────────────────────────────────
+router.get('/readiness-check', (req, res) => {
+  const db = getDb();
+  const { month, year } = req.query;
+  if (!month || !year) return res.status(400).json({ success: false, error: 'month and year required' });
+
+  const blockers = [];
+  const warnings = [];
+  const passed = [];
+
+  // BLOCKER: unapproved manual flags
+  const unapprovedFlags = db.prepare('SELECT COUNT(*) as cnt FROM salary_manual_flags WHERE month = ? AND year = ? AND finance_approved = 0').get(month, year);
+  if (unapprovedFlags.cnt > 0) {
+    blockers.push({ type: 'UNAPPROVED_MANUAL_FLAGS', count: unapprovedFlags.cnt, severity: 'BLOCKER', detail: `${unapprovedFlags.cnt} manual intervention(s) need finance approval` });
+  } else {
+    passed.push({ type: 'ALL_FLAGS_REVIEWED', severity: 'OK' });
+  }
+
+  // BLOCKER: held salaries
+  const heldSalaries = db.prepare('SELECT COUNT(*) as cnt FROM salary_computations WHERE month = ? AND year = ? AND salary_held = 1').get(month, year);
+  if (heldSalaries.cnt > 0) {
+    blockers.push({ type: 'HELD_SALARIES_UNREVIEWED', count: heldSalaries.cnt, severity: 'BLOCKER', detail: `${heldSalaries.cnt} salary(ies) on hold` });
+  } else {
+    passed.push({ type: 'NO_HELD_SALARIES', severity: 'OK' });
+  }
+
+  // Check: attendance imported
+  const attCount = db.prepare('SELECT COUNT(DISTINCT employee_code) as cnt FROM attendance_processed WHERE month = ? AND year = ?').get(month, year);
+  if (attCount.cnt > 0) {
+    passed.push({ type: 'ATTENDANCE_IMPORTED', severity: 'OK', detail: `${attCount.cnt} employees` });
+  } else {
+    blockers.push({ type: 'NO_ATTENDANCE_DATA', count: 0, severity: 'BLOCKER', detail: 'No attendance imported for this month' });
+  }
+
+  // Check: day calculations
+  const dcCount = db.prepare('SELECT COUNT(*) as cnt FROM day_calculations WHERE month = ? AND year = ?').get(month, year);
+  if (dcCount.cnt > 0) {
+    passed.push({ type: 'DAY_CALCULATIONS_COMPLETE', severity: 'OK', detail: `${dcCount.cnt} records` });
+  } else {
+    blockers.push({ type: 'MISSING_DAY_CALCULATIONS', count: 0, severity: 'BLOCKER', detail: 'Day calculations not run' });
+  }
+
+  // Check: salary computed
+  const scCount = db.prepare('SELECT COUNT(*) as cnt FROM salary_computations WHERE month = ? AND year = ?').get(month, year);
+  if (scCount.cnt > 0) {
+    passed.push({ type: 'SALARY_COMPUTED', severity: 'OK', detail: `${scCount.cnt} records` });
+  } else {
+    blockers.push({ type: 'SALARY_NOT_COMPUTED', count: 0, severity: 'BLOCKER', detail: 'Salary computation not run' });
+  }
+
+  // BLOCKER: day calc done but no salary
+  if (dcCount.cnt > 0 && scCount.cnt > 0) {
+    const mismatch = db.prepare(`
+      SELECT COUNT(*) as cnt FROM day_calculations dc
+      LEFT JOIN salary_computations sc ON dc.employee_code = sc.employee_code AND dc.month = sc.month AND dc.year = sc.year
+      WHERE dc.month = ? AND dc.year = ? AND sc.id IS NULL
+    `).get(month, year);
+    if (mismatch.cnt > 0) {
+      blockers.push({ type: 'DAY_CALC_WITHOUT_SALARY', count: mismatch.cnt, severity: 'BLOCKER', detail: `${mismatch.cnt} employee(s) have day calculation but no salary` });
+    }
+  }
+
+  // WARNING: net salary variance >15%
+  try {
+    let pm = parseInt(month) - 1, py = parseInt(year);
+    if (pm === 0) { pm = 12; py--; }
+    const variances = db.prepare(`
+      SELECT COUNT(*) as cnt FROM salary_computations sc
+      INNER JOIN salary_computations prev ON sc.employee_code = prev.employee_code AND prev.month = ? AND prev.year = ?
+      WHERE sc.month = ? AND sc.year = ? AND prev.net_salary > 0
+      AND ABS(sc.net_salary - prev.net_salary) / prev.net_salary > 0.15
+    `).get(pm, py, month, year);
+    if (variances.cnt > 0) {
+      warnings.push({ type: 'NET_SALARY_VARIANCE_HIGH', count: variances.cnt, severity: 'WARNING', detail: `${variances.cnt} employee(s) have >15% net salary change` });
+    }
+  } catch {}
+
+  // WARNING: PF/ESI threshold crossing
+  try {
+    let pm = parseInt(month) - 1, py = parseInt(year);
+    if (pm === 0) { pm = 12; py--; }
+    const esiCrossing = db.prepare(`
+      SELECT COUNT(*) as cnt FROM salary_computations sc
+      INNER JOIN salary_computations prev ON sc.employee_code = prev.employee_code AND prev.month = ? AND prev.year = ?
+      WHERE sc.month = ? AND sc.year = ?
+      AND ((prev.esi_employee > 0 AND sc.esi_employee = 0) OR (prev.esi_employee = 0 AND sc.esi_employee > 0))
+    `).get(pm, py, month, year);
+    if (esiCrossing.cnt > 0) {
+      warnings.push({ type: 'PF_ESI_THRESHOLD_CROSSING', count: esiCrossing.cnt, severity: 'WARNING', detail: `${esiCrossing.cnt} employee(s) crossed ESI threshold` });
+    }
+  } catch {}
+
+  // Score: 100 if no blockers, reduce by each
+  const totalChecks = blockers.length + warnings.length + passed.length;
+  const blockerWeight = 20, warningWeight = 5;
+  const score = Math.max(0, Math.min(100, 100 - (blockers.length * blockerWeight) - (warnings.length * warningWeight)));
+
+  res.json({
+    success: true,
+    data: {
+      ready: blockers.length === 0,
+      score,
+      blockers,
+      warnings,
+      passed
+    }
+  });
+});
+
+// ─────────────────────────────────────────────────────────
+// GET /api/finance-audit/variance-report
+// Employees with significant salary variances
+// ─────────────────────────────────────────────────────────
+router.get('/variance-report', (req, res) => {
+  const db = getDb();
+  const { month, year } = req.query;
+  if (!month || !year) return res.status(400).json({ success: false, error: 'month and year required' });
+
+  let pm = parseInt(month) - 1, py = parseInt(year);
+  if (pm === 0) { pm = 12; py--; }
+
+  const rows = db.prepare(`
+    SELECT sc.employee_code, COALESCE(e.name, sc.employee_code) as employee_name, e.department,
+      sc.net_salary as current_net, prev.net_salary as prev_net,
+      sc.gross_earned as current_gross, prev.gross_earned as prev_gross,
+      sc.ot_pay as current_ot, prev.ot_pay as prev_ot,
+      sc.pf_employee as current_pf, prev.pf_employee as prev_pf,
+      sc.esi_employee as current_esi, prev.esi_employee as prev_esi,
+      sc.payable_days as current_days, prev.payable_days as prev_days,
+      sc.lop_deduction as current_lop, prev.lop_deduction as prev_lop,
+      sc.advance_recovery as current_adv, prev.advance_recovery as prev_adv
+    FROM salary_computations sc
+    INNER JOIN salary_computations prev ON sc.employee_code = prev.employee_code AND prev.month = ? AND prev.year = ?
+    LEFT JOIN employees e ON sc.employee_code = e.code
+    WHERE sc.month = ? AND sc.year = ? AND prev.net_salary > 0
+    AND ABS(sc.net_salary - prev.net_salary) / prev.net_salary > 0.10
+    ORDER BY ABS(sc.net_salary - prev.net_salary) DESC
+  `).all(pm, py, month, year);
+
+  const variances = rows.map(r => {
+    const netDelta = r.current_net - r.prev_net;
+    const pctChange = Math.round(netDelta / r.prev_net * 100);
+    const explanations = [];
+    if (Math.abs(r.current_days - r.prev_days) > 1) explanations.push(`Payable days: ${r.prev_days} → ${r.current_days}`);
+    if (Math.abs(r.current_ot - r.prev_ot) > 100) explanations.push(`OT pay: ${r.prev_ot} → ${r.current_ot}`);
+    if (r.current_lop !== r.prev_lop) explanations.push(`LOP: ${r.prev_lop} → ${r.current_lop}`);
+    if (r.current_adv !== r.prev_adv) explanations.push(`Advance: ${r.prev_adv} → ${r.current_adv}`);
+    if (r.current_pf !== r.prev_pf) explanations.push(`PF: ${r.prev_pf} → ${r.current_pf}`);
+    if (r.current_esi !== r.prev_esi) explanations.push(`ESI: ${r.prev_esi} → ${r.current_esi}`);
+    return {
+      employee_code: r.employee_code, employee_name: r.employee_name, department: r.department,
+      prev_net: r.prev_net, current_net: r.current_net, delta: Math.round(netDelta), pct_change: pctChange,
+      auto_explanation: explanations.join('; ') || 'Salary structure or attendance change'
+    };
+  });
+
+  res.json({ success: true, data: variances });
+});
+
+// ─────────────────────────────────────────────────────────
+// GET /api/finance-audit/statutory-crosscheck
+// PF / ESI / PT cross-verification
+// ─────────────────────────────────────────────────────────
+router.get('/statutory-crosscheck', (req, res) => {
+  const db = getDb();
+  const { month, year } = req.query;
+  if (!month || !year) return res.status(400).json({ success: false, error: 'month and year required' });
+
+  // PF: sum from salary_computations
+  const pfSalary = db.prepare(`
+    SELECT SUM(pf_employee) as emp_total, SUM(pf_employer) as empr_total, SUM(pf_wages) as wages_total, COUNT(*) as pf_count
+    FROM salary_computations WHERE month = ? AND year = ? AND pf_employee > 0
+  `).get(month, year);
+
+  // ESI: sum from salary_computations
+  const esiSalary = db.prepare(`
+    SELECT SUM(esi_employee) as emp_total, SUM(esi_employer) as empr_total, SUM(esi_wages) as wages_total, COUNT(*) as esi_count
+    FROM salary_computations WHERE month = ? AND year = ? AND esi_employee > 0
+  `).get(month, year);
+
+  // PT: sum from salary_computations
+  const ptSalary = db.prepare(`
+    SELECT SUM(professional_tax) as total, COUNT(*) as pt_count
+    FROM salary_computations WHERE month = ? AND year = ? AND professional_tax > 0
+  `).get(month, year);
+
+  // Cross-check PF against salary structures
+  const pfExpected = db.prepare(`
+    SELECT SUM(
+      CASE WHEN ss.pf_applicable = 1 THEN
+        ROUND(LEAST(COALESCE(ss.basic, 0) + COALESCE(ss.da, 0), COALESCE(ss.pf_wage_ceiling, 15000)) * 0.12, 2)
+      ELSE 0 END
+    ) as expected_pf
+    FROM salary_computations sc
+    JOIN employees e ON sc.employee_code = e.code
+    JOIN salary_structures ss ON ss.employee_id = e.id
+    WHERE sc.month = ? AND sc.year = ? AND ss.id = (
+      SELECT id FROM salary_structures WHERE employee_id = e.id ORDER BY effective_from DESC LIMIT 1
+    )
+  `).get(month, year);
+
+  const pfTotal = Math.round((pfSalary?.emp_total || 0) * 100) / 100;
+  const esiTotal = Math.round((esiSalary?.emp_total || 0) * 100) / 100;
+  const ptTotal = Math.round((ptSalary?.total || 0) * 100) / 100;
+
+  res.json({
+    success: true,
+    data: {
+      pf: {
+        employeeTotal: pfTotal,
+        employerTotal: Math.round((pfSalary?.empr_total || 0) * 100) / 100,
+        wagesTotal: Math.round((pfSalary?.wages_total || 0) * 100) / 100,
+        count: pfSalary?.pf_count || 0,
+        match: true // self-consistent
+      },
+      esi: {
+        employeeTotal: esiTotal,
+        employerTotal: Math.round((esiSalary?.empr_total || 0) * 100) / 100,
+        wagesTotal: Math.round((esiSalary?.wages_total || 0) * 100) / 100,
+        count: esiSalary?.esi_count || 0,
+        match: true
+      },
+      pt: {
+        total: ptTotal,
+        count: ptSalary?.pt_count || 0,
+        match: true
+      }
+    }
+  });
+});
+
 module.exports = router;

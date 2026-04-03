@@ -236,6 +236,12 @@ export const applyLeaveCorrection = (data) => api.post('/finance-audit/correctio
 export const markPresentCorrection = (data) => api.post('/finance-audit/corrections/mark-present', data)
 export const getManualAttendanceFlags = (params) => api.get('/finance-audit/manual-flags', { params })
 export const verifyManualFlag = (id, data) => api.put(`/finance-audit/manual-flags/${id}/verify`, data)
+export const getSalaryManualFlags = (month, year, company) => api.get('/finance-audit/salary-manual-flags', { params: { month, year, company } })
+export const approveManualFlag = (flagId, data) => api.put(`/finance-audit/approve-flag/${flagId}`, data)
+export const bulkApproveFlags = (data) => api.put('/finance-audit/bulk-approve', data)
+export const getReadinessCheck = (month, year) => api.get('/finance-audit/readiness-check', { params: { month, year } })
+export const getVarianceReport = (month, year) => api.get('/finance-audit/variance-report', { params: { month, year } })
+export const getStatutoryCrosscheck = (month, year, company) => api.get('/finance-audit/statutory-crosscheck', { params: { month, year, company } })
 
 // ── Phase 5 Features ────────────────────────────────────
 export const accrueLeaves = (month, year) => api.post('/features/accrue-leaves', { month, year })

@@ -1,6 +1,7 @@
 import React, { useState, useMemo } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { getFinanceReport, submitDayCorrection, getCorrectionHistory, getCorrectionsSummary, getManualAttendanceFlags, verifyManualFlag } from '../utils/api'
+import { getFinanceReport, submitDayCorrection, getCorrectionHistory, getCorrectionsSummary, getManualAttendanceFlags, verifyManualFlag,
+  getSalaryManualFlags, approveManualFlag, bulkApproveFlags, getReadinessCheck, getVarianceReport, getStatutoryCrosscheck } from '../utils/api'
 import { useAppStore } from '../store/appStore'
 import DateSelector from '../components/common/DateSelector'
 import useDateSelector from '../hooks/useDateSelector'
@@ -538,27 +539,362 @@ function ManualFlagsTab() {
 }
 
 // ═══════════════════════════════════════════════════════════
+// FLAG TYPE CONFIG
+// ═══════════════════════════════════════════════════════════
+const FLAG_TYPE_CONFIG = {
+  MANUAL_TDS: { label: 'Manual TDS', icon: '💰', color: 'amber' },
+  MANUAL_OTHER_DEDUCTION: { label: 'Other Deduction', icon: '📝', color: 'amber' },
+  GROSS_STRUCTURE_CHANGE: { label: 'Gross Changed', icon: '📊', color: 'purple' },
+  SALARY_HELD: { label: 'Salary Held', icon: '⏸️', color: 'red' },
+  DAY_CORRECTION: { label: 'Day Correction', icon: '📅', color: 'blue' },
+  PUNCH_CORRECTION: { label: 'Punch Correction', icon: '🔧', color: 'cyan' },
+  SALARY_INPUT_CHANGE: { label: 'Salary Input', icon: '✏️', color: 'amber' },
+  HOLD_OVERRIDE: { label: 'Hold Override', icon: '🔓', color: 'green' },
+}
+
+// ═══════════════════════════════════════════════════════════
+// READINESS DASHBOARD TAB
+// ═══════════════════════════════════════════════════════════
+function ReadinessTab() {
+  const { month, year } = useDateSelector({ mode: 'month', syncToStore: true })
+  const { data: res } = useQuery({ queryKey: ['readiness', month, year], queryFn: () => getReadinessCheck(month, year), retry: 0 })
+  const check = res?.data?.data
+
+  if (!check) return <div className="text-center py-12 text-slate-400">Loading readiness check...</div>
+
+  const scoreColor = check.score >= 85 ? 'text-green-600' : check.score >= 60 ? 'text-amber-600' : 'text-red-600'
+  const scoreBg = check.score >= 85 ? 'border-green-400' : check.score >= 60 ? 'border-amber-400' : 'border-red-400'
+
+  return (
+    <div className="space-y-5">
+      {/* Score */}
+      <div className="flex items-center gap-6">
+        <div className={clsx('w-24 h-24 rounded-full border-4 flex items-center justify-center', scoreBg)}>
+          <span className={clsx('text-3xl font-bold', scoreColor)}>{check.score}</span>
+        </div>
+        <div>
+          <h3 className="text-lg font-semibold">{check.ready ? 'Ready to Finalize' : 'Not Ready'}</h3>
+          <p className="text-sm text-slate-500">{check.blockers.length} blocker(s), {check.warnings.length} warning(s), {check.passed.length} passed</p>
+        </div>
+      </div>
+
+      {/* Blockers */}
+      {check.blockers.length > 0 && (
+        <div>
+          <h4 className="text-sm font-semibold text-red-700 mb-2">Blockers</h4>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+            {check.blockers.map((b, i) => (
+              <div key={i} className="bg-red-50 border border-red-200 rounded-lg p-3">
+                <div className="font-semibold text-red-800 text-sm">{b.type.replace(/_/g, ' ')}</div>
+                <div className="text-xs text-red-600 mt-1">{b.detail}</div>
+                {b.count > 0 && <div className="mt-1 text-lg font-bold text-red-700">{b.count}</div>}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Warnings */}
+      {check.warnings.length > 0 && (
+        <div>
+          <h4 className="text-sm font-semibold text-amber-700 mb-2">Warnings</h4>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+            {check.warnings.map((w, i) => (
+              <div key={i} className="bg-amber-50 border border-amber-200 rounded-lg p-3">
+                <div className="font-semibold text-amber-800 text-sm">{w.type.replace(/_/g, ' ')}</div>
+                <div className="text-xs text-amber-600 mt-1">{w.detail}</div>
+                {w.count > 0 && <div className="mt-1 text-lg font-bold text-amber-700">{w.count}</div>}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Passed */}
+      <div>
+        <h4 className="text-sm font-semibold text-green-700 mb-2">Passed Checks</h4>
+        <div className="flex flex-wrap gap-2">
+          {check.passed.map((p, i) => (
+            <span key={i} className="bg-green-50 text-green-700 text-xs px-3 py-1.5 rounded-full border border-green-200">
+              {p.type.replace(/_/g, ' ')} {p.detail ? `(${p.detail})` : ''}
+            </span>
+          ))}
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// ═══════════════════════════════════════════════════════════
+// MANUAL INTERVENTIONS TAB (salary_manual_flags)
+// ═══════════════════════════════════════════════════════════
+function ManualInterventionsTab() {
+  const qc = useQueryClient()
+  const { month, year } = useDateSelector({ mode: 'month', syncToStore: true })
+  const { selectedCompany } = useAppStore()
+  const [filterType, setFilterType] = useState('')
+  const [filterStatus, setFilterStatus] = useState('')
+  const [selected, setSelected] = useState(new Set())
+  const [commentModal, setCommentModal] = useState(null)
+  const [comment, setComment] = useState('')
+
+  const { data: res } = useQuery({
+    queryKey: ['salary-manual-flags', month, year, selectedCompany],
+    queryFn: () => getSalaryManualFlags(month, year, selectedCompany), retry: 0
+  })
+  const flags = res?.data?.data || []
+  const summary = res?.data?.summary || {}
+
+  const filtered = useMemo(() => {
+    let f = flags
+    if (filterType) f = f.filter(x => x.flag_type === filterType)
+    if (filterStatus === 'pending') f = f.filter(x => x.finance_approved === 0)
+    if (filterStatus === 'approved') f = f.filter(x => x.finance_approved === 1)
+    if (filterStatus === 'rejected') f = f.filter(x => x.finance_approved === -1)
+    return f
+  }, [flags, filterType, filterStatus])
+
+  const approveMut = useMutation({
+    mutationFn: ({ id, status, comments }) => approveManualFlag(id, { status, comments }),
+    onSuccess: () => { qc.invalidateQueries(['salary-manual-flags']); qc.invalidateQueries(['readiness']); toast.success('Flag updated') }
+  })
+
+  const bulkMut = useMutation({
+    mutationFn: (data) => bulkApproveFlags(data),
+    onSuccess: () => { qc.invalidateQueries(['salary-manual-flags']); qc.invalidateQueries(['readiness']); setSelected(new Set()); toast.success('Bulk action complete') }
+  })
+
+  const handleApprove = (id, status) => {
+    if (status === 'REJECTED' || status === 'QUERIED') {
+      setCommentModal({ id, status })
+    } else {
+      approveMut.mutate({ id, status, comments: '' })
+    }
+  }
+
+  const toggleSelect = (id) => {
+    const s = new Set(selected)
+    s.has(id) ? s.delete(id) : s.add(id)
+    setSelected(s)
+  }
+
+  const selectAll = () => {
+    if (selected.size === filtered.length) setSelected(new Set())
+    else setSelected(new Set(filtered.map(f => f.id)))
+  }
+
+  const statusBadge = (val) => {
+    if (val === 1) return <span className="text-xs bg-green-100 text-green-700 px-2 py-0.5 rounded-full">Approved</span>
+    if (val === -1) return <span className="text-xs bg-red-100 text-red-700 px-2 py-0.5 rounded-full">Rejected</span>
+    return <span className="text-xs bg-amber-100 text-amber-700 px-2 py-0.5 rounded-full">Pending</span>
+  }
+
+  return (
+    <div className="space-y-4">
+      {/* Summary cards */}
+      <div className="grid grid-cols-4 gap-3">
+        <KPI label="Total Flags" value={summary.totalFlags || 0} color="blue" />
+        <KPI label="Pending" value={summary.pendingCount || 0} color="amber" />
+        <KPI label="Approved" value={summary.approvedCount || 0} color="green" />
+        <KPI label="Rejected" value={summary.rejectedCount || 0} color="red" />
+      </div>
+
+      {/* Filters + bulk */}
+      <div className="flex items-center gap-3 flex-wrap">
+        <select value={filterType} onChange={e => setFilterType(e.target.value)} className="input text-xs w-48">
+          <option value="">All Flag Types</option>
+          {Object.entries(FLAG_TYPE_CONFIG).map(([k, v]) => <option key={k} value={k}>{v.icon} {v.label}</option>)}
+        </select>
+        <select value={filterStatus} onChange={e => setFilterStatus(e.target.value)} className="input text-xs w-36">
+          <option value="">All Status</option>
+          <option value="pending">Pending</option>
+          <option value="approved">Approved</option>
+          <option value="rejected">Rejected</option>
+        </select>
+        {selected.size > 0 && (
+          <div className="flex items-center gap-2 ml-auto">
+            <span className="text-xs text-slate-500">{selected.size} selected</span>
+            <button onClick={() => bulkMut.mutate({ flagIds: [...selected], status: 'APPROVED' })} className="btn-primary text-xs">Approve All</button>
+            <button onClick={() => bulkMut.mutate({ flagIds: [...selected], status: 'REJECTED' })} className="btn-secondary text-xs">Reject All</button>
+          </div>
+        )}
+      </div>
+
+      {/* Table */}
+      <div className="card overflow-x-auto">
+        <table className="table-compact w-full">
+          <thead>
+            <tr>
+              <th><input type="checkbox" onChange={selectAll} checked={selected.size === filtered.length && filtered.length > 0} /></th>
+              <th>Employee</th>
+              <th>Dept</th>
+              <th>Flag Type</th>
+              <th className="text-right">System</th>
+              <th className="text-right">Manual</th>
+              <th className="text-right">Delta</th>
+              <th>Notes</th>
+              <th>Status</th>
+              <th>Actions</th>
+            </tr>
+          </thead>
+          <tbody>
+            {filtered.map(f => {
+              const cfg = FLAG_TYPE_CONFIG[f.flag_type] || { label: f.flag_type, icon: '?', color: 'slate' }
+              const isPending = f.finance_approved === 0
+              return (
+                <tr key={f.id} className={isPending ? 'bg-amber-50/60' : ''}>
+                  <td><input type="checkbox" checked={selected.has(f.id)} onChange={() => toggleSelect(f.id)} /></td>
+                  <td className="font-medium text-sm">{f.employee_name}<div className="text-[10px] text-slate-400">{f.employee_code}</div></td>
+                  <td className="text-xs">{f.department}</td>
+                  <td><span className={`text-xs px-2 py-0.5 rounded-full bg-${cfg.color}-100 text-${cfg.color}-700`}>{cfg.icon} {cfg.label}</span></td>
+                  <td className="text-right text-xs font-mono">{f.system_value ? fmtINR2(f.system_value) : '—'}</td>
+                  <td className="text-right text-xs font-mono">{f.manual_value ? fmtINR2(f.manual_value) : '—'}</td>
+                  <td className="text-right text-xs font-mono font-bold">{f.delta > 0 ? '+' : ''}{f.delta ? fmtINR2(f.delta) : '—'}</td>
+                  <td className="text-xs text-slate-500 max-w-[200px] truncate">{f.notes}</td>
+                  <td>{statusBadge(f.finance_approved)}</td>
+                  <td>
+                    {isPending && (
+                      <div className="flex gap-1">
+                        <button onClick={() => handleApprove(f.id, 'APPROVED')} className="text-green-600 hover:bg-green-50 px-1.5 py-0.5 rounded text-xs font-medium">Approve</button>
+                        <button onClick={() => handleApprove(f.id, 'REJECTED')} className="text-red-600 hover:bg-red-50 px-1.5 py-0.5 rounded text-xs font-medium">Reject</button>
+                      </div>
+                    )}
+                  </td>
+                </tr>
+              )
+            })}
+            {filtered.length === 0 && <tr><td colSpan={10} className="text-center py-8 text-slate-400">No manual flags found</td></tr>}
+          </tbody>
+        </table>
+      </div>
+
+      {/* Comment modal */}
+      {commentModal && (
+        <Modal onClose={() => setCommentModal(null)} title={`${commentModal.status === 'REJECTED' ? 'Reject' : 'Query'} Flag`}>
+          <textarea value={comment} onChange={e => setComment(e.target.value)} className="input w-full h-24" placeholder="Add comments..." />
+          <div className="flex gap-2 mt-3">
+            <button onClick={() => { approveMut.mutate({ id: commentModal.id, status: commentModal.status, comments: comment }); setCommentModal(null); setComment('') }} className="btn-primary text-sm">Submit</button>
+            <button onClick={() => setCommentModal(null)} className="btn-secondary text-sm">Cancel</button>
+          </div>
+        </Modal>
+      )}
+    </div>
+  )
+}
+
+// ═══════════════════════════════════════════════════════════
+// VARIANCE ALERTS TAB
+// ═══════════════════════════════════════════════════════════
+function VarianceTab() {
+  const { month, year } = useDateSelector({ mode: 'month', syncToStore: true })
+  const { data: res } = useQuery({ queryKey: ['variance', month, year], queryFn: () => getVarianceReport(month, year), retry: 0 })
+  const variances = res?.data?.data || []
+
+  return (
+    <div className="space-y-4">
+      <p className="text-sm text-slate-500">{variances.length} employee(s) with &gt;10% net salary variance from previous month</p>
+      {variances.length === 0 && <div className="text-center py-12 text-slate-400">No significant variances detected</div>}
+      <div className="card overflow-x-auto">
+        <table className="table-compact w-full">
+          <thead>
+            <tr><th>Employee</th><th>Dept</th><th className="text-right">Prev Net</th><th className="text-right">Current Net</th><th className="text-right">Delta</th><th className="text-right">%</th><th>Explanation</th></tr>
+          </thead>
+          <tbody>
+            {variances.map(v => (
+              <tr key={v.employee_code} className={v.pct_change < -15 ? 'bg-red-50' : v.pct_change > 15 ? 'bg-green-50' : ''}>
+                <td className="font-medium text-sm">{v.employee_name}<div className="text-[10px] text-slate-400">{v.employee_code}</div></td>
+                <td className="text-xs">{v.department}</td>
+                <td className="text-right text-xs font-mono">{fmtINR(v.prev_net)}</td>
+                <td className="text-right text-xs font-mono">{fmtINR(v.current_net)}</td>
+                <td className={clsx('text-right text-xs font-mono font-bold', v.delta > 0 ? 'text-green-700' : 'text-red-700')}>{v.delta > 0 ? '+' : ''}{fmtINR(v.delta)}</td>
+                <td className={clsx('text-right text-xs font-bold', v.pct_change > 0 ? 'text-green-700' : 'text-red-700')}>{v.pct_change > 0 ? '+' : ''}{v.pct_change}%</td>
+                <td className="text-xs text-slate-500 max-w-[300px]">{v.auto_explanation}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  )
+}
+
+// ═══════════════════════════════════════════════════════════
+// STATUTORY CROSS-CHECK TAB
+// ═══════════════════════════════════════════════════════════
+function StatutoryTab() {
+  const { month, year } = useDateSelector({ mode: 'month', syncToStore: true })
+  const { selectedCompany } = useAppStore()
+  const { data: res } = useQuery({ queryKey: ['statutory', month, year, selectedCompany], queryFn: () => getStatutoryCrosscheck(month, year, selectedCompany), retry: 0 })
+  const data = res?.data?.data
+
+  if (!data) return <div className="text-center py-12 text-slate-400">Loading statutory cross-check...</div>
+
+  const Card = ({ title, items }) => (
+    <div className="card p-4 space-y-3">
+      <h4 className="font-semibold text-sm">{title}</h4>
+      {items.map((item, i) => (
+        <div key={i} className="flex justify-between text-sm">
+          <span className="text-slate-600">{item.label}</span>
+          <span className="font-mono font-medium">{fmtINR(item.value)}</span>
+        </div>
+      ))}
+    </div>
+  )
+
+  return (
+    <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+      <Card title={`PF (${data.pf.count} employees)`} items={[
+        { label: 'Employee PF', value: data.pf.employeeTotal },
+        { label: 'Employer PF', value: data.pf.employerTotal },
+        { label: 'PF Wages', value: data.pf.wagesTotal },
+      ]} />
+      <Card title={`ESI (${data.esi.count} employees)`} items={[
+        { label: 'Employee ESI', value: data.esi.employeeTotal },
+        { label: 'Employer ESI', value: data.esi.employerTotal },
+        { label: 'ESI Wages', value: data.esi.wagesTotal },
+      ]} />
+      <Card title={`Professional Tax (${data.pt.count} employees)`} items={[
+        { label: 'Total PT', value: data.pt.total },
+      ]} />
+    </div>
+  )
+}
+
+// ═══════════════════════════════════════════════════════════
 // MAIN FINANCE AUDIT COMPONENT
 // ═══════════════════════════════════════════════════════════
 export default function FinanceAudit() {
   const { user, selectedCompany } = useAppStore()
   const { month, year, dateProps } = useDateSelector({ mode: 'month', syncToStore: true })
-  const [activeTab, setActiveTab] = useState('report')
+  const [activeTab, setActiveTab] = useState('readiness')
   const isAdmin = user?.role === 'admin'
 
   // Fetch manual flags count for badge
   const { data: flagsRes } = useQuery({
-    queryKey: ['manual-flags', month, year, selectedCompany],
-    queryFn: () => getManualAttendanceFlags({ month, year, company: selectedCompany }),
+    queryKey: ['salary-manual-flags', month, year, selectedCompany],
+    queryFn: () => getSalaryManualFlags(month, year, selectedCompany),
     retry: 0,
     staleTime: 60000
   })
-  const flagsData = flagsRes?.data?.data || flagsRes?.data || []
-  const unverifiedFlagCount = flagsData.filter(f => !f.verified && !f.verified_by).length
+  const flagsSummary = flagsRes?.data?.summary || {}
+  const pendingFlagCount = flagsSummary.pendingCount || 0
+
+  // Legacy manual attendance flags
+  const { data: attFlagsRes } = useQuery({
+    queryKey: ['manual-flags', month, year, selectedCompany],
+    queryFn: () => getManualAttendanceFlags({ month, year, company: selectedCompany }),
+    retry: 0, staleTime: 60000
+  })
+  const attFlagsData = attFlagsRes?.data?.data || attFlagsRes?.data || []
+  const unverifiedFlagCount = attFlagsData.filter(f => !f.verified && !f.verified_by).length
 
   const tabs = [
+    { id: 'readiness', label: 'Readiness' },
+    { id: 'interventions', label: 'Manual Interventions', badge: pendingFlagCount },
+    { id: 'variance', label: 'Variance Alerts' },
+    { id: 'statutory', label: 'Statutory Check' },
     { id: 'report', label: 'Finance Report' },
-    { id: 'manual-flags', label: `Manual Flags${unverifiedFlagCount > 0 ? ` (${unverifiedFlagCount})` : ''}` },
+    { id: 'manual-flags', label: `Attendance Flags`, badge: unverifiedFlagCount },
     ...(isAdmin ? [{ id: 'corrections', label: 'Corrections Summary' }] : [])
   ]
 
@@ -567,7 +903,7 @@ export default function FinanceAudit() {
       <div className="p-6 space-y-5 animate-fade-in">
         <div>
           <h2 className="section-title">Finance Audit</h2>
-          <p className="section-subtitle mt-1">Verify salary computations, review corrections, and detect anomalies</p>
+          <p className="section-subtitle mt-1">Pre-finalization verification, manual intervention tracking, and anomaly detection</p>
         </div>
 
         <div className="flex items-center gap-3">
@@ -575,19 +911,23 @@ export default function FinanceAudit() {
           <DateSelector {...dateProps} />
         </div>
 
-        <div className="border-b border-slate-200 flex gap-0">
+        <div className="border-b border-slate-200 flex gap-0 overflow-x-auto">
           {tabs.map(t => (
             <button key={t.id} onClick={() => setActiveTab(t.id)}
-              className={clsx('px-5 py-2.5 text-sm font-medium border-b-2 transition-colors',
+              className={clsx('px-4 py-2.5 text-sm font-medium border-b-2 transition-colors whitespace-nowrap',
                 activeTab === t.id ? 'border-blue-600 text-blue-600' : 'border-transparent text-slate-500 hover:text-slate-700')}>
               {t.label}
-              {t.id === 'manual-flags' && unverifiedFlagCount > 0 && (
-                <span className="ml-1.5 bg-amber-100 text-amber-700 text-[10px] px-1.5 py-0.5 rounded-full font-bold">{unverifiedFlagCount}</span>
+              {t.badge > 0 && (
+                <span className="ml-1.5 bg-amber-100 text-amber-700 text-[10px] px-1.5 py-0.5 rounded-full font-bold">{t.badge}</span>
               )}
             </button>
           ))}
         </div>
 
+        {activeTab === 'readiness' && <ReadinessTab />}
+        {activeTab === 'interventions' && <ManualInterventionsTab />}
+        {activeTab === 'variance' && <VarianceTab />}
+        {activeTab === 'statutory' && <StatutoryTab />}
         {activeTab === 'report' && <ReportTab />}
         {activeTab === 'manual-flags' && <ManualFlagsTab />}
         {activeTab === 'corrections' && isAdmin && <CorrectionsSummaryTab />}
