@@ -17,6 +17,7 @@ import DrillDownRow, { DrillDownChevron } from '../components/ui/DrillDownRow'
 import EmployeeQuickView from '../components/ui/EmployeeQuickView'
 import api from '../utils/api'
 import { downloadPayslipPDF } from '../utils/payslipPdf'
+import ConfirmDialog from '../components/ui/ConfirmDialog'
 
 export default function SalaryComputation() {
   const { month, year, dateProps } = useDateSelector({ mode: 'month', syncToStore: true })
@@ -26,6 +27,7 @@ export default function SalaryComputation() {
   const [payslipEmployee, setPayslipEmployee] = useState(null)
   const [filterDept, setFilterDept] = useState('')
   const [filterView, setFilterView] = useState('all')
+  const [confirmAction, setConfirmAction] = useState(null)
 
   const { data: res, isLoading, refetch } = useQuery({
     queryKey: ['salary-register', month, year, selectedCompany],
@@ -183,8 +185,8 @@ export default function SalaryComputation() {
               {computeMutation.isPending ? 'Computing...' : 'Compute Salary'}
             </button>
             {allSalaries.length > 0 && !allSalaries[0]?.is_finalised && (
-              <button onClick={() => finaliseMutation.mutate()} disabled={finaliseMutation.isPending} className="btn-success">
-                Finalise
+              <button onClick={() => setConfirmAction('finalise')} disabled={finaliseMutation.isPending} className="btn-success">
+                {finaliseMutation.isPending ? 'Finalising...' : 'Finalise'}
               </button>
             )}
             {allSalaries.length > 0 && (
@@ -643,6 +645,17 @@ export default function SalaryComputation() {
         </Modal>
 
         <AbbreviationLegend keys={['PF', 'EPF', 'EPS', 'ESI', 'PT', 'LOP', 'DA', 'HRA', 'OT', 'TDS', 'EMI', 'NEFT', 'IFSC', 'UAN']} />
+
+        {confirmAction === 'finalise' && (
+          <ConfirmDialog
+            title="Finalise Salary"
+            message={`This will finalise salary for ${monthYearLabel(month, year)} (${allSalaries.length} employees). Finalised salaries cannot be recomputed without admin intervention. Are you sure?`}
+            confirmText="Yes, Finalise"
+            variant="warning"
+            onConfirm={() => { setConfirmAction(null); finaliseMutation.mutate() }}
+            onCancel={() => setConfirmAction(null)}
+          />
+        )}
       </div>
     </div>
   )
