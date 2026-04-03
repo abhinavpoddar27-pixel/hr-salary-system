@@ -74,10 +74,21 @@ function getPrevMonthGross(db, employeeCode, month, year) {
  */
 function getAdvanceRecovery(db, employeeCode, month, year) {
   try {
-    const adv = db.prepare(`
+    // First try paid-but-not-recovered advances (normal flow)
+    let adv = db.prepare(`
       SELECT advance_amount FROM salary_advances
       WHERE employee_code = ? AND recovery_month = ? AND recovery_year = ?
       AND paid = 1 AND recovered = 0
+    `).get(employeeCode, month, year);
+    if (adv && adv.advance_amount > 0) return adv.advance_amount;
+
+    // Also check eligible advances that may not have been marked paid yet
+    // (advances are given mid-month and recovered from same month's salary)
+    adv = db.prepare(`
+      SELECT advance_amount FROM salary_advances
+      WHERE employee_code = ? AND recovery_month = ? AND recovery_year = ?
+      AND is_eligible = 1 AND recovered = 0 AND advance_amount > 0
+      AND remark IS NOT 'NO_ADVANCE'
     `).get(employeeCode, month, year);
     return adv ? adv.advance_amount : 0;
   } catch { return 0; }
@@ -190,14 +201,33 @@ function computeEmployeeSalary(db, employee, month, year, company) {
   const otRate = parseFloat(getPolicyValue(db, 'ot_rate_multiplier', 2));
   const holdMinDays = parseFloat(getPolicyValue(db, 'salary_hold_min_days', 5));
 
-  // Gross monthly salary — use gross_salary field first, fall back to component sum
-  const basicMonthly = salStruct.basic || 0;
-  const daMonthly = salStruct.da || 0;
-  const hraMonthly = salStruct.hra || 0;
-  const conveyanceMonthly = salStruct.conveyance || 0;
-  const otherMonthly = salStruct.other_allowances || 0;
+  // Gross monthly salary — employee.gross_salary (master) is the source of truth
+  // Fall back to salStruct.gross_salary, then component sum
+  let basicMonthly = salStruct.basic || 0;
+  let daMonthly = salStruct.da || 0;
+  let hraMonthly = salStruct.hra || 0;
+  let conveyanceMonthly = salStruct.conveyance || 0;
+  let otherMonthly = salStruct.other_allowances || 0;
   const componentSum = basicMonthly + daMonthly + hraMonthly + conveyanceMonthly + otherMonthly;
-  const grossMonthly = componentSum > 0 ? componentSum : (salStruct.gross_salary || employee.gross_salary || 0);
+  const grossMonthly = employee.gross_salary > 0 ? employee.gross_salary : (salStruct.gross_salary > 0 ? salStruct.gross_salary : componentSum);
+
+  // Rescale components if gross from master differs from component sum
+  // This ensures earned breakdowns match the actual gross
+  if (componentSum > 0 && Math.abs(grossMonthly - componentSum) > 1) {
+    const scale = grossMonthly / componentSum;
+    basicMonthly = Math.round(basicMonthly * scale * 100) / 100;
+    daMonthly = Math.round(daMonthly * scale * 100) / 100;
+    hraMonthly = Math.round(hraMonthly * scale * 100) / 100;
+    conveyanceMonthly = Math.round(conveyanceMonthly * scale * 100) / 100;
+    otherMonthly = Math.round(grossMonthly - basicMonthly - daMonthly - hraMonthly - conveyanceMonthly);
+  } else if (componentSum === 0 && grossMonthly > 0) {
+    // No components set — use default split (50% basic, 20% HRA, 30% other)
+    const bPct = salStruct.basic_percent || 50;
+    const hPct = salStruct.hra_percent || 20;
+    basicMonthly = Math.round(grossMonthly * bPct / 100 * 100) / 100;
+    hraMonthly = Math.round(grossMonthly * hPct / 100 * 100) / 100;
+    otherMonthly = Math.round((grossMonthly - basicMonthly - hraMonthly) * 100) / 100;
+  }
 
   // Per-day rate
   const perDayRate = grossMonthly / divisor;
@@ -246,7 +276,9 @@ function computeEmployeeSalary(db, employee, month, year, company) {
   const professionalTax = calcProfessionalTax(grossMonthly, db);
 
   // ─── LOP Deduction ───
-  const lopDeduction = Math.round(lopDays * perDayRate * 100) / 100;
+  // If payable days >= divisor (typically 26), employee worked a full month — no LOP
+  const effectiveLopDays = payableDays >= divisor ? 0 : lopDays;
+  const lopDeduction = Math.round(effectiveLopDays * perDayRate * 100) / 100;
 
   // ─── Advance Recovery (from salary_advances table) ───
   const autoAdvanceRecovery = getAdvanceRecovery(db, employee.code, month, year);
@@ -373,7 +405,7 @@ function saveSalaryComputation(db, comp) {
       db.prepare(`
         UPDATE salary_advances SET recovered = 1
         WHERE employee_code = ? AND recovery_month = ? AND recovery_year = ?
-        AND paid = 1 AND recovered = 0
+        AND is_eligible = 1 AND recovered = 0 AND advance_amount > 0
       `).run(comp.employeeCode, comp.month, comp.year);
     } catch {}
   }
