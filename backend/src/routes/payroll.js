@@ -3,6 +3,7 @@ const router = express.Router();
 const { getDb } = require('../database/db');
 const { calculateDays, saveDayCalculation } = require('../services/dayCalculation');
 const { computeEmployeeSalary, saveSalaryComputation, generatePayslipData } = require('../services/salaryComputation');
+const XLSX = require('xlsx');
 
 /**
  * POST /api/payroll/calculate-days
@@ -663,6 +664,160 @@ router.get('/salary-comparison', (req, res) => {
     },
     period: { current: { month, year }, previous: { month: prevMonth, year: prevYear } }
   });
+});
+
+/**
+ * GET /api/payroll/salary-slip-excel
+ * Generate single Excel file with all salary slips — 4 per page, with summary sheet
+ */
+router.get('/salary-slip-excel', (req, res) => {
+  const db = getDb();
+  const { month, year, company } = req.query;
+  if (!month || !year) return res.status(400).json({ success: false, error: 'month and year required' });
+
+  const MONTHS = ['', 'JANUARY', 'FEBRUARY', 'MARCH', 'APRIL', 'MAY', 'JUNE', 'JULY', 'AUGUST', 'SEPTEMBER', 'OCTOBER', 'NOVEMBER', 'DECEMBER'];
+
+  // Fetch all salary data
+  const rows = db.prepare(`
+    SELECT sc.*, e.name, e.department, e.designation, e.date_of_joining,
+      dc.total_payable_days, dc.days_present, dc.days_absent, dc.paid_sundays, dc.days_wop, dc.ot_hours
+    FROM salary_computations sc
+    LEFT JOIN employees e ON sc.employee_code = e.code
+    LEFT JOIN day_calculations dc ON sc.employee_code = dc.employee_code AND sc.month = dc.month AND sc.year = dc.year
+    WHERE sc.month = ? AND sc.year = ? AND sc.net_salary > 0
+    ${company ? 'AND sc.company = ?' : ''}
+    AND (e.status IS NULL OR e.status NOT IN ('Exited'))
+    ORDER BY e.department, e.name
+  `).all(...[parseInt(month), parseInt(year), company].filter(Boolean));
+
+  if (rows.length === 0) return res.status(404).json({ success: false, error: 'No salary records found' });
+
+  const companyName = company || 'ASIAN LAKTO IND LTD.';
+  const monthTitle = `SALARY SLIP ${MONTHS[parseInt(month)]} ${year}`;
+
+  const wb = XLSX.utils.book_new();
+
+  // ── Sheet 1: SUMMARY ──────────────────────────────────────
+  const summaryData = [
+    [companyName],
+    [`SALARY SUMMARY — ${MONTHS[parseInt(month)]} ${year}`],
+    [],
+    ['S.No', 'EMP', 'NAME', 'DEPARTMENT', 'DESIGNATION', 'GROSS', 'EARNED', 'PF', 'ESI', 'PT', 'ADVANCE', 'LOAN', 'LOP', 'TOT DED', 'NET PAYABLE', 'DAYS']
+  ];
+
+  rows.forEach((r, i) => {
+    summaryData.push([
+      i + 1, r.employee_code, r.name || '', r.department || '', r.designation || '',
+      r.gross_salary || 0, r.gross_earned || 0,
+      r.pf_employee || 0, r.esi_employee || 0, r.professional_tax || 0,
+      r.advance_recovery || 0, r.loan_recovery || 0, r.lop_deduction || 0,
+      r.total_deductions || 0, r.net_salary || 0, r.total_payable_days || 0
+    ]);
+  });
+
+  // Totals row
+  const totals = rows.reduce((t, r) => {
+    t.gross += r.gross_salary || 0; t.earned += r.gross_earned || 0;
+    t.pf += r.pf_employee || 0; t.esi += r.esi_employee || 0; t.pt += r.professional_tax || 0;
+    t.adv += r.advance_recovery || 0; t.loan += r.loan_recovery || 0; t.lop += r.lop_deduction || 0;
+    t.ded += r.total_deductions || 0; t.net += r.net_salary || 0;
+    return t;
+  }, { gross: 0, earned: 0, pf: 0, esi: 0, pt: 0, adv: 0, loan: 0, lop: 0, ded: 0, net: 0 });
+
+  summaryData.push([
+    '', '', 'TOTAL', '', '',
+    Math.round(totals.gross), Math.round(totals.earned),
+    Math.round(totals.pf), Math.round(totals.esi), Math.round(totals.pt),
+    Math.round(totals.adv), Math.round(totals.loan), Math.round(totals.lop),
+    Math.round(totals.ded), Math.round(totals.net), ''
+  ]);
+
+  const summarySheet = XLSX.utils.aoa_to_sheet(summaryData);
+  summarySheet['!cols'] = [
+    { wch: 5 }, { wch: 8 }, { wch: 22 }, { wch: 18 }, { wch: 16 },
+    { wch: 10 }, { wch: 10 }, { wch: 8 }, { wch: 8 }, { wch: 6 },
+    { wch: 10 }, { wch: 8 }, { wch: 8 }, { wch: 10 }, { wch: 12 }, { wch: 6 }
+  ];
+  summarySheet['!merges'] = [
+    { s: { r: 0, c: 0 }, e: { r: 0, c: 15 } },
+    { s: { r: 1, c: 0 }, e: { r: 1, c: 15 } }
+  ];
+  XLSX.utils.book_append_sheet(wb, summarySheet, 'SUMMARY');
+
+  // ── Sheet 2: SALARY SLIP ──────────────────────────────────
+  const slipData = [];
+  const slipMerges = [];
+  let currentRow = 0;
+
+  // Process employees in groups of 4
+  for (let g = 0; g < rows.length; g += 4) {
+    const group = rows.slice(g, g + 4);
+
+    // Header rows for this page
+    slipData.push([companyName]);
+    slipMerges.push({ s: { r: currentRow, c: 0 }, e: { r: currentRow, c: 11 } });
+    currentRow++;
+
+    slipData.push([monthTitle]);
+    slipMerges.push({ s: { r: currentRow, c: 0 }, e: { r: currentRow, c: 11 } });
+    currentRow++;
+
+    // Column headers
+    slipData.push(['S.No', 'EMP', 'NAME', 'DESIGNATION', 'DATE.D', 'GROSS SALARY', 'TOTAL EARNED', 'ADVANCE', 'Total Days', 'PAYABLE', 'Net Payable', 'Signature']);
+    currentRow++;
+
+    // Employee rows (4 per page, with blank row between each)
+    for (let i = 0; i < group.length; i++) {
+      const r = group[i];
+      const doj = r.date_of_joining ? r.date_of_joining.replace(/-/g, '/').replace(/^(\d{4})\/(\d{2})\/(\d{2})$/, '$2/$3/$1').replace(/^0/, '') : '';
+
+      // Blank row before employee
+      slipData.push([]);
+      currentRow++;
+
+      slipData.push([
+        g + i + 1,
+        r.employee_code,
+        r.name || '',
+        (r.designation || '') + (r.department ? ` ${r.department}` : ''),
+        doj,
+        r.gross_salary || 0,
+        r.gross_earned ? Math.round(r.gross_earned * 100) / 100 : 0,
+        r.advance_recovery || 0,
+        r.total_payable_days ? Math.round(r.total_payable_days * 100) / 100 : 0,
+        r.net_salary ? Math.round((r.net_salary + (r.advance_recovery || 0)) * 100) / 100 : 0,
+        r.net_salary ? Math.round(r.net_salary) : 0,
+        ''
+      ]);
+      currentRow++;
+    }
+
+    // Yellow separator (blank row marker — will need styling in Excel)
+    slipData.push([]);
+    currentRow++;
+    slipData.push(['─', '─', '─', '─', '─', '─', '─', '─', '─', '─', '─', '─']);
+    currentRow++;
+  }
+
+  const slipSheet = XLSX.utils.aoa_to_sheet(slipData);
+  slipSheet['!cols'] = [
+    { wch: 5 }, { wch: 8 }, { wch: 22 }, { wch: 20 }, { wch: 10 },
+    { wch: 12 }, { wch: 12 }, { wch: 10 }, { wch: 10 }, { wch: 12 }, { wch: 12 }, { wch: 14 }
+  ];
+  slipSheet['!merges'] = slipMerges;
+
+  // Set print area and page breaks
+  slipSheet['!print'] = { area: true };
+
+  XLSX.utils.book_append_sheet(wb, slipSheet, 'SALARY SLIP');
+
+  // Generate buffer and send
+  const buf = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' });
+  const filename = `Salary_Slip_${MONTHS[parseInt(month)]}_${year}.xlsx`;
+
+  res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+  res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+  res.send(Buffer.from(buf));
 });
 
 module.exports = router;

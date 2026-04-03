@@ -1,7 +1,7 @@
 import React, { useState, useMemo } from 'react'
 import { useQuery, useMutation } from '@tanstack/react-query'
 import toast from 'react-hot-toast'
-import { getSalaryRegister, computeSalary, finaliseSalary, getPayslip, getMonthEndChecklist, getSalaryComparison, getBulkPayslips } from '../utils/api'
+import { getSalaryRegister, computeSalary, finaliseSalary, getPayslip, getMonthEndChecklist, getSalaryComparison, getBulkPayslips, downloadSalarySlipExcel } from '../utils/api'
 import { useAppStore } from '../store/appStore'
 import CompanyFilter from '../components/shared/CompanyFilter'
 import DateSelector from '../components/common/DateSelector'
@@ -132,6 +132,23 @@ export default function SalaryComputation() {
     finally { setBulkPdfLoading(false) }
   }
 
+  const [excelLoading, setExcelLoading] = useState(false)
+  async function handleExcelSlip() {
+    setExcelLoading(true)
+    try {
+      const res = await downloadSalarySlipExcel(month, year, selectedCompany)
+      const blob = new Blob([res.data], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' })
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = `Salary_Slip_${month}_${year}.xlsx`
+      a.click()
+      URL.revokeObjectURL(url)
+      toast.success('Salary slip Excel downloaded')
+    } catch { toast.error('Excel generation failed') }
+    finally { setExcelLoading(false) }
+  }
+
   const computedTotals = useMemo(() => {
     const active = allSalaries.filter(s => !s.salary_held)
     return {
@@ -171,10 +188,16 @@ export default function SalaryComputation() {
               </button>
             )}
             {allSalaries.length > 0 && (
-              <button onClick={handleBulkPDF} disabled={bulkPdfLoading}
-                className="px-3 py-2 text-sm bg-slate-100 text-slate-700 rounded-lg hover:bg-slate-200 transition-colors">
-                {bulkPdfLoading ? 'Generating...' : 'Bulk PDF'}
-              </button>
+              <>
+                <button onClick={handleExcelSlip} disabled={excelLoading}
+                  className="px-3 py-2 text-sm bg-green-100 text-green-700 rounded-lg hover:bg-green-200 transition-colors font-medium">
+                  {excelLoading ? 'Generating...' : 'Salary Slip (Excel)'}
+                </button>
+                <button onClick={handleBulkPDF} disabled={bulkPdfLoading}
+                  className="px-3 py-2 text-sm bg-slate-100 text-slate-700 rounded-lg hover:bg-slate-200 transition-colors">
+                  {bulkPdfLoading ? 'Generating...' : 'Bulk PDF'}
+                </button>
+              </>
             )}
           </div>
         </div>
