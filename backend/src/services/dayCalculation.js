@@ -208,7 +208,17 @@ function calculateDays(employeeCode, month, year, company, attendanceRecords, le
     let sundayPaid = false;
     let sundayNote = '';
 
-    if (weekActualWorkingDays >= requiredDays) {
+    // If the employee actually worked on this Sunday (WOP), it's always paid
+    // — you can't mark a day unpaid when the person came to work
+    const sundayRec = recordByDate[sundayDate];
+    const sundayStatus = sundayRec ? (sundayRec.status_final || sundayRec.status_original || '') : '';
+    const workedOnSunday = sundayStatus === 'WOP' || sundayStatus === 'P' || sundayStatus === 'WO½P';
+
+    if (workedOnSunday) {
+      sundayPaid = true;
+      sundayNote = `Worked on Sunday (${sundayStatus}) → Paid Sunday`;
+
+    } else if (weekActualWorkingDays >= requiredDays) {
       // Full week worked — paid Sunday, no deductions
       sundayPaid = true;
       sundayNote = `Worked ${weekActualWorkingDays}/${requiredDays} days → Paid Sunday`;
