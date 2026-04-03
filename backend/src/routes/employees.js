@@ -32,28 +32,48 @@ const docUpload = multer({
 // GET all employees
 router.get('/', (req, res) => {
   const db = getDb();
-  const { department, company, status, search } = req.query;
+  const { department, company, status, search, page, limit, sort, order } = req.query;
 
-  let query = `SELECT e.*, s.name as shift_name,
+  let where = 'WHERE 1=1';
+  const params = [];
+
+  if (department) { where += ' AND e.department = ?'; params.push(department); }
+  if (company) { where += ' AND e.company = ?'; params.push(company); }
+  if (status) { where += ' AND e.status = ?'; params.push(status); }
+  if (search) { where += ' AND (e.name LIKE ? OR e.code LIKE ?)'; params.push(`%${search}%`, `%${search}%`); }
+
+  const baseQuery = `SELECT e.*, s.name as shift_name,
     ss.gross_salary, ss.basic_percent, ss.hra_percent, ss.da_percent,
     ss.pf_applicable, ss.esi_applicable, ss.pt_applicable, ss.pf_wage_ceiling
     FROM employees e
     LEFT JOIN shifts s ON e.default_shift_id = s.id
     LEFT JOIN salary_structures ss ON ss.employee_id = e.id AND ss.id = (
       SELECT id FROM salary_structures WHERE employee_id = e.id ORDER BY effective_from DESC LIMIT 1
-    )
-    WHERE 1=1`;
-  const params = [];
+    ) ${where}`;
 
-  if (department) { query += ' AND e.department = ?'; params.push(department); }
-  if (company) { query += ' AND e.company = ?'; params.push(company); }
-  if (status) { query += ' AND e.status = ?'; params.push(status); }
-  if (search) { query += ' AND (e.name LIKE ? OR e.code LIKE ?)'; params.push(`%${search}%`, `%${search}%`); }
+  // If no page param, return all (backward compatible)
+  if (!page) {
+    const employees = db.prepare(baseQuery + ' ORDER BY e.department, e.name').all(...params);
+    return res.json({ success: true, data: employees });
+  }
 
-  query += ' ORDER BY e.department, e.name';
+  const { paginateQuery } = require('../utils/pagination');
+  const countQuery = `SELECT COUNT(*) as cnt FROM employees e ${where}`;
+  const sortCol = sort ? `e.${sort}` : 'e.department, e.name';
+  const result = paginateQuery(db, {
+    baseQuery: baseQuery + ` ORDER BY ${sortCol} ${order === 'desc' ? 'DESC' : 'ASC'}`,
+    countQuery, params, page, limit
+  });
+  // Override the double-sort: paginateQuery adds LIMIT/OFFSET after
+  // Since we already sorted in baseQuery, use a simpler approach
+  const pageNum = Math.max(1, parseInt(page) || 1);
+  const pageSize = Math.min(200, Math.max(1, parseInt(limit) || 50));
+  const totalRow = db.prepare(countQuery).get(...params);
+  const total = totalRow?.cnt || 0;
+  const offset = (pageNum - 1) * pageSize;
+  const data = db.prepare(baseQuery + ` ORDER BY ${sortCol} ${order === 'desc' ? 'DESC' : 'ASC'} LIMIT ? OFFSET ?`).all(...params, pageSize, offset);
 
-  const employees = db.prepare(query).all(...params);
-  res.json({ success: true, data: employees });
+  res.json({ success: true, data, total, page: pageNum, pageSize, totalPages: Math.ceil(total / pageSize) });
 });
 
 // GET single employee
