@@ -31,7 +31,7 @@ router.post('/login', (req, res) => {
   db.prepare("UPDATE users SET last_login = datetime('now'), last_active = datetime('now') WHERE id = ?").run(user.id);
 
   const token = jwt.sign(
-    { id: user.id, username: user.username, role: user.role },
+    { id: user.id, username: user.username, role: user.role, employee_code: user.employee_code || null },
     JWT_SECRET,
     { expiresIn: TOKEN_EXPIRY }
   );

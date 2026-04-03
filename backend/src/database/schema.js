@@ -793,6 +793,7 @@ function initSchema(db) {
   safeAddColumn('users', 'last_active', 'TEXT');
   safeAddColumn('users', 'onboarding_completed', 'INTEGER DEFAULT 0');
   safeAddColumn('users', 'department', 'TEXT');
+  safeAddColumn('users', 'employee_code', 'TEXT');
 
   // day_calculations: late deduction support
   safeAddColumn('day_calculations', 'late_count', 'INTEGER DEFAULT 0');
