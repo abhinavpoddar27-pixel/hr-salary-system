@@ -188,6 +188,7 @@ app.use('/api/session-analytics', requireAuth, require('./src/routes/sessionAnal
 app.use('/api/features',          requireAuth, require('./src/routes/phase5'));
 app.use('/api/jobs',              requireAuth, require('./src/routes/jobs'));
 app.use('/api/notifications',    requireAuth, require('./src/routes/notifications'));
+app.use('/api/tax-declarations', requireAuth, require('./src/routes/taxDeclarations'));
 
 // Health check (public)
 app.get('/api/health', (req, res) => {

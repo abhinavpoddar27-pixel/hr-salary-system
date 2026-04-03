@@ -1053,6 +1053,23 @@ function initSchema(db) {
     );
   `);
 
+  // ── Tax Declarations ─────────────────────────────────────────
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS tax_declarations (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      employee_code TEXT NOT NULL,
+      financial_year TEXT NOT NULL,
+      regime TEXT DEFAULT 'new',
+      section_80c REAL DEFAULT 0,
+      section_80d REAL DEFAULT 0,
+      hra_exemption REAL DEFAULT 0,
+      other_exemptions REAL DEFAULT 0,
+      created_at TEXT DEFAULT (datetime('now')),
+      updated_at TEXT DEFAULT (datetime('now')),
+      UNIQUE(employee_code, financial_year)
+    )
+  `);
+
   console.log('✅ Database schema initialized');
 }
 

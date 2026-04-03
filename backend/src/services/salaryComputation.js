@@ -286,12 +286,26 @@ function computeEmployeeSalary(db, employee, month, year, company) {
   // ─── Loan EMI Recovery ───
   const loanRecovery = getLoanDeductions(db, employee.code, month, year);
 
+  // ─── TDS (auto-calculate if declaration exists, else preserve manual) ───
+  let tds = 0;
+  let tdsAutoCalculated = false;
+  try {
+    const { calculateMonthlyTDS } = require('./tdsCalculation');
+    const fy = month >= 4 ? `${year}-${String(year + 1).slice(2)}` : `${year - 1}-${String(year).slice(2)}`;
+    const tdsResult = calculateMonthlyTDS(db, employee.code, grossMonthly, fy);
+    if (tdsResult.monthly_tds > 0) {
+      tds = tdsResult.monthly_tds;
+      tdsAutoCalculated = true;
+    }
+  } catch {}
+
   // ─── Preserve manual values if record already exists ───
   const existingComp = db.prepare(`
     SELECT tds, other_deductions, advance_recovery FROM salary_computations
     WHERE employee_code = ? AND month = ? AND year = ?
   `).get(employee.code, month, year);
-  const tds = existingComp?.tds || 0;
+  // Use auto TDS if calculated, else fall back to manual/existing
+  if (!tdsAutoCalculated) tds = existingComp?.tds || 0;
   const otherDeductions = existingComp?.other_deductions || 0;
   // Use auto advance if available, else preserve manual
   const advanceRecovery = autoAdvanceRecovery > 0 ? autoAdvanceRecovery : (existingComp?.advance_recovery || 0);
