@@ -3,13 +3,13 @@ import { useNavigate, useLocation } from 'react-router-dom'
 import clsx from 'clsx'
 
 const STAGES = [
-  { num: 1, label: 'Import', short: 'Import', path: '/pipeline/import' },
-  { num: 2, label: 'Miss Punches', short: 'Miss Punch', path: '/pipeline/miss-punch' },
-  { num: 3, label: 'Shift Check', short: 'Shifts', path: '/pipeline/shift-check' },
-  { num: 4, label: 'Night Shift', short: 'Night', path: '/pipeline/night-shift' },
-  { num: 5, label: 'Corrections', short: 'Correct', path: '/pipeline/corrections' },
-  { num: 6, label: 'Day Calc', short: 'Days', path: '/pipeline/day-calc' },
-  { num: 7, label: 'Salary', short: 'Salary', path: '/pipeline/salary' },
+  { num: 1, label: 'Import', short: 'Import', path: '/pipeline/import', tip: 'Upload the EESL biometric .xls file. This parses attendance data for all employees.' },
+  { num: 2, label: 'Miss Punches', short: 'Miss Punch', path: '/pipeline/miss-punch', tip: 'Review and correct missing IN/OUT punches detected from biometric data.' },
+  { num: 3, label: 'Shift Check', short: 'Shifts', path: '/pipeline/shift-check', tip: 'Verify and reassign shift codes for flagged attendance records.' },
+  { num: 4, label: 'Night Shift', short: 'Night', path: '/pipeline/night-shift', tip: 'Review auto-paired night shift records that cross midnight.' },
+  { num: 5, label: 'Corrections', short: 'Correct', path: '/pipeline/corrections', tip: 'Make final manual corrections to the attendance register.' },
+  { num: 6, label: 'Day Calc', short: 'Days', path: '/pipeline/day-calc', tip: 'Calculate payable days using Sunday-granting rule and leave adjustments.' },
+  { num: 7, label: 'Salary', short: 'Salary', path: '/pipeline/salary', tip: 'Compute final salary with all statutory deductions and generate outputs.' },
 ]
 
 export default function PipelineProgress({ stageStatus = {} }) {
@@ -31,6 +31,7 @@ export default function PipelineProgress({ stageStatus = {} }) {
               <button
                 onClick={() => canClick && navigate(stage.path)}
                 disabled={isLocked}
+                title={stage.tip}
                 className={clsx(
                   'flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-medium transition-all',
                   isDone && 'bg-green-50 text-green-700 hover:bg-green-100',
