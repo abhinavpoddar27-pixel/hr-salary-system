@@ -114,7 +114,7 @@ router.put('/:code', (req, res) => {
     'default_shift_id', 'shift_code', 'weekly_off_day',
     'bank_account', 'account_number', 'ifsc', 'ifsc_code', 'bank_name',
     'pf_number', 'uan', 'esi_number', 'aadhar', 'pan', 'phone', 'email',
-    'status', 'is_data_complete',
+    'gross_salary', 'status', 'is_data_complete',
     // Enhanced fields
     'blood_group', 'emergency_contact_name', 'emergency_contact_phone',
     'address_current', 'address_permanent', 'marital_status', 'spouse_name',
@@ -138,6 +138,27 @@ router.put('/:code', (req, res) => {
   params.push(code);
 
   db.prepare(`UPDATE employees SET ${setClauses.join(', ')} WHERE code = ?`).run(...params);
+
+  // Auto-create/update salary structure when gross_salary is updated
+  if (updates.gross_salary !== undefined && parseFloat(updates.gross_salary) > 0) {
+    const gross = parseFloat(updates.gross_salary);
+    const existing = db.prepare('SELECT id FROM salary_structures WHERE employee_id = ? ORDER BY effective_from DESC LIMIT 1').get(emp.id);
+    if (existing) {
+      const basicPct = 50, hraPct = 20;
+      db.prepare(`UPDATE salary_structures SET gross_salary=?, basic=?, hra=?, updated_at=datetime('now') WHERE id=?`)
+        .run(gross, gross * basicPct / 100, gross * hraPct / 100, existing.id);
+    } else {
+      const basicPct = 50, hraPct = 20;
+      db.prepare(`INSERT INTO salary_structures
+        (employee_id, effective_from, gross_salary, basic, da, hra, special_allowance, other_allowances,
+         basic_percent, hra_percent, da_percent, pf_applicable, esi_applicable, pt_applicable, pf_wage_ceiling)
+        VALUES (?, '2025-01-01', ?, ?, 0, ?, 0, 0, ?, ?, 0, ?, ?, ?, 15000)`).run(
+          emp.id, gross, gross * basicPct / 100, gross * hraPct / 100,
+          basicPct, hraPct,
+          emp.pf_applicable || 0, emp.esi_applicable || 0, emp.pt_applicable ?? 1
+      );
+    }
+  }
 
   // Update salary structure if provided
   if (updates.basic !== undefined || updates.da !== undefined) {

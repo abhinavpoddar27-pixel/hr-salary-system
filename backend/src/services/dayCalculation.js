@@ -280,6 +280,23 @@ function calculateDays(employeeCode, month, year, company, attendanceRecords, le
     });
   }
 
+  // ── Shift swap adjustment ────────────────────────────────────
+  // In 24/7 operations, employees swap shifts/offs with each other.
+  // If total working days (P + WOP + ½P) for the month meet or exceed
+  // the required working days, waive per-week LOP since the employee
+  // made up the days in other weeks.
+  const totalWorkedDays = daysPresent + daysWOP + daysHalfPresent;
+  if (lopDays > 0 && totalWorkedDays >= totalWorkingDays) {
+    lopDays = 0;
+    // Also clear per-week LOP entries in breakdown
+    for (const wb of weekBreakdown) {
+      if (wb.lop > 0) {
+        wb.lop = 0;
+        wb.note = wb.note.replace(/LOP:.*day\(s\)/, 'LOP waived (shift swap — monthly attendance met)');
+      }
+    }
+  }
+
   // Paid holidays
   const paidHolidays = holidayNonSunday.length;
 

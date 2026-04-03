@@ -141,19 +141,42 @@ function computeEmployeeSalary(db, employee, month, year, company) {
 
   // Get salary structure (most recent effective from <= current month)
   const monthStr = `${year}-${String(month).padStart(2,'0')}-01`;
-  const salStruct = db.prepare(`
+  let salStruct = db.prepare(`
     SELECT * FROM salary_structures
     WHERE employee_id = ? AND effective_from <= ?
     ORDER BY effective_from DESC LIMIT 1
   `).get(employee.id, monthStr);
 
   if (!salStruct) {
-    return {
-      success: false,
-      excluded: true,
-      employeeCode: employee.code,
-      reason: 'No salary structure — set gross salary in Employees page'
-    };
+    // Auto-create salary structure from employee.gross_salary if available
+    if (employee.gross_salary && employee.gross_salary > 0) {
+      const gross = employee.gross_salary;
+      const basicPct = 50;
+      const hraPct = 20;
+      const basic = gross * basicPct / 100;
+      const hra = gross * hraPct / 100;
+      db.prepare(`INSERT INTO salary_structures
+        (employee_id, effective_from, gross_salary, basic, da, hra, special_allowance, other_allowances,
+         basic_percent, hra_percent, da_percent, pf_applicable, esi_applicable, pt_applicable, pf_wage_ceiling)
+        VALUES (?, '2025-01-01', ?, ?, 0, ?, 0, 0, ?, ?, 0, ?, ?, ?, 15000)`).run(
+          employee.id, gross, basic, hra,
+          basicPct, hraPct,
+          employee.pf_applicable || 0, employee.esi_applicable || 0, employee.pt_applicable ?? 1
+      );
+      salStruct = db.prepare(`
+        SELECT * FROM salary_structures
+        WHERE employee_id = ? AND effective_from <= ?
+        ORDER BY effective_from DESC LIMIT 1
+      `).get(employee.id, monthStr);
+    }
+    if (!salStruct) {
+      return {
+        success: false,
+        excluded: true,
+        employeeCode: employee.code,
+        reason: 'No salary structure — set gross salary in Employees page'
+      };
+    }
   }
 
   // Policy values
