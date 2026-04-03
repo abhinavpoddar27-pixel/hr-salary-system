@@ -244,6 +244,15 @@ export const getReadinessCheck = (month, year) => api.get('/finance-audit/readin
 export const getVarianceReport = (month, year) => api.get('/finance-audit/variance-report', { params: { month, year } })
 export const getStatutoryCrosscheck = (month, year, company) => api.get('/finance-audit/statutory-crosscheck', { params: { month, year, company } })
 
+// ── Notifications ────────────────────────────────────────
+export const getNotifications = () => api.get('/notifications')
+export const markNotificationRead = (id) => api.patch(`/notifications/${id}/read`)
+export const markAllNotificationsRead = () => api.patch('/notifications/mark-all-read')
+
+// ── Jobs ─────────────────────────────────────────────────
+export const createJob = (type, params) => api.post('/jobs', { type, params })
+export const getJobStatus = (id) => api.get(`/jobs/${id}`)
+
 // ── Phase 5 Features ────────────────────────────────────
 export const accrueLeaves = (month, year) => api.post('/features/accrue-leaves', { month, year })
 export const getShiftRoster = (params) => api.get('/features/shift-roster', { params })

@@ -28,26 +28,27 @@ export default function NotificationBell() {
 
   const handleClick = useCallback((n) => {
     if (!n.is_read) markRead.mutate(n.id)
-    if (n.action_url) {
-      navigate(n.action_url)
+    const url = n.action_url || n.link
+    if (url) {
+      navigate(url)
       setOpen(false)
     }
   }, [markRead, navigate])
 
   const typeIcons = {
-    LEAVE_PENDING: '📋',
-    SALARY_CHANGE: '💰',
-    LOAN_PENDING: '🏦',
-    LIFECYCLE_EVENT: '👤',
-    COMPLIANCE: '✅'
+    LEAVE_PENDING: '📋', SALARY_CHANGE: '💰', LOAN_PENDING: '🏦',
+    LIFECYCLE_EVENT: '👤', COMPLIANCE: '✅',
+    IMPORT_PENDING: '📥', MISS_PUNCH_PENDING: '🔍', DAY_CALC_PENDING: '📅',
+    SALARY_PENDING: '💰', FINALIZE_URGENT: '🚨'
   }
 
   const typeColors = {
-    LEAVE_PENDING: 'bg-blue-100 text-blue-700',
-    SALARY_CHANGE: 'bg-amber-100 text-amber-700',
-    LOAN_PENDING: 'bg-purple-100 text-purple-700',
-    LIFECYCLE_EVENT: 'bg-green-100 text-green-700',
-    COMPLIANCE: 'bg-red-100 text-red-700'
+    LEAVE_PENDING: 'bg-blue-100 text-blue-700', SALARY_CHANGE: 'bg-amber-100 text-amber-700',
+    LOAN_PENDING: 'bg-purple-100 text-purple-700', LIFECYCLE_EVENT: 'bg-green-100 text-green-700',
+    COMPLIANCE: 'bg-red-100 text-red-700',
+    IMPORT_PENDING: 'bg-amber-100 text-amber-700', MISS_PUNCH_PENDING: 'bg-blue-100 text-blue-700',
+    DAY_CALC_PENDING: 'bg-purple-100 text-purple-700', SALARY_PENDING: 'bg-amber-100 text-amber-700',
+    FINALIZE_URGENT: 'bg-red-100 text-red-700'
   }
 
   return (
@@ -103,9 +104,9 @@ export default function NotificationBell() {
                     </span>
                     <div className="flex-1 min-w-0">
                       <p className={`text-sm truncate ${!n.is_read ? 'font-semibold text-slate-800' : 'text-slate-700'}`}>
-                        {n.title}
+                        {n.title || n.message}
                       </p>
-                      <p className="text-xs text-slate-500 truncate mt-0.5">{n.message}</p>
+                      {n.title && n.message && <p className="text-xs text-slate-500 truncate mt-0.5">{n.message}</p>}
                       <p className="text-xs text-slate-400 mt-1">
                         {new Date(n.created_at).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}
                       </p>

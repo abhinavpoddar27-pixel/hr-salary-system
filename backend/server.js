@@ -187,6 +187,7 @@ app.use('/api/finance-audit', requireAuth, require('./src/routes/financeAudit'))
 app.use('/api/session-analytics', requireAuth, require('./src/routes/sessionAnalytics'));
 app.use('/api/features',          requireAuth, require('./src/routes/phase5'));
 app.use('/api/jobs',              requireAuth, require('./src/routes/jobs'));
+app.use('/api/notifications',    requireAuth, require('./src/routes/notifications'));
 
 // Health check (public)
 app.get('/api/health', (req, res) => {
@@ -265,6 +266,8 @@ app.listen(PORT, () => {
 
   // Start background job queue worker
   try { require('./src/services/jobQueue').startWorker(); } catch (e) { console.error('Job queue init failed:', e.message); }
+  // Start month-end scheduler
+  try { require('./src/services/monthEndScheduler').startScheduler(); } catch (e) { console.error('Scheduler init failed:', e.message); }
 });
 
 module.exports = app;
