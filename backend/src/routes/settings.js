@@ -2,6 +2,14 @@ const express = require('express');
 const router = express.Router();
 const { getDb } = require('../database/db');
 
+// ─── Admin-only middleware ───────────────────────────────
+function requireAdmin(req, res, next) {
+  if (req.user?.role !== 'admin') {
+    return res.status(403).json({ success: false, error: 'Admin access required' });
+  }
+  next();
+}
+
 // ─── SHIFTS ───────────────────────────────────────────────
 
 router.get('/shifts', (req, res) => {
@@ -9,7 +17,7 @@ router.get('/shifts', (req, res) => {
   res.json({ success: true, data: db.prepare('SELECT * FROM shifts ORDER BY id').all() });
 });
 
-router.post('/shifts', (req, res) => {
+router.post('/shifts', requireAdmin, (req, res) => {
   const db = getDb();
   const { name, code, startTime, endTime, graceMinutes, breakMinutes, minHoursFullDay, minHoursHalfDay } = req.body;
   // Auto-detect overnight from start/end times (start > end means it crosses midnight)
@@ -21,7 +29,7 @@ router.post('/shifts', (req, res) => {
   res.json({ success: true, id: result.lastInsertRowid });
 });
 
-router.put('/shifts/:id', (req, res) => {
+router.put('/shifts/:id', requireAdmin, (req, res) => {
   const db = getDb();
   const { name, startTime, endTime, graceMinutes, breakMinutes, minHoursFullDay, minHoursHalfDay } = req.body;
   // Auto-detect overnight from start/end times
@@ -45,7 +53,7 @@ router.get('/holidays', (req, res) => {
   res.json({ success: true, data: db.prepare(query).all(...params) });
 });
 
-router.post('/holidays', (req, res) => {
+router.post('/holidays', requireAdmin, (req, res) => {
   const db = getDb();
   const { date, name, type, isRecurring, applicableTo } = req.body;
   const result = db.prepare('INSERT INTO holidays (date, name, type, is_recurring, applicable_to) VALUES (?, ?, ?, ?, ?)')
@@ -53,7 +61,7 @@ router.post('/holidays', (req, res) => {
   res.json({ success: true, id: result.lastInsertRowid });
 });
 
-router.delete('/holidays/:id', (req, res) => {
+router.delete('/holidays/:id', requireAdmin, (req, res) => {
   const db = getDb();
   db.prepare('DELETE FROM holidays WHERE id = ?').run(req.params.id);
   res.json({ success: true });
@@ -70,7 +78,7 @@ router.get('/policy', (req, res) => {
   res.json({ success: true, data: config, raw: policies });
 });
 
-router.put('/policy', (req, res) => {
+router.put('/policy', requireAdmin, (req, res) => {
   const db = getDb();
   const updates = req.body; // { key: value, ... }
   const stmt = db.prepare("INSERT INTO policy_config (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = datetime('now')");
@@ -92,7 +100,7 @@ router.get('/compliance', (req, res) => {
   res.json({ success: true, data });
 });
 
-router.put('/compliance/:id', (req, res) => {
+router.put('/compliance/:id', requireAdmin, (req, res) => {
   const db = getDb();
   const { status, challanNumber, filingDate, amount, remarks } = req.body;
   db.prepare('UPDATE compliance_items SET status=?, challan_number=?, filing_date=?, amount=?, remarks=? WHERE id=?')
@@ -101,7 +109,7 @@ router.put('/compliance/:id', (req, res) => {
 });
 
 // Auto-generate compliance calendar for a year
-router.post('/compliance/generate/:year', (req, res) => {
+router.post('/compliance/generate/:year', requireAdmin, (req, res) => {
   const db = getDb();
   const year = parseInt(req.params.year);
 

@@ -55,14 +55,14 @@ const nav = [
   { label: 'Employees', icon: '👤', to: '/employees' },
   { label: 'Session Analytics', icon: '📊', to: '/session-analytics', adminOnly: true },
   {
-    label: 'Settings', icon: '⚙️', to: '/settings',
+    label: 'Settings', icon: '⚙️', to: '/settings', adminOnly: true,
     children: [
       { label: 'Shift Master', to: '/settings/shifts' },
       { label: 'Holiday Master', to: '/settings/holidays' },
       { label: 'Policy Config', to: '/settings/policy' },
       { label: 'Audit Trail', to: '/settings/audit' },
-      { label: 'Usage Logs', to: '/settings/usage-logs', adminOnly: true },
-      { label: 'User Management', to: '/settings/users', adminOnly: true },
+      { label: 'Usage Logs', to: '/settings/usage-logs' },
+      { label: 'User Management', to: '/settings/users' },
     ]
   },
 ]

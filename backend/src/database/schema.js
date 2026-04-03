@@ -751,6 +751,33 @@ function initSchema(db) {
   // Update existing advance_fraction from 0.50 to 0.55
   db.prepare("UPDATE policy_config SET value = '0.55', description = 'Fraction of gross salary paid as advance (>=15 days) — 55%' WHERE key = 'advance_fraction' AND value = '0.50'").run();
 
+  // ── Force-reset policy config to known defaults (undo any HR-user modifications) ──
+  const policyDefaults = [
+    ['salary_divisor', '26'],
+    ['pf_employee_rate', '0.12'],
+    ['pf_employer_rate', '0.12'],
+    ['pf_wage_ceiling', '15000'],
+    ['esi_employee_rate', '0.0075'],
+    ['esi_employer_rate', '0.0325'],
+    ['esi_threshold', '21000'],
+    ['ot_rate_multiplier', '2'],
+    ['ot_threshold_hours', '12'],
+    ['pt_slab_1_limit', '15000'],
+    ['pt_slab_1_amount', '0'],
+    ['pt_slab_2_limit', '25000'],
+    ['pt_slab_2_amount', '150'],
+    ['pt_slab_3_amount', '200'],
+    ['salary_hold_min_days', '5'],
+    ['advance_fraction', '0.55'],
+    ['advance_fraction_low', '0.80'],
+    ['sunday_grant_threshold', '6'],
+    ['sunday_partial_min', '4'],
+  ];
+  const resetPolicy = db.prepare("UPDATE policy_config SET value = ? WHERE key = ?");
+  for (const [key, value] of policyDefaults) {
+    resetPolicy.run(value, key);
+  }
+
   // shifts: update grace from 30 to 9 minutes (per actual plant policy)
   db.prepare("UPDATE shifts SET grace_minutes = 9 WHERE grace_minutes = 30").run();
 

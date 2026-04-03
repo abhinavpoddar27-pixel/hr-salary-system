@@ -754,6 +754,19 @@ export default function Settings() {
   const { user } = useAppStore()
   const userRole = user?.role || 'viewer'
 
+  // Block non-admin users entirely
+  if (userRole !== 'admin') {
+    return (
+      <div className="p-6 flex items-center justify-center min-h-[50vh]">
+        <div className="text-center">
+          <div className="text-4xl mb-3">🔒</div>
+          <h2 className="text-lg font-semibold text-slate-700">Admin Access Required</h2>
+          <p className="text-sm text-slate-500 mt-1">Settings can only be modified by administrators.</p>
+        </div>
+      </div>
+    )
+  }
+
   const visibleTabs = SETTINGS_TABS.filter(t => !t.adminOnly || userRole === 'admin')
 
   return (
