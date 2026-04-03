@@ -132,4 +132,51 @@ router.post('/compliance/generate/:year', requireAdmin, (req, res) => {
   res.json({ success: true, created: items.length });
 });
 
+// ─── COMPANIES ───────────────────────────────────────────
+
+router.get('/companies', (req, res) => {
+  const db = getDb();
+
+  // Auto-seed from existing data if empty
+  db.exec(`CREATE TABLE IF NOT EXISTS companies (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL UNIQUE,
+    display_name TEXT,
+    is_active INTEGER DEFAULT 1,
+    created_at TEXT DEFAULT (datetime('now'))
+  )`);
+
+  const count = db.prepare('SELECT COUNT(*) as cnt FROM companies').get();
+  if (count.cnt === 0) {
+    const insert = db.prepare('INSERT OR IGNORE INTO companies (name, display_name) VALUES (?, ?)');
+    // Seed from employees
+    const empCompanies = db.prepare('SELECT DISTINCT company FROM employees WHERE company IS NOT NULL AND company != ""').all();
+    for (const c of empCompanies) insert.run(c.company, c.company);
+    // Seed from attendance
+    try {
+      const attCompanies = db.prepare('SELECT DISTINCT company FROM attendance_raw WHERE company IS NOT NULL AND company != ""').all();
+      for (const c of attCompanies) insert.run(c.company, c.company);
+    } catch {}
+  }
+
+  const companies = db.prepare('SELECT * FROM companies WHERE is_active = 1 ORDER BY name').all();
+  res.json({ success: true, data: companies });
+});
+
+router.post('/companies', requireAdmin, (req, res) => {
+  const db = getDb();
+  const { name, display_name } = req.body;
+  if (!name) return res.status(400).json({ success: false, error: 'name required' });
+  db.prepare('INSERT INTO companies (name, display_name) VALUES (?, ?)').run(name, display_name || name);
+  res.json({ success: true });
+});
+
+router.patch('/companies/:id', requireAdmin, (req, res) => {
+  const db = getDb();
+  const { display_name, is_active } = req.body;
+  if (display_name !== undefined) db.prepare('UPDATE companies SET display_name = ? WHERE id = ?').run(display_name, req.params.id);
+  if (is_active !== undefined) db.prepare('UPDATE companies SET is_active = ? WHERE id = ?').run(is_active ? 1 : 0, req.params.id);
+  res.json({ success: true });
+});
+
 module.exports = router;

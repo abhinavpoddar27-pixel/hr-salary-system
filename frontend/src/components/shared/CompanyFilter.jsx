@@ -1,21 +1,16 @@
 import { useAppStore } from '../../store/appStore'
+import { useQuery } from '@tanstack/react-query'
+import api from '../../utils/api'
 
-const COMPANIES = [
-  { value: '', label: 'All Companies' },
-  { value: 'Indriyan Beverages', label: 'Indriyan Beverages' },
-  { value: 'Asian Lakto', label: 'Asian Lakto' },
-]
-
-/**
- * Global company filter dropdown. Reads/writes selectedCompany from zustand store.
- * Place in page header bar alongside DateSelector.
- *
- * Props:
- *   className — optional extra Tailwind classes
- *   compact — if true, renders smaller (for tight spaces)
- */
 export default function CompanyFilter({ className = '', compact = false }) {
   const { selectedCompany, setSelectedCompany } = useAppStore()
+
+  const { data: res } = useQuery({
+    queryKey: ['companies'],
+    queryFn: () => api.get('/settings/companies'),
+    staleTime: 300000, retry: 0
+  })
+  const companies = res?.data?.data || []
 
   return (
     <select
@@ -28,9 +23,10 @@ export default function CompanyFilter({ className = '', compact = false }) {
         ${className}
       `}
     >
-      {COMPANIES.map((c) => (
-        <option key={c.value} value={c.value}>
-          {c.label}
+      <option value="">All Companies</option>
+      {companies.map((c) => (
+        <option key={c.id} value={c.name}>
+          {c.display_name || c.name}
         </option>
       ))}
     </select>
