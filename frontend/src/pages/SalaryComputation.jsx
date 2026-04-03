@@ -204,6 +204,22 @@ export default function SalaryComputation() {
           </div>
         </div>
 
+        {/* Skipped employees alert */}
+        {computeResult?.excluded?.length > 0 && (
+          <div className="bg-amber-50 border border-amber-200 rounded-lg p-4">
+            <h4 className="font-semibold text-amber-800 text-sm">{computeResult.excluded.length} Employee(s) Skipped</h4>
+            <p className="text-xs text-amber-600 mt-1">These employees were excluded from salary computation. Click "Set Salary" to add their salary structure.</p>
+            <div className="mt-2 flex flex-wrap gap-2">
+              {computeResult.excluded.map(e => (
+                <a key={e.code} href={`/employees?search=${e.code}`}
+                  className="text-xs bg-white border border-amber-300 text-amber-700 px-2 py-1 rounded hover:bg-amber-100 transition-colors">
+                  {e.code} {e.name} — {e.reason}
+                </a>
+              ))}
+            </div>
+          </div>
+        )}
+
         {/* Summary Cards */}
         {allSalaries.length > 0 && (
           <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
