@@ -167,8 +167,8 @@ export const bulkAdjustLeaves = (data) => api.post('/leaves/bulk-adjust', data)
 
 // ── Notifications ────────────────────────────────────────
 export const getNotifications = (unread) => api.get('/notifications', { params: unread ? { unread: 'true' } : {} })
-export const markNotificationRead = (id) => api.put(`/notifications/${id}/read`)
-export const markAllNotificationsRead = () => api.put('/notifications/read-all')
+export const markNotificationRead = (id) => api.patch(`/notifications/${id}/read`)
+export const markAllNotificationsRead = () => api.patch('/notifications/mark-all-read')
 export const generateNotifications = () => api.post('/notifications/generate')
 
 // ── Employee Lifecycle ────────────────────────────────────
@@ -243,11 +243,6 @@ export const bulkApproveFlags = (data) => api.put('/finance-audit/bulk-approve',
 export const getReadinessCheck = (month, year) => api.get('/finance-audit/readiness-check', { params: { month, year } })
 export const getVarianceReport = (month, year) => api.get('/finance-audit/variance-report', { params: { month, year } })
 export const getStatutoryCrosscheck = (month, year, company) => api.get('/finance-audit/statutory-crosscheck', { params: { month, year, company } })
-
-// ── Notifications ────────────────────────────────────────
-export const getNotifications = () => api.get('/notifications')
-export const markNotificationRead = (id) => api.patch(`/notifications/${id}/read`)
-export const markAllNotificationsRead = () => api.patch('/notifications/mark-all-read')
 
 // ── Jobs ─────────────────────────────────────────────────
 export const createJob = (type, params) => api.post('/jobs', { type, params })
