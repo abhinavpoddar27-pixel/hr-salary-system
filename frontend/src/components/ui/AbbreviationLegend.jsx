@@ -8,7 +8,15 @@ import { getPageAbbreviations } from '../../utils/abbreviations';
  * Usage: <AbbreviationLegend keys={['LOP', 'PF', 'ESI', 'PT', 'DA', 'HRA']} />
  */
 export default function AbbreviationLegend({ keys = [], title = 'Abbreviations Used' }) {
-  const [open, setOpen] = useState(false);
+  const dismissed = typeof window !== 'undefined' && localStorage.getItem('legend_dismissed');
+  const [open, setOpen] = useState(!dismissed);
+
+  const handleToggle = () => {
+    setOpen(o => {
+      if (o && !dismissed) localStorage.setItem('legend_dismissed', 'true');
+      return !o;
+    });
+  };
   const items = getPageAbbreviations(keys);
 
   if (items.length === 0) return null;
@@ -16,7 +24,7 @@ export default function AbbreviationLegend({ keys = [], title = 'Abbreviations U
   return (
     <div className="mt-6 card-solid overflow-hidden">
       <button
-        onClick={() => setOpen(o => !o)}
+        onClick={handleToggle}
         className="w-full px-5 py-3 flex items-center justify-between text-left
           hover:bg-slate-50 transition-colors"
       >
