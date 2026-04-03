@@ -247,6 +247,7 @@ export const getStatutoryCrosscheck = (month, year, company) => api.get('/financ
 // ── Jobs ─────────────────────────────────────────────────
 export const createJob = (type, params) => api.post('/jobs', { type, params })
 export const getJobStatus = (id) => api.get(`/jobs/${id}`)
+export const getUserPermissions = () => api.get('/auth/permissions')
 
 // ── Phase 5 Features ────────────────────────────────────
 export const accrueLeaves = (month, year) => api.post('/features/accrue-leaves', { month, year })

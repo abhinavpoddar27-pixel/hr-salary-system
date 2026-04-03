@@ -139,6 +139,13 @@ router.post('/change-password', requireAuth, (req, res) => {
   res.json({ success: true, message: 'Password updated successfully' });
 });
 
+// GET /api/auth/permissions
+router.get('/permissions', requireAuth, (req, res) => {
+  const { getPermissions } = require('../config/permissions');
+  const perms = getPermissions(req.user.role);
+  res.json({ success: true, role: req.user.role, permissions: perms });
+});
+
 // PATCH /api/auth/onboarding-complete
 router.patch('/onboarding-complete', requireAuth, (req, res) => {
   const db = getDb();
