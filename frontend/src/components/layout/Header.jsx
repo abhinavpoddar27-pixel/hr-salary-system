@@ -17,10 +17,23 @@ export default function Header({ title }) {
     navigate('/login', { replace: true })
   }
 
+  const { toggleSidebar } = useAppStore()
+
   return (
-    <header className="bg-white border-b border-slate-200 px-6 py-3 flex items-center gap-4 sticky top-0 z-10 no-print">
-      <div className="flex-1">
-        <h1 className="text-base font-semibold text-slate-800">{title || 'HR & Salary System'}</h1>
+    <header className="bg-white border-b border-slate-200 px-4 md:px-6 py-3 flex items-center gap-3 md:gap-4 sticky top-0 z-10 no-print">
+      {/* Mobile hamburger menu button */}
+      <button
+        onClick={toggleSidebar}
+        className="md:hidden p-1.5 -ml-1 text-slate-500 hover:text-slate-700 hover:bg-slate-100 rounded-lg"
+        aria-label="Open menu"
+      >
+        <svg className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+          <path strokeLinecap="round" strokeLinejoin="round" d="M4 6h16M4 12h16M4 18h16" />
+        </svg>
+      </button>
+
+      <div className="flex-1 min-w-0">
+        <h1 className="text-base font-semibold text-slate-800 truncate">{title || 'HR & Salary System'}</h1>
       </div>
 
       {/* Company Selector (RBAC) */}

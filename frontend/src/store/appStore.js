@@ -59,7 +59,7 @@ export const useAppStore = create(
       })),
 
       // ── UI state ────────────────────────────────────────────
-      sidebarCollapsed: false,
+      sidebarCollapsed: typeof window !== 'undefined' && window.innerWidth < 768,
       toggleSidebar: () => set(state => ({ sidebarCollapsed: !state.sidebarCollapsed })),
 
       // ── Alert count ─────────────────────────────────────────
