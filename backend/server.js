@@ -186,6 +186,7 @@ app.use('/api/usage-logs',  requireAuth, require('./src/routes/usage-logs'));
 app.use('/api/finance-audit', requireAuth, require('./src/routes/financeAudit'));
 app.use('/api/session-analytics', requireAuth, require('./src/routes/sessionAnalytics'));
 app.use('/api/features',          requireAuth, require('./src/routes/phase5'));
+app.use('/api/jobs',              requireAuth, require('./src/routes/jobs'));
 
 // Health check (public)
 app.get('/api/health', (req, res) => {
@@ -261,6 +262,9 @@ app.listen(PORT, () => {
   console.log(`   Data dir: ${DATA_DIR}`);
   if (IS_PROD) console.log(`   Frontend: served from /frontend/dist`);
   console.log('');
+
+  // Start background job queue worker
+  try { require('./src/services/jobQueue').startWorker(); } catch (e) { console.error('Job queue init failed:', e.message); }
 });
 
 module.exports = app;
