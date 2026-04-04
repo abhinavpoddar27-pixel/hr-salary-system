@@ -204,6 +204,8 @@ router.post('/compute-salary', (req, res) => {
         if (comp.salaryHeld) held.push({ code: emp.code, name: emp.name, reason: comp.holdReason });
       } else if (comp.excluded) {
         excluded.push({ code: comp.employeeCode, name: emp.name, reason: comp.reason });
+      } else if (comp.silentSkip) {
+        // Zero attendance — don't show as error, just count
       } else {
         errors.push({ employeeCode: emp.code, error: comp.error });
       }

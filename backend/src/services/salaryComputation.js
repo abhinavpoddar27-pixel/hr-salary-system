@@ -141,10 +141,11 @@ function computeEmployeeSalary(db, employee, month, year, company) {
   // ── Zero-day check ──
   const daysPresent = dayCalc.days_present || 0;
   const daysHalfPresent = dayCalc.days_half_present || 0;
-  if (daysPresent === 0 && daysHalfPresent === 0) {
+  if (daysPresent === 0 && daysHalfPresent === 0 && (dayCalc.days_wop || 0) === 0) {
     return {
       success: false,
-      excluded: true,
+      excluded: false,
+      silentSkip: true,
       employeeCode: employee.code,
       reason: 'Zero working days — no attendance recorded'
     };
