@@ -82,7 +82,29 @@ router.get('/:code', (req, res) => {
   const emp = db.prepare('SELECT * FROM employees WHERE code = ?').get(req.params.code);
   if (!emp) return res.status(404).json({ success: false, error: 'Employee not found' });
 
-  const salaryStruct = db.prepare('SELECT * FROM salary_structures WHERE employee_id = ? ORDER BY effective_from DESC LIMIT 1').get(emp.id);
+  let salaryStruct = db.prepare('SELECT * FROM salary_structures WHERE employee_id = ? ORDER BY effective_from DESC LIMIT 1').get(emp.id);
+
+  // Sync salary structure gross from employee master if structure has 0
+  if (salaryStruct && (salaryStruct.gross_salary || 0) === 0 && emp.gross_salary > 0) {
+    const gross = emp.gross_salary;
+    const basicPct = salaryStruct.basic_percent || 50;
+    const hraPct = salaryStruct.hra_percent || 20;
+    db.prepare('UPDATE salary_structures SET gross_salary = ?, basic = ?, hra = ?, updated_at = datetime(\'now\') WHERE id = ?')
+      .run(gross, gross * basicPct / 100, gross * hraPct / 100, salaryStruct.id);
+    salaryStruct.gross_salary = gross;
+    salaryStruct.basic = gross * basicPct / 100;
+    salaryStruct.hra = gross * hraPct / 100;
+  }
+
+  // Auto-create salary structure if none exists but employee has gross
+  if (!salaryStruct && emp.gross_salary > 0) {
+    const gross = emp.gross_salary;
+    db.prepare(`INSERT INTO salary_structures (employee_id, effective_from, gross_salary, basic, hra, basic_percent, hra_percent, pf_applicable, esi_applicable, pt_applicable, pf_wage_ceiling)
+      VALUES (?, '2025-01-01', ?, ?, ?, 50, 20, ?, ?, ?, 15000)`)
+      .run(emp.id, gross, gross * 0.5, gross * 0.2, emp.pf_applicable || 0, emp.esi_applicable || 0, emp.pt_applicable ?? 1);
+    salaryStruct = db.prepare('SELECT * FROM salary_structures WHERE employee_id = ? ORDER BY effective_from DESC LIMIT 1').get(emp.id);
+  }
+
   const leaveBalances = db.prepare('SELECT * FROM leave_balances WHERE employee_id = ? AND year = ?').all(emp.id, new Date().getFullYear());
 
   res.json({ success: true, data: { ...emp, salaryStructure: salaryStruct, leaveBalances } });

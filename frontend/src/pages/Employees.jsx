@@ -413,7 +413,7 @@ function EmployeeProfileModal({ employee, onClose }) {
               <div className="bg-slate-50 rounded-xl p-3">
                 <h4 className="text-xs font-bold text-slate-500 uppercase mb-2">Current Salary Structure</h4>
                 <div className="grid grid-cols-3 gap-2 text-sm">
-                  <div><span className="text-slate-400 text-xs">Gross</span><div className="font-bold">{fmtINR(emp.salaryStructure.gross_salary || 0)}</div></div>
+                  <div><span className="text-slate-400 text-xs">Gross</span><div className="font-bold">{fmtINR(emp.salaryStructure.gross_salary || emp.gross_salary || 0)}</div></div>
                   <div><span className="text-slate-400 text-xs">Basic</span><div>{fmtINR(emp.salaryStructure.basic || 0)}</div></div>
                   <div><span className="text-slate-400 text-xs">HRA</span><div>{fmtINR(emp.salaryStructure.hra || 0)}</div></div>
                 </div>
