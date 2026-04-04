@@ -167,14 +167,16 @@ function computeEmployeeSalary(db, employee, month, year, company) {
       const hraPct = 20;
       const basic = gross * basicPct / 100;
       const hra = gross * hraPct / 100;
-      db.prepare(`INSERT INTO salary_structures
-        (employee_id, effective_from, gross_salary, basic, da, hra, special_allowance, other_allowances,
-         basic_percent, hra_percent, da_percent, pf_applicable, esi_applicable, pt_applicable, pf_wage_ceiling)
-        VALUES (?, '2025-01-01', ?, ?, 0, ?, 0, 0, ?, ?, 0, ?, ?, ?, 15000)`).run(
-          employee.id, gross, basic, hra,
-          basicPct, hraPct,
-          employee.pf_applicable || 0, employee.esi_applicable || 0, employee.pt_applicable ?? 1
-      );
+      try {
+        db.prepare(`INSERT OR REPLACE INTO salary_structures
+          (employee_id, effective_from, gross_salary, basic, da, hra, special_allowance, other_allowances,
+           basic_percent, hra_percent, da_percent, pf_applicable, esi_applicable, pt_applicable, pf_wage_ceiling)
+          VALUES (?, '2025-01-01', ?, ?, 0, ?, 0, 0, ?, ?, 0, ?, ?, ?, 15000)`).run(
+            employee.id, gross, basic, hra,
+            basicPct, hraPct,
+            employee.pf_applicable || 0, employee.esi_applicable || 0, employee.pt_applicable ?? 1
+        );
+      } catch (e) { /* structure may already exist */ }
       salStruct = db.prepare(`
         SELECT * FROM salary_structures
         WHERE employee_id = ? AND effective_from <= ?
@@ -189,6 +191,18 @@ function computeEmployeeSalary(db, employee, month, year, company) {
         reason: 'No salary structure — set gross salary in Employees page'
       };
     }
+  }
+
+  // If salary structure exists but has zero gross, update from employee master
+  if (salStruct && (salStruct.gross_salary || 0) === 0 && employee.gross_salary > 0) {
+    const gross = employee.gross_salary;
+    const basicPct = salStruct.basic_percent || 50;
+    const hraPct = salStruct.hra_percent || 20;
+    db.prepare(`UPDATE salary_structures SET gross_salary = ?, basic = ?, hra = ?, updated_at = datetime('now') WHERE id = ?`)
+      .run(gross, gross * basicPct / 100, gross * hraPct / 100, salStruct.id);
+    salStruct.gross_salary = gross;
+    salStruct.basic = gross * basicPct / 100;
+    salStruct.hra = gross * hraPct / 100;
   }
 
   // Policy values
