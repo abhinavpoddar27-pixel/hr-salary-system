@@ -74,23 +74,17 @@ function getPrevMonthGross(db, employeeCode, month, year) {
  */
 function getAdvanceRecovery(db, employeeCode, month, year) {
   try {
-    // First try paid-but-not-recovered advances (normal flow)
-    let adv = db.prepare(`
-      SELECT advance_amount FROM salary_advances
-      WHERE employee_code = ? AND recovery_month = ? AND recovery_year = ?
-      AND paid = 1 AND recovered = 0
-    `).get(employeeCode, month, year);
-    if (adv && adv.advance_amount > 0) return adv.advance_amount;
-
-    // Also check eligible advances that may not have been marked paid yet
-    // (advances are given mid-month and recovered from same month's salary)
-    adv = db.prepare(`
-      SELECT advance_amount FROM salary_advances
-      WHERE employee_code = ? AND recovery_month = ? AND recovery_year = ?
-      AND is_eligible = 1 AND recovered = 0 AND advance_amount > 0
-      AND remark IS NOT 'NO_ADVANCE'
-    `).get(employeeCode, month, year);
-    return adv ? adv.advance_amount : 0;
+    // Get any unrecovered advance for this month (by recovery_month or same month)
+    const adv = db.prepare(`
+      SELECT SUM(advance_amount) as total FROM salary_advances
+      WHERE employee_code = ? AND recovered = 0 AND advance_amount > 0
+      AND remark != 'NO_ADVANCE'
+      AND (
+        (recovery_month = ? AND recovery_year = ?)
+        OR (month = ? AND year = ? AND recovery_month IS NULL)
+      )
+    `).get(employeeCode, month, year, month, year);
+    return adv?.total || 0;
   } catch { return 0; }
 }
 
@@ -308,8 +302,8 @@ function computeEmployeeSalary(db, employee, month, year, company) {
     esiEmployer = Math.round(grossEarned * esiEmprRate * 100) / 100;
   }
 
-  // ─── Professional Tax ───
-  const professionalTax = calcProfessionalTax(grossMonthly, db);
+  // ─── Professional Tax (only if applicable) ───
+  const professionalTax = salStruct.pt_applicable ? calcProfessionalTax(grossMonthly, db) : 0;
 
   // ─── LOP Deduction ───
   // If full month worked → no LOP
