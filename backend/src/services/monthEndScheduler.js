@@ -23,7 +23,12 @@ function createNotification(roleTarget, type, message, link) {
   const today = new Date().toISOString().split('T')[0];
   const existing = db.prepare("SELECT id FROM notifications WHERE type = ? AND message = ? AND created_at LIKE ?").get(type, message, `${today}%`);
   if (existing) return;
-  db.prepare('INSERT INTO notifications (role_target, type, message, link) VALUES (?, ?, ?, ?)').run(roleTarget, type, message, link || null);
+  try {
+    db.prepare('INSERT INTO notifications (role_target, type, title, message, link, action_url) VALUES (?, ?, ?, ?, ?, ?)').run(roleTarget, type, message, message, link || null, link || null);
+  } catch {
+    // Fallback for old schema
+    try { db.prepare('INSERT INTO notifications (type, title, message, action_url) VALUES (?, ?, ?, ?)').run(type, message, message, link || null); } catch {}
+  }
 }
 
 function checkPipelineStatus() {

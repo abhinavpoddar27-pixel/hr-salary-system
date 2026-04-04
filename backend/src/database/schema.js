@@ -795,6 +795,11 @@ function initSchema(db) {
   safeAddColumn('users', 'department', 'TEXT');
   safeAddColumn('users', 'employee_code', 'TEXT');
 
+  // notifications: add columns for month-end scheduler
+  safeAddColumn('notifications', 'role_target', 'TEXT');
+  safeAddColumn('notifications', 'user_id', 'INTEGER');
+  safeAddColumn('notifications', 'link', 'TEXT');
+
   // day_calculations: late deduction support
   safeAddColumn('day_calculations', 'late_count', 'INTEGER DEFAULT 0');
   safeAddColumn('day_calculations', 'late_deduction_days', 'REAL DEFAULT 0');
