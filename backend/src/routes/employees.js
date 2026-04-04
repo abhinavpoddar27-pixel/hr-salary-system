@@ -272,9 +272,9 @@ router.put('/:code/salary', (req, res) => {
   const da = gross * daPct / 100;
   const specialAllow = gross * specialPct / 100;
 
-  // Update employee banking/statutory fields
-  db.prepare(`UPDATE employees SET uan=?, esi_number=?, bank_account=?, bank_name=?, ifsc=?, updated_at=datetime('now') WHERE code=?`)
-    .run(uan || null, esi_number || null, account_number || null, bank_name || null, ifsc_code || null, req.params.code);
+  // Update employee banking/statutory fields + gross salary
+  db.prepare(`UPDATE employees SET gross_salary=?, uan=?, esi_number=?, bank_account=?, bank_name=?, ifsc=?, updated_at=datetime('now') WHERE code=?`)
+    .run(gross, uan || null, esi_number || null, account_number || null, bank_name || null, ifsc_code || null, req.params.code);
 
   // Upsert salary structure
   const existing = db.prepare('SELECT id FROM salary_structures WHERE employee_id = ? ORDER BY effective_from DESC LIMIT 1').get(emp.id);
@@ -294,7 +294,7 @@ router.put('/:code/salary', (req, res) => {
     db.prepare(`INSERT INTO salary_structures
       (employee_id, effective_from, gross_salary, basic, da, hra, special_allowance, other_allowances,
        basic_percent, hra_percent, da_percent, pf_applicable, esi_applicable, pt_applicable, pf_wage_ceiling)
-      VALUES (?, date('now'), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
+      VALUES (?, '2025-01-01', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
         emp.id, gross, basic, da, hra, specialAllow, otherAllow,
         basicPct, hraPct, daPct,
         pf_applicable ?? 1, esi_applicable ?? 1, pt_applicable ?? 1, pf_wage_ceiling || 15000

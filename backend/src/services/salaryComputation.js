@@ -151,13 +151,22 @@ function computeEmployeeSalary(db, employee, month, year, company) {
     };
   }
 
-  // Get salary structure (most recent effective from <= current month)
+  // Get salary structure (most recent effective from <= current month, or any if none found)
   const monthStr = `${year}-${String(month).padStart(2,'0')}-01`;
   let salStruct = db.prepare(`
     SELECT * FROM salary_structures
     WHERE employee_id = ? AND effective_from <= ?
     ORDER BY effective_from DESC LIMIT 1
   `).get(employee.id, monthStr);
+
+  // Fallback: if no structure found for this month, try the most recent one regardless of date
+  if (!salStruct) {
+    salStruct = db.prepare(`
+      SELECT * FROM salary_structures
+      WHERE employee_id = ?
+      ORDER BY effective_from DESC LIMIT 1
+    `).get(employee.id);
+  }
 
   if (!salStruct) {
     // Auto-create salary structure from employee.gross_salary if available
