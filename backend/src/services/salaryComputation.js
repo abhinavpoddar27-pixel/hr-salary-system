@@ -232,12 +232,14 @@ function computeEmployeeSalary(db, employee, month, year, company) {
   // Per-day rate
   const perDayRate = grossMonthly / divisor;
 
-  // Payable days
-  const payableDays = dayCalc.total_payable_days || 0;
+  // Payable days (capped at divisor for earned calculation — extra duty paid separately)
+  const rawPayableDays = dayCalc.total_payable_days || 0;
+  const payableDays = Math.min(rawPayableDays, divisor);
   const lopDays = dayCalc.lop_days || 0;
+  const extraDutyDays = dayCalc.extra_duty_days || 0;
 
-  // Earned components (pro-rata)
-  const earnedRatio = payableDays / divisor;
+  // Earned components (pro-rata, capped at 100% of monthly)
+  const earnedRatio = Math.min(1, payableDays / divisor);
   const basicEarned = Math.round(basicMonthly * earnedRatio * 100) / 100;
   const daEarned = Math.round(daMonthly * earnedRatio * 100) / 100;
   const hraEarned = Math.round(hraMonthly * earnedRatio * 100) / 100;
@@ -249,8 +251,14 @@ function computeEmployeeSalary(db, employee, month, year, company) {
   const basicHourlyRate = basicMonthly / (divisor * 8);
   const otPay = Math.round(otHours * basicHourlyRate * otRate * 100) / 100;
 
-  // Gross earned
-  const grossEarned = basicEarned + daEarned + hraEarned + conveyanceEarned + otherEarned + otPay;
+  // Gross earned (base salary, capped at 100% of monthly gross)
+  const baseEarned = basicEarned + daEarned + hraEarned + conveyanceEarned + otherEarned;
+
+  // Extra duty pay: days worked beyond the divisor (WOP days, extra working days)
+  const extraDutyPay = Math.round(extraDutyDays * perDayRate * 100) / 100;
+
+  // Gross earned = base + OT + extra duty
+  const grossEarned = baseEarned + otPay + extraDutyPay;
 
   // ─── PF ───
   let pfEmployee = 0, pfEmployer = 0, pfWages = 0, eps = 0;
@@ -327,7 +335,7 @@ function computeEmployeeSalary(db, employee, month, year, company) {
 
   // ─── Salary Hold Logic ───
   let salaryHeld = 0, holdReason = '';
-  if (payableDays < holdMinDays) {
+  if (rawPayableDays < holdMinDays) {
     const newJoinee = isNewJoinee(db, employee.code, month, year);
     const hasLeave = hasApprovedLeave(db, employee.code, month, year);
     if (!newJoinee && !hasLeave) {
@@ -342,10 +350,10 @@ function computeEmployeeSalary(db, employee, month, year, company) {
     employeeId: employee.id,
     month, year, company,
     grossSalary: grossMonthly,
-    payableDays: Math.round(payableDays * 100) / 100,
+    payableDays: Math.round(rawPayableDays * 100) / 100,
     perDayRate: Math.round(perDayRate * 100) / 100,
     basicEarned, daEarned, hraEarned, conveyanceEarned, otherEarned,
-    otPay, grossEarned,
+    otPay, extraDutyPay, grossEarned,
     pfWages, esiWages, eps,
     pfEmployee, pfEmployer,
     esiEmployee, esiEmployer,
