@@ -69,7 +69,13 @@ function useSortable(defaultKey = 'employee_name', defaultDir = 'asc') {
 
 export default function DailyMIS() {
   const { selectedCompany } = useAppStore()
-  const [selectedDate, setSelectedDate] = useState(new Date().toISOString().split('T')[0])
+  const [selectedDate, setSelectedDate] = useState(() => {
+    // Use IST date (UTC+5:30) to avoid showing wrong day before 5:30 AM IST
+    const now = new Date();
+    const istOffset = 5.5 * 60 * 60 * 1000;
+    const ist = new Date(now.getTime() + istOffset + now.getTimezoneOffset() * 60 * 1000);
+    return ist.toISOString().split('T')[0];
+  })
   const [mainTab, setMainTab] = useState('today') // 'today' | 'previous'
   const [todaySubTab, setTodaySubTab] = useState('punched-in')
   const [shiftExpanded, setShiftExpanded] = useState({ day: false, night: false })

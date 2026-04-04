@@ -154,7 +154,7 @@ export default function Sidebar() {
         collapsed ? 'md:w-14' : 'md:w-60',
         // Mobile: fixed overlay drawer, fully hidden when collapsed
         'fixed top-0 left-0',
-        collapsed ? '-translate-x-full md:translate-x-0' : 'translate-x-0 w-64'
+        collapsed ? '-translate-x-full md:translate-x-0 w-0 md:w-14 overflow-hidden' : 'translate-x-0 w-64'
       )}>
         {/* Logo */}
         <div className="flex items-center gap-3 px-4 py-4 border-b border-slate-100">

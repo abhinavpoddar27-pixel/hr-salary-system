@@ -35,6 +35,12 @@ function fmtDuration(sec) {
   return `${Math.floor(sec / 3600)}h ${Math.floor((sec % 3600) / 60)}m`
 }
 
+// Helper: format UTC timestamp to IST display
+function fmtIST(ts) {
+  if (!ts) return '—'
+  return new Date(ts).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata', day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit', hour12: false })
+}
+
 // Helper: format ms offset to mm:ss
 function fmtOffset(ms) {
   const totalSec = Math.floor(ms / 1000)
@@ -351,7 +357,7 @@ function ReplayTab({ days, initialUser }) {
                 <tbody>
                   {sessions.map(s => (
                     <tr key={s.session_id} className="cursor-pointer hover:bg-blue-50/60 transition-colors" onClick={() => setSelectedSession(s.session_id)}>
-                      <td className="text-sm text-slate-700 whitespace-nowrap">{s.start_time?.slice(0, 16)?.replace('T', ' ')}</td>
+                      <td className="text-sm text-slate-700 whitespace-nowrap">{fmtIST(s.start_time)}</td>
                       <td className="text-center text-sm">{s.duration_minutes}m</td>
                       <td className="text-center font-bold text-slate-700">{s.event_count}</td>
                       <td className="text-center">{s.pages_visited}</td>
@@ -939,7 +945,7 @@ function ErrorsTab({ days }) {
               <tr><td colSpan={4} className="text-center py-8 text-green-500">No errors recorded</td></tr>
             ) : errors.map((e, i) => (
               <tr key={i}>
-                <td className="text-xs text-slate-400 whitespace-nowrap">{e.timestamp?.slice(0, 16)?.replace('T', ' ')}</td>
+                <td className="text-xs text-slate-400 whitespace-nowrap">{fmtIST(e.timestamp)}</td>
                 <td className="text-sm">{e.username}</td>
                 <td className="text-sm text-slate-600">{e.page}</td>
                 <td className="text-xs text-red-600 max-w-xs truncate">{e.message}</td>
