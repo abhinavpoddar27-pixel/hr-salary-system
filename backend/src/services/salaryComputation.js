@@ -261,8 +261,6 @@ function computeEmployeeSalary(db, employee, month, year, company) {
   const lopDays = dayCalc.lop_days || 0;
   const extraDutyDays = dayCalc.extra_duty_days || 0;
   const totalWorkingDays = dayCalc.total_working_days || divisor;
-  const daysPresent = dayCalc.days_present || 0;
-  const daysHalfPresent = dayCalc.days_half_present || 0;
   const daysWOP = dayCalc.days_wop || 0;
 
   // ── Earned calculation ──
