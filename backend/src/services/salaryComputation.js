@@ -253,8 +253,11 @@ function computeEmployeeSalary(db, employee, month, year, company) {
   // Gross salary is for 1 month. If full month worked → earned = gross.
   // If partial → pro-rate by (actual working days / total working days).
   // OT and extra duty paid separately, NOT included in gross earned.
-  const actualWorkDays = daysPresent + daysHalfPresent; // excludes WOP (that's extra duty)
-  const workedFullMonth = actualWorkDays >= totalWorkingDays || rawPayableDays >= divisor;
+  // actualWorkDays = Mon-Sat working days actually worked (P + ½P, excludes WOP/Sundays/holidays)
+  const actualWorkDays = daysPresent + daysHalfPresent;
+  // Full month = worked all required Mon-Sat working days
+  const workedFullMonth = actualWorkDays >= totalWorkingDays;
+  // Pro-rate: actual working days / total working days in the month
   const earnedRatio = workedFullMonth ? 1 : (totalWorkingDays > 0 ? Math.min(1, actualWorkDays / totalWorkingDays) : 0);
 
   const basicEarned = Math.round(basicMonthly * earnedRatio * 100) / 100;
