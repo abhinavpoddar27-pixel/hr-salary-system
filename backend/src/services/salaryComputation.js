@@ -229,23 +229,15 @@ function computeEmployeeSalary(db, employee, month, year, company) {
   const componentSum = basicMonthly + daMonthly + hraMonthly + conveyanceMonthly + otherMonthly;
   const grossMonthly = employee.gross_salary > 0 ? employee.gross_salary : (salStruct.gross_salary > 0 ? salStruct.gross_salary : componentSum);
 
-  // Rescale components if gross from master differs from component sum
-  // This ensures earned breakdowns match the actual gross
-  if (componentSum > 0 && Math.abs(grossMonthly - componentSum) > 1) {
-    const scale = grossMonthly / componentSum;
-    basicMonthly = Math.round(basicMonthly * scale * 100) / 100;
-    daMonthly = Math.round(daMonthly * scale * 100) / 100;
-    hraMonthly = Math.round(hraMonthly * scale * 100) / 100;
-    conveyanceMonthly = Math.round(conveyanceMonthly * scale * 100) / 100;
-    otherMonthly = Math.round(grossMonthly - basicMonthly - daMonthly - hraMonthly - conveyanceMonthly);
-  } else if (componentSum === 0 && grossMonthly > 0) {
-    // No components set — use default split (50% basic, 20% HRA, 30% other)
-    const bPct = salStruct.basic_percent || 50;
-    const hPct = salStruct.hra_percent || 20;
-    basicMonthly = Math.round(grossMonthly * bPct / 100 * 100) / 100;
-    hraMonthly = Math.round(grossMonthly * hPct / 100 * 100) / 100;
-    otherMonthly = Math.round((grossMonthly - basicMonthly - hraMonthly) * 100) / 100;
-  }
+  // ALWAYS rebuild components from gross to ensure they sum to exactly grossMonthly
+  // This prevents any mismatch between stored components and the actual gross
+  const bPct = salStruct.basic_percent || 50;
+  const hPct = salStruct.hra_percent || 20;
+  basicMonthly = Math.round(grossMonthly * bPct / 100 * 100) / 100;
+  hraMonthly = Math.round(grossMonthly * hPct / 100 * 100) / 100;
+  daMonthly = 0;
+  conveyanceMonthly = 0;
+  otherMonthly = Math.round((grossMonthly - basicMonthly - hraMonthly) * 100) / 100;
 
   // Per-day rate (for deductions like LOP)
   const perDayRate = grossMonthly / divisor;
