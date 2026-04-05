@@ -266,14 +266,15 @@ function computeEmployeeSalary(db, employee, month, year, company) {
   const conveyanceEarned = Math.round(conveyanceMonthly * earnedRatio * 100) / 100;
   const otherEarned = Math.round(otherMonthly * earnedRatio * 100) / 100;
 
-  // OT pay (paid separately based on hours, not added to gross)
+  // OT pay (paid separately based on hours)
   const otHours = dayCalc.ot_hours || 0;
   const basicHourlyRate = basicMonthly / (divisor * 8);
   const otPay = Math.round(otHours * basicHourlyRate * otRate * 100) / 100;
 
-  // Gross earned = base salary earned (NEVER exceeds monthly gross)
-  const baseEarned = basicEarned + daEarned + hraEarned + conveyanceEarned + otherEarned;
-  const grossEarned = Math.min(Math.round(baseEarned * 100) / 100, grossMonthly);
+  // Gross earned = base salary + OT (total what employee earns this month)
+  // Base is capped at grossMonthly; OT is additional
+  const baseEarned = Math.min(basicEarned + daEarned + hraEarned + conveyanceEarned + otherEarned, grossMonthly);
+  const grossEarned = Math.round((baseEarned + otPay) * 100) / 100;
 
   // ─── PF ───
   let pfEmployee = 0, pfEmployer = 0, pfWages = 0, eps = 0;
@@ -299,9 +300,11 @@ function computeEmployeeSalary(db, employee, month, year, company) {
   const professionalTax = salStruct.pt_applicable ? calcProfessionalTax(grossMonthly, db) : 0;
 
   // ─── LOP Deduction ───
-  // If full month worked → no LOP
-  const effectiveLopDays = workedFullMonth ? 0 : lopDays;
-  const lopDeduction = Math.round(effectiveLopDays * perDayRate * 100) / 100;
+  // Pro-rating via earnedRatio already reduces salary for days not worked.
+  // LOP deduction is ONLY for additional leave-without-pay days beyond
+  // the pro-rating (e.g., days marked as LOP in day calculation).
+  // If earned is already pro-rated (earnedRatio < 1), don't double-deduct.
+  const lopDeduction = 0; // Pro-rating handles absent days; no separate LOP needed
 
   // ─── Advance Recovery (from salary_advances table) ───
   const autoAdvanceRecovery = getAdvanceRecovery(db, employee.code, month, year);
@@ -342,8 +345,8 @@ function computeEmployeeSalary(db, employee, month, year, company) {
     salaryWarning = 'DEDUCTIONS_EXCEED_EARNINGS';
     totalDeductions = Math.round(grossEarned * 100) / 100;
   }
-  // Net = base earned - deductions + OT (OT is added on top, not subject to deductions)
-  const netSalary = Math.max(0, Math.round((grossEarned - totalDeductions + otPay) * 100) / 100);
+  // Net = gross earned (base + OT) - all deductions. Simple.
+  const netSalary = Math.max(0, Math.round((grossEarned - totalDeductions) * 100) / 100);
 
   // ─── Gross Change Detection ───
   const prevMonthGross = getPrevMonthGross(db, employee.code, month, year);
