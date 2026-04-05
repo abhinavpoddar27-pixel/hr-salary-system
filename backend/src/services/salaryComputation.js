@@ -262,8 +262,8 @@ function computeEmployeeSalary(db, employee, month, year, company) {
   // If partial → pro-rate by (actual working days / total working days).
   // OT and extra duty paid separately, NOT included in gross earned.
   const actualWorkDays = daysPresent + daysHalfPresent; // excludes WOP (that's extra duty)
-  const workedFullMonth = actualWorkDays >= totalWorkingDays;
-  const earnedRatio = workedFullMonth ? 1 : Math.min(1, actualWorkDays / totalWorkingDays);
+  const workedFullMonth = actualWorkDays >= totalWorkingDays || rawPayableDays >= divisor;
+  const earnedRatio = workedFullMonth ? 1 : (totalWorkingDays > 0 ? Math.min(1, actualWorkDays / totalWorkingDays) : 0);
 
   const basicEarned = Math.round(basicMonthly * earnedRatio * 100) / 100;
   const daEarned = Math.round(daMonthly * earnedRatio * 100) / 100;
@@ -276,11 +276,9 @@ function computeEmployeeSalary(db, employee, month, year, company) {
   const basicHourlyRate = basicMonthly / (divisor * 8);
   const otPay = Math.round(otHours * basicHourlyRate * otRate * 100) / 100;
 
-  // Gross earned = base salary earned (capped at monthly gross)
+  // Gross earned = base salary earned (NEVER exceeds monthly gross)
   const baseEarned = basicEarned + daEarned + hraEarned + conveyanceEarned + otherEarned;
-
-  // Gross earned is ONLY the base salary earned — OT/extra duty are separate
-  const grossEarned = Math.round(baseEarned * 100) / 100;
+  const grossEarned = Math.min(Math.round(baseEarned * 100) / 100, grossMonthly);
 
   // ─── PF ───
   let pfEmployee = 0, pfEmployer = 0, pfWages = 0, eps = 0;
