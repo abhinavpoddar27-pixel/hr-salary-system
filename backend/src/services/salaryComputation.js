@@ -361,7 +361,7 @@ function computeEmployeeSalary(db, employee, month, year, company) {
     const hasLeave = hasApprovedLeave(db, employee.code, month, year);
     if (!newJoinee && !hasLeave) {
       salaryHeld = 1;
-      holdReason = `Only ${payableDays} payable days (min ${holdMinDays} required)`;
+      holdReason = `Only ${rawPayableDays} payable days (min ${holdMinDays} required)`;
     }
   }
 
