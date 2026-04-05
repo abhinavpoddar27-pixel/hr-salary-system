@@ -271,10 +271,11 @@ function computeEmployeeSalary(db, employee, month, year, company) {
   const basicHourlyRate = basicMonthly / (divisor * 8);
   const otPay = Math.round(otHours * basicHourlyRate * otRate * 100) / 100;
 
-  // Gross earned = base salary + OT (total what employee earns this month)
-  // Base is capped at grossMonthly; OT is additional
-  const baseEarned = Math.min(basicEarned + daEarned + hraEarned + conveyanceEarned + otherEarned, grossMonthly);
-  const grossEarned = Math.round((baseEarned + otPay) * 100) / 100;
+  // Gross earned = base salary only (capped at grossMonthly). OT is separate.
+  const grossEarned = Math.min(
+    Math.round((basicEarned + daEarned + hraEarned + conveyanceEarned + otherEarned) * 100) / 100,
+    grossMonthly
+  );
 
   // ─── PF ───
   let pfEmployee = 0, pfEmployer = 0, pfWages = 0, eps = 0;
@@ -340,13 +341,16 @@ function computeEmployeeSalary(db, employee, month, year, company) {
   let totalDeductions = pfEmployee + esiEmployee + professionalTax + tds + advanceRecovery + lopDeduction + otherDeductions + loanRecovery;
   let salaryWarning = '';
 
-  // Cap deductions at gross earned — net salary must never go negative
-  if (totalDeductions > grossEarned && grossEarned > 0) {
+  // Total earnings = base earned + OT
+  const totalEarnings = grossEarned + otPay;
+
+  // Cap deductions at total earnings — net salary must never go negative
+  if (totalDeductions > totalEarnings && totalEarnings > 0) {
     salaryWarning = 'DEDUCTIONS_EXCEED_EARNINGS';
-    totalDeductions = Math.round(grossEarned * 100) / 100;
+    totalDeductions = Math.round(totalEarnings * 100) / 100;
   }
-  // Net = gross earned (base + OT) - all deductions. Simple.
-  const netSalary = Math.max(0, Math.round((grossEarned - totalDeductions) * 100) / 100);
+  // Net = Earned + OT - Deductions
+  const netSalary = Math.max(0, Math.round((totalEarnings - totalDeductions) * 100) / 100);
 
   // ─── Gross Change Detection ───
   const prevMonthGross = getPrevMonthGross(db, employee.code, month, year);

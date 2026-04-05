@@ -458,7 +458,7 @@ export default function SalaryComputation() {
                     <th>Adv.</th>
                     <th><Abbr code="EMI">Loan</Abbr></th>
                     <th>Tot.Ded</th>
-                    <th className="bg-green-50 text-green-700">Net</th>
+                    <th className="bg-green-50 text-green-700" title="Net = Earned + OT - Deductions">Net</th>
                     <th>Status</th>
                     <th></th>
                   </tr>
