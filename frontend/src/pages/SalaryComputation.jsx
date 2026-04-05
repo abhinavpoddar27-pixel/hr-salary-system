@@ -450,6 +450,7 @@ export default function SalaryComputation() {
                     <th>Days</th>
                     <th>Gross</th>
                     <th>Earned</th>
+                    <th><Abbr code="OT">OT</Abbr></th>
                     <th><Abbr code="PF">PF</Abbr></th>
                     <th><Abbr code="ESI">ESI</Abbr></th>
                     <th><Abbr code="PT">PT</Abbr></th>
@@ -499,6 +500,7 @@ export default function SalaryComputation() {
                         <td className="text-center font-mono">{s.payable_days}</td>
                         <td className="font-mono">{fmtINR(s.gross_salary)}</td>
                         <td className="font-mono">{fmtINR(s.gross_earned)}</td>
+                        <td className="font-mono text-cyan-600">{s.ot_pay > 0 ? fmtINR(s.ot_pay) : '—'}</td>
                         <td className="text-indigo-600 font-mono">{fmtINR(s.pf_employee)}</td>
                         <td className="text-purple-600 font-mono">{fmtINR(s.esi_employee)}</td>
                         <td className="font-mono">{fmtINR(s.professional_tax)}</td>
@@ -585,6 +587,7 @@ export default function SalaryComputation() {
                     <td colSpan={3}>TOTAL ({salaries.length})</td>
                     <td className="font-mono">{fmtINR(salaries.reduce((s, r) => s + (r.gross_salary || 0), 0))}</td>
                     <td className="font-mono">{fmtINR(salaries.reduce((s, r) => s + (r.gross_earned || 0), 0))}</td>
+                    <td className="font-mono text-cyan-600">{fmtINR(salaries.reduce((s, r) => s + (r.ot_pay || 0), 0))}</td>
                     <td className="font-mono text-indigo-600">{fmtINR(salaries.reduce((s, r) => s + (r.pf_employee || 0), 0))}</td>
                     <td className="font-mono text-purple-600">{fmtINR(salaries.reduce((s, r) => s + (r.esi_employee || 0), 0))}</td>
                     <td className="font-mono">{fmtINR(salaries.reduce((s, r) => s + (r.professional_tax || 0), 0))}</td>
