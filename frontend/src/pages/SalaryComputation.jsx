@@ -28,6 +28,13 @@ export default function SalaryComputation() {
   const [filterDept, setFilterDept] = useState('')
   const [filterView, setFilterView] = useState('all')
   const [confirmAction, setConfirmAction] = useState(null)
+  const [sortCol, setSortCol] = useState('')
+  const [sortDir, setSortDir] = useState('asc')
+  const toggleSort = (col) => {
+    if (sortCol === col) setSortDir(d => d === 'asc' ? 'desc' : 'asc')
+    else { setSortCol(col); setSortDir('desc') }
+  }
+  const sortIndicator = (col) => sortCol === col ? (sortDir === 'asc' ? ' ▲' : ' ▼') : ''
 
   const { data: res, isLoading, refetch } = useQuery({
     queryKey: ['salary-register', month, year, selectedCompany],
@@ -442,29 +449,32 @@ export default function SalaryComputation() {
               {allSalaries[0]?.is_finalised && <span className="badge-green text-xs">Finalised</span>}
             </div>
             <div className="overflow-x-auto">
-              <table className="w-full table-compact text-xs">
+              <table className="w-full table-compact text-[11px]">
                 <thead>
                   <tr>
-                    <th><Abbr code="Emp">Employee</Abbr></th>
-                    <th><Abbr code="Dept">Dept</Abbr></th>
-                    <th>Days</th>
-                    <th>Gross</th>
-                    <th>Earned</th>
-                    <th><Abbr code="OT">OT</Abbr></th>
-                    <th><Abbr code="PF">PF</Abbr></th>
-                    <th><Abbr code="ESI">ESI</Abbr></th>
-                    <th><Abbr code="PT">PT</Abbr></th>
-                    <th><Abbr code="LOP">LOP</Abbr></th>
-                    <th>Adv.</th>
-                    <th><Abbr code="EMI">Loan</Abbr></th>
-                    <th>Tot.Ded</th>
-                    <th className="bg-green-50 text-green-700" title="Net = Earned + OT - Deductions">Net</th>
-                    <th>Status</th>
+                    <th className="cursor-pointer select-none" onClick={() => toggleSort('employee_name')}>Emp{sortIndicator('employee_name')}</th>
+                    <th className="cursor-pointer select-none" onClick={() => toggleSort('department')}>Dept{sortIndicator('department')}</th>
+                    <th className="cursor-pointer select-none text-center" onClick={() => toggleSort('payable_days')}>Days{sortIndicator('payable_days')}</th>
+                    <th className="cursor-pointer select-none" onClick={() => toggleSort('gross_salary')}>Gross{sortIndicator('gross_salary')}</th>
+                    <th className="cursor-pointer select-none" onClick={() => toggleSort('gross_earned')}>Earned{sortIndicator('gross_earned')}</th>
+                    <th className="cursor-pointer select-none" onClick={() => toggleSort('ot_pay')}>OT{sortIndicator('ot_pay')}</th>
+                    <th className="cursor-pointer select-none" onClick={() => toggleSort('pf_employee')}>PF{sortIndicator('pf_employee')}</th>
+                    <th className="cursor-pointer select-none" onClick={() => toggleSort('esi_employee')}>ESI{sortIndicator('esi_employee')}</th>
+                    <th className="cursor-pointer select-none" onClick={() => toggleSort('professional_tax')}>PT{sortIndicator('professional_tax')}</th>
+                    <th>Adv</th>
+                    <th>Loan</th>
+                    <th className="cursor-pointer select-none" onClick={() => toggleSort('total_deductions')}>Ded{sortIndicator('total_deductions')}</th>
+                    <th className="cursor-pointer select-none bg-green-50 text-green-700" onClick={() => toggleSort('net_salary')} title="Net = Earned + OT - Deductions">Net{sortIndicator('net_salary')}</th>
                     <th></th>
                   </tr>
                 </thead>
                 <tbody>
-                  {salaries.map(s => (
+                  {[...salaries].sort((a, b) => {
+                    if (!sortCol) return 0;
+                    let va = a[sortCol] ?? '', vb = b[sortCol] ?? '';
+                    if (typeof va === 'string') { va = va.toLowerCase(); vb = (vb || '').toLowerCase(); }
+                    return va < vb ? (sortDir === 'asc' ? -1 : 1) : va > vb ? (sortDir === 'asc' ? 1 : -1) : 0;
+                  }).map(s => (
                     <React.Fragment key={s.employee_code}>
                       <tr onClick={() => setShowDetails(showDetails === s.employee_code ? null : s.employee_code)} className={clsx(
                         'transition-colors cursor-pointer hover:bg-blue-50/50',
@@ -496,7 +506,7 @@ export default function SalaryComputation() {
                             </div>
                           </div>
                         </td>
-                        <td className="text-xs text-slate-600">{s.department}</td>
+                        <td className="text-slate-500">{s.department}</td>
                         <td className="text-center font-mono">{s.payable_days}</td>
                         <td className="font-mono">{fmtINR(s.gross_salary)}</td>
                         <td className="font-mono">{fmtINR(s.gross_earned)}</td>
@@ -504,7 +514,6 @@ export default function SalaryComputation() {
                         <td className="text-indigo-600 font-mono">{fmtINR(s.pf_employee)}</td>
                         <td className="text-purple-600 font-mono">{fmtINR(s.esi_employee)}</td>
                         <td className="font-mono">{fmtINR(s.professional_tax)}</td>
-                        <td className={clsx('font-mono', s.lop_deduction > 0 && 'text-red-600')}>{fmtINR(s.lop_deduction)}</td>
                         <td className="font-mono">{fmtINR(s.advance_recovery)}</td>
                         <td className="font-mono">{fmtINR(s.loan_recovery)}</td>
                         <td className="text-red-600 font-mono">{fmtINR(s.total_deductions)}</td>
@@ -591,10 +600,10 @@ export default function SalaryComputation() {
                     <td className="font-mono text-indigo-600">{fmtINR(salaries.reduce((s, r) => s + (r.pf_employee || 0), 0))}</td>
                     <td className="font-mono text-purple-600">{fmtINR(salaries.reduce((s, r) => s + (r.esi_employee || 0), 0))}</td>
                     <td className="font-mono">{fmtINR(salaries.reduce((s, r) => s + (r.professional_tax || 0), 0))}</td>
-                    <td colSpan={3} />
+                    <td colSpan={2} />
                     <td className="font-mono text-red-600">{fmtINR(salaries.reduce((s, r) => s + (r.total_deductions || 0), 0))}</td>
                     <td className="bg-green-100 text-green-700 font-mono">{fmtINR(salaries.filter(s => !s.salary_held).reduce((s, r) => s + (r.net_salary || 0), 0))}</td>
-                    <td colSpan={2} />
+                    <td />
                   </tr>
                 </tfoot>
               </table>

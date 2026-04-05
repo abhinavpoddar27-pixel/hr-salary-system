@@ -266,8 +266,9 @@ function computeEmployeeSalary(db, employee, month, year, company) {
   const conveyanceEarned = Math.round(conveyanceMonthly * earnedRatio * 100) / 100;
   const otherEarned = Math.round(otherMonthly * earnedRatio * 100) / 100;
 
-  // OT pay (paid separately based on hours)
-  const otHours = dayCalc.ot_hours || 0;
+  // OT pay — ONLY if employee worked full month (all required working days)
+  // If earned < gross (partial month), employee hasn't completed standard hours, so no OT
+  const otHours = workedFullMonth ? (dayCalc.ot_hours || 0) : 0;
   const basicHourlyRate = basicMonthly / (divisor * 8);
   const otPay = Math.round(otHours * basicHourlyRate * otRate * 100) / 100;
 
