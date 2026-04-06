@@ -9,6 +9,8 @@ const CONTRACTOR_DEPT_KEYWORDS = [
 
 function isContractor(employee) {
   if (!employee) return false;
+  // Explicit flag takes priority
+  if (employee.is_contractor === 1) return true;
   const empType = (employee.employment_type || '').toUpperCase();
   if (empType === 'CONTRACT' || empType === 'CONTRACTOR') return true;
   const category = (employee.category || '').toUpperCase();

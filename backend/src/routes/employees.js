@@ -156,7 +156,7 @@ router.put('/:code', (req, res) => {
     'default_shift_id', 'shift_code', 'weekly_off_day',
     'bank_account', 'account_number', 'ifsc', 'ifsc_code', 'bank_name',
     'pf_number', 'uan', 'esi_number', 'aadhar', 'pan', 'phone', 'email',
-    'gross_salary', 'status', 'is_data_complete',
+    'gross_salary', 'status', 'is_data_complete', 'is_contractor',
     // Enhanced fields
     'blood_group', 'emergency_contact_name', 'emergency_contact_phone',
     'address_current', 'address_permanent', 'marital_status', 'spouse_name',
@@ -573,6 +573,18 @@ router.post('/bulk-import', (req, res) => {
       database: { totalEmployees: totalAll, active: totalActive, left: totalLeft, salaryStructures: totalSalary }
     }
   });
+});
+
+// Bulk set is_contractor flag
+router.post('/bulk-set-contractor', (req, res) => {
+  const db = getDb();
+  const { codes, is_contractor } = req.body;
+  if (!codes || !codes.length) return res.status(400).json({ success: false, error: 'codes array required' });
+  const val = is_contractor ? 1 : 0;
+  const stmt = db.prepare('UPDATE employees SET is_contractor = ? WHERE code = ?');
+  const txn = db.transaction(() => { for (const code of codes) stmt.run(val, code); });
+  txn();
+  res.json({ success: true, updated: codes.length });
 });
 
 module.exports = router;

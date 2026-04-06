@@ -800,6 +800,7 @@ function initSchema(db) {
   safeAddColumn('notifications', 'user_id', 'INTEGER');
   safeAddColumn('notifications', 'link', 'TEXT');
   safeAddColumn('day_calculations', 'is_contractor', 'INTEGER DEFAULT 0');
+  safeAddColumn('employees', 'is_contractor', 'INTEGER DEFAULT 0');
   safeAddColumn('salary_computations', 'finance_remark', "TEXT DEFAULT ''");
 
   // ── Holiday Master enhancements ─────────────────────────────

@@ -162,7 +162,8 @@ function calculateDays(employeeCode, month, year, company, attendanceRecords, le
   // CONTRACTOR SHORTCUT — daily wage, no paid Sundays/holidays
   // ─────────────────────────────────────────────────────────────
   if (contractorMode) {
-    const finalPayable = Math.round((daysPresent + daysHalfPresent) * 100) / 100;
+    // Contractor payable = present + half + WOP (they worked those days)
+    const finalPayable = Math.round((daysPresent + daysHalfPresent + daysWOP) * 100) / 100;
     return {
       employeeCode, month, year, company,
       totalCalendarDays: daysInMonth, totalSundays, totalHolidays: holidayCount, totalWorkingDays,

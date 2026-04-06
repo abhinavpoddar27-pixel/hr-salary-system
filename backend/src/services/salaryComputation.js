@@ -267,11 +267,11 @@ function computeEmployeeSalary(db, employee, month, year, company) {
   let earnedRatio, workedFullMonth, basicEarned, daEarned, hraEarned, conveyanceEarned, otherEarned;
 
   if (isContract) {
-    // CONTRACT WORKERS: daily wage only. No paid Sundays/holidays in earned.
-    // Earned = actual days worked × per-day rate
+    // CONTRACT WORKERS: daily wage. Earned = (present + WOP + half) / divisor × gross
+    // Payable days from day_calc already includes WOP for contractors
     workedFullMonth = actualWorkDays >= totalWorkingDays;
-    const contractDays = actualWorkDays; // only days actually worked
-    earnedRatio = totalWorkingDays > 0 ? Math.min(1, contractDays / totalWorkingDays) : 0;
+    const contractPayable = rawPayableDays; // day_calc gives present + WOP + half for contractors
+    earnedRatio = Math.min(contractPayable / divisor, 1.0);
     basicEarned = Math.round(basicMonthly * earnedRatio * 100) / 100;
     daEarned = Math.round(daMonthly * earnedRatio * 100) / 100;
     hraEarned = Math.round(hraMonthly * earnedRatio * 100) / 100;
