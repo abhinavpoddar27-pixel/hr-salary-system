@@ -507,8 +507,13 @@ export default function SalaryComputation() {
                                 </div>
                               ) : null}
                               {s.salary_held ? (
-                                <div className="text-[10px] mt-0.5 px-1.5 py-0.5 rounded bg-amber-50 text-amber-700 border border-amber-200 inline-block">
+                                <div className="text-[10px] mt-0.5 px-1.5 py-0.5 rounded bg-red-50 text-red-700 border border-red-200 inline-block">
                                   Held: {s.hold_reason}
+                                </div>
+                              ) : null}
+                              {s.finance_remark && !s.salary_held ? (
+                                <div className="text-[10px] mt-0.5 px-1.5 py-0.5 rounded bg-yellow-50 text-yellow-700 border border-yellow-200 inline-block">
+                                  {s.finance_remark}
                                 </div>
                               ) : null}
                             </div>

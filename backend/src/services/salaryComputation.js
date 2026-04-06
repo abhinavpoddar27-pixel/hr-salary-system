@@ -381,7 +381,7 @@ function computeEmployeeSalary(db, employee, month, year, company) {
   const grossChanged = (prevMonthGross > 0 && Math.abs(grossMonthly - prevMonthGross) > 0.01) ? 1 : 0;
 
   // ─── Salary Hold Logic ───
-  let salaryHeld = 0, holdReason = '';
+  let salaryHeld = 0, holdReason = '', financeRemark = '';
   if (rawPayableDays < holdMinDays) {
     const newJoinee = isNewJoinee(db, employee.code, month, year);
     const hasLeave = hasApprovedLeave(db, employee.code, month, year);
@@ -389,6 +389,36 @@ function computeEmployeeSalary(db, employee, month, year, company) {
       salaryHeld = 1;
       holdReason = `Only ${rawPayableDays} payable days (min ${holdMinDays} required)`;
     }
+  }
+
+  // ─── End-of-month absence streak hold ───
+  if (!salaryHeld && rawPayableDays >= holdMinDays) {
+    try {
+      const absenceThreshold = 7;
+      const daysInMonth = new Date(year, month, 0).getDate();
+      const monthPad = String(month).padStart(2, '0');
+      let consecutiveAbsent = 0;
+
+      for (let d = daysInMonth; d >= 1; d--) {
+        const dateStr = `${year}-${monthPad}-${String(d).padStart(2, '0')}`;
+        const dow = new Date(dateStr + 'T12:00:00').getDay();
+        if (dow === 0) continue; // skip Sundays
+
+        const rec = db.prepare("SELECT COALESCE(status_final, status_original) as status FROM attendance_processed WHERE employee_code = ? AND date = ?").get(employee.code, dateStr);
+        if (!rec || rec.status === 'A') { consecutiveAbsent++; }
+        else { break; }
+      }
+
+      if (consecutiveAbsent >= absenceThreshold) {
+        const leaveForStreak = hasApprovedLeave(db, employee.code, month, year);
+        if (!leaveForStreak) {
+          salaryHeld = 1;
+          holdReason = `FINANCE REVIEW: ${consecutiveAbsent} consecutive absent days at month-end. Possible absconder/unapproved leave.`;
+        } else {
+          financeRemark = `${consecutiveAbsent} absent days at month-end but has approved leave on record.`;
+        }
+      }
+    } catch {}
   }
 
   return {
@@ -411,7 +441,7 @@ function computeEmployeeSalary(db, employee, month, year, company) {
     netSalary,
     prevMonthGross, grossChanged,
     salaryHeld, holdReason,
-    salaryWarning
+    salaryWarning, financeRemark
   };
 }
 
@@ -427,7 +457,7 @@ function saveSalaryComputation(db, comp) {
       pf_wages, esi_wages, pf_employee, pf_employer, eps, esi_employee, esi_employer,
       professional_tax, tds, advance_recovery, lop_deduction, other_deductions,
       total_deductions, net_salary,
-      prev_month_gross, gross_changed, salary_held, hold_reason, loan_recovery
+      prev_month_gross, gross_changed, salary_held, hold_reason, loan_recovery, finance_remark
     ) VALUES (
       ?, ?, ?, ?, ?, ?, ?,
       ?, ?, ?, ?, ?,
@@ -435,7 +465,7 @@ function saveSalaryComputation(db, comp) {
       ?, ?, ?, ?, ?, ?, ?,
       ?, ?, ?, ?, ?,
       ?, ?,
-      ?, ?, ?, ?, ?
+      ?, ?, ?, ?, ?, ?
     )
     ON CONFLICT(employee_code, month, year, company) DO UPDATE SET
       gross_salary = excluded.gross_salary,
@@ -465,6 +495,7 @@ function saveSalaryComputation(db, comp) {
       salary_held = excluded.salary_held,
       hold_reason = excluded.hold_reason,
       loan_recovery = excluded.loan_recovery,
+      finance_remark = excluded.finance_remark,
       is_finalised = 0
   `).run(
     comp.employeeCode, comp.month, comp.year, comp.company,
@@ -474,7 +505,7 @@ function saveSalaryComputation(db, comp) {
     comp.pfWages, comp.esiWages, comp.pfEmployee, comp.pfEmployer, comp.eps, comp.esiEmployee, comp.esiEmployer,
     comp.professionalTax, comp.tds, comp.advanceRecovery, comp.lopDeduction, comp.otherDeductions,
     comp.totalDeductions, comp.netSalary,
-    comp.prevMonthGross, comp.grossChanged, comp.salaryHeld, comp.holdReason, comp.loanRecovery
+    comp.prevMonthGross, comp.grossChanged, comp.salaryHeld, comp.holdReason, comp.loanRecovery, comp.financeRemark || ''
   );
 
   // Mark advance as recovered if applicable
