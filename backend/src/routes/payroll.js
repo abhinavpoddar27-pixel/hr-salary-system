@@ -59,7 +59,10 @@ router.post('/calculate-days', (req, res) => {
           }
         }
 
-        const calcResult = calculateDays(empCode, parseInt(month), parseInt(year), company || '', records, leaveBalances, holidays);
+        // Detect contractor for day calc rules
+        const empFull = db.prepare('SELECT * FROM employees WHERE code = ?').get(empCode);
+        const { isContractor: checkContractor } = require('../utils/employeeClassification');
+        const calcResult = calculateDays(empCode, parseInt(month), parseInt(year), company || '', records, leaveBalances, holidays, { isContractor: checkContractor(empFull) });
         calcResult.employeeId = emp?.id;
         saveDayCalculation(db, calcResult);
 

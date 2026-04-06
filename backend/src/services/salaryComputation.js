@@ -260,10 +260,8 @@ function computeEmployeeSalary(db, employee, month, year, company) {
   const daysWOP = dayCalc.days_wop || 0;
 
   // ── Earned calculation ──
-  // Determine if employee is a contract/daily wage worker
-  const isContract = (employee.employment_type || '').toLowerCase().includes('contract') ||
-                     (employee.employment_type || '').toLowerCase() === 'worker' ||
-                     (employee.employment_type || '').toLowerCase() === 'silp';
+  const { isContractor: checkContractor } = require('../utils/employeeClassification');
+  const isContract = checkContractor(employee) || (dayCalc.is_contractor === 1);
   const actualWorkDays = daysPresent + daysHalfPresent;
 
   let earnedRatio, workedFullMonth, basicEarned, daEarned, hraEarned, conveyanceEarned, otherEarned;

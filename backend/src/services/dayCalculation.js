@@ -25,6 +25,7 @@
  */
 
 const { parseHoursToDecimal } = require('./parser');
+const { isContractor } = require('../utils/employeeClassification');
 
 /**
  * Get all dates in a month as YYYY-MM-DD strings
@@ -78,7 +79,8 @@ function countWorkingDays(dayRecords) {
  * @param {Array} holidays - holiday records { date: 'YYYY-MM-DD' } for this month
  * @returns {Object} day calculation result
  */
-function calculateDays(employeeCode, month, year, company, attendanceRecords, leaveBalances, holidays) {
+function calculateDays(employeeCode, month, year, company, attendanceRecords, leaveBalances, holidays, options = {}) {
+  const contractorMode = options.isContractor || false;
   const allDates = getMonthDates(month, year);
   const daysInMonth = allDates.length;
 
@@ -150,7 +152,30 @@ function calculateDays(employeeCode, month, year, company, attendanceRecords, le
   }
 
   // ─────────────────────────────────────────────────────────────
-  // SUNDAY CALCULATION — Week by week
+  // CONTRACTOR SHORTCUT — daily wage, no paid Sundays/holidays
+  // ─────────────────────────────────────────────────────────────
+  if (contractorMode) {
+    const finalPayable = Math.round((daysPresent + daysHalfPresent) * 100) / 100;
+    return {
+      employeeCode, month, year, company,
+      totalCalendarDays: daysInMonth, totalSundays, totalHolidays: holidayCount, totalWorkingDays,
+      daysPresent: Math.round(daysPresent * 100) / 100,
+      daysHalfPresent: Math.round(daysHalfPresent * 100) / 100,
+      daysWOP: Math.round(daysWOP * 100) / 100,
+      daysAbsent,
+      paidSundays: 0, unpaidSundays: totalSundays, paidHolidays: 0,
+      clUsed: 0, elUsed: 0, slUsed: 0, lopDays: 0,
+      totalPayableDays: finalPayable,
+      extraDutyDays: 0,
+      otHours: Math.round(otHours * 100) / 100,
+      otDays: 0, lateCount,
+      weekBreakdown: '[]',
+      isContractor: 1
+    };
+  }
+
+  // ─────────────────────────────────────────────────────────────
+  // SUNDAY CALCULATION — Week by week (permanent employees only)
   // ─────────────────────────────────────────────────────────────
 
   // Running leave balances (will be deducted as we go)

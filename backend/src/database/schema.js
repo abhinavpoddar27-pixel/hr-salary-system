@@ -799,6 +799,8 @@ function initSchema(db) {
   safeAddColumn('notifications', 'role_target', 'TEXT');
   safeAddColumn('notifications', 'user_id', 'INTEGER');
   safeAddColumn('notifications', 'link', 'TEXT');
+  safeAddColumn('day_calculations', 'is_contractor', 'INTEGER DEFAULT 0');
+  safeAddColumn('salary_computations', 'finance_remark', "TEXT DEFAULT ''");
 
   // day_calculations: late deduction support
   safeAddColumn('day_calculations', 'late_count', 'INTEGER DEFAULT 0');
