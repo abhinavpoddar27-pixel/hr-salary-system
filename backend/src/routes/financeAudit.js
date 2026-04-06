@@ -814,6 +814,7 @@ router.get('/salary-manual-flags', (req, res) => {
   const { month, year, company } = req.query;
   if (!month || !year) return res.status(400).json({ success: false, error: 'month and year required' });
 
+  try {
   const flags = db.prepare(`
     SELECT smf.*,
       COALESCE(e.name, smf.employee_code) as employee_name,
@@ -834,6 +835,10 @@ router.get('/salary-manual-flags', (req, res) => {
     data: flags,
     summary: { totalFlags, approvedCount, pendingCount, rejectedCount }
   });
+  } catch (e) {
+    console.error('salary-manual-flags error:', e.message);
+    res.json({ success: true, data: [], summary: { totalFlags: 0, approvedCount: 0, pendingCount: 0, rejectedCount: 0 } });
+  }
 });
 
 // ─────────────────────────────────────────────────────────

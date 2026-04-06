@@ -180,7 +180,12 @@ function ReportTab() {
                         {r.salaryStatus === 'UNCHANGED' && <span className="text-green-600 text-sm" title="Gross unchanged">&#10003;</span>}
                         {r.salaryStatus === 'NEW' && <span className="bg-blue-100 text-blue-700 text-[10px] px-1.5 py-0.5 rounded-full font-bold">NEW</span>}
                         {r.salaryStatus === 'CHANGED' && <span className="bg-purple-100 text-purple-700 text-[10px] px-1.5 py-0.5 rounded-full font-bold">CHANGED</span>}
-                        {r.salaryHeld && <span className="bg-red-100 text-red-700 text-[10px] px-1.5 py-0.5 rounded-full font-bold">HELD</span>}
+                        {r.salaryHeld && (
+                          <div className="flex flex-col items-center gap-0.5">
+                            <span className="bg-red-100 text-red-700 text-[10px] px-1.5 py-0.5 rounded-full font-bold">HELD</span>
+                            {r.holdReason && <span className="text-[9px] text-red-500 max-w-[120px] truncate" title={r.holdReason}>{r.holdReason}</span>}
+                          </div>
+                        )}
                         {r.hasCorrection && <span className="bg-amber-100 text-amber-700 text-[10px] px-1.5 py-0.5 rounded-full font-bold">EDITED</span>}
                       </div>
                     </td>
@@ -274,6 +279,16 @@ function CorrectionDetail({ code, row }) {
         <EmployeeQuickView employeeCode={code} compact />
       </div>
       <div className="lg:w-1/2 space-y-3">
+        {/* Hold reason */}
+        {row.salaryHeld && row.holdReason && (
+          <div className="bg-red-50 border border-red-200 rounded-lg p-3 col-span-full">
+            <div className="text-[10px] font-bold text-red-600 uppercase mb-1 flex items-center gap-1">
+              <span>⚠</span> Salary Held — Reason
+            </div>
+            <div className="text-xs text-red-800 font-medium">{row.holdReason}</div>
+          </div>
+        )}
+
         {/* Salary breakdown */}
         <div className="bg-white border border-slate-100 rounded-lg p-3">
           <div className="text-[10px] font-bold text-slate-400 uppercase mb-2">Salary Breakdown</div>

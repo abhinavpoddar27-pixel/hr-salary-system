@@ -23,6 +23,8 @@ export default function FinanceVerification() {
   const [statusFilter, setStatusFilter] = useState('')
   const [signoffModal, setSignoffModal] = useState(false)
   const [rejectReason, setRejectReason] = useState('')
+  const [expandedFlags, setExpandedFlags] = useState(new Set())
+  const [flagCategory, setFlagCategory] = useState('all')
   const qc = useQueryClient()
 
   const { data: dashRes } = useQuery({ queryKey: ['fin-dash', month, year], queryFn: () => getFinanceAuditDashboard(month, year), retry: 0 })
@@ -180,32 +182,75 @@ export default function FinanceVerification() {
       )}
 
       {/* Red Flags Tab */}
-      {activeTab === 'flags' && (
-        <div className="space-y-3">
-          {redFlags.length === 0 && <div className="text-center py-12 text-slate-400">No red flags detected</div>}
-          {redFlags.map(f => (
-            <div key={f.id} className={clsx('card p-3 border-l-4', f.severity === 'critical' ? 'border-red-500' : f.severity === 'warning' ? 'border-amber-500' : 'border-blue-500')}>
-              <div className="flex items-start justify-between">
-                <div>
-                  <div className="flex items-center gap-2">
-                    <span className={clsx('text-xs px-2 py-0.5 rounded-full font-medium', f.severity === 'critical' ? 'bg-red-100 text-red-700' : f.severity === 'warning' ? 'bg-amber-100 text-amber-700' : 'bg-blue-100 text-blue-700')}>{f.severity}</span>
-                    <span className="text-xs text-slate-500">{f.type.replace(/_/g, ' ')}</span>
-                  </div>
-                  <div className="text-sm font-medium mt-1">{f.employeeName} ({f.employeeCode})</div>
-                  <div className="text-xs text-slate-600 mt-0.5">{f.department} — {f.description}</div>
-                  <div className="text-xs text-slate-400 mt-1">{f.suggestedAction}</div>
-                </div>
-                {canAct && (
-                  <div className="flex gap-1 shrink-0">
-                    <button onClick={() => verifyMut.mutate({ employeeCode: f.employeeCode, month, year, status: 'verified' })} className="text-green-600 hover:bg-green-50 px-2 py-1 rounded text-xs">Verify</button>
-                    <button onClick={() => verifyMut.mutate({ employeeCode: f.employeeCode, month, year, status: 'flagged', flagReason: f.description, flagCategory: f.type })} className="text-amber-600 hover:bg-amber-50 px-2 py-1 rounded text-xs">Flag</button>
-                  </div>
-                )}
-              </div>
+      {activeTab === 'flags' && (() => {
+        const categories = {};
+        for (const f of redFlags) categories[f.type] = (categories[f.type] || 0) + 1;
+        const filteredFlags = flagCategory === 'all' ? redFlags : redFlags.filter(f => f.type === flagCategory);
+        const toggleExpand = (id) => {
+          setExpandedFlags(prev => { const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id); return n; });
+        };
+
+        return (
+          <div className="space-y-3">
+            {/* Category filter bar */}
+            <div className="flex flex-wrap gap-2">
+              <button onClick={() => { setFlagCategory('all'); setExpandedFlags(new Set()); }}
+                className={clsx('text-xs px-3 py-1.5 rounded-full border transition-colors', flagCategory === 'all' ? 'bg-blue-600 text-white border-blue-600' : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-50')}>
+                All ({redFlags.length})
+              </button>
+              {Object.entries(categories).map(([type, count]) => (
+                <button key={type} onClick={() => { setFlagCategory(type); setExpandedFlags(new Set()); }}
+                  className={clsx('text-xs px-3 py-1.5 rounded-full border transition-colors', flagCategory === type ? 'bg-blue-600 text-white border-blue-600' : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-50')}>
+                  {type.replace(/_/g, ' ')} ({count})
+                </button>
+              ))}
             </div>
-          ))}
-        </div>
-      )}
+
+            {filteredFlags.length === 0 && <div className="text-center py-12 text-slate-400">No red flags in this category</div>}
+            {filteredFlags.map(f => {
+              const fid = f.id || `${f.employeeCode}_${f.type}`;
+              const isExpanded = expandedFlags.has(fid);
+              return (
+                <div key={fid} className={clsx('card border-l-4 cursor-pointer transition-all', f.severity === 'critical' ? 'border-red-500' : f.severity === 'warning' ? 'border-amber-500' : 'border-blue-500')} onClick={() => toggleExpand(fid)}>
+                  <div className="p-3 flex items-start justify-between">
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-2">
+                        <span className={clsx('text-xs px-2 py-0.5 rounded-full font-medium', f.severity === 'critical' ? 'bg-red-100 text-red-700' : f.severity === 'warning' ? 'bg-amber-100 text-amber-700' : 'bg-blue-100 text-blue-700')}>{f.severity}</span>
+                        <span className="text-xs text-slate-500">{f.type.replace(/_/g, ' ')}</span>
+                        <span className="text-[10px] text-slate-400 ml-auto">{isExpanded ? '▼' : '▶'}</span>
+                      </div>
+                      <div className="text-sm font-medium mt-1">{f.employeeName} ({f.employeeCode})</div>
+                      <div className="text-xs text-slate-600 mt-0.5">{f.department} — {f.description}</div>
+                    </div>
+                    {canAct && (
+                      <div className="flex gap-1 shrink-0 ml-2" onClick={e => e.stopPropagation()}>
+                        <button onClick={() => verifyMut.mutate({ employeeCode: f.employeeCode, month, year, status: 'verified' })} className="text-green-600 hover:bg-green-50 px-2 py-1 rounded text-xs">Verify</button>
+                        <button onClick={() => verifyMut.mutate({ employeeCode: f.employeeCode, month, year, status: 'flagged', flagReason: f.description, flagCategory: f.type })} className="text-amber-600 hover:bg-amber-50 px-2 py-1 rounded text-xs">Flag</button>
+                      </div>
+                    )}
+                  </div>
+                  {isExpanded && (
+                    <div className="px-3 pb-3 pt-2 border-t border-slate-100 space-y-2 text-xs">
+                      <div className="text-slate-500">{f.suggestedAction}</div>
+                      {f.details && (
+                        <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
+                          {f.details.grossSalary != null && <div><span className="text-slate-400">Gross</span><div className="font-mono font-medium">{fmtINR(f.details.grossSalary)}</div></div>}
+                          {f.details.grossEarned != null && <div><span className="text-slate-400">Earned</span><div className="font-mono font-medium">{fmtINR(f.details.grossEarned)}</div></div>}
+                          {f.details.netSalary != null && <div><span className="text-slate-400">Net</span><div className="font-mono font-medium">{fmtINR(f.details.netSalary)}</div></div>}
+                          {f.details.advance != null && <div><span className="text-slate-400">Advance</span><div className="font-mono font-medium">{fmtINR(f.details.advance)}</div></div>}
+                          {f.details.daysAbsent != null && <div><span className="text-slate-400">Days Absent</span><div className="font-mono font-medium">{f.details.daysAbsent}</div></div>}
+                          {f.details.net != null && <div><span className="text-slate-400">Net</span><div className="font-mono font-medium">{fmtINR(f.details.net)}</div></div>}
+                        </div>
+                      )}
+                      <a href={`/finance-audit`} className="text-blue-600 hover:underline text-[11px]">View in Finance Audit →</a>
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        );
+      })()}
 
       {/* Sign-off Modal */}
       {signoffModal && (
