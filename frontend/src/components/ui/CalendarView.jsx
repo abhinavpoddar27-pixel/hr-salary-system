@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { getEmployeeDailyAttendance } from '../../utils/api';
 import Skeleton from './Skeleton';
+import clsx from 'clsx';
 
 const DAY_NAMES = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 
