@@ -256,7 +256,6 @@ function computeEmployeeSalary(db, employee, month, year, company) {
   // Payable days and attendance info
   const rawPayableDays = dayCalc.total_payable_days || 0;
   const lopDays = dayCalc.lop_days || 0;
-  const extraDutyDays = dayCalc.extra_duty_days || 0;
   const totalWorkingDays = dayCalc.total_working_days || divisor;
   const daysWOP = dayCalc.days_wop || 0;
 
@@ -292,20 +291,19 @@ function computeEmployeeSalary(db, employee, month, year, company) {
   }
 
   // OT pay — hours-based overtime (daily hours > threshold)
-  // Only for full-month employees (completed standard hours first)
+  // Only for full-month employees who completed standard hours
   const otHours = workedFullMonth ? (dayCalc.ot_hours || 0) : 0;
   const basicHourlyRate = basicMonthly / (divisor * 8);
   const otPay = Math.round(otHours * basicHourlyRate * otRate * 100) / 100;
 
-  // Extra duty pay — WOP days (worked on weekly offs/holidays)
-  // Paid at per-day rate for each WOP day
-  const extraDutyPay = Math.round(daysWOP * perDayRate * 100) / 100;
-
-  // Gross earned = base salary only (capped at grossMonthly). OT is separate.
-  const grossEarned = Math.min(
-    Math.round((basicEarned + daEarned + hraEarned + conveyanceEarned + otherEarned) * 100) / 100,
+  // ── GROSS EARNED = base salary + OT ──
+  // This is the TOTAL the employee earns. NET = EARNED - DEDUCTIONS.
+  // No hidden additions. What you see in EARNED is what the math starts from.
+  const baseEarned = Math.min(
+    basicEarned + daEarned + hraEarned + conveyanceEarned + otherEarned,
     grossMonthly
   );
+  const grossEarned = Math.round((baseEarned + otPay) * 100) / 100;
 
   // ─── PF ───
   let pfEmployee = 0, pfEmployer = 0, pfWages = 0, eps = 0;
@@ -372,16 +370,13 @@ function computeEmployeeSalary(db, employee, month, year, company) {
   let totalDeductions = pfEmployee + esiEmployee + professionalTax + tds + advanceRecovery + lopDeduction + otherDeductions + loanRecovery;
   let salaryWarning = '';
 
-  // Total earnings = base earned + OT + extra duty (WOP)
-  const totalEarnings = grossEarned + otPay + extraDutyPay;
-
-  // Cap deductions at total earnings — net salary must never go negative
-  if (totalDeductions > totalEarnings && totalEarnings > 0) {
+  // Cap deductions at gross earned — net salary must never go negative
+  if (totalDeductions > grossEarned && grossEarned > 0) {
     salaryWarning = 'DEDUCTIONS_EXCEED_EARNINGS';
-    totalDeductions = Math.round(totalEarnings * 100) / 100;
+    totalDeductions = Math.round(grossEarned * 100) / 100;
   }
-  // Net = Earned + OT - Deductions
-  const netSalary = Math.max(0, Math.round((totalEarnings - totalDeductions) * 100) / 100);
+  // ── NET = EARNED - DEDUCTIONS. Simple. Auditable. ──
+  const netSalary = Math.max(0, Math.round((grossEarned - totalDeductions) * 100) / 100);
 
   // ─── Gross Change Detection ───
   const prevMonthGross = getPrevMonthGross(db, employee.code, month, year);
@@ -412,7 +407,6 @@ function computeEmployeeSalary(db, employee, month, year, company) {
     pfEmployee, pfEmployer,
     esiEmployee, esiEmployer,
     professionalTax, tds,
-    extraDutyPay,
     advanceRecovery, lopDeduction, otherDeductions,
     loanRecovery,
     totalDeductions: Math.round(totalDeductions * 100) / 100,
