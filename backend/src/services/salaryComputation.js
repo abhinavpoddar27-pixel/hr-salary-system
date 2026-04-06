@@ -294,14 +294,18 @@ function computeEmployeeSalary(db, employee, month, year, company) {
   const basicHourlyRate = basicMonthly / (divisor * 8);
   const otPay = Math.round(otHours * basicHourlyRate * otRate * 100) / 100;
 
-  // ── GROSS EARNED = base salary + OT ──
+  // ─── Holiday Duty Pay ───
+  // Employees who work on declared national holidays get additional pay
+  const holidayDutyDays = dayCalc.holiday_duty_days || 0;
+  const holidayDutyPay = Math.round(holidayDutyDays * perDayRate * 100) / 100;
+
+  // ── GROSS EARNED = base salary + OT + holiday duty ──
   // This is the TOTAL the employee earns. NET = EARNED - DEDUCTIONS.
-  // No hidden additions. What you see in EARNED is what the math starts from.
   const baseEarned = Math.min(
     basicEarned + daEarned + hraEarned + conveyanceEarned + otherEarned,
     grossMonthly
   );
-  const grossEarned = Math.round((baseEarned + otPay) * 100) / 100;
+  const grossEarned = Math.round((baseEarned + otPay + holidayDutyPay) * 100) / 100;
 
   // ─── PF ───
   let pfEmployee = 0, pfEmployer = 0, pfWages = 0, eps = 0;
@@ -430,7 +434,7 @@ function computeEmployeeSalary(db, employee, month, year, company) {
     payableDays: Math.round(rawPayableDays * 100) / 100,
     perDayRate: Math.round(perDayRate * 100) / 100,
     basicEarned, daEarned, hraEarned, conveyanceEarned, otherEarned,
-    otPay, grossEarned,
+    otPay, holidayDutyPay, grossEarned,
     pfWages, esiWages, eps,
     pfEmployee, pfEmployer,
     esiEmployee, esiEmployer,
@@ -453,7 +457,7 @@ function saveSalaryComputation(db, comp) {
     INSERT INTO salary_computations (
       employee_code, month, year, company, gross_salary, payable_days, per_day_rate,
       basic_earned, da_earned, hra_earned, conveyance_earned, other_allowances_earned,
-      ot_pay, gross_earned,
+      ot_pay, holiday_duty_pay, gross_earned,
       pf_wages, esi_wages, pf_employee, pf_employer, eps, esi_employee, esi_employer,
       professional_tax, tds, advance_recovery, lop_deduction, other_deductions,
       total_deductions, net_salary,
@@ -461,7 +465,7 @@ function saveSalaryComputation(db, comp) {
     ) VALUES (
       ?, ?, ?, ?, ?, ?, ?,
       ?, ?, ?, ?, ?,
-      ?, ?,
+      ?, ?, ?,
       ?, ?, ?, ?, ?, ?, ?,
       ?, ?, ?, ?, ?,
       ?, ?,
@@ -477,6 +481,7 @@ function saveSalaryComputation(db, comp) {
       conveyance_earned = excluded.conveyance_earned,
       other_allowances_earned = excluded.other_allowances_earned,
       ot_pay = excluded.ot_pay,
+      holiday_duty_pay = excluded.holiday_duty_pay,
       gross_earned = excluded.gross_earned,
       pf_wages = excluded.pf_wages,
       esi_wages = excluded.esi_wages,
@@ -501,7 +506,7 @@ function saveSalaryComputation(db, comp) {
     comp.employeeCode, comp.month, comp.year, comp.company,
     comp.grossSalary, comp.payableDays, comp.perDayRate,
     comp.basicEarned, comp.daEarned, comp.hraEarned, comp.conveyanceEarned, comp.otherEarned,
-    comp.otPay, comp.grossEarned,
+    comp.otPay, comp.holidayDutyPay || 0, comp.grossEarned,
     comp.pfWages, comp.esiWages, comp.pfEmployee, comp.pfEmployer, comp.eps, comp.esiEmployee, comp.esiEmployer,
     comp.professionalTax, comp.tds, comp.advanceRecovery, comp.lopDeduction, comp.otherDeductions,
     comp.totalDeductions, comp.netSalary,

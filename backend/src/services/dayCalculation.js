@@ -116,6 +116,7 @@ function calculateDays(employeeCode, month, year, company, attendanceRecords, le
   let daysPresent = 0;
   let daysHalfPresent = 0;
   let daysWOP = 0;
+  let holidayDutyDays = 0;
   let daysAbsent = 0;
   let otHours = 0;
   let lateCount = 0;
@@ -144,6 +145,12 @@ function calculateDays(employeeCode, month, year, company, attendanceRecords, le
     }
     // WO status on Sunday/weekly off is expected — don't count as absent
 
+    // Track holiday duty — employee worked on a declared holiday
+    if (isHoliday && !isSunday) {
+      if (status === 'P' || status === 'WOP') holidayDutyDays += 1;
+      else if (status === '½P' || status === 'HP' || status === 'WO½P') holidayDutyDays += 0.5;
+    }
+
     // Count late arrivals
     if (rec.is_late_arrival) lateCount++;
 
@@ -167,6 +174,7 @@ function calculateDays(employeeCode, month, year, company, attendanceRecords, le
       clUsed: 0, elUsed: 0, slUsed: 0, lopDays: 0,
       totalPayableDays: finalPayable,
       extraDutyDays: 0,
+      holidayDutyDays: Math.round(holidayDutyDays * 100) / 100,
       otHours: Math.round(otHours * 100) / 100,
       otDays: 0, lateCount,
       weekBreakdown: '[]',
@@ -377,6 +385,7 @@ function calculateDays(employeeCode, month, year, company, attendanceRecords, le
     otHours: Math.round(otHours * 100) / 100,
     otDays: Math.round(otHours / 12 * 100) / 100,
     lateCount,
+    holidayDutyDays: Math.round(holidayDutyDays * 100) / 100,
     weekBreakdown: JSON.stringify(weekBreakdown)
   };
 }
@@ -392,14 +401,14 @@ function saveDayCalculation(db, calcResult) {
       days_present, days_half_present, days_wop, days_absent,
       paid_sundays, unpaid_sundays, paid_holidays,
       cl_used, el_used, sl_used, lop_days,
-      total_payable_days, extra_duty_days, ot_hours, ot_days, late_count, week_breakdown
+      total_payable_days, extra_duty_days, ot_hours, ot_days, late_count, holiday_duty_days, week_breakdown
     ) VALUES (
       ?, ?, ?, ?,
       ?, ?, ?, ?,
       ?, ?, ?, ?,
       ?, ?, ?,
       ?, ?, ?, ?,
-      ?, ?, ?, ?, ?, ?
+      ?, ?, ?, ?, ?, ?, ?
     )
     ON CONFLICT(employee_code, month, year, company) DO UPDATE SET
       total_calendar_days = excluded.total_calendar_days,
@@ -422,6 +431,7 @@ function saveDayCalculation(db, calcResult) {
       ot_hours = excluded.ot_hours,
       ot_days = excluded.ot_days,
       late_count = excluded.late_count,
+      holiday_duty_days = excluded.holiday_duty_days,
       week_breakdown = excluded.week_breakdown,
       is_approved = 0
   `);
@@ -433,7 +443,7 @@ function saveDayCalculation(db, calcResult) {
     calcResult.paidSundays, calcResult.unpaidSundays, calcResult.paidHolidays,
     calcResult.clUsed, calcResult.elUsed, calcResult.slUsed, calcResult.lopDays,
     calcResult.totalPayableDays, calcResult.extraDutyDays || 0, calcResult.otHours, calcResult.otDays,
-    calcResult.lateCount,
+    calcResult.lateCount, calcResult.holidayDutyDays || 0,
     calcResult.weekBreakdown
   );
 

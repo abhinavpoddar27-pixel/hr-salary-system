@@ -45,26 +45,125 @@ router.put('/shifts/:id', requireAdmin, (req, res) => {
 
 router.get('/holidays', (req, res) => {
   const db = getDb();
-  const { year } = req.query;
-  let query = 'SELECT * FROM holidays';
+  const { year, includeInactive } = req.query;
+  let query = 'SELECT * FROM holidays WHERE 1=1';
   const params = [];
-  if (year) { query += ' WHERE date LIKE ?'; params.push(`${year}-%`); }
+  if (!includeInactive) { query += ' AND (is_active IS NULL OR is_active = 1)'; }
+  if (year) { query += ' AND date LIKE ?'; params.push(`${year}-%`); }
   query += ' ORDER BY date';
   res.json({ success: true, data: db.prepare(query).all(...params) });
 });
 
 router.post('/holidays', requireAdmin, (req, res) => {
   const db = getDb();
-  const { date, name, type, isRecurring, applicableTo } = req.body;
-  const result = db.prepare('INSERT INTO holidays (date, name, type, is_recurring, applicable_to) VALUES (?, ?, ?, ?, ?)')
-    .run(date, name, type || 'National', isRecurring ? 1 : 0, applicableTo || 'All');
-  res.json({ success: true, id: result.lastInsertRowid });
+  const { date, name, type, isRecurring, applicableTo, addedBy } = req.body;
+  const result = db.prepare('INSERT INTO holidays (date, name, type, is_recurring, applicable_to, added_by) VALUES (?, ?, ?, ?, ?, ?)')
+    .run(date, name, type || 'National', isRecurring ? 1 : 0, applicableTo || 'All', addedBy || req.user?.username || 'HR');
+
+  // Audit log
+  try {
+    const m = parseInt(date.split('-')[1]), y = parseInt(date.split('-')[0]);
+    db.prepare('INSERT INTO holiday_audit_log (holiday_id, action, holiday_date, holiday_name, new_values, changed_by, affects_months) VALUES (?, ?, ?, ?, ?, ?, ?)')
+      .run(result.lastInsertRowid, 'ADD', date, name, JSON.stringify({ date, name, type }), req.user?.username || 'HR', JSON.stringify([{ month: m, year: y }]));
+  } catch {}
+
+  // Check if salary already computed for this month
+  let warning = null;
+  try {
+    const [y, m] = date.split('-');
+    const sc = db.prepare('SELECT COUNT(*) as cnt FROM salary_computations WHERE month = ? AND year = ?').get(parseInt(m), parseInt(y));
+    if (sc?.cnt > 0) warning = `Salary already computed for this month. Re-run Day Calculation and Salary Computation.`;
+  } catch {}
+
+  res.json({ success: true, id: result.lastInsertRowid, warning });
 });
 
 router.delete('/holidays/:id', requireAdmin, (req, res) => {
   const db = getDb();
-  db.prepare('DELETE FROM holidays WHERE id = ?').run(req.params.id);
+  const holiday = db.prepare('SELECT * FROM holidays WHERE id = ?').get(req.params.id);
+  if (!holiday) return res.status(404).json({ success: false, error: 'Holiday not found' });
+
+  const { reason } = req.body || {};
+  if (holiday.type === 'National' && !reason) {
+    return res.status(400).json({ success: false, error: 'Reason required to delete a national holiday' });
+  }
+
+  // Soft delete
+  db.prepare('UPDATE holidays SET is_active = 0 WHERE id = ?').run(req.params.id);
+
+  // Audit
+  try {
+    db.prepare('INSERT INTO holiday_audit_log (holiday_id, action, holiday_date, holiday_name, old_values, changed_by, reason) VALUES (?, ?, ?, ?, ?, ?, ?)')
+      .run(req.params.id, 'DELETE', holiday.date, holiday.name, JSON.stringify(holiday), req.user?.username || 'HR', reason || '');
+  } catch {}
+
   res.json({ success: true });
+});
+
+router.put('/holidays/:id', requireAdmin, (req, res) => {
+  const db = getDb();
+  const old = db.prepare('SELECT * FROM holidays WHERE id = ?').get(req.params.id);
+  if (!old) return res.status(404).json({ success: false, error: 'Holiday not found' });
+
+  const { date, name, type, applicableTo, reason } = req.body;
+  db.prepare('UPDATE holidays SET date=?, name=?, type=?, applicable_to=? WHERE id=?')
+    .run(date || old.date, name || old.name, type || old.type, applicableTo || old.applicable_to, req.params.id);
+
+  try {
+    db.prepare('INSERT INTO holiday_audit_log (holiday_id, action, holiday_date, holiday_name, old_values, new_values, changed_by, reason) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
+      .run(req.params.id, 'MODIFY', date || old.date, name || old.name, JSON.stringify(old), JSON.stringify({ date, name, type }), req.user?.username || 'HR', reason || '');
+  } catch {}
+
+  res.json({ success: true });
+});
+
+router.get('/holidays/audit-log', (req, res) => {
+  const db = getDb();
+  const { page, limit, reviewed } = req.query;
+  const pageNum = parseInt(page) || 1;
+  const pageSize = parseInt(limit) || 20;
+  let where = 'WHERE 1=1';
+  const params = [];
+  if (reviewed === 'false') { where += ' AND finance_reviewed = 0'; }
+  if (reviewed === 'true') { where += ' AND finance_reviewed = 1'; }
+
+  const total = db.prepare(`SELECT COUNT(*) as cnt FROM holiday_audit_log ${where}`).get(...params)?.cnt || 0;
+  const data = db.prepare(`SELECT * FROM holiday_audit_log ${where} ORDER BY changed_at DESC LIMIT ? OFFSET ?`).all(...params, pageSize, (pageNum - 1) * pageSize);
+  const unreviewed = db.prepare('SELECT COUNT(*) as cnt FROM holiday_audit_log WHERE finance_reviewed = 0').get()?.cnt || 0;
+
+  res.json({ success: true, data, total, unreviewed, page: pageNum, pageSize });
+});
+
+router.put('/holidays/audit-log/:id/review', (req, res) => {
+  const db = getDb();
+  const { reviewed_by, notes } = req.body;
+  db.prepare("UPDATE holiday_audit_log SET finance_reviewed = 1, finance_reviewed_by = ?, finance_reviewed_at = datetime('now'), finance_review_notes = ? WHERE id = ?")
+    .run(reviewed_by || req.user?.username || 'finance', notes || '', req.params.id);
+  res.json({ success: true });
+});
+
+router.post('/holidays/bulk-seed', requireAdmin, (req, res) => {
+  const db = getDb();
+  const { year, holidays, addedBy } = req.body;
+  if (!year || !holidays?.length) return res.status(400).json({ success: false, error: 'year and holidays required' });
+
+  // Soft-delete existing for the year
+  db.prepare("UPDATE holidays SET is_active = 0 WHERE date LIKE ?").run(`${year}-%`);
+
+  const ins = db.prepare("INSERT INTO holidays (date, name, type, is_recurring, applicable_to, added_by) VALUES (?, ?, ?, 0, 'All', ?)");
+  const txn = db.transaction(() => {
+    for (const h of holidays) {
+      ins.run(h.date, h.name, h.type || 'National', addedBy || req.user?.username || 'HR');
+    }
+  });
+  txn();
+
+  try {
+    db.prepare('INSERT INTO holiday_audit_log (action, holiday_name, new_values, changed_by, reason) VALUES (?, ?, ?, ?, ?)')
+      .run('BULK_SEED', `${year} holidays`, JSON.stringify(holidays), addedBy || req.user?.username || 'HR', `Seeded ${holidays.length} holidays for ${year}`);
+  } catch {}
+
+  res.json({ success: true, count: holidays.length });
 });
 
 // ─── POLICY CONFIG ────────────────────────────────────────

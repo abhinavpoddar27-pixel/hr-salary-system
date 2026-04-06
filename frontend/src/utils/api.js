@@ -249,6 +249,12 @@ export const createJob = (type, params) => api.post('/jobs', { type, params })
 export const getJobStatus = (id) => api.get(`/jobs/${id}`)
 export const getUserPermissions = () => api.get('/auth/permissions')
 
+// ── Holiday Master ───────────────────────────────────────
+export const updateHoliday = (id, data) => api.put(`/settings/holidays/${id}`, data)
+export const getHolidayAuditLog = (params) => api.get('/settings/holidays/audit-log', { params })
+export const reviewHolidayChange = (id, data) => api.put(`/settings/holidays/audit-log/${id}/review`, data)
+export const bulkSeedHolidays = (data) => api.post('/settings/holidays/bulk-seed', data)
+
 // ── Phase 5 Features ────────────────────────────────────
 export const accrueLeaves = (month, year) => api.post('/features/accrue-leaves', { month, year })
 export const getShiftRoster = (params) => api.get('/features/shift-roster', { params })

@@ -802,6 +802,47 @@ function initSchema(db) {
   safeAddColumn('day_calculations', 'is_contractor', 'INTEGER DEFAULT 0');
   safeAddColumn('salary_computations', 'finance_remark', "TEXT DEFAULT ''");
 
+  // ── Holiday Master enhancements ─────────────────────────────
+  safeAddColumn('holidays', 'added_by', "TEXT DEFAULT 'System'");
+  safeAddColumn('holidays', 'added_at', "TEXT DEFAULT (datetime('now'))");
+  safeAddColumn('holidays', 'is_active', 'INTEGER DEFAULT 1');
+  safeAddColumn('day_calculations', 'holiday_duty_days', 'REAL DEFAULT 0');
+  safeAddColumn('salary_computations', 'holiday_duty_pay', 'REAL DEFAULT 0');
+
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS holiday_audit_log (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      holiday_id INTEGER,
+      action TEXT NOT NULL,
+      holiday_date TEXT,
+      holiday_name TEXT,
+      old_values TEXT,
+      new_values TEXT,
+      changed_by TEXT NOT NULL,
+      changed_at TEXT DEFAULT (datetime('now')),
+      reason TEXT,
+      affects_months TEXT,
+      finance_reviewed INTEGER DEFAULT 0,
+      finance_reviewed_by TEXT,
+      finance_reviewed_at TEXT,
+      finance_review_notes TEXT
+    )
+  `);
+
+  // Seed 2026 national holidays (only if LOHRI doesn't exist yet)
+  const lohriExists = db.prepare("SELECT id FROM holidays WHERE date = '2026-01-13' AND name = 'LOHRI'").get();
+  if (!lohriExists) {
+    // Remove old 2026 generic entries
+    db.prepare("DELETE FROM holidays WHERE date LIKE '2026-%' AND added_by = 'System'").run();
+    const holidays2026 = [
+      ['2026-01-13', 'LOHRI'], ['2026-01-26', 'REPUBLIC DAY'], ['2026-03-04', 'HOLI'],
+      ['2026-08-15', 'INDEPENDENCE DAY'], ['2026-09-04', 'JANMASHTAMI'], ['2026-10-02', 'GANDHI JAYANTI'],
+      ['2026-10-20', 'DUSSEHRA'], ['2026-11-08', 'DIWALI'], ['2026-11-09', 'VISHWAKARMA DAY'], ['2026-11-24', 'GURUPURAV']
+    ];
+    const ins = db.prepare("INSERT OR IGNORE INTO holidays (date, name, type, is_recurring, applicable_to, added_by) VALUES (?, ?, 'National', 0, 'All', 'System')");
+    holidays2026.forEach(([d, n]) => ins.run(d, n));
+  }
+
   // day_calculations: late deduction support
   safeAddColumn('day_calculations', 'late_count', 'INTEGER DEFAULT 0');
   safeAddColumn('day_calculations', 'late_deduction_days', 'REAL DEFAULT 0');
