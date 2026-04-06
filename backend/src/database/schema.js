@@ -1177,6 +1177,43 @@ function initSchema(db) {
   safeCreateIndex('CREATE INDEX IF NOT EXISTS idx_finance_audit_status_month ON finance_audit_status(month, year)');
   safeCreateIndex('CREATE INDEX IF NOT EXISTS idx_finance_audit_comments_month ON finance_audit_comments(month, year)');
 
+  // ── Extra Duty Grants ──────────────────────────────────────
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS extra_duty_grants (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      employee_code TEXT NOT NULL,
+      employee_id INTEGER,
+      grant_date TEXT NOT NULL,
+      month INTEGER NOT NULL,
+      year INTEGER NOT NULL,
+      company TEXT,
+      grant_type TEXT NOT NULL DEFAULT 'OVERNIGHT_STAY',
+      duty_days REAL NOT NULL DEFAULT 1.0,
+      verification_source TEXT NOT NULL,
+      reference_number TEXT,
+      remarks TEXT,
+      linked_attendance_id INTEGER,
+      original_punch_date TEXT,
+      status TEXT NOT NULL DEFAULT 'PENDING',
+      requested_by TEXT,
+      requested_at TEXT DEFAULT (datetime('now')),
+      approved_by TEXT,
+      approved_at TEXT,
+      rejection_reason TEXT,
+      finance_status TEXT NOT NULL DEFAULT 'UNREVIEWED',
+      finance_reviewed_by TEXT,
+      finance_reviewed_at TEXT,
+      finance_flag_reason TEXT,
+      finance_notes TEXT,
+      salary_impact_amount REAL,
+      is_processed INTEGER NOT NULL DEFAULT 0,
+      processed_at TEXT,
+      UNIQUE(employee_code, grant_date, month, year)
+    )
+  `);
+  safeCreateIndex('CREATE INDEX IF NOT EXISTS idx_edg_employee_month ON extra_duty_grants(employee_code, month, year)');
+  safeCreateIndex('CREATE INDEX IF NOT EXISTS idx_edg_status ON extra_duty_grants(status, finance_status)');
+
   console.log('✅ Database schema initialized');
 }
 

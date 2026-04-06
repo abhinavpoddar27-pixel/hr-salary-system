@@ -262,6 +262,19 @@ export const resolveFinanceComment = (id) => api.put(`/finance-verify/comment/${
 export const submitFinanceSignoff = (data) => api.post('/finance-verify/signoff', data)
 export const getFinanceSignoffStatus = (month, year) => api.get('/finance-verify/signoff-status', { params: { month, year } })
 
+// ── Extra Duty Grants ────────────────────────────────────
+export const getExtraDutyGrants = (month, year, params) => api.get('/extra-duty-grants', { params: { month, year, ...params } })
+export const getExtraDutyGrantsSummary = (month, year) => api.get('/extra-duty-grants/summary', { params: { month, year } })
+export const createExtraDutyGrant = (data) => api.post('/extra-duty-grants', data)
+export const approveExtraDutyGrant = (id) => api.post(`/extra-duty-grants/${id}/approve`)
+export const rejectExtraDutyGrant = (id, reason) => api.post(`/extra-duty-grants/${id}/reject`, { rejection_reason: reason })
+export const financeApproveGrant = (id) => api.post(`/extra-duty-grants/${id}/finance-approve`)
+export const financeFlagGrant = (id, reason, notes) => api.post(`/extra-duty-grants/${id}/finance-flag`, { finance_flag_reason: reason, finance_notes: notes })
+export const financeRejectGrant = (id, reason) => api.post(`/extra-duty-grants/${id}/finance-reject`, { finance_flag_reason: reason })
+export const bulkFinanceApproveGrants = (ids) => api.post('/extra-duty-grants/bulk-finance-approve', { ids })
+export const getFinanceReviewQueue = (month, year) => api.get('/extra-duty-grants/finance-review', { params: { month, year } })
+export const getFinanceImpactSummary = (month, year) => api.get('/extra-duty-grants/finance-impact-summary', { params: { month, year } })
+
 // ── Holiday Master ───────────────────────────────────────
 export const updateHoliday = (id, data) => api.put(`/settings/holidays/${id}`, data)
 export const getHolidayAuditLog = (params) => api.get('/settings/holidays/audit-log', { params })

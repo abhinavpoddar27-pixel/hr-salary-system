@@ -356,7 +356,8 @@ function calculateDays(employeeCode, month, year, company, attendanceRecords, le
   // Extra Duty: days worked beyond the regular working schedule (before LOP)
   // = WOP days + any excess working-day attendance over scheduled working days
   const extraWorkingDays = Math.max(0, daysPresent + daysHalfPresent - totalWorkingDays);
-  const extraDutyDays = Math.round((daysWOP + extraWorkingDays) * 100) / 100;
+  const manualGrantDays = options.manualExtraDutyDays || 0;
+  const extraDutyDays = Math.round((daysWOP + extraWorkingDays + manualGrantDays) * 100) / 100;
 
   // Payable: capped at calendar days (extra duty is paid separately)
   const finalPayable = Math.max(0, Math.min(daysInMonth, netPayable));

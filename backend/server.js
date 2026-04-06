@@ -201,6 +201,7 @@ app.use('/api/notifications',    requireAuth, require('./src/routes/notification
 app.use('/api/tax-declarations', requireAuth, require('./src/routes/taxDeclarations'));
 app.use('/api/portal',           requireAuth, require('./src/routes/employeePortal'));
 app.use('/api/finance-verify',   requireAuth, require('./src/routes/financeVerification'));
+app.use('/api/extra-duty-grants', requireAuth, require('./src/routes/extraDutyGrants'));
 
 // Health check (public)
 app.get('/api/health', (req, res) => {

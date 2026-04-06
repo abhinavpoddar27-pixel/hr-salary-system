@@ -62,7 +62,13 @@ router.post('/calculate-days', (req, res) => {
         // Detect contractor for day calc rules
         const empFull = db.prepare('SELECT * FROM employees WHERE code = ?').get(empCode);
         const { isContractor: checkContractor } = require('../utils/employeeClassification');
-        const calcResult = calculateDays(empCode, parseInt(month), parseInt(year), company || '', records, leaveBalances, holidays, { isContractor: checkContractor(empFull) });
+        // Get fully-approved extra duty grants for this employee
+        let manualExtraDutyDays = 0;
+        try {
+          const grants = db.prepare("SELECT SUM(duty_days) as total FROM extra_duty_grants WHERE employee_code = ? AND month = ? AND year = ? AND status = 'APPROVED' AND finance_status = 'FINANCE_APPROVED'").get(empCode, month, year);
+          manualExtraDutyDays = grants?.total || 0;
+        } catch {}
+        const calcResult = calculateDays(empCode, parseInt(month), parseInt(year), company || '', records, leaveBalances, holidays, { isContractor: checkContractor(empFull), manualExtraDutyDays });
         calcResult.employeeId = emp?.id;
         saveDayCalculation(db, calcResult);
 
@@ -370,6 +376,14 @@ router.post('/finalise', (req, res) => {
       });
     }
   } catch {} // table may not exist yet
+
+  // Check extra duty grants reviewed
+  try {
+    const unreviewed = db.prepare("SELECT COUNT(*) as cnt FROM extra_duty_grants WHERE month = ? AND year = ? AND status = 'APPROVED' AND finance_status IN ('UNREVIEWED', 'FINANCE_FLAGGED')").get(month, year);
+    if (unreviewed?.cnt > 0) {
+      return res.status(400).json({ success: false, error: `Cannot finalise: ${unreviewed.cnt} extra duty grant(s) pending finance review.`, pendingGrants: unreviewed.cnt });
+    }
+  } catch {}
 
   db.prepare(`UPDATE salary_computations SET is_finalised = 1, finalised_at = datetime('now') WHERE month = ? AND year = ?`).run(month, year);
   db.prepare(`UPDATE monthly_imports SET is_finalised = 1, finalised_at = datetime('now') WHERE month = ? AND year = ?`).run(month, year);
