@@ -822,4 +822,45 @@ router.get('/salary-slip-excel', (req, res) => {
   res.send(Buffer.from(buf));
 });
 
+/**
+ * GET /api/payroll/debug-advance/:code
+ * Debug endpoint to trace advance recovery chain
+ */
+router.get('/debug-advance/:code', (req, res) => {
+  const db = getDb();
+  const { code } = req.params;
+  const { month, year } = req.query;
+
+  const advByMonth = db.prepare('SELECT * FROM salary_advances WHERE employee_code = ? AND month = ? AND year = ?').all(code, month, year);
+  const advByRecovery = db.prepare('SELECT * FROM salary_advances WHERE employee_code = ? AND recovery_month = ? AND recovery_year = ?').all(code, month, year);
+  const allAdv = db.prepare('SELECT id, employee_code, month, year, advance_amount, paid, recovered, recovery_month, recovery_year, remark, is_eligible FROM salary_advances WHERE employee_code = ?').all(code);
+  const salComp = db.prepare('SELECT employee_code, company, advance_recovery, total_deductions, net_salary, gross_earned FROM salary_computations WHERE employee_code = ? AND month = ? AND year = ?').all(code, month, year);
+
+  // Simulate the query
+  let simulated = 0;
+  let simError = null;
+  try {
+    db.prepare(`UPDATE salary_advances SET recovered = 0 WHERE employee_code = ? AND recovered = 1
+      AND ((recovery_month = ? AND recovery_year = ?) OR (month = ? AND year = ? AND recovery_month IS NULL))`).run(code, month, year, month, year);
+    const adv = db.prepare(`SELECT SUM(advance_amount) as total FROM salary_advances
+      WHERE employee_code = ? AND recovered = 0 AND advance_amount > 0
+      AND (remark IS NULL OR remark != 'NO_ADVANCE')
+      AND ((recovery_month = ? AND recovery_year = ?) OR (month = ? AND year = ? AND recovery_month IS NULL))`).get(code, month, year, month, year);
+    simulated = adv?.total || 0;
+  } catch (e) { simError = e.message; }
+
+  const totalAdvCount = db.prepare('SELECT COUNT(*) as cnt FROM salary_advances WHERE month = ? AND year = ?').get(month, year);
+
+  res.json({
+    employee_code: code, month, year,
+    advances_by_month: advByMonth,
+    advances_by_recovery_month: advByRecovery,
+    all_advances_for_employee: allAdv,
+    salary_computations: salComp,
+    simulated_recovery: simulated,
+    simulated_error: simError,
+    total_advances_this_month: totalAdvCount?.cnt || 0
+  });
+});
+
 module.exports = router;

@@ -93,7 +93,10 @@ function getAdvanceRecovery(db, employeeCode, month, year) {
       )
     `).get(employeeCode, month, year, month, year);
     return adv?.total || 0;
-  } catch { return 0; }
+  } catch (err) {
+    console.error(`[ADVANCE RECOVERY ERROR] emp=${employeeCode} month=${month} year=${year}:`, err.message);
+    return 0;
+  }
 }
 
 /**
@@ -336,6 +339,7 @@ function computeEmployeeSalary(db, employee, month, year, company) {
 
   // ─── Advance Recovery (from salary_advances table) ───
   const autoAdvanceRecovery = getAdvanceRecovery(db, employee.code, month, year);
+  if (autoAdvanceRecovery > 0) console.log(`[ADVANCE] ${employee.code}: auto recovery = ${autoAdvanceRecovery}`);
 
   // ─── Loan EMI Recovery ───
   const loanRecovery = getLoanDeductions(db, employee.code, month, year);
@@ -356,8 +360,8 @@ function computeEmployeeSalary(db, employee, month, year, company) {
   // ─── Preserve manual values if record already exists ───
   const existingComp = db.prepare(`
     SELECT tds, other_deductions, advance_recovery FROM salary_computations
-    WHERE employee_code = ? AND month = ? AND year = ?
-  `).get(employee.code, month, year);
+    WHERE employee_code = ? AND month = ? AND year = ? AND company = ?
+  `).get(employee.code, month, year, company);
   // Use auto TDS if calculated, else fall back to manual/existing
   if (!tdsAutoCalculated) tds = existingComp?.tds || 0;
   const otherDeductions = existingComp?.other_deductions || 0;
