@@ -327,8 +327,10 @@ function computeEmployeeSalary(db, employee, month, year, company) {
     esiEmployer = Math.round(grossEarned * esiEmprRate * 100) / 100;
   }
 
-  // ─── Professional Tax (only if applicable) ───
-  const professionalTax = salStruct.pt_applicable ? calcProfessionalTax(grossMonthly, db) : 0;
+  // ─── Professional Tax ───
+  // Apply PT based on gross salary slab — for ALL employees earning > ₹15,000
+  // regardless of pt_applicable flag (PT is statutory for all workers in Punjab)
+  const professionalTax = grossMonthly > 0 ? calcProfessionalTax(grossMonthly, db) : 0;
 
   // ─── LOP Deduction ───
   // Pro-rating via earnedRatio already reduces salary for days not worked.
@@ -491,8 +493,10 @@ function saveSalaryComputation(db, comp) {
       esi_employee = excluded.esi_employee,
       esi_employer = excluded.esi_employer,
       professional_tax = excluded.professional_tax,
+      tds = excluded.tds,
       advance_recovery = excluded.advance_recovery,
       lop_deduction = excluded.lop_deduction,
+      other_deductions = excluded.other_deductions,
       total_deductions = excluded.total_deductions,
       net_salary = excluded.net_salary,
       prev_month_gross = excluded.prev_month_gross,
