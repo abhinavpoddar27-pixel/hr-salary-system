@@ -27,6 +27,7 @@ export default function SalaryComputation() {
   const [payslipEmployee, setPayslipEmployee] = useState(null)
   const [filterDept, setFilterDept] = useState('')
   const [filterView, setFilterView] = useState('all')
+  const [searchQuery, setSearchQuery] = useState('')
   const [confirmAction, setConfirmAction] = useState(null)
   const [sortCol, setSortCol] = useState('')
   const [sortDir, setSortDir] = useState('asc')
@@ -46,13 +47,21 @@ export default function SalaryComputation() {
 
   const salaries = useMemo(() => {
     let filtered = allSalaries
+    if (searchQuery) {
+      const q = searchQuery.toLowerCase()
+      filtered = filtered.filter(s =>
+        (s.employee_name || '').toLowerCase().includes(q) ||
+        (s.employee_code || '').toLowerCase().includes(q) ||
+        (s.department || '').toLowerCase().includes(q)
+      )
+    }
     if (filterDept) filtered = filtered.filter(s => s.department?.toLowerCase().includes(filterDept.toLowerCase()))
     if (filterView === 'held') filtered = filtered.filter(s => s.salary_held)
     if (filterView === 'changed') filtered = filtered.filter(s => s.gross_changed)
     if (filterView === 'active') filtered = filtered.filter(s => !s.salary_held)
     if (filterView === 'returning') filtered = filtered.filter(s => s.was_left_returned)
     return filtered
-  }, [allSalaries, filterDept, filterView])
+  }, [allSalaries, filterDept, filterView, searchQuery])
 
   const [computeResult, setComputeResult] = useState(null)
   const computeMutation = useMutation({
@@ -366,8 +375,7 @@ export default function SalaryComputation() {
         {allSalaries.length > 0 && (
           <div className="flex gap-3 items-end flex-wrap">
             <div>
-              <label className="label"><Abbr code="Dept">Dept</Abbr> Filter</label>
-              <input type="text" placeholder="Filter dept..." value={filterDept} onChange={e => setFilterDept(e.target.value)} className="input w-40" />
+              <input type="text" placeholder="Search name, code, dept..." value={searchQuery} onChange={e => setSearchQuery(e.target.value)} className="input w-56 text-sm" />
             </div>
             <div className="flex gap-1">
               {[

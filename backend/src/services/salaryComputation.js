@@ -74,6 +74,14 @@ function getPrevMonthGross(db, employeeCode, month, year) {
  */
 function getAdvanceRecovery(db, employeeCode, month, year) {
   try {
+    // First reset any advances that were marked recovered in a previous computation
+    // so they can be re-found on recomputation
+    db.prepare(`
+      UPDATE salary_advances SET recovered = 0
+      WHERE employee_code = ? AND recovered = 1
+      AND ((recovery_month = ? AND recovery_year = ?) OR (month = ? AND year = ? AND recovery_month IS NULL))
+    `).run(employeeCode, month, year, month, year);
+
     // Get any unrecovered advance for this month
     const adv = db.prepare(`
       SELECT SUM(advance_amount) as total FROM salary_advances
@@ -250,21 +258,35 @@ function computeEmployeeSalary(db, employee, month, year, company) {
   const daysWOP = dayCalc.days_wop || 0;
 
   // ── Earned calculation ──
-  // Gross salary is for 1 month. If full month worked → earned = gross.
-  // If partial → pro-rate by (actual working days / total working days).
-  // OT and extra duty paid separately, NOT included in gross earned.
-  // actualWorkDays = Mon-Sat working days actually worked (P + ½P, excludes WOP/Sundays/holidays)
+  // Determine if employee is a contract/daily wage worker
+  const isContract = (employee.employment_type || '').toLowerCase().includes('contract') ||
+                     (employee.employment_type || '').toLowerCase() === 'worker' ||
+                     (employee.employment_type || '').toLowerCase() === 'silp';
   const actualWorkDays = daysPresent + daysHalfPresent;
-  // Full month = worked all required Mon-Sat working days
-  const workedFullMonth = actualWorkDays >= totalWorkingDays;
-  // Pro-rate: actual working days / total working days in the month
-  const earnedRatio = workedFullMonth ? 1 : (totalWorkingDays > 0 ? Math.min(1, actualWorkDays / totalWorkingDays) : 0);
 
-  const basicEarned = Math.round(basicMonthly * earnedRatio * 100) / 100;
-  const daEarned = Math.round(daMonthly * earnedRatio * 100) / 100;
-  const hraEarned = Math.round(hraMonthly * earnedRatio * 100) / 100;
-  const conveyanceEarned = Math.round(conveyanceMonthly * earnedRatio * 100) / 100;
-  const otherEarned = Math.round(otherMonthly * earnedRatio * 100) / 100;
+  let earnedRatio, workedFullMonth, basicEarned, daEarned, hraEarned, conveyanceEarned, otherEarned;
+
+  if (isContract) {
+    // CONTRACT WORKERS: daily wage only. No paid Sundays/holidays in earned.
+    // Earned = actual days worked × per-day rate
+    workedFullMonth = actualWorkDays >= totalWorkingDays;
+    const contractDays = actualWorkDays; // only days actually worked
+    earnedRatio = totalWorkingDays > 0 ? Math.min(1, contractDays / totalWorkingDays) : 0;
+    basicEarned = Math.round(basicMonthly * earnedRatio * 100) / 100;
+    daEarned = Math.round(daMonthly * earnedRatio * 100) / 100;
+    hraEarned = Math.round(hraMonthly * earnedRatio * 100) / 100;
+    conveyanceEarned = Math.round(conveyanceMonthly * earnedRatio * 100) / 100;
+    otherEarned = Math.round(otherMonthly * earnedRatio * 100) / 100;
+  } else {
+    // PERMANENT STAFF: monthly salary. Full month → full gross.
+    workedFullMonth = actualWorkDays >= totalWorkingDays;
+    earnedRatio = workedFullMonth ? 1 : (totalWorkingDays > 0 ? Math.min(1, actualWorkDays / totalWorkingDays) : 0);
+    basicEarned = Math.round(basicMonthly * earnedRatio * 100) / 100;
+    daEarned = Math.round(daMonthly * earnedRatio * 100) / 100;
+    hraEarned = Math.round(hraMonthly * earnedRatio * 100) / 100;
+    conveyanceEarned = Math.round(conveyanceMonthly * earnedRatio * 100) / 100;
+    otherEarned = Math.round(otherMonthly * earnedRatio * 100) / 100;
+  }
 
   // OT pay — hours-based overtime (daily hours > threshold)
   // Only for full-month employees (completed standard hours first)
@@ -273,7 +295,7 @@ function computeEmployeeSalary(db, employee, month, year, company) {
   const otPay = Math.round(otHours * basicHourlyRate * otRate * 100) / 100;
 
   // Extra duty pay — WOP days (worked on weekly offs/holidays)
-  // Paid at per-day rate for each WOP day, regardless of full month
+  // Paid at per-day rate for each WOP day
   const extraDutyPay = Math.round(daysWOP * perDayRate * 100) / 100;
 
   // Gross earned = base salary only (capped at grossMonthly). OT is separate.
@@ -438,6 +460,7 @@ function saveSalaryComputation(db, comp) {
       esi_employee = excluded.esi_employee,
       esi_employer = excluded.esi_employer,
       professional_tax = excluded.professional_tax,
+      advance_recovery = excluded.advance_recovery,
       lop_deduction = excluded.lop_deduction,
       total_deductions = excluded.total_deductions,
       net_salary = excluded.net_salary,
