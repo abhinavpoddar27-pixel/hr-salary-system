@@ -1,9 +1,8 @@
-import React, { Suspense, useEffect, useState } from 'react'
+import React, { Suspense, useEffect } from 'react'
 import { BrowserRouter, Routes, Route, Navigate, useLocation } from 'react-router-dom'
 import Sidebar from './components/layout/Sidebar'
 import Header from './components/layout/Header'
 import ErrorBoundary from './components/ui/ErrorBoundary'
-import OnboardingWizard from './components/OnboardingWizard'
 import { useAppStore } from './store/appStore'
 import { tracker } from './utils/sessionTracker'
 import useInactivityTimeout from './hooks/useInactivityTimeout'
@@ -47,13 +46,6 @@ function PageLoader() {
 }
 
 function Layout({ children, title }) {
-  const user = useAppStore(s => s.user)
-  const [showOnboarding, setShowOnboarding] = useState(false)
-
-  useEffect(() => {
-    if (user && !user.onboarding_completed) setShowOnboarding(true)
-  }, [user])
-
   return (
     <div className="flex h-screen overflow-hidden bg-slate-50">
       <Sidebar />
@@ -67,7 +59,6 @@ function Layout({ children, title }) {
           </ErrorBoundary>
         </main>
       </div>
-      {showOnboarding && <OnboardingWizard onComplete={() => setShowOnboarding(false)} />}
     </div>
   )
 }
