@@ -1214,6 +1214,30 @@ function initSchema(db) {
   safeCreateIndex('CREATE INDEX IF NOT EXISTS idx_edg_employee_month ON extra_duty_grants(employee_code, month, year)');
   safeCreateIndex('CREATE INDEX IF NOT EXISTS idx_edg_status ON extra_duty_grants(status, finance_status)');
 
+  // ── March 2026 Reconciliation: Set contractor flags ──────────
+  // Case 1: 115 contractor employees + MANPREET CON department
+  // COM. HELPER employees are PERMANENT (not contractor) per Abhinav's review
+  const contractorCodes = [
+    '10001','10002','10003','10004','10005','10006','10007','10008','10010','10011',
+    '10012','10013','10014','10015','10501','10502','10505','10507','11001','11002',
+    '11003','11004','11005','11006','11007','11012','11013','11501','11502','11503',
+    '19366','19954','21498','22283','22970','23388','23406','23427','23484','23644',
+    '23663','23709','56594','56638','56663','56684','56717','56744','56761','56762',
+    '56767','56768','56769','60001','60052','60097','60102','60123','60125','60126',
+    '60128','60131','60136','60139','60140','60169','60170','60190','60208','60209',
+    '60215','60216','60217','60225','60227','60228','60229','60230','60231','60239',
+    '60241','60242','60244','60245','60246','60250','60251','60253','60256','60258',
+    '60261','60262','60263','60264','60265','60266','60267','60268','60270','60273',
+    '60275','60276','60278','60279','60280','70004','70036','70059','70077','70078',
+    '70079','70080','70082','9004','9005'
+  ];
+  const setContractor = db.prepare('UPDATE employees SET is_contractor = 1 WHERE code = ? AND is_contractor != 1');
+  for (const code of contractorCodes) setContractor.run(code);
+  // Also flag all MANPREET CON department employees
+  db.prepare("UPDATE employees SET is_contractor = 1 WHERE department LIKE '%MANPREET%CON%' AND is_contractor != 1").run();
+  // Ensure COM. HELPER employees are NOT flagged as contractor
+  db.prepare("UPDATE employees SET is_contractor = 0 WHERE code IN ('23540','23551','23657','23679','23677')").run();
+
   console.log('✅ Database schema initialized');
 }
 

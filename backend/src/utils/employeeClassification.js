@@ -3,8 +3,9 @@
  */
 
 const CONTRACTOR_DEPT_KEYWORDS = [
-  'MEERA', 'KULDEEP', 'LAMBU', 'COM. HELPER', 'JIWAN', 'DAVINDER',
-  'SUNNY', 'AMAR', 'BISLERI', 'CONT', 'PARIKSHAN'
+  'MEERA', 'KULDEEP', 'LAMBU', 'JIWAN', 'DAVINDER',
+  'SUNNY', 'AMAR', 'BISLERI', 'CONT', 'PARIKSHAN',
+  'MANPREET', 'RANJIT', 'MOTI LAL', 'RAJENDRA', 'PAPPU'
 ];
 
 function isContractor(employee) {
