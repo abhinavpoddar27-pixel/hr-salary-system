@@ -359,6 +359,18 @@ router.post('/finalise', (req, res) => {
   const db = getDb();
   const { month, year } = req.body;
 
+  // Check finance sign-off
+  try {
+    const signoff = db.prepare("SELECT status FROM finance_month_signoff WHERE month = ? AND year = ? AND status = 'approved'").get(month, year);
+    if (!signoff) {
+      return res.status(403).json({
+        success: false,
+        error: 'Cannot finalise — finance audit sign-off is pending. The finance team must approve before finalisation.',
+        requiresFinanceApproval: true
+      });
+    }
+  } catch {} // table may not exist yet
+
   db.prepare(`UPDATE salary_computations SET is_finalised = 1, finalised_at = datetime('now') WHERE month = ? AND year = ?`).run(month, year);
   db.prepare(`UPDATE monthly_imports SET is_finalised = 1, finalised_at = datetime('now') WHERE month = ? AND year = ?`).run(month, year);
 

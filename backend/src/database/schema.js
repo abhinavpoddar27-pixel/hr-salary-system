@@ -1120,6 +1120,63 @@ function initSchema(db) {
     )
   `);
 
+  // ── Finance Verification Tables ─────────────────────────────
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS finance_audit_status (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      employee_code TEXT NOT NULL,
+      month INTEGER NOT NULL,
+      year INTEGER NOT NULL,
+      company TEXT,
+      status TEXT NOT NULL DEFAULT 'pending',
+      flag_reason TEXT,
+      flag_category TEXT,
+      verified_by TEXT,
+      verified_at TEXT,
+      notes TEXT,
+      UNIQUE(employee_code, month, year)
+    )
+  `);
+
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS finance_audit_comments (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      employee_code TEXT,
+      month INTEGER NOT NULL,
+      year INTEGER NOT NULL,
+      comment TEXT NOT NULL,
+      category TEXT,
+      severity TEXT DEFAULT 'info',
+      created_by TEXT NOT NULL,
+      created_at TEXT DEFAULT (datetime('now')),
+      resolved INTEGER DEFAULT 0,
+      resolved_by TEXT,
+      resolved_at TEXT
+    )
+  `);
+
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS finance_month_signoff (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      month INTEGER NOT NULL,
+      year INTEGER NOT NULL,
+      company TEXT,
+      status TEXT NOT NULL,
+      total_employees INTEGER,
+      verified_count INTEGER,
+      flagged_count INTEGER,
+      rejected_count INTEGER,
+      total_net_salary REAL,
+      rejection_reason TEXT,
+      signed_by TEXT NOT NULL,
+      signed_at TEXT DEFAULT (datetime('now')),
+      UNIQUE(month, year, company)
+    )
+  `);
+
+  safeCreateIndex('CREATE INDEX IF NOT EXISTS idx_finance_audit_status_month ON finance_audit_status(month, year)');
+  safeCreateIndex('CREATE INDEX IF NOT EXISTS idx_finance_audit_comments_month ON finance_audit_comments(month, year)');
+
   console.log('✅ Database schema initialized');
 }
 

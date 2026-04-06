@@ -32,6 +32,7 @@ const DailyMIS = React.lazy(() => import('./pages/DailyMIS'))
 const Loans = React.lazy(() => import('./pages/Loans'))
 const LeaveManagement = React.lazy(() => import('./pages/LeaveManagement'))
 const FinanceAudit = React.lazy(() => import('./pages/FinanceAudit'))
+const FinanceVerification = React.lazy(() => import('./pages/FinanceVerification'))
 const SessionAnalytics = React.lazy(() => import('./pages/SessionAnalytics'))
 
 function PageLoader() {
@@ -125,6 +126,7 @@ export default function App() {
           <Route path="/compliance/*" element={<RequireAuth><Layout title="Compliance"><Compliance /></Layout></RequireAuth>} />
           <Route path="/reports" element={<RequireAuth><Layout title="Reports"><Reports /></Layout></RequireAuth>} />
           <Route path="/finance-audit" element={<RequireAuth><Layout title="Finance Audit"><FinanceAudit /></Layout></RequireAuth>} />
+          <Route path="/finance-verification" element={<RequireAuth><Layout title="Finance Verification"><FinanceVerification /></Layout></RequireAuth>} />
           <Route path="/session-analytics" element={<RequireAuth><Layout title="Session Analytics"><SessionAnalytics /></Layout></RequireAuth>} />
           <Route path="/employees" element={<RequireAuth><Layout title="Employee Master"><Employees /></Layout></RequireAuth>} />
           <Route path="/alerts" element={<RequireAuth><Layout title="Alerts"><Alerts /></Layout></RequireAuth>} />

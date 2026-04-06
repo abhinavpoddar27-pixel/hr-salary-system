@@ -72,6 +72,16 @@ console.log('[BOOT] Database initialized');
   }
 })();
 
+// ── Seed Finance user ──────
+(function seedFinanceUser() {
+  const finHash = bcrypt.hashSync(process.env.FINANCE_PASSWORD || 'Finance@2025', 10);
+  const finUser = db.prepare("SELECT id FROM users WHERE username = 'finance'").get();
+  if (!finUser) {
+    db.prepare("INSERT INTO users (username, password_hash, role, is_active) VALUES (?, ?, 'finance', 1)").run('finance', finHash);
+    console.log('👤 Finance user created (username: finance)');
+  }
+})();
+
 const app = express();
 const PORT = process.env.PORT || 3001;
 const IS_PROD = process.env.NODE_ENV === 'production';
@@ -190,6 +200,7 @@ app.use('/api/jobs',              requireAuth, require('./src/routes/jobs'));
 app.use('/api/notifications',    requireAuth, require('./src/routes/notifications'));
 app.use('/api/tax-declarations', requireAuth, require('./src/routes/taxDeclarations'));
 app.use('/api/portal',           requireAuth, require('./src/routes/employeePortal'));
+app.use('/api/finance-verify',   requireAuth, require('./src/routes/financeVerification'));
 
 // Health check (public)
 app.get('/api/health', (req, res) => {

@@ -249,6 +249,19 @@ export const createJob = (type, params) => api.post('/jobs', { type, params })
 export const getJobStatus = (id) => api.get(`/jobs/${id}`)
 export const getUserPermissions = () => api.get('/auth/permissions')
 
+// ── Finance Verification ─────────────────────────────────
+export const getFinanceAuditDashboard = (month, year) => api.get('/finance-verify/dashboard', { params: { month, year } })
+export const getFinanceAuditEmployees = (month, year, params) => api.get('/finance-verify/employees', { params: { month, year, ...params } })
+export const getFinanceAuditEmployee = (code, month, year) => api.get(`/finance-verify/employee/${code}`, { params: { month, year } })
+export const getFinanceRedFlags = (month, year) => api.get('/finance-verify/red-flags', { params: { month, year } })
+export const setFinanceAuditStatus = (data) => api.post('/finance-verify/status', data)
+export const bulkVerifyEmployees = (data) => api.post('/finance-verify/bulk-verify', data)
+export const addFinanceComment = (data) => api.post('/finance-verify/comment', data)
+export const getFinanceComments = (month, year, code) => api.get('/finance-verify/comments', { params: { month, year, employeeCode: code } })
+export const resolveFinanceComment = (id) => api.put(`/finance-verify/comment/${id}/resolve`)
+export const submitFinanceSignoff = (data) => api.post('/finance-verify/signoff', data)
+export const getFinanceSignoffStatus = (month, year) => api.get('/finance-verify/signoff-status', { params: { month, year } })
+
 // ── Holiday Master ───────────────────────────────────────
 export const updateHoliday = (id, data) => api.put(`/settings/holidays/${id}`, data)
 export const getHolidayAuditLog = (params) => api.get('/settings/holidays/audit-log', { params })
