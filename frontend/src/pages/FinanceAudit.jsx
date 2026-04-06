@@ -1,5 +1,6 @@
-import React, { useState, useMemo } from 'react'
+import React, { useState, useMemo, useEffect, useRef } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
+import { useSearchParams, useNavigate } from 'react-router-dom'
 import { getFinanceReport, submitDayCorrection, getCorrectionHistory, getCorrectionsSummary, getManualAttendanceFlags, verifyManualFlag,
   getSalaryManualFlags, approveManualFlag, bulkApproveFlags, getReadinessCheck, getVarianceReport, getStatutoryCrosscheck } from '../utils/api'
 import { useAppStore } from '../store/appStore'
@@ -46,9 +47,10 @@ function SortTh({ sort, k, children, className = '' }) {
 // ═══════════════════════════════════════════════════════════
 // FINANCE REPORT TAB
 // ═══════════════════════════════════════════════════════════
-function ReportTab() {
+function ReportTab({ highlightEmployee, onClearHighlight }) {
   const { selectedCompany } = useAppStore()
   const { month, year } = useDateSelector({ mode: 'month', syncToStore: true })
+  const highlightRef = useRef(null)
   const queryClient = useQueryClient()
   const sort = useSortable('department', 'asc')
   const expand = useExpandableRows()
@@ -99,8 +101,24 @@ function ReportTab() {
     })
   }
 
+  // Auto-scroll to highlighted employee
+  useEffect(() => {
+    if (highlightEmployee && report?.length > 0) {
+      expand.setExpanded?.(new Set([highlightEmployee]));
+      setTimeout(() => highlightRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' }), 300);
+    }
+  }, [highlightEmployee, report]);
+
   return (
     <div className="space-y-4">
+      {/* Deep link banner */}
+      {highlightEmployee && (
+        <div className="bg-amber-50 border border-amber-200 rounded-lg px-4 py-2 text-sm text-amber-800 flex items-center justify-between">
+          <span>Navigated from Finance Verify — showing employee <strong>{highlightEmployee}</strong></span>
+          <button onClick={onClearHighlight} className="text-amber-600 hover:text-amber-800 text-xs font-medium">× Dismiss</button>
+        </div>
+      )}
+
       {/* Summary KPIs */}
       <div className="grid grid-cols-2 lg:grid-cols-6 gap-3">
         <KPI label="Employees" value={summary.totalEmployees || 0} color="blue" />
@@ -151,8 +169,10 @@ function ReportTab() {
               ) : filtered.map((r, i) => (
                 <React.Fragment key={r.code || i}>
                   <tr
+                    ref={r.code === highlightEmployee ? highlightRef : null}
                     onClick={() => expand.toggle(r.code)}
                     className={clsx('cursor-pointer transition-colors',
+                      r.code === highlightEmployee && 'ring-2 ring-amber-400 ring-inset bg-amber-50',
                       r.hasCorrection && 'border-l-3 border-l-amber-400',
                       r.salaryHeld && 'bg-red-50/50',
                       expand.isExpanded(r.code) && 'bg-blue-50'
@@ -598,13 +618,20 @@ function ReadinessTab() {
         <div>
           <h4 className="text-sm font-semibold text-red-700 mb-2">Blockers</h4>
           <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-            {check.blockers.map((b, i) => (
-              <div key={i} className="bg-red-50 border border-red-200 rounded-lg p-3">
+            {check.blockers.map((b, i) => {
+              const action = b.type === 'UNAPPROVED_MANUAL_FLAGS' ? () => setActiveTab('interventions')
+                : b.type.includes('HELD') ? () => navigate(`/finance-verify?tab=redflags&filter=salary_held`)
+                : b.type.includes('SALARY') ? () => navigate('/pipeline/salary')
+                : null;
+              return (
+              <div key={i} className={clsx('bg-red-50 border border-red-200 rounded-lg p-3', action && 'cursor-pointer hover:bg-red-100 transition-colors')} onClick={action}>
                 <div className="font-semibold text-red-800 text-sm">{b.type.replace(/_/g, ' ')}</div>
                 <div className="text-xs text-red-600 mt-1">{b.detail}</div>
                 {b.count > 0 && <div className="mt-1 text-lg font-bold text-red-700">{b.count}</div>}
+                {action && <div className="text-[10px] text-red-500 mt-1 font-medium">Click to review →</div>}
               </div>
-            ))}
+              );
+            })}
           </div>
         </div>
       )}
@@ -881,7 +908,12 @@ function StatutoryTab() {
 export default function FinanceAudit() {
   const { user, selectedCompany } = useAppStore()
   const { month, year, dateProps } = useDateSelector({ mode: 'month', syncToStore: true })
-  const [activeTab, setActiveTab] = useState('readiness')
+  const [searchParams] = useSearchParams()
+  const navigate = useNavigate()
+  const deepTab = searchParams.get('tab')
+  const deepEmployee = searchParams.get('employee')
+  const [activeTab, setActiveTab] = useState(deepTab || 'readiness')
+  const [highlightEmployee, setHighlightEmployee] = useState(deepEmployee || null)
   const isAdmin = user?.role === 'admin'
 
   // Fetch manual flags count for badge
@@ -943,7 +975,7 @@ export default function FinanceAudit() {
         {activeTab === 'interventions' && <ManualInterventionsTab />}
         {activeTab === 'variance' && <VarianceTab />}
         {activeTab === 'statutory' && <StatutoryTab />}
-        {activeTab === 'report' && <ReportTab />}
+        {activeTab === 'report' && <ReportTab highlightEmployee={highlightEmployee} onClearHighlight={() => setHighlightEmployee(null)} />}
         {activeTab === 'manual-flags' && <ManualFlagsTab />}
         {activeTab === 'corrections' && isAdmin && <CorrectionsSummaryTab />}
       </div>

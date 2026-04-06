@@ -1,5 +1,6 @@
-import React, { useState, useMemo } from 'react'
+import React, { useState, useMemo, useEffect } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
+import { useNavigate, useSearchParams } from 'react-router-dom'
 import { getFinanceAuditDashboard, getFinanceAuditEmployees, getFinanceRedFlags, setFinanceAuditStatus, bulkVerifyEmployees, submitFinanceSignoff, getFinanceSignoffStatus, addFinanceComment, getFinanceComments } from '../utils/api'
 import { useAppStore } from '../store/appStore'
 import DateSelector from '../components/common/DateSelector'
@@ -18,13 +19,17 @@ function KPI({ label, value, color = 'blue' }) {
 export default function FinanceVerification() {
   const { month, year, dateProps } = useDateSelector({ mode: 'month', syncToStore: true })
   const { selectedCompany, user } = useAppStore()
-  const [activeTab, setActiveTab] = useState('dashboard')
+  const navigate = useNavigate()
+  const [searchParams] = useSearchParams()
+  const deepTab = searchParams.get('tab')
+  const deepFilter = searchParams.get('filter')
+  const [activeTab, setActiveTab] = useState(deepTab === 'redflags' ? 'flags' : 'dashboard')
   const [search, setSearch] = useState('')
   const [statusFilter, setStatusFilter] = useState('')
   const [signoffModal, setSignoffModal] = useState(false)
   const [rejectReason, setRejectReason] = useState('')
   const [expandedFlags, setExpandedFlags] = useState(new Set())
-  const [flagCategory, setFlagCategory] = useState('all')
+  const [flagCategory, setFlagCategory] = useState(deepFilter || 'all')
   const qc = useQueryClient()
 
   const { data: dashRes } = useQuery({ queryKey: ['fin-dash', month, year], queryFn: () => getFinanceAuditDashboard(month, year), retry: 0 })
@@ -242,7 +247,10 @@ export default function FinanceVerification() {
                           {f.details.net != null && <div><span className="text-slate-400">Net</span><div className="font-mono font-medium">{fmtINR(f.details.net)}</div></div>}
                         </div>
                       )}
-                      <a href={`/finance-audit`} className="text-blue-600 hover:underline text-[11px]">View in Finance Audit →</a>
+                      <button onClick={(e) => { e.stopPropagation(); navigate(`/finance-audit?tab=${f.type === 'salary_held' ? 'interventions' : f.type === 'high_absenteeism' ? 'manual-flags' : 'report'}&employee=${f.employeeCode}&month=${month}&year=${year}`); }}
+                        className="text-blue-600 hover:underline text-[11px] font-medium">
+                        {f.type === 'salary_held' ? 'Review Hold in Finance Audit →' : 'View in Finance Audit →'}
+                      </button>
                     </div>
                   )}
                 </div>

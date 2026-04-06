@@ -7,10 +7,11 @@ function detectRedFlags(db, month, year) {
   const flags = [];
   let id = 0;
 
-  const mkFlag = (type, severity, empCode, empName, dept, desc, details, action) => ({
+  const mkFlag = (type, severity, empCode, empName, dept, desc, details, action, extraFields = {}) => ({
     id: `rf_${++id}`, type, severity,
     employeeCode: empCode, employeeName: empName, department: dept,
-    description: desc, details, suggestedAction: action
+    description: desc, details, suggestedAction: action,
+    ...extraFields
   });
 
   // 1. salary_exceeds_gross (CRITICAL)
@@ -60,14 +61,15 @@ function detectRedFlags(db, month, year) {
   // 4. salary_held (INFO)
   try {
     const rows = db.prepare(`
-      SELECT sc.employee_code, e.name, e.department, sc.hold_reason
+      SELECT sc.employee_code, e.name, e.department, sc.hold_reason, sc.gross_salary, sc.gross_earned, sc.net_salary, sc.payable_days, sc.total_deductions, sc.advance_recovery
       FROM salary_computations sc LEFT JOIN employees e ON sc.employee_code = e.code
       WHERE sc.month = ? AND sc.year = ? AND sc.salary_held = 1
     `).all(month, year);
     for (const r of rows) {
       flags.push(mkFlag('salary_held', 'info', r.employee_code, r.name, r.department,
-        `Salary on hold: ${r.hold_reason}`, {},
-        'Review hold reason and decide whether to release'));
+        `Salary on hold: ${r.hold_reason}`, { grossSalary: r.gross_salary, netSalary: r.net_salary },
+        'Review hold reason and decide whether to release',
+        { holdReason: r.hold_reason, grossSalary: r.gross_salary, grossEarned: r.gross_earned, netSalary: r.net_salary, payableDays: r.payable_days }));
     }
   } catch {}
 
@@ -108,15 +110,16 @@ function detectRedFlags(db, month, year) {
   // 7. advance_exceeds_net (WARNING)
   try {
     const rows = db.prepare(`
-      SELECT sc.employee_code, e.name, e.department, sc.advance_recovery, sc.net_salary
+      SELECT sc.employee_code, e.name, e.department, sc.advance_recovery, sc.net_salary, sc.gross_salary, sc.gross_earned, sc.payable_days, sc.total_deductions
       FROM salary_computations sc LEFT JOIN employees e ON sc.employee_code = e.code
       WHERE sc.month = ? AND sc.year = ? AND sc.advance_recovery > sc.net_salary * 0.5 AND sc.advance_recovery > 0
     `).all(month, year);
     for (const r of rows) {
       flags.push(mkFlag('advance_exceeds_net', 'warning', r.employee_code, r.name, r.department,
         `Advance ₹${r.advance_recovery} is > 50% of net ₹${r.net_salary}`,
-        { advance: r.advance_recovery, net: r.net_salary },
-        'Verify advance recovery amount'));
+        { advance: r.advance_recovery, net: r.net_salary, grossSalary: r.gross_salary },
+        'Verify advance recovery amount',
+        { grossSalary: r.gross_salary, grossEarned: r.gross_earned, netSalary: r.net_salary, payableDays: r.payable_days, advanceRecovery: r.advance_recovery, totalDeductions: r.total_deductions }));
     }
   } catch {}
 
