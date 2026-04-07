@@ -815,26 +815,141 @@ router.get('/salary-manual-flags', (req, res) => {
   if (!month || !year) return res.status(400).json({ success: false, error: 'month and year required' });
 
   try {
-  const flags = db.prepare(`
-    SELECT smf.*,
-      COALESCE(e.name, smf.employee_code) as employee_name,
-      e.department, e.designation
-    FROM salary_manual_flags smf
-    LEFT JOIN employees e ON smf.employee_code = e.code
-    WHERE smf.month = ? AND smf.year = ?
-    ORDER BY smf.finance_approved ASC, smf.flag_type, e.department, e.name
-  `).all(month, year);
+    const m = parseInt(month);
+    const y = parseInt(year);
+    const monthStr = String(m).padStart(2, '0');
+    const dateFrom = `${y}-${monthStr}-01`;
+    const dateTo = `${y}-${monthStr}-${String(new Date(y, m, 0).getDate()).padStart(2, '0')}`;
 
-  const totalFlags = flags.length;
-  const approvedCount = flags.filter(f => f.finance_approved === 1).length;
-  const rejectedCount = flags.filter(f => f.finance_approved === -1).length;
-  const pendingCount = totalFlags - approvedCount - rejectedCount;
+    // ── 1. Existing salary_manual_flags rows (MANUAL_TDS, GROSS_STRUCTURE_CHANGE,
+    //    SALARY_HELD, MANUAL_OTHER_DEDUCTION). Skip aggregate PUNCH_CORRECTION /
+    //    DAY_CORRECTION rows because we now expand those live below. ──
+    const flags = db.prepare(`
+      SELECT smf.*,
+        COALESCE(e.name, smf.employee_code) as employee_name,
+        e.department, e.designation
+      FROM salary_manual_flags smf
+      LEFT JOIN employees e ON smf.employee_code = e.code
+      WHERE smf.month = ? AND smf.year = ?
+        AND smf.flag_type NOT IN ('PUNCH_CORRECTION', 'DAY_CORRECTION')
+        ${company ? 'AND (e.company = ? OR e.company IS NULL)' : ''}
+      ORDER BY smf.finance_approved ASC, smf.flag_type, e.department, e.name
+    `).all(...(company ? [m, y, company] : [m, y]));
 
-  res.json({
-    success: true,
-    data: flags,
-    summary: { totalFlags, approvedCount, pendingCount, rejectedCount }
-  });
+    // ── 2. LIVE punch corrections (one row per correction, not aggregate) ──
+    const punchRows = db.prepare(`
+      SELECT
+        pc.id AS pc_id,
+        pc.employee_code,
+        pc.date,
+        pc.punch_type,
+        pc.reason,
+        pc.evidence_notes,
+        pc.original_in_time,
+        pc.original_out_time,
+        pc.corrected_in_time,
+        pc.corrected_out_time,
+        pc.added_by,
+        pc.added_at,
+        pc.applied_to_processed,
+        COALESCE(e.name, pc.employee_code) AS employee_name,
+        e.department,
+        e.designation
+      FROM punch_corrections pc
+      LEFT JOIN employees e ON pc.employee_code = e.code
+      WHERE pc.date >= ? AND pc.date <= ?
+        ${company ? 'AND (e.company = ? OR e.company IS NULL)' : ''}
+      ORDER BY pc.added_at DESC
+    `).all(...(company ? [dateFrom, dateTo, company] : [dateFrom, dateTo]));
+
+    const punchFlags = punchRows.map(r => ({
+      id: `pc-${r.pc_id}`,
+      employee_code: r.employee_code,
+      employee_name: r.employee_name,
+      department: r.department || '',
+      designation: r.designation || '',
+      month: m,
+      year: y,
+      flag_type: 'PUNCH_CORRECTION',
+      field_name: 'punch_times',
+      system_value: 0,
+      manual_value: 0,
+      delta: 0,
+      changed_by: r.added_by,
+      changed_at: r.added_at,
+      finance_approved: r.applied_to_processed ? 1 : 0,
+      approved_by: null,
+      approved_at: null,
+      notes: `${r.date} ${r.punch_type}: ${r.original_in_time || '—'}/${r.original_out_time || '—'} → ${r.corrected_in_time || '—'}/${r.corrected_out_time || '—'} · ${r.reason}${r.evidence_notes ? ' · ' + r.evidence_notes : ''}`,
+      _live: true
+    }));
+
+    // ── 3. LIVE day corrections (one row per correction) ──
+    const dayRows = db.prepare(`
+      SELECT
+        dc.id AS dc_id,
+        dc.employee_code,
+        dc.original_system_days,
+        dc.corrected_days,
+        dc.correction_delta,
+        dc.correction_reason,
+        dc.correction_notes,
+        dc.corrected_by,
+        dc.corrected_at,
+        dc.is_applied,
+        COALESCE(e.name, dc.employee_code) AS employee_name,
+        e.department,
+        e.designation
+      FROM day_corrections dc
+      LEFT JOIN employees e ON dc.employee_code = e.code
+      WHERE dc.month = ? AND dc.year = ?
+        ${company ? 'AND (e.company = ? OR e.company IS NULL)' : ''}
+      ORDER BY dc.corrected_at DESC
+    `).all(...(company ? [m, y, company] : [m, y]));
+
+    const dayFlags = dayRows.map(r => ({
+      id: `dc-${r.dc_id}`,
+      employee_code: r.employee_code,
+      employee_name: r.employee_name,
+      department: r.department || '',
+      designation: r.designation || '',
+      month: m,
+      year: y,
+      flag_type: 'DAY_CORRECTION',
+      field_name: 'total_payable_days',
+      system_value: r.original_system_days,
+      manual_value: r.corrected_days,
+      delta: r.correction_delta,
+      changed_by: r.corrected_by,
+      changed_at: r.corrected_at,
+      finance_approved: r.is_applied ? 1 : 0,
+      approved_by: null,
+      approved_at: null,
+      notes: `${r.correction_reason}${r.correction_notes ? ': ' + r.correction_notes : ''}`,
+      _live: true
+    }));
+
+    // ── 4. Merge & summarise ──
+    const allFlags = [...flags, ...punchFlags, ...dayFlags];
+
+    const totalFlags = allFlags.length;
+    const approvedCount = allFlags.filter(f => f.finance_approved === 1).length;
+    const rejectedCount = allFlags.filter(f => f.finance_approved === -1).length;
+    const pendingCount = totalFlags - approvedCount - rejectedCount;
+
+    res.json({
+      success: true,
+      data: allFlags,
+      summary: {
+        totalFlags,
+        approvedCount,
+        pendingCount,
+        rejectedCount,
+        punch_corrections: punchFlags.length,
+        day_corrections: dayFlags.length,
+        salary_flags: flags.length
+      }
+    });
   } catch (e) {
     console.error('salary-manual-flags error:', e.message);
     res.json({ success: true, data: [], summary: { totalFlags: 0, approvedCount: 0, pendingCount: 0, rejectedCount: 0 } });
@@ -914,10 +1029,39 @@ router.get('/readiness-check', (req, res) => {
   const warnings = [];
   const passed = [];
 
-  // BLOCKER: unapproved manual flags
-  const unapprovedFlags = db.prepare('SELECT COUNT(*) as cnt FROM salary_manual_flags WHERE month = ? AND year = ? AND finance_approved = 0').get(month, year);
-  if (unapprovedFlags.cnt > 0) {
-    blockers.push({ type: 'UNAPPROVED_MANUAL_FLAGS', count: unapprovedFlags.cnt, severity: 'BLOCKER', detail: `${unapprovedFlags.cnt} manual intervention(s) need finance approval` });
+  // BLOCKER: unapproved manual flags — UNION of three sources to match
+  // /salary-manual-flags endpoint exactly. Otherwise count drifts when HR adds
+  // punch_corrections without re-running salary computation.
+  const m = parseInt(month);
+  const y = parseInt(year);
+  const monthStr = String(m).padStart(2, '0');
+  const dateFrom = `${y}-${monthStr}-01`;
+  const dateTo = `${y}-${monthStr}-${String(new Date(y, m, 0).getDate()).padStart(2, '0')}`;
+
+  const smfPending = db.prepare(`
+    SELECT COUNT(*) as cnt FROM salary_manual_flags
+    WHERE month = ? AND year = ? AND finance_approved = 0
+      AND flag_type NOT IN ('PUNCH_CORRECTION', 'DAY_CORRECTION')
+  `).get(m, y).cnt;
+
+  const punchPending = db.prepare(`
+    SELECT COUNT(*) as cnt FROM punch_corrections
+    WHERE date >= ? AND date <= ? AND COALESCE(applied_to_processed, 0) = 0
+  `).get(dateFrom, dateTo).cnt;
+
+  const dayPending = db.prepare(`
+    SELECT COUNT(*) as cnt FROM day_corrections
+    WHERE month = ? AND year = ? AND COALESCE(is_applied, 0) = 0
+  `).get(m, y).cnt;
+
+  const unapprovedTotal = smfPending + punchPending + dayPending;
+  if (unapprovedTotal > 0) {
+    blockers.push({
+      type: 'UNAPPROVED_MANUAL_FLAGS',
+      count: unapprovedTotal,
+      severity: 'BLOCKER',
+      detail: `${unapprovedTotal} manual intervention(s) need finance approval (${smfPending} salary flags + ${punchPending} punch corrections + ${dayPending} day corrections)`
+    });
   } else {
     passed.push({ type: 'ALL_FLAGS_REVIEWED', severity: 'OK' });
   }

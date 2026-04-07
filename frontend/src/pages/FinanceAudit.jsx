@@ -714,6 +714,10 @@ function ManualInterventionsTab() {
     }
   }
 
+  // Live entries (punch / day corrections) cannot be approved via salary_manual_flags id
+  const isLive = (f) => f._live === true || (typeof f.id === 'string' && /^(pc|dc)-/.test(f.id))
+  const approvableFiltered = filtered.filter(f => !isLive(f))
+
   const toggleSelect = (id) => {
     const s = new Set(selected)
     s.has(id) ? s.delete(id) : s.add(id)
@@ -721,8 +725,8 @@ function ManualInterventionsTab() {
   }
 
   const selectAll = () => {
-    if (selected.size === filtered.length) setSelected(new Set())
-    else setSelected(new Set(filtered.map(f => f.id)))
+    if (selected.size === approvableFiltered.length) setSelected(new Set())
+    else setSelected(new Set(approvableFiltered.map(f => f.id)))
   }
 
   const statusBadge = (val) => {
@@ -740,6 +744,16 @@ function ManualInterventionsTab() {
         <KPI label="Approved" value={summary.approvedCount || 0} color="green" />
         <KPI label="Rejected" value={summary.rejectedCount || 0} color="red" />
       </div>
+
+      {/* Source breakdown — punch corrections + day corrections are live (no approval needed) */}
+      {(summary.punch_corrections > 0 || summary.day_corrections > 0 || summary.salary_flags > 0) && (
+        <div className="text-xs text-slate-500 flex items-center gap-3">
+          <span>Sources:</span>
+          {summary.salary_flags > 0 && <span className="badge bg-purple-50 text-purple-700">{summary.salary_flags} salary flags</span>}
+          {summary.punch_corrections > 0 && <span className="badge bg-cyan-50 text-cyan-700">🔧 {summary.punch_corrections} punch corrections (live)</span>}
+          {summary.day_corrections > 0 && <span className="badge bg-blue-50 text-blue-700">📅 {summary.day_corrections} day corrections (live)</span>}
+        </div>
+      )}
 
       {/* Filters + bulk */}
       <div className="flex items-center gap-3 flex-wrap">
@@ -783,19 +797,31 @@ function ManualInterventionsTab() {
             {filtered.map(f => {
               const cfg = FLAG_TYPE_CONFIG[f.flag_type] || { label: f.flag_type, icon: '?', color: 'slate' }
               const isPending = f.finance_approved === 0
+              const live = isLive(f)
               return (
                 <tr key={f.id} className={isPending ? 'bg-amber-50/60' : ''}>
-                  <td><input type="checkbox" checked={selected.has(f.id)} onChange={() => toggleSelect(f.id)} /></td>
+                  <td>
+                    {live ? (
+                      <span className="text-[10px] text-slate-300" title="Auto-included from source table">—</span>
+                    ) : (
+                      <input type="checkbox" checked={selected.has(f.id)} onChange={() => toggleSelect(f.id)} />
+                    )}
+                  </td>
                   <td className="font-medium text-sm">{f.employee_name}<div className="text-[10px] text-slate-400">{f.employee_code}</div></td>
                   <td className="text-xs">{f.department}</td>
-                  <td><span className={`text-xs px-2 py-0.5 rounded-full bg-${cfg.color}-100 text-${cfg.color}-700`}>{cfg.icon} {cfg.label}</span></td>
+                  <td>
+                    <span className={`text-xs px-2 py-0.5 rounded-full bg-${cfg.color}-100 text-${cfg.color}-700`}>{cfg.icon} {cfg.label}</span>
+                    {live && <span className="ml-1 text-[9px] text-slate-400 uppercase tracking-wide">live</span>}
+                  </td>
                   <td className="text-right text-xs font-mono">{f.system_value ? fmtINR2(f.system_value) : '—'}</td>
                   <td className="text-right text-xs font-mono">{f.manual_value ? fmtINR2(f.manual_value) : '—'}</td>
                   <td className="text-right text-xs font-mono font-bold">{f.delta > 0 ? '+' : ''}{f.delta ? fmtINR2(f.delta) : '—'}</td>
-                  <td className="text-xs text-slate-500 max-w-[200px] truncate">{f.notes}</td>
+                  <td className="text-xs text-slate-500 max-w-[200px] truncate" title={f.notes}>{f.notes}</td>
                   <td>{statusBadge(f.finance_approved)}</td>
                   <td>
-                    {isPending && (
+                    {live ? (
+                      <span className="text-[10px] text-slate-400">{f.finance_approved ? 'Applied' : 'Auto-included'}</span>
+                    ) : isPending && (
                       <div className="flex gap-1">
                         <button onClick={() => handleApprove(f.id, 'APPROVED')} className="text-green-600 hover:bg-green-50 px-1.5 py-0.5 rounded text-xs font-medium">Approve</button>
                         <button onClick={() => handleApprove(f.id, 'REJECTED')} className="text-red-600 hover:bg-red-50 px-1.5 py-0.5 rounded text-xs font-medium">Reject</button>
