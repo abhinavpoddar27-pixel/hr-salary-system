@@ -34,8 +34,12 @@ router.post('/calculate-days', (req, res) => {
   `).run(...empCodes);
 
   const monthStr = String(month).padStart(2,'0');
+  // Fetch full holiday metadata so dayCalculation can filter per-employee
+  // by applicable_to ('All' / 'Permanent' / 'Contract'). Type is included
+  // for future use (e.g. Restricted holidays may pay differently one day).
   const holidays = db.prepare(`
-    SELECT date FROM holidays WHERE date LIKE ?
+    SELECT date, name, type, applicable_to
+    FROM holidays WHERE date LIKE ?
   `).all(`${year}-${monthStr}-%`);
 
   const results = [];

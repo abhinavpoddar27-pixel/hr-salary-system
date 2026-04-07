@@ -93,14 +93,33 @@ function calculateDays(employeeCode, month, year, company, attendanceRecords, le
     recordByDate[r.date] = r;
   }
 
-  // Build holiday set
-  const holidayDates = new Set((holidays || []).map(h => h.date));
+  // ── Per-employee holiday filtering (April 2026 fix) ──
+  // Each holiday row carries an `applicable_to` field: 'All', 'Permanent',
+  // or 'Contract'. Contractors must NOT receive holidays they don't qualify
+  // for, AND when a holiday isn't applicable to them the date must behave
+  // as a normal working day (so absence on that date counts as absent).
+  //
+  // Build a per-employee filtered set early so the attendance loop, the
+  // working-days formula, and the paid_holidays count all use the SAME
+  // filtered view.
+  const applicableHolidays = (holidays || []).filter(h => {
+    const at = (h.applicable_to || 'All').toString().trim().toLowerCase();
+    if (contractorMode) {
+      // Contractors only get holidays explicitly tagged for them.
+      return at === 'contract' || at === 'contractor';
+    }
+    // Permanent (and Worker/Sales/SILP/Driver — anything non-contract):
+    // get holidays tagged 'All' or 'Permanent'.
+    return at === 'all' || at === 'permanent' || at === '';
+  });
+
+  const holidayDates = new Set(applicableHolidays.map(h => h.date));
 
   // Count Sundays in the month
   const sundayDates = allDates.filter(d => getDayOfWeek(d) === 0);
   const totalSundays = sundayDates.length;
 
-  // Count holidays that are NOT Sundays
+  // Count APPLICABLE holidays that are NOT Sundays
   let holidayCount = 0;
   const holidayNonSunday = [];
   for (const hDate of holidayDates) {
@@ -110,7 +129,9 @@ function calculateDays(employeeCode, month, year, company, attendanceRecords, le
     }
   }
 
-  // Total working days available = calendar days - sundays - holidays
+  // Total working days available = calendar days - sundays - applicable holidays
+  // Contractors with no applicable holidays will see a higher totalWorkingDays
+  // (which is correct — for them, holidays ARE working days).
   const totalWorkingDays = daysInMonth - totalSundays - holidayCount;
 
   // Count attendance
