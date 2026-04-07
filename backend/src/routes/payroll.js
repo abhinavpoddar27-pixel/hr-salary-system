@@ -733,14 +733,14 @@ router.get('/salary-slip-excel', (req, res) => {
     [companyName],
     [`SALARY SUMMARY — ${MONTHS[parseInt(month)]} ${year}`],
     [],
-    ['S.No', 'EMP', 'NAME', 'DEPARTMENT', 'DESIGNATION', 'GROSS', 'EARNED', 'PF', 'ESI', 'PT', 'ADVANCE', 'LOAN', 'LOP', 'TOT DED', 'NET PAYABLE', 'DAYS']
+    ['S.No', 'EMP', 'NAME', 'DEPARTMENT', 'DESIGNATION', 'GROSS', 'EARNED', 'PF', 'ESI', 'ADVANCE', 'LOAN', 'LOP', 'TOT DED', 'NET PAYABLE', 'DAYS']
   ];
 
   rows.forEach((r, i) => {
     summaryData.push([
       i + 1, r.employee_code, r.name || '', r.department || '', r.designation || '',
       r.gross_salary || 0, r.gross_earned || 0,
-      r.pf_employee || 0, r.esi_employee || 0, r.professional_tax || 0,
+      r.pf_employee || 0, r.esi_employee || 0,
       r.advance_recovery || 0, r.loan_recovery || 0, r.lop_deduction || 0,
       r.total_deductions || 0, r.net_salary || 0, r.total_payable_days || 0
     ]);
@@ -749,16 +749,16 @@ router.get('/salary-slip-excel', (req, res) => {
   // Totals row
   const totals = rows.reduce((t, r) => {
     t.gross += r.gross_salary || 0; t.earned += r.gross_earned || 0;
-    t.pf += r.pf_employee || 0; t.esi += r.esi_employee || 0; t.pt += r.professional_tax || 0;
+    t.pf += r.pf_employee || 0; t.esi += r.esi_employee || 0;
     t.adv += r.advance_recovery || 0; t.loan += r.loan_recovery || 0; t.lop += r.lop_deduction || 0;
     t.ded += r.total_deductions || 0; t.net += r.net_salary || 0;
     return t;
-  }, { gross: 0, earned: 0, pf: 0, esi: 0, pt: 0, adv: 0, loan: 0, lop: 0, ded: 0, net: 0 });
+  }, { gross: 0, earned: 0, pf: 0, esi: 0, adv: 0, loan: 0, lop: 0, ded: 0, net: 0 });
 
   summaryData.push([
     '', '', 'TOTAL', '', '',
     Math.round(totals.gross), Math.round(totals.earned),
-    Math.round(totals.pf), Math.round(totals.esi), Math.round(totals.pt),
+    Math.round(totals.pf), Math.round(totals.esi),
     Math.round(totals.adv), Math.round(totals.loan), Math.round(totals.lop),
     Math.round(totals.ded), Math.round(totals.net), ''
   ]);

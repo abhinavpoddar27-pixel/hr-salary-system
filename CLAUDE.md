@@ -188,12 +188,19 @@ frontend/
 - Output contract: salary_computations row with: gross_salary, gross_earned, basic/da/hra/conveyance/other_allowances_earned, ot_pay, holiday_duty_pay, pf_employee/employer, esi_employee/employer, professional_tax, tds, advance_recovery, loan_recovery, lop_deduction, total_deductions, net_salary, salary_held, hold_reason, finance_remark
 - Downstream consumers: Finance Audit, Finance Verify, Payslip PDF, Bank NEFT export, PF ECR, ESI returns
 - Business rules:
-  - divisor = 26 (from policy_config.salary_divisor)
-  - earnedRatio = min(actualWorkDays / totalWorkingDays, 1.0) — capped to prevent overcalculation
-  - grossEarned = min(sum of components, grossMonthly) + otPay + holidayDutyPay
+  - divisor = 26 (from policy_config.salary_divisor) — used for BASE salary pro-rata only
+  - earnedRatio = min(rawPayableDays / 26, 1.0) — cap is critical to prevent overcalculation
+  - Base components (basic/da/hra/conv/other) × earnedRatio — capped so never exceed monthly gross
+  - Component scaling: if `salary_structures` component sum ≠ stated gross, scale components
+    proportionally to honour stated gross (preserves existing ratios)
+  - OT / extra duty rate uses CALENDAR DAYS not divisor: `grossMonthly / calendarDays`
+    (Sundays do NOT inflate the OT per-day rate)
+  - otPay = otDays × (grossMonthly / calendarDays) + otHours × (grossMonthly / (calendarDays × 8)) × otRate
+  - holidayDutyPay uses calendar-day rate too
+  - grossEarned = (sum of base components capped at grossMonthly) + otPay + holidayDutyPay
   - PF: 12% of min(basic+da, 15000 ceiling), only if pf_applicable
   - ESI: 0.75% employee / 3.25% employer of grossEarned, only if grossMonthly <= 21000
-  - PT: Punjab slabs — 0/150/200 for <=15K/15-25K/>25K
+  - **Professional Tax: DISABLED** (per HR directive April 2026) — always 0
   - LOP: pro-rating handles it (no separate deduction)
   - Auto-hold: payable_days < 5 OR 7+ end-of-month consecutive absent days
   - Finance sign-off gate blocks finalisation
@@ -272,17 +279,34 @@ frontend/
 
 ## Section 5: Salary Calculation Engine
 - File: `backend/src/services/salaryComputation.js`
-- **Salary divisor: 26** (line 223: `getPolicyValue('salary_divisor', 26)`). Configurable via `policy_config` table. Force-reset to defaults on startup (admin-only override).
-- **earnedRatio formula**: `Math.min(actualWorkDays / totalWorkingDays, 1.0)` (lines 274, 283). The cap is critical — without it, payable_days > 26 produces ratio > 1.0 and inflates all base components.
-- **Pro-rated components**: basic, da, hra, conveyance, other_allowances (each multiplied by earnedRatio, lines 275-279, 284-288)
-- **Independent components**: `otPay = otHours × basicHourlyRate × otRate` (line 298, default 2x); `holidayDutyPay = holidayDutyDays × perDayRate` (line 303); both NOT subject to earnedRatio cap
-- **grossEarned formula**: `min(baseEarned, grossMonthly) + otPay + holidayDutyPay` (lines 308-309)
-- **PF**: 12% of `min(basic + da, 15000)` for both employee and employer (lines 312-318). EPS split: `min(pfWageBase × 0.0833, 1250)` (line 319). Rates from `policy_config`.
-- **ESI**: 0.75% employee / 3.25% employer of `grossEarned`, only if `grossMonthly <= 21000` threshold (lines 322-327). Applicability gated by `salStruct.esi_applicable`.
-- **Professional Tax**: Punjab slabs in `calcProfessionalTax()` (lines 17-27). 0 (≤15K), 150 (≤25K), 200 (>25K). Applied to ALL employees with grossMonthly > 0 (statutory in Punjab).
+- **Salary divisor: 26** — used for base salary pro-rata ONLY. Never change.
+- **earnedRatio formula**: `Math.min(rawPayableDays / 26, 1.0)`. The cap is critical —
+  without it, payable_days > 26 produces ratio > 1.0 and inflates all base components.
+  Applied to both contractor and permanent paths.
+- **Component scaling** (April 2026): If `salary_structures` components exist but don't
+  sum to the stated gross (`employees.gross_salary` or `salary_structures.gross_salary`),
+  components are scaled by `scaleFactor = statedGross / rawComponentSum` so the sum
+  matches stated gross while preserving ratios. If no components exist, fall back to
+  percentage-based derivation from `basic_percent`/`hra_percent`.
+- **OT / Extra Duty rate** (April 2026): Uses CALENDAR DAYS, not divisor.
+  `otPerDayRate = grossMonthly / calendarDays` — Sundays don't inflate the rate.
+  `otPay = otDays × otPerDayRate + otHours × (grossMonthly / (calendarDays × 8)) × otRate`
+  (both gated to workedFullMonth = true).
+- **Holiday Duty Pay**: Also uses calendar-day rate.
+- **Professional Tax: DISABLED** (April 2026, HR directive). Hard-coded to 0 regardless of
+  gross or pt_applicable flag. Column/row removed from Stage 7 UI, payslip PDF, Excel export.
+  `calcProfessionalTax()` helper retained for backward compat but never invoked.
+- **Pro-rated components**: basic, da, hra, conveyance, other_allowances (× earnedRatio)
+- **Independent components**: `otPay = otDays × otPerDayRate + otHours × otHourlyRate × otRate` where
+  `otPerDayRate = grossMonthly / calendarDays` and `otHourlyRate = grossMonthly / (calendarDays × 8)`;
+  `holidayDutyPay = holidayDutyDays × otPerDayRate`. Both uncapped but gated to workedFullMonth.
+- **grossEarned formula**: `min(baseEarned, grossMonthly) + otPay + holidayDutyPay`
+- **PF**: 12% of `min(basic + da, 15000)` for both employee and employer. EPS split: `min(pfWageBase × 0.0833, 1250)`. Rates from `policy_config`. Gated by `salStruct.pf_applicable`.
+- **ESI**: 0.75% employee / 3.25% employer of `grossEarned`, only if `grossMonthly <= 21000` threshold. Gated by `salStruct.esi_applicable`.
+- **Professional Tax**: **DISABLED** (April 2026). Always 0. `calcProfessionalTax()` helper retained but never invoked.
 - **TDS**: Auto-calculated from `tax_declarations` table; falls back to manually entered TDS preserved across recomputations.
 - **LOP**: NOT a separate deduction — pro-rating handles missed days via earnedRatio (line 338).
-- **Net salary formula**: `Math.max(0, grossEarned - totalDeductions)` (line 383). totalDeductions = pf + esi + pt + tds + advance + lop + other + loan (line 374).
+- **Net salary formula**: `Math.max(0, grossEarned - totalDeductions)`. totalDeductions = pf + esi + tds + advance + lop + other + loan (PT always 0).
 - **Rounding**: `Math.round(x * 100) / 100` everywhere (2 decimal precision).
 - **Salary hold logic**: Auto-hold if (a) `rawPayableDays < 5`, OR (b) 7+ consecutive absent days at month-end (unless approved leave exists). Hold reason stored in `salary_computations.hold_reason`.
 - **Finance gate**: `POST /finalise` blocked unless `finance_month_signoff.status = 'approved'` AND no unreviewed extra_duty_grants.
@@ -297,7 +321,9 @@ frontend/
 - **EESL parser**: `backend/src/services/parser.js` — handles EESL format variations via dynamic landmark scanning (`findLandmarks()` line 93). Company column may be empty → falls back to employee master lookup. Status codes: P, A, WO, WOP, ½P, HP, NH, ED.
 
 ## Section 7: Known Gotchas & Domain Rules
-- **Salary overcalculation**: Without `Math.min(earnedRatio, 1.0)`, employees working 28-31 days produce ratio > 1.0 and inflate all base components by 8-19%. Cap is in BOTH contractor (line 274) and permanent (line 283) paths. OT/holiday duty are legitimately uncapped.
+- **Salary overcalculation**: Without `Math.min(earnedRatio, 1.0)`, employees working 28-31 days produce ratio > 1.0 and inflate all base components by 8-19%. Cap applied uniformly to both contractor and permanent paths. OT/holiday duty are legitimately uncapped but use calendar-day rate, not divisor.
+- **Component mismatch**: `salary_structures` components (basic+da+hra+conv+other) may not sum to the stated gross_salary. When mismatched, salaryComputation.js scales components by `scaleFactor = statedGross / rawComponentSum` to honour the stated gross. Diagnostic query: `SELECT e.code, e.name, COALESCE(e.gross_salary, ss.gross_salary, 0) AS stated, (basic+da+hra+conveyance+other_allowances) AS sum FROM employees e LEFT JOIN salary_structures ss ON ss.employee_id=e.id WHERE e.status='Active' AND ABS(stated - sum) > 1`.
+- **Mark Left preservation**: Manual "Mark Left" actions (via `PUT /employees/:code/mark-left`) set `auto_inactive=0` AND `inactive_since=exit_date` so reimports do NOT resurrect them. Four code paths respect this: (1) import.js auto-reactivation checks `auto_inactive=1` before reactivating, (2) `POST /reconciliation/add-to-master` preserves Left status via CASE WHEN, (3) `POST /bulk-import` preserves Left via CASE WHEN, (4) auto-detect-Left in import.js only marks auto_inactive=1 (never touches manual marks).
 - **Sunday rule complexity**: 3-tier in `dayCalculation.js` (lines 220-275). ≥6 worked → paid. 4-5 → CL/EL fallback or LOP (if shortage <=1.5). <4 → unpaid. WOP days (employee actually worked the Sunday) are ALWAYS paid regardless of Mon-Sat count.
 - **Night shift pairing**: IN ≥ 18:00 day D + OUT ≤ 12:00 day D+1 → single shift. ~190 cases/month. Stage 4 sets `is_night_out_only=1` on the OUT record so Stage 6 doesn't double-count.
 - **EESL format variations**: Column positions vary between companies/months. Parser scans for "Emp. Name" header to detect column index dynamically. Company column may be empty → fallback to employee master.

@@ -468,7 +468,6 @@ export default function SalaryComputation() {
                     <th className="cursor-pointer select-none" onClick={() => toggleSort('ot_pay')} title="OT + Extra Duty (WOP days)">OT/ED{sortIndicator('ot_pay')}</th>
                     <th className="cursor-pointer select-none" onClick={() => toggleSort('pf_employee')}>PF{sortIndicator('pf_employee')}</th>
                     <th className="cursor-pointer select-none" onClick={() => toggleSort('esi_employee')}>ESI{sortIndicator('esi_employee')}</th>
-                    <th className="cursor-pointer select-none" onClick={() => toggleSort('professional_tax')}>PT{sortIndicator('professional_tax')}</th>
                     <th>Adv</th>
                     <th>Loan</th>
                     <th className="cursor-pointer select-none" onClick={() => toggleSort('total_deductions')}>Ded{sortIndicator('total_deductions')}</th>
@@ -526,7 +525,6 @@ export default function SalaryComputation() {
                         <td className="font-mono text-cyan-600">{s.ot_pay > 0 ? fmtINR(s.ot_pay) : '—'}</td>
                         <td className="text-indigo-600 font-mono">{fmtINR(s.pf_employee)}</td>
                         <td className="text-purple-600 font-mono">{fmtINR(s.esi_employee)}</td>
-                        <td className="font-mono">{fmtINR(s.professional_tax)}</td>
                         <td className="font-mono">{fmtINR(s.advance_recovery)}</td>
                         <td className="font-mono">{fmtINR(s.loan_recovery)}</td>
                         <td className="text-red-600 font-mono">{fmtINR(s.total_deductions)}</td>
@@ -579,7 +577,7 @@ export default function SalaryComputation() {
                                 <div>
                                   <p className="font-semibold mb-1 text-slate-600">Deductions</p>
                                   <div className="space-y-0.5">
-                                    {[['PF (Emp)', s.pf_employee], ['PF (Empr)', s.pf_employer], ['ESI (Emp)', s.esi_employee], ['ESI (Empr)', s.esi_employer], ['PT', s.professional_tax], ['TDS', s.tds], ['LOP', s.lop_deduction], ['Advance', s.advance_recovery], ['Loan EMI', s.loan_recovery], ['Other', s.other_deductions]].map(([k,v]) => v > 0 && (
+                                    {[['PF (Emp)', s.pf_employee], ['PF (Empr)', s.pf_employer], ['ESI (Emp)', s.esi_employee], ['ESI (Empr)', s.esi_employer], ['TDS', s.tds], ['LOP', s.lop_deduction], ['Advance', s.advance_recovery], ['Loan EMI', s.loan_recovery], ['Other', s.other_deductions]].map(([k,v]) => v > 0 && (
                                       <div key={k} className="flex justify-between"><span>{k}</span><span className="font-mono font-medium text-red-600">{fmtINR(v)}</span></div>
                                     ))}
                                   </div>
@@ -612,7 +610,6 @@ export default function SalaryComputation() {
                     <td className="font-mono text-cyan-600">{fmtINR(salaries.reduce((s, r) => s + (r.ot_pay || 0), 0))}</td>
                     <td className="font-mono text-indigo-600">{fmtINR(salaries.reduce((s, r) => s + (r.pf_employee || 0), 0))}</td>
                     <td className="font-mono text-purple-600">{fmtINR(salaries.reduce((s, r) => s + (r.esi_employee || 0), 0))}</td>
-                    <td className="font-mono">{fmtINR(salaries.reduce((s, r) => s + (r.professional_tax || 0), 0))}</td>
                     <td colSpan={2} />
                     <td className="font-mono text-red-600">{fmtINR(salaries.reduce((s, r) => s + (r.total_deductions || 0), 0))}</td>
                     <td className="bg-green-100 text-green-700 font-mono">{fmtINR(salaries.filter(s => !s.salary_held).reduce((s, r) => s + (r.net_salary || 0), 0))}</td>
@@ -688,7 +685,7 @@ export default function SalaryComputation() {
           </ModalFooter>
         </Modal>
 
-        <AbbreviationLegend keys={['PF', 'EPF', 'EPS', 'ESI', 'PT', 'LOP', 'DA', 'HRA', 'OT', 'TDS', 'EMI', 'NEFT', 'IFSC', 'UAN']} />
+        <AbbreviationLegend keys={['PF', 'EPF', 'EPS', 'ESI', 'LOP', 'DA', 'HRA', 'OT', 'TDS', 'EMI', 'NEFT', 'IFSC', 'UAN']} />
 
         {confirmAction === 'finalise' && (
           <ConfirmDialog

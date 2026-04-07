@@ -230,28 +230,57 @@ function computeEmployeeSalary(db, employee, month, year, company) {
   const otRate = parseFloat(getPolicyValue(db, 'ot_rate_multiplier', 2));
   const holdMinDays = parseFloat(getPolicyValue(db, 'salary_hold_min_days', 5));
 
-  // Gross monthly salary — employee.gross_salary (master) is the source of truth
-  // Fall back to salStruct.gross_salary, then component sum
+  // ── Gross Salary Resolution & Component Scaling (Issue 2 fix) ──
+  // Priority: employees.gross_salary → salStruct.gross_salary → componentSum
+  // When components exist but don't sum to stated gross, scale them proportionally
+  // to preserve ratios while honouring the authoritative gross figure.
   let basicMonthly = salStruct.basic || 0;
   let daMonthly = salStruct.da || 0;
   let hraMonthly = salStruct.hra || 0;
   let conveyanceMonthly = salStruct.conveyance || 0;
   let otherMonthly = salStruct.other_allowances || 0;
-  const componentSum = basicMonthly + daMonthly + hraMonthly + conveyanceMonthly + otherMonthly;
-  const grossMonthly = employee.gross_salary > 0 ? employee.gross_salary : (salStruct.gross_salary > 0 ? salStruct.gross_salary : componentSum);
+  const rawComponentSum = basicMonthly + daMonthly + hraMonthly + conveyanceMonthly + otherMonthly;
+  const statedGross = (employee.gross_salary > 0 ? employee.gross_salary : 0)
+                   || (salStruct.gross_salary > 0 ? salStruct.gross_salary : 0);
 
-  // ALWAYS rebuild components from gross to ensure they sum to exactly grossMonthly
-  // This prevents any mismatch between stored components and the actual gross
-  const bPct = salStruct.basic_percent || 50;
-  const hPct = salStruct.hra_percent || 20;
-  basicMonthly = Math.round(grossMonthly * bPct / 100 * 100) / 100;
-  hraMonthly = Math.round(grossMonthly * hPct / 100 * 100) / 100;
-  daMonthly = 0;
-  conveyanceMonthly = 0;
-  otherMonthly = Math.round((grossMonthly - basicMonthly - hraMonthly) * 100) / 100;
+  let grossMonthly, scaleFactor = 1;
+  if (rawComponentSum > 0 && statedGross > 0 && Math.abs(rawComponentSum - statedGross) > 1) {
+    // Components don't match stated gross — scale proportionally to honour stated gross
+    grossMonthly = statedGross;
+    scaleFactor = statedGross / rawComponentSum;
+  } else if (statedGross > 0) {
+    grossMonthly = statedGross;
+  } else if (rawComponentSum > 0) {
+    grossMonthly = rawComponentSum;
+  } else {
+    grossMonthly = 0;
+  }
 
-  // Per-day rate (for deductions like LOP)
+  if (scaleFactor !== 1 && rawComponentSum > 0) {
+    // Scale existing components preserving their ratios
+    basicMonthly = Math.round(basicMonthly * scaleFactor * 100) / 100;
+    daMonthly = Math.round(daMonthly * scaleFactor * 100) / 100;
+    hraMonthly = Math.round(hraMonthly * scaleFactor * 100) / 100;
+    conveyanceMonthly = Math.round(conveyanceMonthly * scaleFactor * 100) / 100;
+    otherMonthly = Math.round(otherMonthly * scaleFactor * 100) / 100;
+  } else if (rawComponentSum === 0 && grossMonthly > 0) {
+    // No components at all — derive from percentage defaults
+    const bPct = salStruct.basic_percent || 50;
+    const hPct = salStruct.hra_percent || 20;
+    basicMonthly = Math.round(grossMonthly * bPct / 100 * 100) / 100;
+    hraMonthly = Math.round(grossMonthly * hPct / 100 * 100) / 100;
+    daMonthly = 0;
+    conveyanceMonthly = 0;
+    otherMonthly = Math.round((grossMonthly - basicMonthly - hraMonthly) * 100) / 100;
+  }
+
+  // Per-day rate for base salary (divisor = 26 for pro-rata) — NEVER change divisor
   const perDayRate = grossMonthly / divisor;
+
+  // Calendar-day rate specifically for OT / extra duty pay (Issue 4 fix)
+  // OT rate must use calendar days so that weekends don't inflate the per-day figure
+  const calendarDays = new Date(year, month, 0).getDate();
+  const otPerDayRate = calendarDays > 0 ? grossMonthly / calendarDays : 0;
 
   // Payable days and attendance info
   const rawPayableDays = dayCalc.total_payable_days || 0;
@@ -259,45 +288,42 @@ function computeEmployeeSalary(db, employee, month, year, company) {
   const totalWorkingDays = dayCalc.total_working_days || divisor;
   const daysWOP = dayCalc.days_wop || 0;
 
-  // ── Earned calculation ──
+  // ── Earned calculation (Issue 1 fix) ──
+  // earnedRatio = min(payableDays / divisor, 1.0) — cap prevents overcalculation
+  // when payable days (e.g. 28, 31) exceed the salary divisor (26).
   const { isContractor: checkContractor } = require('../utils/employeeClassification');
   const isContract = checkContractor(employee) || (dayCalc.is_contractor === 1);
   const actualWorkDays = daysPresent + daysHalfPresent;
+  const workedFullMonth = actualWorkDays >= totalWorkingDays;
 
-  let earnedRatio, workedFullMonth, basicEarned, daEarned, hraEarned, conveyanceEarned, otherEarned;
+  // For contractors, rawPayableDays already includes WOP + half.
+  // For permanent staff, rawPayableDays includes paid Sundays/holidays.
+  // In both cases, cap the ratio at 1.0 — base components never exceed monthly gross.
+  const earnedRatio = Math.min((rawPayableDays || 0) / divisor, 1.0);
 
-  if (isContract) {
-    // CONTRACT WORKERS: daily wage. Earned = (present + WOP + half) / divisor × gross
-    // Payable days from day_calc already includes WOP for contractors
-    workedFullMonth = actualWorkDays >= totalWorkingDays;
-    const contractPayable = rawPayableDays; // day_calc gives present + WOP + half for contractors
-    earnedRatio = Math.min(contractPayable / divisor, 1.0);
-    basicEarned = Math.round(basicMonthly * earnedRatio * 100) / 100;
-    daEarned = Math.round(daMonthly * earnedRatio * 100) / 100;
-    hraEarned = Math.round(hraMonthly * earnedRatio * 100) / 100;
-    conveyanceEarned = Math.round(conveyanceMonthly * earnedRatio * 100) / 100;
-    otherEarned = Math.round(otherMonthly * earnedRatio * 100) / 100;
-  } else {
-    // PERMANENT STAFF: monthly salary. Full month → full gross.
-    workedFullMonth = actualWorkDays >= totalWorkingDays;
-    earnedRatio = workedFullMonth ? 1 : (totalWorkingDays > 0 ? Math.min(1, actualWorkDays / totalWorkingDays) : 0);
-    basicEarned = Math.round(basicMonthly * earnedRatio * 100) / 100;
-    daEarned = Math.round(daMonthly * earnedRatio * 100) / 100;
-    hraEarned = Math.round(hraMonthly * earnedRatio * 100) / 100;
-    conveyanceEarned = Math.round(conveyanceMonthly * earnedRatio * 100) / 100;
-    otherEarned = Math.round(otherMonthly * earnedRatio * 100) / 100;
-  }
+  const basicEarned = Math.round(basicMonthly * earnedRatio * 100) / 100;
+  const daEarned = Math.round(daMonthly * earnedRatio * 100) / 100;
+  const hraEarned = Math.round(hraMonthly * earnedRatio * 100) / 100;
+  const conveyanceEarned = Math.round(conveyanceMonthly * earnedRatio * 100) / 100;
+  const otherEarned = Math.round(otherMonthly * earnedRatio * 100) / 100;
 
-  // OT pay — hours-based overtime (daily hours > threshold)
-  // Only for full-month employees who completed standard hours
+  // ── OT / Extra Duty Pay (Issue 4 fix) ──
+  // Day-based extra duty uses the calendar-day rate (grossMonthly / calendar days).
+  // Hourly OT uses a calendar-day hourly rate × ot_rate multiplier.
+  // Only paid for full-month employees.
   const otHours = workedFullMonth ? (dayCalc.ot_hours || 0) : 0;
-  const basicHourlyRate = basicMonthly / (divisor * 8);
-  const otPay = Math.round(otHours * basicHourlyRate * otRate * 100) / 100;
+  const otDays = workedFullMonth ? (dayCalc.extra_duty_days || 0) : 0;
+
+  const otDayPay = Math.round(otDays * otPerDayRate * 100) / 100;
+  const otHourlyRate = calendarDays > 0 ? grossMonthly / (calendarDays * 8) : 0;
+  const otHourPay = Math.round(otHours * otHourlyRate * otRate * 100) / 100;
+  const otPay = Math.round((otDayPay + otHourPay) * 100) / 100;
 
   // ─── Holiday Duty Pay ───
-  // Employees who work on declared national holidays get additional pay
+  // Employees who work on declared national holidays get additional pay.
+  // Also uses calendar-day rate so Sunday-free divisor doesn't distort it.
   const holidayDutyDays = dayCalc.holiday_duty_days || 0;
-  const holidayDutyPay = Math.round(holidayDutyDays * perDayRate * 100) / 100;
+  const holidayDutyPay = Math.round(holidayDutyDays * otPerDayRate * 100) / 100;
 
   // ── GROSS EARNED = base salary + OT + holiday duty ──
   // This is the TOTAL the employee earns. NET = EARNED - DEDUCTIONS.
@@ -328,9 +354,8 @@ function computeEmployeeSalary(db, employee, month, year, company) {
   }
 
   // ─── Professional Tax ───
-  // Apply PT based on gross salary slab — for ALL employees earning > ₹15,000
-  // regardless of pt_applicable flag (PT is statutory for all workers in Punjab)
-  const professionalTax = grossMonthly > 0 ? calcProfessionalTax(grossMonthly, db) : 0;
+  // PT is DISABLED per HR directive (Issue 6). No PT deduction applied.
+  const professionalTax = 0;
 
   // ─── LOP Deduction ───
   // Pro-rating via earnedRatio already reduces salary for days not worked.

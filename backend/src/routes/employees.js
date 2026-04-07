@@ -319,8 +319,19 @@ router.put('/:code/mark-left', (req, res) => {
 
   const txn = db.transaction(() => {
     // 1. Set status = 'Left', is_active = 0, date_of_exit
-    db.prepare(`UPDATE employees SET status = 'Left', is_data_complete = 0, date_of_exit = ?, exit_reason = ?, updated_at = datetime('now') WHERE code = ?`)
-      .run(date_of_leaving || new Date().toISOString().split('T')[0], reason || '', code);
+    // Also set inactive_since (for reactivation cutoff) and auto_inactive = 0
+    // so the import auto-detector treats this as a MANUAL mark, not a system guess.
+    const exitDate = date_of_leaving || new Date().toISOString().split('T')[0];
+    db.prepare(`UPDATE employees SET
+        status = 'Left',
+        is_data_complete = 0,
+        date_of_exit = ?,
+        exit_reason = ?,
+        inactive_since = ?,
+        auto_inactive = 0,
+        updated_at = datetime('now')
+      WHERE code = ?`)
+      .run(exitDate, reason || '', exitDate, code);
 
     // 2. Close any active loans — write off or close
     const activeLoans = db.prepare("SELECT id, status FROM loans WHERE employee_code = ? AND status IN ('Active', 'Approved', 'Pending')").all(code);
@@ -470,7 +481,11 @@ router.post('/bulk-import', (req, res) => {
       gross_salary = CASE WHEN excluded.gross_salary > 0 THEN excluded.gross_salary ELSE employees.gross_salary END,
       pf_applicable = excluded.pf_applicable,
       esi_applicable = excluded.esi_applicable,
-      status = excluded.status,
+      -- Preserve manually marked Left/Inactive/Exited status on bulk re-import
+      status = CASE
+        WHEN employees.status IN ('Left', 'Inactive', 'Exited') AND employees.auto_inactive = 0 THEN employees.status
+        ELSE excluded.status
+      END,
       category = excluded.category,
       updated_at = datetime('now')
   `);

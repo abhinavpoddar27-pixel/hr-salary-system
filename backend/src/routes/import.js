@@ -470,7 +470,7 @@ router.post('/upload', upload.array('files', 20), async (req, res) => {
 
         for (const { month: im, year: iy } of monthYearPairs.values()) {
           const allEmps = dbRef.prepare(`
-            SELECT DISTINCT ap.employee_code, e.id as emp_id, e.name, e.department, e.employment_type, e.status, e.inactive_since
+            SELECT DISTINCT ap.employee_code, e.id as emp_id, e.name, e.department, e.employment_type, e.status, e.inactive_since, e.auto_inactive
             FROM attendance_processed ap
             LEFT JOIN employees e ON ap.employee_code = e.code
             WHERE ap.month = ? AND ap.year = ? AND ap.is_night_out_only = 0
@@ -479,8 +479,9 @@ router.post('/upload', upload.array('files', 20), async (req, res) => {
           for (const emp of allEmps) {
             if (emp.status === 'Exited') continue;
 
-            // Auto-reactivation: if Left/Inactive and has new present records after inactive_since
-            if ((emp.status === 'Left' || emp.status === 'Inactive') && emp.inactive_since) {
+            // Auto-reactivation: ONLY for auto-detected inactives (auto_inactive=1).
+            // Manual "Mark Left" actions by HR must never be overridden by reimports.
+            if ((emp.status === 'Left' || emp.status === 'Inactive') && emp.inactive_since && emp.auto_inactive === 1) {
               const newPresent = dbRef.prepare(`
                 SELECT COUNT(*) as cnt FROM attendance_processed
                 WHERE employee_code = ? AND is_night_out_only = 0
@@ -811,7 +812,11 @@ router.post('/reconciliation/add-to-master', (req, res) => {
       name = COALESCE(NULLIF(excluded.name, ''), employees.name),
       department = COALESCE(NULLIF(excluded.department, ''), employees.department),
       company = COALESCE(NULLIF(excluded.company, ''), employees.company),
-      status = 'Active',
+      -- Preserve manually marked Left/Inactive/Exited status; only set Active otherwise
+      status = CASE
+        WHEN employees.status IN ('Left', 'Inactive', 'Exited') AND employees.auto_inactive = 0 THEN employees.status
+        ELSE 'Active'
+      END,
       updated_at = datetime('now')
   `);
 

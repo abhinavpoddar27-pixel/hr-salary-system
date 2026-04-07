@@ -89,7 +89,6 @@ function generateSalaryRegisterHTML(payslips, companyConfig, month, year) {
           <th style="${hdrStyle}">Advance</th>
           <th style="${hdrStyle}">PF</th>
           <th style="${hdrStyle}">ESI</th>
-          <th style="${hdrStyle}">PT</th>
           <th style="${hdrStyle}">Days</th>
           <th style="${hdrStyle}">Sun</th>
           <th style="${hdrStyle}">Tot Days</th>
@@ -101,17 +100,17 @@ function generateSalaryRegisterHTML(payslips, companyConfig, month, year) {
       </thead>
       <tbody>`;
 
-  let grandTotals = { gross: 0, basic: 0, totalEarned: 0, advance: 0, pf: 0, esi: 0, pt: 0, days: 0, sundays: 0, totalDays: 0, payable: 0, lateDed: 0, netPayable: 0 };
+  let grandTotals = { gross: 0, basic: 0, totalEarned: 0, advance: 0, pf: 0, esi: 0, days: 0, sundays: 0, totalDays: 0, payable: 0, lateDed: 0, netPayable: 0 };
 
   for (const [key, group] of Object.entries(groups)) {
     if (group.employees.length === 0) continue;
 
     // Group header
     if (key !== permanentKey) {
-      html += `<tr><td colspan="18" style="padding:6px 5px;border:1px solid #999;font-weight:bold;background:#f0e6d2;font-size:10px;">${group.label}</td></tr>`;
+      html += `<tr><td colspan="17" style="padding:6px 5px;border:1px solid #999;font-weight:bold;background:#f0e6d2;font-size:10px;">${group.label}</td></tr>`;
     }
 
-    let groupTotals = { gross: 0, basic: 0, totalEarned: 0, advance: 0, pf: 0, esi: 0, pt: 0, days: 0, sundays: 0, totalDays: 0, payable: 0, lateDed: 0, netPayable: 0 };
+    let groupTotals = { gross: 0, basic: 0, totalEarned: 0, advance: 0, pf: 0, esi: 0, days: 0, sundays: 0, totalDays: 0, payable: 0, lateDed: 0, netPayable: 0 };
 
     group.employees.forEach((r, i) => {
       groupTotals.gross += r.grossSalary;
@@ -120,7 +119,6 @@ function generateSalaryRegisterHTML(payslips, companyConfig, month, year) {
       groupTotals.advance += r.advance;
       groupTotals.pf += r.pf;
       groupTotals.esi += r.esi;
-      groupTotals.pt += r.pt;
       groupTotals.days += r.days;
       groupTotals.sundays += r.sundays;
       groupTotals.totalDays += r.totalDays;
@@ -139,7 +137,6 @@ function generateSalaryRegisterHTML(payslips, companyConfig, month, year) {
         <td style="${numStyle}">${r.advance ? fmt(r.advance) : ''}</td>
         <td style="${numStyle}">${r.pf ? fmt(r.pf) : ''}</td>
         <td style="${numStyle}">${r.esi ? fmt(r.esi) : ''}</td>
-        <td style="${numStyle}">${r.pt ? fmt(r.pt) : ''}</td>
         <td style="${numStyle}">${r.days}</td>
         <td style="${numStyle}">${r.sundays || ''}</td>
         <td style="${numStyle}">${r.totalDays}</td>
@@ -160,7 +157,6 @@ function generateSalaryRegisterHTML(payslips, companyConfig, month, year) {
       <td style="${numStyle}font-weight:bold;">${fmt(groupTotals.advance)}</td>
       <td style="${numStyle}font-weight:bold;">${fmt(groupTotals.pf)}</td>
       <td style="${numStyle}font-weight:bold;">${fmt(groupTotals.esi)}</td>
-      <td style="${numStyle}font-weight:bold;">${fmt(groupTotals.pt)}</td>
       <td style="${numStyle}font-weight:bold;">${groupTotals.days}</td>
       <td style="${numStyle}font-weight:bold;">${groupTotals.sundays || ''}</td>
       <td style="${numStyle}font-weight:bold;">${groupTotals.totalDays}</td>
@@ -184,7 +180,6 @@ function generateSalaryRegisterHTML(payslips, companyConfig, month, year) {
     <td style="${numStyle}font-weight:bold;">${fmt(grandTotals.advance)}</td>
     <td style="${numStyle}font-weight:bold;">${fmt(grandTotals.pf)}</td>
     <td style="${numStyle}font-weight:bold;">${fmt(grandTotals.esi)}</td>
-    <td style="${numStyle}font-weight:bold;">${fmt(grandTotals.pt)}</td>
     <td style="${numStyle}font-weight:bold;">${grandTotals.days}</td>
     <td style="${numStyle}font-weight:bold;">${grandTotals.sundays || ''}</td>
     <td style="${numStyle}font-weight:bold;">${grandTotals.totalDays}</td>

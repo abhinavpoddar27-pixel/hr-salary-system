@@ -531,7 +531,16 @@ function MarkLeftModal({ employee, onClose }) {
 
   const mutation = useMutation({
     mutationFn: () => markEmployeeLeft(employee.code, { date_of_leaving: dateOfLeaving, reason }),
-    onSuccess: () => { toast.success(`${employee.name} marked as left`); qc.invalidateQueries(['employees']); onClose() }
+    onSuccess: () => {
+      toast.success(`${employee.name} marked as left`)
+      qc.invalidateQueries({ queryKey: ['employees'] })
+      qc.refetchQueries({ queryKey: ['employees'] })
+      onClose()
+    },
+    onError: (err) => {
+      const msg = err?.response?.data?.error || err?.message || 'Failed to mark employee as left'
+      toast.error(msg)
+    }
   })
 
   return (
