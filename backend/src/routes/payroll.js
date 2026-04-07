@@ -247,6 +247,8 @@ router.post('/compute-salary', (req, res) => {
     summary: {
       totalNetSalary: Math.round(totalNetSalary * 100) / 100,
       totalGrossSalary: Math.round(totalGross * 100) / 100,
+      totalOTPay: Math.round(results.reduce((s, r) => s + (r.otPay || 0), 0) * 100) / 100,
+      totalPayable: Math.round(results.reduce((s, r) => s + (r.totalPayable || 0), 0) * 100) / 100,
       totalPFEmployee: Math.round(results.reduce((s, r) => s + r.pfEmployee, 0) * 100) / 100,
       totalPFEmployer: Math.round(results.reduce((s, r) => s + r.pfEmployer, 0) * 100) / 100,
       totalESIEmployee: Math.round(results.reduce((s, r) => s + r.esiEmployee, 0) * 100) / 100,
@@ -350,13 +352,17 @@ router.put('/salary/:code/manual-deductions', (req, res) => {
   const { code } = req.params;
   const { month, year, advanceRecovery, tds, otherDeductions } = req.body;
 
+  // Recalculate total_deductions, net_salary AND total_payable (= net + ot + holidayDuty)
+  // net is base-only (grossEarned is base); OT is clean add-on after deductions.
   db.prepare(`
     UPDATE salary_computations SET
       advance_recovery = ?, tds = ?, other_deductions = ?,
       total_deductions = pf_employee + esi_employee + professional_tax + ? + ? + lop_deduction + ? + COALESCE(loan_recovery, 0),
-      net_salary = gross_earned - (pf_employee + esi_employee + professional_tax + ? + ? + lop_deduction + ? + COALESCE(loan_recovery, 0))
+      net_salary = MAX(0, gross_earned - (pf_employee + esi_employee + professional_tax + ? + ? + lop_deduction + ? + COALESCE(loan_recovery, 0))),
+      total_payable = MAX(0, gross_earned - (pf_employee + esi_employee + professional_tax + ? + ? + lop_deduction + ? + COALESCE(loan_recovery, 0))) + COALESCE(ot_pay, 0) + COALESCE(holiday_duty_pay, 0)
     WHERE employee_code = ? AND month = ? AND year = ?
   `).run(
+    advanceRecovery || 0, tds || 0, otherDeductions || 0,
     advanceRecovery || 0, tds || 0, otherDeductions || 0,
     advanceRecovery || 0, tds || 0, otherDeductions || 0,
     advanceRecovery || 0, tds || 0, otherDeductions || 0,
@@ -898,6 +904,183 @@ router.get('/debug-advance/:code', (req, res) => {
     simulated_error: simError,
     total_advances_this_month: totalAdvCount?.cnt || 0
   });
+});
+
+// ═══════════════════════════════════════════════════════════════
+// PAYABLE OT / EXTRA DUTY REGISTER
+// ═══════════════════════════════════════════════════════════════
+
+/**
+ * GET /api/payroll/payable-ot
+ * OT register — all employees with OT details for a month
+ */
+router.get('/payable-ot', (req, res) => {
+  const db = getDb();
+  const { month, year, company } = req.query;
+  if (!month || !year) return res.status(400).json({ success: false, error: 'month and year required' });
+
+  const m = parseInt(month);
+  const y = parseInt(year);
+
+  const records = db.prepare(`
+    SELECT
+      sc.employee_code,
+      COALESCE(NULLIF(e.name, ''), sc.employee_code) as employee_name,
+      e.department, e.designation, e.employment_type,
+      dc.days_present, dc.days_half_present, dc.days_wop,
+      dc.paid_sundays, dc.paid_holidays, dc.extra_duty_days, dc.total_payable_days,
+      sc.gross_salary, sc.ot_pay, sc.ot_days, sc.ot_daily_rate,
+      sc.punch_based_ot, sc.finance_extra_duty, sc.ot_note,
+      sc.gross_earned, sc.net_salary, sc.total_payable,
+      sc.is_finalised, sc.is_contractor, sc.company
+    FROM salary_computations sc
+    LEFT JOIN employees e ON sc.employee_code = e.code
+    LEFT JOIN day_calculations dc ON sc.employee_code = dc.employee_code
+      AND sc.month = dc.month AND sc.year = dc.year
+    WHERE sc.month = ? AND sc.year = ?
+    ${company ? 'AND sc.company = ?' : ''}
+    AND (e.status IS NULL OR e.status != 'Left')
+    ORDER BY sc.ot_days DESC, e.department, e.name
+  `).all(...(company ? [m, y, company] : [m, y]));
+
+  const daysInMonth = new Date(y, m, 0).getDate();
+  let sundaysInMonth = 0;
+  for (let d = 1; d <= daysInMonth; d++) {
+    if (new Date(y, m - 1, d).getDay() === 0) sundaysInMonth++;
+  }
+  const standardWorkingDays = daysInMonth - sundaysInMonth;
+
+  const otRecords = records.filter(r => (r.ot_days || 0) > 0);
+
+  const totalOTDays = otRecords.reduce((s, r) => s + (r.ot_days || 0), 0);
+  const totalOTPay = otRecords.reduce((s, r) => s + (r.ot_pay || 0), 0);
+  const totalPunchOT = otRecords.reduce((s, r) => s + (r.punch_based_ot || 0), 0);
+  const totalFinanceED = otRecords.reduce((s, r) => s + (r.finance_extra_duty || 0), 0);
+
+  res.json({
+    success: true,
+    data: records,
+    otRecords,
+    summary: {
+      totalEmployees: records.length,
+      employeesWithOT: otRecords.length,
+      employeesWithoutOT: records.length - otRecords.length,
+      totalOTDays: Math.round(totalOTDays * 100) / 100,
+      totalOTPay: Math.round(totalOTPay * 100) / 100,
+      totalPunchOT: Math.round(totalPunchOT * 100) / 100,
+      totalFinanceED: Math.round(totalFinanceED * 100) / 100,
+      daysInMonth, sundaysInMonth, standardWorkingDays,
+      avgOTDailyRate: otRecords.length > 0
+        ? Math.round(otRecords.reduce((s, r) => s + (r.ot_daily_rate || 0), 0) / otRecords.length)
+        : 0
+    }
+  });
+});
+
+/**
+ * POST /api/payroll/grant-extra-duty
+ * Finance grants extra duty days to an employee. Stored in day_corrections
+ * with correction_type='extra_duty' + finance_verified=1. Reuses the existing
+ * correction_delta column for the day count so the NOT NULL constraints on
+ * the table are satisfied.
+ */
+router.post('/grant-extra-duty', (req, res) => {
+  const db = getDb();
+  const { employeeCode, month, year, days, remark } = req.body;
+
+  if (!employeeCode || !month || !year || !days) {
+    return res.status(400).json({ success: false, error: 'employeeCode, month, year, days required' });
+  }
+  const n = parseFloat(days);
+  if (isNaN(n) || n <= 0 || n > 10) {
+    return res.status(400).json({ success: false, error: 'days must be a number 1..10' });
+  }
+
+  const emp = db.prepare('SELECT id, company FROM employees WHERE code = ?').get(employeeCode);
+  if (!emp) return res.status(404).json({ success: false, error: 'Employee not found' });
+  const user = req.user?.username || 'finance';
+
+  try {
+    // day_corrections has a UNIQUE(employee_code, month, year, company) constraint.
+    // To allow multiple extra-duty grants per employee/month, we must UPDATE the
+    // existing row's delta instead of inserting a duplicate. For a fresh employee,
+    // INSERT the row with correction_type='extra_duty'.
+    const existing = db.prepare(
+      "SELECT id, correction_delta, correction_type FROM day_corrections WHERE employee_code = ? AND month = ? AND year = ? AND COALESCE(company, '') = COALESCE(?, '')"
+    ).get(employeeCode, month, year, emp.company || '');
+
+    if (existing) {
+      // Only add to delta if the existing row is already an extra_duty grant;
+      // otherwise refuse to avoid clobbering an unrelated day correction.
+      if (existing.correction_type !== 'extra_duty') {
+        return res.status(409).json({
+          success: false,
+          error: 'An existing day correction (non-extra-duty) blocks this grant. Review the Corrections page first.'
+        });
+      }
+      db.prepare(`
+        UPDATE day_corrections SET
+          correction_delta = COALESCE(correction_delta, 0) + ?,
+          corrected_days = COALESCE(corrected_days, 0) + ?,
+          remark = ?,
+          finance_verified = 1,
+          correction_type = 'extra_duty'
+        WHERE id = ?
+      `).run(n, n, remark || `Extra duty: +${n} day(s) granted by ${user}`, existing.id);
+    } else {
+      db.prepare(`
+        INSERT INTO day_corrections (
+          employee_id, employee_code, month, year, company,
+          original_system_days, corrected_days, correction_delta,
+          correction_reason, correction_notes, corrected_by,
+          correction_type, finance_verified, remark
+        ) VALUES (?, ?, ?, ?, ?, 0, ?, ?, 'EXTRA_DUTY', ?, ?, 'extra_duty', 1, ?)
+      `).run(
+        emp.id, employeeCode, month, year, emp.company || '',
+        n, n,
+        remark || `Extra duty: ${n} day(s) granted by finance`,
+        user,
+        remark || `Extra duty: ${n} day(s) granted by ${user}`
+      );
+    }
+
+    res.json({ success: true, message: `${n} extra duty day(s) granted to ${employeeCode}. Re-run salary computation to apply.` });
+  } catch (e) {
+    console.error('grant-extra-duty error:', e.message);
+    res.status(500).json({ success: false, error: e.message });
+  }
+});
+
+/**
+ * DELETE /api/payroll/revoke-extra-duty/:id
+ */
+router.delete('/revoke-extra-duty/:id', (req, res) => {
+  const db = getDb();
+  const existing = db.prepare("SELECT * FROM day_corrections WHERE id = ? AND correction_type = 'extra_duty'").get(req.params.id);
+  if (!existing) return res.status(404).json({ success: false, error: 'Extra duty grant not found' });
+  db.prepare('DELETE FROM day_corrections WHERE id = ?').run(req.params.id);
+  res.json({ success: true, message: 'Extra duty revoked. Re-run salary computation to apply.' });
+});
+
+/**
+ * GET /api/payroll/extra-duty-grants
+ * List finance-verified extra duty grants for a month.
+ */
+router.get('/extra-duty-grants', (req, res) => {
+  const db = getDb();
+  const { month, year } = req.query;
+  if (!month || !year) return res.status(400).json({ success: false, error: 'month and year required' });
+  const grants = db.prepare(`
+    SELECT dc.id, dc.employee_code, dc.month, dc.year, dc.company,
+      dc.correction_delta AS days, dc.remark, dc.correction_notes,
+      dc.corrected_by AS granted_by, dc.corrected_at,
+      COALESCE(e.name, dc.employee_code) as employee_name, e.department
+    FROM day_corrections dc
+    LEFT JOIN employees e ON dc.employee_code = e.code
+    WHERE dc.month = ? AND dc.year = ? AND dc.correction_type = 'extra_duty'
+    ORDER BY dc.corrected_at DESC
+  `).all(month, year);
+  res.json({ success: true, data: grants });
 });
 
 module.exports = router;

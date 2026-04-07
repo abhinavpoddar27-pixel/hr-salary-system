@@ -471,7 +471,8 @@ export default function SalaryComputation() {
                     <th>Adv</th>
                     <th>Loan</th>
                     <th className="cursor-pointer select-none" onClick={() => toggleSort('total_deductions')}>Ded{sortIndicator('total_deductions')}</th>
-                    <th className="cursor-pointer select-none bg-green-50 text-green-700" onClick={() => toggleSort('net_salary')} title="Net = Earned + OT - Deductions">Net{sortIndicator('net_salary')}</th>
+                    <th className="cursor-pointer select-none bg-slate-50 text-slate-600" onClick={() => toggleSort('net_salary')} title="Net = Gross Earned − Deductions (base only, no OT)">Net{sortIndicator('net_salary')}</th>
+                    <th className="cursor-pointer select-none bg-emerald-50 text-emerald-700" onClick={() => toggleSort('total_payable')} title="Total Payable = Net + OT (actual take-home)">Take Home{sortIndicator('total_payable')}</th>
                     <th></th>
                   </tr>
                 </thead>
@@ -541,7 +542,8 @@ export default function SalaryComputation() {
                         <td className="font-mono">{fmtINR(s.advance_recovery)}</td>
                         <td className="font-mono">{fmtINR(s.loan_recovery)}</td>
                         <td className="text-red-600 font-mono">{fmtINR(s.total_deductions)}</td>
-                        <td className="bg-green-50 font-bold text-green-700 font-mono">{fmtINR(s.net_salary)}</td>
+                        <td className="bg-slate-50 text-slate-700 font-mono">{fmtINR(s.net_salary)}</td>
+                        <td className="bg-emerald-50 font-bold text-emerald-700 font-mono">{fmtINR(s.total_payable || s.net_salary)}</td>
                         <td>
                           {s.is_finalised ? (
                             <span className="badge-green text-xs">Final</span>
@@ -625,7 +627,8 @@ export default function SalaryComputation() {
                     <td className="font-mono text-purple-600">{fmtINR(salaries.reduce((s, r) => s + (r.esi_employee || 0), 0))}</td>
                     <td colSpan={2} />
                     <td className="font-mono text-red-600">{fmtINR(salaries.reduce((s, r) => s + (r.total_deductions || 0), 0))}</td>
-                    <td className="bg-green-100 text-green-700 font-mono">{fmtINR(salaries.filter(s => !s.salary_held).reduce((s, r) => s + (r.net_salary || 0), 0))}</td>
+                    <td className="bg-slate-100 text-slate-700 font-mono">{fmtINR(salaries.filter(s => !s.salary_held).reduce((s, r) => s + (r.net_salary || 0), 0))}</td>
+                    <td className="bg-emerald-100 text-emerald-700 font-mono">{fmtINR(salaries.filter(s => !s.salary_held).reduce((s, r) => s + (r.total_payable || r.net_salary || 0), 0))}</td>
                     <td />
                   </tr>
                 </tfoot>

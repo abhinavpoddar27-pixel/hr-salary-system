@@ -818,8 +818,12 @@ function initSchema(db) {
   safeAddColumn('salary_computations', 'ot_days', 'REAL DEFAULT 0');
   safeAddColumn('salary_computations', 'ot_daily_rate', 'REAL DEFAULT 0');
   safeAddColumn('salary_computations', 'manual_extra_duty', 'REAL DEFAULT 0');
-  safeAddColumn('day_corrections', 'correction_type', "TEXT DEFAULT 'day'");
-  safeAddColumn('day_corrections', 'finance_verified', 'INTEGER DEFAULT 0');
+  safeAddColumn('salary_computations', 'punch_based_ot', 'REAL DEFAULT 0');
+  safeAddColumn('salary_computations', 'finance_extra_duty', 'REAL DEFAULT 0');
+  safeAddColumn('salary_computations', 'ot_note', 'TEXT');
+  safeAddColumn('salary_computations', 'total_payable', 'REAL DEFAULT 0');
+  // NOTE: day_corrections CREATE TABLE runs LATER in this file (~line 919).
+  // Its safeAddColumn migrations live AFTER the create statement — see below.
   safeAddColumn('salary_computations', 'holiday_duty_pay', 'REAL DEFAULT 0');
 
   db.exec(`
@@ -981,6 +985,15 @@ function initSchema(db) {
     ON day_corrections(employee_code, month, year)`);
   safeCreateIndex(`CREATE INDEX IF NOT EXISTS idx_punch_corrections_date
     ON punch_corrections(date, employee_code)`);
+
+  // ── day_corrections migrations (must run AFTER CREATE TABLE above) ──
+  // Extra duty grant workflow reuses this table with correction_type='extra_duty'
+  // + finance_verified=1. These columns are nullable with defaults so existing
+  // rows keep working.
+  safeAddColumn('day_corrections', 'correction_type', "TEXT DEFAULT 'day'");
+  safeAddColumn('day_corrections', 'finance_verified', 'INTEGER DEFAULT 0');
+  safeAddColumn('day_corrections', 'remark', 'TEXT');
+
   safeCreateIndex(`CREATE INDEX IF NOT EXISTS idx_audit_log_emp_code
     ON audit_log(employee_code, changed_at)`);
   safeCreateIndex(`CREATE INDEX IF NOT EXISTS idx_audit_log_action_type

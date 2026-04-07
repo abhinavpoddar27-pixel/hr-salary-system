@@ -288,7 +288,7 @@ function computeEmployeeSalary(db, employee, month, year, company) {
 
   // ── Earned calculation (April 2026 overhaul — contractor/permanent split) ──
   // Permanent: regularDays = min(payableDays, daysInMonth), ratio = regular/daysInMonth.
-  //            OT kicks in only when payableDays > daysInMonth. ratio ≤ 1.0 ALWAYS.
+  //            OT is computed SEPARATELY below and added AFTER deductions.
   // Contractor: daily wage, no Sundays/holidays. earned = (payable/daysInMonth) × gross.
   //             No OT for contractors.
   const { isContractor: checkContractor } = require('../utils/employeeClassification');
@@ -298,43 +298,64 @@ function computeEmployeeSalary(db, employee, month, year, company) {
   const daysInMonth = calendarDays; // alias for readability in formulas below
 
   let basicEarned, daEarned, hraEarned, conveyanceEarned, otherEarned;
-  let otDays, otPay, earnedRatio, regularDays;
-  let otPerDayRateDisplay = daysInMonth > 0 ? grossMonthly / daysInMonth : 0;
+  let earnedRatio, regularDays;
+  const otPerDayRateDisplay = daysInMonth > 0 ? grossMonthly / daysInMonth : 0;
 
   if (isContract) {
-    // ═══ CONTRACTOR SALARY ═══
-    // Strictly daily wage: gross / daysInMonth × days present.
-    // No Sundays, no holidays, no OT, no CL/EL.
-    regularDays = rawPayableDays; // dayCalc already excludes Sundays/holidays for contractors
+    regularDays = rawPayableDays;
     earnedRatio = daysInMonth > 0 ? Math.min(regularDays / daysInMonth, 1.0) : 0;
-    basicEarned = Math.round(basicMonthly * earnedRatio * 100) / 100;
-    daEarned = Math.round(daMonthly * earnedRatio * 100) / 100;
-    hraEarned = Math.round(hraMonthly * earnedRatio * 100) / 100;
-    conveyanceEarned = Math.round(conveyanceMonthly * earnedRatio * 100) / 100;
-    otherEarned = Math.round(otherMonthly * earnedRatio * 100) / 100;
-    otDays = 0;
-    otPay = 0;
   } else {
-    // ═══ PERMANENT EMPLOYEE SALARY ═══
-    // Base salary: capped at full month (regular days can never exceed daysInMonth)
     regularDays = Math.min(rawPayableDays, daysInMonth);
     earnedRatio = daysInMonth > 0 ? regularDays / daysInMonth : 0;
-    // earnedRatio is ALWAYS ≤ 1.0 — base salary can NEVER exceed gross.
-    basicEarned = Math.round(basicMonthly * earnedRatio * 100) / 100;
-    daEarned = Math.round(daMonthly * earnedRatio * 100) / 100;
-    hraEarned = Math.round(hraMonthly * earnedRatio * 100) / 100;
-    conveyanceEarned = Math.round(conveyanceMonthly * earnedRatio * 100) / 100;
-    otherEarned = Math.round(otherMonthly * earnedRatio * 100) / 100;
+  }
+  basicEarned = Math.round(basicMonthly * earnedRatio * 100) / 100;
+  daEarned = Math.round(daMonthly * earnedRatio * 100) / 100;
+  hraEarned = Math.round(hraMonthly * earnedRatio * 100) / 100;
+  conveyanceEarned = Math.round(conveyanceMonthly * earnedRatio * 100) / 100;
+  otherEarned = Math.round(otherMonthly * earnedRatio * 100) / 100;
 
-    // OT / Extra Duty: payable days are already capped at daysInMonth in Stage 6
-    // so the "excess" is captured separately in dayCalc.extra_duty_days (WOP + any
-    // excess working-day attendance). Fill-the-gap rule: regular salary covers
-    // daysInMonth first; anything beyond that becomes OT.
-    const otDailyRate = otPerDayRateDisplay;
-    const otDaysOrganic = dayCalc.extra_duty_days || 0;
+  // ═══ OT CALCULATION (day-based, SEPARATE from base salary) ═══
+  // OT is ONLY added AFTER deductions — it never factors into grossEarned.
+  // Two triggers:
+  //   1. Punch-detected excess: daysPresent > (daysInMonth − sundaysInMonth)
+  //   2. Finance-verified extra duty from day_corrections
+  // Contractors get ZERO OT. Ever.
+  const otDailyRate = otPerDayRateDisplay;
+  let totalOTDays = 0;
+  let otPay = 0;
+  let punchBasedOT = 0;
+  let financeExtraDuty = 0;
+  let otNote = '';
 
-    // Extra duty from fully-approved grants flows in additively, regardless of
-    // whether Stage 6 captured it on total_payable_days.
+  if (!isContract) {
+    // Count Sundays in this month
+    let sundaysInMonth = 0;
+    for (let d = 1; d <= daysInMonth; d++) {
+      if (new Date(year, month - 1, d).getDay() === 0) sundaysInMonth++;
+    }
+    const standardWorkingDays = daysInMonth - sundaysInMonth;
+
+    // Condition 1: Punch-detected excess
+    // Total attended = daysPresent (Mon-Sat P) + daysWOP (Sundays/offs worked) +
+    // daysHalfPresent (½P). OT kicks in when total attended > standard working days,
+    // i.e. the employee worked additional days beyond their Mon-Sat capacity.
+    const totalAttended = daysPresent + (dayCalc.days_wop || 0) + daysHalfPresent;
+    punchBasedOT = Math.max(0, totalAttended - standardWorkingDays);
+
+    // Condition 2: Finance-verified manual extra duty from day_corrections
+    // (stored in correction_delta, flagged via correction_type='extra_duty' + finance_verified=1)
+    try {
+      const manualED = db.prepare(`
+        SELECT COALESCE(SUM(correction_delta), 0) AS total
+        FROM day_corrections
+        WHERE employee_code = ? AND month = ? AND year = ?
+          AND COALESCE(correction_type, 'day') = 'extra_duty'
+          AND COALESCE(finance_verified, 0) = 1
+      `).get(employee.code, month, year);
+      financeExtraDuty = manualED?.total || 0;
+    } catch {}
+
+    // Also absorb fully-approved extra_duty_grants (legacy dual-approval workflow)
     let extraDutyDaysFromGrants = 0;
     try {
       const grantsRow = db.prepare(`
@@ -345,47 +366,41 @@ function computeEmployeeSalary(db, employee, month, year, company) {
           AND finance_status = 'FINANCE_APPROVED'
       `).get(employee.code, month, year);
       extraDutyDaysFromGrants = grantsRow?.total_days || 0;
-    } catch (e) {
-      console.warn(`[OT] grants lookup failed for ${employee.code}: ${e.message}`);
-    }
-
-    // Finance-verified manual extra duty from day_corrections
-    let verifiedExtraDuty = 0;
-    try {
-      const row = db.prepare(`
-        SELECT COALESCE(SUM(correction_delta), 0) AS total
-        FROM day_corrections
-        WHERE employee_code = ? AND month = ? AND year = ?
-          AND COALESCE(correction_type, 'day') = 'extra_duty'
-          AND COALESCE(finance_verified, 0) = 1
-      `).get(employee.code, month, year);
-      verifiedExtraDuty = row?.total || 0;
     } catch {}
 
-    otDays = Math.max(otDaysOrganic, extraDutyDaysFromGrants) + verifiedExtraDuty;
-    otPay = Math.round(otDays * otDailyRate * 100) / 100;
+    // Hard caps: non-negative, never exceed daysInMonth
+    totalOTDays = Math.max(0, punchBasedOT + financeExtraDuty + extraDutyDaysFromGrants);
+    totalOTDays = Math.min(totalOTDays, daysInMonth);
+
+    otPay = Math.round(totalOTDays * otDailyRate * 100) / 100;
+
+    otNote = totalOTDays > 0
+      ? `Attended ${totalAttended}/${standardWorkingDays} working days. Punch OT: ${punchBasedOT}, Finance ED: ${financeExtraDuty + extraDutyDaysFromGrants}. Total OT: ${totalOTDays} days @ ₹${Math.round(otDailyRate)}/day`
+      : `Attended ${totalAttended}/${standardWorkingDays} working days. No OT.`;
+  } else {
+    otNote = 'Contractor — no OT';
   }
 
   // ─── Holiday Duty Pay ───
-  // Employees who work on declared national holidays get additional pay on top of
-  // base. Contractors never accrue this (holidayDutyDays will be 0 for them).
+  // Treated like OT: separate from grossEarned, added to totalPayable after deductions.
   const holidayDutyDays = dayCalc.holiday_duty_days || 0;
   const holidayDutyPay = isContract
     ? 0
     : Math.round(holidayDutyDays * otPerDayRateDisplay * 100) / 100;
 
-  // ── GROSS EARNED = base salary + OT + holiday duty ──
-  // Base is capped at grossMonthly as a safety rail (earnedRatio ≤ 1 already
-  // guarantees this; the cap is defensive against rounding drift).
-  const baseEarned = Math.min(
-    basicEarned + daEarned + hraEarned + conveyanceEarned + otherEarned,
-    grossMonthly
-  );
-  const grossEarned = Math.round((baseEarned + otPay + holidayDutyPay) * 100) / 100;
+  // ── GROSS EARNED = BASE SALARY ONLY (no OT, no holiday duty) ──
+  // Critical rule: deductions are calculated on base only. OT is clean add-on.
+  const grossEarned = Math.round(
+    Math.min(
+      basicEarned + daEarned + hraEarned + conveyanceEarned + otherEarned,
+      grossMonthly
+    ) * 100
+  ) / 100;
 
-  // Retain otHours in return for backward compatibility (hourly OT no longer
-  // added to pay — day-based OT replaces it).
+  // Retain otHours in return for backward compatibility (hourly OT no longer paid;
+  // day-based OT replaces it entirely).
   const otHours = dayCalc.ot_hours || 0;
+  const otDays = totalOTDays;
 
   // ─── PF ───
   let pfEmployee = 0, pfEmployer = 0, pfWages = 0, eps = 0;
@@ -458,8 +473,13 @@ function computeEmployeeSalary(db, employee, month, year, company) {
     salaryWarning = 'DEDUCTIONS_EXCEED_EARNINGS';
     totalDeductions = Math.round(grossEarned * 100) / 100;
   }
-  // ── NET = EARNED - DEDUCTIONS. Simple. Auditable. ──
+  // ── NET = BASE EARNED - DEDUCTIONS (no OT, no holiday duty) ──
+  // Deductions apply ONLY to base earned. OT and holiday duty are clean add-ons.
   const netSalary = Math.max(0, Math.round((grossEarned - totalDeductions) * 100) / 100);
+
+  // ── TOTAL PAYABLE = Net Salary + OT Pay + Holiday Duty Pay ──
+  // This is what the employee actually receives — clean addition after deductions.
+  const totalPayable = Math.round((netSalary + otPay + holidayDutyPay) * 100) / 100;
 
   // ─── Gross Change Detection ───
   const prevMonthGross = getPrevMonthGross(db, employee.code, month, year);
@@ -524,6 +544,10 @@ function computeEmployeeSalary(db, employee, month, year, company) {
     loanRecovery,
     totalDeductions: Math.round(totalDeductions * 100) / 100,
     netSalary,
+    // ═══ TOTAL PAYABLE = netSalary + otPay + holidayDutyPay ═══
+    // This is what the employee actually takes home. OT and holiday duty are
+    // completely outside the deduction pipeline — clean addition after net.
+    totalPayable,
     prevMonthGross, grossChanged,
     salaryHeld, holdReason,
     salaryWarning, financeRemark,
@@ -533,7 +557,10 @@ function computeEmployeeSalary(db, employee, month, year, company) {
     regularDays: Math.round(regularDays * 100) / 100,
     otDays: Math.round(otDays * 100) / 100,
     otDailyRate: Math.round(otPerDayRateDisplay * 100) / 100,
-    manualExtraDuty: 0 // kept for backward compat; verified grants are absorbed into otDays
+    punchBasedOT: Math.round(punchBasedOT * 100) / 100,
+    financeExtraDuty: Math.round(financeExtraDuty * 100) / 100,
+    otNote,
+    manualExtraDuty: 0 // kept for backward compat
   };
 }
 
@@ -550,7 +577,8 @@ function saveSalaryComputation(db, comp) {
       professional_tax, tds, advance_recovery, lop_deduction, other_deductions,
       total_deductions, net_salary,
       prev_month_gross, gross_changed, salary_held, hold_reason, loan_recovery, finance_remark,
-      is_contractor, days_in_month, regular_days, ot_days, ot_daily_rate, manual_extra_duty
+      is_contractor, days_in_month, regular_days, ot_days, ot_daily_rate, manual_extra_duty,
+      punch_based_ot, finance_extra_duty, ot_note, total_payable
     ) VALUES (
       ?, ?, ?, ?, ?, ?, ?,
       ?, ?, ?, ?, ?,
@@ -559,7 +587,8 @@ function saveSalaryComputation(db, comp) {
       ?, ?, ?, ?, ?,
       ?, ?,
       ?, ?, ?, ?, ?, ?,
-      ?, ?, ?, ?, ?, ?
+      ?, ?, ?, ?, ?, ?,
+      ?, ?, ?, ?
     )
     ON CONFLICT(employee_code, month, year, company) DO UPDATE SET
       gross_salary = excluded.gross_salary,
@@ -599,6 +628,10 @@ function saveSalaryComputation(db, comp) {
       ot_days = excluded.ot_days,
       ot_daily_rate = excluded.ot_daily_rate,
       manual_extra_duty = excluded.manual_extra_duty,
+      punch_based_ot = excluded.punch_based_ot,
+      finance_extra_duty = excluded.finance_extra_duty,
+      ot_note = excluded.ot_note,
+      total_payable = excluded.total_payable,
       is_finalised = 0
   `).run(
     comp.employeeCode, comp.month, comp.year, comp.company,
@@ -610,7 +643,8 @@ function saveSalaryComputation(db, comp) {
     comp.totalDeductions, comp.netSalary,
     comp.prevMonthGross, comp.grossChanged, comp.salaryHeld, comp.holdReason, comp.loanRecovery, comp.financeRemark || '',
     comp.isContractor ? 1 : 0, comp.daysInMonth || null, comp.regularDays || 0,
-    comp.otDays || 0, comp.otDailyRate || 0, comp.manualExtraDuty || 0
+    comp.otDays || 0, comp.otDailyRate || 0, comp.manualExtraDuty || 0,
+    comp.punchBasedOT || 0, comp.financeExtraDuty || 0, comp.otNote || '', comp.totalPayable || 0
   );
 
   // Mark advance as recovered if applicable
