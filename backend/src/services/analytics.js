@@ -9,6 +9,15 @@ const PERMANENT_DEPTS = [
   'HOUSE KEEPING', 'SECURITY', 'Sales Coordinator'
 ];
 
+/**
+ * Department name heuristic — for MIS display grouping ONLY.
+ *
+ * ⚠️ Do NOT use isContractorDept() for payroll math or any logic that
+ *    determines whether an employee gets paid Sundays, holidays, or OT.
+ *    Use isContractorForPayroll(employee) — re-exported below from
+ *    utils/employeeClassification — which honours employment_type first
+ *    and falls back to this keyword heuristic only for legacy rows.
+ */
 const CONTRACTOR_KEYWORDS = [
   'MEERA', 'KULDEEP', 'LAMBU', 'COM. HELPER', 'JIWAN', 'DAVINDER',
   'SUNNY', 'AMAR', 'BISLERI', 'CONT'
@@ -19,6 +28,10 @@ function isContractorDept(deptName) {
   const upper = deptName.toUpperCase();
   return CONTRACTOR_KEYWORDS.some(k => upper.includes(k));
 }
+
+// Re-export the payroll-grade detection so MIS/analytics code that already
+// imports from './analytics' has a single place to get the correct function.
+const { isContractorForPayroll } = require('../utils/employeeClassification');
 
 /**
  * Build a WHERE clause for date filtering.
@@ -724,5 +737,6 @@ module.exports = {
   computeDepartmentDeepDive,
   generateAlerts,
   isContractorDept,
+  isContractorForPayroll,
   isPermanentDept
 };

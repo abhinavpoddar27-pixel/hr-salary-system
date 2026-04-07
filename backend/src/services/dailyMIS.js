@@ -5,7 +5,7 @@
  * and worker-type (permanent vs contractor) breakdowns.
  */
 
-const { isContractorDept } = require('./analytics');
+const { isContractorDept, isContractorForPayroll } = require('./analytics');
 
 // Admin departments (office/admin roles)
 const ADMIN_DEPTS = ['OFFICE ADMIN', 'H.R', 'ACCOUNTS', 'Sales Coordinator', 'SECURITY', 'HOUSE KEEPING'];
@@ -128,8 +128,10 @@ function getDailySummary(db, date) {
   }
 
   // ── Total employee classification counts ──
+  // Fetches employment_type so isContractorForPayroll can honour it over the
+  // dept-keyword heuristic (e.g. COM. HELPER staff with employment_type=Permanent).
   const allActive = db.prepare(`
-    SELECT code, department FROM employees
+    SELECT code, department, employment_type, is_contractor FROM employees
     WHERE status != 'Inactive'
     AND (date_of_joining IS NULL OR date_of_joining <= ?)
     AND (date_of_exit IS NULL OR date_of_exit >= ?)
@@ -139,7 +141,7 @@ function getDailySummary(db, date) {
   for (const emp of allActive) {
     if (isAdminDept(emp.department)) totalAdmin++;
     else totalMfg++;
-    if (isContractorDept(emp.department)) totalContractor++;
+    if (isContractorForPayroll(emp)) totalContractor++;
     else totalPermanent++;
   }
 
@@ -369,9 +371,10 @@ function getDepartmentTypeBreakdown(db, date) {
 // 6. getWorkerTypeBreakdown — NEW: permanent vs contractor detail
 // ───────────────────────────────────────────────────────────────
 function getWorkerTypeBreakdown(db, date) {
-  // All active employees
+  // All active employees — fetches employment_type so isContractorForPayroll
+  // honours it over the dept-keyword heuristic.
   const allActive = db.prepare(`
-    SELECT code, name, department, designation FROM employees
+    SELECT code, name, department, designation, employment_type, is_contractor FROM employees
     WHERE status != 'Inactive'
     AND (date_of_joining IS NULL OR date_of_joining <= ?)
     AND (date_of_exit IS NULL OR date_of_exit >= ?)
@@ -391,7 +394,7 @@ function getWorkerTypeBreakdown(db, date) {
   const contractor = { total: [], present: [], departments: {} };
 
   for (const emp of allActive) {
-    const isCont = isContractorDept(emp.department);
+    const isCont = isContractorForPayroll(emp);
     const bucket = isCont ? contractor : permanent;
     bucket.total.push(emp);
     if (presentSet.has(emp.code)) bucket.present.push(emp);
