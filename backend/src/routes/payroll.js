@@ -206,17 +206,25 @@ router.post('/compute-salary', (req, res) => {
 
   const txn = db.transaction(() => {
     for (const emp of employees) {
-      const comp = computeEmployeeSalary(db, emp, parseInt(month), parseInt(year), company || '');
-      if (comp.success) {
-        saveSalaryComputation(db, comp);
-        results.push(comp);
-        if (comp.salaryHeld) held.push({ code: emp.code, name: emp.name, reason: comp.holdReason });
-      } else if (comp.excluded) {
-        excluded.push({ code: comp.employeeCode, name: emp.name, reason: comp.reason });
-      } else if (comp.silentSkip) {
-        // Zero attendance — don't show as error, just count
-      } else {
-        errors.push({ employeeCode: emp.code, error: comp.error });
+      try {
+        const comp = computeEmployeeSalary(db, emp, parseInt(month), parseInt(year), company || '');
+        if (comp.success) {
+          saveSalaryComputation(db, comp);
+          results.push(comp);
+          if (comp.salaryHeld) held.push({ code: emp.code, name: emp.name, reason: comp.holdReason });
+        } else if (comp.excluded) {
+          excluded.push({ code: comp.employeeCode, name: emp.name, reason: comp.reason });
+        } else if (comp.silentSkip) {
+          // Zero attendance — don't show as error, just count
+        } else {
+          errors.push({ employeeCode: emp.code, error: comp.error });
+        }
+      } catch (perEmpErr) {
+        // Per-employee try/catch so ONE bad employee's SQL error doesn't roll
+        // back the entire batch and leave Stage 7 stale.
+        console.error(`[compute-salary] employee ${emp.code} failed: ${perEmpErr.message}`);
+        if (perEmpErr.stack) console.error(perEmpErr.stack.split('\n').slice(0, 5).join('\n'));
+        errors.push({ employeeCode: emp.code, error: perEmpErr.message });
       }
     }
   });

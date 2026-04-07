@@ -1029,6 +1029,11 @@ router.get('/readiness-check', (req, res) => {
   const warnings = [];
   const passed = [];
 
+  // Wrap entire body so any single failing sub-query (e.g. schema drift on a
+  // newer column) doesn't 500 the whole readiness page — finance still gets
+  // the rest of the checklist plus the error noted in passed/warnings.
+  try {
+
   // BLOCKER: unapproved manual flags — UNION of three sources to match
   // /salary-manual-flags endpoint exactly. Otherwise count drifts when HR adds
   // punch_corrections without re-running salary computation.
@@ -1155,6 +1160,20 @@ router.get('/readiness-check', (req, res) => {
       passed
     }
   });
+  } catch (e) {
+    console.error('readiness-check error:', e.message);
+    if (e.stack) console.error(e.stack.split('\n').slice(0, 5).join('\n'));
+    res.json({
+      success: true,
+      data: {
+        ready: false,
+        score: 0,
+        blockers: [{ type: 'CHECK_ERROR', count: 0, severity: 'BLOCKER', detail: `Readiness check failed: ${e.message}` }],
+        warnings,
+        passed
+      }
+    });
+  }
 });
 
 // ─────────────────────────────────────────────────────────

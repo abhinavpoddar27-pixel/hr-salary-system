@@ -59,7 +59,10 @@ router.get('/', (req, res) => {
 
   const { paginateQuery } = require('../utils/pagination');
   const countQuery = `SELECT COUNT(*) as cnt FROM employees e ${where}`;
-  const sortCol = sort ? `e.${sort}` : 'e.department, e.name';
+  // Whitelist sortable columns to avoid SQL "no such column: e." errors when
+  // an unknown or empty sort field is passed in.
+  const SORTABLE = new Set(['code','name','department','designation','company','status','date_of_joining','date_of_exit','gross_salary']);
+  const sortCol = (sort && SORTABLE.has(sort)) ? `e.${sort}` : 'e.department, e.name';
   const result = paginateQuery(db, {
     baseQuery: baseQuery + ` ORDER BY ${sortCol} ${order === 'desc' ? 'DESC' : 'ASC'}`,
     countQuery, params, page, limit

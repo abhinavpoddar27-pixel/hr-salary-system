@@ -263,7 +263,11 @@ if (IS_PROD) {
 
 // ── Global error handler ──────────────────────────────────────
 app.use((err, req, res, next) => {
-  console.error('API Error:', err.message);
+  // Verbose log so we can identify which endpoint and column the SQL error
+  // came from when "no such column" surfaces in production.
+  console.error('API Error:', req.method, req.originalUrl);
+  console.error('  message:', err.message);
+  if (err.stack) console.error('  stack:', err.stack.split('\n').slice(0, 6).join('\n'));
   res.status(err.status || 500).json({
     success: false,
     error: err.message || 'Internal server error',
