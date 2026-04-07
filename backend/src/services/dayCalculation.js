@@ -25,7 +25,8 @@
  */
 
 const { parseHoursToDecimal } = require('./parser');
-const { isContractor } = require('../utils/employeeClassification');
+// isContractor is not detected here — it's passed in via options.isContractor
+// from payroll.js which uses isContractorForPayroll() at call time.
 
 /**
  * Get all dates in a month as YYYY-MM-DD strings

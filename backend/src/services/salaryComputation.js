@@ -291,8 +291,12 @@ function computeEmployeeSalary(db, employee, month, year, company) {
   //            OT is computed SEPARATELY below and added AFTER deductions.
   // Contractor: daily wage, no Sundays/holidays. earned = (payable/daysInMonth) × gross.
   //             No OT for contractors.
-  const { isContractor: checkContractor } = require('../utils/employeeClassification');
-  const isContract = checkContractor(employee) || (dayCalc.is_contractor === 1);
+  const { isContractorForPayroll } = require('../utils/employeeClassification');
+  // employment_type on the employees row is the authoritative source.
+  // Do NOT fall back to dayCalc.is_contractor — past Stage 6 runs may have
+  // been buggy and persisted wrong flags; re-checking from the live employee
+  // record self-heals without requiring Stage 6 to be re-run.
+  const isContract = isContractorForPayroll(employee);
   const actualWorkDays = daysPresent + daysHalfPresent;
   const workedFullMonth = actualWorkDays >= totalWorkingDays;
   const daysInMonth = calendarDays; // alias for readability in formulas below
@@ -785,6 +789,12 @@ function generatePayslipData(db, employeeCode, month, year) {
     salaryHeld: comp.salary_held,
     holdReason: comp.hold_reason,
     prevMonthGross: comp.prev_month_gross,
+    // Authoritative contractor flag from salary_computations — used by
+    // frontend payslipPdf to route employees into the right group without
+    // relying on inline dept keyword checks.
+    is_contractor: comp.is_contractor || 0,
+    otPay: comp.ot_pay || 0,
+    totalPayable: comp.total_payable || comp.net_salary || 0,
     generatedAt: new Date().toISOString()
   };
 }

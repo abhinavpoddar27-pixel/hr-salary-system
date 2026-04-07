@@ -61,14 +61,14 @@ router.post('/calculate-days', (req, res) => {
 
         // Detect contractor for day calc rules
         const empFull = db.prepare('SELECT * FROM employees WHERE code = ?').get(empCode);
-        const { isContractor: checkContractor } = require('../utils/employeeClassification');
+        const { isContractorForPayroll } = require('../utils/employeeClassification');
         // Get fully-approved extra duty grants for this employee
         let manualExtraDutyDays = 0;
         try {
           const grants = db.prepare("SELECT SUM(duty_days) as total FROM extra_duty_grants WHERE employee_code = ? AND month = ? AND year = ? AND status = 'APPROVED' AND finance_status = 'FINANCE_APPROVED'").get(empCode, month, year);
           manualExtraDutyDays = grants?.total || 0;
         } catch {}
-        const calcResult = calculateDays(empCode, parseInt(month), parseInt(year), company || '', records, leaveBalances, holidays, { isContractor: checkContractor(empFull), manualExtraDutyDays });
+        const calcResult = calculateDays(empCode, parseInt(month), parseInt(year), company || '', records, leaveBalances, holidays, { isContractor: isContractorForPayroll(empFull), manualExtraDutyDays });
         calcResult.employeeId = emp?.id;
         saveDayCalculation(db, calcResult);
 

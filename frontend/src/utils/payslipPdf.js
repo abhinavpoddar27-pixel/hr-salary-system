@@ -58,10 +58,18 @@ function generateSalaryRegisterHTML(payslips, companyConfig, month, year) {
       department: emp.department || '',
     };
 
-    // Determine group — check if department suggests contractor
+    // Determine group — use the authoritative is_contractor flag from the
+    // salary computation data (set by isContractorForPayroll on the backend,
+    // which honours employment_type). Fall back to dept heuristic ONLY for
+    // payslips generated from legacy data that predates the flag.
+    const scIsContractor = ps.is_contractor === 1 || ps.is_contractor === true;
     const dept = (emp.department || '').toUpperCase();
-    const isContractor = dept.includes('CONT') || dept.includes('LAMBU') || dept.includes('MEERA') ||
-      dept.includes('KULDEEP') || dept.includes('JIWAN') || dept.includes('SUNNY') || dept.includes('AMAR');
+    const isContractor = scIsContractor || (
+      ps.is_contractor === undefined && (
+        dept.includes('CONT') || dept.includes('LAMBU') || dept.includes('MEERA') ||
+        dept.includes('KULDEEP') || dept.includes('JIWAN') || dept.includes('SUNNY') || dept.includes('AMAR')
+      )
+    );
 
     if (isContractor) {
       const groupKey = emp.department || 'CONTRACTOR';
