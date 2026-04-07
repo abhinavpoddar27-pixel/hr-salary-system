@@ -332,19 +332,29 @@ function computeEmployeeSalary(db, employee, month, year, company) {
   let otNote = '';
 
   if (!isContract) {
-    // Count Sundays in this month
+    // Count Sundays in this month (kept for the diagnostic note below)
     let sundaysInMonth = 0;
     for (let d = 1; d <= daysInMonth; d++) {
       if (new Date(year, month - 1, d).getDay() === 0) sundaysInMonth++;
     }
     const standardWorkingDays = daysInMonth - sundaysInMonth;
 
-    // Condition 1: Punch-detected excess
-    // Total attended = daysPresent (Mon-Sat P) + daysWOP (Sundays/offs worked) +
-    // daysHalfPresent (½P). OT kicks in when total attended > standard working days,
-    // i.e. the employee worked additional days beyond their Mon-Sat capacity.
-    const totalAttended = daysPresent + (dayCalc.days_wop || 0) + daysHalfPresent;
-    punchBasedOT = Math.max(0, totalAttended - standardWorkingDays);
+    // ─── Payable-based OT (April 2026 fix) ───
+    // OT = payable days that exceed the calendar month length.
+    // Uncapped payable = present + halfP + WOP + paidSundays + paidHolidays
+    // (the dayCalculation caps total_payable_days at daysInMonth — anything
+    // above that overflow is OT). Crucially this counts paid holidays and
+    // paid Sundays toward OT, not just punch attendance, so an employee who
+    // worked the full month and gets a holiday or paid Sunday push above 31
+    // earns the extra day(s) as OT.
+    const dcWOP = dayCalc.days_wop || 0;
+    const dcPaidSundays = dayCalc.paid_sundays || 0;
+    const dcPaidHolidays = dayCalc.paid_holidays || 0;
+    const uncappedPayable = daysPresent + daysHalfPresent + dcWOP + dcPaidSundays + dcPaidHolidays;
+    punchBasedOT = Math.max(0, uncappedPayable - daysInMonth);
+
+    // Diagnostic only — kept for the otNote string below
+    const totalAttended = daysPresent + dcWOP + daysHalfPresent;
 
     // Condition 2: Finance-verified manual extra duty from day_corrections
     // (stored in correction_delta, flagged via correction_type='extra_duty' + finance_verified=1)
@@ -379,8 +389,8 @@ function computeEmployeeSalary(db, employee, month, year, company) {
     otPay = Math.round(totalOTDays * otDailyRate * 100) / 100;
 
     otNote = totalOTDays > 0
-      ? `Attended ${totalAttended}/${standardWorkingDays} working days. Punch OT: ${punchBasedOT}, Finance ED: ${financeExtraDuty + extraDutyDaysFromGrants}. Total OT: ${totalOTDays} days @ ₹${Math.round(otDailyRate)}/day`
-      : `Attended ${totalAttended}/${standardWorkingDays} working days. No OT.`;
+      ? `Payable ${uncappedPayable}/${daysInMonth} days (attended ${totalAttended}/${standardWorkingDays}). Payable-based OT: ${punchBasedOT}, Finance ED: ${financeExtraDuty + extraDutyDaysFromGrants}. Total OT: ${totalOTDays} days @ ₹${Math.round(otDailyRate)}/day`
+      : `Payable ${uncappedPayable}/${daysInMonth} days (attended ${totalAttended}/${standardWorkingDays}). No OT.`;
   } else {
     otNote = 'Contractor — no OT';
   }
