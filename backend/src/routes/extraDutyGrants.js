@@ -59,15 +59,31 @@ router.post('/', (req, res) => {
   res.json({ success: true, id: result.lastInsertRowid });
 });
 
+// Compute per-day OT rate using calendar days of the grant's month (HR rule:
+// gross / calendarDays — Sundays must NOT inflate the rate). Returns 0 when
+// gross is missing so callers store NULL safely.
+function computeOtPerDay(db, employeeCode, month, year) {
+  const row = db.prepare(`
+    SELECT COALESCE(e.gross_salary, ss.gross_salary, 0) AS gross
+    FROM employees e
+    LEFT JOIN salary_structures ss ON ss.employee_id = e.id
+    WHERE e.code = ?
+    ORDER BY ss.effective_from DESC LIMIT 1
+  `).get(employeeCode);
+  const gross = row?.gross || 0;
+  if (gross <= 0 || !month || !year) return 0;
+  const calendarDays = new Date(year, month, 0).getDate();
+  return calendarDays > 0 ? gross / calendarDays : 0;
+}
+
 // POST /:id/approve — HR approve
 router.post('/:id/approve', (req, res) => {
   const db = getDb();
   const grant = db.prepare('SELECT * FROM extra_duty_grants WHERE id = ? AND status = ?').get(req.params.id, 'PENDING');
   if (!grant) return res.status(404).json({ success: false, error: 'Grant not found or not pending' });
 
-  // Calculate salary impact
-  const emp = db.prepare(`SELECT ss.gross_salary FROM employees e JOIN salary_structures ss ON ss.employee_id = e.id WHERE e.code = ? ORDER BY ss.effective_from DESC LIMIT 1`).get(grant.employee_code);
-  const perDay = (emp?.gross_salary || 0) / 26;
+  // Salary impact = duty_days × (gross / calendarDays of grant month)
+  const perDay = computeOtPerDay(db, grant.employee_code, grant.month, grant.year);
   const impact = Math.round(grant.duty_days * perDay * 100) / 100;
 
   db.prepare("UPDATE extra_duty_grants SET status = 'APPROVED', approved_by = ?, approved_at = datetime('now'), salary_impact_amount = ? WHERE id = ?")
@@ -85,14 +101,45 @@ router.post('/:id/reject', (req, res) => {
   res.json({ success: true });
 });
 
-// POST /bulk-approve
+// POST /bulk-approve — HR bulk approve, also stamps salary_impact_amount
 router.post('/bulk-approve', (req, res) => {
   const db = getDb();
   const { ids } = req.body;
-  const stmt = db.prepare("UPDATE extra_duty_grants SET status = 'APPROVED', approved_by = ?, approved_at = datetime('now') WHERE id = ? AND status = 'PENDING'");
-  const txn = db.transaction(() => { for (const id of ids) stmt.run(req.user?.username || 'hr', id); });
+  const stmt = db.prepare("UPDATE extra_duty_grants SET status = 'APPROVED', approved_by = ?, approved_at = datetime('now'), salary_impact_amount = ? WHERE id = ? AND status = 'PENDING'");
+  const user = req.user?.username || 'hr';
+  const txn = db.transaction(() => {
+    for (const id of ids) {
+      const g = db.prepare('SELECT employee_code, duty_days, month, year FROM extra_duty_grants WHERE id = ?').get(id);
+      if (!g) continue;
+      const perDay = computeOtPerDay(db, g.employee_code, g.month, g.year);
+      const impact = Math.round((g.duty_days || 0) * perDay * 100) / 100;
+      stmt.run(user, impact, id);
+    }
+  });
   txn();
   res.json({ success: true, count: ids.length });
+});
+
+// POST /backfill-impact — recompute salary_impact_amount for all approved grants
+// in a given month using the new calendar-day rate. Useful one-shot after the
+// rate fix to refresh historical entries that were stamped with /26.
+router.post('/backfill-impact', (req, res) => {
+  const db = getDb();
+  const { month, year } = req.body;
+  if (!month || !year) return res.status(400).json({ success: false, error: 'month and year required' });
+  const grants = db.prepare("SELECT id, employee_code, duty_days, month, year FROM extra_duty_grants WHERE month = ? AND year = ? AND status = 'APPROVED'").all(month, year);
+  const update = db.prepare('UPDATE extra_duty_grants SET salary_impact_amount = ? WHERE id = ?');
+  let updated = 0;
+  const txn = db.transaction(() => {
+    for (const g of grants) {
+      const perDay = computeOtPerDay(db, g.employee_code, g.month, g.year);
+      const impact = Math.round((g.duty_days || 0) * perDay * 100) / 100;
+      update.run(impact, g.id);
+      updated++;
+    }
+  });
+  txn();
+  res.json({ success: true, updated });
 });
 
 // GET /finance-review

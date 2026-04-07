@@ -1211,6 +1211,32 @@ function initSchema(db) {
       UNIQUE(employee_code, grant_date, month, year)
     )
   `);
+  // Schema-drift safety: production DBs created from earlier table versions
+  // may be missing columns added later. Use safeAddColumn for every nullable
+  // field so the route queries never throw "no such column" on prod.
+  safeAddColumn('extra_duty_grants', 'company', 'TEXT');
+  safeAddColumn('extra_duty_grants', 'grant_type', "TEXT NOT NULL DEFAULT 'OVERNIGHT_STAY'");
+  safeAddColumn('extra_duty_grants', 'duty_days', 'REAL NOT NULL DEFAULT 1.0');
+  safeAddColumn('extra_duty_grants', 'verification_source', 'TEXT');
+  safeAddColumn('extra_duty_grants', 'reference_number', 'TEXT');
+  safeAddColumn('extra_duty_grants', 'remarks', 'TEXT');
+  safeAddColumn('extra_duty_grants', 'linked_attendance_id', 'INTEGER');
+  safeAddColumn('extra_duty_grants', 'original_punch_date', 'TEXT');
+  safeAddColumn('extra_duty_grants', 'status', "TEXT NOT NULL DEFAULT 'PENDING'");
+  safeAddColumn('extra_duty_grants', 'requested_by', 'TEXT');
+  safeAddColumn('extra_duty_grants', 'requested_at', 'TEXT');
+  safeAddColumn('extra_duty_grants', 'approved_by', 'TEXT');
+  safeAddColumn('extra_duty_grants', 'approved_at', 'TEXT');
+  safeAddColumn('extra_duty_grants', 'rejection_reason', 'TEXT');
+  safeAddColumn('extra_duty_grants', 'finance_status', "TEXT NOT NULL DEFAULT 'UNREVIEWED'");
+  safeAddColumn('extra_duty_grants', 'finance_reviewed_by', 'TEXT');
+  safeAddColumn('extra_duty_grants', 'finance_reviewed_at', 'TEXT');
+  safeAddColumn('extra_duty_grants', 'finance_flag_reason', 'TEXT');
+  safeAddColumn('extra_duty_grants', 'finance_notes', 'TEXT');
+  safeAddColumn('extra_duty_grants', 'salary_impact_amount', 'REAL');
+  safeAddColumn('extra_duty_grants', 'is_processed', 'INTEGER NOT NULL DEFAULT 0');
+  safeAddColumn('extra_duty_grants', 'processed_at', 'TEXT');
+
   safeCreateIndex('CREATE INDEX IF NOT EXISTS idx_edg_employee_month ON extra_duty_grants(employee_code, month, year)');
   safeCreateIndex('CREATE INDEX IF NOT EXISTS idx_edg_status ON extra_duty_grants(status, finance_status)');
 

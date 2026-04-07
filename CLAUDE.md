@@ -188,8 +188,11 @@ frontend/
 - Output contract: salary_computations row with: gross_salary, gross_earned, basic/da/hra/conveyance/other_allowances_earned, ot_pay, holiday_duty_pay, pf_employee/employer, esi_employee/employer, professional_tax, tds, advance_recovery, loan_recovery, lop_deduction, total_deductions, net_salary, salary_held, hold_reason, finance_remark
 - Downstream consumers: Finance Audit, Finance Verify, Payslip PDF, Bank NEFT export, PF ECR, ESI returns
 - Business rules:
-  - divisor = 26 (from policy_config.salary_divisor) — used for BASE salary pro-rata only
-  - earnedRatio = min(rawPayableDays / 26, 1.0) — cap is critical to prevent overcalculation
+  - divisor = 26 (from policy_config.salary_divisor) — used for BASE salary pro-rata when payableDays ≤ 26
+  - **Hybrid divisor** (April 2026 fix): `effectiveDivisor = payableDays > 26 ? calendarDays : 26`,
+    `earnedRatio = min(payableDays / effectiveDivisor, 1.0)`. Matches HR's calc:
+    Amit ₹24,000 × 28/31 = ₹21,677; Preeti ₹24,700 × 28/31 = ₹22,310; Sonu 31/31 = full;
+    SONU 70059 20/26 = ₹10,769.
   - Base components (basic/da/hra/conv/other) × earnedRatio — capped so never exceed monthly gross
   - Component scaling: if `salary_structures` component sum ≠ stated gross, scale components
     proportionally to honour stated gross (preserves existing ratios)
@@ -280,9 +283,10 @@ frontend/
 ## Section 5: Salary Calculation Engine
 - File: `backend/src/services/salaryComputation.js`
 - **Salary divisor: 26** — used for base salary pro-rata ONLY. Never change.
-- **earnedRatio formula**: `Math.min(rawPayableDays / 26, 1.0)`. The cap is critical —
-  without it, payable_days > 26 produces ratio > 1.0 and inflates all base components.
-  Applied to both contractor and permanent paths.
+- **earnedRatio formula** (hybrid divisor): `effectiveDivisor = payableDays > 26 ? calendarDays : 26`,
+  `earnedRatio = min(payableDays / effectiveDivisor, 1.0)`. Under-26 days prorate on
+  divisor 26; over-26 days prorate on calendar days of the month. Applied to both
+  contractor and permanent paths.
 - **Component scaling** (April 2026): If `salary_structures` components exist but don't
   sum to the stated gross (`employees.gross_salary` or `salary_structures.gross_salary`),
   components are scaled by `scaleFactor = statedGross / rawComponentSum` so the sum
@@ -290,8 +294,10 @@ frontend/
   percentage-based derivation from `basic_percent`/`hra_percent`.
 - **OT / Extra Duty rate** (April 2026): Uses CALENDAR DAYS, not divisor.
   `otPerDayRate = grossMonthly / calendarDays` — Sundays don't inflate the rate.
-  `otPay = otDays × otPerDayRate + otHours × (grossMonthly / (calendarDays × 8)) × otRate`
-  (both gated to workedFullMonth = true).
+  `otPay = otDays × otPerDayRate + otHours × (grossMonthly / (calendarDays × 8)) × otRate`.
+  `otDays = max(dayCalc.extra_duty_days, sum(extra_duty_grants.duty_days WHERE
+  status='APPROVED' AND finance_status='FINANCE_APPROVED'))`. **No longer gated on
+  workedFullMonth** — explicit extra duty is always paid.
 - **Holiday Duty Pay**: Also uses calendar-day rate.
 - **Professional Tax: DISABLED** (April 2026, HR directive). Hard-coded to 0 regardless of
   gross or pt_applicable flag. Column/row removed from Stage 7 UI, payslip PDF, Excel export.
@@ -299,7 +305,10 @@ frontend/
 - **Pro-rated components**: basic, da, hra, conveyance, other_allowances (× earnedRatio)
 - **Independent components**: `otPay = otDays × otPerDayRate + otHours × otHourlyRate × otRate` where
   `otPerDayRate = grossMonthly / calendarDays` and `otHourlyRate = grossMonthly / (calendarDays × 8)`;
-  `holidayDutyPay = holidayDutyDays × otPerDayRate`. Both uncapped but gated to workedFullMonth.
+  `holidayDutyPay = holidayDutyDays × otPerDayRate`. Uncapped, NOT gated on workedFullMonth.
+  `otDays` is sourced from BOTH `dayCalc.extra_duty_days` AND fully-approved
+  `extra_duty_grants` (uses the greater value) so manual grants flow into salary
+  even when Stage 6 wasn't re-run after approval.
 - **grossEarned formula**: `min(baseEarned, grossMonthly) + otPay + holidayDutyPay`
 - **PF**: 12% of `min(basic + da, 15000)` for both employee and employer. EPS split: `min(pfWageBase × 0.0833, 1250)`. Rates from `policy_config`. Gated by `salStruct.pf_applicable`.
 - **ESI**: 0.75% employee / 3.25% employer of `grossEarned`, only if `grossMonthly <= 21000` threshold. Gated by `salStruct.esi_applicable`.

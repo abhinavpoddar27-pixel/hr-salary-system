@@ -288,18 +288,23 @@ function computeEmployeeSalary(db, employee, month, year, company) {
   const totalWorkingDays = dayCalc.total_working_days || divisor;
   const daysWOP = dayCalc.days_wop || 0;
 
-  // ── Earned calculation (Issue 1 fix) ──
-  // earnedRatio = min(payableDays / divisor, 1.0) — cap prevents overcalculation
-  // when payable days (e.g. 28, 31) exceed the salary divisor (26).
+  // ── Earned calculation (hybrid divisor — Round 2 fix) ──
+  // The denominator is divisor (26) when payableDays <= 26, otherwise calendar days
+  // of the month. This way:
+  //   * 20 payable / 26 divisor   = 0.769 (under-26 → prorated on divisor)
+  //   * 28 payable / 31 calendar  = 0.903 (over-26 → prorated on calendar)
+  //   * 31 payable / 31 calendar  = 1.000 (full month → full salary)
+  //   * 26 payable / 26 divisor   = 1.000 (exactly 26 → full salary)
+  // This matches HR's verified math (Amit ₹24,000 × 28/31 = ₹21,677 etc.).
   const { isContractor: checkContractor } = require('../utils/employeeClassification');
   const isContract = checkContractor(employee) || (dayCalc.is_contractor === 1);
   const actualWorkDays = daysPresent + daysHalfPresent;
   const workedFullMonth = actualWorkDays >= totalWorkingDays;
 
-  // For contractors, rawPayableDays already includes WOP + half.
-  // For permanent staff, rawPayableDays includes paid Sundays/holidays.
-  // In both cases, cap the ratio at 1.0 — base components never exceed monthly gross.
-  const earnedRatio = Math.min((rawPayableDays || 0) / divisor, 1.0);
+  const effectiveDivisor = (rawPayableDays || 0) > divisor ? calendarDays : divisor;
+  const earnedRatio = effectiveDivisor > 0
+    ? Math.min((rawPayableDays || 0) / effectiveDivisor, 1.0)
+    : 0;
 
   const basicEarned = Math.round(basicMonthly * earnedRatio * 100) / 100;
   const daEarned = Math.round(daMonthly * earnedRatio * 100) / 100;
@@ -307,12 +312,32 @@ function computeEmployeeSalary(db, employee, month, year, company) {
   const conveyanceEarned = Math.round(conveyanceMonthly * earnedRatio * 100) / 100;
   const otherEarned = Math.round(otherMonthly * earnedRatio * 100) / 100;
 
-  // ── OT / Extra Duty Pay (Issue 4 fix) ──
-  // Day-based extra duty uses the calendar-day rate (grossMonthly / calendar days).
+  // ── OT / Extra Duty Pay (Round 2 fix) ──
+  // Day-based extra duty uses the calendar-day rate (grossMonthly / calendarDays).
   // Hourly OT uses a calendar-day hourly rate × ot_rate multiplier.
-  // Only paid for full-month employees.
-  const otHours = workedFullMonth ? (dayCalc.ot_hours || 0) : 0;
-  const otDays = workedFullMonth ? (dayCalc.extra_duty_days || 0) : 0;
+  // NO LONGER gated on workedFullMonth — extra duty days are explicit additional
+  // work and must be paid regardless of regular attendance pattern.
+  // Pull extra duty days from BOTH dayCalc.extra_duty_days AND fully-approved
+  // extra_duty_grants (whichever is greater) so manual grants always flow into
+  // salary even if Stage 6 wasn't re-run after the grant was approved.
+  const otHours = dayCalc.ot_hours || 0;
+  const extraDutyDaysFromCalc = dayCalc.extra_duty_days || 0;
+
+  let extraDutyDaysFromGrants = 0;
+  try {
+    const grantsRow = db.prepare(`
+      SELECT COALESCE(SUM(duty_days), 0) AS total_days
+      FROM extra_duty_grants
+      WHERE employee_code = ? AND month = ? AND year = ?
+        AND status = 'APPROVED'
+        AND finance_status = 'FINANCE_APPROVED'
+    `).get(employee.code, month, year);
+    extraDutyDaysFromGrants = grantsRow?.total_days || 0;
+  } catch (e) {
+    console.warn(`[OT] grants lookup failed for ${employee.code}: ${e.message}`);
+  }
+
+  const otDays = Math.max(extraDutyDaysFromCalc, extraDutyDaysFromGrants);
 
   const otDayPay = Math.round(otDays * otPerDayRate * 100) / 100;
   const otHourlyRate = calendarDays > 0 ? grossMonthly / (calendarDays * 8) : 0;
