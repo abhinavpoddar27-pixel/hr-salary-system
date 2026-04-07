@@ -808,6 +808,18 @@ function initSchema(db) {
   safeAddColumn('holidays', 'added_at', "TEXT DEFAULT (datetime('now'))");
   safeAddColumn('holidays', 'is_active', 'INTEGER DEFAULT 1');
   safeAddColumn('day_calculations', 'holiday_duty_days', 'REAL DEFAULT 0');
+
+  // ── April 2026 salary overhaul: monthly leniency model + contractor split ──
+  safeAddColumn('day_calculations', 'sunday_threshold', 'INTEGER');
+  safeAddColumn('day_calculations', 'sunday_note', 'TEXT');
+  safeAddColumn('salary_computations', 'is_contractor', 'INTEGER DEFAULT 0');
+  safeAddColumn('salary_computations', 'days_in_month', 'INTEGER');
+  safeAddColumn('salary_computations', 'regular_days', 'REAL DEFAULT 0');
+  safeAddColumn('salary_computations', 'ot_days', 'REAL DEFAULT 0');
+  safeAddColumn('salary_computations', 'ot_daily_rate', 'REAL DEFAULT 0');
+  safeAddColumn('salary_computations', 'manual_extra_duty', 'REAL DEFAULT 0');
+  safeAddColumn('day_corrections', 'correction_type', "TEXT DEFAULT 'day'");
+  safeAddColumn('day_corrections', 'finance_verified', 'INTEGER DEFAULT 0');
   safeAddColumn('salary_computations', 'holiday_duty_pay', 'REAL DEFAULT 0');
 
   db.exec(`

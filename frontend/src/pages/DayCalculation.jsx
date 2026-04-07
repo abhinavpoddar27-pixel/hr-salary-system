@@ -425,12 +425,21 @@ export default function DayCalculation() {
                 <p className="text-slate-500 mt-1">Sundays and holidays are <strong>never</strong> counted as absent.</p>
               </div>
               <div>
-                <p className="font-semibold text-slate-700 mb-1">Sunday Granting Rules</p>
-                <p>Each week (Mon–Sat), if employee worked:</p>
+                <p className="font-semibold text-slate-700 mb-1">Sunday Granting — Monthly Leniency</p>
+                <p>threshold = workingDays − 2 (leniency)</p>
                 <ul className="list-disc list-inside mt-1 space-y-0.5">
-                  <li><strong>6 days</strong> → Free paid Sunday</li>
-                  <li><strong>4–5 days</strong> → Paid Sunday but CL/EL deducted for gap</li>
-                  <li><strong>&lt;4 days</strong> → Unpaid Sunday</li>
+                  <li><strong>Present ≥ threshold</strong> → ALL Sundays paid</li>
+                  <li><strong>Present &lt; threshold</strong> → lose (threshold − present) Sundays</li>
+                </ul>
+                <p className="text-slate-500 mt-1">No CL/EL deducted from Sunday logic — leaves are managed separately.</p>
+              </div>
+              <div>
+                <p className="font-semibold text-amber-700 mb-1">Contractor Rules</p>
+                <ul className="list-disc list-inside space-y-0.5">
+                  <li>No paid Sundays (daily wage only)</li>
+                  <li>No paid holidays</li>
+                  <li>Daily rate = Gross ÷ Days in Month</li>
+                  <li>Salary = Days Present × Daily Rate</li>
                 </ul>
               </div>
               <div>
@@ -580,8 +589,19 @@ function DrillDownContent({ r, selectedMonth, selectedYear, daysInMonth, lateDed
     weeks = typeof r.week_breakdown === 'string' ? JSON.parse(r.week_breakdown) : (r.week_breakdown || [])
   } catch (e) { weeks = [] }
 
+  const isContractor = r.is_contractor === 1 || r.is_contractor === true
   return (
     <div className="space-y-4">
+      {/* Employment type badge + Sunday leniency note */}
+      <div className="flex flex-wrap items-center gap-2 text-xs">
+        <span className={clsx('px-2 py-0.5 rounded-full font-medium',
+          isContractor ? 'bg-amber-100 text-amber-800' : 'bg-blue-100 text-blue-700')}>
+          {isContractor ? '👷 Contractor (daily wage)' : '💼 Permanent'}
+        </span>
+        {r.sunday_note && (
+          <span className="text-slate-500 italic">{r.sunday_note}</span>
+        )}
+      </div>
       {/* ─── Top Summary Bar ─── */}
       <div className="flex flex-wrap gap-2">
         <DaySummaryBox label="Calendar" value={r.total_calendar_days} color="slate" subtext={`${r.total_sundays} Sun`} />

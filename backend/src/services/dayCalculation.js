@@ -164,6 +164,19 @@ function calculateDays(employeeCode, month, year, company, attendanceRecords, le
   if (contractorMode) {
     // Contractor payable = present + half + WOP (they worked those days)
     const finalPayable = Math.round((daysPresent + daysHalfPresent + daysWOP) * 100) / 100;
+    // Build a minimal weekBreakdown so the UI can still render something sane
+    const cWeekBreakdown = sundayDates.map(sundayDate => ({
+      sundayDate,
+      weekDays: [],
+      availableDays: 0,
+      workedDays: 0,
+      requiredDays: 0,
+      sundayPaid: false,
+      clUsed: 0,
+      elUsed: 0,
+      lop: 0,
+      note: 'Contractor — no Sunday pay'
+    }));
     return {
       employeeCode, month, year, company,
       totalCalendarDays: daysInMonth, totalSundays, totalHolidays: holidayCount, totalWorkingDays,
@@ -178,175 +191,68 @@ function calculateDays(employeeCode, month, year, company, attendanceRecords, le
       holidayDutyDays: Math.round(holidayDutyDays * 100) / 100,
       otHours: Math.round(otHours * 100) / 100,
       otDays: 0, lateCount,
-      weekBreakdown: '[]',
-      isContractor: 1
+      weekBreakdown: JSON.stringify(cWeekBreakdown),
+      isContractor: 1,
+      employmentType: 'Contractor',
+      sundayLeniency: null,
+      sundayThreshold: null,
+      sundayNote: 'Contractor — no Sunday pay'
     };
   }
 
   // ─────────────────────────────────────────────────────────────
-  // SUNDAY CALCULATION — Week by week (permanent employees only)
+  // PERMANENT STAFF — Monthly Leniency Model (April 2026 overhaul)
   // ─────────────────────────────────────────────────────────────
+  // Old model: week-by-week Sunday granting with CL/EL fallback + LOP shortage.
+  // New model: ONE monthly check. If effectivePresent >= (workingDays - leniency),
+  // ALL Sundays are paid. Otherwise, first N Sundays are paid where
+  // N = totalSundays - sundaysLost. No CL/EL deductions from Sunday logic;
+  // CL/EL are managed separately through the leave system.
 
-  // Running leave balances (will be deducted as we go)
-  let clBalance = (leaveBalances.CL || 0);
-  let elBalance = (leaveBalances.EL || 0);
+  const SUNDAY_LENIENCY = 2; // hardcoded — forgive up to 2 absent working days
+  const clUsed = 0; // leave deductions no longer tied to Sunday logic
+  const elUsed = 0;
+  const lopDays = 0;
+
+  // paidHolidays (non-Sunday holidays) is computed unconditionally for permanent
+  const paidHolidays = holidayNonSunday.length;
+
+  // workingDays = Mon-Sat days that are NOT holidays
+  const workingDays = daysInMonth - totalSundays - paidHolidays;
+  // effectivePresent = actual work + holidays (holidays already accrue as "free" days)
+  const effectivePresent = daysPresent + daysHalfPresent + paidHolidays;
+  const sundayThreshold = workingDays - SUNDAY_LENIENCY;
 
   let paidSundays = 0;
   let unpaidSundays = 0;
-  let clUsed = 0;
-  let elUsed = 0;
-  let lopDays = 0;
+  let sundayNote = '';
 
-  const weekBreakdown = [];
-
-  // Group Sundays with their preceding Mon-Sat week
-  for (const sundayDate of sundayDates) {
-    // Find the Mon-Sat days preceding this Sunday
-    const sundayJS = new Date(sundayDate + 'T12:00:00');
-
-    // Get Mon-Sat of the week ending on this Sunday
-    const weekDays = [];
-    for (let d = 6; d >= 1; d--) {
-      const weekDate = new Date(sundayJS);
-      weekDate.setDate(sundayJS.getDate() - d);
-      const dateStr = weekDate.toISOString().split('T')[0];
-      if (allDates.includes(dateStr)) {
-        weekDays.push(dateStr);
-      }
-    }
-
-    // Count working days for Mon-Sat of this week
-    // Exclude holiday days from the working day requirement
-    const weekWorkingDays = weekDays.filter(d => !holidayDates.has(d) && getDayOfWeek(d) !== 0);
-    const maxWorkingDays = weekWorkingDays.length; // Could be < 6 for partial first week
-
-    let weekActualWorkingDays = 0;
-    for (const d of weekWorkingDays) {
-      const rec = recordByDate[d];
-      if (!rec) {
-        // No record → absent
-        continue;
-      }
-      const status = rec.status_final || rec.status_original || '';
-      if (status === 'P' || status === 'WOP') weekActualWorkingDays += 1;
-      else if (status === '½P' || status === 'HP' || status === 'WO½P') weekActualWorkingDays += 0.5;
-    }
-
-    // Normalize: if week has < 6 available working days (month start/end),
-    // scale the requirement proportionally
-    const requiredDays = Math.min(6, maxWorkingDays);
-
-    let weekClUsed = 0;
-    let weekElUsed = 0;
-    let weekLOP = 0;
-    let sundayPaid = false;
-    let sundayNote = '';
-
-    // If the employee actually worked on this Sunday (WOP), it's always paid
-    // — you can't mark a day unpaid when the person came to work
-    const sundayRec = recordByDate[sundayDate];
-    const sundayStatus = sundayRec ? (sundayRec.status_final || sundayRec.status_original || '') : '';
-    const workedOnSunday = sundayStatus === 'WOP' || sundayStatus === 'P' || sundayStatus === 'WO½P';
-
-    if (workedOnSunday) {
-      sundayPaid = true;
-      sundayNote = `Worked on Sunday (${sundayStatus}) → Paid Sunday`;
-
-    } else if (weekActualWorkingDays >= requiredDays) {
-      // Full week worked — paid Sunday, no deductions
-      sundayPaid = true;
-      sundayNote = `Worked ${weekActualWorkingDays}/${requiredDays} days → Paid Sunday`;
-
-    } else if (weekActualWorkingDays >= 4 || (requiredDays < 6 && weekActualWorkingDays >= Math.max(2, requiredDays - 2))) {
-      const shortage = requiredDays - weekActualWorkingDays;
-
-      if (clBalance >= shortage) {
-        // Use CL
-        weekClUsed = shortage;
-        clBalance -= shortage;
-        clUsed += shortage;
-        sundayPaid = true;
-        sundayNote = `Worked ${weekActualWorkingDays}/${requiredDays} → Paid Sunday. CL deducted: ${shortage.toFixed(1)}`;
-
-      } else if (clBalance + elBalance >= shortage) {
-        // Use CL first, then EL
-        const clDeduct = Math.min(clBalance, shortage);
-        const elDeduct = shortage - clDeduct;
-        weekClUsed = clDeduct;
-        weekElUsed = elDeduct;
-        clBalance -= clDeduct;
-        elBalance -= elDeduct;
-        clUsed += clDeduct;
-        elUsed += elDeduct;
-        sundayPaid = true;
-        sundayNote = `Worked ${weekActualWorkingDays}/${requiredDays} → Paid Sunday. CL: ${clDeduct.toFixed(1)}, EL: ${elDeduct.toFixed(1)} deducted`;
-
-      } else if (shortage <= 1.5) {
-        // Grant Sunday but mark LOP
-        weekLOP = shortage - clBalance - elBalance;
-        const clDeduct = Math.min(clBalance, shortage);
-        const elDeduct = Math.min(elBalance, shortage - clDeduct);
-        weekClUsed = clDeduct;
-        weekElUsed = elDeduct;
-        clBalance -= clDeduct;
-        elBalance -= elDeduct;
-        clUsed += clDeduct;
-        elUsed += elDeduct;
-        lopDays += weekLOP;
-        sundayPaid = true;
-        sundayNote = `Worked ${weekActualWorkingDays}/${requiredDays} → Paid Sunday. LOP: ${weekLOP.toFixed(1)} day(s)`;
-
-      } else {
-        // Unpaid Sunday
-        sundayPaid = false;
-        sundayNote = `Worked ${weekActualWorkingDays}/${requiredDays} → Unpaid Sunday (shortage ${shortage.toFixed(1)} > 1.5, no leave balance)`;
-      }
-    } else {
-      // Less than 4 days — unpaid Sunday
-      sundayPaid = false;
-      sundayNote = `Worked ${weekActualWorkingDays}/${requiredDays} days → Unpaid Sunday`;
-    }
-
-    if (sundayPaid) paidSundays++;
-    else unpaidSundays++;
-
-    weekBreakdown.push({
-      sundayDate,
-      weekDays: weekWorkingDays,
-      availableDays: maxWorkingDays,
-      workedDays: weekActualWorkingDays,
-      requiredDays,
-      sundayPaid,
-      clUsed: weekClUsed,
-      elUsed: weekElUsed,
-      lop: weekLOP,
-      note: sundayNote
-    });
+  if (effectivePresent >= sundayThreshold) {
+    paidSundays = totalSundays;
+    unpaidSundays = 0;
+    sundayNote = `Present ${effectivePresent}/${workingDays} (threshold ${sundayThreshold}) → All ${totalSundays} Sundays paid`;
+  } else {
+    const sundaysLost = Math.min(totalSundays, sundayThreshold - effectivePresent);
+    paidSundays = Math.max(0, totalSundays - sundaysLost);
+    unpaidSundays = totalSundays - paidSundays;
+    sundayNote = `Present ${effectivePresent}/${workingDays} (threshold ${sundayThreshold}) → ${sundaysLost} Sunday(s) lost, ${paidSundays} paid`;
   }
 
-  // ── Shift swap / make-up day adjustment ──────────────────────
-  // In 24/7 operations, employees swap shifts/offs with each other.
-  // If total attendance (P + WOP + ½P) for the month meets or exceeds
-  // the required working days, waive ALL per-week LOP — the employee
-  // made up the days in other weeks or on weekly offs.
-  // Also waive if the resulting payable days would equal or exceed the month days.
-  const totalWorkedDays = daysPresent + daysWOP + daysHalfPresent;
-  const projectedPayable = totalWorkedDays + paidSundays + (holidayNonSunday.length) - lopDays;
-  if (lopDays > 0 && (totalWorkedDays >= totalWorkingDays || projectedPayable + lopDays >= daysInMonth)) {
-    lopDays = 0;
-    // Also clear per-week LOP entries in breakdown
-    for (const wb of weekBreakdown) {
-      if (wb.lop > 0) {
-        wb.lop = 0;
-        wb.note = wb.note.replace(/LOP:.*day\(s\)/, 'LOP waived (monthly attendance met)');
-      }
-    }
-  }
-
-  // Paid holidays
-  const paidHolidays = holidayNonSunday.length;
-
-  // ── Payable & Extra Duty Calculation ───────────────────────
+  // Build weekBreakdown for the UI: one entry per Sunday, first N paid, rest not
+  const weekBreakdown = sundayDates.map((sundayDate, i) => ({
+    sundayDate,
+    weekDays: [],
+    availableDays: workingDays,
+    workedDays: effectivePresent,
+    requiredDays: sundayThreshold,
+    sundayPaid: i < paidSundays,
+    clUsed: 0,
+    elUsed: 0,
+    lop: 0,
+    note: i < paidSundays
+      ? `Paid (monthly leniency: ${effectivePresent} ≥ ${sundayThreshold})`
+      : `Unpaid (monthly leniency: ${effectivePresent} < ${sundayThreshold}, Sunday #${i+1} of ${totalSundays})`
+  }));
   // daysPresent = regular working day attendance (P status only, excludes WOP)
   // daysWOP = weekly off worked (WOP status, Sundays/holidays worked)
   // Gross earned = all working/attendance days + paid offs
@@ -388,7 +294,13 @@ function calculateDays(employeeCode, month, year, company, attendanceRecords, le
     otDays: Math.round(otHours / 12 * 100) / 100,
     lateCount,
     holidayDutyDays: Math.round(holidayDutyDays * 100) / 100,
-    weekBreakdown: JSON.stringify(weekBreakdown)
+    weekBreakdown: JSON.stringify(weekBreakdown),
+    // ── Monthly leniency model fields (permanent employees) ──
+    isContractor: 0,
+    employmentType: 'Permanent',
+    sundayLeniency: SUNDAY_LENIENCY,
+    sundayThreshold,
+    sundayNote
   };
 }
 
@@ -403,14 +315,16 @@ function saveDayCalculation(db, calcResult) {
       days_present, days_half_present, days_wop, days_absent,
       paid_sundays, unpaid_sundays, paid_holidays,
       cl_used, el_used, sl_used, lop_days,
-      total_payable_days, extra_duty_days, ot_hours, ot_days, late_count, holiday_duty_days, week_breakdown
+      total_payable_days, extra_duty_days, ot_hours, ot_days, late_count, holiday_duty_days, week_breakdown,
+      is_contractor, sunday_threshold, sunday_note
     ) VALUES (
       ?, ?, ?, ?,
       ?, ?, ?, ?,
       ?, ?, ?, ?,
       ?, ?, ?,
       ?, ?, ?, ?,
-      ?, ?, ?, ?, ?, ?, ?
+      ?, ?, ?, ?, ?, ?, ?,
+      ?, ?, ?
     )
     ON CONFLICT(employee_code, month, year, company) DO UPDATE SET
       total_calendar_days = excluded.total_calendar_days,
@@ -435,6 +349,9 @@ function saveDayCalculation(db, calcResult) {
       late_count = excluded.late_count,
       holiday_duty_days = excluded.holiday_duty_days,
       week_breakdown = excluded.week_breakdown,
+      is_contractor = excluded.is_contractor,
+      sunday_threshold = excluded.sunday_threshold,
+      sunday_note = excluded.sunday_note,
       is_approved = 0
   `);
 
@@ -446,7 +363,10 @@ function saveDayCalculation(db, calcResult) {
     calcResult.clUsed, calcResult.elUsed, calcResult.slUsed, calcResult.lopDays,
     calcResult.totalPayableDays, calcResult.extraDutyDays || 0, calcResult.otHours, calcResult.otDays,
     calcResult.lateCount, calcResult.holidayDutyDays || 0,
-    calcResult.weekBreakdown
+    calcResult.weekBreakdown,
+    calcResult.isContractor ? 1 : 0,
+    calcResult.sundayThreshold !== undefined && calcResult.sundayThreshold !== null ? calcResult.sundayThreshold : null,
+    calcResult.sundayNote || ''
   );
 
   return calcResult;

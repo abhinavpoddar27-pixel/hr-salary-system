@@ -518,11 +518,24 @@ export default function SalaryComputation() {
                             </div>
                           </div>
                         </td>
-                        <td className="text-slate-500">{s.department}</td>
-                        <td className="text-center font-mono">{s.payable_days}</td>
+                        <td className="text-slate-500">
+                          {s.department}
+                          {s.is_contractor ? <span className="ml-1 text-[9px] px-1 py-0.5 rounded bg-amber-100 text-amber-700">CONT</span> : null}
+                        </td>
+                        <td className="text-center font-mono">
+                          {s.payable_days}
+                          {(s.ot_days || 0) > 0 && (
+                            <div className="text-[9px] text-cyan-600">{s.regular_days || s.payable_days}+{s.ot_days} OT</div>
+                          )}
+                        </td>
                         <td className="font-mono">{fmtINR(s.gross_salary)}</td>
                         <td className="font-mono">{fmtINR(s.gross_earned)}</td>
-                        <td className="font-mono text-cyan-600">{s.ot_pay > 0 ? fmtINR(s.ot_pay) : '—'}</td>
+                        <td className="font-mono text-cyan-600">
+                          {s.ot_pay > 0 ? fmtINR(s.ot_pay) : '—'}
+                          {(s.ot_days || 0) > 0 && s.ot_daily_rate > 0 && (
+                            <div className="text-[9px] text-slate-400">{s.ot_days}×{fmtINR(s.ot_daily_rate)}</div>
+                          )}
+                        </td>
                         <td className="text-indigo-600 font-mono">{fmtINR(s.pf_employee)}</td>
                         <td className="text-purple-600 font-mono">{fmtINR(s.esi_employee)}</td>
                         <td className="font-mono">{fmtINR(s.advance_recovery)}</td>
