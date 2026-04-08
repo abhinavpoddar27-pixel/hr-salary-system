@@ -91,14 +91,29 @@ function countWorkingDays(dayRecords) {
  * @param {number}  options.weeklyOffDay   0=Sun … 6=Sat (default 0)
  * @param {string}  options.employmentType Permanent / Contractor / Worker / SILP / …
  * @param {number}  options.manualExtraDutyDays
+ * @param {string}  options.dateOfJoining  YYYY-MM-DD — pre-DOJ days excluded from
+ *                                         working days, weekly offs, holidays, absences
  */
 function calculateDays(employeeCode, month, year, company, attendanceRecords, leaveBalances, holidays, options = {}) {
   const contractorMode = options.isContractor || false;
   const weeklyOffDay = Number.isInteger(options.weeklyOffDay) ? options.weeklyOffDay : 0;
   const employmentType = options.employmentType || (contractorMode ? 'Contractor' : 'Permanent');
 
+  // ── DOJ-based filtering (April 2026) ──
+  // Employees who joined AFTER a date must NOT receive paid credit for any
+  // holiday/weekly off/working day before their DOJ. Pre-DOJ days are also
+  // never counted as absences.
+  // dateOfJoining is YYYY-MM-DD; null = legacy / no filtering.
+  const dateOfJoining = options.dateOfJoining || null;
+  const isPreDOJ = (dateStr) => dateOfJoining && dateStr < dateOfJoining;
+
   const allDates = getMonthDates(month, year);
   const daysInMonth = allDates.length;
+
+  // Eligible dates = on/after DOJ. For most employees this == allDates.
+  const eligibleDates = dateOfJoining ? allDates.filter(d => d >= dateOfJoining) : allDates;
+  const eligibleCalendarDays = eligibleDates.length;
+  const isMidMonthJoiner = eligibleCalendarDays > 0 && eligibleCalendarDays < daysInMonth;
 
   // ── Build date → attendance record map (skip night-shift OUT-only rows) ──
   const recordByDate = {};
@@ -119,21 +134,29 @@ function calculateDays(employeeCode, month, year, company, attendanceRecords, le
   });
   const holidayDates = new Set(applicableHolidays.map(h => h.date));
 
-  // ── Weekly off dates (generalised per employee) ──
-  const weeklyOffDates = allDates.filter(d => getDayOfWeek(d) === weeklyOffDay);
+  // ── Weekly off dates (generalised per employee, ELIGIBLE only) ──
+  // Pre-DOJ weekly offs do not count — employee was not yet hired.
+  const weeklyOffDates = eligibleDates.filter(d => getDayOfWeek(d) === weeklyOffDay);
   const totalWeeklyOffs = weeklyOffDates.length;
 
   // ── Holidays that are NOT on the employee's weekly off day ──
+  // Holidays before DOJ are excluded from paid credit (mid-month joiner rule).
   const holidayNonWeeklyOff = [];
+  let holidaysBeforeDOJ = 0;
   for (const hDate of holidayDates) {
-    if (allDates.includes(hDate) && getDayOfWeek(hDate) !== weeklyOffDay) {
+    if (!allDates.includes(hDate)) continue;
+    if (getDayOfWeek(hDate) === weeklyOffDay) continue;
+    if (isPreDOJ(hDate)) {
+      holidaysBeforeDOJ++;
+    } else {
       holidayNonWeeklyOff.push(hDate);
     }
   }
   const holidayCount = holidayNonWeeklyOff.length;
 
-  // workingDays = Mon-Sat-equivalent (calendar days minus WOs minus applicable holidays)
-  const workingDays = daysInMonth - totalWeeklyOffs - holidayCount;
+  // workingDays = Mon-Sat-equivalent (eligible calendar days minus WOs minus applicable holidays)
+  // For mid-month joiners eligibleCalendarDays < daysInMonth.
+  const workingDays = eligibleCalendarDays - totalWeeklyOffs - holidayCount;
 
   // ── Attendance loop ──
   let daysPresent = 0;
@@ -145,6 +168,10 @@ function calculateDays(employeeCode, month, year, company, attendanceRecords, le
   let lateCount = 0;
 
   for (const dateStr of allDates) {
+    // Skip dates before DOJ — employee had not joined yet, so absences,
+    // weekly offs and holidays in this range do not count for them.
+    if (isPreDOJ(dateStr)) continue;
+
     const isWeeklyOff = getDayOfWeek(dateStr) === weeklyOffDay;
     const isHoliday = holidayDates.has(dateStr);
 
@@ -198,7 +225,7 @@ function calculateDays(employeeCode, month, year, company, attendanceRecords, le
     }));
     return {
       employeeCode, month, year, company,
-      totalCalendarDays: daysInMonth,
+      totalCalendarDays: eligibleCalendarDays,
       weeklyOffDay,
       totalWeeklyOffs,
       totalSundays: totalWeeklyOffs,  // backward compat
@@ -232,7 +259,11 @@ function calculateDays(employeeCode, month, year, company, attendanceRecords, le
       employmentType: 'Contractor',
       sundayLeniency: null,
       sundayThreshold: null,
-      sundayNote: 'Contractor — no paid weekly offs'
+      sundayNote: 'Contractor — no paid weekly offs',
+      // DOJ visibility (April 2026)
+      dateOfJoining,
+      holidaysBeforeDOJ,
+      isMidMonthJoiner: isMidMonthJoiner ? 1 : 0
     };
   }
 
@@ -305,7 +336,12 @@ function calculateDays(employeeCode, month, year, company, attendanceRecords, le
 
   return {
     employeeCode, month, year, company,
-    totalCalendarDays: daysInMonth,
+    totalCalendarDays: eligibleCalendarDays,
+
+    // DOJ visibility (April 2026)
+    dateOfJoining,
+    holidaysBeforeDOJ,
+    isMidMonthJoiner: isMidMonthJoiner ? 1 : 0,
 
     // New weekly off fields
     weeklyOffDay,
@@ -376,7 +412,8 @@ function saveDayCalculation(db, calcResult) {
       total_payable_days, extra_duty_days, ot_hours, ot_days, late_count, holiday_duty_days, week_breakdown,
       is_contractor, sunday_threshold, sunday_note,
       weekly_off_day, base_entitlement, total_absences, effective_present,
-      days_per_weekly_off, weekly_off_threshold, weekly_off_tier, weekly_off_note
+      days_per_weekly_off, weekly_off_threshold, weekly_off_tier, weekly_off_note,
+      date_of_joining, holidays_before_doj, is_mid_month_joiner
     ) VALUES (
       ?, ?, ?, ?,
       ?, ?, ?, ?,
@@ -386,7 +423,8 @@ function saveDayCalculation(db, calcResult) {
       ?, ?, ?, ?, ?, ?, ?,
       ?, ?, ?,
       ?, ?, ?, ?,
-      ?, ?, ?, ?
+      ?, ?, ?, ?,
+      ?, ?, ?
     )
     ON CONFLICT(employee_code, month, year, company) DO UPDATE SET
       total_calendar_days = excluded.total_calendar_days,
@@ -422,6 +460,9 @@ function saveDayCalculation(db, calcResult) {
       weekly_off_threshold = excluded.weekly_off_threshold,
       weekly_off_tier = excluded.weekly_off_tier,
       weekly_off_note = excluded.weekly_off_note,
+      date_of_joining = excluded.date_of_joining,
+      holidays_before_doj = excluded.holidays_before_doj,
+      is_mid_month_joiner = excluded.is_mid_month_joiner,
       is_approved = 0
   `);
 
@@ -444,7 +485,10 @@ function saveDayCalculation(db, calcResult) {
     calcResult.daysPerWeeklyOff ?? 0,
     calcResult.weeklyOffThreshold !== undefined && calcResult.weeklyOffThreshold !== null ? calcResult.weeklyOffThreshold : null,
     calcResult.weeklyOffTier || '',
-    calcResult.weeklyOffNote || ''
+    calcResult.weeklyOffNote || '',
+    calcResult.dateOfJoining || null,
+    calcResult.holidaysBeforeDOJ || 0,
+    calcResult.isMidMonthJoiner ? 1 : 0
   );
 
   return calcResult;

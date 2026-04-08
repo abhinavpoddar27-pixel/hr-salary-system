@@ -878,6 +878,12 @@ function initSchema(db) {
   safeAddColumn('day_calculations', 'weekly_off_tier', 'TEXT');
   safeAddColumn('day_calculations', 'weekly_off_note', 'TEXT');
 
+  // ── April 2026: DOJ-based holiday eligibility ──
+  // Pre-DOJ holidays must NOT be paid for new joiners. Persisted for audit + finance review.
+  safeAddColumn('day_calculations', 'date_of_joining', 'TEXT');
+  safeAddColumn('day_calculations', 'holidays_before_doj', 'INTEGER DEFAULT 0');
+  safeAddColumn('day_calculations', 'is_mid_month_joiner', 'INTEGER DEFAULT 0');
+
   // ── Phase 1: Data integrity & deduplication ─────────────────────
 
   // monthly_imports: track reimports

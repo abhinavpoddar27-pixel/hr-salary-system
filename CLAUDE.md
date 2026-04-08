@@ -167,8 +167,8 @@ frontend/
 - Service: `backend/src/services/dayCalculation.js` → `calculateDays(empCode, month, year, company, records, leaveBalances, holidays, options)`, `saveDayCalculation()`
 - Tables read: `attendance_processed`, `holidays`, `leave_balances`, `employees`, `extra_duty_grants` (manual grants with both approvals)
 - Tables written: `day_calculations` (one row per employee per month per company)
-- Input contract: Stages 1-5 complete; `is_contractor` flag set on employee
-- Output contract: `day_calculations` row with: total_payable_days, days_present, days_half_present, days_wop, days_absent, paid_sundays, paid_holidays, lop_days, ot_hours, extra_duty_days, holiday_duty_days, week_breakdown (JSON)
+- Input contract: Stages 1-5 complete; `is_contractor` flag set on employee; `employees.date_of_joining` set for new joiners
+- Output contract: `day_calculations` row with: total_payable_days, days_present, days_half_present, days_wop, days_absent, paid_sundays, paid_holidays, lop_days, ot_hours, extra_duty_days, holiday_duty_days, week_breakdown (JSON), date_of_joining, holidays_before_doj, is_mid_month_joiner
 - Downstream consumers: Stage 7 salary computation, Finance Audit, Reports
 - Business rules:
   - Sunday rule (permanent only): worked >=6 Mon-Sat → paid Sunday; 4-5 → CL/EL fallback or LOP if shortage <=1.5; <4 → unpaid Sunday
@@ -177,7 +177,14 @@ frontend/
   - Contractor mode: payable = present + WOP + halfPresent (no Sunday eligibility, no CL/EL)
   - LOP waived if total worked days >= total working days OR rawPayableDays >= calendar days
   - Manual extra duty grants added when both HR + Finance approved
-- Edge cases: Cross-month night shifts, holidays on Sundays, partial weeks at month boundary
+  - **DOJ-based holiday eligibility (April 2026)**: pre-DOJ dates are skipped in
+    the attendance loop (no absent), pre-DOJ holidays are excluded from
+    `paidHolidays` (counted in `holidaysBeforeDOJ`), pre-DOJ weekly offs are
+    excluded from `totalWeeklyOffs`, and `totalCalendarDays`/`totalWorkingDays`
+    are scoped to DOJ→month-end. `dateOfJoining` is threaded via
+    `options.dateOfJoining` (`null` ⇒ legacy / no filtering, all backward compat).
+    `is_mid_month_joiner=1` flags rows for finance review.
+- Edge cases: Cross-month night shifts, holidays on Sundays, partial weeks at month boundary, mid-month joiners (pre-DOJ days never counted), DOJ-on-holiday (eligible), DOJ-on-weekly-off (weekly off counts), returning employees (DOJ in past ⇒ no-op)
 
 ## Stage 7: Salary Computation
 - Route: `backend/src/routes/payroll.js` → `POST /compute-salary`, `GET /salary-register`, `POST /finalise`, `GET /payslip/:code`, `GET /salary-slip-excel`
@@ -217,7 +224,7 @@ frontend/
 
 ## Consumer: Finance Verification
 - Route: `backend/src/routes/financeVerification.js` → 11 endpoints (`/dashboard`, `/employees`, `/employee/:code`, `/red-flags`, `/status`, `/bulk-verify`, `/comment`, `/comments`, `/comment/:id/resolve`, `/signoff`, `/signoff-status`)
-- Service: `backend/src/services/financeRedFlags.js` → `detectRedFlags()` with 8 detectors
+- Service: `backend/src/services/financeRedFlags.js` → `detectRedFlags()` with 9 detectors (incl. `doj_holiday_exclusion` for mid-month joiners)
 - Tables read: `salary_computations`, `day_calculations`, `salary_advances`, `salary_structures`, `employees`, `finance_audit_status`, `finance_audit_comments`
 - Tables written: `finance_audit_status`, `finance_audit_comments`, `finance_month_signoff`
 - What it produces: 3-tab dashboard (Audit Dashboard, Employee Review, Red Flags) + sign-off workflow

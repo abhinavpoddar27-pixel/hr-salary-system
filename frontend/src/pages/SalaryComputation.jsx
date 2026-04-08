@@ -60,8 +60,18 @@ export default function SalaryComputation() {
     if (filterView === 'changed') filtered = filtered.filter(s => s.gross_changed)
     if (filterView === 'active') filtered = filtered.filter(s => !s.salary_held)
     if (filterView === 'returning') filtered = filtered.filter(s => s.was_left_returned)
+    if (filterView === 'newjoiners') {
+      filtered = filtered.filter(s => {
+        if (!s?.date_of_joining) return false
+        const doj = new Date(s.date_of_joining + 'T12:00:00')
+        if (isNaN(doj)) return false
+        const ps = new Date(year, month - 1, 1)
+        const pe = new Date(year, month, 0)
+        return doj >= ps && doj <= pe
+      })
+    }
     return filtered
-  }, [allSalaries, filterDept, filterView, searchQuery])
+  }, [allSalaries, filterDept, filterView, searchQuery, month, year])
 
   const [computeResult, setComputeResult] = useState(null)
   const computeMutation = useMutation({
@@ -181,6 +191,25 @@ export default function SalaryComputation() {
   const heldCount = allSalaries.filter(s => s.salary_held).length
   const changedCount = allSalaries.filter(s => s.gross_changed).length
   const returningCount = allSalaries.filter(s => s.was_left_returned).length
+
+  // ── DOJ helpers (April 2026) ──────────────────────────────────
+  // A "new joiner" is anyone who joined within the current period and
+  // therefore got pre-DOJ holidays excluded from their pay.
+  const isNewJoinerForPeriod = (s) => {
+    if (!s?.date_of_joining) return false
+    const doj = new Date(s.date_of_joining + 'T12:00:00')
+    if (isNaN(doj)) return false
+    const periodStart = new Date(year, month - 1, 1)
+    const periodEnd = new Date(year, month, 0)
+    return doj >= periodStart && doj <= periodEnd
+  }
+  const fmtDOJ = (iso) => {
+    if (!iso) return '—'
+    const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(iso)
+    if (!m) return iso
+    return `${m[3]}/${m[2]}/${m[1]}`
+  }
+  const newJoinerCount = allSalaries.filter(isNewJoinerForPeriod).length
 
   return (
     <div className="animate-fade-in">
@@ -384,6 +413,7 @@ export default function SalaryComputation() {
                 { key: 'held', label: 'Held', count: heldCount },
                 { key: 'changed', label: 'Changed', count: changedCount },
                 ...(returningCount > 0 ? [{ key: 'returning', label: 'Returning', count: returningCount }] : []),
+                ...(newJoinerCount > 0 ? [{ key: 'newjoiners', label: 'New Joiners', count: newJoinerCount }] : []),
               ].map(f => (
                 <button key={f.key}
                   onClick={() => setFilterView(f.key)}
@@ -462,6 +492,7 @@ export default function SalaryComputation() {
                   <tr>
                     <th className="cursor-pointer select-none" onClick={() => toggleSort('employee_name')}>Emp{sortIndicator('employee_name')}</th>
                     <th className="cursor-pointer select-none" onClick={() => toggleSort('department')}>Dept{sortIndicator('department')}</th>
+                    <th className="cursor-pointer select-none" onClick={() => toggleSort('date_of_joining')} title="Date of Joining">DOJ{sortIndicator('date_of_joining')}</th>
                     <th className="cursor-pointer select-none text-center" onClick={() => toggleSort('payable_days')}>Days{sortIndicator('payable_days')}</th>
                     <th className="cursor-pointer select-none" onClick={() => toggleSort('gross_salary')}>Gross{sortIndicator('gross_salary')}</th>
                     <th className="cursor-pointer select-none" onClick={() => toggleSort('gross_earned')}>Earned{sortIndicator('gross_earned')}</th>
@@ -506,6 +537,12 @@ export default function SalaryComputation() {
                                   Returning — was previously marked as Left
                                 </div>
                               ) : null}
+                              {isNewJoinerForPeriod(s) ? (
+                                <div className="text-[10px] mt-0.5 px-1.5 py-0.5 rounded bg-emerald-50 text-emerald-700 border border-emerald-200 inline-block">
+                                  New Joiner — DOJ {fmtDOJ(s.date_of_joining)}
+                                  {s.holidays_before_doj > 0 && ` (${s.holidays_before_doj} holiday${s.holidays_before_doj > 1 ? 's' : ''} excluded)`}
+                                </div>
+                              ) : null}
                               {s.salary_held ? (
                                 <div className="text-[10px] mt-0.5 px-1.5 py-0.5 rounded bg-red-50 text-red-700 border border-red-200 inline-block">
                                   Held: {s.hold_reason}
@@ -529,6 +566,9 @@ export default function SalaryComputation() {
                             const isCont = empType ? empType.includes('contract') : !!s.is_contractor;
                             return isCont ? <span className="ml-1 text-[9px] px-1 py-0.5 rounded bg-amber-100 text-amber-700">CONT</span> : null;
                           })()}
+                        </td>
+                        <td className="text-slate-500 font-mono text-[10px]" title={s.date_of_joining || ''}>
+                          {fmtDOJ(s.date_of_joining)}
                         </td>
                         <td className="text-center font-mono">
                           {s.payable_days}
@@ -583,7 +623,7 @@ export default function SalaryComputation() {
                         </td>
                       </tr>
                       {showDetails === s.employee_code && (
-                        <DrillDownRow colSpan={14}>
+                        <DrillDownRow colSpan={15}>
                           <EmployeeQuickView
                             employeeCode={s.employee_code}
                             contextContent={
@@ -626,7 +666,7 @@ export default function SalaryComputation() {
                 </tbody>
                 <tfoot>
                   <tr className="bg-slate-50 font-bold text-xs">
-                    <td colSpan={3}>TOTAL ({salaries.length})</td>
+                    <td colSpan={4}>TOTAL ({salaries.length})</td>
                     <td className="font-mono">{fmtINR(salaries.reduce((s, r) => s + (r.gross_salary || 0), 0))}</td>
                     <td className="font-mono">{fmtINR(salaries.reduce((s, r) => s + (r.gross_earned || 0), 0))}</td>
                     <td className="font-mono text-cyan-600">{fmtINR(salaries.reduce((s, r) => s + (r.ot_pay || 0), 0))}</td>

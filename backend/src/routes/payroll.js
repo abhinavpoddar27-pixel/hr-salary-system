@@ -79,7 +79,10 @@ router.post('/calculate-days', (req, res) => {
             isContractor: isContractorForPayroll(empFull),
             weeklyOffDay: empFull?.weekly_off_day ?? 0,
             employmentType: empFull?.employment_type || 'Permanent',
-            manualExtraDutyDays
+            manualExtraDutyDays,
+            // DOJ-based holiday eligibility (April 2026): mid-month joiners
+            // must NOT receive paid credit for holidays before their DOJ.
+            dateOfJoining: empFull?.date_of_joining || null
           }
         );
         calcResult.employeeId = emp?.id;
@@ -287,9 +290,11 @@ router.get('/salary-register', (req, res) => {
            COALESCE(NULLIF(e.department, ''), ar_name.department) as department,
            e.designation, e.employment_type, e.is_contractor as employee_is_contractor,
            e.bank_account, e.ifsc, e.was_left_returned, e.status as employee_status,
+           e.date_of_joining,
            dc.total_payable_days, dc.days_present, dc.days_absent, dc.lop_days, dc.paid_sundays,
            dc.days_half_present, dc.ot_hours,
-           dc.late_count, dc.late_deduction_days, dc.late_deduction_remark
+           dc.late_count, dc.late_deduction_days, dc.late_deduction_remark,
+           dc.holidays_before_doj, dc.is_mid_month_joiner
     FROM salary_computations sc
     LEFT JOIN employees e ON sc.employee_code = e.code
     LEFT JOIN day_calculations dc ON sc.employee_code = dc.employee_code AND sc.month = dc.month AND sc.year = dc.year
@@ -756,16 +761,23 @@ router.get('/salary-slip-excel', (req, res) => {
   const wb = XLSX.utils.book_new();
 
   // ── Sheet 1: SUMMARY ──────────────────────────────────────
+  const fmtDOJ = (iso) => {
+    if (!iso) return '';
+    const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(iso);
+    return m ? `${m[3]}/${m[2]}/${m[1]}` : iso;
+  };
+
   const summaryData = [
     [companyName],
     [`SALARY SUMMARY — ${MONTHS[parseInt(month)]} ${year}`],
     [],
-    ['S.No', 'EMP', 'NAME', 'DEPARTMENT', 'DESIGNATION', 'GROSS', 'EARNED', 'PF', 'ESI', 'ADVANCE', 'LOAN', 'LOP', 'TOT DED', 'NET PAYABLE', 'DAYS']
+    ['S.No', 'EMP', 'NAME', 'DEPARTMENT', 'DESIGNATION', 'DOJ', 'GROSS', 'EARNED', 'PF', 'ESI', 'ADVANCE', 'LOAN', 'LOP', 'TOT DED', 'NET PAYABLE', 'DAYS']
   ];
 
   rows.forEach((r, i) => {
     summaryData.push([
       i + 1, r.employee_code, r.name || '', r.department || '', r.designation || '',
+      fmtDOJ(r.date_of_joining),
       r.gross_salary || 0, r.gross_earned || 0,
       r.pf_employee || 0, r.esi_employee || 0,
       r.advance_recovery || 0, r.loan_recovery || 0, r.lop_deduction || 0,
@@ -783,7 +795,7 @@ router.get('/salary-slip-excel', (req, res) => {
   }, { gross: 0, earned: 0, pf: 0, esi: 0, adv: 0, loan: 0, lop: 0, ded: 0, net: 0 });
 
   summaryData.push([
-    '', '', 'TOTAL', '', '',
+    '', '', 'TOTAL', '', '', '',
     Math.round(totals.gross), Math.round(totals.earned),
     Math.round(totals.pf), Math.round(totals.esi),
     Math.round(totals.adv), Math.round(totals.loan), Math.round(totals.lop),
@@ -792,8 +804,8 @@ router.get('/salary-slip-excel', (req, res) => {
 
   const summarySheet = XLSX.utils.aoa_to_sheet(summaryData);
   summarySheet['!cols'] = [
-    { wch: 5 }, { wch: 8 }, { wch: 22 }, { wch: 18 }, { wch: 16 },
-    { wch: 10 }, { wch: 10 }, { wch: 8 }, { wch: 8 }, { wch: 6 },
+    { wch: 5 }, { wch: 8 }, { wch: 22 }, { wch: 18 }, { wch: 16 }, { wch: 11 },
+    { wch: 10 }, { wch: 10 }, { wch: 8 }, { wch: 8 }, { wch: 8 },
     { wch: 10 }, { wch: 8 }, { wch: 8 }, { wch: 10 }, { wch: 12 }, { wch: 6 }
   ];
   summarySheet['!merges'] = [

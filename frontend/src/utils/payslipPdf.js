@@ -215,6 +215,12 @@ function generatePayslipHTML(payslip, companyConfig) {
     `<tr><td style="padding:4px 8px;border:1px solid #ddd;">${d.label}</td><td style="padding:4px 8px;border:1px solid #ddd;text-align:right;">${fmtC(d.amount)}</td></tr>`
   ).join('');
 
+  const fmtDOJ = (iso) => {
+    if (!iso) return '\u2014';
+    const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(iso);
+    return m ? `${m[3]}/${m[2]}/${m[1]}` : iso;
+  };
+
   return `<div style="font-family:Arial,sans-serif;font-size:11px;max-width:700px;margin:0 auto;padding:20px;page-break-after:always;">
     <div style="text-align:center;border-bottom:2px solid #333;padding-bottom:10px;margin-bottom:15px;">
       <h2 style="margin:0;font-size:16px;">${companyName}</h2>
@@ -223,7 +229,8 @@ function generatePayslipHTML(payslip, companyConfig) {
     <table style="width:100%;border-collapse:collapse;margin-bottom:12px;font-size:10px;">
       <tr><td style="padding:3px 0;width:25%;"><strong>Name:</strong></td><td style="width:25%;">${emp.name}</td><td style="width:25%;"><strong>Code:</strong></td><td style="width:25%;">${emp.code}</td></tr>
       <tr><td style="padding:3px 0;"><strong>Department:</strong></td><td>${emp.department}</td><td><strong>Designation:</strong></td><td>${emp.designation}</td></tr>
-      <tr><td style="padding:3px 0;"><strong>UAN:</strong></td><td>${emp.uan || '\u2014'}</td><td><strong>Bank A/C:</strong></td><td>${emp.bank_account || '\u2014'}</td></tr>
+      <tr><td style="padding:3px 0;"><strong>Date of Joining:</strong></td><td>${fmtDOJ(emp.date_of_joining)}</td><td><strong>UAN:</strong></td><td>${emp.uan || '\u2014'}</td></tr>
+      <tr><td style="padding:3px 0;"><strong>Bank A/C:</strong></td><td colspan="3">${emp.bank_account || '\u2014'}</td></tr>
     </table>
     <table style="width:100%;border-collapse:collapse;margin-bottom:8px;font-size:10px;">
       <tr style="background:#f0f0f0;">

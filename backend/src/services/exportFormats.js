@@ -116,7 +116,7 @@ function generateBankFile(db, month, year, company) {
     SELECT sc.employee_code, e.name as employee_name,
            COALESCE(e.account_number, e.bank_account) as account_number,
            COALESCE(e.ifsc_code, e.ifsc) as ifsc_code,
-           e.bank_name, e.department,
+           e.bank_name, e.department, e.date_of_joining,
            sc.net_salary
     FROM salary_computations sc
     LEFT JOIN employees e ON sc.employee_code = e.code
@@ -129,9 +129,15 @@ function generateBankFile(db, month, year, company) {
 
   const narration = `SALARY ${MONTHS_SHORT[month].toUpperCase()} ${year}`;
 
-  // Build CSV with header
-  const csvLines = ['Sr No,Beneficiary Name,Account Number,IFSC Code,Amount,Narration'];
+  // Build CSV with header (Date of Joining included for HR audit, April 2026)
+  const csvLines = ['Sr No,Beneficiary Name,Account Number,IFSC Code,Date of Joining,Amount,Narration'];
   const missing = [];
+
+  const fmtDOJ = (iso) => {
+    if (!iso) return '';
+    const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(iso);
+    return m ? `${m[3]}/${m[2]}/${m[1]}` : iso;
+  };
 
   let sr = 0;
   for (const emp of employees) {
@@ -140,6 +146,7 @@ function generateBankFile(db, month, year, company) {
         employee_code: emp.employee_code,
         employee_name: emp.employee_name,
         department: emp.department,
+        date_of_joining: emp.date_of_joining,
         net_salary: emp.net_salary,
         missing_account: !emp.account_number,
         missing_ifsc: !emp.ifsc_code,
@@ -150,7 +157,8 @@ function generateBankFile(db, month, year, company) {
     sr++;
     const name = (emp.employee_name || '').replace(/,/g, ' ').replace(/"/g, '');
     const amount = Math.round(emp.net_salary * 100) / 100;
-    csvLines.push(`${sr},"${name}",${emp.account_number},${emp.ifsc_code},${amount},"${narration}"`);
+    const doj = fmtDOJ(emp.date_of_joining);
+    csvLines.push(`${sr},"${name}",${emp.account_number},${emp.ifsc_code},${doj},${amount},"${narration}"`);
   }
 
   const validEmployees = employees.filter(e => e.account_number && e.ifsc_code);

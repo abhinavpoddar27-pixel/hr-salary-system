@@ -137,6 +137,38 @@ function detectRedFlags(db, month, year) {
     }
   } catch {}
 
+  // 9. doj_holiday_exclusion (INFO) — April 2026 mid-month joiner rule
+  // Surfaces every employee whose DOJ falls in this month so the finance reviewer
+  // can confirm the pre-DOJ holiday exclusion + pro-rata calculation.
+  try {
+    const rows = db.prepare(`
+      SELECT sc.employee_code, e.name, e.department, e.date_of_joining,
+             dc.holidays_before_doj, dc.is_mid_month_joiner, dc.total_payable_days,
+             sc.gross_salary, sc.gross_earned, sc.net_salary
+      FROM salary_computations sc
+      LEFT JOIN employees e ON sc.employee_code = e.code
+      LEFT JOIN day_calculations dc ON sc.employee_code = dc.employee_code AND sc.month = dc.month AND sc.year = dc.year
+      WHERE sc.month = ? AND sc.year = ?
+        AND dc.is_mid_month_joiner = 1
+    `).all(month, year);
+    for (const r of rows) {
+      const excludedTxt = r.holidays_before_doj > 0
+        ? `${r.holidays_before_doj} pre-DOJ holiday${r.holidays_before_doj > 1 ? 's' : ''} excluded`
+        : 'no pre-DOJ holidays';
+      flags.push(mkFlag('doj_holiday_exclusion', 'info', r.employee_code, r.name, r.department,
+        `New joiner — DOJ ${r.date_of_joining || 'unknown'} (${excludedTxt})`,
+        {
+          dateOfJoining: r.date_of_joining,
+          holidaysBeforeDOJ: r.holidays_before_doj || 0,
+          payableDays: r.total_payable_days,
+          grossSalary: r.gross_salary,
+          grossEarned: r.gross_earned,
+          netSalary: r.net_salary
+        },
+        'Verify pro-rata salary and pre-DOJ holiday exclusion are correct'));
+    }
+  } catch {}
+
   // Sort: critical first, then warning, then info
   const sev = { critical: 0, warning: 1, info: 2 };
   flags.sort((a, b) => (sev[a.severity] || 9) - (sev[b.severity] || 9));
