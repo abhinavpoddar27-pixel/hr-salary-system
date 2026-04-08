@@ -429,21 +429,26 @@ function computeEmployeeSalary(db, employee, month, year, company) {
     }
   } catch {}
 
-  // ─── Preserve manual values if record already exists ───
-  const existingComp = db.prepare(`
-    SELECT tds, other_deductions, advance_recovery FROM salary_computations
-    WHERE employee_code = ? AND month = ? AND year = ? AND company = ?
-  `).get(employee.code, month, year, company);
-  // Use auto TDS if calculated, else fall back to manual/existing
-  if (!tdsAutoCalculated) tds = existingComp?.tds || 0;
-  const otherDeductions = existingComp?.other_deductions || 0;
-  // Advance recovery is ALWAYS derived from salary_advances via getAdvanceRecovery().
-  // Do NOT fall back to the previously-stored salary_computations.advance_recovery —
-  // that produced ghost deductions (Bug: Dalvir Singh 12003, SL Verma 23234 — Mar 2026)
-  // when HR clicked "No Advance" after an earlier computation had already written a
-  // non-zero recovery. The "No Advance" click sets salary_advances.advance_amount = 0
-  // and remark = 'NO_ADVANCE', so getAdvanceRecovery() correctly returns 0 and we
-  // must honour that instead of preserving the stale row.
+  // ─── Deductions are ALWAYS re-derived — never preserved across recomputes ───
+  // Previously this block read the existing salary_computations row and fell
+  // back to stored tds / other_deductions / advance_recovery whenever the fresh
+  // derivation came back zero. That preservation logic existed for a manual
+  // override endpoint (PUT /payroll/salary/:code/manual-deductions) which is
+  // exported in api.js but has no caller in the frontend — it is dead code.
+  //
+  // The fallback produced ghost deductions when the source data legitimately
+  // changed to zero:
+  //   - Dalvir Singh (12003) Mar 2026: HR clicked "No Advance", but the stale
+  //     advance_recovery from an earlier compute was still being charged.
+  //   - SL Verma (23234) Mar 2026: Rs.10,487 TDS kept reappearing — this was
+  //     the tdsCalculation auto value from BEFORE the "declaration required"
+  //     gate was added, and the fallback resurrected it every recompute.
+  //
+  // Rule: advance_recovery comes from salary_advances, tds from tax_declarations
+  // (via calculateMonthlyTDS), other_deductions defaults to 0. If manual overrides
+  // are ever re-introduced they must be tracked via a dedicated flag column.
+  if (!tdsAutoCalculated) tds = 0;
+  const otherDeductions = 0;
   const advanceRecovery = autoAdvanceRecovery;
 
   // ─── Total Deductions & Net ───

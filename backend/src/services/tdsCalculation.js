@@ -53,6 +53,21 @@ function calculateMonthlyTDS(db, employeeCode, grossMonthly, financialYear) {
     declaration = db.prepare('SELECT * FROM tax_declarations WHERE employee_code = ? AND financial_year = ?').get(employeeCode, financialYear);
   } catch {}
 
+  // TDS gate: only auto-deduct when the employee has filed a tax declaration.
+  // Without a declaration we cannot know the regime, exemptions, or even whether
+  // the employee is tax-liable under this payroll (e.g. SILP / consultant cases).
+  // Prior to this gate every employee earning > Rs.7L/yr got an auto-deduction —
+  // e.g. SL Verma (23234) Rs.10,487 ghost deduction for Mar 2026. Matches the
+  // documented behaviour in CLAUDE.md ("Auto-calculated from tax_declarations table").
+  if (!declaration) {
+    return {
+      monthly_tds: 0,
+      annual_projected_tax: 0,
+      regime: 'none',
+      effective_rate: 0
+    };
+  }
+
   const regime = declaration?.regime || 'new';
   const annualGross = grossMonthly * 12;
 

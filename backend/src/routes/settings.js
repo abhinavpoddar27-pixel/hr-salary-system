@@ -249,11 +249,11 @@ router.get('/companies', (req, res) => {
   if (count.cnt === 0) {
     const insert = db.prepare('INSERT OR IGNORE INTO companies (name, display_name) VALUES (?, ?)');
     // Seed from employees
-    const empCompanies = db.prepare('SELECT DISTINCT company FROM employees WHERE company IS NOT NULL AND company != ""').all();
+    const empCompanies = db.prepare("SELECT DISTINCT company FROM employees WHERE company IS NOT NULL AND company != ''").all();
     for (const c of empCompanies) insert.run(c.company, c.company);
     // Seed from attendance
     try {
-      const attCompanies = db.prepare('SELECT DISTINCT company FROM attendance_raw WHERE company IS NOT NULL AND company != ""').all();
+      const attCompanies = db.prepare("SELECT DISTINCT company FROM attendance_raw WHERE company IS NOT NULL AND company != ''").all();
       for (const c of attCompanies) insert.run(c.company, c.company);
     } catch {}
   }
