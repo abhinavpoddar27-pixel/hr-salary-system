@@ -343,7 +343,23 @@ export default function MissPunch() {
                         </td>
                         <td>
                           {rec.miss_punch_resolved ? (
-                            <span className="badge-green text-xs">✓ {rec.correction_source}</span>
+                            rec.miss_punch_finance_status === 'rejected' ? (
+                              <span
+                                className="badge text-xs bg-red-100 text-red-700"
+                                title={rec.miss_punch_finance_notes || 'Finance rejected — back in HR queue'}
+                              >
+                                ✕ Finance rejected
+                              </span>
+                            ) : rec.miss_punch_finance_status === 'approved' ? (
+                              <span className="badge-green text-xs">✓ Finance approved</span>
+                            ) : (
+                              <span
+                                className="badge text-xs bg-amber-100 text-amber-800"
+                                title="HR resolved — awaiting finance review"
+                              >
+                                ⏳ Pending finance
+                              </span>
+                            )
                           ) : (
                             <button onClick={() => setEditId(rec.id)} className="btn-secondary text-xs px-2 py-1">Correct</button>
                           )}

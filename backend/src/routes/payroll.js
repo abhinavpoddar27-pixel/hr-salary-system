@@ -483,6 +483,24 @@ router.post('/finalise', (req, res) => {
     }
   } catch {}
 
+  // Check miss-punch finance verification complete (April 2026)
+  try {
+    const pendingMP = db.prepare(`
+      SELECT COUNT(*) as cnt FROM attendance_processed
+      WHERE month = ? AND year = ?
+        AND is_miss_punch = 1
+        AND miss_punch_resolved = 1
+        AND miss_punch_finance_status = 'pending'
+    `).get(month, year);
+    if (pendingMP?.cnt > 0) {
+      return res.status(400).json({
+        success: false,
+        error: `Cannot finalise: ${pendingMP.cnt} miss-punch resolution(s) pending finance review.`,
+        pendingMissPunches: pendingMP.cnt
+      });
+    }
+  } catch {}
+
   db.prepare(`UPDATE salary_computations SET is_finalised = 1, finalised_at = datetime('now') WHERE month = ? AND year = ?`).run(month, year);
   db.prepare(`UPDATE monthly_imports SET is_finalised = 1, finalised_at = datetime('now') WHERE month = ? AND year = ?`).run(month, year);
 

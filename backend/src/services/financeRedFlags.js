@@ -169,6 +169,30 @@ function detectRedFlags(db, month, year) {
     }
   } catch {}
 
+  // 10. unverified_miss_punches (WARNING) — April 2026 finance approval gate
+  // HR has resolved the miss punch but finance has NOT yet approved the
+  // fabricated in/out times. Month cannot be finalised until cleared.
+  try {
+    const rows = db.prepare(`
+      SELECT ap.employee_code, e.name, e.department,
+             COUNT(*) as pending_count,
+             GROUP_CONCAT(ap.date) as pending_dates
+      FROM attendance_processed ap
+      LEFT JOIN employees e ON ap.employee_code = e.code
+      WHERE ap.month = ? AND ap.year = ?
+        AND ap.is_miss_punch = 1
+        AND ap.miss_punch_resolved = 1
+        AND ap.miss_punch_finance_status = 'pending'
+      GROUP BY ap.employee_code, e.name, e.department
+    `).all(month, year);
+    for (const r of rows) {
+      flags.push(mkFlag('unverified_miss_punches', 'warning', r.employee_code, r.name, r.department,
+        `${r.pending_count} miss-punch resolution(s) awaiting finance review`,
+        { pendingCount: r.pending_count, pendingDates: r.pending_dates },
+        'Review HR-fabricated in/out times and approve or reject'));
+    }
+  } catch {}
+
   // Sort: critical first, then warning, then info
   const sev = { critical: 0, warning: 1, info: 2 };
   flags.sort((a, b) => (sev[a.severity] || 9) - (sev[b.severity] || 9));

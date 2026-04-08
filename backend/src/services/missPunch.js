@@ -96,6 +96,11 @@ function applyMissPunchFlags(db, missPunches) {
 
 /**
  * Resolve a miss punch correction
+ *
+ * April 2026: Every HR resolution now enters a "pending" finance-verification
+ * state. Finance must approve/reject before the month can be finalised. This
+ * closes the loophole where HR could silently fabricate in/out times without
+ * any second-pair-of-eyes review.
  */
 function resolveMissPunch(db, recordId, { inTime, outTime, source, remark, convertToLeave, leaveType }) {
   const { logAudit } = require('../database/db');
@@ -107,7 +112,12 @@ function resolveMissPunch(db, recordId, { inTime, outTime, source, remark, conve
     miss_punch_resolved: 1,
     stage_2_done: 1,
     correction_source: source,
-    correction_remark: remark
+    correction_remark: remark,
+    // New: every resolution goes into "pending finance review"
+    miss_punch_finance_status: 'pending',
+    miss_punch_finance_reviewed_by: null,
+    miss_punch_finance_reviewed_at: null,
+    miss_punch_finance_notes: null
   };
 
   if (convertToLeave) {
