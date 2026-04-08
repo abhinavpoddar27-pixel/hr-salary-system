@@ -361,3 +361,39 @@ frontend/
 - Financial calculations: always verify rounding, check for divide-by-zero on salary divisor, and ensure earned ratio is capped at 1.0 for base components.
 - Run lint before marking any task complete.
 - Update this CLAUDE.md file after completing any major feature or pipeline change.
+## Section 9: Diagnostic endpoint (read-only prod DB access)
+
+A future Claude session can inspect the live Railway DB via:
+
+- `GET  /api/diagnostic/health` — schema snapshot + key table row counts
+- `POST /api/diagnostic/query` — single SELECT/WITH/EXPLAIN, max 2000 rows (default 500)
+- `GET  /api/diagnostic/schema/:table` — column list (PRAGMA table_info)
+
+Auth: `Authorization: Bearer $DIAG_TOKEN` (set in Railway env vars).
+Guards: SQL regex guard + SQLite `PRAGMA query_only=ON` + readonly file handle +
+30 req/min rate limit + full audit trail to `audit_log` (stage =
+`DIAG_QUERY` / `DIAG_HEALTH` / `DIAG_ERROR`).
+
+Token lives at `~/.claude/hr-salary-diag.env` on the calling side, in the
+form `DIAG_TOKEN=...`. Never commit the token.
+
+Production base URL: `https://hr-salary-system-production.up.railway.app`
+Sandbox allowlist in `~/.claude/settings.json` must include
+`hr-salary-system-production.up.railway.app` for curl calls to succeed.
+## Section 9: Diagnostic endpoint (read-only prod DB access)
+
+A future Claude session can inspect the live Railway DB via:
+
+- `GET  /api/diagnostic/health` — schema snapshot + key table row counts
+- `POST /api/diagnostic/query` — single SELECT/WITH/EXPLAIN, max 2000 rows (default 500)
+- `GET  /api/diagnostic/schema/:table` — column list (PRAGMA table_info)
+
+Auth: `Authorization: Bearer $DIAG_TOKEN` (set in Railway env vars).
+Guards: SQL regex guard + SQLite `PRAGMA query_only=ON` + readonly file handle +
+30 req/min rate limit + full audit trail to `audit_log` (stage =
+`DIAG_QUERY` / `DIAG_HEALTH` / `DIAG_ERROR`).
+
+Token lives at `~/.claude/hr-salary-diag.env` on the calling side, in the
+form `DIAG_TOKEN=...`. Never commit the token.
+
+Production base URL: `https://hr-salary-system-production.up.railway.app`
