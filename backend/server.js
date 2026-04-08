@@ -177,6 +177,9 @@ const loginLimiter = rateLimit({
 app.post('/api/auth/login', loginLimiter);
 app.use('/api/auth', require('./src/routes/auth'));
 
+// Diagnostic (SELECT-only, bearer-token gated) — DOES NOT use requireAuth
+app.use('/api/diagnostic', require('./src/routes/diagnostic'));
+
 // All other API routes require authentication
 app.use('/api/import',     requireAuth, require('./src/routes/import'));
 app.use('/api/attendance', requireAuth, require('./src/routes/attendance'));
