@@ -184,13 +184,32 @@ function calculateDays(employeeCode, month, year, company, attendanceRecords, le
 
     const status = rec.status_final || rec.status_original || '';
 
+    // ── Non-weekly-off holidays: ONLY contribute via paidHolidays + holidayDutyDays ──
+    // The date is already counted in `paidHolidays` (computed from holidayCount),
+    // so incrementing daysPresent/daysHalfPresent/daysAbsent/daysWOP would
+    // double-count the day. Observed bug (Mar 2026): employees whose holiday
+    // was marked ½P (worked half the holiday) had daysHalfPresent += 0.5 AND
+    // paidHolidays = 1, breaking the integrity invariant
+    //   workingDays = daysPresent + 2*daysHalfPresent + daysAbsent
+    // and producing finalPayable=35.5 when expected=36.5 for 7 employees.
+    // Fix: treat non-WO holidays as holiday-only — the work-on-holiday bonus
+    // flows through `holidayDutyDays` which feeds holidayDutyPay separately.
+    if (isHoliday && !isWeeklyOff) {
+      if (status === 'P' || status === 'WOP') holidayDutyDays += 1;
+      else if (status === '½P' || status === 'HP' || status === 'WO½P') holidayDutyDays += 0.5;
+      // Status 'A' on a holiday is a no-op (employee still gets paidHolidays).
+      if (rec.is_late_arrival) lateCount++;
+      if (rec.overtime_minutes) otHours += rec.overtime_minutes / 60;
+      continue;
+    }
+
     if (status === 'P') daysPresent += 1;
     else if (status === 'WOP') daysWOP += 1;                      // worked on weekly off (extra)
     else if (status === '½P' || status === 'HP') daysHalfPresent += 0.5;
     else if (status === 'WO½P') daysWOP += 0.5;                   // half day on weekly off (extra)
     else if (status === 'A') {
-      // Absent on a weekly off or holiday does not count as an absence
-      if (!isWeeklyOff && !isHoliday) daysAbsent++;
+      // Absent on a weekly off does not count as an absence
+      if (!isWeeklyOff) daysAbsent++;
     }
     else if (status === 'WO' || status === 'NH') {
       // Expected non-working day markers — no count
@@ -205,13 +224,7 @@ function calculateDays(employeeCode, month, year, company, attendanceRecords, le
       // inflated by one day per ghost. 232/422 employees in Mar 2026 were
       // affected; 4 "Returning" employees had 12-15 day overpayments
       // because only half the month had real biometric data.
-      if (!isWeeklyOff && !isHoliday) daysAbsent++;
-    }
-
-    // Holiday duty — worked a declared non-weekly-off holiday
-    if (isHoliday && !isWeeklyOff) {
-      if (status === 'P' || status === 'WOP') holidayDutyDays += 1;
-      else if (status === '½P' || status === 'HP' || status === 'WO½P') holidayDutyDays += 0.5;
+      if (!isWeeklyOff) daysAbsent++;
     }
 
     if (rec.is_late_arrival) lateCount++;
