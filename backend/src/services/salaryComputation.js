@@ -332,19 +332,29 @@ function computeEmployeeSalary(db, employee, month, year, company) {
   let otNote = '';
 
   if (!isContract) {
-    // ─── Extra duty: ONLY from fully-approved grants (April 2026 gate) ───
-    // Previous behaviour read `dayCalc.extra_duty_days` directly, which
-    // auto-folded unapproved WOP days from biometric into OT pay. From
-    // April 2026 every extra-duty day must pass BOTH HR approval and
-    // Finance verification before it earns salary. Pending/flagged/
-    // rejected grants contribute zero.
+    // ─── Extra duty: max(attendance-detected, fully-approved grants) ───
+    // Per CLAUDE.md Section 5:
+    //   otDays = max(dayCalc.extra_duty_days, sum(grants WHERE status='APPROVED'
+    //                                                 AND finance_status='FINANCE_APPROVED'))
     //
-    // Auto-creation of PENDING grants from WOP detection happens in
-    // `routes/payroll.js calculate-days` so biometric-detected Sundays
-    // always land in the approval queue — HR never has to raise them
-    // manually. `dayCalc.extra_duty_days` remains in day_calculations
-    // for reporting (shows "worked beyond month" visibility to finance)
-    // but is no longer a salary input.
+    // Stage 6 already computes `dayCalc.extra_duty_days` from biometric
+    // WOP detection (excess payable beyond calendar days) AND auto-creates
+    // PENDING grants for HR to review. The previous gate waited for the
+    // full HR+Finance approval cycle before paying a single rupee, which
+    // underpaid any employee whose auto-created grants were still pending
+    // at salary-run time (observed March 2026: most 35-day employees
+    // received ₹0 OT because grants existed but hadn't been approved).
+    //
+    // New behaviour: pay OT from attendance-detected extra duty by default.
+    // If HR/Finance approve MORE than attendance caught (manual grants),
+    // the larger value wins. The approval workflow is now non-blocking —
+    // grants are still tracked, rejections still archive, but the default
+    // salary run honours what biometric actually recorded.
+    //
+    // Split semantics for reporting (Payable OT page, finance audit):
+    //   punchBasedOT   = dayCalc.extra_duty_days (attendance excess)
+    //   financeExtraDuty = max(0, approvedGrants - punchBasedOT)
+    //   totalOTDays    = punchBasedOT + financeExtraDuty = max(dayCalc, approved)
     const approvedGrants = db.prepare(`
       SELECT COALESCE(SUM(duty_days), 0) as total
       FROM extra_duty_grants
@@ -354,21 +364,26 @@ function computeEmployeeSalary(db, employee, month, year, company) {
         AND status = 'APPROVED'
         AND finance_status = 'FINANCE_APPROVED'
     `).get(employee.code, month, year);
-    punchBasedOT = Math.max(0, approvedGrants?.total || 0);
-    financeExtraDuty = 0;
+    const approvedGrantsTotal = Math.max(0, approvedGrants?.total || 0);
+    const dcExtraDuty = Math.max(0, dayCalc.extra_duty_days || 0);
+
+    // Source 1: attendance-detected excess
+    punchBasedOT = dcExtraDuty;
+    // Source 2: any finance-approved grants beyond what attendance caught
+    financeExtraDuty = Math.max(0, approvedGrantsTotal - punchBasedOT);
 
     // Hard caps: non-negative, never exceed daysInMonth
-    totalOTDays = Math.max(0, punchBasedOT);
-    totalOTDays = Math.min(totalOTDays, daysInMonth);
+    totalOTDays = punchBasedOT + financeExtraDuty;
+    totalOTDays = Math.min(Math.max(0, totalOTDays), daysInMonth);
 
     otPay = Math.round(totalOTDays * otDailyRate * 100) / 100;
 
     const dcPayable = dayCalc.total_payable_days || 0;
-    const dcExtraDuty = Math.max(0, dayCalc.extra_duty_days || 0);
     if (totalOTDays > 0) {
-      otNote = `${totalOTDays} approved extra-duty day(s) × ₹${Math.round(otDailyRate)}/day`;
-    } else if (dcExtraDuty > 0) {
-      otNote = `Payable ${dcPayable}/${daysInMonth} days. ${dcExtraDuty} pending finance approval → not paid.`;
+      const parts = [];
+      if (punchBasedOT > 0) parts.push(`${punchBasedOT} attendance`);
+      if (financeExtraDuty > 0) parts.push(`${financeExtraDuty} approved grant`);
+      otNote = `${totalOTDays} OT day(s) [${parts.join(' + ')}] × ₹${Math.round(otDailyRate)}/day`;
     } else {
       otNote = `Payable ${dcPayable}/${daysInMonth} days. No OT.`;
     }
