@@ -437,8 +437,14 @@ function computeEmployeeSalary(db, employee, month, year, company) {
   // Use auto TDS if calculated, else fall back to manual/existing
   if (!tdsAutoCalculated) tds = existingComp?.tds || 0;
   const otherDeductions = existingComp?.other_deductions || 0;
-  // Use auto advance if available, else preserve manual
-  const advanceRecovery = autoAdvanceRecovery > 0 ? autoAdvanceRecovery : (existingComp?.advance_recovery || 0);
+  // Advance recovery is ALWAYS derived from salary_advances via getAdvanceRecovery().
+  // Do NOT fall back to the previously-stored salary_computations.advance_recovery —
+  // that produced ghost deductions (Bug: Dalvir Singh 12003, SL Verma 23234 — Mar 2026)
+  // when HR clicked "No Advance" after an earlier computation had already written a
+  // non-zero recovery. The "No Advance" click sets salary_advances.advance_amount = 0
+  // and remark = 'NO_ADVANCE', so getAdvanceRecovery() correctly returns 0 and we
+  // must honour that instead of preserving the stale row.
+  const advanceRecovery = autoAdvanceRecovery;
 
   // ─── Total Deductions & Net ───
   let totalDeductions = pfEmployee + esiEmployee + professionalTax + tds + advanceRecovery + lopDeduction + otherDeductions + loanRecovery;
