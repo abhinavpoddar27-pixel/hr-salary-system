@@ -177,6 +177,19 @@ router.put('/:code', (req, res) => {
     }
   }
 
+  // ── Auto-sync is_contractor when employment_type changes ──
+  // If the user sets employment_type via the Edit form, derive is_contractor
+  // from it so all downstream code (payroll, analytics, MIS, payslip PDF)
+  // stays consistent. Without this, a stale is_contractor=1 set by the
+  // March 2026 migration would keep firing even after HR corrects the type.
+  // Only auto-sync when the caller didn't explicitly set is_contractor itself.
+  if (updates.employment_type !== undefined && updates.is_contractor === undefined) {
+    const newType = String(updates.employment_type || '').trim().toLowerCase();
+    const shouldBeContractor = newType.includes('contract') ? 1 : 0;
+    setClauses.push('is_contractor = ?');
+    params.push(shouldBeContractor);
+  }
+
   if (setClauses.length === 0) return res.json({ success: true, message: 'No updates' });
 
   setClauses.push("updated_at = datetime('now')");
