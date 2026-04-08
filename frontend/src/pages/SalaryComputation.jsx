@@ -532,7 +532,7 @@ export default function SalaryComputation() {
                       <tr onClick={() => setShowDetails(showDetails === s.employee_code ? null : s.employee_code)} className={clsx(
                         'transition-colors cursor-pointer hover:bg-blue-50/50',
                         showDetails === s.employee_code && 'bg-blue-50/70',
-                        s.salary_held && showDetails !== s.employee_code && 'bg-amber-50/50',
+                        s.salary_held && showDetails !== s.employee_code && 'bg-amber-50/60 border-l-4 border-l-amber-500',
                         s.gross_changed && !s.salary_held && showDetails !== s.employee_code && 'bg-blue-50/30'
                       )}>
                         <td>
@@ -611,18 +611,36 @@ export default function SalaryComputation() {
                         <td className="text-purple-600 font-mono">{fmtINR(s.esi_employee)}</td>
                         <td className="font-mono">{fmtINR(s.advance_recovery)}</td>
                         <td className="font-mono">{fmtINR(s.loan_recovery)}</td>
-                        <td className="text-red-600 font-mono">{fmtINR(s.total_deductions)}</td>
-                        <td className="bg-slate-50 text-slate-700 font-mono">{fmtINR(s.net_salary)}</td>
-                        <td className="bg-emerald-50 font-bold text-emerald-700 font-mono">{fmtINR(s.take_home || s.total_payable || s.net_salary)}</td>
+                        <td className={clsx('text-red-600 font-mono', s.salary_held && 'cell-caution')}
+                            title={s.salary_held ? `Held: ${s.hold_reason || 'No reason specified'}` : undefined}>
+                          {fmtINR(s.total_deductions)}
+                        </td>
+                        <td className={clsx('bg-slate-50 text-slate-700 font-mono', s.salary_held && 'cell-caution')}
+                            title={s.salary_held ? `Held: ${s.hold_reason || 'No reason specified'}` : undefined}>
+                          {fmtINR(s.net_salary)}
+                        </td>
+                        <td className={clsx('bg-emerald-50 font-bold text-emerald-700 font-mono', s.salary_held && 'cell-caution')}
+                            title={s.salary_held ? `Held: ${s.hold_reason || 'No reason specified'}` : undefined}>
+                          {fmtINR(s.take_home || s.total_payable || s.net_salary)}
+                        </td>
                         <td>
                           {s.is_finalised ? (
                             <span className="badge-green text-xs">Final</span>
                           ) : s.salary_held ? (
-                            <div className="flex items-center gap-1">
-                              <span className="salary-held-flag text-xs px-1.5 py-0.5 rounded">Held</span>
-                              <button onClick={() => releaseHoldMutation.mutate(s.employee_code)} className="btn-ghost text-xs px-1 text-blue-600">
-                                Release
-                              </button>
+                            <div className="flex flex-col gap-0.5">
+                              <div className="flex items-center gap-1">
+                                <span className="inline-flex items-center gap-0.5 text-xs px-1.5 py-0.5 rounded bg-red-100 text-red-700 border border-red-200 font-semibold">
+                                  <span aria-hidden="true">⚠</span> Held
+                                </span>
+                                <button onClick={(e) => { e.stopPropagation(); releaseHoldMutation.mutate(s.employee_code); }} className="btn-ghost text-xs px-1 text-blue-600">
+                                  Release
+                                </button>
+                              </div>
+                              {s.hold_reason && (
+                                <span className="text-[9px] text-red-500 truncate max-w-[120px]" title={s.hold_reason}>
+                                  {s.hold_reason}
+                                </span>
+                              )}
                             </div>
                           ) : (
                             <span className="badge-yellow text-xs">Draft</span>
