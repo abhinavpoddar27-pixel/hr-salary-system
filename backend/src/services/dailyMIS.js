@@ -5,7 +5,7 @@
  * and worker-type (permanent vs contractor) breakdowns.
  */
 
-const { isContractorDept, isContractorForPayroll } = require('./analytics');
+const { isContractorForPayroll } = require('./analytics');
 
 // Admin departments (office/admin roles)
 const ADMIN_DEPTS = ['OFFICE ADMIN', 'H.R', 'ACCOUNTS', 'Sales Coordinator', 'SECURITY', 'HOUSE KEEPING'];
@@ -17,12 +17,19 @@ function isAdminDept(deptName) {
 
 /**
  * Classify a single attendance row, enriching it with is_contractor and is_admin flags.
+ *
+ * Expects `row` to include at least `department`. For accurate contractor
+ * detection the caller should also include `employment_type` and
+ * `is_contractor` from the employees table (see callers below — queries
+ * join employees and select e.employment_type, e.is_contractor).
  */
 function classifyEmployee(row) {
   const dept = row.department || '';
   return {
     ...row,
-    is_contractor: isContractorDept(dept),
+    // isContractorForPayroll honours employment_type over is_contractor
+    // over dept-keyword heuristic.
+    is_contractor: isContractorForPayroll(row),
     is_admin: isAdminDept(dept),
   };
 }
@@ -246,11 +253,13 @@ function getDepartmentBreakdown(db, date) {
   const totalMap = {};
   for (const t of totals) totalMap[t.department] = t.total;
 
-  // Permanent/contractor counts per department
+  // Permanent/contractor counts per department — isContractorForPayroll
+  // honours employment_type from Employee Master over dept keyword match.
   const permCounts = {};
   const contCounts = {};
+  const deptIsContractorMap = {};  // for line ~278 below
   const allEmps = db.prepare(`
-    SELECT code, department FROM employees
+    SELECT code, department, employment_type, is_contractor FROM employees
     WHERE status != 'Inactive'
     AND (date_of_joining IS NULL OR date_of_joining <= ?)
     AND (date_of_exit IS NULL OR date_of_exit >= ?)
@@ -258,25 +267,35 @@ function getDepartmentBreakdown(db, date) {
 
   for (const e of allEmps) {
     const dept = e.department || 'Unknown';
-    if (isContractorDept(dept)) {
+    const isCont = isContractorForPayroll(e);
+    if (isCont) {
       contCounts[dept] = (contCounts[dept] || 0) + 1;
     } else {
       permCounts[dept] = (permCounts[dept] || 0) + 1;
     }
+    // Track per-dept majority for the map() below
+    if (!deptIsContractorMap[dept]) deptIsContractorMap[dept] = { cont: 0, total: 0 };
+    deptIsContractorMap[dept].total++;
+    if (isCont) deptIsContractorMap[dept].cont++;
   }
 
-  return depts.map(d => ({
-    ...d,
-    total: totalMap[d.department] || d.present,
-    permanent: permCounts[d.department] || 0,
-    contractor: contCounts[d.department] || 0,
-    absent: (totalMap[d.department] || d.present) - d.present,
-    rate: totalMap[d.department] > 0
-      ? Math.round(d.present / totalMap[d.department] * 100 * 10) / 10
-      : 100,
-    is_admin: isAdminDept(d.department),
-    is_contractor: isContractorDept(d.department),
-  }));
+  return depts.map(d => {
+    // Dept-level is_contractor label: majority of classified employees
+    const stat = deptIsContractorMap[d.department];
+    const deptIsCont = stat && stat.total > 0 && stat.cont * 2 > stat.total;
+    return {
+      ...d,
+      total: totalMap[d.department] || d.present,
+      permanent: permCounts[d.department] || 0,
+      contractor: contCounts[d.department] || 0,
+      absent: (totalMap[d.department] || d.present) - d.present,
+      rate: totalMap[d.department] > 0
+        ? Math.round(d.present / totalMap[d.department] * 100 * 10) / 10
+        : 100,
+      is_admin: isAdminDept(d.department),
+      is_contractor: !!deptIsCont,
+    };
+  });
 }
 
 // ───────────────────────────────────────────────────────────────
@@ -442,8 +461,12 @@ function getPreviousDayReport(db, todayDate) {
   const prevDateStr = prevDate.toISOString().split('T')[0];
 
   // All attendance records for previous day
+  // employment_type + is_contractor added so isContractorForPayroll (inside
+  // classifyEmployee and the dept breakdown below) can honour the Employee
+  // Master's type over a stale dept-keyword match.
   const records = db.prepare(`
     SELECT ap.employee_code, e.name as employee_name, e.department, e.designation,
+           e.employment_type, e.is_contractor,
            COALESCE(ap.in_time_final, ap.in_time_original) as in_time,
            COALESCE(ap.out_time_final, ap.out_time_original) as out_time,
            COALESCE(ap.status_final, ap.status_original) as status,
@@ -495,23 +518,34 @@ function getPreviousDayReport(db, todayDate) {
   const total = totalActive?.count || 0;
   const attendanceRate = total > 0 ? Math.round(presentRecords.length / total * 100 * 10) / 10 : 0;
 
-  // Department breakdown
+  // Department breakdown — is_contractor label derived from majority of
+  // employees classified via isContractorForPayroll (employment_type first).
   const deptMap = {};
   for (const rec of records) {
     const dept = rec.department || 'Unknown';
-    if (!deptMap[dept]) deptMap[dept] = { department: dept, total: 0, present: 0, absent: 0, late: 0, halfDay: 0, hours: 0, hoursCount: 0, is_admin: isAdminDept(dept), is_contractor: isContractorDept(dept) };
+    if (!deptMap[dept]) deptMap[dept] = {
+      department: dept, total: 0, present: 0, absent: 0, late: 0, halfDay: 0,
+      hours: 0, hoursCount: 0, is_admin: isAdminDept(dept),
+      contractorCount: 0, classifiedCount: 0
+    };
     deptMap[dept].total++;
     if (presentStatuses.includes(rec.status)) deptMap[dept].present++;
     if (rec.status === 'A') deptMap[dept].absent++;
     if (rec.is_late_arrival) deptMap[dept].late++;
     if (rec.status === '\u00bdP' || rec.status === 'WO\u00bdP') deptMap[dept].halfDay++;
     if (rec.actual_hours > 0) { deptMap[dept].hours += rec.actual_hours; deptMap[dept].hoursCount++; }
+    deptMap[dept].classifiedCount++;
+    if (isContractorForPayroll(rec)) deptMap[dept].contractorCount++;
   }
-  const departments = Object.values(deptMap).map(d => ({
-    ...d,
-    avgHours: d.hoursCount > 0 ? Math.round(d.hours / d.hoursCount * 10) / 10 : 0,
-    rate: d.total > 0 ? Math.round(d.present / d.total * 100 * 10) / 10 : 0,
-  })).sort((a, b) => b.total - a.total);
+  const departments = Object.values(deptMap).map(d => {
+    const { contractorCount, classifiedCount, ...rest } = d;
+    return {
+      ...rest,
+      is_contractor: classifiedCount > 0 && contractorCount * 2 > classifiedCount,
+      avgHours: d.hoursCount > 0 ? Math.round(d.hours / d.hoursCount * 10) / 10 : 0,
+      rate: d.total > 0 ? Math.round(d.present / d.total * 100 * 10) / 10 : 0,
+    };
+  }).sort((a, b) => b.total - a.total);
 
   // Shift stats builder
   const buildShiftStats = (emps) => {

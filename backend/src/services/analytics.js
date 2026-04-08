@@ -79,13 +79,18 @@ function computeOrgOverview(db, month, year, startDate, endDate) {
     companyBreakdown[comp].add(r.employee_code);
   }
 
-  // Permanent vs contractor
+  // Permanent vs contractor — use isContractorForPayroll so employment_type
+  // from the Employee Master takes priority over dept keyword matching.
+  // Pre-compute classification for each employee once; reuse below for
+  // the per-department isContractor label.
   let permanentCount = 0;
   let contractorCount = 0;
+  const empClassByCode = {};
   for (const code of empCodes) {
-    const emp = db.prepare('SELECT department, employment_type FROM employees WHERE code = ?').get(code);
-    const dept = emp?.department || '';
-    if (isContractorDept(dept)) contractorCount++;
+    const emp = db.prepare('SELECT department, employment_type, is_contractor FROM employees WHERE code = ?').get(code);
+    const isCont = isContractorForPayroll(emp);
+    empClassByCode[code] = isCont;
+    if (isCont) contractorCount++;
     else permanentCount++;
   }
 
@@ -135,19 +140,31 @@ function computeOrgOverview(db, month, year, startDate, endDate) {
     if (!r.in_time_original || !r.out_time_original) deptStats[dept].missPunch++;
   }
 
-  const departments = Object.entries(deptStats).map(([dept, stats]) => ({
-    department: dept,
-    totalEmployees: stats.employees.size,
-    headcount: stats.employees.size,
-    presentDays: Math.round(stats.present * 10) / 10,
-    absentDays: stats.absent,
-    attendanceRate: stats.possible > 0 ? Math.round((stats.present / stats.possible) * 1000) / 10 : 0,
-    punctualityIssues: stats.late,
-    overtimeHours: Math.round(stats.ot / 60),
-    avgActualHours: stats.hoursCount > 0 ? Math.round(stats.hours / stats.hoursCount * 100) / 100 : 0,
-    missPunchCount: stats.missPunch,
-    isContractor: isContractorDept(dept)
-  })).sort((a, b) => b.headcount - a.headcount);
+  const departments = Object.entries(deptStats).map(([dept, stats]) => {
+    // Department-level isContractor hint — majority of its employees
+    // classified by isContractorForPayroll (employment_type priority).
+    let dContCount = 0;
+    let dTotalClassified = 0;
+    for (const code of stats.employees) {
+      if (empClassByCode[code] === undefined) continue;
+      dTotalClassified++;
+      if (empClassByCode[code]) dContCount++;
+    }
+    const deptIsContractor = dTotalClassified > 0 && dContCount * 2 > dTotalClassified;
+    return {
+      department: dept,
+      totalEmployees: stats.employees.size,
+      headcount: stats.employees.size,
+      presentDays: Math.round(stats.present * 10) / 10,
+      absentDays: stats.absent,
+      attendanceRate: stats.possible > 0 ? Math.round((stats.present / stats.possible) * 1000) / 10 : 0,
+      punctualityIssues: stats.late,
+      overtimeHours: Math.round(stats.ot / 60),
+      avgActualHours: stats.hoursCount > 0 ? Math.round(stats.hours / stats.hoursCount * 100) / 100 : 0,
+      missPunchCount: stats.missPunch,
+      isContractor: deptIsContractor
+    };
+  }).sort((a, b) => b.headcount - a.headcount);
 
   // Salary outflow
   let salaryData;
@@ -256,8 +273,8 @@ function computeHeadcountTrend(db, months) {
 
     if (empCodes.length > 0) {
       for (const code of empCodes) {
-        const emp = db.prepare('SELECT department FROM employees WHERE code = ?').get(code);
-        if (isContractorDept(emp?.department)) contCount++;
+        const emp = db.prepare('SELECT department, employment_type, is_contractor FROM employees WHERE code = ?').get(code);
+        if (isContractorForPayroll(emp)) contCount++;
         else permCount++;
       }
     } else {
@@ -266,13 +283,13 @@ function computeHeadcountTrend(db, months) {
       const monthEnd = `${year}-${monthStr}-31`;
       const monthStart = `${year}-${monthStr}-01`;
       const emps = db.prepare(`
-        SELECT department FROM employees
+        SELECT department, employment_type, is_contractor FROM employees
         WHERE date_of_joining <= ?
         AND (date_of_exit IS NULL OR date_of_exit = '' OR date_of_exit > ?)
         AND status NOT IN ('Inactive', 'Left', 'Exited')
       `).all(monthEnd, monthStart);
       for (const emp of emps) {
-        if (isContractorDept(emp.department)) contCount++;
+        if (isContractorForPayroll(emp)) contCount++;
         else permCount++;
       }
     }
