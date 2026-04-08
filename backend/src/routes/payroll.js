@@ -99,6 +99,39 @@ router.post('/calculate-days', (req, res) => {
         // Detect contractor for day calc rules
         const empFull = db.prepare('SELECT * FROM employees WHERE code = ?').get(empCode);
         const { isContractorForPayroll } = require('../utils/employeeClassification');
+        const isContract = isContractorForPayroll(empFull);
+
+        // ── Auto-create PENDING extra_duty_grants from detected WOP days ──
+        // April 2026 finance approval gate: an employee who worked on their
+        // weekly off (WOP / WO½P) must have the day approved by BOTH HR
+        // and Finance before it flows into salary. Auto-creating the PENDING
+        // row here means HR doesn't have to manually raise a grant every
+        // time — they just approve/reject what the biometric already caught.
+        // Idempotent via UQ (employee_code, grant_date, month, year): reruns
+        // of calculate-days never produce duplicates.
+        // Contractors get no grants (they're paid daily and never enter the
+        // OT/extra-duty pipeline).
+        if (!isContract) {
+          const wopInsert = db.prepare(`
+            INSERT OR IGNORE INTO extra_duty_grants
+              (employee_code, employee_id, grant_date, month, year, company,
+               grant_type, duty_days, verification_source, remarks,
+               linked_attendance_id, status, finance_status, requested_by)
+            VALUES (?, ?, ?, ?, ?, ?, 'OVERNIGHT_STAY', ?, 'BIOMETRIC_AUTO',
+                    'Auto-detected from attendance WOP status', ?, 'PENDING',
+                    'UNREVIEWED', 'system')
+          `);
+          for (const rec of records) {
+            const status = rec.status_final || rec.status_original || '';
+            if (status !== 'WOP' && status !== 'WO½P') continue;
+            const dutyDays = status === 'WO½P' ? 0.5 : 1.0;
+            wopInsert.run(
+              empCode, emp?.id, rec.date, parseInt(month), parseInt(year),
+              company || rec.company || '', dutyDays, rec.id
+            );
+          }
+        }
+
         // Get fully-approved extra duty grants for this employee
         let manualExtraDutyDays = 0;
         try {
@@ -109,7 +142,7 @@ router.post('/calculate-days', (req, res) => {
           empCode, parseInt(month), parseInt(year), company || '',
           records, leaveBalances, holidays,
           {
-            isContractor: isContractorForPayroll(empFull),
+            isContractor: isContract,
             weeklyOffDay: empFull?.weekly_off_day ?? 0,
             employmentType: empFull?.employment_type || 'Permanent',
             manualExtraDutyDays,

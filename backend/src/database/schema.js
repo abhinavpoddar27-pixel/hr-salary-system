@@ -1281,6 +1281,46 @@ function initSchema(db) {
   safeCreateIndex('CREATE INDEX IF NOT EXISTS idx_edg_employee_month ON extra_duty_grants(employee_code, month, year)');
   safeCreateIndex('CREATE INDEX IF NOT EXISTS idx_edg_status ON extra_duty_grants(status, finance_status)');
 
+  // ── Finance Rejections Archive (April 2026) ────────────────
+  // Unified archive for anything rejected by HR or Finance across the
+  // manual-intervention workflows (extra duty, miss punch, future types).
+  // When a line item is rejected, the original payload is serialised here
+  // so there is ONE canonical place to audit past rejections — queries
+  // don't have to union across multiple source tables or chase soft-deleted
+  // rows. The source table/id is kept for traceability.
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS finance_rejections (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      rejection_type TEXT NOT NULL,          -- EXTRA_DUTY_HR | EXTRA_DUTY_FINANCE | MISS_PUNCH_FINANCE
+      source_table TEXT NOT NULL,            -- extra_duty_grants | attendance_processed
+      source_record_id INTEGER NOT NULL,
+      employee_code TEXT,
+      employee_name TEXT,
+      department TEXT,
+      month INTEGER,
+      year INTEGER,
+      company TEXT,
+      original_details TEXT,                 -- JSON snapshot of the source row at rejection time
+      rejection_reason TEXT NOT NULL,
+      rejected_by TEXT NOT NULL,
+      rejected_at TEXT NOT NULL DEFAULT (datetime('now')),
+      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    )
+  `);
+  safeCreateIndex('CREATE INDEX IF NOT EXISTS idx_finrej_employee_month ON finance_rejections(employee_code, month, year)');
+  safeCreateIndex('CREATE INDEX IF NOT EXISTS idx_finrej_type ON finance_rejections(rejection_type, rejected_at)');
+  safeCreateIndex('CREATE INDEX IF NOT EXISTS idx_finrej_source ON finance_rejections(source_table, source_record_id)');
+
+  // ── Miss-punch finance verification (April 2026) ───────────
+  // After HR resolves a miss punch, finance must verify before the salary
+  // month can be finalised. Columns live on attendance_processed to keep
+  // the data next to the resolved fields (status_final, in_time_final).
+  safeAddColumn('attendance_processed', 'miss_punch_finance_status', "TEXT DEFAULT ''");
+  safeAddColumn('attendance_processed', 'miss_punch_finance_reviewed_by', 'TEXT');
+  safeAddColumn('attendance_processed', 'miss_punch_finance_reviewed_at', 'TEXT');
+  safeAddColumn('attendance_processed', 'miss_punch_finance_notes', 'TEXT');
+  safeCreateIndex('CREATE INDEX IF NOT EXISTS idx_ap_mp_fin_status ON attendance_processed(miss_punch_finance_status, month, year)');
+
   // ── March 2026 Reconciliation: Set contractor flags ──────────
   // ONE-TIME migration. Previously ran on every app boot, which re-stamped
   // is_contractor=1 on employees whose employment_type was later corrected

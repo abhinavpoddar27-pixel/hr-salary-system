@@ -332,15 +332,29 @@ function computeEmployeeSalary(db, employee, month, year, company) {
   let otNote = '';
 
   if (!isContract) {
-    // ─── Extra duty from day calculation (April 2026 overhaul) ───
-    // dayCalculation.js now produces `extra_duty_days = max(0, finalPayable − daysInMonth)`
-    // under the baseline model:
-    //   finalPayable = baseEntitlement − totalAbsences + daysWOP (+ manualExtraDutyDays)
-    // So anything above the calendar month length is already the correct OT value.
-    // Salary computation MUST use this directly — never recompute from attendance.
-    // Fully-approved extra_duty_grants are already folded into dayCalc via Stage 6
-    // (payroll route passes manualExtraDutyDays into calculateDays).
-    punchBasedOT = Math.max(0, dayCalc.extra_duty_days || 0);
+    // ─── Extra duty: ONLY from fully-approved grants (April 2026 gate) ───
+    // Previous behaviour read `dayCalc.extra_duty_days` directly, which
+    // auto-folded unapproved WOP days from biometric into OT pay. From
+    // April 2026 every extra-duty day must pass BOTH HR approval and
+    // Finance verification before it earns salary. Pending/flagged/
+    // rejected grants contribute zero.
+    //
+    // Auto-creation of PENDING grants from WOP detection happens in
+    // `routes/payroll.js calculate-days` so biometric-detected Sundays
+    // always land in the approval queue — HR never has to raise them
+    // manually. `dayCalc.extra_duty_days` remains in day_calculations
+    // for reporting (shows "worked beyond month" visibility to finance)
+    // but is no longer a salary input.
+    const approvedGrants = db.prepare(`
+      SELECT COALESCE(SUM(duty_days), 0) as total
+      FROM extra_duty_grants
+      WHERE employee_code = ?
+        AND month = ?
+        AND year = ?
+        AND status = 'APPROVED'
+        AND finance_status = 'FINANCE_APPROVED'
+    `).get(employee.code, month, year);
+    punchBasedOT = Math.max(0, approvedGrants?.total || 0);
     financeExtraDuty = 0;
 
     // Hard caps: non-negative, never exceed daysInMonth
@@ -350,9 +364,14 @@ function computeEmployeeSalary(db, employee, month, year, company) {
     otPay = Math.round(totalOTDays * otDailyRate * 100) / 100;
 
     const dcPayable = dayCalc.total_payable_days || 0;
-    otNote = totalOTDays > 0
-      ? `Payable ${dcPayable} days, ${totalOTDays} above ${daysInMonth}-day month → OT. ${totalOTDays} days × ₹${Math.round(otDailyRate)}/day`
-      : `Payable ${dcPayable}/${daysInMonth} days. No OT.`;
+    const dcExtraDuty = Math.max(0, dayCalc.extra_duty_days || 0);
+    if (totalOTDays > 0) {
+      otNote = `${totalOTDays} approved extra-duty day(s) × ₹${Math.round(otDailyRate)}/day`;
+    } else if (dcExtraDuty > 0) {
+      otNote = `Payable ${dcPayable}/${daysInMonth} days. ${dcExtraDuty} pending finance approval → not paid.`;
+    } else {
+      otNote = `Payable ${dcPayable}/${daysInMonth} days. No OT.`;
+    }
   } else {
     otNote = 'Contractor — no OT';
   }
