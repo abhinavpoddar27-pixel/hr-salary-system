@@ -521,7 +521,14 @@ export default function SalaryComputation() {
                         </td>
                         <td className="text-slate-500">
                           {s.department}
-                          {s.is_contractor ? <span className="ml-1 text-[9px] px-1 py-0.5 rounded bg-amber-100 text-amber-700">CONT</span> : null}
+                          {(() => {
+                            // Prefer live employment_type from employee master over
+                            // the stale is_contractor on the salary_computations row
+                            // (which may reflect a classification from an earlier run).
+                            const empType = String(s.employment_type || '').trim().toLowerCase();
+                            const isCont = empType ? empType.includes('contract') : !!s.is_contractor;
+                            return isCont ? <span className="ml-1 text-[9px] px-1 py-0.5 rounded bg-amber-100 text-amber-700">CONT</span> : null;
+                          })()}
                         </td>
                         <td className="text-center font-mono">
                           {s.payable_days}

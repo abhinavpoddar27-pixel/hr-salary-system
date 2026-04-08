@@ -285,7 +285,7 @@ router.get('/salary-register', (req, res) => {
     SELECT sc.*,
            COALESCE(NULLIF(e.name, ''), ar_name.employee_name, sc.employee_code) as employee_name,
            COALESCE(NULLIF(e.department, ''), ar_name.department) as department,
-           e.designation,
+           e.designation, e.employment_type, e.is_contractor as employee_is_contractor,
            e.bank_account, e.ifsc, e.was_left_returned, e.status as employee_status,
            dc.total_payable_days, dc.days_present, dc.days_absent, dc.lop_days, dc.paid_sundays,
            dc.days_half_present, dc.ot_hours,
