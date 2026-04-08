@@ -2,6 +2,25 @@ const express = require('express');
 const router = express.Router();
 const { getDb, logAudit } = require('../database/db');
 
+// ─── Role gates ────────────────────────────────────────────
+// `requireAuth` runs at mount time (server.js) and populates req.user.role.
+// These helpers add a second check on top of that so only HR/admin can
+// manage the HR queue and only Finance/admin can run finance approvals.
+// Role comparison is case-insensitive — the user-create endpoint doesn't
+// normalise `role`, so a "Finance" typo should NOT lock finance out.
+function roleIn(req, ...allowed) {
+  const r = (req.user?.role || '').toLowerCase();
+  return allowed.map(x => x.toLowerCase()).includes(r);
+}
+function requireHrOrAdmin(req, res, next) {
+  if (roleIn(req, 'admin', 'hr')) return next();
+  return res.status(403).json({ success: false, error: 'HR or admin access required' });
+}
+function requireFinanceOrAdmin(req, res, next) {
+  if (roleIn(req, 'admin', 'finance')) return next();
+  return res.status(403).json({ success: false, error: 'Finance or admin access required' });
+}
+
 // ─── Finance Rejections Archive helper ─────────────────────
 // Writes one row per rejection into the unified `finance_rejections` archive.
 // Called from every HR/Finance reject endpoint so there is a single, queryable
@@ -67,8 +86,8 @@ router.get('/employee/:code', (req, res) => {
   res.json({ success: true, data });
 });
 
-// POST / — Create grant
-router.post('/', (req, res) => {
+// POST / — Create grant (HR/admin)
+router.post('/', requireHrOrAdmin, (req, res) => {
   const db = getDb();
   const { employee_code, grant_date, month, year, company, grant_type, duty_days, verification_source, reference_number, remarks, original_punch_date } = req.body;
   if (!employee_code || !grant_date || !month || !year || !verification_source) {
@@ -88,7 +107,7 @@ router.post('/', (req, res) => {
 // salaryComputation.js (ed_pay) using the current month's gross / calendarDays,
 // so there's no drift when salary structures change. The legacy
 // `salary_impact_amount` column is left in the schema for audit but ignored.
-router.post('/:id/approve', (req, res) => {
+router.post('/:id/approve', requireHrOrAdmin, (req, res) => {
   const db = getDb();
   const grant = db.prepare('SELECT * FROM extra_duty_grants WHERE id = ? AND status = ?').get(req.params.id, 'PENDING');
   if (!grant) return res.status(404).json({ success: false, error: 'Grant not found or not pending' });
@@ -104,7 +123,7 @@ router.post('/:id/approve', (req, res) => {
 });
 
 // POST /:id/reject — HR reject
-router.post('/:id/reject', (req, res) => {
+router.post('/:id/reject', requireHrOrAdmin, (req, res) => {
   const db = getDb();
   const { rejection_reason } = req.body;
   if (!rejection_reason) return res.status(400).json({ success: false, error: 'Rejection reason required' });
@@ -123,7 +142,7 @@ router.post('/:id/reject', (req, res) => {
 });
 
 // POST /bulk-approve — HR bulk approve
-router.post('/bulk-approve', (req, res) => {
+router.post('/bulk-approve', requireHrOrAdmin, (req, res) => {
   const db = getDb();
   const { ids } = req.body;
   const stmt = db.prepare("UPDATE extra_duty_grants SET status = 'APPROVED', approved_by = ?, approved_at = datetime('now') WHERE id = ? AND status = 'PENDING'");
@@ -166,7 +185,7 @@ router.get('/finance-review', (req, res) => {
 });
 
 // POST /:id/finance-approve
-router.post('/:id/finance-approve', (req, res) => {
+router.post('/:id/finance-approve', requireFinanceOrAdmin, (req, res) => {
   const db = getDb();
   const grant = db.prepare("SELECT * FROM extra_duty_grants WHERE id = ? AND status = 'APPROVED'").get(req.params.id);
   if (!grant) return res.status(404).json({ success: false, error: 'Grant not found or not HR-approved' });
@@ -183,7 +202,7 @@ router.post('/:id/finance-approve', (req, res) => {
 });
 
 // POST /:id/finance-flag
-router.post('/:id/finance-flag', (req, res) => {
+router.post('/:id/finance-flag', requireFinanceOrAdmin, (req, res) => {
   const db = getDb();
   const { finance_flag_reason, finance_notes } = req.body;
   if (!finance_flag_reason) return res.status(400).json({ success: false, error: 'Flag reason required' });
@@ -202,7 +221,7 @@ router.post('/:id/finance-flag', (req, res) => {
 });
 
 // POST /:id/finance-reject
-router.post('/:id/finance-reject', (req, res) => {
+router.post('/:id/finance-reject', requireFinanceOrAdmin, (req, res) => {
   const db = getDb();
   const { finance_flag_reason } = req.body;
   if (!finance_flag_reason) return res.status(400).json({ success: false, error: 'Rejection reason required' });
@@ -222,7 +241,7 @@ router.post('/:id/finance-reject', (req, res) => {
 });
 
 // POST /bulk-finance-approve
-router.post('/bulk-finance-approve', (req, res) => {
+router.post('/bulk-finance-approve', requireFinanceOrAdmin, (req, res) => {
   const db = getDb();
   const { ids } = req.body;
   const stmt = db.prepare("UPDATE extra_duty_grants SET finance_status = 'FINANCE_APPROVED', finance_reviewed_by = ?, finance_reviewed_at = datetime('now') WHERE id = ? AND status = 'APPROVED'");

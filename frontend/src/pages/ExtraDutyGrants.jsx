@@ -1,6 +1,11 @@
-import React, { useState } from 'react'
+import React, { useState, useMemo } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { getExtraDutyGrants, getExtraDutyGrantsSummary, createExtraDutyGrant, approveExtraDutyGrant, rejectExtraDutyGrant, financeApproveGrant, financeFlagGrant, getFinanceReviewQueue } from '../utils/api'
+import {
+  getExtraDutyGrants, getExtraDutyGrantsSummary, createExtraDutyGrant,
+  approveExtraDutyGrant, rejectExtraDutyGrant,
+  financeApproveGrant, financeFlagGrant, financeRejectGrant, bulkFinanceApproveGrants,
+  getFinanceReviewQueue
+} from '../utils/api'
 import { useAppStore } from '../store/appStore'
 import DateSelector from '../components/common/DateSelector'
 import useDateSelector from '../hooks/useDateSelector'
@@ -17,11 +22,28 @@ function KPI({ label, value, color = 'blue' }) {
 export default function ExtraDutyGrants() {
   const { month, year, dateProps } = useDateSelector({ mode: 'month', syncToStore: true })
   const { selectedCompany, user } = useAppStore()
-  const [activeTab, setActiveTab] = useState('hr')
+
+  // Case-insensitive role check — the user-create endpoint doesn't normalise
+  // `role`, so a user accidentally created with "Finance" instead of "finance"
+  // would silently fail a plain equality check. Lowercasing here hardens both
+  // the HR and Finance gates against that class of bug.
+  const role = (user?.role || '').toLowerCase()
+  const canHR = ['admin', 'hr'].includes(role)
+  const canFinance = ['admin', 'finance'].includes(role)
+
+  // Finance users land on the Finance Review tab by default; everyone else
+  // starts on the HR queue.
+  const [activeTab, setActiveTab] = useState(role === 'finance' ? 'finance' : 'hr')
   const [showCreate, setShowCreate] = useState(false)
   const [form, setForm] = useState({ employee_code: '', grant_date: '', grant_type: 'OVERNIGHT_STAY', duty_days: 1, verification_source: 'Gate Register', reference_number: '', remarks: '', original_punch_date: '' })
   const [rejectId, setRejectId] = useState(null)
   const [rejectReason, setRejectReason] = useState('')
+  const [flagId, setFlagId] = useState(null)
+  const [flagReason, setFlagReason] = useState('')
+  const [flagNotes, setFlagNotes] = useState('')
+  const [finRejectId, setFinRejectId] = useState(null)
+  const [finRejectReason, setFinRejectReason] = useState('')
+  const [selectedIds, setSelectedIds] = useState([])
   const qc = useQueryClient()
 
   const { data: sumRes } = useQuery({ queryKey: ['edg-summary', month, year], queryFn: () => getExtraDutyGrantsSummary(month, year), retry: 0 })
@@ -29,16 +51,36 @@ export default function ExtraDutyGrants() {
   const { data: grantsRes } = useQuery({ queryKey: ['edg-list', month, year, activeTab], queryFn: () => activeTab === 'finance' ? getFinanceReviewQueue(month, year) : getExtraDutyGrants(month, year), retry: 0 })
   const grants = grantsRes?.data?.data || []
 
-  const createMut = useMutation({ mutationFn: createExtraDutyGrant, onSuccess: () => { qc.invalidateQueries(['edg']); setShowCreate(false); toast.success('Grant created') } })
-  const approveMut = useMutation({ mutationFn: (id) => approveExtraDutyGrant(id), onSuccess: () => { qc.invalidateQueries(['edg']); toast.success('Approved') } })
-  const rejectMut = useMutation({ mutationFn: ({ id, reason }) => rejectExtraDutyGrant(id, reason), onSuccess: () => { qc.invalidateQueries(['edg']); setRejectId(null); toast.success('Rejected') } })
-  const finApproveMut = useMutation({ mutationFn: (id) => financeApproveGrant(id), onSuccess: () => { qc.invalidateQueries(['edg']); toast.success('Finance approved') } })
+  // Bulk selection helpers — only the UNREVIEWED finance rows are selectable.
+  const bulkEligibleIds = useMemo(
+    () => grants.filter(g => g.status === 'APPROVED' && g.finance_status === 'UNREVIEWED').map(g => g.id),
+    [grants]
+  )
+  const allSelected = bulkEligibleIds.length > 0 && bulkEligibleIds.every(id => selectedIds.includes(id))
+  const toggleSelectAll = () => setSelectedIds(allSelected ? [] : bulkEligibleIds)
+  const toggleSelect = (id) => setSelectedIds(prev => prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id])
 
-  const canHR = ['admin', 'hr'].includes(user?.role)
-  const canFinance = ['admin', 'finance'].includes(user?.role)
+  const createMut = useMutation({ mutationFn: createExtraDutyGrant, onSuccess: () => { qc.invalidateQueries({ queryKey: ['edg-list'] }); qc.invalidateQueries({ queryKey: ['edg-summary'] }); setShowCreate(false); toast.success('Grant created') } })
+  const approveMut = useMutation({ mutationFn: (id) => approveExtraDutyGrant(id), onSuccess: () => { qc.invalidateQueries({ queryKey: ['edg-list'] }); qc.invalidateQueries({ queryKey: ['edg-summary'] }); toast.success('Approved') } })
+  const rejectMut = useMutation({ mutationFn: ({ id, reason }) => rejectExtraDutyGrant(id, reason), onSuccess: () => { qc.invalidateQueries({ queryKey: ['edg-list'] }); qc.invalidateQueries({ queryKey: ['edg-summary'] }); setRejectId(null); toast.success('Rejected') } })
+  const finApproveMut = useMutation({ mutationFn: (id) => financeApproveGrant(id), onSuccess: () => { qc.invalidateQueries({ queryKey: ['edg-list'] }); qc.invalidateQueries({ queryKey: ['edg-summary'] }); toast.success('Finance approved') } })
+  const finFlagMut = useMutation({
+    mutationFn: ({ id, reason, notes }) => financeFlagGrant(id, reason, notes),
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ['edg-list'] }); qc.invalidateQueries({ queryKey: ['edg-summary'] }); setFlagId(null); setFlagReason(''); setFlagNotes(''); toast.success('Flagged for review') }
+  })
+  const finRejectMut = useMutation({
+    mutationFn: ({ id, reason }) => financeRejectGrant(id, reason),
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ['edg-list'] }); qc.invalidateQueries({ queryKey: ['edg-summary'] }); setFinRejectId(null); setFinRejectReason(''); toast.success('Finance rejected') }
+  })
+  const bulkFinApproveMut = useMutation({
+    mutationFn: (ids) => bulkFinanceApproveGrants(ids),
+    onSuccess: (res) => { qc.invalidateQueries({ queryKey: ['edg-list'] }); qc.invalidateQueries({ queryKey: ['edg-summary'] }); setSelectedIds([]); toast.success(`${res?.data?.count || 0} grants approved`) }
+  })
 
   const hrBadge = { PENDING: 'bg-amber-100 text-amber-800', APPROVED: 'bg-green-100 text-green-800', REJECTED: 'bg-red-100 text-red-800' }
   const finBadge = { UNREVIEWED: 'bg-slate-100 text-slate-600', FINANCE_APPROVED: 'bg-green-100 text-green-800', FINANCE_FLAGGED: 'bg-amber-100 text-amber-800', FINANCE_REJECTED: 'bg-red-100 text-red-800' }
+
+  const showSelectColumn = activeTab === 'finance' && canFinance
 
   return (
     <div className="p-6 space-y-5 animate-fade-in">
@@ -57,41 +99,90 @@ export default function ExtraDutyGrants() {
       <div className="flex items-center gap-3">
         <div className="border-b border-slate-200 flex gap-0">
           {[{ id: 'hr', label: 'HR Queue' }, { id: 'finance', label: 'Finance Review' }, { id: 'all', label: 'All Grants' }].map(t => (
-            <button key={t.id} onClick={() => setActiveTab(t.id)}
+            <button key={t.id} onClick={() => { setActiveTab(t.id); setSelectedIds([]) }}
               className={clsx('px-4 py-2.5 text-sm font-medium border-b-2 transition-colors', activeTab === t.id ? 'border-blue-600 text-blue-600' : 'border-transparent text-slate-500')}>
               {t.label}
             </button>
           ))}
         </div>
-        {canHR && <button onClick={() => setShowCreate(true)} className="btn-primary text-sm ml-auto">+ New Grant</button>}
+        <div className="ml-auto flex gap-2">
+          {showSelectColumn && selectedIds.length > 0 && (
+            <button onClick={() => bulkFinApproveMut.mutate(selectedIds)}
+              disabled={bulkFinApproveMut.isPending}
+              className="btn-primary text-sm">
+              {bulkFinApproveMut.isPending ? 'Approving...' : `Bulk Approve (${selectedIds.length})`}
+            </button>
+          )}
+          {canHR && <button onClick={() => setShowCreate(true)} className="btn-primary text-sm">+ New Grant</button>}
+        </div>
       </div>
 
       <div className="card overflow-x-auto">
         <table className="table-compact w-full text-[11px]">
-          <thead><tr><th>Employee</th><th>Dept</th><th>Grant Date</th><th>Type</th><th>Days</th><th>Source</th><th>HR Status</th><th>Finance</th><th>Actions</th></tr></thead>
+          <thead>
+            <tr>
+              {showSelectColumn && (
+                <th className="w-8">
+                  <input type="checkbox"
+                    checked={allSelected}
+                    disabled={bulkEligibleIds.length === 0}
+                    onChange={toggleSelectAll}
+                    title="Select all UNREVIEWED rows" />
+                </th>
+              )}
+              <th>Employee</th>
+              <th>Dept</th>
+              <th>Grant Date</th>
+              <th>Type</th>
+              <th>Days</th>
+              <th>Source</th>
+              <th>HR Status</th>
+              <th>Finance</th>
+              <th>Actions</th>
+            </tr>
+          </thead>
           <tbody>
-            {grants.map(g => (
-              <tr key={g.id} className={g.finance_status === 'FINANCE_FLAGGED' ? 'bg-amber-50' : ''}>
-                <td className="font-medium">{g.employee_name || g.employee_code}<div className="text-[10px] text-slate-400">{g.employee_code}</div></td>
-                <td className="text-slate-500">{g.department}</td>
-                <td className="font-mono">{g.grant_date}</td>
-                <td className="text-xs">{g.grant_type?.replace(/_/g, ' ')}</td>
-                <td className="text-center font-mono">{g.duty_days}</td>
-                <td className="text-xs">{g.verification_source}</td>
-                <td><span className={clsx('text-[10px] px-1.5 py-0.5 rounded-full', hrBadge[g.status])}>{g.status}</span></td>
-                <td><span className={clsx('text-[10px] px-1.5 py-0.5 rounded-full', finBadge[g.finance_status])}>{g.finance_status?.replace('FINANCE_', '')}</span></td>
-                <td className="flex gap-1">
-                  {canHR && g.status === 'PENDING' && <>
-                    <button onClick={() => approveMut.mutate(g.id)} className="text-green-600 hover:bg-green-50 px-1 py-0.5 rounded text-[10px]">Approve</button>
-                    <button onClick={() => { setRejectId(g.id); setRejectReason('') }} className="text-red-600 hover:bg-red-50 px-1 py-0.5 rounded text-[10px]">Reject</button>
-                  </>}
-                  {canFinance && g.status === 'APPROVED' && g.finance_status === 'UNREVIEWED' && <>
-                    <button onClick={() => finApproveMut.mutate(g.id)} className="text-green-600 hover:bg-green-50 px-1 py-0.5 rounded text-[10px]">Fin OK</button>
-                  </>}
-                </td>
-              </tr>
-            ))}
-            {grants.length === 0 && <tr><td colSpan={9} className="text-center py-8 text-slate-400">No grants for this period</td></tr>}
+            {grants.map(g => {
+              const bulkEligible = g.status === 'APPROVED' && g.finance_status === 'UNREVIEWED'
+              return (
+                <tr key={g.id} className={g.finance_status === 'FINANCE_FLAGGED' ? 'bg-amber-50' : ''}>
+                  {showSelectColumn && (
+                    <td>
+                      <input type="checkbox"
+                        disabled={!bulkEligible}
+                        checked={selectedIds.includes(g.id)}
+                        onChange={() => toggleSelect(g.id)} />
+                    </td>
+                  )}
+                  <td className="font-medium">{g.employee_name || g.employee_code}<div className="text-[10px] text-slate-400">{g.employee_code}</div></td>
+                  <td className="text-slate-500">{g.department}</td>
+                  <td className="font-mono">{g.grant_date}</td>
+                  <td className="text-xs">{g.grant_type?.replace(/_/g, ' ')}</td>
+                  <td className="text-center font-mono">{g.duty_days}</td>
+                  <td className="text-xs">{g.verification_source}</td>
+                  <td><span className={clsx('text-[10px] px-1.5 py-0.5 rounded-full', hrBadge[g.status])}>{g.status}</span></td>
+                  <td><span className={clsx('text-[10px] px-1.5 py-0.5 rounded-full', finBadge[g.finance_status])}>{g.finance_status?.replace('FINANCE_', '')}</span></td>
+                  <td>
+                    <div className="flex gap-1 flex-wrap">
+                      {canHR && g.status === 'PENDING' && <>
+                        <button onClick={() => approveMut.mutate(g.id)} className="text-green-600 hover:bg-green-50 px-1.5 py-0.5 rounded text-[10px] font-medium">Approve</button>
+                        <button onClick={() => { setRejectId(g.id); setRejectReason('') }} className="text-red-600 hover:bg-red-50 px-1.5 py-0.5 rounded text-[10px] font-medium">Reject</button>
+                      </>}
+                      {canFinance && g.status === 'APPROVED' && g.finance_status === 'UNREVIEWED' && <>
+                        <button onClick={() => finApproveMut.mutate(g.id)} className="text-green-600 hover:bg-green-50 px-1.5 py-0.5 rounded text-[10px] font-medium">✓ Approve</button>
+                        <button onClick={() => { setFlagId(g.id); setFlagReason(''); setFlagNotes('') }} className="text-amber-600 hover:bg-amber-50 px-1.5 py-0.5 rounded text-[10px] font-medium">⚑ Flag</button>
+                        <button onClick={() => { setFinRejectId(g.id); setFinRejectReason('') }} className="text-red-600 hover:bg-red-50 px-1.5 py-0.5 rounded text-[10px] font-medium">✕ Reject</button>
+                      </>}
+                      {canFinance && g.status === 'APPROVED' && g.finance_status === 'FINANCE_FLAGGED' && <>
+                        <button onClick={() => finApproveMut.mutate(g.id)} className="text-green-600 hover:bg-green-50 px-1.5 py-0.5 rounded text-[10px] font-medium">✓ Approve</button>
+                        <button onClick={() => { setFinRejectId(g.id); setFinRejectReason('') }} className="text-red-600 hover:bg-red-50 px-1.5 py-0.5 rounded text-[10px] font-medium">✕ Reject</button>
+                      </>}
+                    </div>
+                  </td>
+                </tr>
+              )
+            })}
+            {grants.length === 0 && <tr><td colSpan={showSelectColumn ? 10 : 9} className="text-center py-8 text-slate-400">No grants for this period</td></tr>}
           </tbody>
         </table>
       </div>
@@ -114,11 +205,59 @@ export default function ExtraDutyGrants() {
         </Modal>
       )}
 
-      {/* Reject Modal */}
+      {/* HR Reject Modal */}
       {rejectId && (
         <Modal onClose={() => setRejectId(null)} title="Reject Grant">
-          <textarea value={rejectReason} onChange={e => setRejectReason(e.target.value)} className="input w-full h-20" placeholder="Rejection reason (required)..." />
-          <button onClick={() => rejectMut.mutate({ id: rejectId, reason: rejectReason })} disabled={!rejectReason} className="btn-danger w-full mt-3">Reject</button>
+          <div className="space-y-3">
+            <textarea value={rejectReason} onChange={e => setRejectReason(e.target.value)} className="input w-full h-20" placeholder="Rejection reason (required)..." />
+            <button onClick={() => rejectMut.mutate({ id: rejectId, reason: rejectReason })} disabled={!rejectReason || rejectMut.isPending} className="btn-danger w-full">
+              {rejectMut.isPending ? 'Rejecting...' : 'Reject'}
+            </button>
+          </div>
+        </Modal>
+      )}
+
+      {/* Finance Flag Modal */}
+      {flagId && (
+        <Modal onClose={() => setFlagId(null)} title="Flag Grant for Review">
+          <div className="space-y-3">
+            <div>
+              <label className="label">Flag Reason *</label>
+              <select value={flagReason} onChange={e => setFlagReason(e.target.value)} className="input w-full">
+                <option value="">Select reason...</option>
+                <option value="EXCESSIVE_AMOUNT">Excessive salary impact</option>
+                <option value="DUPLICATE_SUSPECTED">Possible duplicate</option>
+                <option value="MISSING_EVIDENCE">Missing verification evidence</option>
+                <option value="RATE_MISMATCH">Rate calculation mismatch</option>
+                <option value="OTHER">Other</option>
+              </select>
+            </div>
+            <div>
+              <label className="label">Notes (optional)</label>
+              <textarea value={flagNotes} onChange={e => setFlagNotes(e.target.value)}
+                className="input w-full h-20" placeholder="Additional notes..." />
+            </div>
+            <button onClick={() => finFlagMut.mutate({ id: flagId, reason: flagReason, notes: flagNotes })}
+              disabled={!flagReason || finFlagMut.isPending}
+              className="btn-warning w-full">
+              {finFlagMut.isPending ? 'Flagging...' : 'Flag for Review'}
+            </button>
+          </div>
+        </Modal>
+      )}
+
+      {/* Finance Reject Modal */}
+      {finRejectId && (
+        <Modal onClose={() => setFinRejectId(null)} title="Finance Reject Grant">
+          <div className="space-y-3">
+            <textarea value={finRejectReason} onChange={e => setFinRejectReason(e.target.value)}
+              className="input w-full h-20" placeholder="Rejection reason (required)..." />
+            <button onClick={() => finRejectMut.mutate({ id: finRejectId, reason: finRejectReason })}
+              disabled={!finRejectReason || finRejectMut.isPending}
+              className="btn-danger w-full">
+              {finRejectMut.isPending ? 'Rejecting...' : 'Finance Reject'}
+            </button>
+          </div>
         </Modal>
       )}
     </div>
