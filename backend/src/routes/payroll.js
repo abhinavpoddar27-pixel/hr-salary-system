@@ -72,7 +72,16 @@ router.post('/calculate-days', (req, res) => {
           const grants = db.prepare("SELECT SUM(duty_days) as total FROM extra_duty_grants WHERE employee_code = ? AND month = ? AND year = ? AND status = 'APPROVED' AND finance_status = 'FINANCE_APPROVED'").get(empCode, month, year);
           manualExtraDutyDays = grants?.total || 0;
         } catch {}
-        const calcResult = calculateDays(empCode, parseInt(month), parseInt(year), company || '', records, leaveBalances, holidays, { isContractor: isContractorForPayroll(empFull), manualExtraDutyDays });
+        const calcResult = calculateDays(
+          empCode, parseInt(month), parseInt(year), company || '',
+          records, leaveBalances, holidays,
+          {
+            isContractor: isContractorForPayroll(empFull),
+            weeklyOffDay: empFull?.weekly_off_day ?? 0,
+            employmentType: empFull?.employment_type || 'Permanent',
+            manualExtraDutyDays
+          }
+        );
         calcResult.employeeId = emp?.id;
         saveDayCalculation(db, calcResult);
 

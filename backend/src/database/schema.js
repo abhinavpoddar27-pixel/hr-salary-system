@@ -868,6 +868,16 @@ function initSchema(db) {
   // day_calculations: extra duty (payable > calendar days)
   safeAddColumn('day_calculations', 'extra_duty_days', 'REAL DEFAULT 0');
 
+  // ── April 2026 day calculation overhaul: weekly off generalisation + baseline model ──
+  safeAddColumn('day_calculations', 'weekly_off_day', 'INTEGER DEFAULT 0');
+  safeAddColumn('day_calculations', 'base_entitlement', 'REAL DEFAULT 0');
+  safeAddColumn('day_calculations', 'total_absences', 'REAL DEFAULT 0');
+  safeAddColumn('day_calculations', 'effective_present', 'REAL DEFAULT 0');
+  safeAddColumn('day_calculations', 'days_per_weekly_off', 'REAL DEFAULT 0');
+  safeAddColumn('day_calculations', 'weekly_off_threshold', 'REAL');
+  safeAddColumn('day_calculations', 'weekly_off_tier', 'TEXT');
+  safeAddColumn('day_calculations', 'weekly_off_note', 'TEXT');
+
   // ── Phase 1: Data integrity & deduplication ─────────────────────
 
   // monthly_imports: track reimports

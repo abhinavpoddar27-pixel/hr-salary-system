@@ -1,36 +1,52 @@
 /**
- * Day Calculation Service
+ * Day Calculation Service — Baseline Model (April 2026 overhaul)
  *
- * Implements the EXACT Sunday granting rules from the project specification:
+ * For each employee, computes payable days for the month using the
+ * baseline-minus-absences model (permanent) or daily-wage model (contractor).
  *
- * For each Mon-Sat work week + its Sunday:
- *   working_days = P_count + WOP_count + (½P_count × 0.5)
+ * PERMANENT EMPLOYEE MODEL
+ * ────────────────────────
+ * Base entitlement is the full month. The employee's weekly off day and
+ * public holidays are already INCLUDED in that base — they are not
+ * "awarded" separately. Absences on working days SUBTRACT from the base.
+ * Working on the weekly off day (WOP) is EXTRA work on top of the base,
+ * which can push payable above daysInMonth and become OT.
  *
- *   if working_days >= 6:
- *     → Paid Sunday. No leave deduction.
+ *   baseEntitlement = workingDays + paidWeeklyOffs + paidHolidays
+ *                   ( = daysInMonth when no weekly offs are stripped)
+ *   totalAbsences   = daysAbsent + daysHalfPresent
+ *                     (daysHalfPresent is the absent half of each ½P day)
+ *   finalPayable    = max(0, baseEntitlement − totalAbsences + daysWOP)
+ *   extraDutyDays   = max(0, finalPayable − daysInMonth)
  *
- *   elif working_days >= 4:
- *     shortage = 6 - working_days
- *     if CL_balance >= shortage:
- *       → Paid Sunday. Deduct shortage from CL.
- *     elif CL_balance + EL_balance >= shortage:
- *       → Paid Sunday. Deduct CL first, then EL.
- *     elif shortage <= 1.5:
- *       → Paid Sunday. Mark shortage as LOP.
- *     else:
- *       → Unpaid Sunday.
+ * WEEKLY OFF GRANTING — three-tier proportional
+ * ─────────────────────────────────────────────
+ *   Tier 1  effectivePresent ≥ (workingDays − LENIENCY)   →  all WOs paid
+ *   Tier 2  effectivePresent > daysPerWeeklyOff           →  floor(eff / dpw) WOs
+ *   Tier 3  effectivePresent ≤ daysPerWeeklyOff           →  0 WOs
  *
- *   else (working_days < 4):
- *     → Unpaid Sunday.
+ *   effectivePresent = daysPresent + daysHalfPresent + daysWOP + paidHolidays
+ *                      (daysWOP counts — the employee actually showed up)
+ *   daysPerWeeklyOff = workingDays / totalWeeklyOffs
+ *
+ * CONTRACTOR MODEL
+ * ────────────────
+ * Strictly daily wage. No weekly offs, no holidays, no base entitlement.
+ *   finalPayable = daysPresent + daysHalfPresent + daysWOP
+ *
+ * GENERALISED WEEKLY OFF (not just Sunday)
+ * ────────────────────────────────────────
+ * The employee's `weekly_off_day` (0=Sun, 1=Mon, … 6=Sat) is passed in as
+ * `options.weeklyOffDay`. All "Sunday" detection is generalised to this
+ * field. The field is persisted on `employees.weekly_off_day`.
  */
 
 const { parseHoursToDecimal } = require('./parser');
-// isContractor is not detected here — it's passed in via options.isContractor
-// from payroll.js which uses isContractorForPayroll() at call time.
 
-/**
- * Get all dates in a month as YYYY-MM-DD strings
- */
+/** Hardcoded lenience: max absent working days before ANY weekly off is lost */
+const WEEKLY_OFF_LENIENCY = 2;
+
+/** Get all dates in a month as YYYY-MM-DD strings */
 function getMonthDates(month, year) {
   const dates = [];
   const daysInMonth = new Date(year, month, 0).getDate();
@@ -40,24 +56,16 @@ function getMonthDates(month, year) {
   return dates;
 }
 
-/**
- * Get day of week (0=Sunday, 1=Monday, ... 6=Saturday) for a date string
- */
+/** Day of week (0=Sunday … 6=Saturday) */
 function getDayOfWeek(dateStr) {
   return new Date(dateStr + 'T12:00:00').getDay();
 }
 
-/**
- * Parse HH:MM to decimal hours
- */
 function timeToHours(timeStr) {
   return parseHoursToDecimal(timeStr);
 }
 
-/**
- * Count working days from a list of day records
- * P = 1.0, WOP = 1.0, ½P = 0.5, WO½P = 0.5, A/WO = 0
- */
+/** Count working days from a list of day records (legacy helper) */
 function countWorkingDays(dayRecords) {
   let days = 0;
   for (const r of dayRecords) {
@@ -69,72 +77,65 @@ function countWorkingDays(dayRecords) {
 }
 
 /**
- * Main day calculation function.
+ * Main day calculation.
  *
  * @param {string} employeeCode
- * @param {number} month
+ * @param {number} month 1-12
  * @param {number} year
  * @param {string} company
- * @param {Array} attendanceRecords - attendance_processed records for this employee this month
- * @param {Object} leaveBalances - { CL: number, EL: number, SL: number }
- * @param {Array} holidays - holiday records { date: 'YYYY-MM-DD' } for this month
- * @returns {Object} day calculation result
+ * @param {Array}  attendanceRecords  attendance_processed rows for this employee this month
+ * @param {Object} leaveBalances      { CL, EL, SL } — retained for backward compat, unused by WO logic
+ * @param {Array}  holidays           [{ date, applicable_to }, …]
+ * @param {Object} options
+ * @param {boolean} options.isContractor
+ * @param {number}  options.weeklyOffDay   0=Sun … 6=Sat (default 0)
+ * @param {string}  options.employmentType Permanent / Contractor / Worker / SILP / …
+ * @param {number}  options.manualExtraDutyDays
  */
 function calculateDays(employeeCode, month, year, company, attendanceRecords, leaveBalances, holidays, options = {}) {
   const contractorMode = options.isContractor || false;
+  const weeklyOffDay = Number.isInteger(options.weeklyOffDay) ? options.weeklyOffDay : 0;
+  const employmentType = options.employmentType || (contractorMode ? 'Contractor' : 'Permanent');
+
   const allDates = getMonthDates(month, year);
   const daysInMonth = allDates.length;
 
-  // Build a map of date → attendance record
+  // ── Build date → attendance record map (skip night-shift OUT-only rows) ──
   const recordByDate = {};
   for (const r of attendanceRecords) {
-    // Skip night-shift OUT-only records (the OUT portion is counted on the IN date)
     if (r.is_night_out_only) continue;
     recordByDate[r.date] = r;
   }
 
-  // ── Per-employee holiday filtering (April 2026 fix) ──
-  // Each holiday row carries an `applicable_to` field: 'All', 'Permanent',
-  // or 'Contract'. Contractors must NOT receive holidays they don't qualify
-  // for, AND when a holiday isn't applicable to them the date must behave
-  // as a normal working day (so absence on that date counts as absent).
-  //
-  // Build a per-employee filtered set early so the attendance loop, the
-  // working-days formula, and the paid_holidays count all use the SAME
-  // filtered view.
+  // ── Per-employee holiday filtering ──
+  // Permanent employees see holidays tagged 'All' or 'Permanent'.
+  // Contractors only see holidays explicitly tagged for them.
   const applicableHolidays = (holidays || []).filter(h => {
     const at = (h.applicable_to || 'All').toString().trim().toLowerCase();
     if (contractorMode) {
-      // Contractors only get holidays explicitly tagged for them.
       return at === 'contract' || at === 'contractor';
     }
-    // Permanent (and Worker/Sales/SILP/Driver — anything non-contract):
-    // get holidays tagged 'All' or 'Permanent'.
     return at === 'all' || at === 'permanent' || at === '';
   });
-
   const holidayDates = new Set(applicableHolidays.map(h => h.date));
 
-  // Count Sundays in the month
-  const sundayDates = allDates.filter(d => getDayOfWeek(d) === 0);
-  const totalSundays = sundayDates.length;
+  // ── Weekly off dates (generalised per employee) ──
+  const weeklyOffDates = allDates.filter(d => getDayOfWeek(d) === weeklyOffDay);
+  const totalWeeklyOffs = weeklyOffDates.length;
 
-  // Count APPLICABLE holidays that are NOT Sundays
-  let holidayCount = 0;
-  const holidayNonSunday = [];
+  // ── Holidays that are NOT on the employee's weekly off day ──
+  const holidayNonWeeklyOff = [];
   for (const hDate of holidayDates) {
-    if (allDates.includes(hDate) && getDayOfWeek(hDate) !== 0) {
-      holidayCount++;
-      holidayNonSunday.push(hDate);
+    if (allDates.includes(hDate) && getDayOfWeek(hDate) !== weeklyOffDay) {
+      holidayNonWeeklyOff.push(hDate);
     }
   }
+  const holidayCount = holidayNonWeeklyOff.length;
 
-  // Total working days available = calendar days - sundays - applicable holidays
-  // Contractors with no applicable holidays will see a higher totalWorkingDays
-  // (which is correct — for them, holidays ARE working days).
-  const totalWorkingDays = daysInMonth - totalSundays - holidayCount;
+  // workingDays = Mon-Sat-equivalent (calendar days minus WOs minus applicable holidays)
+  const workingDays = daysInMonth - totalWeeklyOffs - holidayCount;
 
-  // Count attendance
+  // ── Attendance loop ──
   let daysPresent = 0;
   let daysHalfPresent = 0;
   let daysWOP = 0;
@@ -144,185 +145,220 @@ function calculateDays(employeeCode, month, year, company, attendanceRecords, le
   let lateCount = 0;
 
   for (const dateStr of allDates) {
-    const isSunday = getDayOfWeek(dateStr) === 0;
+    const isWeeklyOff = getDayOfWeek(dateStr) === weeklyOffDay;
     const isHoliday = holidayDates.has(dateStr);
 
     const rec = recordByDate[dateStr];
     if (!rec) {
-      // Only count as absent if it's a regular working day (not Sunday, not holiday)
-      if (!isHoliday && !isSunday) daysAbsent++;
+      // No record → absent only if it's a regular working day
+      if (!isHoliday && !isWeeklyOff) daysAbsent++;
       continue;
     }
 
     const status = rec.status_final || rec.status_original || '';
 
     if (status === 'P') daysPresent += 1;
-    else if (status === 'WOP') daysWOP += 1;                           // WOP counted ONLY in daysWOP, not daysPresent
-    else if (status === '½P' || status === 'HP') daysHalfPresent += 0.5;  // Handle both '½P' and 'HP' status codes
-    else if (status === 'WO½P') daysWOP += 0.5;
+    else if (status === 'WOP') daysWOP += 1;                      // worked on weekly off (extra)
+    else if (status === '½P' || status === 'HP') daysHalfPresent += 0.5;
+    else if (status === 'WO½P') daysWOP += 0.5;                   // half day on weekly off (extra)
     else if (status === 'A') {
-      // Sundays and holidays should NEVER be counted as absent days
-      // They are weekly offs / public holidays, not absent days
-      if (!isSunday && !isHoliday) daysAbsent++;
+      // Absent on a weekly off or holiday does not count as an absence
+      if (!isWeeklyOff && !isHoliday) daysAbsent++;
     }
-    // WO status on Sunday/weekly off is expected — don't count as absent
+    // WO / weekly off taken is expected — no count
 
-    // Track holiday duty — employee worked on a declared holiday
-    if (isHoliday && !isSunday) {
+    // Holiday duty — worked a declared non-weekly-off holiday
+    if (isHoliday && !isWeeklyOff) {
       if (status === 'P' || status === 'WOP') holidayDutyDays += 1;
       else if (status === '½P' || status === 'HP' || status === 'WO½P') holidayDutyDays += 0.5;
     }
 
-    // Count late arrivals
     if (rec.is_late_arrival) lateCount++;
-
-    // OT hours
     if (rec.overtime_minutes) otHours += rec.overtime_minutes / 60;
   }
 
-  // ─────────────────────────────────────────────────────────────
-  // CONTRACTOR SHORTCUT — daily wage, no paid Sundays/holidays
-  // ─────────────────────────────────────────────────────────────
+  // ══════════════════════════════════════════════════════════════
+  // CONTRACTOR PATH — daily wage, no weekly offs, no holidays
+  // ══════════════════════════════════════════════════════════════
   if (contractorMode) {
-    // Contractor payable = present + half + WOP (they worked those days)
     const finalPayable = Math.round((daysPresent + daysHalfPresent + daysWOP) * 100) / 100;
-    // Build a minimal weekBreakdown so the UI can still render something sane
-    const cWeekBreakdown = sundayDates.map(sundayDate => ({
-      sundayDate,
+    const cWeekBreakdown = weeklyOffDates.map(d => ({
+      sundayDate: d,
+      weeklyOffDate: d,
       weekDays: [],
       availableDays: 0,
       workedDays: 0,
       requiredDays: 0,
       sundayPaid: false,
+      weeklyOffPaid: false,
       clUsed: 0,
       elUsed: 0,
       lop: 0,
-      note: 'Contractor — no Sunday pay'
+      note: 'Contractor — no paid weekly offs'
     }));
     return {
       employeeCode, month, year, company,
-      totalCalendarDays: daysInMonth, totalSundays, totalHolidays: holidayCount, totalWorkingDays,
+      totalCalendarDays: daysInMonth,
+      weeklyOffDay,
+      totalWeeklyOffs,
+      totalSundays: totalWeeklyOffs,  // backward compat
+      totalHolidays: 0,
+      totalWorkingDays: workingDays,
       daysPresent: Math.round(daysPresent * 100) / 100,
       daysHalfPresent: Math.round(daysHalfPresent * 100) / 100,
       daysWOP: Math.round(daysWOP * 100) / 100,
       daysAbsent,
-      paidSundays: 0, unpaidSundays: totalSundays, paidHolidays: 0,
+      paidWeeklyOffs: 0,
+      unpaidWeeklyOffs: totalWeeklyOffs,
+      paidSundays: 0,             // backward compat
+      unpaidSundays: totalWeeklyOffs,
+      paidHolidays: 0,
       clUsed: 0, elUsed: 0, slUsed: 0, lopDays: 0,
+      baseEntitlement: 0,
+      totalAbsences: 0,
+      effectivePresent: Math.round((daysPresent + daysHalfPresent + daysWOP) * 100) / 100,
+      daysPerWeeklyOff: 0,
+      weeklyOffThreshold: null,
+      weeklyOffTier: 'contractor',
+      weeklyOffNote: 'Contractor — no paid weekly offs',
       totalPayableDays: finalPayable,
       extraDutyDays: 0,
       holidayDutyDays: Math.round(holidayDutyDays * 100) / 100,
       otHours: Math.round(otHours * 100) / 100,
-      otDays: 0, lateCount,
+      otDays: 0,
+      lateCount,
       weekBreakdown: JSON.stringify(cWeekBreakdown),
       isContractor: 1,
       employmentType: 'Contractor',
       sundayLeniency: null,
       sundayThreshold: null,
-      sundayNote: 'Contractor — no Sunday pay'
+      sundayNote: 'Contractor — no paid weekly offs'
     };
   }
 
-  // ─────────────────────────────────────────────────────────────
-  // PERMANENT STAFF — Monthly Leniency Model (April 2026 overhaul)
-  // ─────────────────────────────────────────────────────────────
-  // Old model: week-by-week Sunday granting with CL/EL fallback + LOP shortage.
-  // New model: ONE monthly check. If effectivePresent >= (workingDays - leniency),
-  // ALL Sundays are paid. Otherwise, first N Sundays are paid where
-  // N = totalSundays - sundaysLost. No CL/EL deductions from Sunday logic;
-  // CL/EL are managed separately through the leave system.
+  // ══════════════════════════════════════════════════════════════
+  // PERMANENT PATH — baseline minus absences + extra work
+  // ══════════════════════════════════════════════════════════════
+  const paidHolidays = holidayCount;
 
-  const SUNDAY_LENIENCY = 2; // hardcoded — forgive up to 2 absent working days
-  const clUsed = 0; // leave deductions no longer tied to Sunday logic
-  const elUsed = 0;
-  const lopDays = 0;
+  // daysPerWeeklyOff — how many working days "earn" one weekly off
+  const daysPerWeeklyOff = totalWeeklyOffs > 0 ? workingDays / totalWeeklyOffs : workingDays;
 
-  // paidHolidays (non-Sunday holidays) is computed unconditionally for permanent
-  const paidHolidays = holidayNonSunday.length;
+  // effectivePresent — WOP counts! They showed up.
+  const effectivePresent = daysPresent + daysHalfPresent + daysWOP + paidHolidays;
+  const threshold = workingDays - WEEKLY_OFF_LENIENCY;
 
-  // workingDays = Mon-Sat days that are NOT holidays
-  const workingDays = daysInMonth - totalSundays - paidHolidays;
-  // effectivePresent = actual work + holidays (holidays already accrue as "free" days)
-  const effectivePresent = daysPresent + daysHalfPresent + paidHolidays;
-  const sundayThreshold = workingDays - SUNDAY_LENIENCY;
+  // ── Three-tier weekly off granting ──
+  let paidWeeklyOffs = 0;
+  let unpaidWeeklyOffs = 0;
+  let weeklyOffTier;
+  let weeklyOffNote;
 
-  let paidSundays = 0;
-  let unpaidSundays = 0;
-  let sundayNote = '';
-
-  if (effectivePresent >= sundayThreshold) {
-    paidSundays = totalSundays;
-    unpaidSundays = 0;
-    sundayNote = `Present ${effectivePresent}/${workingDays} (threshold ${sundayThreshold}) → All ${totalSundays} Sundays paid`;
+  if (effectivePresent >= threshold) {
+    // TIER 1: good attendance → all weekly offs paid
+    paidWeeklyOffs = totalWeeklyOffs;
+    unpaidWeeklyOffs = 0;
+    weeklyOffTier = 'tier1_full';
+    weeklyOffNote = `Tier 1: ${effectivePresent}/${workingDays} present (≥${threshold}) → All ${totalWeeklyOffs} weekly offs paid`;
+  } else if (effectivePresent > daysPerWeeklyOff) {
+    // TIER 2: proportional — each chunk of working days earns 1 weekly off
+    paidWeeklyOffs = Math.min(totalWeeklyOffs, Math.floor(effectivePresent / daysPerWeeklyOff));
+    unpaidWeeklyOffs = totalWeeklyOffs - paidWeeklyOffs;
+    weeklyOffTier = 'tier2_proportional';
+    weeklyOffNote = `Tier 2: ${effectivePresent}/${workingDays} present. floor(${effectivePresent}/${daysPerWeeklyOff.toFixed(2)})=${paidWeeklyOffs} weekly off(s) paid, ${unpaidWeeklyOffs} lost`;
   } else {
-    const sundaysLost = Math.min(totalSundays, sundayThreshold - effectivePresent);
-    paidSundays = Math.max(0, totalSundays - sundaysLost);
-    unpaidSundays = totalSundays - paidSundays;
-    sundayNote = `Present ${effectivePresent}/${workingDays} (threshold ${sundayThreshold}) → ${sundaysLost} Sunday(s) lost, ${paidSundays} paid`;
+    // TIER 3: severe absence → no weekly offs
+    paidWeeklyOffs = 0;
+    unpaidWeeklyOffs = totalWeeklyOffs;
+    weeklyOffTier = 'tier3_none';
+    weeklyOffNote = `Tier 3: ${effectivePresent}/${workingDays} present (≤${daysPerWeeklyOff.toFixed(2)}) → 0 weekly offs paid`;
   }
 
-  // Build weekBreakdown for the UI: one entry per Sunday, first N paid, rest not
-  const weekBreakdown = sundayDates.map((sundayDate, i) => ({
-    sundayDate,
+  // ── Baseline model ──
+  const baseEntitlement = workingDays + paidWeeklyOffs + paidHolidays;
+  const totalAbsences = daysAbsent + daysHalfPresent;
+  // WOP is ADDITIONAL — on top of entitlement
+  const rawPayable = baseEntitlement - totalAbsences + daysWOP;
+  const manualGrantDays = options.manualExtraDutyDays || 0;
+  const finalPayable = Math.max(0, Math.round((rawPayable + manualGrantDays) * 100) / 100);
+
+  // Extra duty — anything above daysInMonth
+  const extraDutyDays = Math.max(0, Math.round((finalPayable - daysInMonth) * 100) / 100);
+
+  // ── UI week breakdown: one entry per weekly off, first N paid ──
+  const weekBreakdown = weeklyOffDates.map((d, i) => ({
+    sundayDate: d,             // legacy field for existing UI
+    weeklyOffDate: d,
     weekDays: [],
     availableDays: workingDays,
     workedDays: effectivePresent,
-    requiredDays: sundayThreshold,
-    sundayPaid: i < paidSundays,
+    requiredDays: threshold,
+    sundayPaid: i < paidWeeklyOffs,
+    weeklyOffPaid: i < paidWeeklyOffs,
     clUsed: 0,
     elUsed: 0,
     lop: 0,
-    note: i < paidSundays
-      ? `Paid (monthly leniency: ${effectivePresent} ≥ ${sundayThreshold})`
-      : `Unpaid (monthly leniency: ${effectivePresent} < ${sundayThreshold}, Sunday #${i+1} of ${totalSundays})`
+    note: i < paidWeeklyOffs
+      ? `Paid (${weeklyOffTier})`
+      : `Unpaid (${weeklyOffTier})`
   }));
-  // daysPresent = regular working day attendance (P status only, excludes WOP)
-  // daysWOP = weekly off worked (WOP status, Sundays/holidays worked)
-  // Gross earned = all working/attendance days + paid offs
-  const grossEarned = daysPresent + daysWOP + daysHalfPresent + paidSundays + paidHolidays;
-  const netPayable = grossEarned - lopDays;
-
-  // Extra Duty: days worked beyond the regular working schedule (before LOP)
-  // = WOP days + any excess working-day attendance over scheduled working days
-  const extraWorkingDays = Math.max(0, daysPresent + daysHalfPresent - totalWorkingDays);
-  const manualGrantDays = options.manualExtraDutyDays || 0;
-  const extraDutyDays = Math.round((daysWOP + extraWorkingDays + manualGrantDays) * 100) / 100;
-
-  // Payable: capped at calendar days (extra duty is paid separately)
-  const finalPayable = Math.max(0, Math.min(daysInMonth, netPayable));
 
   return {
-    employeeCode,
-    month,
-    year,
-    company,
+    employeeCode, month, year, company,
     totalCalendarDays: daysInMonth,
-    totalSundays,
-    totalHolidays: holidayCount,
-    totalWorkingDays,
+
+    // New weekly off fields
+    weeklyOffDay,
+    totalWeeklyOffs,
+    paidWeeklyOffs: Math.round(paidWeeklyOffs * 100) / 100,
+    unpaidWeeklyOffs,
+    weeklyOffNote,
+    weeklyOffTier,
+    weeklyOffThreshold: threshold,
+    daysPerWeeklyOff: Math.round(daysPerWeeklyOff * 100) / 100,
+
+    // Backward-compat Sunday field names (mapped to weekly off values)
+    totalSundays: totalWeeklyOffs,
+    paidSundays: Math.round(paidWeeklyOffs * 100) / 100,
+    unpaidSundays: unpaidWeeklyOffs,
+
+    totalHolidays: paidHolidays,
+    totalWorkingDays: workingDays,
+
     daysPresent: Math.round(daysPresent * 100) / 100,
     daysHalfPresent: Math.round(daysHalfPresent * 100) / 100,
     daysWOP: Math.round(daysWOP * 100) / 100,
     daysAbsent,
-    paidSundays: Math.round(paidSundays * 100) / 100,
-    unpaidSundays,
+
     paidHolidays,
-    clUsed: Math.round(clUsed * 100) / 100,
-    elUsed: Math.round(elUsed * 100) / 100,
-    slUsed: 0, // SL handled separately
-    lopDays: Math.round(lopDays * 100) / 100,
-    totalPayableDays: Math.round(finalPayable * 100) / 100,
+
+    // Transparency fields (baseline model)
+    baseEntitlement: Math.round(baseEntitlement * 100) / 100,
+    totalAbsences: Math.round(totalAbsences * 100) / 100,
+    effectivePresent: Math.round(effectivePresent * 100) / 100,
+
+    // Leave fields — retained for backward compat, unused by WO logic
+    clUsed: 0,
+    elUsed: 0,
+    slUsed: 0,
+    lopDays: 0,
+
+    totalPayableDays: finalPayable,
     extraDutyDays,
     otHours: Math.round(otHours * 100) / 100,
     otDays: Math.round(otHours / 12 * 100) / 100,
     lateCount,
     holidayDutyDays: Math.round(holidayDutyDays * 100) / 100,
+
     weekBreakdown: JSON.stringify(weekBreakdown),
-    // ── Monthly leniency model fields (permanent employees) ──
+
     isContractor: 0,
-    employmentType: 'Permanent',
-    sundayLeniency: SUNDAY_LENIENCY,
-    sundayThreshold,
-    sundayNote
+    employmentType,
+
+    // Legacy sunday-* aliases
+    sundayLeniency: WEEKLY_OFF_LENIENCY,
+    sundayThreshold: threshold,
+    sundayNote: weeklyOffNote
   };
 }
 
@@ -338,7 +374,9 @@ function saveDayCalculation(db, calcResult) {
       paid_sundays, unpaid_sundays, paid_holidays,
       cl_used, el_used, sl_used, lop_days,
       total_payable_days, extra_duty_days, ot_hours, ot_days, late_count, holiday_duty_days, week_breakdown,
-      is_contractor, sunday_threshold, sunday_note
+      is_contractor, sunday_threshold, sunday_note,
+      weekly_off_day, base_entitlement, total_absences, effective_present,
+      days_per_weekly_off, weekly_off_threshold, weekly_off_tier, weekly_off_note
     ) VALUES (
       ?, ?, ?, ?,
       ?, ?, ?, ?,
@@ -346,7 +384,9 @@ function saveDayCalculation(db, calcResult) {
       ?, ?, ?,
       ?, ?, ?, ?,
       ?, ?, ?, ?, ?, ?, ?,
-      ?, ?, ?
+      ?, ?, ?,
+      ?, ?, ?, ?,
+      ?, ?, ?, ?
     )
     ON CONFLICT(employee_code, month, year, company) DO UPDATE SET
       total_calendar_days = excluded.total_calendar_days,
@@ -374,6 +414,14 @@ function saveDayCalculation(db, calcResult) {
       is_contractor = excluded.is_contractor,
       sunday_threshold = excluded.sunday_threshold,
       sunday_note = excluded.sunday_note,
+      weekly_off_day = excluded.weekly_off_day,
+      base_entitlement = excluded.base_entitlement,
+      total_absences = excluded.total_absences,
+      effective_present = excluded.effective_present,
+      days_per_weekly_off = excluded.days_per_weekly_off,
+      weekly_off_threshold = excluded.weekly_off_threshold,
+      weekly_off_tier = excluded.weekly_off_tier,
+      weekly_off_note = excluded.weekly_off_note,
       is_approved = 0
   `);
 
@@ -388,10 +436,18 @@ function saveDayCalculation(db, calcResult) {
     calcResult.weekBreakdown,
     calcResult.isContractor ? 1 : 0,
     calcResult.sundayThreshold !== undefined && calcResult.sundayThreshold !== null ? calcResult.sundayThreshold : null,
-    calcResult.sundayNote || ''
+    calcResult.sundayNote || '',
+    calcResult.weeklyOffDay ?? 0,
+    calcResult.baseEntitlement ?? 0,
+    calcResult.totalAbsences ?? 0,
+    calcResult.effectivePresent ?? 0,
+    calcResult.daysPerWeeklyOff ?? 0,
+    calcResult.weeklyOffThreshold !== undefined && calcResult.weeklyOffThreshold !== null ? calcResult.weeklyOffThreshold : null,
+    calcResult.weeklyOffTier || '',
+    calcResult.weeklyOffNote || ''
   );
 
   return calcResult;
 }
 
-module.exports = { calculateDays, saveDayCalculation, getMonthDates, getDayOfWeek };
+module.exports = { calculateDays, saveDayCalculation, getMonthDates, getDayOfWeek, WEEKLY_OFF_LENIENCY };
