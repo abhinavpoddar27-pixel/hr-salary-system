@@ -332,65 +332,27 @@ function computeEmployeeSalary(db, employee, month, year, company) {
   let otNote = '';
 
   if (!isContract) {
-    // Count Sundays in this month (kept for the diagnostic note below)
-    let sundaysInMonth = 0;
-    for (let d = 1; d <= daysInMonth; d++) {
-      if (new Date(year, month - 1, d).getDay() === 0) sundaysInMonth++;
-    }
-    const standardWorkingDays = daysInMonth - sundaysInMonth;
-
-    // ─── Payable-based OT (April 2026 fix) ───
-    // OT = payable days that exceed the calendar month length.
-    // Uncapped payable = present + halfP + WOP + paidSundays + paidHolidays
-    // (the dayCalculation caps total_payable_days at daysInMonth — anything
-    // above that overflow is OT). Crucially this counts paid holidays and
-    // paid Sundays toward OT, not just punch attendance, so an employee who
-    // worked the full month and gets a holiday or paid Sunday push above 31
-    // earns the extra day(s) as OT.
-    const dcWOP = dayCalc.days_wop || 0;
-    const dcPaidSundays = dayCalc.paid_sundays || 0;
-    const dcPaidHolidays = dayCalc.paid_holidays || 0;
-    const uncappedPayable = daysPresent + daysHalfPresent + dcWOP + dcPaidSundays + dcPaidHolidays;
-    punchBasedOT = Math.max(0, uncappedPayable - daysInMonth);
-
-    // Diagnostic only — kept for the otNote string below
-    const totalAttended = daysPresent + dcWOP + daysHalfPresent;
-
-    // Condition 2: Finance-verified manual extra duty from day_corrections
-    // (stored in correction_delta, flagged via correction_type='extra_duty' + finance_verified=1)
-    try {
-      const manualED = db.prepare(`
-        SELECT COALESCE(SUM(correction_delta), 0) AS total
-        FROM day_corrections
-        WHERE employee_code = ? AND month = ? AND year = ?
-          AND COALESCE(correction_type, 'day') = 'extra_duty'
-          AND COALESCE(finance_verified, 0) = 1
-      `).get(employee.code, month, year);
-      financeExtraDuty = manualED?.total || 0;
-    } catch {}
-
-    // Also absorb fully-approved extra_duty_grants (legacy dual-approval workflow)
-    let extraDutyDaysFromGrants = 0;
-    try {
-      const grantsRow = db.prepare(`
-        SELECT COALESCE(SUM(duty_days), 0) AS total_days
-        FROM extra_duty_grants
-        WHERE employee_code = ? AND month = ? AND year = ?
-          AND status = 'APPROVED'
-          AND finance_status = 'FINANCE_APPROVED'
-      `).get(employee.code, month, year);
-      extraDutyDaysFromGrants = grantsRow?.total_days || 0;
-    } catch {}
+    // ─── Extra duty from day calculation (April 2026 overhaul) ───
+    // dayCalculation.js now produces `extra_duty_days = max(0, finalPayable − daysInMonth)`
+    // under the baseline model:
+    //   finalPayable = baseEntitlement − totalAbsences + daysWOP (+ manualExtraDutyDays)
+    // So anything above the calendar month length is already the correct OT value.
+    // Salary computation MUST use this directly — never recompute from attendance.
+    // Fully-approved extra_duty_grants are already folded into dayCalc via Stage 6
+    // (payroll route passes manualExtraDutyDays into calculateDays).
+    punchBasedOT = Math.max(0, dayCalc.extra_duty_days || 0);
+    financeExtraDuty = 0;
 
     // Hard caps: non-negative, never exceed daysInMonth
-    totalOTDays = Math.max(0, punchBasedOT + financeExtraDuty + extraDutyDaysFromGrants);
+    totalOTDays = Math.max(0, punchBasedOT);
     totalOTDays = Math.min(totalOTDays, daysInMonth);
 
     otPay = Math.round(totalOTDays * otDailyRate * 100) / 100;
 
+    const dcPayable = dayCalc.total_payable_days || 0;
     otNote = totalOTDays > 0
-      ? `Payable ${uncappedPayable}/${daysInMonth} days (attended ${totalAttended}/${standardWorkingDays}). Payable-based OT: ${punchBasedOT}, Finance ED: ${financeExtraDuty + extraDutyDaysFromGrants}. Total OT: ${totalOTDays} days @ ₹${Math.round(otDailyRate)}/day`
-      : `Payable ${uncappedPayable}/${daysInMonth} days (attended ${totalAttended}/${standardWorkingDays}). No OT.`;
+      ? `Payable ${dcPayable} days, ${totalOTDays} above ${daysInMonth}-day month → OT. ${totalOTDays} days × ₹${Math.round(otDailyRate)}/day`
+      : `Payable ${dcPayable}/${daysInMonth} days. No OT.`;
   } else {
     otNote = 'Contractor — no OT';
   }
