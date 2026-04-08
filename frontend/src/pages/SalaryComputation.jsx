@@ -185,6 +185,10 @@ export default function SalaryComputation() {
       esi: allSalaries.reduce((s, r) => s + (r.esi_employee || 0) + (r.esi_employer || 0), 0),
       net: active.reduce((s, r) => s + (r.net_salary || 0), 0),
       heldNet: allSalaries.filter(s => s.salary_held).reduce((s, r) => s + (r.net_salary || 0), 0),
+      otPay: allSalaries.reduce((s, r) => s + (r.ot_pay || 0), 0),
+      edPay: allSalaries.reduce((s, r) => s + (r.ed_pay || 0), 0),
+      takeHome: active.reduce((s, r) => s + (r.take_home || r.total_payable || r.net_salary || 0), 0),
+      edEmployees: allSalaries.filter(s => (s.ed_pay || 0) > 0).length,
     }
   }, [allSalaries])
 
@@ -267,7 +271,7 @@ export default function SalaryComputation() {
 
         {/* Summary Cards */}
         {allSalaries.length > 0 && (
-          <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
+          <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-7 gap-4">
             <div className="stat-card border-l-4 border-l-blue-400">
               <span className="text-xs font-semibold text-slate-400 uppercase tracking-wider">Total Gross</span>
               <span className="text-xl font-bold text-slate-800">{fmtINR(computedTotals.gross)}</span>
@@ -281,9 +285,19 @@ export default function SalaryComputation() {
               <span className="text-xs font-semibold text-slate-400 uppercase tracking-wider"><Abbr code="ESI">ESI</Abbr> (Both)</span>
               <span className="text-xl font-bold text-purple-600">{fmtINR(computedTotals.esi)}</span>
             </div>
+            <div className="stat-card border-l-4 border-l-cyan-400">
+              <span className="text-xs font-semibold text-slate-400 uppercase tracking-wider">OT Pay</span>
+              <span className="text-xl font-bold text-cyan-700">{fmtINR(computedTotals.otPay)}</span>
+              <span className="text-xs text-slate-400">Punch-detected</span>
+            </div>
+            <div className="stat-card border-l-4 border-l-fuchsia-400">
+              <span className="text-xs font-semibold text-slate-400 uppercase tracking-wider">ED Pay</span>
+              <span className="text-xl font-bold text-fuchsia-700">{fmtINR(computedTotals.edPay)}</span>
+              <span className="text-xs text-slate-400">{computedTotals.edEmployees} emp · finance approved</span>
+            </div>
             <div className="stat-card border-l-4 border-l-emerald-400">
-              <span className="text-xs font-semibold text-slate-400 uppercase tracking-wider">Bank Transfer</span>
-              <span className="text-xl font-bold text-emerald-700">{fmtINR(computedTotals.net)}</span>
+              <span className="text-xs font-semibold text-slate-400 uppercase tracking-wider">Take Home</span>
+              <span className="text-xl font-bold text-emerald-700">{fmtINR(computedTotals.takeHome)}</span>
               {heldCount > 0 && <span className="text-xs text-amber-600">{heldCount} held ({fmtINR(computedTotals.heldNet)})</span>}
             </div>
             <div className="stat-card border-l-4 border-l-amber-400">
@@ -496,14 +510,14 @@ export default function SalaryComputation() {
                     <th className="cursor-pointer select-none text-center" onClick={() => toggleSort('payable_days')}>Days{sortIndicator('payable_days')}</th>
                     <th className="cursor-pointer select-none" onClick={() => toggleSort('gross_salary')}>Gross{sortIndicator('gross_salary')}</th>
                     <th className="cursor-pointer select-none" onClick={() => toggleSort('gross_earned')}>Earned{sortIndicator('gross_earned')}</th>
-                    <th className="cursor-pointer select-none" onClick={() => toggleSort('ot_pay')} title="OT + Extra Duty (WOP days)">OT/ED{sortIndicator('ot_pay')}</th>
+                    <th className="cursor-pointer select-none" onClick={() => toggleSort('ot_pay')} title="OT (punch-detected) and ED (finance-approved grants), shown separately">OT / ED{sortIndicator('ot_pay')}</th>
                     <th className="cursor-pointer select-none" onClick={() => toggleSort('pf_employee')}>PF{sortIndicator('pf_employee')}</th>
                     <th className="cursor-pointer select-none" onClick={() => toggleSort('esi_employee')}>ESI{sortIndicator('esi_employee')}</th>
                     <th>Adv</th>
                     <th>Loan</th>
                     <th className="cursor-pointer select-none" onClick={() => toggleSort('total_deductions')}>Ded{sortIndicator('total_deductions')}</th>
                     <th className="cursor-pointer select-none bg-slate-50 text-slate-600" onClick={() => toggleSort('net_salary')} title="Net = Gross Earned − Deductions (base only, no OT)">Net{sortIndicator('net_salary')}</th>
-                    <th className="cursor-pointer select-none bg-emerald-50 text-emerald-700" onClick={() => toggleSort('total_payable')} title="Total Payable = Net + OT (actual take-home)">Take Home{sortIndicator('total_payable')}</th>
+                    <th className="cursor-pointer select-none bg-emerald-50 text-emerald-700" onClick={() => toggleSort('take_home')} title="Take Home = Net + OT + Holiday Duty + ED (actual amount paid)">Take Home{sortIndicator('take_home')}</th>
                     <th></th>
                   </tr>
                 </thead>
@@ -578,11 +592,20 @@ export default function SalaryComputation() {
                         </td>
                         <td className="font-mono">{fmtINR(s.gross_salary)}</td>
                         <td className="font-mono">{fmtINR(s.gross_earned)}</td>
-                        <td className="font-mono text-cyan-600">
-                          {s.ot_pay > 0 ? fmtINR(s.ot_pay) : '—'}
-                          {(s.ot_days || 0) > 0 && s.ot_daily_rate > 0 && (
-                            <div className="text-[9px] text-slate-400">{s.ot_days}×{fmtINR(s.ot_daily_rate)}</div>
+                        <td className="font-mono">
+                          {(s.ot_pay || 0) > 0 && (
+                            <div className="text-cyan-600">
+                              {fmtINR(s.ot_pay)}
+                              <div className="text-[9px] text-slate-400">OT {s.ot_days || 0}×{fmtINR(s.ot_daily_rate || 0)}</div>
+                            </div>
                           )}
+                          {(s.ed_pay || 0) > 0 && (
+                            <div className="text-purple-600 mt-0.5">
+                              {fmtINR(s.ed_pay)}
+                              <div className="text-[9px] text-slate-400">ED {s.ed_days || 0}×{fmtINR(s.ot_daily_rate || 0)}</div>
+                            </div>
+                          )}
+                          {!(s.ot_pay || 0) && !(s.ed_pay || 0) && '—'}
                         </td>
                         <td className="text-indigo-600 font-mono">{fmtINR(s.pf_employee)}</td>
                         <td className="text-purple-600 font-mono">{fmtINR(s.esi_employee)}</td>
@@ -590,7 +613,7 @@ export default function SalaryComputation() {
                         <td className="font-mono">{fmtINR(s.loan_recovery)}</td>
                         <td className="text-red-600 font-mono">{fmtINR(s.total_deductions)}</td>
                         <td className="bg-slate-50 text-slate-700 font-mono">{fmtINR(s.net_salary)}</td>
-                        <td className="bg-emerald-50 font-bold text-emerald-700 font-mono">{fmtINR(s.total_payable || s.net_salary)}</td>
+                        <td className="bg-emerald-50 font-bold text-emerald-700 font-mono">{fmtINR(s.take_home || s.total_payable || s.net_salary)}</td>
                         <td>
                           {s.is_finalised ? (
                             <span className="badge-green text-xs">Final</span>
@@ -631,9 +654,24 @@ export default function SalaryComputation() {
                                 <div>
                                   <p className="font-semibold mb-1 text-slate-600">Earnings</p>
                                   <div className="space-y-0.5">
-                                    {[['Basic', s.basic_earned], ['DA', s.da_earned], ['HRA', s.hra_earned], ['Conv.', s.conveyance_earned], ['Other', s.other_allowances_earned], ['OT', s.ot_pay]].map(([k,v]) => v > 0 && (
+                                    {[
+                                      ['Basic', s.basic_earned],
+                                      ['DA', s.da_earned],
+                                      ['HRA', s.hra_earned],
+                                      ['Conv.', s.conveyance_earned],
+                                      ['Other', s.other_allowances_earned],
+                                      ['OT', s.ot_pay],
+                                      ['Holiday Duty', s.holiday_duty_pay],
+                                      ['Extra Duty (ED)', s.ed_pay]
+                                    ].map(([k,v]) => v > 0 && (
                                       <div key={k} className="flex justify-between"><span>{k}</span><span className="font-mono font-medium">{fmtINR(v)}</span></div>
                                     ))}
+                                    {(s.take_home || s.total_payable) > 0 && (
+                                      <div className="flex justify-between mt-1 pt-1 border-t border-slate-200 font-bold text-emerald-700">
+                                        <span>Take Home</span>
+                                        <span className="font-mono">{fmtINR(s.take_home || s.total_payable)}</span>
+                                      </div>
+                                    )}
                                   </div>
                                 </div>
                                 <div>
@@ -669,13 +707,16 @@ export default function SalaryComputation() {
                     <td colSpan={4}>TOTAL ({salaries.length})</td>
                     <td className="font-mono">{fmtINR(salaries.reduce((s, r) => s + (r.gross_salary || 0), 0))}</td>
                     <td className="font-mono">{fmtINR(salaries.reduce((s, r) => s + (r.gross_earned || 0), 0))}</td>
-                    <td className="font-mono text-cyan-600">{fmtINR(salaries.reduce((s, r) => s + (r.ot_pay || 0), 0))}</td>
+                    <td className="font-mono">
+                      <div className="text-cyan-600">OT {fmtINR(salaries.reduce((s, r) => s + (r.ot_pay || 0), 0))}</div>
+                      <div className="text-purple-600">ED {fmtINR(salaries.reduce((s, r) => s + (r.ed_pay || 0), 0))}</div>
+                    </td>
                     <td className="font-mono text-indigo-600">{fmtINR(salaries.reduce((s, r) => s + (r.pf_employee || 0), 0))}</td>
                     <td className="font-mono text-purple-600">{fmtINR(salaries.reduce((s, r) => s + (r.esi_employee || 0), 0))}</td>
                     <td colSpan={2} />
                     <td className="font-mono text-red-600">{fmtINR(salaries.reduce((s, r) => s + (r.total_deductions || 0), 0))}</td>
                     <td className="bg-slate-100 text-slate-700 font-mono">{fmtINR(salaries.filter(s => !s.salary_held).reduce((s, r) => s + (r.net_salary || 0), 0))}</td>
-                    <td className="bg-emerald-100 text-emerald-700 font-mono">{fmtINR(salaries.filter(s => !s.salary_held).reduce((s, r) => s + (r.total_payable || r.net_salary || 0), 0))}</td>
+                    <td className="bg-emerald-100 text-emerald-700 font-mono">{fmtINR(salaries.filter(s => !s.salary_held).reduce((s, r) => s + (r.take_home || r.total_payable || r.net_salary || 0), 0))}</td>
                     <td />
                   </tr>
                 </tfoot>
@@ -729,6 +770,23 @@ export default function SalaryComputation() {
                   <span className="font-bold text-green-800">Net Salary</span>
                   <span className="text-xl font-bold text-green-700 font-mono">{fmtINR(payslip.netSalary)}</span>
                 </div>
+                {((payslip.otPay || 0) > 0 || (payslip.edPay || 0) > 0 || (payslip.holidayDutyPay || 0) > 0) && (
+                  <div className="bg-emerald-50 p-3 rounded-xl border border-emerald-200 space-y-1">
+                    {(payslip.otPay || 0) > 0 && (
+                      <div className="flex justify-between text-xs"><span className="text-slate-600">+ OT Pay</span><span className="font-mono text-cyan-700">{fmtINR(payslip.otPay)}</span></div>
+                    )}
+                    {(payslip.holidayDutyPay || 0) > 0 && (
+                      <div className="flex justify-between text-xs"><span className="text-slate-600">+ Holiday Duty Pay</span><span className="font-mono text-purple-700">{fmtINR(payslip.holidayDutyPay)}</span></div>
+                    )}
+                    {(payslip.edPay || 0) > 0 && (
+                      <div className="flex justify-between text-xs"><span className="text-slate-600">+ Extra Duty Pay ({payslip.edDays || 0}d)</span><span className="font-mono text-fuchsia-700">{fmtINR(payslip.edPay)}</span></div>
+                    )}
+                    <div className="flex justify-between pt-1 border-t border-emerald-200 font-bold">
+                      <span className="text-emerald-800">Take Home</span>
+                      <span className="text-xl font-bold text-emerald-700 font-mono">{fmtINR(payslip.takeHome || payslip.totalPayable || payslip.netSalary)}</span>
+                    </div>
+                  </div>
+                )}
                 {(payslip.grossChanged || payslip.salaryHeld) && (
                   <div className="flex gap-2">
                     {payslip.grossChanged ? <span className="salary-change-flag text-xs px-2 py-1 rounded-lg print-visible">Gross Changed: {fmtINR(payslip.prevMonthGross)} → Current</span> : null}

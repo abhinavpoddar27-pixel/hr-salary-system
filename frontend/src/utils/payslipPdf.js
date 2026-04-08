@@ -32,6 +32,9 @@ function generateSalaryRegisterHTML(payslips, companyConfig, month, year) {
   for (const ps of payslips) {
     const emp = ps.employee;
     const att = ps.attendance || {};
+    const otPay = ps.otPay || ps.earnings?.find(e => e.label === 'OT Pay')?.amount || 0;
+    const edPay = ps.edPay || ps.earnings?.find(e => e.label === 'Extra Duty Pay')?.amount || 0;
+    const takeHome = ps.takeHome || ((ps.totalPayable || ps.netSalary || 0) + edPay);
     const row = {
       code: emp.code,
       name: emp.name || emp.code,
@@ -42,6 +45,8 @@ function generateSalaryRegisterHTML(payslips, companyConfig, month, year) {
       cca: 0,
       conv: ps.earnings?.find(e => e.label?.includes('Conveyance'))?.amount || 0,
       totalEarned: ps.grossEarned || 0,
+      otPay,
+      edPay,
       advance: ps.deductions?.find(d => d.label?.includes('Advance'))?.amount || 0,
       pf: ps.deductions?.find(d => d.label?.includes('PF') && !d.label?.includes('Employer'))?.amount || 0,
       esi: ps.deductions?.find(d => d.label?.includes('ESI') && !d.label?.includes('Employer'))?.amount || 0,
@@ -55,6 +60,7 @@ function generateSalaryRegisterHTML(payslips, companyConfig, month, year) {
       totalDays: att.total_payable_days || 0,
       payable: ps.grossEarned || 0,
       netPayable: ps.netSalary || 0,
+      takeHome,
       department: emp.department || '',
     };
 
@@ -94,6 +100,8 @@ function generateSalaryRegisterHTML(payslips, companyConfig, month, year) {
           <th style="${hdrStyle}">Gross</th>
           <th style="${hdrStyle}">Basic</th>
           <th style="${hdrStyle}">Total Earned</th>
+          <th style="${hdrStyle}">OT Pay</th>
+          <th style="${hdrStyle}">ED Pay</th>
           <th style="${hdrStyle}">Advance</th>
           <th style="${hdrStyle}">PF</th>
           <th style="${hdrStyle}">ESI</th>
@@ -103,27 +111,30 @@ function generateSalaryRegisterHTML(payslips, companyConfig, month, year) {
           <th style="${hdrStyle}">Payable</th>
           <th style="${hdrStyle}">Late Ded</th>
           <th style="${hdrStyle}font-weight:bold;">Net Pay</th>
+          <th style="${hdrStyle}font-weight:bold;background:#cdebd6;">Take Home</th>
           <th style="${hdrStyle}width:50px;">Sign</th>
         </tr>
       </thead>
       <tbody>`;
 
-  let grandTotals = { gross: 0, basic: 0, totalEarned: 0, advance: 0, pf: 0, esi: 0, days: 0, sundays: 0, totalDays: 0, payable: 0, lateDed: 0, netPayable: 0 };
+  let grandTotals = { gross: 0, basic: 0, totalEarned: 0, otPay: 0, edPay: 0, advance: 0, pf: 0, esi: 0, days: 0, sundays: 0, totalDays: 0, payable: 0, lateDed: 0, netPayable: 0, takeHome: 0 };
 
   for (const [key, group] of Object.entries(groups)) {
     if (group.employees.length === 0) continue;
 
     // Group header
     if (key !== permanentKey) {
-      html += `<tr><td colspan="17" style="padding:6px 5px;border:1px solid #999;font-weight:bold;background:#f0e6d2;font-size:10px;">${group.label}</td></tr>`;
+      html += `<tr><td colspan="19" style="padding:6px 5px;border:1px solid #999;font-weight:bold;background:#f0e6d2;font-size:10px;">${group.label}</td></tr>`;
     }
 
-    let groupTotals = { gross: 0, basic: 0, totalEarned: 0, advance: 0, pf: 0, esi: 0, days: 0, sundays: 0, totalDays: 0, payable: 0, lateDed: 0, netPayable: 0 };
+    let groupTotals = { gross: 0, basic: 0, totalEarned: 0, otPay: 0, edPay: 0, advance: 0, pf: 0, esi: 0, days: 0, sundays: 0, totalDays: 0, payable: 0, lateDed: 0, netPayable: 0, takeHome: 0 };
 
     group.employees.forEach((r, i) => {
       groupTotals.gross += r.grossSalary;
       groupTotals.basic += r.basic;
       groupTotals.totalEarned += r.totalEarned;
+      groupTotals.otPay += r.otPay;
+      groupTotals.edPay += r.edPay;
       groupTotals.advance += r.advance;
       groupTotals.pf += r.pf;
       groupTotals.esi += r.esi;
@@ -133,6 +144,7 @@ function generateSalaryRegisterHTML(payslips, companyConfig, month, year) {
       groupTotals.payable += r.payable;
       groupTotals.lateDed += r.lateDed;
       groupTotals.netPayable += r.netPayable;
+      groupTotals.takeHome += r.takeHome;
 
       html += `<tr>
         <td style="${cellStyle}text-align:center;">${i + 1}</td>
@@ -142,6 +154,8 @@ function generateSalaryRegisterHTML(payslips, companyConfig, month, year) {
         <td style="${numStyle}">${fmt(r.grossSalary)}</td>
         <td style="${numStyle}">${fmt(r.basic)}</td>
         <td style="${numStyle}">${fmt(r.totalEarned)}</td>
+        <td style="${numStyle}">${r.otPay ? fmt(r.otPay) : ''}</td>
+        <td style="${numStyle}">${r.edPay ? fmt(r.edPay) : ''}</td>
         <td style="${numStyle}">${r.advance ? fmt(r.advance) : ''}</td>
         <td style="${numStyle}">${r.pf ? fmt(r.pf) : ''}</td>
         <td style="${numStyle}">${r.esi ? fmt(r.esi) : ''}</td>
@@ -151,6 +165,7 @@ function generateSalaryRegisterHTML(payslips, companyConfig, month, year) {
         <td style="${numStyle}font-weight:bold;">${fmt(r.payable)}</td>
         <td style="${numStyle}">${r.lateDed ? fmt(r.lateDed) : ''}</td>
         <td style="${numStyle}font-weight:bold;">${fmt(r.netPayable)}</td>
+        <td style="${numStyle}font-weight:bold;background:#eaf6ec;">${fmt(r.takeHome)}</td>
         <td style="${cellStyle}"></td>
       </tr>`;
     });
@@ -162,6 +177,8 @@ function generateSalaryRegisterHTML(payslips, companyConfig, month, year) {
       <td style="${numStyle}font-weight:bold;">${fmt(groupTotals.gross)}</td>
       <td style="${numStyle}font-weight:bold;">${fmt(groupTotals.basic)}</td>
       <td style="${numStyle}font-weight:bold;">${fmt(groupTotals.totalEarned)}</td>
+      <td style="${numStyle}font-weight:bold;">${fmt(groupTotals.otPay)}</td>
+      <td style="${numStyle}font-weight:bold;">${fmt(groupTotals.edPay)}</td>
       <td style="${numStyle}font-weight:bold;">${fmt(groupTotals.advance)}</td>
       <td style="${numStyle}font-weight:bold;">${fmt(groupTotals.pf)}</td>
       <td style="${numStyle}font-weight:bold;">${fmt(groupTotals.esi)}</td>
@@ -171,6 +188,7 @@ function generateSalaryRegisterHTML(payslips, companyConfig, month, year) {
       <td style="${numStyle}font-weight:bold;">${fmt(groupTotals.payable)}</td>
       <td style="${numStyle}font-weight:bold;">${fmt(groupTotals.lateDed)}</td>
       <td style="${numStyle}font-weight:bold;">${fmt(groupTotals.netPayable)}</td>
+      <td style="${numStyle}font-weight:bold;background:#cdebd6;">${fmt(groupTotals.takeHome)}</td>
       <td style="${cellStyle}"></td>
     </tr>`;
 
@@ -185,6 +203,8 @@ function generateSalaryRegisterHTML(payslips, companyConfig, month, year) {
     <td style="${numStyle}font-weight:bold;">${fmt(grandTotals.gross)}</td>
     <td style="${numStyle}font-weight:bold;">${fmt(grandTotals.basic)}</td>
     <td style="${numStyle}font-weight:bold;">${fmt(grandTotals.totalEarned)}</td>
+    <td style="${numStyle}font-weight:bold;">${fmt(grandTotals.otPay)}</td>
+    <td style="${numStyle}font-weight:bold;">${fmt(grandTotals.edPay)}</td>
     <td style="${numStyle}font-weight:bold;">${fmt(grandTotals.advance)}</td>
     <td style="${numStyle}font-weight:bold;">${fmt(grandTotals.pf)}</td>
     <td style="${numStyle}font-weight:bold;">${fmt(grandTotals.esi)}</td>
@@ -194,6 +214,7 @@ function generateSalaryRegisterHTML(payslips, companyConfig, month, year) {
     <td style="${numStyle}font-weight:bold;">${fmt(grandTotals.payable)}</td>
     <td style="${numStyle}font-weight:bold;">${fmt(grandTotals.lateDed)}</td>
     <td style="${numStyle}font-weight:bold;font-size:10px;">${fmt(grandTotals.netPayable)}</td>
+    <td style="${numStyle}font-weight:bold;font-size:10px;background:#cdebd6;">${fmt(grandTotals.takeHome)}</td>
     <td style="${cellStyle}"></td>
   </tr>`;
 
@@ -251,6 +272,15 @@ function generatePayslipHTML(payslip, companyConfig) {
       </table></div>
     </div>
     <div style="margin-top:12px;padding:10px;background:#e8fde8;border:2px solid #4caf50;text-align:center;font-size:14px;"><strong>Net Salary: ${fmtC(payslip.netSalary)}</strong></div>
+    ${((payslip.otPay || 0) > 0 || (payslip.edPay || 0) > 0 || (payslip.holidayDutyPay || 0) > 0) ? `
+    <div style="margin-top:6px;padding:8px 12px;background:#f0fdf4;border:1px solid #86efac;font-size:10px;">
+      ${(payslip.otPay || 0) > 0 ? `<div style="display:flex;justify-content:space-between;"><span>+ OT Pay</span><span>${fmtC(payslip.otPay)}</span></div>` : ''}
+      ${(payslip.holidayDutyPay || 0) > 0 ? `<div style="display:flex;justify-content:space-between;"><span>+ Holiday Duty Pay</span><span>${fmtC(payslip.holidayDutyPay)}</span></div>` : ''}
+      ${(payslip.edPay || 0) > 0 ? `<div style="display:flex;justify-content:space-between;"><span>+ Extra Duty Pay (${payslip.edDays || 0}d)</span><span>${fmtC(payslip.edPay)}</span></div>` : ''}
+      <div style="display:flex;justify-content:space-between;margin-top:4px;padding-top:4px;border-top:1px solid #86efac;font-weight:bold;font-size:12px;">
+        <span>TAKE HOME</span><span>${fmtC(payslip.takeHome || payslip.totalPayable || payslip.netSalary)}</span>
+      </div>
+    </div>` : ''}
     <div style="margin-top:8px;font-size:9px;color:#666;"><p>Employer PF: ${fmtC(payslip.pfEmployer)} | Employer ESI: ${fmtC(payslip.esiEmployer)}</p></div>
   </div>`;
 }

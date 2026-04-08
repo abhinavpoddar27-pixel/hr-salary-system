@@ -826,6 +826,17 @@ function initSchema(db) {
   // Its safeAddColumn migrations live AFTER the create statement — see below.
   safeAddColumn('salary_computations', 'holiday_duty_pay', 'REAL DEFAULT 0');
 
+  // ── Extra Duty (ED) integration (April 2026) ──
+  // ED grants are finance-approved manual entries (overnight stay, gate-record-only,
+  // missed-punch reconciliation) that are NOT auto-detected by the biometric WOP
+  // overflow logic. They are paid SEPARATELY from punch-based OT — same per-day rate
+  // (gross / calendarDays) but a distinct column on salary_computations so the
+  // payable-OT register and Stage 7 can show OT and ED side by side without
+  // double-counting. take_home = total_payable + ed_pay (= net + ot + holidayDuty + ed).
+  safeAddColumn('salary_computations', 'ed_days', 'REAL DEFAULT 0');
+  safeAddColumn('salary_computations', 'ed_pay', 'REAL DEFAULT 0');
+  safeAddColumn('salary_computations', 'take_home', 'REAL DEFAULT 0');
+
   db.exec(`
     CREATE TABLE IF NOT EXISTS holiday_audit_log (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -883,6 +894,13 @@ function initSchema(db) {
   safeAddColumn('day_calculations', 'date_of_joining', 'TEXT');
   safeAddColumn('day_calculations', 'holidays_before_doj', 'INTEGER DEFAULT 0');
   safeAddColumn('day_calculations', 'is_mid_month_joiner', 'INTEGER DEFAULT 0');
+
+  // ── Finance-approved Extra Duty days (April 2026) ──
+  // Display-only count of finance-approved extra_duty_grants for the month, after
+  // excluding dates that overlap with WOP/punch-based OT. Stage 6 UI shows this
+  // separately from `extra_duty_days` (which is the system-detected payable-overflow);
+  // the two are independent reportable concepts.
+  safeAddColumn('day_calculations', 'finance_ed_days', 'REAL DEFAULT 0');
 
   // ── Phase 1: Data integrity & deduplication ─────────────────────
 

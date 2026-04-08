@@ -174,12 +174,14 @@ export default function DayCalculation() {
     lop: acc.lop + (r.lop_days || 0),
     payable: acc.payable + (r.total_payable_days || 0),
     extraDuty: acc.extraDuty + (r.extra_duty_days || 0),
+    financeED: acc.financeED + (r.finance_ed_days || 0),
     wop: acc.wop + (r.days_wop || 0),
-  }), { present: 0, half: 0, absent: 0, paidSundays: 0, holidays: 0, cl: 0, el: 0, lop: 0, payable: 0, extraDuty: 0, wop: 0 })
+  }), { present: 0, half: 0, absent: 0, paidSundays: 0, holidays: 0, cl: 0, el: 0, lop: 0, payable: 0, extraDuty: 0, financeED: 0, wop: 0 })
 
   const zeroDayCount = rawCalcs.filter(r => (r.days_present || 0) === 0 && (r.days_half_present || 0) === 0).length
   const lopCount = rawCalcs.filter(r => (r.lop_days || 0) > 0).length
   const extraDutyCount = rawCalcs.filter(r => (r.extra_duty_days || 0) > 0).length
+  const financeEDCount = rawCalcs.filter(r => (r.finance_ed_days || 0) > 0).length
 
   return (
     <div className="animate-fade-in">
@@ -245,6 +247,7 @@ export default function DayCalculation() {
               {lopCount > 0 && <span className="ml-2 text-amber-600">| {lopCount} with LOP</span>}
               {zeroDayCount > 0 && <span className="ml-2 text-red-600">| {zeroDayCount} with 0 days</span>}
               {extraDutyCount > 0 && <span className="ml-2 text-cyan-600">| {extraDutyCount} with Extra Duty</span>}
+              {financeEDCount > 0 && <span className="ml-2 text-purple-600">| {financeEDCount} with Finance ED</span>}
             </div>
           </div>
         )}
@@ -308,6 +311,9 @@ export default function DayCalculation() {
                     <th className="cursor-pointer select-none bg-cyan-50 text-cyan-700" onClick={() => toggleSort('extraDuty')}>
                       <Tip text="Extra Duty Days = Payable - Calendar Days (when payable exceeds month days)">Extra Duty</Tip>
                       <SortIcon field="extraDuty" sortField={sortField} sortDir={sortDir} />
+                    </th>
+                    <th className="bg-purple-50 text-purple-700">
+                      <Tip text="Finance-approved Extra Duty grants for the month (display only — paid via salary's ed_pay)">Fin. ED</Tip>
                     </th>
                   </tr>
                 </thead>
@@ -373,9 +379,12 @@ export default function DayCalculation() {
                           <td className={clsx('font-bold text-sm', hasExtraDuty ? 'bg-cyan-50 text-cyan-700' : 'text-slate-300')}>
                             {hasExtraDuty ? r.extra_duty_days : '—'}
                           </td>
+                          <td className={clsx('font-bold text-sm', (r.finance_ed_days || 0) > 0 ? 'bg-purple-50 text-purple-700' : 'text-slate-300')}>
+                            {(r.finance_ed_days || 0) > 0 ? r.finance_ed_days : '—'}
+                          </td>
                         </tr>
                         {expandedRow === r.id && (
-                          <DrillDownRow colSpan={17}>
+                          <DrillDownRow colSpan={18}>
                             <DrillDownContent
                               r={r}
                               selectedMonth={month}
@@ -407,6 +416,7 @@ export default function DayCalculation() {
                     <td className="text-red-600">{totals.lop.toFixed(1)}</td>
                     <td className="bg-blue-100 text-blue-700">{totals.payable.toFixed(1)}</td>
                     <td className={clsx(totals.extraDuty > 0 ? 'bg-cyan-100 text-cyan-700' : 'text-slate-300')}>{totals.extraDuty > 0 ? totals.extraDuty.toFixed(1) : '—'}</td>
+                    <td className={clsx(totals.financeED > 0 ? 'bg-purple-100 text-purple-700' : 'text-slate-300')}>{totals.financeED > 0 ? totals.financeED.toFixed(1) : '—'}</td>
                   </tr>
                 </tfoot>
               </table>
@@ -620,6 +630,14 @@ function DrillDownContent({ r, selectedMonth, selectedYear, daysInMonth, lateDed
         {hasExtraDuty && (
           <DaySummaryBox label="Extra Duty" value={r.extra_duty_days} color="cyan" subtext={`${r.total_payable_days} > ${daysInMonth}`} />
         )}
+        {(r.finance_ed_days || 0) > 0 && (
+          <DaySummaryBox
+            label="Finance ED"
+            value={r.finance_ed_days}
+            color="purple"
+            subtext="Approved grants"
+          />
+        )}
         {r.gross_salary > 0 && (
           <DaySummaryBox label="Gross Salary" value={`₹${(r.gross_salary || 0).toLocaleString('en-IN')}`} color="emerald" subtext={`₹${Math.round((r.gross_salary || 0) / 26).toLocaleString('en-IN')}/day`} />
         )}
@@ -680,6 +698,11 @@ function DrillDownContent({ r, selectedMonth, selectedYear, daysInMonth, lateDed
                 {hasExtraDuty && (
                   <div className="flex justify-between font-bold text-cyan-700 mt-1">
                     <span>→ Extra Duty ({r.total_payable_days} − {daysInMonth})</span><span>{r.extra_duty_days} days</span>
+                  </div>
+                )}
+                {(r.finance_ed_days || 0) > 0 && (
+                  <div className="flex justify-between font-bold text-purple-700 mt-1">
+                    <span>★ Finance ED (approved grants)</span><span>{r.finance_ed_days} day(s)</span>
                   </div>
                 )}
               </div>

@@ -91,6 +91,11 @@ function countWorkingDays(dayRecords) {
  * @param {number}  options.weeklyOffDay   0=Sun … 6=Sat (default 0)
  * @param {string}  options.employmentType Permanent / Contractor / Worker / SILP / …
  * @param {number}  options.manualExtraDutyDays
+ * @param {number}  options.financeEDDays   Display-only — count of finance-approved
+ *                                          extra_duty_grants for the month after
+ *                                          subtracting WOP overlap. Persisted to
+ *                                          day_calculations.finance_ed_days for the
+ *                                          Stage 6 UI; does NOT affect payable days.
  * @param {string}  options.dateOfJoining  YYYY-MM-DD — pre-DOJ days excluded from
  *                                         working days, weekly offs, holidays, absences
  */
@@ -290,7 +295,9 @@ function calculateDays(employeeCode, month, year, company, attendanceRecords, le
       // DOJ visibility (April 2026)
       dateOfJoining,
       holidaysBeforeDOJ,
-      isMidMonthJoiner: isMidMonthJoiner ? 1 : 0
+      isMidMonthJoiner: isMidMonthJoiner ? 1 : 0,
+      // Finance-approved ED days (display-only — contractors never accrue ED)
+      financeEDDays: 0
     };
   }
 
@@ -439,7 +446,12 @@ function calculateDays(employeeCode, month, year, company, attendanceRecords, le
     // Legacy sunday-* aliases
     sundayLeniency: WEEKLY_OFF_LENIENCY,
     sundayThreshold: threshold,
-    sundayNote: weeklyOffNote
+    sundayNote: weeklyOffNote,
+
+    // Finance-approved Extra Duty days (April 2026) — display-only on Stage 6.
+    // Computed by the route caller from extra_duty_grants minus WOP overlap.
+    // Does NOT modify totalPayableDays (those grants are paid via salary's ed_pay).
+    financeEDDays: Math.round(((options.financeEDDays || 0)) * 100) / 100
   };
 }
 
@@ -458,7 +470,8 @@ function saveDayCalculation(db, calcResult) {
       is_contractor, sunday_threshold, sunday_note,
       weekly_off_day, base_entitlement, total_absences, effective_present,
       days_per_weekly_off, weekly_off_threshold, weekly_off_tier, weekly_off_note,
-      date_of_joining, holidays_before_doj, is_mid_month_joiner
+      date_of_joining, holidays_before_doj, is_mid_month_joiner,
+      finance_ed_days
     ) VALUES (
       ?, ?, ?, ?,
       ?, ?, ?, ?,
@@ -469,7 +482,8 @@ function saveDayCalculation(db, calcResult) {
       ?, ?, ?,
       ?, ?, ?, ?,
       ?, ?, ?, ?,
-      ?, ?, ?
+      ?, ?, ?,
+      ?
     )
     ON CONFLICT(employee_code, month, year, company) DO UPDATE SET
       total_calendar_days = excluded.total_calendar_days,
@@ -508,6 +522,7 @@ function saveDayCalculation(db, calcResult) {
       date_of_joining = excluded.date_of_joining,
       holidays_before_doj = excluded.holidays_before_doj,
       is_mid_month_joiner = excluded.is_mid_month_joiner,
+      finance_ed_days = excluded.finance_ed_days,
       is_approved = 0
   `);
 
@@ -533,7 +548,8 @@ function saveDayCalculation(db, calcResult) {
     calcResult.weeklyOffNote || '',
     calcResult.dateOfJoining || null,
     calcResult.holidaysBeforeDOJ || 0,
-    calcResult.isMidMonthJoiner ? 1 : 0
+    calcResult.isMidMonthJoiner ? 1 : 0,
+    calcResult.financeEDDays || 0
   );
 
   return calcResult;

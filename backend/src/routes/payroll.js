@@ -138,6 +138,35 @@ router.post('/calculate-days', (req, res) => {
           const grants = db.prepare("SELECT SUM(duty_days) as total FROM extra_duty_grants WHERE employee_code = ? AND month = ? AND year = ? AND status = 'APPROVED' AND finance_status = 'FINANCE_APPROVED'").get(empCode, month, year);
           manualExtraDutyDays = grants?.total || 0;
         } catch {}
+
+        // ── Finance-approved ED days (display-only on Stage 6) ──
+        // Count grant days that DON'T overlap with WOP/punch-OT dates so the
+        // Stage 6 box shows only the truly-extra finance grants. Anti-double-
+        // counting by date — a grant on 2026-03-15 is excluded if that day's
+        // attendance record is WOP/WO½P (already counted in extra_duty_days).
+        // Contractors never accrue ED grants.
+        let financeEDDays = 0;
+        if (!isContract) {
+          try {
+            const wopDates = new Set(
+              records
+                .filter(r => {
+                  const s = r.status_final || r.status_original || '';
+                  return s === 'WOP' || s === 'WO½P';
+                })
+                .map(r => r.date)
+            );
+            const approvedGrants = db.prepare(`
+              SELECT grant_date, duty_days FROM extra_duty_grants
+              WHERE employee_code = ? AND month = ? AND year = ?
+                AND status = 'APPROVED' AND finance_status = 'FINANCE_APPROVED'
+            `).all(empCode, month, year);
+            financeEDDays = approvedGrants
+              .filter(g => !wopDates.has(g.grant_date))
+              .reduce((sum, g) => sum + (g.duty_days || 0), 0);
+          } catch {}
+        }
+
         const calcResult = calculateDays(
           empCode, parseInt(month), parseInt(year), company || '',
           records, leaveBalances, holidays,
@@ -146,6 +175,7 @@ router.post('/calculate-days', (req, res) => {
             weeklyOffDay: empFull?.weekly_off_day ?? 0,
             employmentType: empFull?.employment_type || 'Permanent',
             manualExtraDutyDays,
+            financeEDDays,
             // DOJ-based holiday eligibility (April 2026): mid-month joiners
             // must NOT receive paid credit for holidays before their DOJ.
             dateOfJoining: empFull?.date_of_joining || null
@@ -330,7 +360,10 @@ router.post('/compute-salary', (req, res) => {
       totalNetSalary: Math.round(totalNetSalary * 100) / 100,
       totalGrossSalary: Math.round(totalGross * 100) / 100,
       totalOTPay: Math.round(results.reduce((s, r) => s + (r.otPay || 0), 0) * 100) / 100,
+      totalEDPay: Math.round(results.reduce((s, r) => s + (r.edPay || 0), 0) * 100) / 100,
       totalPayable: Math.round(results.reduce((s, r) => s + (r.totalPayable || 0), 0) * 100) / 100,
+      totalTakeHome: Math.round(results.reduce((s, r) => s + (r.takeHome || 0), 0) * 100) / 100,
+      edEmployees: results.filter(r => (r.edPay || 0) > 0).length,
       totalPFEmployee: Math.round(results.reduce((s, r) => s + r.pfEmployee, 0) * 100) / 100,
       totalPFEmployer: Math.round(results.reduce((s, r) => s + r.pfEmployer, 0) * 100) / 100,
       totalESIEmployee: Math.round(results.reduce((s, r) => s + r.esiEmployee, 0) * 100) / 100,
@@ -360,7 +393,7 @@ router.get('/salary-register', (req, res) => {
            dc.total_payable_days, dc.days_present, dc.days_absent, dc.lop_days, dc.paid_sundays,
            dc.days_half_present, dc.ot_hours,
            dc.late_count, dc.late_deduction_days, dc.late_deduction_remark,
-           dc.holidays_before_doj, dc.is_mid_month_joiner
+           dc.holidays_before_doj, dc.is_mid_month_joiner, dc.finance_ed_days
     FROM salary_computations sc
     LEFT JOIN employees e ON sc.employee_code = e.code
     LEFT JOIN day_calculations dc ON sc.employee_code = dc.employee_code AND sc.month = dc.month AND sc.year = dc.year
@@ -388,6 +421,10 @@ router.get('/salary-register', (req, res) => {
     totalESI: records.reduce((s, r) => s + (r.esi_employee || 0) + (r.esi_employer || 0), 0),
     totalLoanRecovery: records.reduce((s, r) => s + (r.loan_recovery || 0), 0),
     totalAdvanceRecovery: records.reduce((s, r) => s + (r.advance_recovery || 0), 0),
+    totalOTPay: records.reduce((s, r) => s + (r.ot_pay || 0), 0),
+    totalEDPay: records.reduce((s, r) => s + (r.ed_pay || 0), 0),
+    totalTakeHome: activeRecords.reduce((s, r) => s + (r.take_home || r.total_payable || r.net_salary || 0), 0),
+    edEmployees: records.filter(r => (r.ed_pay || 0) > 0).length,
     count: records.length,
     heldCount: heldRecords.length,
     grossChangedCount: records.filter(r => r.gross_changed).length,
@@ -436,16 +473,20 @@ router.put('/salary/:code/manual-deductions', (req, res) => {
   const { code } = req.params;
   const { month, year, advanceRecovery, tds, otherDeductions } = req.body;
 
-  // Recalculate total_deductions, net_salary AND total_payable (= net + ot + holidayDuty)
-  // net is base-only (grossEarned is base); OT is clean add-on after deductions.
+  // Recalculate total_deductions, net_salary, total_payable, take_home
+  //   net          = gross_earned − deductions   (base only, no OT/ED)
+  //   total_payable = net + ot_pay + holiday_duty_pay
+  //   take_home    = total_payable + ed_pay
   db.prepare(`
     UPDATE salary_computations SET
       advance_recovery = ?, tds = ?, other_deductions = ?,
       total_deductions = pf_employee + esi_employee + professional_tax + ? + ? + lop_deduction + ? + COALESCE(loan_recovery, 0),
       net_salary = MAX(0, gross_earned - (pf_employee + esi_employee + professional_tax + ? + ? + lop_deduction + ? + COALESCE(loan_recovery, 0))),
-      total_payable = MAX(0, gross_earned - (pf_employee + esi_employee + professional_tax + ? + ? + lop_deduction + ? + COALESCE(loan_recovery, 0))) + COALESCE(ot_pay, 0) + COALESCE(holiday_duty_pay, 0)
+      total_payable = MAX(0, gross_earned - (pf_employee + esi_employee + professional_tax + ? + ? + lop_deduction + ? + COALESCE(loan_recovery, 0))) + COALESCE(ot_pay, 0) + COALESCE(holiday_duty_pay, 0),
+      take_home = MAX(0, gross_earned - (pf_employee + esi_employee + professional_tax + ? + ? + lop_deduction + ? + COALESCE(loan_recovery, 0))) + COALESCE(ot_pay, 0) + COALESCE(holiday_duty_pay, 0) + COALESCE(ed_pay, 0)
     WHERE employee_code = ? AND month = ? AND year = ?
   `).run(
+    advanceRecovery || 0, tds || 0, otherDeductions || 0,
     advanceRecovery || 0, tds || 0, otherDeductions || 0,
     advanceRecovery || 0, tds || 0, otherDeductions || 0,
     advanceRecovery || 0, tds || 0, otherDeductions || 0,
@@ -855,46 +896,53 @@ router.get('/salary-slip-excel', (req, res) => {
     [companyName],
     [`SALARY SUMMARY — ${MONTHS[parseInt(month)]} ${year}`],
     [],
-    ['S.No', 'EMP', 'NAME', 'DEPARTMENT', 'DESIGNATION', 'DOJ', 'GROSS', 'EARNED', 'PF', 'ESI', 'ADVANCE', 'LOAN', 'LOP', 'TOT DED', 'NET PAYABLE', 'DAYS']
+    ['S.No', 'EMP', 'NAME', 'DEPARTMENT', 'DESIGNATION', 'DOJ', 'GROSS', 'EARNED', 'OT PAY', 'ED PAY',
+     'PF', 'ESI', 'ADVANCE', 'LOAN', 'LOP', 'TOT DED', 'NET PAYABLE', 'TAKE HOME', 'DAYS']
   ];
 
   rows.forEach((r, i) => {
+    const takeHome = r.take_home || ((r.total_payable || r.net_salary || 0) + (r.ed_pay || 0));
     summaryData.push([
       i + 1, r.employee_code, r.name || '', r.department || '', r.designation || '',
       fmtDOJ(r.date_of_joining),
       r.gross_salary || 0, r.gross_earned || 0,
+      r.ot_pay || 0, r.ed_pay || 0,
       r.pf_employee || 0, r.esi_employee || 0,
       r.advance_recovery || 0, r.loan_recovery || 0, r.lop_deduction || 0,
-      r.total_deductions || 0, r.net_salary || 0, r.total_payable_days || 0
+      r.total_deductions || 0, r.net_salary || 0, takeHome, r.total_payable_days || 0
     ]);
   });
 
   // Totals row
   const totals = rows.reduce((t, r) => {
     t.gross += r.gross_salary || 0; t.earned += r.gross_earned || 0;
+    t.ot += r.ot_pay || 0; t.ed += r.ed_pay || 0;
     t.pf += r.pf_employee || 0; t.esi += r.esi_employee || 0;
     t.adv += r.advance_recovery || 0; t.loan += r.loan_recovery || 0; t.lop += r.lop_deduction || 0;
     t.ded += r.total_deductions || 0; t.net += r.net_salary || 0;
+    t.takeHome += r.take_home || ((r.total_payable || r.net_salary || 0) + (r.ed_pay || 0));
     return t;
-  }, { gross: 0, earned: 0, pf: 0, esi: 0, adv: 0, loan: 0, lop: 0, ded: 0, net: 0 });
+  }, { gross: 0, earned: 0, ot: 0, ed: 0, pf: 0, esi: 0, adv: 0, loan: 0, lop: 0, ded: 0, net: 0, takeHome: 0 });
 
   summaryData.push([
     '', '', 'TOTAL', '', '', '',
     Math.round(totals.gross), Math.round(totals.earned),
+    Math.round(totals.ot), Math.round(totals.ed),
     Math.round(totals.pf), Math.round(totals.esi),
     Math.round(totals.adv), Math.round(totals.loan), Math.round(totals.lop),
-    Math.round(totals.ded), Math.round(totals.net), ''
+    Math.round(totals.ded), Math.round(totals.net), Math.round(totals.takeHome), ''
   ]);
 
   const summarySheet = XLSX.utils.aoa_to_sheet(summaryData);
   summarySheet['!cols'] = [
     { wch: 5 }, { wch: 8 }, { wch: 22 }, { wch: 18 }, { wch: 16 }, { wch: 11 },
-    { wch: 10 }, { wch: 10 }, { wch: 8 }, { wch: 8 }, { wch: 8 },
+    { wch: 10 }, { wch: 10 }, { wch: 9 }, { wch: 9 },
+    { wch: 8 }, { wch: 8 }, { wch: 8 },
     { wch: 10 }, { wch: 8 }, { wch: 8 }, { wch: 10 }, { wch: 12 }, { wch: 6 }
   ];
   summarySheet['!merges'] = [
-    { s: { r: 0, c: 0 }, e: { r: 0, c: 15 } },
-    { s: { r: 1, c: 0 }, e: { r: 1, c: 15 } }
+    { s: { r: 0, c: 0 }, e: { r: 0, c: 18 } },
+    { s: { r: 1, c: 0 }, e: { r: 1, c: 18 } }
   ];
   XLSX.utils.book_append_sheet(wb, summarySheet, 'SUMMARY');
 
@@ -1031,15 +1079,17 @@ router.get('/payable-ot', (req, res) => {
   const m = parseInt(month);
   const y = parseInt(year);
 
-  const records = db.prepare(`
+  const rawRecords = db.prepare(`
     SELECT
       sc.employee_code,
       COALESCE(NULLIF(e.name, ''), sc.employee_code) as employee_name,
       e.department, e.designation, e.employment_type,
       dc.days_present, dc.days_half_present, dc.days_wop,
       dc.paid_sundays, dc.paid_holidays, dc.extra_duty_days, dc.total_payable_days,
+      dc.finance_ed_days,
       sc.gross_salary, sc.ot_pay, sc.ot_days, sc.ot_daily_rate,
       sc.punch_based_ot, sc.finance_extra_duty, sc.ot_note,
+      sc.ed_days, sc.ed_pay, sc.take_home,
       sc.gross_earned, sc.net_salary, sc.total_payable,
       sc.is_finalised, sc.is_contractor, sc.company
     FROM salary_computations sc
@@ -1049,8 +1099,19 @@ router.get('/payable-ot', (req, res) => {
     WHERE sc.month = ? AND sc.year = ?
     ${company ? 'AND sc.company = ?' : ''}
     AND (e.status IS NULL OR e.status != 'Left')
-    ORDER BY sc.ot_days DESC, e.department, e.name
+    ORDER BY sc.ed_pay DESC, sc.ot_pay DESC, e.department, e.name
   `).all(...(company ? [m, y, company] : [m, y]));
+
+  // Synthesise the per-row total_due (= ot_pay + ed_pay) so the UI doesn't have
+  // to repeat the addition. Done in JS — adding it to the SELECT would require
+  // ORDER BY column gymnastics on a SQLite UNION-style derived field.
+  const records = rawRecords.map(r => ({
+    ...r,
+    punch_ot_days: Math.round(((r.ot_days || r.punch_based_ot || 0)) * 100) / 100,
+    fin_ed_days: Math.round(((r.ed_days || 0)) * 100) / 100,
+    total_ot_ed_days: Math.round((((r.ot_days || 0) + (r.ed_days || 0))) * 100) / 100,
+    total_due: Math.round((((r.ot_pay || 0) + (r.ed_pay || 0))) * 100) / 100
+  }));
 
   const daysInMonth = new Date(y, m, 0).getDate();
   let sundaysInMonth = 0;
@@ -1059,12 +1120,19 @@ router.get('/payable-ot', (req, res) => {
   }
   const standardWorkingDays = daysInMonth - sundaysInMonth;
 
-  const otRecords = records.filter(r => (r.ot_days || 0) > 0);
+  // A row is on the OT/ED register if it has either bucket populated. The
+  // legacy "no OT" group is anything that has neither.
+  const otRecords = records.filter(r => (r.ot_pay || 0) > 0 || (r.ed_pay || 0) > 0);
 
   const totalOTDays = otRecords.reduce((s, r) => s + (r.ot_days || 0), 0);
+  const totalEDDays = otRecords.reduce((s, r) => s + (r.ed_days || 0), 0);
   const totalOTPay = otRecords.reduce((s, r) => s + (r.ot_pay || 0), 0);
+  const totalEDPay = otRecords.reduce((s, r) => s + (r.ed_pay || 0), 0);
+  const totalCombinedPay = totalOTPay + totalEDPay;
   const totalPunchOT = otRecords.reduce((s, r) => s + (r.punch_based_ot || 0), 0);
   const totalFinanceED = otRecords.reduce((s, r) => s + (r.finance_extra_duty || 0), 0);
+  const employeesWithOT = otRecords.filter(r => (r.ot_pay || 0) > 0).length;
+  const employeesWithED = otRecords.filter(r => (r.ed_pay || 0) > 0).length;
 
   res.json({
     success: true,
@@ -1072,10 +1140,14 @@ router.get('/payable-ot', (req, res) => {
     otRecords,
     summary: {
       totalEmployees: records.length,
-      employeesWithOT: otRecords.length,
+      employeesWithOT,
+      employeesWithED,
       employeesWithoutOT: records.length - otRecords.length,
       totalOTDays: Math.round(totalOTDays * 100) / 100,
+      totalEDDays: Math.round(totalEDDays * 100) / 100,
       totalOTPay: Math.round(totalOTPay * 100) / 100,
+      totalEDPay: Math.round(totalEDPay * 100) / 100,
+      totalCombinedPay: Math.round(totalCombinedPay * 100) / 100,
       totalPunchOT: Math.round(totalPunchOT * 100) / 100,
       totalFinanceED: Math.round(totalFinanceED * 100) / 100,
       daysInMonth, sundaysInMonth, standardWorkingDays,

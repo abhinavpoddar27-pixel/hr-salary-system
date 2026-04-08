@@ -320,75 +320,93 @@ function computeEmployeeSalary(db, employee, month, year, company) {
 
   // ═══ OT CALCULATION (day-based, SEPARATE from base salary) ═══
   // OT is ONLY added AFTER deductions — it never factors into grossEarned.
-  // Two triggers:
-  //   1. Punch-detected excess: daysPresent > (daysInMonth − sundaysInMonth)
-  //   2. Finance-verified extra duty from day_corrections
-  // Contractors get ZERO OT. Ever.
+  // April 2026 ED-integration overhaul: OT and ED are now SEPARATE buckets.
+  //
+  //   ot_pay = punch-based extra duty days (dayCalc.extra_duty_days) × otDailyRate
+  //   ed_pay = finance-APPROVED extra_duty_grants days × otDailyRate
+  //            (minus dates that overlap with WOP/punch OT — anti-double-count)
+  //
+  // Same per-day rate (gross / calendarDays) for both, so payslips and the
+  // Payable-OT register can show the two columns side by side. Contractors
+  // get ZERO OT and ZERO ED.
   const otDailyRate = otPerDayRateDisplay;
   let totalOTDays = 0;
   let otPay = 0;
   let punchBasedOT = 0;
-  let financeExtraDuty = 0;
+  let financeExtraDuty = 0;  // legacy reporting field — now mirrors edDays
+  let edDays = 0;
+  let edPay = 0;
   let otNote = '';
 
   if (!isContract) {
-    // ─── Extra duty: max(attendance-detected, fully-approved grants) ───
-    // Per CLAUDE.md Section 5:
-    //   otDays = max(dayCalc.extra_duty_days, sum(grants WHERE status='APPROVED'
-    //                                                 AND finance_status='FINANCE_APPROVED'))
-    //
-    // Stage 6 already computes `dayCalc.extra_duty_days` from biometric
-    // WOP detection (excess payable beyond calendar days) AND auto-creates
-    // PENDING grants for HR to review. The previous gate waited for the
-    // full HR+Finance approval cycle before paying a single rupee, which
-    // underpaid any employee whose auto-created grants were still pending
-    // at salary-run time (observed March 2026: most 35-day employees
-    // received ₹0 OT because grants existed but hadn't been approved).
-    //
-    // New behaviour: pay OT from attendance-detected extra duty by default.
-    // If HR/Finance approve MORE than attendance caught (manual grants),
-    // the larger value wins. The approval workflow is now non-blocking —
-    // grants are still tracked, rejections still archive, but the default
-    // salary run honours what biometric actually recorded.
-    //
-    // Split semantics for reporting (Payable OT page, finance audit):
-    //   punchBasedOT   = dayCalc.extra_duty_days (attendance excess)
-    //   financeExtraDuty = max(0, approvedGrants - punchBasedOT)
-    //   totalOTDays    = punchBasedOT + financeExtraDuty = max(dayCalc, approved)
-    const approvedGrants = db.prepare(`
-      SELECT COALESCE(SUM(duty_days), 0) as total
-      FROM extra_duty_grants
-      WHERE employee_code = ?
-        AND month = ?
-        AND year = ?
-        AND status = 'APPROVED'
-        AND finance_status = 'FINANCE_APPROVED'
-    `).get(employee.code, month, year);
-    const approvedGrantsTotal = Math.max(0, approvedGrants?.total || 0);
+    // ─── Punch-based OT ───
+    // dayCalc.extra_duty_days is the biometric-detected overflow (payable
+    // beyond calendar days, sourced from WOP/WO½P statuses). Pay this as
+    // OT — no merge with grants, no max(). The grant approval workflow
+    // does NOT modify ot_pay any more.
     const dcExtraDuty = Math.max(0, dayCalc.extra_duty_days || 0);
-
-    // Source 1: attendance-detected excess
     punchBasedOT = dcExtraDuty;
-    // Source 2: any finance-approved grants beyond what attendance caught
-    financeExtraDuty = Math.max(0, approvedGrantsTotal - punchBasedOT);
-
-    // Hard caps: non-negative, never exceed daysInMonth
-    totalOTDays = punchBasedOT + financeExtraDuty;
-    totalOTDays = Math.min(Math.max(0, totalOTDays), daysInMonth);
-
+    totalOTDays = Math.min(Math.max(0, punchBasedOT), daysInMonth);
     otPay = Math.round(totalOTDays * otDailyRate * 100) / 100;
 
+    // ─── Finance-approved Extra Duty (ED) — separate bucket ───
+    // Pull every fully-approved grant for the month, then exclude any whose
+    // grant_date already coincides with a WOP/WO½P attendance day (those
+    // days were already paid via punch OT above). The remainder are truly
+    // additional finance grants — overnight stays without biometric, gate-
+    // record-only days, completed miss-punch reconciliations, etc.
+    try {
+      const wopRows = db.prepare(`
+        SELECT DISTINCT date FROM attendance_processed
+        WHERE employee_code = ? AND month = ? AND year = ?
+          AND (status_final IN ('WOP', 'WO½P') OR status_original IN ('WOP', 'WO½P'))
+      `).all(employee.code, month, year);
+      const wopDateSet = new Set(wopRows.map(r => r.date));
+
+      const approvedGrants = db.prepare(`
+        SELECT grant_date, duty_days
+        FROM extra_duty_grants
+        WHERE employee_code = ?
+          AND month = ?
+          AND year = ?
+          AND status = 'APPROVED'
+          AND finance_status = 'FINANCE_APPROVED'
+      `).all(employee.code, month, year);
+
+      const validEDGrants = approvedGrants.filter(g => !wopDateSet.has(g.grant_date));
+      const skipped = approvedGrants.length - validEDGrants.length;
+
+      edDays = Math.round(
+        validEDGrants.reduce((sum, g) => sum + (g.duty_days || 0), 0) * 100
+      ) / 100;
+      // Cap ED days at calendar days as a safety net
+      edDays = Math.min(edDays, daysInMonth);
+      edPay = Math.round(edDays * otDailyRate * 100) / 100;
+      financeExtraDuty = edDays;  // legacy alias
+
+      if (edDays > 0 || punchBasedOT > 0 || skipped > 0) {
+        console.log(
+          `[ED] ${employee.code} ${month}/${year}: ` +
+          `${approvedGrants.length} approved grants, ` +
+          `${validEDGrants.length} after WOP filter (skipped ${skipped}), ` +
+          `punchOT=${punchBasedOT}, edDays=${edDays}, edPay=₹${edPay}`
+        );
+      }
+    } catch (e) {
+      console.error(`[ED] ${employee.code}: query failed — ${e.message}`);
+    }
+
     const dcPayable = dayCalc.total_payable_days || 0;
-    if (totalOTDays > 0) {
-      const parts = [];
-      if (punchBasedOT > 0) parts.push(`${punchBasedOT} attendance`);
-      if (financeExtraDuty > 0) parts.push(`${financeExtraDuty} approved grant`);
-      otNote = `${totalOTDays} OT day(s) [${parts.join(' + ')}] × ₹${Math.round(otDailyRate)}/day`;
+    const parts = [];
+    if (punchBasedOT > 0) parts.push(`${punchBasedOT}d punch OT`);
+    if (edDays > 0) parts.push(`${edDays}d finance ED`);
+    if (parts.length > 0) {
+      otNote = `${parts.join(' + ')} × ₹${Math.round(otDailyRate)}/day`;
     } else {
-      otNote = `Payable ${dcPayable}/${daysInMonth} days. No OT.`;
+      otNote = `Payable ${dcPayable}/${daysInMonth} days. No OT/ED.`;
     }
   } else {
-    otNote = 'Contractor — no OT';
+    otNote = 'Contractor — no OT/ED';
   }
 
   // ─── Holiday Duty Pay ───
@@ -494,13 +512,20 @@ function computeEmployeeSalary(db, employee, month, year, company) {
     salaryWarning = 'DEDUCTIONS_EXCEED_EARNINGS';
     totalDeductions = Math.round(grossEarned * 100) / 100;
   }
-  // ── NET = BASE EARNED - DEDUCTIONS (no OT, no holiday duty) ──
-  // Deductions apply ONLY to base earned. OT and holiday duty are clean add-ons.
+  // ── NET = BASE EARNED - DEDUCTIONS (no OT, no holiday duty, no ED) ──
+  // Deductions apply ONLY to base earned. OT, holiday duty and ED are clean add-ons.
   const netSalary = Math.max(0, Math.round((grossEarned - totalDeductions) * 100) / 100);
 
   // ── TOTAL PAYABLE = Net Salary + OT Pay + Holiday Duty Pay ──
-  // This is what the employee actually receives — clean addition after deductions.
+  // Existing field — represents net + punch-based add-ons. Kept stable so
+  // existing consumers (reports, finance audit, bank NEFT) don't break.
   const totalPayable = Math.round((netSalary + otPay + holidayDutyPay) * 100) / 100;
+
+  // ── TAKE HOME = TOTAL PAYABLE + ED PAY (April 2026) ──
+  // The actual amount the employee walks away with, including finance-
+  // approved Extra Duty grants. ED is excluded from total_payable so older
+  // exports stay consistent — new reports use take_home instead.
+  const takeHome = Math.round((totalPayable + edPay) * 100) / 100;
 
   // ─── Gross Change Detection ───
   const prevMonthGross = getPrevMonthGross(db, employee.code, month, year);
@@ -557,6 +582,8 @@ function computeEmployeeSalary(db, employee, month, year, company) {
     perDayRate: Math.round(otPerDayRateDisplay * 100) / 100,
     basicEarned, daEarned, hraEarned, conveyanceEarned, otherEarned,
     otPay, holidayDutyPay, grossEarned,
+    // Finance-approved Extra Duty (April 2026)
+    edDays, edPay, takeHome,
     pfWages, esiWages, eps,
     pfEmployee, pfEmployer,
     esiEmployee, esiEmployer,
@@ -599,7 +626,8 @@ function saveSalaryComputation(db, comp) {
       total_deductions, net_salary,
       prev_month_gross, gross_changed, salary_held, hold_reason, loan_recovery, finance_remark,
       is_contractor, days_in_month, regular_days, ot_days, ot_daily_rate, manual_extra_duty,
-      punch_based_ot, finance_extra_duty, ot_note, total_payable
+      punch_based_ot, finance_extra_duty, ot_note, total_payable,
+      ed_days, ed_pay, take_home
     ) VALUES (
       ?, ?, ?, ?, ?, ?, ?,
       ?, ?, ?, ?, ?,
@@ -609,7 +637,8 @@ function saveSalaryComputation(db, comp) {
       ?, ?,
       ?, ?, ?, ?, ?, ?,
       ?, ?, ?, ?, ?, ?,
-      ?, ?, ?, ?
+      ?, ?, ?, ?,
+      ?, ?, ?
     )
     ON CONFLICT(employee_code, month, year, company) DO UPDATE SET
       gross_salary = excluded.gross_salary,
@@ -653,6 +682,9 @@ function saveSalaryComputation(db, comp) {
       finance_extra_duty = excluded.finance_extra_duty,
       ot_note = excluded.ot_note,
       total_payable = excluded.total_payable,
+      ed_days = excluded.ed_days,
+      ed_pay = excluded.ed_pay,
+      take_home = excluded.take_home,
       is_finalised = 0
   `).run(
     comp.employeeCode, comp.month, comp.year, comp.company,
@@ -665,7 +697,8 @@ function saveSalaryComputation(db, comp) {
     comp.prevMonthGross, comp.grossChanged, comp.salaryHeld, comp.holdReason, comp.loanRecovery, comp.financeRemark || '',
     comp.isContractor ? 1 : 0, comp.daysInMonth || null, comp.regularDays || 0,
     comp.otDays || 0, comp.otDailyRate || 0, comp.manualExtraDuty || 0,
-    comp.punchBasedOT || 0, comp.financeExtraDuty || 0, comp.otNote || '', comp.totalPayable || 0
+    comp.punchBasedOT || 0, comp.financeExtraDuty || 0, comp.otNote || '', comp.totalPayable || 0,
+    comp.edDays || 0, comp.edPay || 0, comp.takeHome || 0
   );
 
   // Mark advance as recovered if applicable
@@ -785,7 +818,9 @@ function generatePayslipData(db, employeeCode, month, year) {
       { label: 'HRA (House Rent Allowance)', amount: comp.hra_earned },
       { label: 'Conveyance Allowance', amount: comp.conveyance_earned },
       { label: 'Other Allowances', amount: comp.other_allowances_earned },
-      { label: 'OT Pay', amount: comp.ot_pay }
+      { label: 'OT Pay', amount: comp.ot_pay },
+      { label: 'Holiday Duty Pay', amount: comp.holiday_duty_pay },
+      { label: 'Extra Duty Pay', amount: comp.ed_pay }
     ].filter(e => e.amount > 0),
     deductions: [
       { label: 'PF (Employee)', amount: comp.pf_employee },
@@ -811,7 +846,13 @@ function generatePayslipData(db, employeeCode, month, year) {
     // relying on inline dept keyword checks.
     is_contractor: comp.is_contractor || 0,
     otPay: comp.ot_pay || 0,
+    edPay: comp.ed_pay || 0,
+    edDays: comp.ed_days || 0,
+    holidayDutyPay: comp.holiday_duty_pay || 0,
     totalPayable: comp.total_payable || comp.net_salary || 0,
+    // take_home = total_payable + ed_pay (the actual amount the employee
+    // receives, including finance-approved Extra Duty grants)
+    takeHome: comp.take_home || ((comp.total_payable || comp.net_salary || 0) + (comp.ed_pay || 0)),
     generatedAt: new Date().toISOString()
   };
 }

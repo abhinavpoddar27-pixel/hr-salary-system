@@ -168,7 +168,7 @@ frontend/
 - Tables read: `attendance_processed`, `holidays`, `leave_balances`, `employees`, `extra_duty_grants` (manual grants with both approvals)
 - Tables written: `day_calculations` (one row per employee per month per company)
 - Input contract: Stages 1-5 complete; `is_contractor` flag set on employee; `employees.date_of_joining` set for new joiners
-- Output contract: `day_calculations` row with: total_payable_days, days_present, days_half_present, days_wop, days_absent, paid_sundays, paid_holidays, lop_days, ot_hours, extra_duty_days, holiday_duty_days, week_breakdown (JSON), date_of_joining, holidays_before_doj, is_mid_month_joiner
+- Output contract: `day_calculations` row with: total_payable_days, days_present, days_half_present, days_wop, days_absent, paid_sundays, paid_holidays, lop_days, ot_hours, extra_duty_days, holiday_duty_days, week_breakdown (JSON), date_of_joining, holidays_before_doj, is_mid_month_joiner, finance_ed_days (display-only count of finance-approved ED grants minus WOP overlap)
 - Downstream consumers: Stage 7 salary computation, Finance Audit, Reports
 - Business rules:
   - Sunday rule (permanent only): worked >=6 Mon-Sat → paid Sunday; 4-5 → CL/EL fallback or LOP if shortage <=1.5; <4 → unpaid Sunday
@@ -189,10 +189,10 @@ frontend/
 ## Stage 7: Salary Computation
 - Route: `backend/src/routes/payroll.js` → `POST /compute-salary`, `GET /salary-register`, `POST /finalise`, `GET /payslip/:code`, `GET /salary-slip-excel`
 - Service: `backend/src/services/salaryComputation.js` → `computeEmployeeSalary()`, `saveSalaryComputation()`, `generatePayslipData()`, `getAdvanceRecovery()`, `getLoanDeductions()`
-- Tables read: `day_calculations`, `salary_structures`, `employees`, `salary_advances`, `loan_repayments`, `tax_declarations`, `policy_config`
-- Tables written: `salary_computations` (one row per employee per month per company), `salary_manual_flags` (auto-populated for finance audit), `salary_advances` (marked recovered)
+- Tables read: `day_calculations`, `salary_structures`, `employees`, `salary_advances`, `loan_repayments`, `tax_declarations`, `policy_config`, `extra_duty_grants` (April 2026 — for `ed_pay` bucket), `attendance_processed` (for WOP overlap detection)
+- Tables written: `salary_computations` (one row per employee per month per company; includes new `ed_days`/`ed_pay`/`take_home`), `salary_manual_flags` (auto-populated for finance audit), `salary_advances` (marked recovered)
 - Input contract: Stage 6 complete; salary_structures populated; `employees.gross_salary` set
-- Output contract: salary_computations row with: gross_salary, gross_earned, basic/da/hra/conveyance/other_allowances_earned, ot_pay, holiday_duty_pay, pf_employee/employer, esi_employee/employer, professional_tax, tds, advance_recovery, loan_recovery, lop_deduction, total_deductions, net_salary, salary_held, hold_reason, finance_remark
+- Output contract: salary_computations row with: gross_salary, gross_earned, basic/da/hra/conveyance/other_allowances_earned, ot_pay, holiday_duty_pay, ed_days, ed_pay, take_home, pf_employee/employer, esi_employee/employer, professional_tax, tds, advance_recovery, loan_recovery, lop_deduction, total_deductions, net_salary, total_payable, salary_held, hold_reason, finance_remark
 - Downstream consumers: Finance Audit, Finance Verify, Payslip PDF, Bank NEFT export, PF ECR, ESI returns
 - Business rules:
   - divisor = 26 (from policy_config.salary_divisor) — used for BASE salary pro-rata when payableDays ≤ 26
@@ -302,9 +302,18 @@ frontend/
 - **OT / Extra Duty rate** (April 2026): Uses CALENDAR DAYS, not divisor.
   `otPerDayRate = grossMonthly / calendarDays` — Sundays don't inflate the rate.
   `otPay = otDays × otPerDayRate + otHours × (grossMonthly / (calendarDays × 8)) × otRate`.
-  `otDays = max(dayCalc.extra_duty_days, sum(extra_duty_grants.duty_days WHERE
-  status='APPROVED' AND finance_status='FINANCE_APPROVED'))`. **No longer gated on
-  workedFullMonth** — explicit extra duty is always paid.
+  `otDays = dayCalc.extra_duty_days` (pure punch-based, since the ED-integration overhaul).
+  Finance-approved grants now flow into a SEPARATE `ed_pay` bucket — see ED Integration below.
+- **Extra Duty (ED) Integration** (April 2026): `ed_pay` is a NEW bucket, separate from
+  `ot_pay`. Sourced from `extra_duty_grants` rows with `status='APPROVED' AND
+  finance_status='FINANCE_APPROVED'`, MINUS any grant whose `grant_date` overlaps with a
+  WOP/WO½P attendance day (anti-double-counting — those days are already paid via punch OT).
+  Same per-day rate (`gross / calendarDays`). Persisted in `salary_computations.ed_days`,
+  `ed_pay`, `take_home`. ED is NOT part of `gross_earned` (deductions don't apply to it).
+  - `take_home = total_payable + ed_pay = net_salary + ot_pay + holiday_duty_pay + ed_pay`
+  - `total_payable` is unchanged (existing exports stay stable); new reports use `take_home`
+  - Stage 6 also persists `day_calculations.finance_ed_days` for the UI breakdown
+  - Contractors get zero ED (same gate as OT)
 - **Holiday Duty Pay**: Also uses calendar-day rate.
 - **Professional Tax: DISABLED** (April 2026, HR directive). Hard-coded to 0 regardless of
   gross or pt_applicable flag. Column/row removed from Stage 7 UI, payslip PDF, Excel export.
@@ -313,9 +322,14 @@ frontend/
 - **Independent components**: `otPay = otDays × otPerDayRate + otHours × otHourlyRate × otRate` where
   `otPerDayRate = grossMonthly / calendarDays` and `otHourlyRate = grossMonthly / (calendarDays × 8)`;
   `holidayDutyPay = holidayDutyDays × otPerDayRate`. Uncapped, NOT gated on workedFullMonth.
-  `otDays` is sourced from BOTH `dayCalc.extra_duty_days` AND fully-approved
-  `extra_duty_grants` (uses the greater value) so manual grants flow into salary
-  even when Stage 6 wasn't re-run after approval.
+  `otDays = dayCalc.extra_duty_days` (pure biometric overflow). Finance-approved
+  grants now feed `ed_pay` separately, with date-level anti-double-counting against
+  WOP/WO½P attendance days.
+- **Extra Duty Pay (ED, April 2026)**: `edPay = edDays × otPerDayRate` where
+  `edDays = sum(extra_duty_grants.duty_days WHERE status='APPROVED' AND
+  finance_status='FINANCE_APPROVED' AND grant_date NOT IN (WOP/WO½P dates))`.
+  Capped at calendarDays. Excluded from `grossEarned`/PF/ESI. Not paid for contractors.
+  `take_home = total_payable + ed_pay`.
 - **grossEarned formula**: `min(baseEarned, grossMonthly) + otPay + holidayDutyPay`
 - **PF**: 12% of `min(basic + da, 15000)` for both employee and employer. EPS split: `min(pfWageBase × 0.0833, 1250)`. Rates from `policy_config`. Gated by `salStruct.pf_applicable`.
 - **ESI**: 0.75% employee / 3.25% employer of `grossEarned`, only if `grossMonthly <= 21000` threshold. Gated by `salStruct.esi_applicable`.
@@ -323,6 +337,7 @@ frontend/
 - **TDS**: Auto-calculated from `tax_declarations` table; falls back to manually entered TDS preserved across recomputations.
 - **LOP**: NOT a separate deduction — pro-rating handles missed days via earnedRatio (line 338).
 - **Net salary formula**: `Math.max(0, grossEarned - totalDeductions)`. totalDeductions = pf + esi + tds + advance + lop + other + loan (PT always 0).
+- **Take-home formula** (April 2026 ED integration): `take_home = net_salary + ot_pay + holiday_duty_pay + ed_pay` (= `total_payable + ed_pay`). New ED bucket sits OUTSIDE deductions and the existing total_payable, so older bank/PF/ESI exports stay stable while the take-home figure on payslips and the OT&ED Payable register reflects everything the employee actually receives.
 - **Rounding**: `Math.round(x * 100) / 100` everywhere (2 decimal precision).
 - **Salary hold logic**: Auto-hold if (a) `rawPayableDays < 5`, OR (b) 7+ consecutive absent days at month-end (unless approved leave exists). Hold reason stored in `salary_computations.hold_reason`.
 - **Finance gate**: `POST /finalise` blocked unless `finance_month_signoff.status = 'approved'` AND no unreviewed extra_duty_grants.
