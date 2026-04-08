@@ -28,33 +28,40 @@ function deptMatchesContractorKeyword(deptName) {
 /**
  * PAYROLL-GRADE contractor detection.
  *
- * Priority order:
- *   1. Explicit `is_contractor` DB flag (if set — HR's manual override wins)
- *   2. `employment_type` from Employee Master (authoritative — if set, it
- *      determines contractor status regardless of category/department)
- *   3. Department-keyword heuristic (FALLBACK ONLY for legacy rows with
- *      no employment_type set)
+ * Priority order (April 2026 fix — employment_type is now authoritative):
+ *   1. `employment_type` from Employee Master (user-editable source of truth).
+ *      If it's explicitly set, it ALWAYS determines contractor status —
+ *      this makes the Edit Employee form actually work for rows whose
+ *      `is_contractor` flag was set by a one-time migration.
+ *      - empty string 'contract' → contractor
+ *      - anything else ('Permanent', 'Worker', 'SILP', …) → NOT contractor
+ *   2. `is_contractor` DB flag — fallback only when employment_type is empty.
+ *      This legacy flag was set by the March 2026 migration for employees
+ *      that had no employment_type yet.
+ *   3. Department-keyword heuristic — last resort for legacy rows with
+ *      neither employment_type nor is_contractor set.
  *
  * Returns boolean.
  */
 function isContractorForPayroll(employee) {
   if (!employee) return false;
 
-  // 1. Explicit DB flag — HR's manual override wins. is_contractor=0 is
-  //    NOT treated as "definitely not contractor" here because many rows
-  //    default to 0 without HR having reviewed them; only =1 is decisive.
-  if (employee.is_contractor === 1) return true;
-
-  // 2. employment_type from Employee Master is the source of truth.
-  //    If it's explicitly set, use it and SKIP the dept heuristic entirely.
-  //    This prevents COM. HELPER / WORKER-category permanent employees
-  //    from being wrongly flagged by keyword matching.
+  // 1. employment_type from Employee Master is the source of truth.
+  //    If it's explicitly set, use it and SKIP everything else. This
+  //    ensures the Edit Employee form actually overrides a stale
+  //    is_contractor flag set by the one-time migration.
   const empType = (employee.employment_type || '').trim().toLowerCase();
   if (empType) {
     return empType.includes('contract');
   }
 
-  // 3. Legacy fallback: no employment_type set. Use dept heuristic.
+  // 2. is_contractor DB flag — fallback only when employment_type is empty.
+  //    The March 2026 migration set this on ~115 rows that didn't have
+  //    employment_type. Any row with a non-empty employment_type short-
+  //    circuits above this check.
+  if (employee.is_contractor === 1) return true;
+
+  // 3. Legacy fallback: no employment_type, no is_contractor. Use dept heuristic.
   return deptMatchesContractorKeyword(employee.department);
 }
 
