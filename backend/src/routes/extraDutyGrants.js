@@ -1,16 +1,17 @@
 const express = require('express');
 const router = express.Router();
 const { getDb, logAudit } = require('../database/db');
+const { normalizeRole } = require('./auth');
 
 // ─── Role gates ────────────────────────────────────────────
 // `requireAuth` runs at mount time (server.js) and populates req.user.role.
 // These helpers add a second check on top of that so only HR/admin can
 // manage the HR queue and only Finance/admin can run finance approvals.
-// Role comparison is case-insensitive — the user-create endpoint doesn't
-// normalise `role`, so a "Finance" typo should NOT lock finance out.
+// Uses the canonical normalizeRole() helper from auth.js so the check
+// never cares about case, whitespace, or legacy capitalised roles.
 function roleIn(req, ...allowed) {
-  const r = (req.user?.role || '').toLowerCase();
-  return allowed.map(x => x.toLowerCase()).includes(r);
+  const r = normalizeRole(req.user?.role);
+  return allowed.includes(r);
 }
 function requireHrOrAdmin(req, res, next) {
   if (roleIn(req, 'admin', 'hr')) return next();

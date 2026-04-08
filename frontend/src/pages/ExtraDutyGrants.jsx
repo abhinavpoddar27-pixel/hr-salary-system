@@ -89,6 +89,18 @@ export default function ExtraDutyGrants() {
         <div className="flex items-center gap-3"><CompanyFilter /><DateSelector {...dateProps} /></div>
       </div>
 
+      {/* Access diagnostic — only shown when the user has neither HR nor Finance
+          access on a page that requires them. Surfaces the raw role value from
+          localStorage so the admin can see exactly why access was denied and
+          fix the underlying user record. */}
+      {!canHR && !canFinance && (
+        <div className="rounded-lg border border-amber-300 bg-amber-50 px-4 py-3 text-xs text-amber-900 space-y-1">
+          <div className="font-semibold">⚠ No approval access</div>
+          <div>You're logged in as <strong>{user?.username || '(unknown)'}</strong> with role <code className="bg-amber-100 px-1 rounded">{JSON.stringify(user?.role)}</code>.</div>
+          <div>To get HR or Finance approval buttons your role must be <code>hr</code>, <code>finance</code>, or <code>admin</code>. Ask an admin to update your role under Settings → User Management, then log out and back in.</div>
+        </div>
+      )}
+
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
         <KPI label="Total" value={summary.total || 0} />
         <KPI label="Pending HR" value={summary.pending || 0} color="amber" />

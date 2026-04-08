@@ -795,6 +795,33 @@ function initSchema(db) {
   safeAddColumn('users', 'department', 'TEXT');
   safeAddColumn('users', 'employee_code', 'TEXT');
 
+  // ── Role normalisation migration (April 2026) ──
+  // The permission layer requires canonical lowercase roles ('admin', 'hr',
+  // 'finance', 'supervisor', 'viewer', 'employee'). Historically the user
+  // create/update endpoints trusted the admin's input verbatim, so any user
+  // created with "Finance" (capitalised from a dropdown label) silently lost
+  // finance-only features because the case-sensitive `includes('finance')`
+  // check failed. Run a one-time idempotent normalisation on startup:
+  //   1. trim whitespace
+  //   2. lowercase
+  //   3. coerce unknown values to 'viewer' so we don't leak perms.
+  try {
+    const rows = db.prepare('SELECT id, role FROM users').all();
+    const VALID = new Set(['admin', 'hr', 'finance', 'supervisor', 'viewer', 'employee']);
+    const upd = db.prepare('UPDATE users SET role = ? WHERE id = ?');
+    let fixed = 0;
+    for (const u of rows) {
+      const trimmed = String(u.role || '').trim().toLowerCase();
+      let canonical = 'viewer';
+      if (VALID.has(trimmed)) canonical = trimmed;
+      else for (const v of VALID) if (trimmed.split(/[\s_-]+/).includes(v)) { canonical = v; break; }
+      if (canonical !== u.role) { upd.run(canonical, u.id); fixed++; }
+    }
+    if (fixed > 0) console.log(`[schema] Normalised ${fixed} user role(s) to canonical lowercase form`);
+  } catch (e) {
+    console.warn('[schema] user role normalisation failed:', e.message);
+  }
+
   // notifications: add columns for month-end scheduler
   safeAddColumn('notifications', 'role_target', 'TEXT');
   safeAddColumn('notifications', 'user_id', 'INTEGER');

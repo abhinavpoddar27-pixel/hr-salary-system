@@ -865,17 +865,21 @@ router.get('/salary-slip-excel', (req, res) => {
 
   const MONTHS = ['', 'JANUARY', 'FEBRUARY', 'MARCH', 'APRIL', 'MAY', 'JUNE', 'JULY', 'AUGUST', 'SEPTEMBER', 'OCTOBER', 'NOVEMBER', 'DECEMBER'];
 
-  // Fetch all salary data
+  // Fetch all salary data — include held employees so the finance team has a
+  // complete paper record. `sc.*` brings in salary_held / hold_reason /
+  // finance_remark which the summary sheet prefixes with ⚠ and follows up
+  // with an inline note row for each held row.
   const rows = db.prepare(`
     SELECT sc.*, e.name, e.department, e.designation, e.date_of_joining,
       dc.total_payable_days, dc.days_present, dc.days_absent, dc.paid_sundays, dc.days_wop, dc.ot_hours
     FROM salary_computations sc
     LEFT JOIN employees e ON sc.employee_code = e.code
     LEFT JOIN day_calculations dc ON sc.employee_code = dc.employee_code AND sc.month = dc.month AND sc.year = dc.year
-    WHERE sc.month = ? AND sc.year = ? AND sc.net_salary > 0
+    WHERE sc.month = ? AND sc.year = ?
+      AND (sc.net_salary > 0 OR sc.salary_held = 1)
     ${company ? 'AND sc.company = ?' : ''}
     AND (e.status IS NULL OR e.status NOT IN ('Exited'))
-    ORDER BY e.department, e.name
+    ORDER BY sc.salary_held DESC, e.department, e.name
   `).all(...[parseInt(month), parseInt(year), company].filter(Boolean));
 
   if (rows.length === 0) return res.status(404).json({ success: false, error: 'No salary records found' });
@@ -885,13 +889,23 @@ router.get('/salary-slip-excel', (req, res) => {
 
   const wb = XLSX.utils.book_new();
 
-  // ── Sheet 1: SUMMARY ──────────────────────────────────────
+  // Shared helpers
   const fmtDOJ = (iso) => {
     if (!iso) return '';
     const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(iso);
     return m ? `${m[3]}/${m[2]}/${m[1]}` : iso;
   };
+  const isHeld = (r) => (r.salary_held === 1 || r.salary_held === true);
+  const holdNote = (r) => {
+    const bits = [];
+    if (r.hold_reason) bits.push(r.hold_reason);
+    if (r.finance_remark && r.finance_remark !== r.hold_reason) bits.push(`Finance: ${r.finance_remark}`);
+    return bits.length ? bits.join(' | ') : 'Salary held — reason not recorded';
+  };
 
+  // ── Sheet 1: SUMMARY ──────────────────────────────────────
+
+  const SUMMARY_COLS = 19; // S.No … DAYS
   const summaryData = [
     [companyName],
     [`SALARY SUMMARY — ${MONTHS[parseInt(month)]} ${year}`],
@@ -899,11 +913,19 @@ router.get('/salary-slip-excel', (req, res) => {
     ['S.No', 'EMP', 'NAME', 'DEPARTMENT', 'DESIGNATION', 'DOJ', 'GROSS', 'EARNED', 'OT PAY', 'ED PAY',
      'PF', 'ESI', 'ADVANCE', 'LOAN', 'LOP', 'TOT DED', 'NET PAYABLE', 'TAKE HOME', 'DAYS']
   ];
+  // Track rows that need merge/note styling. Header is rows 0..3, data starts at row 4.
+  const summaryMerges = [
+    { s: { r: 0, c: 0 }, e: { r: 0, c: SUMMARY_COLS - 1 } },
+    { s: { r: 1, c: 0 }, e: { r: 1, c: SUMMARY_COLS - 1 } }
+  ];
+  const heldEmployees = [];
 
   rows.forEach((r, i) => {
     const takeHome = r.take_home || ((r.total_payable || r.net_salary || 0) + (r.ed_pay || 0));
+    const held = isHeld(r);
+    const namePrefix = held ? '⚠ HELD — ' : '';
     summaryData.push([
-      i + 1, r.employee_code, r.name || '', r.department || '', r.designation || '',
+      i + 1, r.employee_code, namePrefix + (r.name || ''), r.department || '', r.designation || '',
       fmtDOJ(r.date_of_joining),
       r.gross_salary || 0, r.gross_earned || 0,
       r.ot_pay || 0, r.ed_pay || 0,
@@ -911,9 +933,24 @@ router.get('/salary-slip-excel', (req, res) => {
       r.advance_recovery || 0, r.loan_recovery || 0, r.lop_deduction || 0,
       r.total_deductions || 0, r.net_salary || 0, takeHome, r.total_payable_days || 0
     ]);
+
+    if (held) {
+      // Insert a note row immediately after the held employee's salary row.
+      // Column 0 carries the note text; the remaining cells are filled with
+      // empty strings so XLSX can merge them into a single visual cell.
+      const noteRowIdx = summaryData.length; // 0-based index of the row we're about to push
+      const note = `    ↳ HOLD REASON: ${holdNote(r)}`;
+      const row = new Array(SUMMARY_COLS).fill('');
+      row[0] = note;
+      summaryData.push(row);
+      summaryMerges.push({ s: { r: noteRowIdx, c: 0 }, e: { r: noteRowIdx, c: SUMMARY_COLS - 1 } });
+      heldEmployees.push(r);
+    }
   });
 
-  // Totals row
+  // Totals row — only sums non-held-note rows. Held rows ARE included because
+  // total_payable/take_home still reflect what would be paid IF released; finance
+  // reviewing the sheet wants to see the financial scale of the holds.
   const totals = rows.reduce((t, r) => {
     t.gross += r.gross_salary || 0; t.earned += r.gross_earned || 0;
     t.ot += r.ot_pay || 0; t.ed += r.ed_pay || 0;
@@ -933,18 +970,73 @@ router.get('/salary-slip-excel', (req, res) => {
     Math.round(totals.ded), Math.round(totals.net), Math.round(totals.takeHome), ''
   ]);
 
+  // Footer: held-count summary so finance can see at a glance how many holds
+  // are in the register without scanning the whole sheet.
+  if (heldEmployees.length > 0) {
+    summaryData.push([]);
+    const footerRow = summaryData.length;
+    summaryData.push([`⚠ ${heldEmployees.length} employee(s) marked HELD — see inline notes above and the HELD EMPLOYEES sheet for the full paper record`]);
+    summaryMerges.push({ s: { r: footerRow, c: 0 }, e: { r: footerRow, c: SUMMARY_COLS - 1 } });
+  }
+
   const summarySheet = XLSX.utils.aoa_to_sheet(summaryData);
   summarySheet['!cols'] = [
-    { wch: 5 }, { wch: 8 }, { wch: 22 }, { wch: 18 }, { wch: 16 }, { wch: 11 },
+    { wch: 5 }, { wch: 8 }, { wch: 28 }, { wch: 18 }, { wch: 16 }, { wch: 11 },
     { wch: 10 }, { wch: 10 }, { wch: 9 }, { wch: 9 },
     { wch: 8 }, { wch: 8 }, { wch: 8 },
     { wch: 10 }, { wch: 8 }, { wch: 8 }, { wch: 10 }, { wch: 12 }, { wch: 6 }
   ];
-  summarySheet['!merges'] = [
-    { s: { r: 0, c: 0 }, e: { r: 0, c: 18 } },
-    { s: { r: 1, c: 0 }, e: { r: 1, c: 18 } }
-  ];
+  summarySheet['!merges'] = summaryMerges;
   XLSX.utils.book_append_sheet(wb, summarySheet, 'SUMMARY');
+
+  // ── Sheet 1.5: HELD EMPLOYEES (paper record) ──────────────
+  // Dedicated sheet listing only the held employees with full salary breakdown
+  // and hold reason. Finance prints this separately for their audit binder.
+  if (heldEmployees.length > 0) {
+    const HELD_COLS = 8;
+    const heldData = [
+      [companyName],
+      [`HELD SALARIES — ${MONTHS[parseInt(month)]} ${year}`],
+      [`${heldEmployees.length} employee(s) held for finance review`],
+      [],
+      ['S.No', 'EMP', 'NAME', 'DEPARTMENT', 'GROSS', 'NET (held)', 'TAKE HOME', 'HOLD REASON']
+    ];
+    const heldMerges = [
+      { s: { r: 0, c: 0 }, e: { r: 0, c: HELD_COLS - 1 } },
+      { s: { r: 1, c: 0 }, e: { r: 1, c: HELD_COLS - 1 } },
+      { s: { r: 2, c: 0 }, e: { r: 2, c: HELD_COLS - 1 } }
+    ];
+
+    heldEmployees.forEach((r, i) => {
+      const takeHome = r.take_home || ((r.total_payable || r.net_salary || 0) + (r.ed_pay || 0));
+      heldData.push([
+        i + 1,
+        r.employee_code,
+        r.name || '',
+        r.department || '',
+        Math.round(r.gross_salary || 0),
+        Math.round(r.net_salary || 0),
+        Math.round(takeHome),
+        holdNote(r)
+      ]);
+    });
+
+    // Paper-record footer: signatures block for the finance team binder.
+    heldData.push([]);
+    heldData.push(['NOTE: Each held salary has been reviewed and flagged by the salary computation pipeline.']);
+    heldData.push(['Release requires an explicit action via Stage 7 "Release Hold" button, logged in the audit trail.']);
+    heldData.push([]);
+    heldData.push(['Reviewed by Finance: ____________________________', '', '', '', 'Date: __________']);
+    heldData.push(['Approved by HR:      ____________________________', '', '', '', 'Date: __________']);
+
+    const heldSheet = XLSX.utils.aoa_to_sheet(heldData);
+    heldSheet['!cols'] = [
+      { wch: 5 }, { wch: 8 }, { wch: 28 }, { wch: 18 },
+      { wch: 10 }, { wch: 12 }, { wch: 12 }, { wch: 60 }
+    ];
+    heldSheet['!merges'] = heldMerges;
+    XLSX.utils.book_append_sheet(wb, heldSheet, 'HELD EMPLOYEES');
+  }
 
   // ── Sheet 2: SALARY SLIP ──────────────────────────────────
   const slipData = [];
@@ -972,6 +1064,7 @@ router.get('/salary-slip-excel', (req, res) => {
     for (let i = 0; i < group.length; i++) {
       const r = group[i];
       const doj = r.date_of_joining ? r.date_of_joining.replace(/-/g, '/').replace(/^(\d{4})\/(\d{2})\/(\d{2})$/, '$2/$3/$1').replace(/^0/, '') : '';
+      const held = isHeld(r);
 
       // Blank row before employee
       slipData.push([]);
@@ -980,7 +1073,7 @@ router.get('/salary-slip-excel', (req, res) => {
       slipData.push([
         g + i + 1,
         r.employee_code,
-        r.name || '',
+        (held ? '⚠ HELD — ' : '') + (r.name || ''),
         (r.designation || '') + (r.department ? ` ${r.department}` : ''),
         doj,
         r.gross_salary || 0,
@@ -992,6 +1085,16 @@ router.get('/salary-slip-excel', (req, res) => {
         ''
       ]);
       currentRow++;
+
+      // Hold-reason note row (merged across the whole slip width) so the
+      // finance team printing the payslip page sees WHY the salary is held
+      // directly under that employee's figures — no cross-referencing needed.
+      if (held) {
+        const noteRow = [`    ↳ HOLD REASON: ${holdNote(r)}`, '', '', '', '', '', '', '', '', '', '', ''];
+        slipData.push(noteRow);
+        slipMerges.push({ s: { r: currentRow, c: 0 }, e: { r: currentRow, c: 11 } });
+        currentRow++;
+      }
     }
 
     // Yellow separator (blank row marker — will need styling in Excel)

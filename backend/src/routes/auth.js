@@ -8,6 +8,26 @@ const { requireAuth, JWT_SECRET } = require('../middleware/auth');
 const TOKEN_EXPIRY = '2h';
 const INACTIVITY_TIMEOUT_MS = 15 * 60 * 1000; // 15 minutes
 
+// Canonical roles accepted by the permission layer. Anything outside this
+// set is coerced to 'viewer' so a typo at user creation can never silently
+// lock a user out (or worse, accidentally escalate them).
+const VALID_ROLES = new Set(['admin', 'hr', 'finance', 'supervisor', 'viewer', 'employee']);
+
+/**
+ * Normalize a role field to its canonical lowercase form.
+ * Handles: whitespace, case variations, empty/null, and unknown values.
+ * Returns 'viewer' as a safe fallback for anything we don't recognise.
+ */
+function normalizeRole(raw) {
+  const trimmed = String(raw || '').trim().toLowerCase();
+  if (!trimmed) return 'viewer';
+  // Tolerate "Finance Team" / "HR Manager" by matching on known tokens
+  for (const r of VALID_ROLES) {
+    if (trimmed === r || trimmed.split(/[\s_-]+/).includes(r)) return r;
+  }
+  return 'viewer';
+}
+
 // POST /api/auth/login
 router.post('/login', (req, res) => {
   const { username, password } = req.body;
@@ -27,11 +47,21 @@ router.post('/login', (req, res) => {
     return res.status(401).json({ success: false, error: 'Invalid credentials' });
   }
 
+  // Normalize role on-the-fly AND write it back to the DB so a legacy
+  // "Finance" / "FINANCE " row gets cleaned up the next time the user
+  // logs in. Self-healing migration.
+  const normalizedRole = normalizeRole(user.role);
+  if (normalizedRole !== user.role) {
+    try {
+      db.prepare('UPDATE users SET role = ? WHERE id = ?').run(normalizedRole, user.id);
+    } catch (e) { /* best-effort */ }
+  }
+
   // Update last login + last active
   db.prepare("UPDATE users SET last_login = datetime('now'), last_active = datetime('now') WHERE id = ?").run(user.id);
 
   const token = jwt.sign(
-    { id: user.id, username: user.username, role: user.role, employee_code: user.employee_code || null },
+    { id: user.id, username: user.username, role: normalizedRole, employee_code: user.employee_code || null },
     JWT_SECRET,
     { expiresIn: TOKEN_EXPIRY }
   );
@@ -54,7 +84,7 @@ router.post('/login', (req, res) => {
     user: {
       id: user.id,
       username: user.username,
-      role: user.role,
+      role: normalizedRole,
       allowedCompanies
     }
   });
@@ -72,6 +102,9 @@ router.get('/me', requireAuth, (req, res) => {
   const user = db.prepare('SELECT id, username, role, last_login, allowed_companies, onboarding_completed FROM users WHERE id = ?').get(req.user.id);
   if (!user) return res.status(404).json({ success: false, error: 'User not found' });
 
+  // Always return a canonical role — protects the frontend from any
+  // legacy rows that haven't self-healed via a login yet.
+  user.role = normalizeRole(user.role);
   const ac = user.allowed_companies || '*';
   user.allowedCompanies = ac === '*' ? ['*'] : ac.split(',').map(c => c.trim()).filter(Boolean);
 
@@ -85,9 +118,10 @@ router.post('/heartbeat', requireAuth, (req, res) => {
     // Update last_active timestamp
     db.prepare("UPDATE users SET last_active = datetime('now') WHERE id = ?").run(req.user.id);
 
-    // Issue a fresh token (sliding window)
+    // Issue a fresh token (sliding window) — normalize role defensively
+    // in case the JWT was issued before the normalization landed.
     const token = jwt.sign(
-      { id: req.user.id, username: req.user.username, role: req.user.role },
+      { id: req.user.id, username: req.user.username, role: normalizeRole(req.user.role) },
       JWT_SECRET,
       { expiresIn: TOKEN_EXPIRY }
     );
@@ -142,8 +176,9 @@ router.post('/change-password', requireAuth, (req, res) => {
 // GET /api/auth/permissions
 router.get('/permissions', requireAuth, (req, res) => {
   const { getPermissions } = require('../config/permissions');
-  const perms = getPermissions(req.user.role);
-  res.json({ success: true, role: req.user.role, permissions: perms });
+  const role = normalizeRole(req.user.role);
+  const perms = getPermissions(role);
+  res.json({ success: true, role, permissions: perms });
 });
 
 // PATCH /api/auth/onboarding-complete
@@ -190,7 +225,7 @@ router.post('/users', requireAuth, (req, res) => {
 
   const hash = bcrypt.hashSync(password, 10);
   const result = db.prepare('INSERT INTO users (username, password_hash, role, allowed_companies) VALUES (?, ?, ?, ?)').run(
-    username.trim().toLowerCase(), hash, role || 'viewer', ac
+    username.trim().toLowerCase(), hash, normalizeRole(role), ac
   );
   res.json({ success: true, id: result.lastInsertRowid });
 });
@@ -208,7 +243,7 @@ router.put('/users/:id', requireAuth, (req, res) => {
   const updates = [];
   const values = [];
 
-  if (role !== undefined) { updates.push('role = ?'); values.push(role); }
+  if (role !== undefined) { updates.push('role = ?'); values.push(normalizeRole(role)); }
   if (is_active !== undefined) { updates.push('is_active = ?'); values.push(is_active ? 1 : 0); }
   if (allowedCompanies !== undefined) {
     let ac = '*';
@@ -233,3 +268,4 @@ router.put('/users/:id', requireAuth, (req, res) => {
 });
 
 module.exports = router;
+module.exports.normalizeRole = normalizeRole;
