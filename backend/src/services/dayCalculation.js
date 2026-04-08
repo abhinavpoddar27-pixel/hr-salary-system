@@ -192,7 +192,21 @@ function calculateDays(employeeCode, month, year, company, attendanceRecords, le
       // Absent on a weekly off or holiday does not count as an absence
       if (!isWeeklyOff && !isHoliday) daysAbsent++;
     }
-    // WO / weekly off taken is expected — no count
+    else if (status === 'WO' || status === 'NH') {
+      // Expected non-working day markers — no count
+    }
+    else {
+      // GHOST STATUS CATCH-ALL — any unrecognised status (empty string ""
+      // from a blank biometric cell, unknown code, whitespace, etc.) on a
+      // regular working day MUST count as absent. Without this clause, a
+      // ghost record silently fell through the if/else chain: the working
+      // day stayed in `workingDays` (baseEntitlement), `daysAbsent` was
+      // never incremented, and `finalPayable = baseEntitlement - absences`
+      // inflated by one day per ghost. 232/422 employees in Mar 2026 were
+      // affected; 4 "Returning" employees had 12-15 day overpayments
+      // because only half the month had real biometric data.
+      if (!isWeeklyOff && !isHoliday) daysAbsent++;
+    }
 
     // Holiday duty — worked a declared non-weekly-off holiday
     if (isHoliday && !isWeeklyOff) {
@@ -315,6 +329,24 @@ function calculateDays(employeeCode, month, year, company, attendanceRecords, le
 
   // Extra duty — anything above daysInMonth
   const extraDutyDays = Math.max(0, Math.round((finalPayable - daysInMonth) * 100) / 100);
+
+  // ── Integrity assertion (ghost-status detector) ──
+  // finalPayable should equal the sum of paid components:
+  //   daysPresent + daysHalfPresent + paidWeeklyOffs + paidHolidays + daysWOP + manualGrantDays
+  // Derivation: finalPayable = workingDays - daysAbsent - daysHalfPresent + paidWeeklyOffs + paidHolidays + daysWOP,
+  // and workingDays = daysPresent + 2*daysHalfPresent + daysAbsent (assuming every
+  // working day is accounted for as P / ½P / A — no ghost statuses).
+  // If this mismatches, either a ghost record slipped through or the status
+  // classification is missing a new code.
+  const expectedPayable = daysPresent + daysHalfPresent + paidWeeklyOffs + paidHolidays + daysWOP + manualGrantDays;
+  if (Math.abs(finalPayable - expectedPayable) > 0.01) {
+    console.warn(
+      `[DayCalc] Integrity warning ${employeeCode} ${month}/${year}: ` +
+      `finalPayable=${finalPayable} but expected=${expectedPayable} ` +
+      `(present=${daysPresent}, half=${daysHalfPresent}, paidWO=${paidWeeklyOffs}, ` +
+      `holidays=${paidHolidays}, wop=${daysWOP}, absent=${daysAbsent}, workingDays=${workingDays})`
+    );
+  }
 
   // ── UI week breakdown: one entry per weekly off, first N paid ──
   const weekBreakdown = weeklyOffDates.map((d, i) => ({

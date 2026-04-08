@@ -15,6 +15,39 @@ router.post('/calculate-days', (req, res) => {
 
   if (!month || !year) return res.status(400).json({ success: false, error: 'month and year required' });
 
+  // ── Ghost attendance cleanup ──
+  // Rows with no status AND no in_time AND no out_time are "ghost" records —
+  // typically second-half-of-month rows for "Returning" employees whose EESL
+  // biometric data only covered the first half. Before Fix 1 in dayCalculation.js
+  // closed the catch-all hole, these fell through the status loop without
+  // counting as absent, inflating total_payable_days by up to 12-15 days.
+  //
+  // The in-code fix in dayCalculation.js handles the calculation correctly,
+  // but we also normalise the DB here so the Stage 5 attendance UI shows
+  // 'A' instead of a blank cell on these days (and other consumers — finance
+  // audit, analytics — see a consistent status). Weekly-off and holiday days
+  // are intentionally NOT excluded: day-calc still skips them from daysAbsent
+  // via `isWeeklyOff`/`isHoliday` checks, so setting a ghost Sunday to 'A'
+  // is a no-op functionally but makes the data uniform.
+  const ghostCleanup = db.prepare(`
+    UPDATE attendance_processed
+    SET status_original = CASE
+          WHEN status_original IS NULL OR status_original = '' THEN 'A'
+          ELSE status_original
+        END,
+        status_final = 'A'
+    WHERE month = ? AND year = ?
+    ${company ? 'AND company = ?' : ''}
+    AND (status_final IS NULL OR status_final = '')
+    AND (status_original IS NULL OR status_original = '')
+    AND (in_time_original IS NULL OR in_time_original = '')
+    AND (out_time_original IS NULL OR out_time_original = '')
+    AND is_night_out_only = 0
+  `).run(...[month, year, company].filter(Boolean));
+  if (ghostCleanup.changes > 0) {
+    console.log(`[DayCalc] Cleaned ${ghostCleanup.changes} ghost attendance records → 'A' for ${month}/${year}`);
+  }
+
   // Get employee codes from attendance — include ALL employees with attendance data
   // (even those marked 'Left' who may have returned; auto-reactivate them)
   const empCodes = db.prepare(`

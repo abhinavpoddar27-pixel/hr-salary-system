@@ -327,7 +327,7 @@ function parseSheet(ws, sheetName) {
         const dayInfo = colToDayMap[col];
         if (!dayInfo) continue;
 
-        const status = getCellValue(ws, statusRow, col) || '';
+        const rawStatus = getCellValue(ws, statusRow, col) || '';
         const inTimeRaw = inTimeRow >= 0 ? getCellValue(ws, inTimeRow, col) : null;
         const outTimeRaw = outTimeRow >= 0 ? getCellValue(ws, outTimeRow, col) : null;
         const totalHoursRaw = getCellValue(ws, totalRow, col);
@@ -335,6 +335,18 @@ function parseSheet(ws, sheetName) {
         const inTime = normalizeTime(inTimeRaw);
         const outTime = normalizeTime(outTimeRaw);
         const totalHours = totalHoursRaw && totalHoursRaw !== '00:00' ? totalHoursRaw : null;
+
+        // Ghost-record guard: if the biometric XLS left the day completely
+        // blank (no status, no IN-time, no OUT-time) treat the day as absent.
+        // Without this, the empty string flowed all the way through to
+        // attendance_processed and silently inflated total_payable_days in
+        // Stage 6. The fallback loop in dayCalculation.js now also catches
+        // unknown statuses, but normalising at the source keeps attendance_raw
+        // and the Stage 5 UI consistent with reality.
+        let status = rawStatus.trim();
+        if (!status && !inTime && !outTime) {
+          status = 'A';
+        }
 
         records.push({
           employeeCode: String(empCode).trim(),
@@ -347,7 +359,7 @@ function parseSheet(ws, sheetName) {
           dayNumber: dayInfo.dayNumber,
           month,
           year,
-          status: status.trim(),
+          status,
           inTime,
           outTime,
           totalHours,
