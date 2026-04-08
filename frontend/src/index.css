@@ -240,6 +240,42 @@
     cursor-default select-none;
 }
 
+/* ── Caution triangle for held-salary cells (Excel-style) ──────────── */
+/* Mimics the corner triangle Excel renders on flagged cells: a small
+   amber triangle anchored to the top-left of the cell. Used on TOT DED,
+   NET PAYABLE, and TAKE HOME columns when salary_held = 1 so finance
+   can spot held salaries while scanning the financial columns. */
+.cell-caution {
+  position: relative;
+}
+.cell-caution::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 0;
+  height: 0;
+  border-style: solid;
+  border-width: 9px 9px 0 0;
+  border-color: #f59e0b transparent transparent transparent; /* amber-500 */
+  pointer-events: none;
+  z-index: 1;
+}
+.cell-caution[title]:hover::after {
+  content: attr(title);
+  position: absolute;
+  top: -22px;
+  left: 0;
+  background: #1e293b;
+  color: white;
+  font-size: 10px;
+  padding: 2px 6px;
+  border-radius: 4px;
+  white-space: nowrap;
+  z-index: 20;
+  pointer-events: none;
+}
+
 /* ── Print Styles ──────────────────────────────────── */
 @media print {
   .no-print { display: none !important; }
@@ -255,6 +291,12 @@
     -webkit-print-color-adjust: exact;
     print-color-adjust: exact;
   }
+
+  .cell-caution::before {
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+  }
+  .cell-caution::after { display: none !important; }
 
   .table-compact th { background: #f1f5f9 !important; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
   .table-compact td { border-bottom: 1px solid #e2e8f0 !important; }

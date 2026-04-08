@@ -920,10 +920,18 @@ router.get('/salary-slip-excel', (req, res) => {
   ];
   const heldEmployees = [];
 
+  // Track caution-cell coordinates for held employees so we can attach Excel
+  // cell comments to the TOT DED / NET PAYABLE / TAKE HOME columns after the
+  // sheet is built. The xlsx community edition does not honour cell fill
+  // styling on write, but cell comments (the `c` field) DO survive the round
+  // trip and render as the standard Excel red-corner-triangle indicator.
+  const heldCautionRows = []; // [{ rowIdx, note }]
+
   rows.forEach((r, i) => {
     const takeHome = r.take_home || ((r.total_payable || r.net_salary || 0) + (r.ed_pay || 0));
     const held = isHeld(r);
     const namePrefix = held ? '⚠ HELD — ' : '';
+    const dataRowIdx = summaryData.length; // 0-based index of the row we're about to push
     summaryData.push([
       i + 1, r.employee_code, namePrefix + (r.name || ''), r.department || '', r.designation || '',
       fmtDOJ(r.date_of_joining),
@@ -945,6 +953,7 @@ router.get('/salary-slip-excel', (req, res) => {
       summaryData.push(row);
       summaryMerges.push({ s: { r: noteRowIdx, c: 0 }, e: { r: noteRowIdx, c: SUMMARY_COLS - 1 } });
       heldEmployees.push(r);
+      heldCautionRows.push({ rowIdx: dataRowIdx, note: holdNote(r) });
     }
   });
 
@@ -987,6 +996,26 @@ router.get('/salary-slip-excel', (req, res) => {
     { wch: 10 }, { wch: 8 }, { wch: 8 }, { wch: 10 }, { wch: 12 }, { wch: 6 }
   ];
   summarySheet['!merges'] = summaryMerges;
+
+  // Attach Excel cell comments (red corner triangle) to the financial cells
+  // for held employees. Excel renders these as the same red caution triangle
+  // the company's salary summaries use, so finance can spot held salaries while
+  // scanning the TOT DED / NET PAYABLE / TAKE HOME columns. The xlsx community
+  // edition does not write fill colours, so cell comments are the most
+  // reliable visual indicator across versions.
+  const CAUTION_COLS = [15, 16, 17]; // TOT DED, NET PAYABLE, TAKE HOME (0-indexed)
+  for (const { rowIdx, note } of heldCautionRows) {
+    for (const colIdx of CAUTION_COLS) {
+      const cellRef = XLSX.utils.encode_cell({ r: rowIdx, c: colIdx });
+      const cell = summarySheet[cellRef];
+      if (!cell) continue;
+      cell.c = [{ a: 'Payroll System', t: `⚠ Salary Held: ${note}` }];
+      // Mark the comment as hidden by default so Excel only shows the corner
+      // triangle until the user hovers (matches the company spreadsheet UX).
+      cell.c.hidden = true;
+    }
+  }
+
   XLSX.utils.book_append_sheet(wb, summarySheet, 'SUMMARY');
 
   // ── Sheet 1.5: HELD EMPLOYEES (paper record) ──────────────
