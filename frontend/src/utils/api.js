@@ -281,7 +281,6 @@ export const financeFlagGrant = (id, reason, notes) => api.post(`/extra-duty-gra
 export const financeRejectGrant = (id, reason) => api.post(`/extra-duty-grants/${id}/finance-reject`, { finance_flag_reason: reason })
 export const bulkFinanceApproveGrants = (ids) => api.post('/extra-duty-grants/bulk-finance-approve', { ids })
 export const getFinanceReviewQueue = (month, year) => api.get('/extra-duty-grants/finance-review', { params: { month, year } })
-export const getFinanceImpactSummary = (month, year) => api.get('/extra-duty-grants/finance-impact-summary', { params: { month, year } })
 
 // ── Holiday Master ───────────────────────────────────────
 export const updateHoliday = (id, data) => api.put(`/settings/holidays/${id}`, data)

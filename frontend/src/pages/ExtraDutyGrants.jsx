@@ -5,7 +5,6 @@ import { useAppStore } from '../store/appStore'
 import DateSelector from '../components/common/DateSelector'
 import useDateSelector from '../hooks/useDateSelector'
 import CompanyFilter from '../components/shared/CompanyFilter'
-import { fmtINR } from '../utils/formatters'
 import Modal from '../components/ui/Modal'
 import clsx from 'clsx'
 import toast from 'react-hot-toast'
@@ -48,12 +47,11 @@ export default function ExtraDutyGrants() {
         <div className="flex items-center gap-3"><CompanyFilter /><DateSelector {...dateProps} /></div>
       </div>
 
-      <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
         <KPI label="Total" value={summary.total || 0} />
         <KPI label="Pending HR" value={summary.pending || 0} color="amber" />
         <KPI label="HR Approved" value={summary.hrApproved || 0} color="blue" />
         <KPI label="Finance OK" value={summary.financeApproved || 0} color="green" />
-        <KPI label="Impact" value={fmtINR(summary.totalImpact || 0)} color="indigo" />
       </div>
 
       <div className="flex items-center gap-3">
@@ -70,7 +68,7 @@ export default function ExtraDutyGrants() {
 
       <div className="card overflow-x-auto">
         <table className="table-compact w-full text-[11px]">
-          <thead><tr><th>Employee</th><th>Dept</th><th>Grant Date</th><th>Type</th><th>Days</th><th>Source</th><th>HR Status</th><th>Finance</th><th>Impact</th><th>Actions</th></tr></thead>
+          <thead><tr><th>Employee</th><th>Dept</th><th>Grant Date</th><th>Type</th><th>Days</th><th>Source</th><th>HR Status</th><th>Finance</th><th>Actions</th></tr></thead>
           <tbody>
             {grants.map(g => (
               <tr key={g.id} className={g.finance_status === 'FINANCE_FLAGGED' ? 'bg-amber-50' : ''}>
@@ -82,7 +80,6 @@ export default function ExtraDutyGrants() {
                 <td className="text-xs">{g.verification_source}</td>
                 <td><span className={clsx('text-[10px] px-1.5 py-0.5 rounded-full', hrBadge[g.status])}>{g.status}</span></td>
                 <td><span className={clsx('text-[10px] px-1.5 py-0.5 rounded-full', finBadge[g.finance_status])}>{g.finance_status?.replace('FINANCE_', '')}</span></td>
-                <td className="font-mono text-indigo-600">{g.salary_impact_amount ? fmtINR(g.salary_impact_amount) : '—'}</td>
                 <td className="flex gap-1">
                   {canHR && g.status === 'PENDING' && <>
                     <button onClick={() => approveMut.mutate(g.id)} className="text-green-600 hover:bg-green-50 px-1 py-0.5 rounded text-[10px]">Approve</button>
@@ -94,7 +91,7 @@ export default function ExtraDutyGrants() {
                 </td>
               </tr>
             ))}
-            {grants.length === 0 && <tr><td colSpan={10} className="text-center py-8 text-slate-400">No grants for this period</td></tr>}
+            {grants.length === 0 && <tr><td colSpan={9} className="text-center py-8 text-slate-400">No grants for this period</td></tr>}
           </tbody>
         </table>
       </div>
