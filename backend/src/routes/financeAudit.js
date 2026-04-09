@@ -1146,6 +1146,40 @@ router.get('/readiness-check', (req, res) => {
     }
   } catch {}
 
+  // WARNING: late coming deductions pending finance review (Phase 2)
+  try {
+    const pendingLate = db.prepare(`
+      SELECT COUNT(*) as cnt FROM late_coming_deductions
+      WHERE month = ? AND year = ? AND finance_status = 'pending'
+    `).get(month, year);
+    if (pendingLate.cnt > 0) {
+      warnings.push({
+        type: 'LATE_DEDUCTIONS_PENDING',
+        count: pendingLate.cnt,
+        severity: 'WARNING',
+        detail: `${pendingLate.cnt} late coming deduction(s) awaiting finance review`
+      });
+    } else {
+      passed.push({ type: 'LATE_DEDUCTIONS_REVIEWED', severity: 'OK' });
+    }
+  } catch {}
+
+  // WARNING: approved late deductions not yet applied to salary (Phase 2)
+  try {
+    const unapplied = db.prepare(`
+      SELECT COUNT(*) as cnt FROM late_coming_deductions
+      WHERE month = ? AND year = ? AND finance_status = 'approved' AND is_applied_to_salary = 0
+    `).get(month, year);
+    if (unapplied.cnt > 0) {
+      warnings.push({
+        type: 'LATE_DEDUCTIONS_UNAPPLIED',
+        count: unapplied.cnt,
+        severity: 'WARNING',
+        detail: `${unapplied.cnt} approved late deduction(s) need salary recomputation`
+      });
+    }
+  } catch {}
+
   // Score: 100 if no blockers, reduce by each
   const totalChecks = blockers.length + warnings.length + passed.length;
   const blockerWeight = 20, warningWeight = 5;

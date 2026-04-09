@@ -904,7 +904,51 @@ router.get('/month-end-checklist', (req, res) => {
     link: '/pipeline/salary'
   });
 
-  // 7. Already finalised check
+  // 7a. Late coming deductions pending finance review (Phase 2)
+  try {
+    const pendingLate = db.prepare(`
+      SELECT COUNT(*) as cnt FROM late_coming_deductions
+      WHERE month = ? AND year = ? AND finance_status = 'pending'
+    `).get(month, year);
+    if (pendingLate.cnt > 0) {
+      items.push({
+        id: 'late-deductions-pending',
+        label: 'Late coming deductions pending finance review',
+        status: 'warning',
+        count: pendingLate.cnt,
+        detail: `${pendingLate.cnt} late coming deduction(s) awaiting finance review`,
+        link: '/finance-audit?tab=late-coming'
+      });
+    } else {
+      items.push({
+        id: 'late-deductions-reviewed',
+        label: 'All late coming deductions reviewed',
+        status: 'ok',
+        count: 0,
+        detail: 'No pending late coming deductions'
+      });
+    }
+  } catch (e) {}
+
+  // 7b. Approved late deductions not yet applied to salary
+  try {
+    const approvedNotApplied = db.prepare(`
+      SELECT COUNT(*) as cnt FROM late_coming_deductions
+      WHERE month = ? AND year = ? AND finance_status = 'approved' AND is_applied_to_salary = 0
+    `).get(month, year);
+    if (approvedNotApplied.cnt > 0) {
+      items.push({
+        id: 'late-deductions-unapplied',
+        label: 'Approved late deductions not yet in salary',
+        status: 'warning',
+        count: approvedNotApplied.cnt,
+        detail: `${approvedNotApplied.cnt} approved deduction(s) need salary recomputation`,
+        link: '/pipeline/salary'
+      });
+    }
+  } catch (e) {}
+
+  // 8. Already finalised check
   const finalised = db.prepare(`
     SELECT COUNT(*) as cnt FROM salary_computations
     WHERE month = ? AND year = ? AND is_finalised = 1
