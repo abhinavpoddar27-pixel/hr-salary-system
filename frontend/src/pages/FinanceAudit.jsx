@@ -157,6 +157,7 @@ function ReportTab({ highlightEmployee, onClearHighlight }) {
                 <SortTh sort={sort} k="correctionDelta" className="text-center">Corr.</SortTh>
                 <SortTh sort={sort} k="finalDays" className="text-center">Final Days</SortTh>
                 <SortTh sort={sort} k="grossSalary" className="text-right">Gross</SortTh>
+                <SortTh sort={sort} k="lateComingDeduction" className="text-right">Late Ded</SortTh>
                 <SortTh sort={sort} k="netSalary" className="text-right">Net</SortTh>
                 <th className="text-center">Status</th>
                 <th className="text-center">Actions</th>
@@ -164,9 +165,9 @@ function ReportTab({ highlightEmployee, onClearHighlight }) {
             </thead>
             <tbody>
               {isLoading ? (
-                <tr><td colSpan={10} className="text-center py-8 text-slate-400">Loading finance report...</td></tr>
+                <tr><td colSpan={11} className="text-center py-8 text-slate-400">Loading finance report...</td></tr>
               ) : filtered.length === 0 ? (
-                <tr><td colSpan={10} className="text-center py-8 text-slate-400">No salary data for this month. Run salary computation first.</td></tr>
+                <tr><td colSpan={11} className="text-center py-8 text-slate-400">No salary data for this month. Run salary computation first.</td></tr>
               ) : filtered.map((r, i) => (
                 <React.Fragment key={r.code || i}>
                   <tr
@@ -195,6 +196,11 @@ function ReportTab({ highlightEmployee, onClearHighlight }) {
                     </td>
                     <td className="text-center font-bold">{r.finalDays ?? '—'}</td>
                     <td className="text-right">{fmtINR(r.grossEarned)}</td>
+                    <td className={clsx('text-right font-mono text-xs',
+                      (r.lateComingDeduction || 0) > 0 ? 'bg-amber-50 text-amber-700 font-semibold' : 'text-slate-400')}
+                      title={(r.lateComingDeduction || 0) > 0 ? `${r.lateDeductionApprovedDays} day(s) approved` : ''}>
+                      {(r.lateComingDeduction || 0) > 0 ? fmtINR(r.lateComingDeduction) : '—'}
+                    </td>
                     <td className="text-right font-semibold text-green-700">{fmtINR(r.netSalary)}</td>
                     <td className="text-center">
                       <div className="flex items-center justify-center gap-1">
@@ -228,7 +234,7 @@ function ReportTab({ highlightEmployee, onClearHighlight }) {
                     </td>
                   </tr>
                   {expand.isExpanded(r.code) && (
-                    <DrillDownRow colSpan={10}>
+                    <DrillDownRow colSpan={11}>
                       <CorrectionDetail code={r.code} row={r} />
                     </DrillDownRow>
                   )}

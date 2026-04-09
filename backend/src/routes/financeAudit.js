@@ -50,7 +50,9 @@ router.get('/report', (req, res) => {
     let prevMonth = m - 1, prevYear = y;
     if (prevMonth === 0) { prevMonth = 12; prevYear--; }
 
-    // Get salary data joined with day_calculations and corrections
+    // Get salary data joined with day_calculations and corrections.
+    // Phase 2: also pull finance-approved late coming deduction days and any
+    // overall status (pending/approved/rejected mix) for the month.
     const employees = db.prepare(`
       SELECT
         sc.employee_code, e.name, e.department, e.designation, e.company,
@@ -60,10 +62,24 @@ router.get('/report', (req, res) => {
         sc.gross_salary, sc.gross_earned, sc.net_salary, sc.payable_days,
         sc.pf_employee, sc.esi_employee, sc.professional_tax,
         sc.advance_recovery, sc.loan_recovery, sc.total_deductions,
+        sc.late_coming_deduction,
         sc.gross_changed, sc.salary_held, sc.hold_reason,
         sc.is_finalised,
         dcorr.id as correction_id, dcorr.correction_delta, dcorr.corrected_days as corrected_payable_days,
-        dcorr.correction_reason, dcorr.correction_notes, dcorr.corrected_by, dcorr.corrected_at
+        dcorr.correction_reason, dcorr.correction_notes, dcorr.corrected_by, dcorr.corrected_at,
+        -- Phase 2: sum of approved late-coming deduction days
+        COALESCE((
+          SELECT SUM(deduction_days) FROM late_coming_deductions lcd
+          WHERE lcd.employee_code = sc.employee_code
+            AND lcd.month = sc.month AND lcd.year = sc.year
+            AND lcd.finance_status = 'approved'
+        ), 0) AS late_deduction_approved_days,
+        -- Phase 2: overall late-coming status label for this employee/month
+        (
+          SELECT GROUP_CONCAT(DISTINCT finance_status) FROM late_coming_deductions lcd
+          WHERE lcd.employee_code = sc.employee_code
+            AND lcd.month = sc.month AND lcd.year = sc.year
+        ) AS late_deduction_status
       FROM salary_computations sc
       LEFT JOIN employees e ON sc.employee_code = e.code
       LEFT JOIN day_calculations dc ON dc.employee_code = sc.employee_code
@@ -143,6 +159,10 @@ router.get('/report', (req, res) => {
         professionalTax: emp.professional_tax,
         advanceRecovery: emp.advance_recovery,
         loanRecovery: emp.loan_recovery,
+        // Phase 2 — late coming deduction (rupee amount persisted on salary_computations)
+        lateComingDeduction: emp.late_coming_deduction || 0,
+        lateDeductionApprovedDays: Number(emp.late_deduction_approved_days || 0),
+        lateDeductionStatus: emp.late_deduction_status || null,
         // Comparison
         salaryStatus,
         prevGross: prev?.prev_gross || null,
