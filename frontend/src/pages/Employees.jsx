@@ -1,7 +1,7 @@
 import React, { useState, useRef } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import toast from 'react-hot-toast'
-import { getEmployees, getEmployee, createEmployee, updateEmployee, updateSalaryStructure, getLeaveBalances, updateLeaveBalance, getEmployeeDocuments, uploadEmployeeDocument, deleteEmployeeDocument, getEmployeeLoans, markEmployeeLeft, getShifts, bulkAssignShift } from '../utils/api'
+import { getEmployees, getEmployee, createEmployee, updateEmployee, updateSalaryStructure, getLeaveBalances, updateLeaveBalance, getEmployeeDocuments, uploadEmployeeDocument, deleteEmployeeDocument, getEmployeeLoans, markEmployeeLeft, getShifts, bulkAssignShift, getLateComingEmployeeHistory } from '../utils/api'
 import { fmtINR } from '../utils/formatters'
 import { useAppStore } from '../store/appStore'
 import Modal from '../components/ui/Modal'
@@ -352,9 +352,25 @@ function EmployeeProfileModal({ employee, onClose }) {
     { id: 'info', label: 'Personal' },
     { id: 'employment', label: 'Employment' },
     { id: 'attendance', label: 'Attendance' },
+    { id: 'latecoming', label: 'Late Coming' },
     { id: 'documents', label: 'Documents' },
     { id: 'loans', label: 'Loans' },
   ]
+
+  // Late Coming history — 12 months, fetched lazily
+  const { data: lcHistoryRes } = useQuery({
+    queryKey: ['employee-late-history', employee.code],
+    queryFn: () => getLateComingEmployeeHistory(employee.code, 12),
+    retry: 0,
+    enabled: activeTab === 'latecoming'
+  })
+  const lcHistory = lcHistoryRes?.data?.data || []
+  const lcCurrent = lcHistory[0] || {}
+  const lcPrev = lcHistory[1] || {}
+  const lcTrend = (lcCurrent.late_count || 0) - (lcPrev.late_count || 0)
+  const lcAllDeductions = lcHistory.flatMap(m =>
+    (m.deductions || []).map(d => ({ ...d, _month: m.month, _year: m.year }))
+  ).sort((a, b) => (b.applied_at || '').localeCompare(a.applied_at || ''))
 
   return (
     <Modal title={`${emp.name || employee.code}`} onClose={onClose} size="lg">
@@ -462,6 +478,121 @@ function EmployeeProfileModal({ employee, onClose }) {
         {activeTab === 'attendance' && (
           <div>
             <CalendarView employeeCode={employee.code} month={selectedMonth} year={selectedYear} />
+          </div>
+        )}
+
+        {/* Late Coming History (Phase 2) */}
+        {activeTab === 'latecoming' && (
+          <div className="space-y-4">
+            {/* Current shift badge */}
+            <div className="flex items-center gap-3">
+              <div className="px-3 py-2 bg-blue-50 border border-blue-200 rounded-lg">
+                <div className="text-[10px] text-slate-500 uppercase font-semibold">Current Shift</div>
+                <div className="text-sm font-bold text-blue-700">
+                  {emp.shift_code || '—'}
+                  {emp.shift_start_time && <span className="text-xs text-blue-500 ml-2">{emp.shift_start_time} – {emp.shift_end_time}</span>}
+                </div>
+              </div>
+              <div className="px-3 py-2 bg-amber-50 border border-amber-200 rounded-lg">
+                <div className="text-[10px] text-slate-500 uppercase font-semibold">Late This Month</div>
+                <div className="text-sm font-bold text-amber-700">
+                  {lcCurrent.late_count || 0}
+                  {lcTrend !== 0 && (
+                    <span className={clsx('text-[10px] ml-1', lcTrend > 0 ? 'text-red-600' : 'text-green-600')}>
+                      {lcTrend > 0 ? '↑' : '↓'} {Math.abs(lcTrend)}
+                    </span>
+                  )}
+                </div>
+              </div>
+              <div className="px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg">
+                <div className="text-[10px] text-slate-500 uppercase font-semibold">Late Last Month</div>
+                <div className="text-sm font-bold text-slate-700">{lcPrev.late_count || 0}</div>
+              </div>
+              <div className="px-3 py-2 bg-orange-50 border border-orange-200 rounded-lg">
+                <div className="text-[10px] text-slate-500 uppercase font-semibold">Left Late This Month</div>
+                <div className="text-sm font-bold text-orange-700">{lcCurrent.left_late_count || 0}</div>
+              </div>
+            </div>
+
+            {/* Month-by-month late counts */}
+            <div>
+              <div className="text-xs font-semibold text-slate-600 mb-2">Monthly Late Coming — Last 12 Months</div>
+              <table className="w-full text-xs">
+                <thead>
+                  <tr className="border-b text-[10px] text-slate-500 uppercase">
+                    <th className="py-1 text-left">Month</th>
+                    <th className="py-1 text-right">Late Count</th>
+                    <th className="py-1 text-right">Avg Min</th>
+                    <th className="py-1 text-right">Left Late</th>
+                    <th className="py-1 text-right">Deductions</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {lcHistory.map(h => {
+                    const mName = ['', 'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'][h.month] || h.month
+                    return (
+                      <tr key={`${h.year}-${h.month}`} className="border-b border-slate-100">
+                        <td className="py-1.5 font-medium">{mName} {h.year}</td>
+                        <td className="py-1.5 text-right font-mono">{h.late_count}</td>
+                        <td className="py-1.5 text-right font-mono">{h.avg_late_minutes}</td>
+                        <td className="py-1.5 text-right font-mono">{h.left_late_count}</td>
+                        <td className="py-1.5 text-right font-mono">
+                          {(h.deductions || []).length > 0 ? (
+                            (h.deductions || []).reduce((s, d) => s + Number(d.deduction_days || 0), 0) + 'd'
+                          ) : '—'}
+                        </td>
+                      </tr>
+                    )
+                  })}
+                  {lcHistory.length === 0 && (
+                    <tr><td colSpan={5} className="py-4 text-center text-slate-400">No history yet</td></tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+
+            {/* Deduction full history */}
+            <div>
+              <div className="text-xs font-semibold text-slate-600 mb-2">Deduction History</div>
+              {lcAllDeductions.length === 0 ? (
+                <div className="text-center py-4 text-slate-400 text-xs">No deductions applied yet</div>
+              ) : (
+                <table className="w-full text-xs">
+                  <thead>
+                    <tr className="border-b text-[10px] text-slate-500 uppercase">
+                      <th className="py-1 text-left">Month</th>
+                      <th className="py-1 text-right">Days</th>
+                      <th className="py-1 text-left">HR Remark</th>
+                      <th className="py-1 text-left">Status</th>
+                      <th className="py-1 text-left">Finance Remark</th>
+                      <th className="py-1 text-center">In Salary</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {lcAllDeductions.map(d => {
+                      const mName = ['', 'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'][d._month] || d._month
+                      const badge = d.finance_status === 'approved'
+                        ? 'bg-green-100 text-green-700'
+                        : d.finance_status === 'rejected'
+                          ? 'bg-red-100 text-red-700'
+                          : 'bg-amber-100 text-amber-700'
+                      return (
+                        <tr key={d.id} className="border-b border-slate-100">
+                          <td className="py-1.5 font-medium">{mName} {d._year}</td>
+                          <td className="py-1.5 text-right font-mono">{d.deduction_days}</td>
+                          <td className="py-1.5 text-slate-600 max-w-[160px] truncate" title={d.remark}>{d.remark}</td>
+                          <td className="py-1.5">
+                            <span className={clsx('text-[10px] px-2 py-0.5 rounded-full', badge)}>{d.finance_status}</span>
+                          </td>
+                          <td className="py-1.5 text-slate-500 max-w-[160px] truncate" title={d.finance_remark}>{d.finance_remark || '—'}</td>
+                          <td className="py-1.5 text-center">{d.is_applied_to_salary ? '✓' : '—'}</td>
+                        </tr>
+                      )
+                    })}
+                  </tbody>
+                </table>
+              )}
+            </div>
           </div>
         )}
 
