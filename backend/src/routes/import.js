@@ -337,6 +337,7 @@ router.post('/upload', upload.array('files', 20), async (req, res) => {
             actual_hours = ?, is_late_arrival = ?, late_by_minutes = ?,
             is_early_departure = ?, early_by_minutes = ?,
             is_overtime = ?, overtime_minutes = ?,
+            is_left_late = ?, left_late_minutes = ?,
             is_night_shift = CASE WHEN ? = 1 THEN 1 ELSE is_night_shift END,
             shift_id = COALESCE(shift_id, ?), shift_detected = COALESCE(shift_detected, ?)
           WHERE id = ?
@@ -416,10 +417,39 @@ router.post('/upload', upload.array('files', 20), async (req, res) => {
               otMinutes = Math.round((actualHours - otThresholdHours) * 60);
             }
 
+            // ── Late Coming Phase 1: Detect "left late" ─────────────
+            // Employee stayed 20+ minutes past their shift end time → flag
+            // for overtime context in the late-coming analytics. Purely
+            // additive — does not touch actual_hours, status, or any other
+            // pipeline-critical field. Uses a 20-minute hard threshold
+            // (separate from the shift grace used for early-departure).
+            let isLeftLate = 0, leftLateMinutes = 0;
+            if (outTime && shift && shift.end_time && isPresent) {
+              const [oh3, om3] = outTime.split(':').map(Number);
+              const [eh3, em3] = shift.end_time.split(':').map(Number);
+              if (!isNaN(oh3) && !isNaN(eh3)) {
+                let outMin = oh3 * 60 + (om3 || 0);
+                let endMin = eh3 * 60 + (em3 || 0);
+                // For overnight shifts (e.g. end=08:00) the OUT punch lands the
+                // next calendar morning — wrap both values so the delta is
+                // meaningful.
+                if (isNight) {
+                  if (endMin < 12 * 60) endMin += 24 * 60;
+                  if (outMin < 12 * 60) outMin += 24 * 60;
+                }
+                const diff = outMin - endMin;
+                if (diff >= 20) {
+                  isLeftLate = 1;
+                  leftLateMinutes = diff;
+                }
+              }
+            }
+
             updatePost.run(
               actualHours, isLate, lateBy,
               isEarly, earlyBy,
               isOT, otMinutes,
+              isLeftLate, leftLateMinutes,
               isNight ? 1 : 0,
               shift?.id || null, shift?.name || null,
               rec.id

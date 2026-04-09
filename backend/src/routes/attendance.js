@@ -556,10 +556,14 @@ router.post('/recalculate-metrics', (req, res) => {
   const defaultDayShift = shiftByCode['DAY'] || allShifts[0];
   const defaultNightShift = shiftByCode['NIGHT'];
 
+  // Late Coming Phase 1: also persist is_left_late / left_late_minutes here so
+  // HR can re-run the recalc after assigning shifts and see the new data
+  // reflected in analytics without a full re-import.
   const updateStmt = db.prepare(`
     UPDATE attendance_processed SET
       actual_hours = COALESCE(?, actual_hours),
       is_late_arrival = ?, late_by_minutes = ?,
+      is_left_late = ?, left_late_minutes = ?,
       is_night_shift = CASE WHEN ? = 1 THEN 1 ELSE is_night_shift END,
       shift_id = COALESCE(shift_id, ?), shift_detected = COALESCE(shift_detected, ?)
     WHERE id = ?
@@ -592,7 +596,8 @@ router.post('/recalculate-metrics', (req, res) => {
 
       let isLate = 0, lateBy = 0;
       const status = rec.status_original;
-      if (inTime && shift && shift.start_time && (status === 'P' || status === 'WOP')) {
+      const isPresent = status === 'P' || status === 'WOP';
+      if (inTime && shift && shift.start_time && isPresent) {
         const [sh, sm] = shift.start_time.split(':').map(Number);
         if (!isNaN(inH) && !isNaN(sh)) {
           let diffMin = (inH * 60 + (parseInt(inTime.split(':')[1]) || 0)) - (sh * 60 + sm);
@@ -606,7 +611,30 @@ router.post('/recalculate-metrics', (req, res) => {
         }
       }
 
-      updateStmt.run(actualHours, isLate, lateBy, isNight ? 1 : 0, shift?.id || null, shift?.name || null, rec.id);
+      // Late Coming Phase 1: left-late detection (20+ min past shift end).
+      let isLeftLate = 0, leftLateMinutes = 0;
+      if (outTime && shift && shift.end_time && isPresent) {
+        const [oh3, om3] = outTime.split(':').map(Number);
+        const [eh3, em3] = shift.end_time.split(':').map(Number);
+        if (!isNaN(oh3) && !isNaN(eh3)) {
+          let outMin = oh3 * 60 + (om3 || 0);
+          let endMin = eh3 * 60 + (em3 || 0);
+          if (isNight) {
+            if (endMin < 12 * 60) endMin += 24 * 60;
+            if (outMin < 12 * 60) outMin += 24 * 60;
+          }
+          const diff = outMin - endMin;
+          if (diff >= 20) {
+            isLeftLate = 1;
+            leftLateMinutes = diff;
+          }
+        }
+      }
+
+      updateStmt.run(
+        actualHours, isLate, lateBy, isLeftLate, leftLateMinutes,
+        isNight ? 1 : 0, shift?.id || null, shift?.name || null, rec.id
+      );
       updated++;
     }
   });

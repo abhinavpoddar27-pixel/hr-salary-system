@@ -12,33 +12,101 @@ function requireAdmin(req, res, next) {
 
 // ─── SHIFTS ───────────────────────────────────────────────
 
+// Helper: given a "HH:MM" start time and a numeric duration in hours, return
+// the matching "HH:MM" end time (wraps past midnight to model overnight shifts).
+function calcEndTime(startTime, durationHours) {
+  const [sh, sm] = String(startTime || '').split(':').map(Number);
+  const dur = parseFloat(durationHours);
+  if (isNaN(sh) || isNaN(dur)) return null;
+  let totalMin = sh * 60 + (sm || 0) + Math.round(dur * 60);
+  totalMin = ((totalMin % (24 * 60)) + 24 * 60) % (24 * 60);
+  const eh = Math.floor(totalMin / 60);
+  const em = totalMin % 60;
+  return `${String(eh).padStart(2, '0')}:${String(em).padStart(2, '0')}`;
+}
+
 router.get('/shifts', (req, res) => {
   const db = getDb();
   res.json({ success: true, data: db.prepare('SELECT * FROM shifts ORDER BY id').all() });
 });
 
-router.post('/shifts', requireAdmin, (req, res) => {
+// HR + admin can create shifts. Grace minutes are forced to the policy default
+// (9) for non-admin callers so HR can't silently relax punctuality rules.
+router.post('/shifts', (req, res) => {
+  if (req.user?.role !== 'admin' && req.user?.role !== 'hr') {
+    return res.status(403).json({ success: false, error: 'HR or admin access required' });
+  }
   const db = getDb();
-  const { name, code, startTime, endTime, graceMinutes, breakMinutes, minHoursFullDay, minHoursHalfDay } = req.body;
-  // Auto-detect overnight from start/end times (start > end means it crosses midnight)
-  const [sh] = (startTime || '').split(':').map(Number);
-  const [eh] = (endTime || '').split(':').map(Number);
-  const autoOvernight = (!isNaN(sh) && !isNaN(eh) && sh > eh) ? 1 : 0;
-  const result = db.prepare('INSERT INTO shifts (name, code, start_time, end_time, grace_minutes, is_overnight, break_minutes, min_hours_full_day, min_hours_half_day) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)')
-    .run(name, code, startTime, endTime, graceMinutes || 30, autoOvernight, breakMinutes || 0, minHoursFullDay || 10, minHoursHalfDay || 4);
-  res.json({ success: true, id: result.lastInsertRowid });
+  const { name, code, startTime, durationHours, graceMinutes, breakMinutes, minHoursFullDay, minHoursHalfDay } = req.body;
+
+  if (!name || !code || !startTime || durationHours === undefined || durationHours === null) {
+    return res.status(400).json({ success: false, error: 'name, code, startTime, and durationHours are required' });
+  }
+
+  const endTime = calcEndTime(startTime, durationHours);
+  if (!endTime) {
+    return res.status(400).json({ success: false, error: 'Invalid startTime or durationHours' });
+  }
+  // Overnight if end wraps before start
+  const [sh] = startTime.split(':').map(Number);
+  const [eh] = endTime.split(':').map(Number);
+  const autoOvernight = (!isNaN(sh) && !isNaN(eh) && (sh > eh || (sh === eh && parseFloat(durationHours) >= 24))) ? 1 : 0;
+
+  // Admin may set a custom grace; HR always gets the policy default (9).
+  const finalGrace = req.user?.role === 'admin' ? (graceMinutes ?? 9) : 9;
+
+  const result = db.prepare(
+    'INSERT INTO shifts (name, code, start_time, end_time, grace_minutes, is_overnight, break_minutes, min_hours_full_day, min_hours_half_day, duration_hours) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
+  ).run(
+    name, code, startTime, endTime, finalGrace, autoOvernight,
+    breakMinutes || 0, minHoursFullDay || 10, minHoursHalfDay || 4,
+    parseFloat(durationHours)
+  );
+  res.json({ success: true, id: result.lastInsertRowid, endTime });
 });
 
-router.put('/shifts/:id', requireAdmin, (req, res) => {
+router.put('/shifts/:id', (req, res) => {
+  if (req.user?.role !== 'admin' && req.user?.role !== 'hr') {
+    return res.status(403).json({ success: false, error: 'HR or admin access required' });
+  }
   const db = getDb();
-  const { name, startTime, endTime, graceMinutes, breakMinutes, minHoursFullDay, minHoursHalfDay } = req.body;
-  // Auto-detect overnight from start/end times
-  const [sh2] = (startTime || '').split(':').map(Number);
-  const [eh2] = (endTime || '').split(':').map(Number);
-  const autoOvernight2 = (!isNaN(sh2) && !isNaN(eh2) && sh2 > eh2) ? 1 : 0;
-  db.prepare('UPDATE shifts SET name=?, start_time=?, end_time=?, grace_minutes=?, is_overnight=?, break_minutes=?, min_hours_full_day=?, min_hours_half_day=? WHERE id=?')
-    .run(name, startTime, endTime, graceMinutes, autoOvernight2, breakMinutes || 0, minHoursFullDay, minHoursHalfDay, req.params.id);
-  res.json({ success: true });
+  const existing = db.prepare('SELECT * FROM shifts WHERE id = ?').get(req.params.id);
+  if (!existing) return res.status(404).json({ success: false, error: 'Shift not found' });
+
+  const { name, startTime, durationHours, graceMinutes, breakMinutes, minHoursFullDay, minHoursHalfDay } = req.body;
+
+  // Use incoming values if provided, fall back to existing values otherwise.
+  const newStart = startTime !== undefined ? startTime : existing.start_time;
+  const newDuration = durationHours !== undefined ? parseFloat(durationHours) : (existing.duration_hours || 0);
+  const newEnd = calcEndTime(newStart, newDuration);
+  if (!newEnd) {
+    return res.status(400).json({ success: false, error: 'Invalid startTime or durationHours' });
+  }
+
+  const [sh2] = newStart.split(':').map(Number);
+  const [eh2] = newEnd.split(':').map(Number);
+  const autoOvernight2 = (!isNaN(sh2) && !isNaN(eh2) && (sh2 > eh2 || (sh2 === eh2 && newDuration >= 24))) ? 1 : 0;
+
+  // Only admins may change grace_minutes — HR edits keep the existing value.
+  const finalGrace = (req.user?.role === 'admin' && graceMinutes !== undefined)
+    ? graceMinutes
+    : existing.grace_minutes;
+
+  db.prepare(
+    'UPDATE shifts SET name=?, start_time=?, end_time=?, grace_minutes=?, is_overnight=?, break_minutes=?, min_hours_full_day=?, min_hours_half_day=?, duration_hours=? WHERE id=?'
+  ).run(
+    name || existing.name,
+    newStart,
+    newEnd,
+    finalGrace,
+    autoOvernight2,
+    breakMinutes !== undefined ? breakMinutes : (existing.break_minutes || 0),
+    minHoursFullDay !== undefined ? minHoursFullDay : existing.min_hours_full_day,
+    minHoursHalfDay !== undefined ? minHoursHalfDay : existing.min_hours_half_day,
+    newDuration,
+    req.params.id
+  );
+  res.json({ success: true, endTime: newEnd });
 });
 
 // ─── HOLIDAYS ─────────────────────────────────────────────

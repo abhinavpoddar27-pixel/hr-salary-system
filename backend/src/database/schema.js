@@ -10,7 +10,7 @@ function initSchema(db) {
       code TEXT NOT NULL UNIQUE,
       start_time TEXT NOT NULL,
       end_time TEXT NOT NULL,
-      grace_minutes INTEGER DEFAULT 30,
+      grace_minutes INTEGER DEFAULT 9,
       is_overnight INTEGER DEFAULT 0,
       break_minutes INTEGER DEFAULT 0,
       min_hours_full_day REAL DEFAULT 10.0,
@@ -778,8 +778,40 @@ function initSchema(db) {
     resetPolicy.run(value, key);
   }
 
-  // shifts: update grace from 30 to 9 minutes (per actual plant policy)
-  db.prepare("UPDATE shifts SET grace_minutes = 9 WHERE grace_minutes = 30").run();
+  // shifts: add duration_hours column for auto-calculated end time (Late Coming Phase 1)
+  safeAddColumn('shifts', 'duration_hours', 'REAL');
+
+  // shifts: update grace to 9 minutes for ALL shifts (per actual plant policy, Late Coming Phase 1)
+  db.prepare("UPDATE shifts SET grace_minutes = 9 WHERE grace_minutes != 9").run();
+
+  // Late Coming Phase 1: Insert three canonical shifts if they don't already exist.
+  // 12HR, 10HR, 9HR — these are the three employee shift types used by HR to
+  // assign punctuality expectations. Grace is 9 min for all (plant policy).
+  db.prepare(`INSERT OR IGNORE INTO shifts (name, code, start_time, end_time, grace_minutes, is_overnight, break_minutes, min_hours_full_day, min_hours_half_day, duration_hours)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run('12-Hour Shift', '12HR', '08:00', '20:00', 9, 0, 0, 10.0, 4.0, 12);
+  db.prepare(`INSERT OR IGNORE INTO shifts (name, code, start_time, end_time, grace_minutes, is_overnight, break_minutes, min_hours_full_day, min_hours_half_day, duration_hours)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run('10-Hour Shift', '10HR', '09:00', '19:00', 9, 0, 0, 8.0, 4.0, 10);
+  db.prepare(`INSERT OR IGNORE INTO shifts (name, code, start_time, end_time, grace_minutes, is_overnight, break_minutes, min_hours_full_day, min_hours_half_day, duration_hours)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run('9-Hour Shift', '9HR', '09:30', '18:30', 9, 0, 0, 7.0, 4.0, 9);
+
+  // Backfill duration_hours on shifts that don't have it yet (derive from start/end times).
+  // Handles overnight shifts correctly by adding 24 to the end when it wraps midnight.
+  try {
+    const shiftsNeedingDuration = db.prepare("SELECT id, start_time, end_time, is_overnight FROM shifts WHERE duration_hours IS NULL OR duration_hours = 0").all();
+    const updDuration = db.prepare("UPDATE shifts SET duration_hours = ? WHERE id = ?");
+    for (const s of shiftsNeedingDuration) {
+      const [sh, sm] = String(s.start_time || '').split(':').map(Number);
+      const [eh, em] = String(s.end_time || '').split(':').map(Number);
+      if (isNaN(sh) || isNaN(eh)) continue;
+      let startMin = sh * 60 + (sm || 0);
+      let endMin = eh * 60 + (em || 0);
+      if (endMin <= startMin) endMin += 24 * 60; // overnight
+      const hrs = Math.round((endMin - startMin) / 60 * 100) / 100;
+      updDuration.run(hrs, s.id);
+    }
+  } catch (e) {
+    console.warn('[schema] duration_hours backfill failed:', e.message);
+  }
 
   // PF/ESI: disabled by default — set all existing records to 0 unless explicitly set via master import
   // This runs idempotently on every startup but only affects defaults
@@ -1414,6 +1446,42 @@ function initSchema(db) {
   safeCreateIndex('CREATE INDEX IF NOT EXISTS idx_finrej_employee_month ON finance_rejections(employee_code, month, year)');
   safeCreateIndex('CREATE INDEX IF NOT EXISTS idx_finrej_type ON finance_rejections(rejection_type, rejected_at)');
   safeCreateIndex('CREATE INDEX IF NOT EXISTS idx_finrej_source ON finance_rejections(source_table, source_record_id)');
+
+  // ── Late Coming Phase 1 (April 2026) ────────────────────────
+  // Track when employees left 20+ minutes past their shift end time. Fed by
+  // import post-processing and recalculate-metrics. NEVER modifies late-arrival
+  // or status fields — purely additive columns.
+  safeAddColumn('attendance_processed', 'is_left_late', 'INTEGER DEFAULT 0');
+  safeAddColumn('attendance_processed', 'left_late_minutes', 'INTEGER DEFAULT 0');
+
+  // Late Coming Phase 1: HR-initiated discretionary deductions for chronic late
+  // comings. Pending rows sit in a finance review queue before hitting salary.
+  // Immutable: no row is ever deleted, only its finance_status progresses.
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS late_coming_deductions (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      employee_code TEXT NOT NULL,
+      employee_id INTEGER REFERENCES employees(id),
+      month INTEGER NOT NULL,
+      year INTEGER NOT NULL,
+      company TEXT,
+      late_count INTEGER NOT NULL,
+      deduction_days REAL NOT NULL,
+      remark TEXT NOT NULL,
+      applied_by TEXT NOT NULL,
+      applied_at TEXT DEFAULT (datetime('now')),
+      finance_status TEXT DEFAULT 'pending',
+      finance_reviewed_by TEXT,
+      finance_reviewed_at TEXT,
+      finance_remark TEXT,
+      is_applied_to_salary INTEGER DEFAULT 0,
+      applied_to_salary_at TEXT,
+      created_at TEXT DEFAULT (datetime('now')),
+      UNIQUE(employee_code, month, year, company, applied_at)
+    )
+  `);
+  safeCreateIndex('CREATE INDEX IF NOT EXISTS idx_late_deductions_employee ON late_coming_deductions(employee_code, month, year)');
+  safeCreateIndex('CREATE INDEX IF NOT EXISTS idx_late_deductions_status ON late_coming_deductions(finance_status)');
 
   // ── Miss-punch finance verification (April 2026) ───────────
   // After HR resolves a miss punch, finance must verify before the salary

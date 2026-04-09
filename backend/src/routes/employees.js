@@ -286,6 +286,67 @@ router.post('/', (req, res) => {
   res.json({ success: true, id: empId, message: 'Employee created' });
 });
 
+/**
+ * PUT /api/employees/bulk-shift
+ * Late Coming Phase 1: Bulk-assign a shift to multiple employees.
+ * Restricted to HR + admin. Logs one audit_log row per changed employee.
+ *
+ * NOTE: Must be declared BEFORE `PUT /:code` so Express does not treat
+ * "bulk-shift" as an employee code param.
+ */
+router.put('/bulk-shift', (req, res) => {
+  if (req.user?.role !== 'admin' && req.user?.role !== 'hr') {
+    return res.status(403).json({ success: false, error: 'HR or admin access required' });
+  }
+  const db = getDb();
+  const { employeeCodes, shiftId, shiftCode } = req.body;
+  if (!Array.isArray(employeeCodes) || !employeeCodes.length) {
+    return res.status(400).json({ success: false, error: 'employeeCodes array required' });
+  }
+  if (!shiftId) {
+    return res.status(400).json({ success: false, error: 'shiftId required' });
+  }
+
+  const shift = db.prepare('SELECT id, code FROM shifts WHERE id = ?').get(shiftId);
+  if (!shift) return res.status(404).json({ success: false, error: 'Shift not found' });
+
+  const effectiveShiftCode = shiftCode || shift.code;
+  const selectEmp = db.prepare('SELECT id, code, default_shift_id, shift_code FROM employees WHERE code = ?');
+  const updateStmt = db.prepare(
+    "UPDATE employees SET default_shift_id = ?, shift_code = ?, updated_at = datetime('now') WHERE code = ?"
+  );
+  const auditStmt = db.prepare(`
+    INSERT INTO audit_log (table_name, record_id, field_name, old_value, new_value, changed_by, stage, remark, employee_code, action_type)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `);
+
+  let updated = 0;
+  const username = req.user?.username || 'unknown';
+  const txn = db.transaction(() => {
+    for (const code of employeeCodes) {
+      const emp = selectEmp.get(code);
+      if (!emp) continue;
+      const prevCode = emp.shift_code || '';
+      updateStmt.run(shift.id, effectiveShiftCode, code);
+      updated++;
+      try {
+        auditStmt.run(
+          'employees', emp.id, 'shift_assignment',
+          prevCode, effectiveShiftCode,
+          username,
+          'employee_master',
+          `Bulk shift change from ${prevCode || '(none)'} to ${effectiveShiftCode}`,
+          code,
+          'shift_change'
+        );
+      } catch (e) { /* audit should not block bulk update */ }
+    }
+  });
+  txn();
+
+  res.json({ success: true, updated });
+});
+
 // UPDATE employee
 router.put('/:code', (req, res) => {
   const db = getDb();
@@ -336,6 +397,34 @@ router.put('/:code', (req, res) => {
   }
 
   if (setClauses.length === 0) return res.json({ success: true, message: 'No updates' });
+
+  // ── Late Coming Phase 1: Audit trail for shift assignment changes ──
+  // When an HR user changes an employee's shift via the Employee Master form,
+  // record the old/new shift codes so auditors can trace why an employee's
+  // punctuality metrics suddenly shifted (pun intended). Uses the direct SQL
+  // insert so we can stamp the actual username from req.user.
+  if (updates.default_shift_id !== undefined && updates.default_shift_id !== emp.default_shift_id) {
+    try {
+      const oldShiftCode = emp.shift_code || (emp.default_shift_id
+        ? (db.prepare('SELECT code FROM shifts WHERE id = ?').get(emp.default_shift_id)?.code || '')
+        : '');
+      const newShiftCode = updates.shift_code || (updates.default_shift_id
+        ? (db.prepare('SELECT code FROM shifts WHERE id = ?').get(updates.default_shift_id)?.code || '')
+        : '');
+      db.prepare(`
+        INSERT INTO audit_log (table_name, record_id, field_name, old_value, new_value, changed_by, stage, remark, employee_code, action_type)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(
+        'employees', emp.id, 'shift_assignment',
+        oldShiftCode, newShiftCode,
+        req.user?.username || 'unknown',
+        'employee_master',
+        `Shift changed from ${oldShiftCode || '(none)'} to ${newShiftCode || '(none)'}`,
+        emp.code,
+        'shift_change'
+      );
+    } catch (e) { /* audit should not break updates */ }
+  }
 
   setClauses.push("updated_at = datetime('now')");
   params.push(code);
