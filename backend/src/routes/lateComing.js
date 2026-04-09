@@ -27,6 +27,13 @@ function requireHrFinanceOrAdmin(req, res, next) {
   }
   next();
 }
+function requireFinanceOrAdmin(req, res, next) {
+  const role = req.user?.role;
+  if (role !== 'finance' && role !== 'admin') {
+    return res.status(403).json({ success: false, error: 'Finance or admin access required' });
+  }
+  next();
+}
 
 // ─── Utility: previous month/year ─────────────────────────
 function prevMonth(month, year) {
@@ -498,6 +505,236 @@ router.get('/export', requireHrFinanceOrAdmin, (req, res) => {
   res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
   res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
   res.send(buf);
+});
+
+// ─── Finance approval helpers (Phase 2) ───────────────────
+// Returns the last N (month, year) tuples ending at (refMonth, refYear).
+function lastNMonths(refMonth, refYear, n) {
+  const tuples = [];
+  let m = parseInt(refMonth);
+  let y = parseInt(refYear);
+  for (let i = 0; i < n; i++) {
+    tuples.push({ month: m, year: y });
+    m -= 1;
+    if (m === 0) { m = 12; y -= 1; }
+  }
+  return tuples;
+}
+
+// Build 6-month history for a given employee ending at (month, year).
+function buildDeductionHistory(db, employeeCode, month, year, monthsBack = 6) {
+  const tuples = lastNMonths(month, year, monthsBack);
+  const history = [];
+  let leftLateTotal = 0;
+  for (const t of tuples) {
+    const stats = db.prepare(`
+      SELECT
+        SUM(CASE WHEN is_late_arrival = 1 AND is_night_out_only = 0 THEN 1 ELSE 0 END) AS late_count,
+        AVG(CASE WHEN is_late_arrival = 1 AND is_night_out_only = 0 THEN late_by_minutes END) AS avg_late_minutes,
+        SUM(CASE WHEN is_left_late = 1 AND is_night_out_only = 0 THEN 1 ELSE 0 END) AS left_late_count
+      FROM attendance_processed
+      WHERE employee_code = ? AND month = ? AND year = ?
+    `).get(employeeCode, t.month, t.year);
+    const deds = db.prepare(`
+      SELECT id, deduction_days, remark, applied_by, applied_at,
+             finance_status, finance_remark, is_applied_to_salary
+      FROM late_coming_deductions
+      WHERE employee_code = ? AND month = ? AND year = ?
+      ORDER BY applied_at DESC
+    `).all(employeeCode, t.month, t.year);
+    const leftLateCount = Number(stats?.left_late_count) || 0;
+    leftLateTotal += leftLateCount;
+    history.push({
+      month: t.month,
+      year: t.year,
+      late_count: Number(stats?.late_count) || 0,
+      avg_late_minutes: stats?.avg_late_minutes ? Math.round(stats.avg_late_minutes * 10) / 10 : 0,
+      left_late_count: leftLateCount,
+      deductions: deds
+    });
+  }
+  return { history, leftLateTotal };
+}
+
+// ─── GET /finance-pending ─────────────────────────────────
+// List all pending deductions for a month with enriched context so Finance
+// can make approve/reject decisions without additional round-trips.
+router.get('/finance-pending', requireHrFinanceOrAdmin, (req, res) => {
+  const db = getDb();
+  const month = parseInt(req.query.month);
+  const year = parseInt(req.query.year);
+  const company = req.query.company || null;
+  if (!month || !year) {
+    return res.status(400).json({ success: false, error: 'month and year required' });
+  }
+
+  let where = "WHERE lcd.month = ? AND lcd.year = ? AND lcd.finance_status = 'pending'";
+  const params = [month, year];
+  if (company) {
+    where += ' AND (lcd.company = ? OR lcd.company IS NULL)';
+    params.push(company);
+  }
+
+  const rows = db.prepare(`
+    SELECT lcd.id, lcd.employee_code, lcd.month, lcd.year, lcd.company,
+      lcd.late_count, lcd.deduction_days, lcd.remark, lcd.applied_by, lcd.applied_at,
+      lcd.finance_status,
+      e.name, e.department, e.designation, e.shift_code,
+      s.name AS shift_name, s.start_time AS shift_start, s.end_time AS shift_end
+    FROM late_coming_deductions lcd
+    LEFT JOIN employees e ON e.code = lcd.employee_code
+    LEFT JOIN shifts s ON s.code = e.shift_code
+    ${where}
+    ORDER BY lcd.applied_at DESC
+  `).all(...params);
+
+  // Enrich with current-month stats + 6-month history
+  const enriched = rows.map(r => {
+    const currentStats = db.prepare(`
+      SELECT
+        SUM(CASE WHEN is_late_arrival = 1 AND is_night_out_only = 0 THEN 1 ELSE 0 END) AS late_count,
+        AVG(CASE WHEN is_late_arrival = 1 AND is_night_out_only = 0 THEN late_by_minutes END) AS avg_minutes
+      FROM attendance_processed
+      WHERE employee_code = ? AND month = ? AND year = ?
+    `).get(r.employee_code, month, year);
+    const { history, leftLateTotal } = buildDeductionHistory(db, r.employee_code, month, year, 6);
+    return {
+      ...r,
+      current_month_late_count: Number(currentStats?.late_count) || 0,
+      current_month_avg_minutes: currentStats?.avg_minutes
+        ? Math.round(currentStats.avg_minutes * 10) / 10
+        : 0,
+      history,
+      leftLateTotal
+    };
+  });
+
+  res.json({ success: true, data: enriched });
+});
+
+// ─── PUT /finance-review/:id ──────────────────────────────
+// Approve or reject a single pending deduction.
+router.put('/finance-review/:id', requireFinanceOrAdmin, (req, res) => {
+  const db = getDb();
+  const id = parseInt(req.params.id);
+  const { status, remark } = req.body || {};
+  if (!id) return res.status(400).json({ success: false, error: 'id required' });
+  if (status !== 'approved' && status !== 'rejected') {
+    return res.status(400).json({ success: false, error: "status must be 'approved' or 'rejected'" });
+  }
+  if (status === 'rejected' && (!remark || !String(remark).trim())) {
+    return res.status(400).json({ success: false, error: 'remark is required when rejecting' });
+  }
+
+  const existing = db.prepare('SELECT * FROM late_coming_deductions WHERE id = ?').get(id);
+  if (!existing) return res.status(404).json({ success: false, error: 'Deduction not found' });
+  if (existing.finance_status !== 'pending') {
+    return res.status(400).json({ success: false, error: `Deduction already ${existing.finance_status}` });
+  }
+
+  const reviewer = req.user?.username || 'finance';
+  const cleanRemark = remark ? String(remark).trim() : '';
+
+  const txn = db.transaction(() => {
+    db.prepare(`
+      UPDATE late_coming_deductions
+      SET finance_status = ?, finance_reviewed_by = ?, finance_reviewed_at = datetime('now'),
+          finance_remark = ?
+      WHERE id = ?
+    `).run(status, reviewer, cleanRemark, id);
+
+    try {
+      db.prepare(`
+        INSERT INTO finance_approvals
+          (employee_code, month, year, flag_id, status, reviewed_by, reviewed_at, comments)
+        VALUES (?, ?, ?, ?, ?, ?, datetime('now'), ?)
+      `).run(
+        existing.employee_code, existing.month, existing.year,
+        id, status, reviewer, cleanRemark
+      );
+    } catch (e) { /* finance_approvals insert should not break review */ }
+
+    try {
+      db.prepare(`
+        INSERT INTO audit_log
+          (table_name, record_id, field_name, old_value, new_value, changed_by, stage, remark, employee_code, action_type)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(
+        'late_coming_deductions', id, 'finance_status',
+        'pending', status, reviewer, 'late_coming',
+        `Finance ${status}: ${existing.deduction_days} days deduction. ${cleanRemark || ''}`.trim(),
+        existing.employee_code, 'finance_review'
+      );
+    } catch (e) { /* audit should not break review */ }
+  });
+  txn();
+
+  res.json({ success: true, id, status });
+});
+
+// ─── PUT /finance-bulk-review ─────────────────────────────
+// Approve or reject multiple pending deductions in a single transaction.
+router.put('/finance-bulk-review', requireFinanceOrAdmin, (req, res) => {
+  const db = getDb();
+  const { deductionIds, status, remark } = req.body || {};
+  if (!Array.isArray(deductionIds) || deductionIds.length === 0) {
+    return res.status(400).json({ success: false, error: 'deductionIds array required' });
+  }
+  if (status !== 'approved' && status !== 'rejected') {
+    return res.status(400).json({ success: false, error: "status must be 'approved' or 'rejected'" });
+  }
+  if (status === 'rejected' && (!remark || !String(remark).trim())) {
+    return res.status(400).json({ success: false, error: 'remark is required when rejecting' });
+  }
+
+  const reviewer = req.user?.username || 'finance';
+  const cleanRemark = remark ? String(remark).trim() : '';
+  let count = 0;
+
+  const txn = db.transaction(() => {
+    for (const rawId of deductionIds) {
+      const id = parseInt(rawId);
+      if (!id) continue;
+      const existing = db.prepare('SELECT * FROM late_coming_deductions WHERE id = ?').get(id);
+      if (!existing || existing.finance_status !== 'pending') continue;
+
+      db.prepare(`
+        UPDATE late_coming_deductions
+        SET finance_status = ?, finance_reviewed_by = ?, finance_reviewed_at = datetime('now'),
+            finance_remark = ?
+        WHERE id = ?
+      `).run(status, reviewer, cleanRemark, id);
+
+      try {
+        db.prepare(`
+          INSERT INTO finance_approvals
+            (employee_code, month, year, flag_id, status, reviewed_by, reviewed_at, comments)
+          VALUES (?, ?, ?, ?, ?, ?, datetime('now'), ?)
+        `).run(
+          existing.employee_code, existing.month, existing.year,
+          id, status, reviewer, cleanRemark
+        );
+      } catch (e) { /* best effort */ }
+
+      try {
+        db.prepare(`
+          INSERT INTO audit_log
+            (table_name, record_id, field_name, old_value, new_value, changed_by, stage, remark, employee_code, action_type)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `).run(
+          'late_coming_deductions', id, 'finance_status',
+          'pending', status, reviewer, 'late_coming',
+          `Finance bulk ${status}: ${existing.deduction_days} days. ${cleanRemark || ''}`.trim(),
+          existing.employee_code, 'finance_review'
+        );
+      } catch (e) { /* best effort */ }
+
+      count += 1;
+    }
+  });
+  txn();
+
+  res.json({ success: true, count });
 });
 
 module.exports = router;
