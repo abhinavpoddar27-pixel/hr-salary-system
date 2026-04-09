@@ -5,6 +5,140 @@ const fs = require('fs');
 const multer = require('multer');
 const { getDb } = require('../database/db');
 
+// ── Salary structure sync helper ──────────────────────────────────
+// Single source of truth for keeping `salary_structures` in sync with
+// `employees.gross_salary` + statutory flags. Use this from EVERY code
+// path that writes employees.gross_salary / pf_applicable / esi_applicable
+// / pt_applicable so the pipeline's "same gross in two places" invariant
+// cannot silently drift again (see employee 60052 bug, April 2026).
+//
+// Key properties:
+//   - Uses the EXISTING basic_percent / hra_percent / da_percent from the
+//     latest salary_structure (no hardcoded 50/20 fallback that trashes real
+//     ratios). Only falls back to 50/20/0 if no structure exists.
+//   - Scales ALL monetary components (basic, da, hra, conveyance,
+//     special_allowance, other_allowances) proportionally so their sum
+//     tracks the new gross — never leaves stale da/conv/other values.
+//   - Propagates pf_applicable / esi_applicable / pt_applicable when
+//     explicitly provided (so the employees table and salary_structures
+//     agree on eligibility flags).
+//   - Creates a salary_structures row if none exists.
+//   - No-op if gross is 0 or null AND no flag updates requested.
+//
+// Call with: syncSalaryStructureFromEmployee(db, employeeId, {
+//   gross_salary, pf_applicable, esi_applicable, pt_applicable
+// }).
+function syncSalaryStructureFromEmployee(db, employeeId, updates = {}) {
+  if (!employeeId) return { synced: false, reason: 'no employee id' };
+
+  const hasGrossUpdate = updates.gross_salary !== undefined && updates.gross_salary !== null;
+  const gross = hasGrossUpdate ? parseFloat(updates.gross_salary) || 0 : null;
+
+  const hasPfUpdate = updates.pf_applicable !== undefined;
+  const hasEsiUpdate = updates.esi_applicable !== undefined;
+  const hasPtUpdate = updates.pt_applicable !== undefined;
+
+  // Nothing to sync
+  if (!hasGrossUpdate && !hasPfUpdate && !hasEsiUpdate && !hasPtUpdate) {
+    return { synced: false, reason: 'no tracked fields in update' };
+  }
+
+  const existing = db.prepare(
+    'SELECT * FROM salary_structures WHERE employee_id = ? ORDER BY effective_from DESC LIMIT 1'
+  ).get(employeeId);
+
+  // Pull employee fallback for flags if caller didn't supply one
+  const emp = db.prepare('SELECT gross_salary, pf_applicable, esi_applicable, pt_applicable FROM employees WHERE id = ?').get(employeeId);
+  if (!emp) return { synced: false, reason: 'employee not found' };
+
+  const resolvedGross = hasGrossUpdate ? gross : (existing?.gross_salary || emp.gross_salary || 0);
+  const pfApp = hasPfUpdate ? (updates.pf_applicable ? 1 : 0) : (existing?.pf_applicable ?? emp.pf_applicable ?? 0);
+  const esiApp = hasEsiUpdate ? (updates.esi_applicable ? 1 : 0) : (existing?.esi_applicable ?? emp.esi_applicable ?? 0);
+  const ptApp = hasPtUpdate ? (updates.pt_applicable ? 1 : 0) : (existing?.pt_applicable ?? emp.pt_applicable ?? 1);
+
+  if (existing) {
+    // Preserve existing ratios. Prefer percent columns when present; fall
+    // back to deriving from current component amounts so an employee whose
+    // struct has da=₹5000, basic=₹10k etc. keeps the same split after a
+    // gross bump.
+    const prevGross = existing.gross_salary || 0;
+    let basicPct = existing.basic_percent;
+    let hraPct = existing.hra_percent;
+    let daPct = existing.da_percent;
+
+    const rawSum = (existing.basic || 0) + (existing.da || 0) + (existing.hra || 0)
+                 + (existing.conveyance || 0) + (existing.special_allowance || 0) + (existing.other_allowances || 0);
+
+    let basic, da, hra, conveyance, specialAllow, otherAllow;
+
+    if (hasGrossUpdate && resolvedGross > 0 && rawSum > 0 && prevGross > 0) {
+      // Proportional scale all components by new/old gross ratio — this
+      // keeps da, conveyance, special_allowance, other_allowances in sync
+      // too, not just basic/hra.
+      const scale = resolvedGross / prevGross;
+      basic = Math.round((existing.basic || 0) * scale * 100) / 100;
+      da = Math.round((existing.da || 0) * scale * 100) / 100;
+      hra = Math.round((existing.hra || 0) * scale * 100) / 100;
+      conveyance = Math.round((existing.conveyance || 0) * scale * 100) / 100;
+      specialAllow = Math.round((existing.special_allowance || 0) * scale * 100) / 100;
+      otherAllow = Math.round((existing.other_allowances || 0) * scale * 100) / 100;
+      // Refresh percent columns to match (keeps display consistent).
+      basicPct = resolvedGross > 0 ? Math.round(basic / resolvedGross * 10000) / 100 : basicPct;
+      hraPct = resolvedGross > 0 ? Math.round(hra / resolvedGross * 10000) / 100 : hraPct;
+      daPct = resolvedGross > 0 ? Math.round(da / resolvedGross * 10000) / 100 : daPct;
+    } else if (hasGrossUpdate && resolvedGross > 0) {
+      // No usable existing breakdown — fall back to percent-based derivation
+      // using whatever percents were on the row (or sensible defaults).
+      basicPct = basicPct || 50;
+      hraPct = hraPct || 20;
+      daPct = daPct || 0;
+      basic = Math.round(resolvedGross * basicPct / 100 * 100) / 100;
+      hra = Math.round(resolvedGross * hraPct / 100 * 100) / 100;
+      da = Math.round(resolvedGross * daPct / 100 * 100) / 100;
+      conveyance = existing.conveyance || 0;
+      specialAllow = existing.special_allowance || 0;
+      otherAllow = Math.max(0, Math.round((resolvedGross - basic - hra - da - conveyance - specialAllow) * 100) / 100);
+    } else {
+      // Only flag updates — leave amounts alone.
+      basic = existing.basic || 0;
+      da = existing.da || 0;
+      hra = existing.hra || 0;
+      conveyance = existing.conveyance || 0;
+      specialAllow = existing.special_allowance || 0;
+      otherAllow = existing.other_allowances || 0;
+    }
+
+    db.prepare(`UPDATE salary_structures SET
+        gross_salary = ?, basic = ?, da = ?, hra = ?, conveyance = ?,
+        special_allowance = ?, other_allowances = ?,
+        basic_percent = ?, hra_percent = ?, da_percent = ?,
+        pf_applicable = ?, esi_applicable = ?, pt_applicable = ?,
+        updated_at = datetime('now')
+      WHERE id = ?`).run(
+        resolvedGross, basic, da, hra, conveyance, specialAllow, otherAllow,
+        basicPct || 50, hraPct || 20, daPct || 0,
+        pfApp, esiApp, ptApp,
+        existing.id
+      );
+    return { synced: true, action: 'updated', id: existing.id, gross: resolvedGross };
+  }
+
+  // No existing structure — create one. Only create if we have a usable gross.
+  if (resolvedGross <= 0) return { synced: false, reason: 'no existing structure and gross is 0' };
+
+  const basicPct = 50;
+  const hraPct = 20;
+  const basic = Math.round(resolvedGross * basicPct / 100 * 100) / 100;
+  const hra = Math.round(resolvedGross * hraPct / 100 * 100) / 100;
+  const result = db.prepare(`INSERT INTO salary_structures
+      (employee_id, effective_from, gross_salary, basic, da, hra, conveyance, special_allowance, other_allowances,
+       basic_percent, hra_percent, da_percent, pf_applicable, esi_applicable, pt_applicable, pf_wage_ceiling)
+      VALUES (?, '2025-01-01', ?, ?, 0, ?, 0, 0, 0, ?, ?, 0, ?, ?, ?, 15000)`).run(
+        employeeId, resolvedGross, basic, hra, basicPct, hraPct, pfApp, esiApp, ptApp
+      );
+  return { synced: true, action: 'created', id: result.lastInsertRowid, gross: resolvedGross };
+}
+
 // Document upload directory
 const DOCS_DIR = process.env.DOCS_DIR || path.join(__dirname, '..', '..', 'uploads', 'documents');
 if (!fs.existsSync(DOCS_DIR)) fs.mkdirSync(DOCS_DIR, { recursive: true });
@@ -42,9 +176,19 @@ router.get('/', (req, res) => {
   if (status) { where += ' AND e.status = ?'; params.push(status); }
   if (search) { where += ' AND (e.name LIKE ? OR e.code LIKE ?)'; params.push(`%${search}%`, `%${search}%`); }
 
+  // IMPORTANT: Do NOT alias `ss.gross_salary` / `ss.pf_applicable` etc. as
+  // their bare names — they would shadow `e.gross_salary` / `e.pf_applicable`
+  // in better-sqlite3's result row (last column wins on name collision) and
+  // silently make the list view read stale salary_structures values. Expose
+  // the struct values under `struct_*` aliases so UI can still drill into
+  // them, and keep `e.*` fields as the authoritative display source.
   const baseQuery = `SELECT e.*, s.name as shift_name,
-    ss.gross_salary, ss.basic_percent, ss.hra_percent, ss.da_percent,
-    ss.pf_applicable, ss.esi_applicable, ss.pt_applicable, ss.pf_wage_ceiling
+    ss.gross_salary AS struct_gross_salary,
+    ss.basic_percent, ss.hra_percent, ss.da_percent,
+    ss.pf_applicable AS struct_pf_applicable,
+    ss.esi_applicable AS struct_esi_applicable,
+    ss.pt_applicable AS struct_pt_applicable,
+    ss.pf_wage_ceiling
     FROM employees e
     LEFT JOIN shifts s ON e.default_shift_id = s.id
     LEFT JOIN salary_structures ss ON ss.employee_id = e.id AND ss.id = (
@@ -87,24 +231,22 @@ router.get('/:code', (req, res) => {
 
   let salaryStruct = db.prepare('SELECT * FROM salary_structures WHERE employee_id = ? ORDER BY effective_from DESC LIMIT 1').get(emp.id);
 
-  // Sync salary structure gross from employee master if structure has 0
-  if (salaryStruct && (salaryStruct.gross_salary || 0) === 0 && emp.gross_salary > 0) {
-    const gross = emp.gross_salary;
-    const basicPct = salaryStruct.basic_percent || 50;
-    const hraPct = salaryStruct.hra_percent || 20;
-    db.prepare('UPDATE salary_structures SET gross_salary = ?, basic = ?, hra = ?, updated_at = datetime(\'now\') WHERE id = ?')
-      .run(gross, gross * basicPct / 100, gross * hraPct / 100, salaryStruct.id);
-    salaryStruct.gross_salary = gross;
-    salaryStruct.basic = gross * basicPct / 100;
-    salaryStruct.hra = gross * hraPct / 100;
-  }
+  // ── Self-healing sync: if employees.gross_salary disagrees with
+  // salary_structures.gross_salary (by more than a rounding epsilon), treat
+  // `employees` as authoritative and repair the structure in place. Also
+  // auto-creates a structure if none exists. This is the safety net for
+  // legacy desync rows that pre-date the helper being wired into every
+  // write path (see employee 60052, April 2026).
+  const empGross = parseFloat(emp.gross_salary) || 0;
+  const structGross = salaryStruct ? (parseFloat(salaryStruct.gross_salary) || 0) : 0;
+  const needsRepair = empGross > 0 && Math.abs(empGross - structGross) > 1;
 
-  // Auto-create salary structure if none exists but employee has gross
-  if (!salaryStruct && emp.gross_salary > 0) {
-    const gross = emp.gross_salary;
-    db.prepare(`INSERT INTO salary_structures (employee_id, effective_from, gross_salary, basic, hra, basic_percent, hra_percent, pf_applicable, esi_applicable, pt_applicable, pf_wage_ceiling)
-      VALUES (?, '2025-01-01', ?, ?, ?, 50, 20, ?, ?, ?, 15000)`)
-      .run(emp.id, gross, gross * 0.5, gross * 0.2, emp.pf_applicable || 0, emp.esi_applicable || 0, emp.pt_applicable ?? 1);
+  if (!salaryStruct && empGross > 0) {
+    syncSalaryStructureFromEmployee(db, emp.id, { gross_salary: empGross });
+    salaryStruct = db.prepare('SELECT * FROM salary_structures WHERE employee_id = ? ORDER BY effective_from DESC LIMIT 1').get(emp.id);
+  } else if (needsRepair) {
+    console.log(`[SALARY-SYNC] Repairing ${emp.code}: employees.gross=${empGross} != salary_structures.gross=${structGross}`);
+    syncSalaryStructureFromEmployee(db, emp.id, { gross_salary: empGross });
     salaryStruct = db.prepare('SELECT * FROM salary_structures WHERE employee_id = ? ORDER BY effective_from DESC LIMIT 1').get(emp.id);
   }
 
@@ -160,6 +302,9 @@ router.put('/:code', (req, res) => {
     'bank_account', 'account_number', 'ifsc', 'ifsc_code', 'bank_name',
     'pf_number', 'uan', 'esi_number', 'aadhar', 'pan', 'phone', 'email',
     'gross_salary', 'status', 'is_data_complete', 'is_contractor',
+    // Statutory flags — must also propagate into salary_structures via
+    // syncSalaryStructureFromEmployee() below so computations agree.
+    'pf_applicable', 'esi_applicable', 'pt_applicable',
     // Enhanced fields
     'blood_group', 'emergency_contact_name', 'emergency_contact_phone',
     'address_current', 'address_permanent', 'marital_status', 'spouse_name',
@@ -197,25 +342,21 @@ router.put('/:code', (req, res) => {
 
   db.prepare(`UPDATE employees SET ${setClauses.join(', ')} WHERE code = ?`).run(...params);
 
-  // Auto-create/update salary structure when gross_salary is updated
-  if (updates.gross_salary !== undefined && parseFloat(updates.gross_salary) > 0) {
-    const gross = parseFloat(updates.gross_salary);
-    const existing = db.prepare('SELECT id FROM salary_structures WHERE employee_id = ? ORDER BY effective_from DESC LIMIT 1').get(emp.id);
-    if (existing) {
-      const basicPct = 50, hraPct = 20;
-      db.prepare(`UPDATE salary_structures SET gross_salary=?, basic=?, hra=?, updated_at=datetime('now') WHERE id=?`)
-        .run(gross, gross * basicPct / 100, gross * hraPct / 100, existing.id);
-    } else {
-      const basicPct = 50, hraPct = 20;
-      db.prepare(`INSERT INTO salary_structures
-        (employee_id, effective_from, gross_salary, basic, da, hra, special_allowance, other_allowances,
-         basic_percent, hra_percent, da_percent, pf_applicable, esi_applicable, pt_applicable, pf_wage_ceiling)
-        VALUES (?, '2025-01-01', ?, ?, 0, ?, 0, 0, ?, ?, 0, ?, ?, ?, 15000)`).run(
-          emp.id, gross, gross * basicPct / 100, gross * hraPct / 100,
-          basicPct, hraPct,
-          emp.pf_applicable || 0, emp.esi_applicable || 0, emp.pt_applicable ?? 1
-      );
-    }
+  // ── Sync salary_structures whenever gross_salary or any statutory flag
+  // changes via this generic PUT. Prevents the employees↔salary_structures
+  // desync that was silently overwriting Stage 7 with stale values
+  // (see employee 60052 bug, April 2026). Uses existing percentages —
+  // never hardcodes 50/20 that would trash custom ratios.
+  if (updates.gross_salary !== undefined
+      || updates.pf_applicable !== undefined
+      || updates.esi_applicable !== undefined
+      || updates.pt_applicable !== undefined) {
+    syncSalaryStructureFromEmployee(db, emp.id, {
+      gross_salary: updates.gross_salary,
+      pf_applicable: updates.pf_applicable,
+      esi_applicable: updates.esi_applicable,
+      pt_applicable: updates.pt_applicable
+    });
   }
 
   // Update salary structure if provided
@@ -563,7 +704,7 @@ router.post('/bulk-import', (req, res) => {
         if (!empRow) continue;
 
         if (gross > 0) {
-          const existingSalary = db.prepare('SELECT id FROM salary_structures WHERE employee_id = ?').get(empRow.id);
+          const existingSalary = db.prepare('SELECT * FROM salary_structures WHERE employee_id = ? ORDER BY effective_from DESC LIMIT 1').get(empRow.id);
           if (!existingSalary) {
             const effectiveFrom = emp.date_of_joining || '2025-04-01';
             const specialAllowance = Math.max(0, gross - basic - (emp.hra || 0) - (emp.cca || 0) - (emp.conv || 0));
@@ -574,6 +715,20 @@ router.post('/bulk-import', (req, res) => {
               pfApplicable, esiApplicable, ptApplicable, 15000
             );
             salaryCreated++;
+          } else if (Math.abs((existingSalary.gross_salary || 0) - gross) > 1
+                     || (existingSalary.pf_applicable ?? 0) !== (pfApplicable ?? 0)
+                     || (existingSalary.esi_applicable ?? 0) !== (esiApplicable ?? 0)
+                     || (existingSalary.pt_applicable ?? 1) !== (ptApplicable ?? 1)) {
+            // Existing structure drifted from the incoming import values —
+            // repair it in the same transaction. Without this, bulk re-imports
+            // silently leave Stage 7 reading stale gross from the struct while
+            // employees.gross_salary shows the new value (the 60052 bug).
+            syncSalaryStructureFromEmployee(db, empRow.id, {
+              gross_salary: gross,
+              pf_applicable: pfApplicable,
+              esi_applicable: esiApplicable,
+              pt_applicable: ptApplicable
+            });
           }
         }
 
@@ -616,6 +771,172 @@ router.post('/bulk-set-contractor', (req, res) => {
   const txn = db.transaction(() => { for (const code of codes) stmt.run(val, code); });
   txn();
   res.json({ success: true, updated: codes.length });
+});
+
+/**
+ * GET /api/employees/admin/integrity-check
+ * Scans for desync between employees and salary_structures that would make
+ * Stage 7 compute the wrong gross. Read-only — returns a punch list the
+ * admin can repair via POST /admin/integrity-fix.
+ *
+ * Detects:
+ *   - employees.gross_salary != salary_structures.gross_salary (non-trivial diff)
+ *   - employees with no salary_structure row but non-zero gross
+ *   - employees.pf_applicable / esi_applicable / pt_applicable disagree with struct
+ *   - employment_type='Contract' / 'Contractor' but is_contractor=0 (and vice versa)
+ */
+router.get('/admin/integrity-check', (req, res) => {
+  const db = getDb();
+
+  // 1. Gross salary mismatches
+  const grossMismatches = db.prepare(`
+    SELECT e.code, e.name, e.department, e.status,
+           e.gross_salary AS employee_gross,
+           ss.gross_salary AS struct_gross,
+           ABS(COALESCE(e.gross_salary, 0) - COALESCE(ss.gross_salary, 0)) AS diff
+    FROM employees e
+    LEFT JOIN salary_structures ss ON ss.id = (
+      SELECT id FROM salary_structures WHERE employee_id = e.id ORDER BY effective_from DESC LIMIT 1
+    )
+    WHERE e.status = 'Active'
+      AND COALESCE(e.gross_salary, 0) > 0
+      AND COALESCE(ss.gross_salary, 0) > 0
+      AND ABS(COALESCE(e.gross_salary, 0) - COALESCE(ss.gross_salary, 0)) > 1
+    ORDER BY diff DESC
+  `).all();
+
+  // 2. Employees with gross but no structure
+  const missingStruct = db.prepare(`
+    SELECT e.code, e.name, e.department, e.gross_salary
+    FROM employees e
+    LEFT JOIN salary_structures ss ON ss.employee_id = e.id
+    WHERE e.status = 'Active' AND COALESCE(e.gross_salary, 0) > 0 AND ss.id IS NULL
+  `).all();
+
+  // 3. Statutory flag mismatches
+  const flagMismatches = db.prepare(`
+    SELECT e.code, e.name, e.department,
+           e.pf_applicable AS e_pf, ss.pf_applicable AS ss_pf,
+           e.esi_applicable AS e_esi, ss.esi_applicable AS ss_esi,
+           e.pt_applicable AS e_pt, ss.pt_applicable AS ss_pt
+    FROM employees e
+    JOIN salary_structures ss ON ss.id = (
+      SELECT id FROM salary_structures WHERE employee_id = e.id ORDER BY effective_from DESC LIMIT 1
+    )
+    WHERE e.status = 'Active'
+      AND (COALESCE(e.pf_applicable, 0) != COALESCE(ss.pf_applicable, 0)
+           OR COALESCE(e.esi_applicable, 0) != COALESCE(ss.esi_applicable, 0)
+           OR COALESCE(e.pt_applicable, 1) != COALESCE(ss.pt_applicable, 1))
+  `).all();
+
+  // 4. is_contractor vs employment_type mismatches
+  let contractorMismatches = [];
+  try {
+    contractorMismatches = db.prepare(`
+      SELECT code, name, department, employment_type, is_contractor
+      FROM employees
+      WHERE status = 'Active'
+        AND ((LOWER(COALESCE(employment_type, '')) LIKE '%contract%' AND COALESCE(is_contractor, 0) = 0)
+             OR (LOWER(COALESCE(employment_type, '')) NOT LIKE '%contract%' AND COALESCE(is_contractor, 0) = 1))
+    `).all();
+  } catch (e) {
+    // is_contractor column may not exist on older deployments
+    contractorMismatches = [{ error: e.message }];
+  }
+
+  res.json({
+    success: true,
+    summary: {
+      grossMismatches: grossMismatches.length,
+      missingStruct: missingStruct.length,
+      flagMismatches: flagMismatches.length,
+      contractorMismatches: Array.isArray(contractorMismatches) ? contractorMismatches.length : 0
+    },
+    data: {
+      grossMismatches,
+      missingStruct,
+      flagMismatches,
+      contractorMismatches
+    }
+  });
+});
+
+/**
+ * POST /api/employees/admin/integrity-fix
+ * Repairs the desync issues reported by /admin/integrity-check. Treats
+ * `employees` table as the source of truth and scales salary_structures
+ * components proportionally to match. Admin only.
+ *
+ * Body: { dryRun: boolean } — if true, reports what WOULD change without
+ * writing. Defaults to false.
+ */
+router.post('/admin/integrity-fix', (req, res) => {
+  const db = getDb();
+  const dryRun = !!req.body?.dryRun;
+
+  const mismatches = db.prepare(`
+    SELECT e.id, e.code, e.name,
+           e.gross_salary AS employee_gross,
+           COALESCE(ss.gross_salary, 0) AS struct_gross,
+           e.pf_applicable AS e_pf, COALESCE(ss.pf_applicable, 0) AS ss_pf,
+           e.esi_applicable AS e_esi, COALESCE(ss.esi_applicable, 0) AS ss_esi,
+           e.pt_applicable AS e_pt, COALESCE(ss.pt_applicable, 1) AS ss_pt,
+           ss.id AS ss_id
+    FROM employees e
+    LEFT JOIN salary_structures ss ON ss.id = (
+      SELECT id FROM salary_structures WHERE employee_id = e.id ORDER BY effective_from DESC LIMIT 1
+    )
+    WHERE e.status = 'Active'
+      AND COALESCE(e.gross_salary, 0) > 0
+      AND (
+        ABS(COALESCE(e.gross_salary, 0) - COALESCE(ss.gross_salary, 0)) > 1
+        OR COALESCE(e.pf_applicable, 0) != COALESCE(ss.pf_applicable, 0)
+        OR COALESCE(e.esi_applicable, 0) != COALESCE(ss.esi_applicable, 0)
+        OR COALESCE(e.pt_applicable, 1) != COALESCE(ss.pt_applicable, 1)
+        OR ss.id IS NULL
+      )
+  `).all();
+
+  const actions = [];
+  if (!dryRun) {
+    const txn = db.transaction(() => {
+      for (const row of mismatches) {
+        const result = syncSalaryStructureFromEmployee(db, row.id, {
+          gross_salary: row.employee_gross,
+          pf_applicable: row.e_pf,
+          esi_applicable: row.e_esi,
+          pt_applicable: row.e_pt
+        });
+        actions.push({
+          code: row.code,
+          name: row.name,
+          before: { gross: row.struct_gross, pf: row.ss_pf, esi: row.ss_esi, pt: row.ss_pt },
+          after: { gross: row.employee_gross, pf: row.e_pf, esi: row.e_esi, pt: row.e_pt },
+          action: result.action || 'skipped',
+          reason: result.reason || null
+        });
+      }
+    });
+    txn();
+  } else {
+    for (const row of mismatches) {
+      actions.push({
+        code: row.code,
+        name: row.name,
+        before: { gross: row.struct_gross, pf: row.ss_pf, esi: row.ss_esi, pt: row.ss_pt },
+        after: { gross: row.employee_gross, pf: row.e_pf, esi: row.e_esi, pt: row.e_pt },
+        action: row.ss_id ? 'would-update' : 'would-create'
+      });
+    }
+  }
+
+  res.json({
+    success: true,
+    dryRun,
+    totalFixed: dryRun ? 0 : actions.filter(a => a.action !== 'skipped').length,
+    totalFound: mismatches.length,
+    actions
+  });
 });
 
 module.exports = router;

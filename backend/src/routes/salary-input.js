@@ -143,24 +143,41 @@ router.put('/approve/:id', requireFinanceOrAdmin, (req, res) => {
 
   const effectiveFrom = req.body.effectiveFrom || new Date().toISOString().split('T')[0];
 
+  // Resolve gross from newStructure — prefer explicit gross_salary field,
+  // fall back to summing components. Required to keep employees.gross_salary
+  // and salary_structures.gross_salary in sync after approval (before this
+  // fix, the INSERT omitted gross_salary entirely so the new row had gross=0,
+  // and employees.gross_salary was never touched at all).
+  const newBasic = parseFloat(newStructure.basic) || 0;
+  const newDa = parseFloat(newStructure.da) || 0;
+  const newHra = parseFloat(newStructure.hra) || 0;
+  const newConv = parseFloat(newStructure.conveyance) || 0;
+  const newOther = parseFloat(newStructure.other_allowances) || 0;
+  const newSpecial = parseFloat(newStructure.special_allowance) || 0;
+  const newGross = parseFloat(newStructure.gross_salary)
+                || (newBasic + newDa + newHra + newConv + newOther + newSpecial);
+  const newPf = newStructure.pf_applicable !== undefined ? (newStructure.pf_applicable ? 1 : 0) : 0;
+  const newEsi = newStructure.esi_applicable !== undefined ? (newStructure.esi_applicable ? 1 : 0) : 0;
+
   const txn = db.transaction(() => {
-    // Insert new salary structure
+    // Insert new salary structure WITH gross_salary so the latest-by-
+    // effective_from lookup returns a consistent figure.
     db.prepare(`
       INSERT INTO salary_structures (
-        employee_id, basic, da, hra, conveyance, other_allowances,
+        employee_id, gross_salary, basic, da, hra, conveyance, special_allowance, other_allowances,
         pf_applicable, esi_applicable, effective_from
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
-      emp.id,
-      newStructure.basic || 0,
-      newStructure.da || 0,
-      newStructure.hra || 0,
-      newStructure.conveyance || 0,
-      newStructure.other_allowances || 0,
-      newStructure.pf_applicable !== undefined ? newStructure.pf_applicable : 0,
-      newStructure.esi_applicable !== undefined ? newStructure.esi_applicable : 0,
-      effectiveFrom
+      emp.id, newGross, newBasic, newDa, newHra, newConv, newSpecial, newOther,
+      newPf, newEsi, effectiveFrom
     );
+
+    // Sync employees.gross_salary + statutory flags so the master row agrees
+    // with the just-approved structure. Without this the Employee Master UI
+    // and bulk exports would still show the pre-approval gross.
+    db.prepare(`UPDATE employees SET
+        gross_salary = ?, pf_applicable = ?, esi_applicable = ?, updated_at = datetime('now')
+      WHERE id = ?`).run(newGross, newPf, newEsi, emp.id);
 
     // Update request status
     db.prepare(`

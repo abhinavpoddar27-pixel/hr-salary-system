@@ -256,6 +256,23 @@ function computeEmployeeSalary(db, employee, month, year, company) {
     grossMonthly = 0;
   }
 
+  // ── Gross resolution trace ──
+  // Log whenever there's a mismatch between employees.gross_salary and
+  // salary_structures.gross_salary / component sum. This surfaces sync
+  // regressions during a payroll run (the 60052 class of bug) instead of
+  // leaving them to manifest as silently-wrong Stage 7 numbers.
+  const empGrossRaw = parseFloat(employee.gross_salary) || 0;
+  const structGrossRaw = parseFloat(salStruct.gross_salary) || 0;
+  if (Math.abs(empGrossRaw - structGrossRaw) > 1
+      || (rawComponentSum > 0 && Math.abs(rawComponentSum - grossMonthly) > 1)) {
+    console.log(
+      `[GROSS-RESOLVE] ${employee.code}: ` +
+      `employees.gross=${empGrossRaw}, salStruct.gross=${structGrossRaw}, ` +
+      `componentSum=${Math.round(rawComponentSum * 100) / 100}, ` +
+      `resolved=${grossMonthly}, scaleFactor=${Math.round(scaleFactor * 10000) / 10000}`
+    );
+  }
+
   if (scaleFactor !== 1 && rawComponentSum > 0) {
     // Scale existing components preserving their ratios
     basicMonthly = Math.round(basicMonthly * scaleFactor * 100) / 100;
