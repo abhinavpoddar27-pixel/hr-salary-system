@@ -13,6 +13,16 @@ import useExpandableRows from '../hooks/useExpandableRows'
 import DrillDownRow, { DrillDownChevron } from '../components/ui/DrillDownRow'
 import EmployeeQuickView from '../components/ui/EmployeeQuickView'
 
+// Late Coming Phase 1 follow-up: the shifts table still contains legacy
+// DAY/NIGHT/GEN/DUBLE rows because historical attendance records reference
+// them. HR should only assign employees to the three canonical Phase 1
+// shifts going forward, so filter these codes out of the Employee Master
+// picker. Any new shift admin adds later (e.g. "11HR") automatically
+// appears because the filter is a blacklist of known-legacy codes, not a
+// whitelist.
+const LEGACY_SHIFT_CODES = new Set(['DAY', 'NIGHT', 'GEN', 'DUBLE'])
+const isLegacyShiftCode = (code) => !code || LEGACY_SHIFT_CODES.has(code)
+
 function SalaryModal({ employee, onClose }) {
   const qc = useQueryClient()
   const { selectedYear } = useAppStore()
@@ -170,9 +180,12 @@ function EditEmployeeModal({ employee, onClose }) {
   })
 
   // Late Coming Phase 1: fetch real shifts for the dropdown so HR can assign
-  // 12HR / 10HR / 9HR (plus any admin-defined custom shift).
+  // 12HR / 10HR / 9HR (plus any admin-defined custom shift). Legacy
+  // DAY/NIGHT/GEN/DUBLE rows are filtered out here so HR cannot
+  // accidentally reassign someone to a deprecated shift.
   const { data: shiftsRes } = useQuery({ queryKey: ['shifts'], queryFn: getShifts, retry: 0 })
   const shifts = shiftsRes?.data?.data || []
+  const assignableShifts = shifts.filter(s => !LEGACY_SHIFT_CODES.has(s.code))
 
   const saveMutation = useMutation({
     mutationFn: (data) => isNew ? createEmployee(data) : updateEmployee(employee.code, data),
@@ -227,10 +240,10 @@ function EditEmployeeModal({ employee, onClose }) {
           <div className="col-span-2">
             <label className="label">Shift</label>
             <select
-              value={form.default_shift_id || ''}
+              value={assignableShifts.some(s => s.id === form.default_shift_id) ? form.default_shift_id : ''}
               onChange={e => {
                 const id = e.target.value ? parseInt(e.target.value) : null
-                const chosen = shifts.find(s => s.id === id)
+                const chosen = assignableShifts.find(s => s.id === id)
                 setForm(f => ({
                   ...f,
                   default_shift_id: id,
@@ -240,7 +253,7 @@ function EditEmployeeModal({ employee, onClose }) {
               className="select"
             >
               <option value="">— Select shift —</option>
-              {shifts.map(s => (
+              {assignableShifts.map(s => (
                 <option key={s.id} value={s.id}>
                   {s.code} ({s.start_time} - {s.end_time})
                 </option>
@@ -413,7 +426,7 @@ function EmployeeProfileModal({ employee, onClose }) {
                 ['Company', emp.company],
                 ['Department', emp.department],
                 ['Designation', emp.designation],
-                ['Shift', emp.shift_code || 'DAY'],
+                ['Shift', isLegacyShiftCode(emp.shift_code) ? '— needs shift' : emp.shift_code],
                 ['Employment Type', emp.employment_type],
                 ['Weekly Off', ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'][emp.weekly_off_day || 0]],
                 ['PF Number', emp.pf_number],
@@ -792,7 +805,11 @@ export default function Employees() {
                           {e.employment_type || 'Permanent'}
                         </span>
                       </td>
-                      <td className="text-slate-500">{e.shift_code || 'DAY'}</td>
+                      <td>
+                        {isLegacyShiftCode(e.shift_code)
+                          ? <span className="text-[10px] px-2 py-0.5 bg-amber-100 text-amber-700 rounded-full font-semibold">— needs shift</span>
+                          : <span className="text-slate-600 font-mono text-xs">{e.shift_code}</span>}
+                      </td>
                       <td className="text-right font-medium">{e.gross_salary ? fmtINR(e.gross_salary) : <span className="text-slate-300">Not Set</span>}</td>
                       <td className="text-center">{e.pf_applicable !== 0 ? <span className="text-green-500 text-xs">✓</span> : <span className="text-slate-300 text-xs">—</span>}</td>
                       <td className="text-center">{e.esi_applicable !== 0 ? <span className="text-green-500 text-xs">✓</span> : <span className="text-slate-300 text-xs">—</span>}</td>
