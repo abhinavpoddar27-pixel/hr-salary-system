@@ -43,7 +43,7 @@ backend/
 │   │   ├── sessionAnalytics.js  User session tracking
 │   │   ├── usage-logs.js        Admin usage audit
 │   │   ├── phase5.js            Leave accrual, shift roster, attrition
-│   │   ├── lateComing.js        Late Coming Phase 1: analytics + deductions
+│   │   ├── lateComing.js        Late Coming: analytics, deductions, finance approval (Phase 1+2)
 │   │   └── analytics.js         Workforce analytics
 │   └── services/
 │       ├── parser.js                 EESL XLS parsing — dynamic column detection
@@ -191,7 +191,7 @@ frontend/
 - Route: `backend/src/routes/payroll.js` → `POST /compute-salary`, `GET /salary-register`, `POST /finalise`, `GET /payslip/:code`, `GET /salary-slip-excel`
 - Service: `backend/src/services/salaryComputation.js` → `computeEmployeeSalary()`, `saveSalaryComputation()`, `generatePayslipData()`, `getAdvanceRecovery()`, `getLoanDeductions()`
 - Tables read: `day_calculations`, `salary_structures`, `employees`, `salary_advances`, `loan_repayments`, `tax_declarations`, `policy_config`, `extra_duty_grants` (April 2026 — for `ed_pay` bucket), `attendance_processed` (for WOP overlap detection)
-- Tables written: `salary_computations` (one row per employee per month per company; includes new `ed_days`/`ed_pay`/`take_home`), `salary_manual_flags` (auto-populated for finance audit), `salary_advances` (marked recovered)
+- Tables written: `salary_computations` (one row per employee per month per company; includes new `ed_days`/`ed_pay`/`take_home`/`late_coming_deduction`), `salary_manual_flags` (auto-populated for finance audit), `salary_advances` (marked recovered), `late_coming_deductions` (is_applied_to_salary flag flipped after compute)
 - Input contract: Stage 6 complete; salary_structures populated; `employees.gross_salary` set
 - Output contract: salary_computations row with: gross_salary, gross_earned, basic/da/hra/conveyance/other_allowances_earned, ot_pay, holiday_duty_pay, ed_days, ed_pay, take_home, pf_employee/employer, esi_employee/employer, professional_tax, tds, advance_recovery, loan_recovery, lop_deduction, total_deductions, net_salary, total_payable, salary_held, hold_reason, finance_remark
 - Downstream consumers: Finance Audit, Finance Verify, Payslip PDF, Bank NEFT export, PF ECR, ESI returns
@@ -368,7 +368,7 @@ frontend/
 - **Salary advance recovery loop**: `getAdvanceRecovery()` resets `recovered=0` flag before query so re-runs find advances; ON CONFLICT UPDATE on `salary_computations` includes `advance_recovery` so the value persists.
 - **Holiday duty pay**: National holidays (Mar 4 etc) auto-detected. If employee works the holiday, paid extra at per_day_rate. Tracked separately from OT.
 
-## Late Coming Management System (April 2026 — Phase 1 complete)
+## Late Coming Management System (April 2026 — Phase 1 + Phase 2 complete)
 - **Three canonical shifts** seeded in `shifts` table: `12HR` (08:00–20:00, 12h),
   `10HR` (09:00–19:00, 10h), `9HR` (09:30–18:30, 9h). All shifts have
   `grace_minutes=9` per plant policy (including legacy DAY/NIGHT/GEN).
@@ -398,6 +398,9 @@ frontend/
   - `POST /deduction` — HR applies deduction (requires HR or admin role; validates days in [0.5, 5] and non-empty remark)
   - `GET /deductions` — list deductions filtered by status (pending/approved/rejected/all)
   - `GET /export` — xlsx download (HR/finance/admin)
+  - `GET /finance-pending` (Phase 2) — pending deductions enriched with 6-month history + current-month stats (HR/finance/admin)
+  - `PUT /finance-review/:id` (Phase 2) — finance approve/reject single deduction; writes `finance_approvals` + `audit_log`
+  - `PUT /finance-bulk-review` (Phase 2) — same, transactional for multiple ids
 - **New route on `daily-mis.js`**: `GET /late-coming-summary` returns today's
   late arrivals with MTD counts, trend, department breakdown, and "left late
   yesterday" flag.
@@ -417,7 +420,8 @@ frontend/
   - Sidebar: new top-level "Late Coming" entry linking to `/analytics/punctuality`.
 - **Permissions**: `late-coming` page added to `hr` and `finance` roles in
   `backend/src/config/permissions.js`. HR has full access (view + deduction);
-  finance is view-only (Phase 2 will add approve/reject).
+  finance can view analytics, plus approve/reject deductions and review them
+  from the Finance Audit → Late Coming tab.
 - **Employee shift audit**: every shift change on `employees` (via PUT /:code
   or PUT /bulk-shift) writes an `audit_log` row with `field_name='shift_assignment'`,
   `action_type='shift_change'`, and `changed_by` set to the actual username.
@@ -425,10 +429,81 @@ frontend/
   `{ employeeCodes: [...], shiftId, shiftCode }`. Transactional update + one
   audit row per employee. Declared BEFORE `PUT /:code` in the router so Express
   doesn't interpret "bulk-shift" as an employee code.
-- **Phase 2 (NOT YET BUILT)**: finance approval gate on deductions, salary
-  pipeline integration (Stage 7 reading approved deductions as extra LOP days),
-  month-end checklist entry for unreviewed deductions, employee record view
-  late history tab, department report page, bulk payslip download gating.
+- **Phase 2 (April 2026) — shipped**. Closes the loop from HR-initiated
+  deduction to salary impact:
+  - **Finance approval endpoints** on `lateComing.js`:
+    - `GET /finance-pending` — pending deductions enriched with current-month
+      stats + 6-month history + left-late totals (single round-trip for the
+      review UI).
+    - `PUT /finance-review/:id` — approve/reject a single deduction
+      (`finance` or `admin` role). Mandatory remark on rejection. Writes to
+      `finance_approvals` and `audit_log` (`action_type='finance_review'`,
+      `field_name='finance_status'`, `old_value='pending'`).
+    - `PUT /finance-bulk-review` — same logic for multiple rows, transactional.
+  - **New column**: `salary_computations.late_coming_deduction REAL DEFAULT 0`
+    (migrated via `safeAddColumn`). Persisted alongside PF/ESI/TDS/etc.
+  - **Salary pipeline integration** in `salaryComputation.js`:
+    - Top of `computeEmployeeSalary()` resets `is_applied_to_salary=0` for
+      approved rows so every recompute re-reads them.
+    - After TDS/advance/loan derivation, SUMs `deduction_days` of approved &
+      unapplied rows and multiplies by `otPerDayRateDisplay = gross /
+      calendarDays` (same rate as OT/ED/holiday duty). Gated on `!isContract`
+      — contractors mirror the OT/ED exclusion rule.
+    - `lateComingDeduction` is added into `totalDeductions`. `net_salary`
+      math is unchanged — the new bucket just joins the existing sum.
+    - `saveSalaryComputation()` INSERT + ON CONFLICT UPDATE + parameter list
+      were extended with the new column (same pattern as `advance_recovery`).
+    - After the INSERT the function flips `is_applied_to_salary=1` on the
+      matching rows and writes a `logAudit()` entry
+      (`action_type='applied_to_salary'`, `stage='salary_compute'`).
+    - `generatePayslipData()` surfaces a new `Late Coming Deduction` line
+      item in `payslip.deductions` (auto-filtered when zero).
+  - **Stage 6 (DayCalculation.jsx)**: `GET /api/payroll/day-calculations`
+    now returns `finance_approved_late_days` + `finance_late_remark` via
+    subqueries. The day calc detail panel shows a "★ Finance-approved late
+    deduction" info row with the remark directly below.
+  - **Stage 7 (SalaryComputation.jsx)**: new "Late" column between Loan and
+    Ded in the salary register table (amber highlight when > 0). Drill-down
+    deductions list shows "Late Coming" as a separate line item. tfoot
+    column totals include the new bucket.
+  - **Finance Audit → new "Late Coming" tab** (`FinanceAudit.jsx →
+    LateComingAuditTab`): summary KPI cards (Pending / Approved / Rejected /
+    Total Days), expandable pending table revealing 6-month history per
+    employee + Approve/Reject buttons + bulk-action toolbar, history table
+    of already-reviewed deductions for the month. Tab badge shows the pending
+    count.
+  - **Finance Audit → Report tab**: `/finance-audit/report` now joins
+    `late_coming_deductions` (sum of approved days + status) and the UI
+    shows a new "Late Ded" column (amber highlight) between Gross and Net.
+  - **Month-end checklist** (`/payroll/month-end-checklist`): two new items
+    — `late-deductions-pending` (WARNING) and `late-deductions-unapplied`
+    (WARNING, links to `/pipeline/salary`). If neither is present the
+    checklist shows an OK "All late coming deductions reviewed" row.
+  - **Readiness check** (`/finance-audit/readiness-check`): mirrors the two
+    checklist items as WARNINGs (`LATE_DEDUCTIONS_PENDING`,
+    `LATE_DEDUCTIONS_UNAPPLIED`). Not blockers — they reduce the readiness
+    score but don't prevent finalisation.
+  - **Finance red flag detector** `late_deduction_high` (WARNING) in
+    `financeRedFlags.js`: surfaces employees whose approved deduction days
+    exceed 2 for the month.
+  - **Employee profile → new "Late Coming" tab**: 12-month history with
+    trend arrows, summary cards (late this/last month, left-late count),
+    and a full deduction history table showing status badges and the
+    "applied to salary" flag.
+  - **Analytics → Punctuality → view toggle**: new Employees/Departments
+    toggle. Department view renders a report sorted by total late
+    instances with top 5 latecomers per row and an expandable employee
+    list per department.
+  - **Bulk payslip download disabled**: `GET /payroll/payslips/bulk`
+    returns HTTP 403 with a policy error message. The Stage 7 Bulk PDF
+    button, its handler, and the `getBulkPayslips` import were removed
+    from `SalaryComputation.jsx`. Individual payslip generation
+    (`/payslip/:code`) remains functional for internal review.
+  - **Audit trail**: every state transition is logged —
+    `deduction_applied` (HR), `finance_review` (finance approve/reject),
+    `applied_to_salary` (Stage 7 compute), `shift_change` (employee
+    shift assignment). All write to `audit_log` with `stage='late_coming'`
+    or `stage='salary_compute'`.
 
 ## Section 8: Rules for Claude Code Sessions
 - Before changing ANY pipeline stage: ALWAYS read every downstream stage's service file AND every consumer (finance audit, payslips, exports, analytics) that reads this stage's output tables.
