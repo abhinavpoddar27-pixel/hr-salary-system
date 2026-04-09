@@ -1,8 +1,13 @@
 import React, { useState, useMemo } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import toast from 'react-hot-toast'
-import { getMissPunches, resolveMissPunch, bulkResolveMissPunches } from '../utils/api'
+import Modal, { ModalBody, ModalFooter } from '../components/ui/Modal'
+import {
+  getMissPunches, resolveMissPunch, bulkResolveMissPunches,
+  approveMissPunch, rejectMissPunch
+} from '../utils/api'
 import { useAppStore } from '../store/appStore'
+import { canFinance as canFinanceFn, canHR as canHRFn } from '../utils/role'
 import CompanyFilter from '../components/shared/CompanyFilter'
 import DateSelector from '../components/common/DateSelector'
 import useDateSelector from '../hooks/useDateSelector'
@@ -33,7 +38,7 @@ function EditRow({ record, onSave, onCancel }) {
 
   return (
     <tr className="bg-blue-50/80">
-      <td colSpan={10} className="px-4 py-3">
+      <td colSpan={12} className="px-4 py-3">
         <div className="flex flex-wrap items-end gap-3">
           <div>
             <label className="label">IN Time</label>
@@ -69,13 +74,20 @@ function EditRow({ record, onSave, onCancel }) {
 
 export default function MissPunch() {
   const { month, year, dateProps } = useDateSelector({ mode: 'month', syncToStore: true })
-  const { selectedCompany } = useAppStore()
+  const { selectedCompany, user } = useAppStore()
+  const canFinance = canFinanceFn(user)
+  const canHR = canHRFn(user)
   const queryClient = useQueryClient()
   const [editId, setEditId] = useState(null)
   const [selected, setSelected] = useState(new Set())
   const [filterDept, setFilterDept] = useState('')
   const [filterType, setFilterType] = useState('')
-  const [filterResolved, setFilterResolved] = useState('false')
+  // April 2026: filter by full pipeline state, not just resolved/unresolved.
+  //   all | hr-pending | finance-pending | approved | rejected
+  // Default to 'all' so nothing is hidden from the user — the old default
+  // ('resolved=false') hid every HR-resolved-finance-pending row which was
+  // the root cause of the "45 miss punches" confusion.
+  const [filterState, setFilterState] = useState('all')
   const [bulkModal, setBulkModal] = useState(false)
   const [bulkForm, setBulkForm] = useState({ inTime: '', outTime: '', source: 'Gate Register', remark: '' })
   const [sortField, setSortField] = useState('date')
@@ -83,10 +95,13 @@ export default function MissPunch() {
   const [calendarEmployee, setCalendarEmployee] = useState(null)
   const { toggle, isExpanded } = useExpandableRows()
   const [filterDate, setFilterDate] = useState('')
+  // Finance reject-reason modal state
+  const [finRejectId, setFinRejectId] = useState(null)
+  const [finRejectReason, setFinRejectReason] = useState('')
 
   const { data: res, isLoading, refetch } = useQuery({
-    queryKey: ['miss-punches', month, year, filterDept, filterType, filterResolved, selectedCompany],
-    queryFn: () => getMissPunches({ month: month, year: year, department: filterDept, resolved: filterResolved, company: selectedCompany }),
+    queryKey: ['miss-punches', month, year, filterDept, filterType, filterState, selectedCompany],
+    queryFn: () => getMissPunches({ month: month, year: year, department: filterDept, state: filterState, company: selectedCompany }),
     retry: 0
   })
 
@@ -143,6 +158,25 @@ export default function MissPunch() {
     }
   })
 
+  // ── Finance approve/reject (April 2026) ──────────────────
+  // Inline actions on HR-resolved rows for finance users. Backend
+  // endpoints are gated by requireFinanceOrAdmin via
+  // /finance-audit/miss-punch/:id/approve|reject.
+  const finApproveMut = useMutation({
+    mutationFn: (id) => approveMissPunch(id, ''),
+    onSuccess: () => { toast.success('Approved — Stage 6 recalculation required'); refetch() },
+    onError: (e) => toast.error(e?.response?.data?.error || 'Approve failed')
+  })
+  const finRejectMut = useMutation({
+    mutationFn: ({ id, reason }) => rejectMissPunch(id, reason),
+    onSuccess: () => {
+      toast.success('Rejected — ½P credited, awaiting HR re-resolution')
+      setFinRejectId(null); setFinRejectReason('')
+      refetch()
+    },
+    onError: (e) => toast.error(e?.response?.data?.error || 'Reject failed')
+  })
+
   const handleSave = (id, data) => resolveMutation.mutate({ id, data })
 
   const handleBulkResolve = () => {
@@ -194,6 +228,42 @@ export default function MissPunch() {
           </div>
         </div>
 
+        {/* Pipeline-state banner + filter chips (April 2026).
+            Shows the full breakdown so finance can see the complete
+            picture: Detected · HR Pending · Finance Pending · Approved ·
+            Rejected. Clicking a chip filters the table to that state;
+            counts come from the server-side summary so they stay
+            correct regardless of which chip is currently active. */}
+        <div className="rounded-lg border border-blue-200 bg-blue-50 px-4 py-3 text-xs text-blue-900 space-y-2">
+          <div className="flex flex-wrap items-center gap-x-4 gap-y-1">
+            <span><strong>Detected:</strong> <code className="bg-white px-1.5 py-0.5 rounded">{summary.total || 0}</code></span>
+            <span><strong>HR Pending:</strong> <code className="bg-white px-1.5 py-0.5 rounded">{summary.hrPending || 0}</code></span>
+            <span><strong>Finance Pending:</strong> <code className="bg-white px-1.5 py-0.5 rounded">{summary.financePending || 0}</code></span>
+            <span><strong>Approved:</strong> <code className="bg-white px-1.5 py-0.5 rounded text-green-700">{summary.approved || 0}</code></span>
+            <span><strong>Rejected:</strong> <code className="bg-white px-1.5 py-0.5 rounded text-red-700">{summary.rejected || 0}</code></span>
+            <span className="ml-auto text-slate-500">
+              Finance-approved flow to Stage 6/7 · rejected credited as ½P
+            </span>
+          </div>
+          <div className="flex flex-wrap gap-1.5">
+            {[
+              { key: 'all', label: `All (${summary.total || 0})`, color: 'slate' },
+              { key: 'hr-pending', label: `HR Pending (${summary.hrPending || 0})`, color: 'amber' },
+              { key: 'finance-pending', label: `Finance Pending (${summary.financePending || 0})`, color: 'blue' },
+              { key: 'approved', label: `Approved (${summary.approved || 0})`, color: 'green' },
+              { key: 'rejected', label: `Rejected (${summary.rejected || 0})`, color: 'red' },
+            ].map(c => (
+              <button key={c.key} onClick={() => setFilterState(c.key)}
+                className={clsx('text-xs px-3 py-1 rounded-full border font-medium transition-colors',
+                  filterState === c.key
+                    ? 'bg-blue-600 text-white border-blue-600'
+                    : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-50'
+                )}
+              >{c.label}</button>
+            ))}
+          </div>
+        </div>
+
         {/* Filters */}
         <div className="flex gap-3 items-end flex-wrap">
           <div>
@@ -209,14 +279,6 @@ export default function MissPunch() {
             <select value={filterType} onChange={e => setFilterType(e.target.value)} className="select w-44">
               <option value="">All Types</option>
               {Object.entries(ISSUE_LABELS).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
-            </select>
-          </div>
-          <div>
-            <label className="label">Status</label>
-            <select value={filterResolved} onChange={e => setFilterResolved(e.target.value)} className="select w-36">
-              <option value="">All</option>
-              <option value="false">Pending</option>
-              <option value="true">Resolved</option>
             </select>
           </div>
         </div>
@@ -261,26 +323,28 @@ export default function MissPunch() {
                   <th className="cursor-pointer select-none" onClick={() => toggleSort('type')}>
                     Issue <SortIcon field="type" sortField={sortField} sortDir={sortDir} />
                   </th>
+                  <th>HR Review</th>
+                  <th>Finance Review</th>
                   <th>Calendar</th>
                   <th>Action</th>
                 </tr>
               </thead>
               <tbody>
                 {isLoading ? (
-                  <tr><td colSpan={10} className="text-center py-12 text-slate-400">
+                  <tr><td colSpan={12} className="text-center py-12 text-slate-400">
                     <div className="flex flex-col items-center gap-2">
                       <div className="w-6 h-6 border-3 border-blue-200 border-t-blue-600 rounded-full animate-spin" />
                       <span className="text-sm">Loading records...</span>
                     </div>
                   </td></tr>
                 ) : records.length === 0 ? (
-                  <tr><td colSpan={10} className="text-center py-12 text-slate-400">
-                    {filterResolved === 'false' ? (
+                  <tr><td colSpan={12} className="text-center py-12 text-slate-400">
+                    {filterState === 'hr-pending' ? (
                       <div className="flex flex-col items-center gap-2">
                         <span className="text-3xl">✅</span>
-                        <span className="font-medium text-emerald-600">All miss punches resolved!</span>
+                        <span className="font-medium text-emerald-600">No HR-pending miss punches — all caught up!</span>
                       </div>
-                    ) : 'No records found'}
+                    ) : 'No records in this filter'}
                   </td></tr>
                 ) : (
                   records.map(rec => (
@@ -332,6 +396,56 @@ export default function MissPunch() {
                             {ISSUE_LABELS[rec.miss_punch_type] || rec.miss_punch_type}
                           </span>
                         </td>
+                        {/* HR Review column — shows what HR has done.
+                            Rejected rows are back in the HR queue and
+                            display a distinct red badge so HR knows to
+                            re-resolve. Finance-rejected rows get ½P
+                            credit at Stage 6 regardless. */}
+                        <td>
+                          {rec.miss_punch_finance_status === 'rejected' ? (
+                            <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-red-100 text-red-700 font-medium"
+                              title={rec.miss_punch_finance_notes || 'Finance rejected — HR must re-resolve'}>
+                              ⟲ Needs re-resolution
+                            </span>
+                          ) : rec.miss_punch_resolved ? (
+                            <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-blue-100 text-blue-700 font-medium">
+                              ✓ Resolved
+                            </span>
+                          ) : (
+                            <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-amber-100 text-amber-800 font-medium">
+                              ⏳ Pending
+                            </span>
+                          )}
+                        </td>
+                        {/* Finance Review column — parallel to HR status.
+                            Pending = HR resolved, waiting for finance.
+                            Approved = flows to Stage 6/7.
+                            Rejected = ½P credit, visible reason. */}
+                        <td>
+                          {rec.miss_punch_finance_status === 'approved' ? (
+                            <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-green-100 text-green-700 font-medium">
+                              ✓ Approved
+                            </span>
+                          ) : rec.miss_punch_finance_status === 'rejected' ? (
+                            <div className="flex flex-col gap-0.5">
+                              <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-red-100 text-red-700 font-medium">
+                                ✕ Rejected
+                              </span>
+                              {rec.miss_punch_finance_notes && (
+                                <span className="text-[9px] text-red-500 max-w-[140px] truncate" title={rec.miss_punch_finance_notes}>
+                                  {rec.miss_punch_finance_notes}
+                                </span>
+                              )}
+                              <span className="text-[9px] text-amber-600 italic">½P credited until re-resolved</span>
+                            </div>
+                          ) : rec.miss_punch_resolved ? (
+                            <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-slate-100 text-slate-600 font-medium">
+                              ⏳ Pending
+                            </span>
+                          ) : (
+                            <span className="text-[10px] text-slate-300">—</span>
+                          )}
+                        </td>
                         <td>
                           <button
                             onClick={(e) => { e.stopPropagation(); setCalendarEmployee({ code: rec.employee_code, name: rec.employee_name || rec.employee_code }); }}
@@ -341,32 +455,31 @@ export default function MissPunch() {
                             📅
                           </button>
                         </td>
-                        <td>
-                          {rec.miss_punch_resolved ? (
-                            rec.miss_punch_finance_status === 'rejected' ? (
-                              <span
-                                className="badge text-xs bg-red-100 text-red-700"
-                                title={rec.miss_punch_finance_notes || 'Finance rejected — back in HR queue'}
-                              >
-                                ✕ Finance rejected
-                              </span>
-                            ) : rec.miss_punch_finance_status === 'approved' ? (
-                              <span className="badge-green text-xs">✓ Finance approved</span>
-                            ) : (
-                              <span
-                                className="badge text-xs bg-amber-100 text-amber-800"
-                                title="HR resolved — awaiting finance review"
-                              >
-                                ⏳ Pending finance
-                              </span>
-                            )
-                          ) : (
-                            <button onClick={() => setEditId(rec.id)} className="btn-secondary text-xs px-2 py-1">Correct</button>
+                        {/* Action column — role-specific:
+                             • HR-pending or finance-rejected (back-to-HR) → Correct button
+                             • HR-resolved + finance-pending → finance sees ✓ / ✕ buttons
+                             • Approved → read-only (green elsewhere) */}
+                        <td onClick={(e) => e.stopPropagation()}>
+                          {(!rec.miss_punch_resolved || rec.miss_punch_finance_status === 'rejected') && canHR && (
+                            <button onClick={() => setEditId(rec.id)} className="btn-secondary text-xs px-2 py-1">
+                              {rec.miss_punch_finance_status === 'rejected' ? 'Re-resolve' : 'Correct'}
+                            </button>
+                          )}
+                          {rec.miss_punch_resolved
+                            && (rec.miss_punch_finance_status === 'pending' || !rec.miss_punch_finance_status || rec.miss_punch_finance_status === '')
+                            && canFinance && (
+                            <div className="flex gap-1">
+                              <button onClick={() => finApproveMut.mutate(rec.id)} className="text-green-600 hover:bg-green-50 px-1.5 py-0.5 rounded text-[10px] font-medium">✓ Approve</button>
+                              <button onClick={() => { setFinRejectId(rec.id); setFinRejectReason('') }} className="text-red-600 hover:bg-red-50 px-1.5 py-0.5 rounded text-[10px] font-medium">✕ Reject</button>
+                            </div>
+                          )}
+                          {rec.miss_punch_finance_status === 'approved' && (
+                            <span className="text-[10px] text-green-600">Finalised</span>
                           )}
                         </td>
                       </tr>
                       {isExpanded(rec.id) && (
-                        <DrillDownRow colSpan={10}>
+                        <DrillDownRow colSpan={12}>
                           <EmployeeQuickView
                             employeeCode={rec.employee_code}
                             contextContent={
@@ -451,6 +564,39 @@ export default function MissPunch() {
             </div>
           </div>
         </div>
+      )}
+
+      {/* Finance Reject modal — opened from the Action column on HR-
+          resolved rows. Rejection reverts HR's in/out times, sets
+          finance_status='rejected' (→ Stage 6 credits ½P), and puts
+          the row back in the HR queue for re-resolution. */}
+      {finRejectId && (
+        <Modal open={true} onClose={() => setFinRejectId(null)} title="Reject Miss Punch Resolution">
+          <ModalBody>
+            <div className="space-y-3 text-sm">
+              <p className="text-xs text-slate-500">
+                Rejecting will revert HR's in/out correction. The day will be credited as <strong>½P (half-day present)</strong> in Stage 6 / Stage 7 until HR re-resolves and finance re-approves.
+              </p>
+              <textarea
+                value={finRejectReason}
+                onChange={e => setFinRejectReason(e.target.value)}
+                className="input w-full h-24"
+                placeholder="Rejection reason (required) — e.g. &quot;IN time inconsistent with gate register&quot;, &quot;No supporting evidence provided&quot;, etc."
+                autoFocus
+              />
+            </div>
+          </ModalBody>
+          <ModalFooter>
+            <button
+              onClick={() => finRejectMut.mutate({ id: finRejectId, reason: finRejectReason })}
+              disabled={!finRejectReason.trim() || finRejectMut.isPending}
+              className="btn-danger text-sm"
+            >
+              {finRejectMut.isPending ? 'Rejecting...' : 'Reject & Credit ½P'}
+            </button>
+            <button onClick={() => setFinRejectId(null)} className="btn-ghost text-sm">Cancel</button>
+          </ModalFooter>
+        </Modal>
       )}
     </div>
   )

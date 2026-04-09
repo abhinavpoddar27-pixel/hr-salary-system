@@ -439,18 +439,35 @@ router.get('/salary-register', (req, res) => {
  * PUT /api/payroll/salary/:code/hold-release
  * Finance releases a held salary. Gated by requireFinanceOrAdmin so HR
  * cannot self-release a hold they themselves placed (or that the
- * pipeline auto-imposed). Writes an audit_log entry so the release is
- * traceable to the finance user who approved it.
+ * pipeline auto-imposed).
+ *
+ * April 2026: `release_notes` is now a REQUIRED body param (the paper-
+ * verification reference — e.g. "Approved by HR manager, sign-off form
+ * #2026-04-08-07"). A row is written to `salary_hold_releases` on
+ * success, creating a queryable audit trail independent of
+ * salary_computations (which only stores the latest release state).
  */
 router.put('/salary/:code/hold-release', requireFinanceOrAdmin, (req, res) => {
   const db = getDb();
   const { code } = req.params;
-  const { month, year } = req.body;
+  const { month, year, release_notes } = req.body;
   const user = req.user?.username || 'finance';
 
-  const before = db.prepare(
-    'SELECT id, salary_held, hold_reason FROM salary_computations WHERE employee_code = ? AND month = ? AND year = ?'
-  ).get(code, month, year);
+  if (!release_notes || !String(release_notes).trim()) {
+    return res.status(400).json({
+      success: false,
+      error: 'Release notes are required (paper verification reference)'
+    });
+  }
+  const trimmedNotes = String(release_notes).trim();
+
+  const before = db.prepare(`
+    SELECT sc.id, sc.salary_held, sc.hold_reason, sc.net_salary, sc.company,
+           e.name AS employee_name, e.department
+    FROM salary_computations sc
+    LEFT JOIN employees e ON e.code = sc.employee_code
+    WHERE sc.employee_code = ? AND sc.month = ? AND sc.year = ?
+  `).get(code, month, year);
   if (!before) return res.status(404).json({ success: false, error: 'Salary record not found' });
   if (before.salary_held !== 1) {
     return res.status(400).json({ success: false, error: 'Salary is not currently held' });
@@ -462,12 +479,137 @@ router.put('/salary/:code/hold-release', requireFinanceOrAdmin, (req, res) => {
     WHERE employee_code = ? AND month = ? AND year = ?
   `).run(user, code, month, year);
 
+  // Write the audit row. Wrapped in try/catch so an audit failure
+  // never blocks the release itself — mirrors archiveRejection() in
+  // extraDutyGrants.js. A successful release + failed audit is still
+  // better than a failed release.
+  try {
+    db.prepare(`
+      INSERT INTO salary_hold_releases
+        (employee_code, employee_name, department, month, year, company,
+         hold_reason, hold_amount, released_by, release_notes)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      code, before.employee_name || '', before.department || '',
+      parseInt(month), parseInt(year), before.company || '',
+      before.hold_reason || '', before.net_salary || 0,
+      user, trimmedNotes
+    );
+  } catch (e) {
+    console.error('[salary_hold_releases] audit insert failed:', e.message);
+  }
+
   try {
     logAudit('salary_computations', before.id, 'salary_held', '1', '0',
-      'FINANCE_HOLD_RELEASE', `${code} ${month}/${year}: ${before.hold_reason || 'no reason'}`);
+      'FINANCE_HOLD_RELEASE', `${code} ${month}/${year}: ${trimmedNotes}`);
   } catch (e) { /* logAudit failures should never block the release */ }
 
   res.json({ success: true, message: `Salary released for ${code}` });
+});
+
+/**
+ * GET /api/payroll/salary/hold-releases
+ * Finance audit trail of every released hold. Powers the Held Salaries
+ * Register "Released History" tab. Gated by requireFinanceOrAdmin — the
+ * release audit is finance-sensitive.
+ */
+router.get('/salary/hold-releases', requireFinanceOrAdmin, (req, res) => {
+  const db = getDb();
+  const { month, year, employee_code, company, limit = 500 } = req.query;
+  let q = 'SELECT * FROM salary_hold_releases WHERE 1=1';
+  const p = [];
+  if (month) { q += ' AND month = ?'; p.push(parseInt(month)); }
+  if (year) { q += ' AND year = ?'; p.push(parseInt(year)); }
+  if (employee_code) { q += ' AND employee_code = ?'; p.push(employee_code); }
+  if (company) { q += ' AND company = ?'; p.push(company); }
+  q += ' ORDER BY released_at DESC LIMIT ?';
+  p.push(Math.min(parseInt(limit) || 500, 2000));
+  res.json({ success: true, data: db.prepare(q).all(...p) });
+});
+
+/**
+ * GET /api/payroll/salary/hold-releases/report
+ * Range export — returns all releases between (startMonth/startYear) and
+ * (endMonth/endYear) inclusive with totals. The frontend turns this into
+ * an xlsx download. Gated by requireFinanceOrAdmin.
+ */
+router.get('/salary/hold-releases/report', requireFinanceOrAdmin, (req, res) => {
+  const db = getDb();
+  const { startMonth, startYear, endMonth, endYear, company } = req.query;
+  if (!startMonth || !startYear || !endMonth || !endYear) {
+    return res.status(400).json({ success: false, error: 'startMonth, startYear, endMonth, endYear are all required' });
+  }
+  const startKey = parseInt(startYear) * 12 + parseInt(startMonth);
+  const endKey   = parseInt(endYear)   * 12 + parseInt(endMonth);
+  let q = `SELECT * FROM salary_hold_releases WHERE (year*12 + month) BETWEEN ? AND ?`;
+  const p = [startKey, endKey];
+  if (company) { q += ' AND company = ?'; p.push(company); }
+  q += ' ORDER BY released_at DESC';
+  const rows = db.prepare(q).all(...p);
+  const totals = {
+    count: rows.length,
+    amount: rows.reduce((s, r) => s + (r.hold_amount || 0), 0)
+  };
+  res.json({ success: true, data: rows, totals });
+});
+
+/**
+ * GET /api/payroll/day-calc-staleness
+ * Detects whether a Stage 6 recompute is required for the given
+ * month/year/company. Returns a count of miss punches whose finance
+ * status changed (approved / rejected) AFTER the latest
+ * day_calculations.updated_at for the month. If count > 0, the
+ * frontend shows a "Recalculate Days" banner prompting the user to
+ * re-run Stage 6 so the new finance verdicts flow into payroll.
+ *
+ * April 2026: the Stage 6 gate on miss_punch_finance_status means
+ * day calcs can drift out of sync with reality when finance
+ * approves/rejects after the last compute. This endpoint gives the
+ * frontend a cheap way to detect that drift without recomputing
+ * everything on every page load.
+ */
+router.get('/day-calc-staleness', (req, res) => {
+  const db = getDb();
+  const { month, year, company } = req.query;
+  if (!month || !year) {
+    return res.status(400).json({ success: false, error: 'month and year required' });
+  }
+
+  // Most-recent day_calculations.updated_at for the month (per-company
+  // if filtered; else the max across companies). If no day_calculations
+  // exist yet, the banner shows `stale=false` — user will run Stage 6
+  // for the first time anyway.
+  let lastQ = 'SELECT MAX(updated_at) AS last_calc FROM day_calculations WHERE month = ? AND year = ?';
+  const lastP = [month, year];
+  if (company) { lastQ += ' AND company = ?'; lastP.push(company); }
+  const lastRow = db.prepare(lastQ).get(...lastP);
+  const lastCalc = lastRow?.last_calc;
+
+  if (!lastCalc) {
+    return res.json({ success: true, stale: false, changedMissPunches: 0, lastCalc: null });
+  }
+
+  // Count miss punches whose finance review happened AFTER lastCalc.
+  // We use miss_punch_finance_reviewed_at as the "when finance acted"
+  // timestamp — set by both approve and reject endpoints.
+  let changedQ = `
+    SELECT COUNT(*) AS n
+    FROM attendance_processed
+    WHERE is_miss_punch = 1
+      AND month = ? AND year = ?
+      AND miss_punch_finance_status IN ('approved', 'rejected')
+      AND miss_punch_finance_reviewed_at > ?
+  `;
+  const changedP = [month, year, lastCalc];
+  if (company) { changedQ += ' AND company = ?'; changedP.push(company); }
+  const changed = db.prepare(changedQ).get(...changedP);
+
+  res.json({
+    success: true,
+    stale: (changed?.n || 0) > 0,
+    changedMissPunches: changed?.n || 0,
+    lastCalc
+  });
 });
 
 /**

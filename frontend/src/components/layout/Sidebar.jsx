@@ -17,6 +17,7 @@ const nav = [
       { label: '5. Corrections', icon: '✏️', to: '/pipeline/corrections' },
       { label: '6. Day Calc', icon: '📅', to: '/pipeline/day-calc' },
       { label: '7. Salary', icon: '₹', to: '/pipeline/salary' },
+      { label: 'Held Salaries Register', icon: '🔒', to: '/held-salaries' },
       { label: 'Salary Advance', icon: '💵', to: '/salary-advance' },
       { label: 'Payable OT', icon: '⏱️', to: '/payable-ot' },
       { label: 'Salary Input', icon: '📝', to: '/salary-input' },

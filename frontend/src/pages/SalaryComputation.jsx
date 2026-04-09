@@ -2,7 +2,7 @@ import React, { useState, useMemo, useEffect } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { Link, useSearchParams } from 'react-router-dom'
 import toast from 'react-hot-toast'
-import { getSalaryRegister, computeSalary, finaliseSalary, getPayslip, getMonthEndChecklist, getSalaryComparison, getBulkPayslips, downloadSalarySlipExcel, releaseHeldSalary } from '../utils/api'
+import { getSalaryRegister, computeSalary, finaliseSalary, getPayslip, getMonthEndChecklist, getSalaryComparison, getBulkPayslips, downloadSalarySlipExcel, releaseHeldSalary, getDayCalcStaleness } from '../utils/api'
 import { useAppStore } from '../store/appStore'
 import CompanyFilter from '../components/shared/CompanyFilter'
 import DateSelector from '../components/common/DateSelector'
@@ -20,6 +20,7 @@ import api from '../utils/api'
 import { downloadPayslipPDF } from '../utils/payslipPdf'
 import ConfirmDialog from '../components/ui/ConfirmDialog'
 import { canFinance as canFinanceFn } from '../utils/role'
+import ReleaseHoldModal from '../components/ui/ReleaseHoldModal'
 
 export default function SalaryComputation() {
   const { month, year, dateProps } = useDateSelector({ mode: 'month', syncToStore: true })
@@ -114,16 +115,22 @@ export default function SalaryComputation() {
   })
 
   // April 2026: the hold-release endpoint is now gated by requireFinanceOrAdmin
-  // so HR sees a 403 if they try (the button is hidden for HR below, but the
-  // onError toast is the user-visible fallback). Invalidates both this page's
-  // query and the Finance Verification held-salaries query so both stay in
-  // sync when used side-by-side.
+  // AND requires release_notes (paper-verification reference). The button opens
+  // the shared ReleaseHoldModal — same flow used by the Finance Verify Held tab
+  // and the new Held Salaries Register. Every release writes a row to
+  // salary_hold_releases so there's a queryable audit trail.
+  const [releaseEmployee, setReleaseEmployee] = useState(null)
   const releaseHoldMutation = useMutation({
-    mutationFn: (code) => api.put(`/payroll/salary/${code}/hold-release`, { month: month, year: year, company: selectedCompany }),
+    mutationFn: ({ code, notes }) => api.put(`/payroll/salary/${code}/hold-release`, {
+      month, year, company: selectedCompany, release_notes: notes
+    }),
     onSuccess: () => {
-      toast.success('Salary hold released')
+      toast.success('Salary hold released — audit row recorded')
+      setReleaseEmployee(null)
       refetch()
       qc.invalidateQueries({ queryKey: ['fin-held'] })
+      qc.invalidateQueries({ queryKey: ['held-register-current'] })
+      qc.invalidateQueries({ queryKey: ['held-register-history'] })
     },
     onError: (e) => toast.error(e?.response?.data?.error || 'Release failed')
   })
@@ -134,6 +141,18 @@ export default function SalaryComputation() {
     enabled: !!payslipEmployee
   })
   const payslip = payslipRes?.data?.data
+
+  // April 2026: day-calc staleness check for the "Recompute Stage 6"
+  // banner. Salary Computation is downstream of Stage 6, so if Stage 6
+  // is stale, Stage 7 numbers are also stale. Read-only here — the
+  // recompute action lives on the Stage 6 page (link supplied).
+  const { data: stalenessRes } = useQuery({
+    queryKey: ['day-calc-staleness', month, year, selectedCompany],
+    queryFn: () => getDayCalcStaleness(month, year, selectedCompany || undefined),
+    refetchInterval: 30000,
+    retry: 0
+  })
+  const staleness = stalenessRes?.data || {}
 
   // Month-end checklist
   const { data: checklistRes } = useQuery({
@@ -465,6 +484,28 @@ export default function SalaryComputation() {
           </div>
         )}
 
+        {/* Stage 6 staleness banner (April 2026). Read-only mirror of
+            the Day Calculation page's recompute banner — Stage 7
+            depends on Stage 6, so if Stage 6 is stale so is Stage 7.
+            Link navigates to /pipeline/day-calc where the user can
+            trigger the actual recompute. */}
+        {staleness.stale && (
+          <div className="rounded-lg border border-amber-400 bg-amber-50 px-4 py-3 text-sm text-amber-900 flex flex-wrap items-center gap-3">
+            <span className="text-lg">⚠</span>
+            <div className="flex-1 min-w-0">
+              <div className="font-semibold">
+                Stage 6 is stale — {staleness.changedMissPunches} miss punch{staleness.changedMissPunches === 1 ? '' : 'es'} changed finance status since last day calc
+              </div>
+              <div className="text-xs text-amber-800 mt-0.5">
+                Salary numbers below reflect pre-approval days. Re-run Stage 6 first, then recompute salaries here.
+              </div>
+            </div>
+            <Link to="/pipeline/day-calc" className="btn-primary text-sm shrink-0">
+              Open Stage 6 →
+            </Link>
+          </div>
+        )}
+
         {/* Held Salaries ↔ Finance Verification interlink banner.
             Surfaces only when the user is viewing the "Held" filter
             so the cross-page navigation is contextual. Works both
@@ -480,6 +521,9 @@ export default function SalaryComputation() {
             </span>
             <Link to="/finance-verification?tab=held" className="ml-auto text-blue-600 hover:underline font-medium shrink-0">
               Review in Finance Verify →
+            </Link>
+            <Link to="/held-salaries" className="text-blue-600 hover:underline font-medium shrink-0">
+              Open Release Register →
             </Link>
           </div>
         )}
@@ -675,9 +719,23 @@ export default function SalaryComputation() {
                                 {/* Release gated to finance/admin — HR sees the Held
                                     badge but not the Release button. Matches the
                                     requireFinanceOrAdmin gate on the backend endpoint
-                                    added April 2026. */}
+                                    added April 2026. Opens the shared ReleaseHoldModal
+                                    which enforces the required release_notes. */}
                                 {canFinance && (
-                                  <button onClick={(e) => { e.stopPropagation(); releaseHoldMutation.mutate(s.employee_code); }} className="btn-ghost text-xs px-1 text-blue-600">
+                                  <button
+                                    onClick={(e) => {
+                                      e.stopPropagation()
+                                      setReleaseEmployee({
+                                        code: s.employee_code,
+                                        name: s.employee_name,
+                                        department: s.department,
+                                        hold_reason: s.hold_reason,
+                                        net_salary: s.net_salary,
+                                        month, year
+                                      })
+                                    }}
+                                    className="btn-ghost text-xs px-1 text-blue-600"
+                                  >
                                     Release
                                   </button>
                                 )}
@@ -882,6 +940,18 @@ export default function SalaryComputation() {
             onCancel={() => setConfirmAction(null)}
           />
         )}
+
+        {/* Shared release modal — same component used by Finance Verify
+            Held tab and the Held Salaries Register. Guarantees the
+            paper-verification notes requirement is enforced from every
+            entry point. */}
+        <ReleaseHoldModal
+          open={!!releaseEmployee}
+          onClose={() => setReleaseEmployee(null)}
+          employee={releaseEmployee}
+          pending={releaseHoldMutation.isPending}
+          onSubmit={(notes) => releaseHoldMutation.mutate({ code: releaseEmployee.code, notes })}
+        />
       </div>
     </div>
   )

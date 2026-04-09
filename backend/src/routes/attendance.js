@@ -40,7 +40,7 @@ router.get('/processed', (req, res) => {
  */
 router.get('/miss-punches', (req, res) => {
   const db = getDb();
-  const { month, year, company, department, resolved } = req.query;
+  const { month, year, company, department, resolved, state } = req.query;
 
   let query = `
     SELECT ap.*, e.name as employee_name, e.department, e.designation
@@ -54,25 +54,81 @@ router.get('/miss-punches', (req, res) => {
   if (year) { query += ' AND ap.year = ?'; params.push(year); }
   if (company) { query += ' AND ap.company = ?'; params.push(company); }
   if (department) { query += ' AND e.department = ?'; params.push(department); }
+
+  // Legacy `resolved` filter kept for backwards compat. Prefer the new
+  // `state` filter (April 2026) which maps the full HR→Finance workflow:
+  //   hr-pending      — HR hasn't actioned OR finance rejected it (HR
+  //                     needs to re-resolve; Stage 6 credits ½P in the
+  //                     rejected case)
+  //   finance-pending — HR resolved, finance hasn't reviewed yet
+  //   approved        — finance said yes (flows into Stage 6/7)
+  //   rejected        — finance said no (½P credit, visible in Stage 2)
+  //   all (default)   — nothing hidden
   if (resolved === 'false') { query += ' AND ap.miss_punch_resolved = 0'; }
   if (resolved === 'true') { query += ' AND ap.miss_punch_resolved = 1'; }
+
+  if (state === 'hr-pending') {
+    query += " AND ap.miss_punch_resolved = 0";
+  } else if (state === 'finance-pending') {
+    query += " AND ap.miss_punch_resolved = 1 AND (ap.miss_punch_finance_status IS NULL OR ap.miss_punch_finance_status = '' OR ap.miss_punch_finance_status = 'pending')";
+  } else if (state === 'approved') {
+    query += " AND ap.miss_punch_finance_status = 'approved'";
+  } else if (state === 'rejected') {
+    query += " AND ap.miss_punch_finance_status = 'rejected'";
+  }
+  // state === 'all' (or unspecified) → no extra filter
 
   query += ' ORDER BY e.department, ap.employee_code, ap.date';
 
   const records = db.prepare(query).all(...params);
 
-  // Summary stats
+  // ── Full-pipeline summary (April 2026) ────────────────────
+  // Compute buckets over the FULL month (unfiltered by state) so the
+  // Stage 2 chip row shows correct totals even when a state filter is
+  // active. Without this, clicking a chip would reload the page with
+  // zero counts on the other chips.
+  let fullQ = `SELECT is_miss_punch, miss_punch_resolved, miss_punch_finance_status,
+                       miss_punch_type, ap.company
+                FROM attendance_processed ap
+                LEFT JOIN employees e ON ap.employee_code = e.code
+                WHERE ap.is_miss_punch = 1`;
+  const fullP = [];
+  if (month) { fullQ += ' AND ap.month = ?'; fullP.push(month); }
+  if (year) { fullQ += ' AND ap.year = ?'; fullP.push(year); }
+  if (company) { fullQ += ' AND ap.company = ?'; fullP.push(company); }
+  if (department) { fullQ += ' AND e.department = ?'; fullP.push(department); }
+  const allForCounts = db.prepare(fullQ).all(...fullP);
+
+  const classify = (r) => {
+    const fs = r.miss_punch_finance_status;
+    if (fs === 'approved') return 'approved';
+    if (fs === 'rejected') return 'rejected';
+    if (r.miss_punch_resolved === 1) return 'financePending';
+    return 'hrPending';
+  };
+
   const summary = {
-    total: records.length,
-    resolved: records.filter(r => r.miss_punch_resolved).length,
-    pending: records.filter(r => !r.miss_punch_resolved).length,
+    total: allForCounts.length,
+    // Legacy keys (kept for backwards compat with callers still using the
+    // old resolved/pending summary shape — analytics.js, dashboard widgets)
+    resolved: allForCounts.filter(r => r.miss_punch_resolved).length,
+    pending: allForCounts.filter(r => !r.miss_punch_resolved).length,
+    // New pipeline split used by the Stage 2 + Finance Verify count banners
+    hrPending: 0,
+    financePending: 0,
+    approved: 0,
+    rejected: 0,
     byType: {},
     byDepartment: {}
   };
-
-  for (const r of records) {
+  for (const r of allForCounts) {
+    summary[classify(r)]++;
     const type = r.miss_punch_type || 'UNKNOWN';
     summary.byType[type] = (summary.byType[type] || 0) + 1;
+  }
+  // By-department view only tracks records in the CURRENT filter slice
+  // so the per-department panel reflects what the user is looking at.
+  for (const r of records) {
     const dept = r.department || 'Unknown';
     if (!summary.byDepartment[dept]) summary.byDepartment[dept] = { total: 0, resolved: 0 };
     summary.byDepartment[dept].total++;

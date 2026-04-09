@@ -1425,6 +1425,35 @@ function initSchema(db) {
   safeAddColumn('attendance_processed', 'miss_punch_finance_notes', 'TEXT');
   safeCreateIndex('CREATE INDEX IF NOT EXISTS idx_ap_mp_fin_status ON attendance_processed(miss_punch_finance_status, month, year)');
 
+  // ── Salary hold release audit trail (April 2026) ───────────
+  // Every time finance releases a held salary, write one row here with
+  // a paper-verification note. Powers the Held Salaries Register page's
+  // "Released History" and "Release Report" tabs and gives finance a
+  // queryable audit trail independent of salary_computations (which only
+  // stores the latest release state, not the history). Release notes are
+  // REQUIRED at the endpoint level — the column is NOT NULL so bad data
+  // can never land here.
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS salary_hold_releases (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      employee_code TEXT NOT NULL,
+      employee_name TEXT,
+      department TEXT,
+      month INTEGER NOT NULL,
+      year INTEGER NOT NULL,
+      company TEXT,
+      hold_reason TEXT,
+      hold_amount REAL,
+      released_by TEXT NOT NULL,
+      released_at TEXT NOT NULL DEFAULT (datetime('now')),
+      release_notes TEXT NOT NULL,
+      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    )
+  `);
+  safeCreateIndex('CREATE INDEX IF NOT EXISTS idx_hold_releases_month    ON salary_hold_releases(month, year)');
+  safeCreateIndex('CREATE INDEX IF NOT EXISTS idx_hold_releases_employee ON salary_hold_releases(employee_code)');
+  safeCreateIndex('CREATE INDEX IF NOT EXISTS idx_hold_releases_date     ON salary_hold_releases(released_at)');
+
   // ── March 2026 Reconciliation: Set contractor flags ──────────
   // ONE-TIME migration. Previously ran on every app boot, which re-stamped
   // is_contractor=1 on employees whose employment_type was later corrected

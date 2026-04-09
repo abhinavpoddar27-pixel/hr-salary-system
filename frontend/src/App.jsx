@@ -20,6 +20,7 @@ const NightShift = React.lazy(() => import('./pages/NightShift'))
 const AttendanceRegister = React.lazy(() => import('./pages/AttendanceRegister'))
 const DayCalculation = React.lazy(() => import('./pages/DayCalculation'))
 const SalaryComputation = React.lazy(() => import('./pages/SalaryComputation'))
+const HeldSalariesRegister = React.lazy(() => import('./pages/HeldSalariesRegister'))
 const Analytics = React.lazy(() => import('./pages/Analytics'))
 const WorkforceAnalytics = React.lazy(() => import('./pages/WorkforceAnalytics'))
 const Compliance = React.lazy(() => import('./pages/Compliance'))
@@ -146,6 +147,7 @@ export default function App() {
           <Route path="/pipeline/corrections" element={<RequireAuth><Layout title="Stage 5: Manual Corrections"><AttendanceRegister /></Layout></RequireAuth>} />
           <Route path="/pipeline/day-calc" element={<RequireAuth><Layout title="Stage 6: Day Calculation & Leave Adjustment"><DayCalculation /></Layout></RequireAuth>} />
           <Route path="/pipeline/salary" element={<RequireAuth><Layout title="Stage 7: Salary Computation"><SalaryComputation /></Layout></RequireAuth>} />
+          <Route path="/held-salaries" element={<RequireAuth><Layout title="Held Salaries Register"><HeldSalariesRegister /></Layout></RequireAuth>} />
           <Route path="/salary-advance" element={<RequireAuth><Layout title="Salary Advance"><SalaryAdvance /></Layout></RequireAuth>} />
           <Route path="/payable-ot" element={<RequireAuth><Layout title="Payable OT / Extra Duty"><PayableOT /></Layout></RequireAuth>} />
           <Route path="/salary-input" element={<RequireAuth><Layout title="Salary Input & Changes"><SalaryInput /></Layout></RequireAuth>} />

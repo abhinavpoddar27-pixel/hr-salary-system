@@ -1,7 +1,7 @@
 import React, { useState, useMemo } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import toast from 'react-hot-toast'
-import api, { getDayCalculations, calculateDays, getEmployeeDailyAttendance, applyLeaveCorrection, getEmployeeLeaveBalance } from '../utils/api'
+import api, { getDayCalculations, calculateDays, getEmployeeDailyAttendance, applyLeaveCorrection, getEmployeeLeaveBalance, getDayCalcStaleness } from '../utils/api'
 import Modal from '../components/ui/Modal'
 import { useAppStore } from '../store/appStore'
 import CompanyFilter from '../components/shared/CompanyFilter'
@@ -108,9 +108,23 @@ export default function DayCalculation() {
       toast.success(`Day calculation complete for ${res.data.processed} employees`)
       refetch()
       queryClient.invalidateQueries(['org-overview'])
+      queryClient.invalidateQueries(['day-calc-staleness'])
     },
     onError: (err) => toast.error(err.response?.data?.error || 'Calculation failed')
   })
+
+  // April 2026: miss-punch finance-review gate. Detects whether any
+  // finance approvals/rejections happened since the last day calc
+  // run for this month. If so, Stage 6 data is stale and the banner
+  // nudges the user to click Recalculate. Refetches every 30s so the
+  // banner updates as finance works through their queue in parallel.
+  const { data: stalenessRes } = useQuery({
+    queryKey: ['day-calc-staleness', month, year, selectedCompany],
+    queryFn: () => getDayCalcStaleness(month, year, selectedCompany || undefined),
+    refetchInterval: 30000,
+    retry: 0
+  })
+  const staleness = stalenessRes?.data || {}
 
   const lateDeductionMutation = useMutation({
     mutationFn: ({ code, deductionDays, remark }) => api.put(`/payroll/day-calculations/${code}/late-deduction`, {
@@ -208,6 +222,33 @@ export default function DayCalculation() {
             {calcMutation.isPending ? '⏳ Calculating...' : '▶ Run Day Calculation'}
           </button>
         </div>
+
+        {/* April 2026: stale-data banner. Surfaces when finance has
+            approved/rejected miss punches since the last day calc
+            run for this month — without a re-run, Stage 6 shows
+            pre-approval numbers. Auto-refetches every 30s (via
+            refetchInterval on the staleness query) so the banner
+            updates live as finance works through their queue. */}
+        {staleness.stale && (
+          <div className="rounded-lg border border-amber-400 bg-amber-50 px-4 py-3 text-sm text-amber-900 flex flex-wrap items-center gap-3">
+            <span className="text-lg">⚠</span>
+            <div className="flex-1 min-w-0">
+              <div className="font-semibold">
+                {staleness.changedMissPunches} miss punch{staleness.changedMissPunches === 1 ? '' : 'es'} changed finance status since the last day calculation
+              </div>
+              <div className="text-xs text-amber-800 mt-0.5">
+                Re-run Stage 6 so finance-approved resolutions flow in and finance-rejected ones get the ½P credit.
+              </div>
+            </div>
+            <button
+              onClick={() => calcMutation.mutate()}
+              disabled={calcMutation.isPending}
+              className="btn-primary text-sm shrink-0"
+            >
+              {calcMutation.isPending ? 'Recalculating...' : 'Recalculate Days'}
+            </button>
+          </div>
+        )}
 
         {/* Summary Stats */}
         {rawCalcs.length > 0 && (

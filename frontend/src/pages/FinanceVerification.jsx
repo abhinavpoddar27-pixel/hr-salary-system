@@ -14,6 +14,7 @@ import useDateSelector from '../hooks/useDateSelector'
 import CompanyFilter from '../components/shared/CompanyFilter'
 import { fmtINR } from '../utils/formatters'
 import { canFinance as canFinanceFn } from '../utils/role'
+import ReleaseHoldModal from '../components/ui/ReleaseHoldModal'
 import clsx from 'clsx'
 import toast from 'react-hot-toast'
 import Modal from '../components/ui/Modal'
@@ -94,10 +95,28 @@ export default function FinanceVerification() {
     enabled: activeTab === 'held' || activeTab === 'dashboard'
   })
   const heldSalaries = (heldRes?.data?.data || []).filter(r => r.salary_held === 1 && r.hold_released !== 1)
+  // April 2026: release flow now goes through the shared ReleaseHoldModal
+  // so the paper-verification notes requirement is enforced everywhere.
+  const [releaseEmployee, setReleaseEmployee] = useState(null)
   const releaseMut = useMutation({
-    mutationFn: ({ code, month: m, year: y }) => releaseHeldSalary(code, m, y),
-    onSuccess: () => { qc.invalidateQueries({ queryKey: ['fin-held'] }); qc.invalidateQueries({ queryKey: ['fin-dash'] }); toast.success('Salary released') },
+    mutationFn: ({ code, notes }) => releaseHeldSalary(code, month, year, notes),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['fin-held'] })
+      qc.invalidateQueries({ queryKey: ['fin-dash'] })
+      qc.invalidateQueries({ queryKey: ['held-register-current'] })
+      qc.invalidateQueries({ queryKey: ['held-register-history'] })
+      setReleaseEmployee(null)
+      toast.success('Salary released — audit row recorded')
+    },
     onError: (e) => toast.error(e?.response?.data?.error || 'Release failed')
+  })
+  const openReleaseModal = (h) => setReleaseEmployee({
+    code: h.employee_code,
+    name: h.employee_name,
+    department: h.department,
+    hold_reason: h.hold_reason,
+    net_salary: h.net_salary,
+    month, year
   })
 
   // Canonical role check — see frontend/src/utils/role.js. A plain
@@ -199,7 +218,7 @@ export default function FinanceVerification() {
                       <div className="text-slate-500 mt-0.5 truncate" title={h.hold_reason}>{h.hold_reason || 'No reason recorded'}</div>
                     </div>
                     {canAct && (
-                      <button onClick={() => releaseMut.mutate({ code: h.employee_code, month, year })} disabled={releaseMut.isPending} className="text-green-600 hover:bg-green-50 px-2 py-1 rounded text-xs font-medium ml-3 shrink-0">
+                      <button onClick={() => openReleaseModal(h)} disabled={releaseMut.isPending} className="text-green-600 hover:bg-green-50 px-2 py-1 rounded text-xs font-medium ml-3 shrink-0">
                         Release
                       </button>
                     )}
@@ -456,6 +475,9 @@ export default function FinanceVerification() {
             <button onClick={() => navigate('/pipeline/salary?filter=held')} className="text-blue-600 hover:underline font-medium">
               View in Stage 7 →
             </button>
+            <button onClick={() => navigate('/held-salaries')} className="text-blue-600 hover:underline font-medium">
+              Open Release Register →
+            </button>
           </div>
           <div className="card overflow-x-auto">
             <table className="table-compact w-full text-[11px]">
@@ -479,7 +501,7 @@ export default function FinanceVerification() {
                     <td className="font-mono">{fmtINR(h.net_salary)}</td>
                     {canAct && (
                       <td>
-                        <button onClick={() => releaseMut.mutate({ code: h.employee_code, month, year })} disabled={releaseMut.isPending} className="text-green-600 hover:bg-green-50 px-2 py-1 rounded text-xs font-medium">
+                        <button onClick={() => openReleaseModal(h)} disabled={releaseMut.isPending} className="text-green-600 hover:bg-green-50 px-2 py-1 rounded text-xs font-medium">
                           Release
                         </button>
                       </td>
@@ -532,6 +554,17 @@ export default function FinanceVerification() {
           </div>
         </Modal>
       )}
+
+      {/* Shared release modal (April 2026) — enforces the paper-
+          verification notes requirement. Same component used by
+          Stage 7 Salary Computation and the Held Salaries Register. */}
+      <ReleaseHoldModal
+        open={!!releaseEmployee}
+        onClose={() => setReleaseEmployee(null)}
+        employee={releaseEmployee}
+        pending={releaseMut.isPending}
+        onSubmit={(notes) => releaseMut.mutate({ code: releaseEmployee.code, notes })}
+      />
     </div>
   )
 }

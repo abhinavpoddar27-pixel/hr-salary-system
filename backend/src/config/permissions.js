@@ -3,13 +3,16 @@ const PERMISSIONS = {
   hr: ['dashboard', 'daily-mis', 'import', 'attendance', 'miss-punch', 'night-shift', 'shift-verify',
        'corrections', 'day-calc', 'salary', 'employees', 'leaves', 'advances', 'loans',
        'reports', 'payslips', 'notifications', 'leave-management', 'salary-input', 'salary-advance',
-       'workforce', 'analytics', 'compliance', 'finance-audit', 'alerts'],
+       'workforce', 'analytics', 'compliance', 'finance-audit', 'alerts', 'held-salaries-register'],
   // Finance role (April 2026): added `salary-input` so finance can navigate to
-  // the gross-salary change approval queue, and `miss-punch` so finance can
-  // reach the new "Miss Punch Review" tab on the Finance Verification page.
+  // the gross-salary change approval queue, `miss-punch` so finance can reach
+  // the Miss Punch Review tab, and `held-salaries-register` for the new
+  // dedicated Held Salaries Register page under Payroll. HR also gets the
+  // register for read-only visibility (Release button is gated on canFinance).
   finance: ['dashboard', 'salary', 'reports', 'finance-audit', 'finance-verification',
             'extra-duty-grants', 'payable-ot', 'payslips', 'notifications', 'alerts',
-            'employees', 'compliance', 'salary-input', 'miss-punch'],
+            'employees', 'compliance', 'salary-input', 'miss-punch',
+            'held-salaries-register'],
   supervisor: ['dashboard', 'supervisor-dashboard', 'notifications', 'daily-mis'],
   viewer: ['dashboard', 'reports', 'notifications', 'daily-mis'],
   employee: ['portal']

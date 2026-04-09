@@ -128,7 +128,17 @@ export const getAttendanceHeatmap = (month, year, startDate, endDate) => api.get
 export const getOvertimeReport = (month, year, startDate, endDate, company) => api.get('/analytics/overtime', { params: { month, year, startDate, endDate, ...(company ? { company } : {}) } })
 export const getWorkingHoursReport = (month, year, startDate, endDate, company) => api.get('/analytics/working-hours', { params: { month, year, startDate, endDate, ...(company ? { company } : {}) } })
 export const getDepartmentDeepDive = (dept, month, year, startDate, endDate, company) => api.get(`/analytics/department/${encodeURIComponent(dept)}`, { params: { month, year, startDate, endDate, ...(company ? { company } : {}) } })
-export const releaseHeldSalary = (code, month, year) => api.put(`/payroll/salary/${code}/hold-release`, { month, year })
+// April 2026: release_notes is now REQUIRED by the backend endpoint.
+// Callers that don't pass a note get a clean 400 — the shared
+// ReleaseHoldModal component is the only legitimate entry point.
+export const releaseHeldSalary = (code, month, year, releaseNotes) =>
+  api.put(`/payroll/salary/${code}/hold-release`, { month, year, release_notes: releaseNotes })
+export const getHoldReleases = (params = {}) => api.get('/payroll/salary/hold-releases', { params })
+export const getHoldReleasesReport = (params) => api.get('/payroll/salary/hold-releases/report', { params })
+// Stage 6/7 recompute-required banner — detects miss punches whose
+// finance status changed since the last day_calculations.updated_at
+export const getDayCalcStaleness = (month, year, company) =>
+  api.get('/payroll/day-calc-staleness', { params: { month, year, company } })
 
 // ── Loans ────────────────────────────────────────────────
 export const getLoans = (params) => api.get('/loans', { params })

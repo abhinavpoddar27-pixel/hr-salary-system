@@ -65,11 +65,49 @@ function timeToHours(timeStr) {
   return parseHoursToDecimal(timeStr);
 }
 
+/**
+ * Effective day status honouring the finance gate on miss punches.
+ * April 2026: the miss-punch workflow is HR resolves → Finance reviews,
+ * and Stage 6/7 MUST NOT consume HR's resolution until finance has
+ * approved it. Previously the status read was just
+ * `status_final || status_original`, which silently bypassed the
+ * finance gate because status_final is stamped the moment HR resolves.
+ *
+ * Three-state behaviour:
+ *
+ *   miss_punch_finance_status === 'approved'
+ *     → use status_final (HR's resolution, finance agrees)
+ *
+ *   miss_punch_finance_status === 'rejected'
+ *     → force '½P' (half-day credit — business rule: the day clearly
+ *       had *some* activity or HR wouldn't have raised the correction,
+ *       so don't zero it out. The record stays visible in Stage 2 for
+ *       HR re-resolution; the ½P credit is replaced by whatever the
+ *       next approval produces.)
+ *
+ *   miss_punch_finance_status === 'pending' | '' | null
+ *     → fall back to status_original (HR's resolution is in limbo,
+ *       the day reverts to what biometric said until finance acts)
+ *
+ * Non-miss-punch records use the original `status_final || status_original`
+ * logic unchanged so no other stage's behaviour shifts.
+ */
+function effectiveStatusForDay(r) {
+  const isMp = r.is_miss_punch === 1;
+  if (!isMp) return r.status_final || r.status_original || '';
+
+  const fs = r.miss_punch_finance_status;
+  if (fs === 'approved') return r.status_final || r.status_original || '';
+  if (fs === 'rejected') return '½P';
+  // 'pending' / '' / null — HR's resolution hasn't cleared finance yet
+  return r.status_original || '';
+}
+
 /** Count working days from a list of day records (legacy helper) */
 function countWorkingDays(dayRecords) {
   let days = 0;
   for (const r of dayRecords) {
-    const status = r.status_final || r.status_original || '';
+    const status = effectiveStatusForDay(r);
     if (status === 'P' || status === 'WOP') days += 1;
     else if (status === '½P' || status === 'HP' || status === 'WO½P') days += 0.5;
   }
@@ -187,7 +225,10 @@ function calculateDays(employeeCode, month, year, company, attendanceRecords, le
       continue;
     }
 
-    const status = rec.status_final || rec.status_original || '';
+    // April 2026: respect the miss-punch finance gate. Rejected
+    // resolutions produce a forced ½P; pending ones fall back to
+    // status_original. See effectiveStatusForDay() docstring.
+    const status = effectiveStatusForDay(rec);
 
     // ── Non-weekly-off holidays: ONLY contribute via paidHolidays + holidayDutyDays ──
     // The date is already counted in `paidHolidays` (computed from holidayCount),
@@ -555,4 +596,4 @@ function saveDayCalculation(db, calcResult) {
   return calcResult;
 }
 
-module.exports = { calculateDays, saveDayCalculation, getMonthDates, getDayOfWeek, WEEKLY_OFF_LENIENCY };
+module.exports = { calculateDays, saveDayCalculation, getMonthDates, getDayOfWeek, WEEKLY_OFF_LENIENCY, effectiveStatusForDay };
