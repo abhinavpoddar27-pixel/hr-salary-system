@@ -955,6 +955,13 @@ function initSchema(db) {
   safeAddColumn('salary_computations', 'ed_pay', 'REAL DEFAULT 0');
   safeAddColumn('salary_computations', 'take_home', 'REAL DEFAULT 0');
 
+  // ── Late Coming deduction (April 2026 — Phase 2) ──
+  // Finance-approved HR discretionary deduction for chronic late arrivals.
+  // Rupees amount = deduction_days × (grossMonthly / calendarDays). Sourced from
+  // late_coming_deductions rows with finance_status='approved' and is_applied_to_salary=0
+  // at compute time, then the flag flips to 1 so recomputes don't double-count.
+  safeAddColumn('salary_computations', 'late_coming_deduction', 'REAL DEFAULT 0');
+
   db.exec(`
     CREATE TABLE IF NOT EXISTS holiday_audit_log (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
