@@ -454,6 +454,9 @@ function PunctualityTab({ selectedMonth, selectedYear, dateRangeMode, dateRangeS
   const [lcShiftFilter, setLcShiftFilter] = useState('')
   const [lcDeptFilter, setLcDeptFilter] = useState('')
   const [deductionEmp, setDeductionEmp] = useState(null)
+  // Phase 2: view mode toggle (employee list vs department rollup)
+  const [lcViewMode, setLcViewMode] = useState('employee')
+  const [lcExpandedDept, setLcExpandedDept] = useState(null)
 
   const { data: res, isLoading } = useQuery({
     queryKey: ['punctuality', selectedMonth, selectedYear, dateRangeMode, dateRangeStart, dateRangeEnd, selectedCompany],
@@ -554,6 +557,18 @@ function PunctualityTab({ selectedMonth, selectedYear, dateRangeMode, dateRangeS
             <p className="text-xs text-slate-500">Shift-based punctuality tracking &amp; discretionary deductions</p>
           </div>
           <div className="flex items-center gap-2">
+            <div className="flex rounded-lg border border-slate-300 overflow-hidden text-xs">
+              <button
+                onClick={() => setLcViewMode('employee')}
+                className={clsx('px-3 py-1.5 font-medium transition-colors',
+                  lcViewMode === 'employee' ? 'bg-brand-600 text-white' : 'bg-white text-slate-600 hover:bg-slate-50')}
+              >Employees</button>
+              <button
+                onClick={() => setLcViewMode('department')}
+                className={clsx('px-3 py-1.5 font-medium transition-colors border-l border-slate-300',
+                  lcViewMode === 'department' ? 'bg-brand-600 text-white' : 'bg-white text-slate-600 hover:bg-slate-50')}
+              >Departments</button>
+            </div>
             <select value={lcShiftFilter} onChange={e => setLcShiftFilter(e.target.value)} className="select text-sm">
               <option value="">All Shifts</option>
               <option value="12HR">12-Hour</option>
@@ -576,8 +591,8 @@ function PunctualityTab({ selectedMonth, selectedYear, dateRangeMode, dateRangeS
           <KPI icon="🌙" label="Left Late Count" value={totalLeftLate} sub="20+ min past shift end" color="purple" />
         </div>
 
-        {/* Department summary */}
-        {lcDeptRows.length > 0 && (
+        {/* Department summary — shown only in employee mode as a compact rollup */}
+        {lcViewMode === 'employee' && lcDeptRows.length > 0 && (
           <div className="card overflow-hidden mb-5">
             <div className="card-header"><h4 className="font-semibold text-slate-700">Department Summary</h4></div>
             <div className="overflow-x-auto">
@@ -611,7 +626,116 @@ function PunctualityTab({ selectedMonth, selectedYear, dateRangeMode, dateRangeS
           </div>
         )}
 
+        {/* ─── Department View (Phase 2) ─── */}
+        {lcViewMode === 'department' && (
+          <div className="card overflow-hidden mb-5">
+            <div className="card-header">
+              <h4 className="font-semibold text-slate-700">Department Report — sorted by total late instances</h4>
+            </div>
+            <div className="overflow-x-auto">
+              <table className="table-compact w-full">
+                <thead>
+                  <tr>
+                    <th></th>
+                    <th>Department</th>
+                    <th className="text-center">Total Employees</th>
+                    <th className="text-center">Total Late</th>
+                    <th className="text-center">Trend vs Last</th>
+                    <th className="text-center">Avg Min Late</th>
+                    <th className="text-center">Left Late</th>
+                    <th className="text-center">Deduction Days Applied</th>
+                    <th>Top 5 Latecomers</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {[...lcDeptRows]
+                    .sort((a, b) => (b.total_late_instances || 0) - (a.total_late_instances || 0))
+                    .map(d => {
+                      const deptEmps = lcRows.filter(r => r.department === d.department)
+                      const topLatecomers = [...deptEmps]
+                        .sort((a, b) => (b.late_count_this_month || 0) - (a.late_count_this_month || 0))
+                        .slice(0, 5)
+                      const totalMinutes = deptEmps.reduce((s, e) => s + (e.avg_late_minutes || 0) * (e.late_count_this_month || 0), 0)
+                      const totalLate = deptEmps.reduce((s, e) => s + (e.late_count_this_month || 0), 0)
+                      const avgMin = totalLate > 0 ? Math.round(totalMinutes / totalLate) : 0
+                      // Sum of deduction days from pending + already-applied is surfaced below when expanded;
+                      // here we show count from pendingDeductions (what HR has queued this month).
+                      const deptDedDays = pendingDeductions
+                        .filter(p => p.department === d.department)
+                        .reduce((s, p) => s + Number(p.deduction_days || 0), 0)
+                      const isExpanded = lcExpandedDept === d.department
+                      return (
+                        <React.Fragment key={d.department}>
+                          <tr className="hover:bg-slate-50 cursor-pointer" onClick={() => setLcExpandedDept(isExpanded ? null : d.department)}>
+                            <td className="text-slate-400 text-xs">{isExpanded ? '▼' : '▶'}</td>
+                            <td className="font-medium text-slate-700">{d.department}</td>
+                            <td className="text-center">{d.employee_count}</td>
+                            <td className="text-center font-bold text-amber-600">{d.total_late_instances}</td>
+                            <td className="text-center"><TrendArrow trend={d.trend} /></td>
+                            <td className="text-center text-amber-600">{avgMin} min</td>
+                            <td className="text-center text-purple-600">{d.left_late_count}</td>
+                            <td className="text-center text-red-600 font-semibold">{deptDedDays > 0 ? deptDedDays + 'd' : '—'}</td>
+                            <td className="text-xs text-slate-600 max-w-[260px]">
+                              {topLatecomers.slice(0, 5).map((e, i) =>
+                                <span key={e.employee_code} className="inline-block mr-1">
+                                  {i > 0 && ', '}
+                                  {e.name} ({e.late_count_this_month})
+                                </span>
+                              )}
+                            </td>
+                          </tr>
+                          {isExpanded && deptEmps.length > 0 && (
+                            <tr>
+                              <td colSpan={9} className="bg-slate-50 p-3">
+                                <div className="text-xs font-semibold text-slate-600 mb-2">All employees in {d.department}</div>
+                                <table className="text-xs w-full">
+                                  <thead className="text-slate-500">
+                                    <tr className="border-b border-slate-200">
+                                      <th className="py-1 text-left">Name</th>
+                                      <th className="py-1 text-left">Shift</th>
+                                      <th className="py-1 text-right">Late (Month)</th>
+                                      <th className="py-1 text-right">Late (Prev)</th>
+                                      <th className="py-1 text-center">Trend</th>
+                                      <th className="py-1 text-right">Avg Min</th>
+                                      <th className="py-1 text-right">Left Late</th>
+                                    </tr>
+                                  </thead>
+                                  <tbody>
+                                    {deptEmps
+                                      .sort((a, b) => (b.late_count_this_month || 0) - (a.late_count_this_month || 0))
+                                      .map(e => (
+                                        <tr key={e.employee_code} className="border-b border-slate-100">
+                                          <td className="py-1">
+                                            <span className="font-medium">{e.name}</span>
+                                            <span className="text-slate-400 ml-1">({e.employee_code})</span>
+                                          </td>
+                                          <td className="py-1">{e.shift_code || '—'}</td>
+                                          <td className="py-1 text-right font-bold text-red-600">{e.late_count_this_month}</td>
+                                          <td className="py-1 text-right text-slate-500">{e.late_count_last_month}</td>
+                                          <td className="py-1 text-center"><TrendArrow trend={e.trend} /></td>
+                                          <td className="py-1 text-right text-amber-600">{e.avg_late_minutes || 0}</td>
+                                          <td className="py-1 text-right text-purple-600">{e.left_late_count_this_month}</td>
+                                        </tr>
+                                      ))}
+                                  </tbody>
+                                </table>
+                              </td>
+                            </tr>
+                          )}
+                        </React.Fragment>
+                      )
+                    })}
+                  {lcDeptRows.length === 0 && (
+                    <tr><td colSpan={9} className="text-center py-8 text-slate-400">No department data for this period</td></tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )}
+
         {/* Employee detail table */}
+        {lcViewMode === 'employee' && (
         <div className="card overflow-hidden">
           <div className="card-header"><h4 className="font-semibold text-slate-700">Employee Late Coming Detail</h4></div>
           <div className="overflow-x-auto">
@@ -661,6 +785,7 @@ function PunctualityTab({ selectedMonth, selectedYear, dateRangeMode, dateRangeS
             </table>
           </div>
         </div>
+        )}
 
         {/* Pending deductions */}
         {pendingDeductions.length > 0 && (
