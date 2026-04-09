@@ -117,6 +117,21 @@ function getLoanDeductions(db, employeeCode, month, year) {
  * Compute salary for one employee for a month.
  */
 function computeEmployeeSalary(db, employee, month, year, company) {
+  // ── Phase 2 Late Coming: reset applied flag for a clean recompute ──
+  // saveSalaryComputation() later flips is_applied_to_salary to 1 after writing the
+  // row. Clearing it here ensures a re-run picks up the latest approved deductions
+  // (e.g. finance reviewed a row mid-cycle) without double-counting — the SELECT a
+  // few lines below filters on is_applied_to_salary=0, and the UPDATE post-save
+  // flips it back to 1.
+  try {
+    db.prepare(`
+      UPDATE late_coming_deductions
+      SET is_applied_to_salary = 0, applied_to_salary_at = NULL
+      WHERE employee_code = ? AND month = ? AND year = ?
+        AND finance_status = 'approved'
+    `).run(employee.code, month, year);
+  } catch (e) { /* silent — migration may not have run yet */ }
+
   // Get day calculation for this employee — try with company, then without
   let dayCalc = null;
   if (company) {
@@ -520,8 +535,30 @@ function computeEmployeeSalary(db, employee, month, year, company) {
   const otherDeductions = 0;
   const advanceRecovery = autoAdvanceRecovery;
 
+  // ─── Late Coming Deduction (Phase 2 — finance-approved only) ───
+  // Sum up all late_coming_deductions rows for this employee/month with
+  // finance_status='approved' AND is_applied_to_salary=0. Rupees amount uses
+  // the calendar-day rate (same as OT/ED/holiday-duty). Contractors are excluded
+  // — their pay is already daily, mirroring the OT/ED gating rule.
+  let lateComingDeduction = 0;
+  if (!isContract) {
+    try {
+      const row = db.prepare(`
+        SELECT COALESCE(SUM(deduction_days), 0) AS totalDays
+        FROM late_coming_deductions
+        WHERE employee_code = ? AND month = ? AND year = ?
+          AND finance_status = 'approved' AND is_applied_to_salary = 0
+      `).get(employee.code, month, year);
+      if (row?.totalDays > 0) {
+        lateComingDeduction = Math.round(row.totalDays * otPerDayRateDisplay * 100) / 100;
+      }
+    } catch (e) {
+      console.warn(`[salary] Late coming deduction lookup failed for ${employee.code}: ${e.message}`);
+    }
+  }
+
   // ─── Total Deductions & Net ───
-  let totalDeductions = pfEmployee + esiEmployee + professionalTax + tds + advanceRecovery + lopDeduction + otherDeductions + loanRecovery;
+  let totalDeductions = pfEmployee + esiEmployee + professionalTax + tds + advanceRecovery + lopDeduction + otherDeductions + loanRecovery + lateComingDeduction;
   let salaryWarning = '';
 
   // Cap deductions at gross earned — net salary must never go negative
@@ -607,6 +644,8 @@ function computeEmployeeSalary(db, employee, month, year, company) {
     professionalTax, tds,
     advanceRecovery, lopDeduction, otherDeductions,
     loanRecovery,
+    // Phase 2 — finance-approved late coming deduction
+    lateComingDeduction: Math.round(lateComingDeduction * 100) / 100,
     totalDeductions: Math.round(totalDeductions * 100) / 100,
     netSalary,
     // ═══ TOTAL PAYABLE = netSalary + otPay + holidayDutyPay ═══
@@ -644,7 +683,8 @@ function saveSalaryComputation(db, comp) {
       prev_month_gross, gross_changed, salary_held, hold_reason, loan_recovery, finance_remark,
       is_contractor, days_in_month, regular_days, ot_days, ot_daily_rate, manual_extra_duty,
       punch_based_ot, finance_extra_duty, ot_note, total_payable,
-      ed_days, ed_pay, take_home
+      ed_days, ed_pay, take_home,
+      late_coming_deduction
     ) VALUES (
       ?, ?, ?, ?, ?, ?, ?,
       ?, ?, ?, ?, ?,
@@ -655,7 +695,8 @@ function saveSalaryComputation(db, comp) {
       ?, ?, ?, ?, ?, ?,
       ?, ?, ?, ?, ?, ?,
       ?, ?, ?, ?,
-      ?, ?, ?
+      ?, ?, ?,
+      ?
     )
     ON CONFLICT(employee_code, month, year, company) DO UPDATE SET
       gross_salary = excluded.gross_salary,
@@ -702,6 +743,7 @@ function saveSalaryComputation(db, comp) {
       ed_days = excluded.ed_days,
       ed_pay = excluded.ed_pay,
       take_home = excluded.take_home,
+      late_coming_deduction = excluded.late_coming_deduction,
       is_finalised = 0
   `).run(
     comp.employeeCode, comp.month, comp.year, comp.company,
@@ -715,8 +757,34 @@ function saveSalaryComputation(db, comp) {
     comp.isContractor ? 1 : 0, comp.daysInMonth || null, comp.regularDays || 0,
     comp.otDays || 0, comp.otDailyRate || 0, comp.manualExtraDuty || 0,
     comp.punchBasedOT || 0, comp.financeExtraDuty || 0, comp.otNote || '', comp.totalPayable || 0,
-    comp.edDays || 0, comp.edPay || 0, comp.takeHome || 0
+    comp.edDays || 0, comp.edPay || 0, comp.takeHome || 0,
+    comp.lateComingDeduction || 0
   );
+
+  // ── Phase 2 Late Coming: mark approved deductions as applied ──
+  // Flips is_applied_to_salary=1 so a second compute-salary run picks the
+  // same amount back up via the identical guarded SELECT in computeEmployeeSalary()
+  // — no double counting. If the row is recomputed later, computeEmployeeSalary()
+  // resets the flag first, giving us clean re-entry.
+  if (comp.lateComingDeduction > 0) {
+    try {
+      db.prepare(`
+        UPDATE late_coming_deductions
+        SET is_applied_to_salary = 1, applied_to_salary_at = datetime('now')
+        WHERE employee_code = ? AND month = ? AND year = ?
+          AND finance_status = 'approved' AND is_applied_to_salary = 0
+      `).run(comp.employeeCode, comp.month, comp.year);
+
+      const { logAudit } = require('../database/db');
+      logAudit(
+        'late_coming_deductions', 0, 'applied_to_salary', '0', '1',
+        'salary_compute',
+        `Late deduction of ₹${comp.lateComingDeduction} applied to ${comp.employeeCode} for ${comp.month}/${comp.year}`
+      );
+    } catch (e) {
+      console.warn(`[salary] Failed to mark late deductions applied for ${comp.employeeCode}: ${e.message}`);
+    }
+  }
 
   // Mark advance as recovered if applicable
   if (comp.advanceRecovery > 0) {
@@ -847,6 +915,7 @@ function generatePayslipData(db, employeeCode, month, year) {
       { label: 'Advance Recovery', amount: comp.advance_recovery },
       { label: 'Loan EMI', amount: comp.loan_recovery },
       { label: 'LOP Deduction', amount: comp.lop_deduction },
+      { label: 'Late Coming Deduction', amount: comp.late_coming_deduction || 0 },
       { label: 'Other Deductions', amount: comp.other_deductions }
     ].filter(d => d.amount > 0),
     grossEarned: comp.gross_earned,
