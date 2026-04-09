@@ -1,10 +1,24 @@
 import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
+import { normalizeRole } from '../utils/role'
 
 const now = new Date()
 
-// Rehydrate auth from localStorage on startup
-const storedUser = (() => { try { return JSON.parse(localStorage.getItem('hr_user')) } catch { return null } })()
+// Rehydrate auth from localStorage on startup. Every read goes through
+// normalizeRole() so a legacy stored user with role="Finance"/"Finance Team"/
+// "finance " gets healed in-place before any permission check runs.
+function healUser(u) {
+  if (!u || typeof u !== 'object') return u
+  const healed = { ...u, role: normalizeRole(u.role) }
+  if (healed.role !== u.role) {
+    try { localStorage.setItem('hr_user', JSON.stringify(healed)) } catch {}
+  }
+  return healed
+}
+
+const storedUser = (() => {
+  try { return healUser(JSON.parse(localStorage.getItem('hr_user'))) } catch { return null }
+})()
 const storedToken = localStorage.getItem('hr_token') || null
 
 export const useAppStore = create(
@@ -15,12 +29,23 @@ export const useAppStore = create(
       token: storedToken,
       isAuthenticated: !!(storedToken && storedUser),
       setAuth: (user, token) => {
+        // Normalize role before persisting so every downstream check
+        // (canHR, canFinance, isAdmin) sees a canonical lowercase value.
+        const healed = healUser(user)
         localStorage.setItem('hr_token', token)
-        localStorage.setItem('hr_user', JSON.stringify(user))
+        localStorage.setItem('hr_user', JSON.stringify(healed))
         // Auto-set company if user has only one allowed company
-        const ac = user.allowedCompanies || ['*']
+        const ac = healed.allowedCompanies || ['*']
         const autoCompany = (ac.length === 1 && ac[0] !== '*') ? ac[0] : ''
-        set({ user, token, isAuthenticated: true, selectedCompany: autoCompany })
+        set({ user: healed, token, isAuthenticated: true, selectedCompany: autoCompany })
+      },
+      // Refresh the stored user object in-place (e.g. after /auth/me).
+      // Keeps the current token but swaps in a fresh user — used by the
+      // app-startup refresh so a stale localStorage role heals automatically.
+      refreshUser: (user) => {
+        const healed = healUser(user)
+        localStorage.setItem('hr_user', JSON.stringify(healed))
+        set({ user: healed })
       },
       clearAuth: () => {
         localStorage.removeItem('hr_token')

@@ -11,6 +11,7 @@ import DateSelector from '../components/common/DateSelector'
 import useDateSelector from '../hooks/useDateSelector'
 import CompanyFilter from '../components/shared/CompanyFilter'
 import Modal from '../components/ui/Modal'
+import { normalizeRole, canHR as canHRFn, canFinance as canFinanceFn } from '../utils/role'
 import clsx from 'clsx'
 import toast from 'react-hot-toast'
 
@@ -23,13 +24,14 @@ export default function ExtraDutyGrants() {
   const { month, year, dateProps } = useDateSelector({ mode: 'month', syncToStore: true })
   const { selectedCompany, user } = useAppStore()
 
-  // Case-insensitive role check — the user-create endpoint doesn't normalise
-  // `role`, so a user accidentally created with "Finance" instead of "finance"
-  // would silently fail a plain equality check. Lowercasing here hardens both
-  // the HR and Finance gates against that class of bug.
-  const role = (user?.role || '').toLowerCase()
-  const canHR = ['admin', 'hr'].includes(role)
-  const canFinance = ['admin', 'finance'].includes(role)
+  // Canonical role check via shared normalizeRole() — tolerates case,
+  // trailing whitespace, and compound labels like "Finance Team" / "HR_Manager"
+  // that legacy user rows may still carry in localStorage. Mirrors the
+  // backend-side normalizeRole() in backend/src/routes/auth.js so a user
+  // accepted by the API is never silently rejected by the UI.
+  const role = normalizeRole(user?.role)
+  const canHR = canHRFn(user)
+  const canFinance = canFinanceFn(user)
 
   // Finance users land on the Finance Review tab by default; everyone else
   // starts on the HR queue.

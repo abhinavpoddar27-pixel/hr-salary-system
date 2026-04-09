@@ -7,6 +7,7 @@ import DateSelector from '../components/common/DateSelector'
 import useDateSelector from '../hooks/useDateSelector'
 import CompanyFilter from '../components/shared/CompanyFilter'
 import { fmtINR } from '../utils/formatters'
+import { canFinance as canFinanceFn } from '../utils/role'
 import clsx from 'clsx'
 import toast from 'react-hot-toast'
 import Modal from '../components/ui/Modal'
@@ -45,7 +46,10 @@ export default function FinanceVerification() {
   const bulkMut = useMutation({ mutationFn: bulkVerifyEmployees, onSuccess: (r) => { qc.invalidateQueries(['fin-dash']); qc.invalidateQueries(['fin-emps']); toast.success(`${r.data.verified} employees verified`) } })
   const signoffMut = useMutation({ mutationFn: submitFinanceSignoff, onSuccess: () => { qc.invalidateQueries(['fin-signoff']); qc.invalidateQueries(['fin-dash']); setSignoffModal(false); toast.success('Sign-off submitted') }, onError: (e) => toast.error(e.response?.data?.error || 'Failed') })
 
-  const canAct = ['finance', 'admin'].includes(user?.role)
+  // Canonical role check — see frontend/src/utils/role.js. A plain
+  // `includes(user.role)` used to silently fail for legacy rows that
+  // stored "Finance" / "Finance Team" / "finance " instead of "finance".
+  const canAct = canFinanceFn(user)
   const tabs = [{ id: 'dashboard', label: 'Audit Dashboard' }, { id: 'employees', label: 'Employee Review' }, { id: 'flags', label: `Red Flags (${redFlags.length})` }]
 
   return (

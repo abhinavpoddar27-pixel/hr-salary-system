@@ -4,6 +4,7 @@ import Sidebar from './components/layout/Sidebar'
 import Header from './components/layout/Header'
 import ErrorBoundary from './components/ui/ErrorBoundary'
 import { useAppStore } from './store/appStore'
+import { getMe } from './utils/api'
 import { tracker } from './utils/sessionTracker'
 import useInactivityTimeout from './hooks/useInactivityTimeout'
 
@@ -66,9 +67,36 @@ function Layout({ children, title }) {
   )
 }
 
+// Module-level cache so we only hit /auth/me once per token, not on
+// every route navigation (RequireAuth remounts per <Route element>).
+// Keyed by token so a logout-then-login flow refetches for the new user.
+let lastRefreshedToken = null
+
 // ── Auth guard: redirects to /login if not authenticated ──────
+// On first authenticated render, refresh the stored user from /auth/me
+// so a stale localStorage role (e.g. a legacy "Finance Team" that pre-
+// dates backend role normalization) heals automatically. The backend's
+// normalizeRole() runs on that endpoint, so the refreshed object is
+// guaranteed to have a canonical lowercase `role`.
 function RequireAuth({ children }) {
   const isAuthenticated = useAppStore(s => s.isAuthenticated)
+  const token = useAppStore(s => s.token)
+  const refreshUser = useAppStore(s => s.refreshUser)
+
+  useEffect(() => {
+    if (!isAuthenticated || !token || lastRefreshedToken === token) return
+    lastRefreshedToken = token
+    let cancelled = false
+    getMe()
+      .then((res) => {
+        if (cancelled) return
+        const u = res?.data?.user
+        if (u) refreshUser(u)
+      })
+      .catch(() => { /* 401 interceptor already handles redirect */ })
+    return () => { cancelled = true }
+  }, [isAuthenticated, token, refreshUser])
+
   if (!isAuthenticated) return <Navigate to="/login" replace />
   return children
 }
