@@ -193,6 +193,34 @@ function detectRedFlags(db, month, year) {
     }
   } catch {}
 
+  // 11. late_deduction_high (WARNING) — April 2026 Phase 2
+  // Finance has approved more than 2 days of late coming deductions for this
+  // employee this month. Surfaces for review because the rupee impact is large
+  // and should have clear HR justification.
+  try {
+    const rows = db.prepare(`
+      SELECT sc.employee_code, COALESCE(e.name, sc.employee_code) AS name,
+             e.department, sc.late_coming_deduction,
+             COALESCE((
+               SELECT SUM(deduction_days) FROM late_coming_deductions lcd
+               WHERE lcd.employee_code = sc.employee_code
+                 AND lcd.month = sc.month AND lcd.year = sc.year
+                 AND lcd.finance_status = 'approved'
+             ), 0) AS deduction_days
+      FROM salary_computations sc
+      LEFT JOIN employees e ON sc.employee_code = e.code
+      WHERE sc.month = ? AND sc.year = ? AND COALESCE(sc.late_coming_deduction, 0) > 0
+    `).all(month, year);
+    for (const r of rows) {
+      if (r.deduction_days > 2) {
+        flags.push(mkFlag('late_deduction_high', 'warning', r.employee_code, r.name, r.department,
+          `Late coming deduction of ${r.deduction_days} days (₹${r.late_coming_deduction})`,
+          { deductionDays: r.deduction_days, amount: r.late_coming_deduction },
+          'Review HR justification and employee 6-month history before finalising'));
+      }
+    }
+  } catch {}
+
   // Sort: critical first, then warning, then info
   const sev = { critical: 0, warning: 1, info: 2 };
   flags.sort((a, b) => (sev[a.severity] || 9) - (sev[b.severity] || 9));

@@ -968,6 +968,7 @@ router.get('/salary-comparison', (req, res) => {
     SELECT sc.employee_code, e.name as employee_name, e.department,
            sc.gross_salary, sc.gross_earned, sc.net_salary, sc.payable_days,
            sc.pf_employee, sc.esi_employee, sc.total_deductions,
+           sc.late_coming_deduction,
            sc.gross_changed, sc.salary_held
     FROM salary_computations sc
     LEFT JOIN employees e ON sc.employee_code = e.code
