@@ -1,7 +1,7 @@
 import React, { useState, useRef } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import toast from 'react-hot-toast'
-import { getEmployees, getEmployee, createEmployee, updateEmployee, updateSalaryStructure, getLeaveBalances, updateLeaveBalance, getEmployeeDocuments, uploadEmployeeDocument, deleteEmployeeDocument, getEmployeeLoans, markEmployeeLeft } from '../utils/api'
+import { getEmployees, getEmployee, createEmployee, updateEmployee, updateSalaryStructure, getLeaveBalances, updateLeaveBalance, getEmployeeDocuments, uploadEmployeeDocument, deleteEmployeeDocument, getEmployeeLoans, markEmployeeLeft, getShifts, bulkAssignShift } from '../utils/api'
 import { fmtINR } from '../utils/formatters'
 import { useAppStore } from '../store/appStore'
 import Modal from '../components/ui/Modal'
@@ -160,13 +160,19 @@ function EditEmployeeModal({ employee, onClose }) {
     company: employee.company || '',
     date_of_joining: employee.date_of_joining || '',
     employment_type: employee.employment_type || 'Permanent',
-    shift_code: employee.shift_code || 'DAY',
+    shift_code: employee.shift_code || '',
+    default_shift_id: employee.default_shift_id || null,
     weekly_off_day: employee.weekly_off_day ?? 0,
     phone: employee.phone || '',
     email: employee.email || '',
     aadhar: employee.aadhar || '',
     pan: employee.pan || ''
   })
+
+  // Late Coming Phase 1: fetch real shifts for the dropdown so HR can assign
+  // 12HR / 10HR / 9HR (plus any admin-defined custom shift).
+  const { data: shiftsRes } = useQuery({ queryKey: ['shifts'], queryFn: getShifts, retry: 0 })
+  const shifts = shiftsRes?.data?.data || []
 
   const saveMutation = useMutation({
     mutationFn: (data) => isNew ? createEmployee(data) : updateEmployee(employee.code, data),
@@ -218,10 +224,27 @@ function EditEmployeeModal({ employee, onClose }) {
               {['Permanent', 'Contract', 'Temporary', 'Probation'].map(t => <option key={t}>{t}</option>)}
             </select>
           </div>
-          <div>
-            <label className="label">Shift Code</label>
-            <select value={form.shift_code} onChange={e => setForm(f => ({ ...f, shift_code: e.target.value }))} className="select">
-              {['DAY', 'NIGHT', 'GEN'].map(s => <option key={s}>{s}</option>)}
+          <div className="col-span-2">
+            <label className="label">Shift</label>
+            <select
+              value={form.default_shift_id || ''}
+              onChange={e => {
+                const id = e.target.value ? parseInt(e.target.value) : null
+                const chosen = shifts.find(s => s.id === id)
+                setForm(f => ({
+                  ...f,
+                  default_shift_id: id,
+                  shift_code: chosen?.code || ''
+                }))
+              }}
+              className="select"
+            >
+              <option value="">— Select shift —</option>
+              {shifts.map(s => (
+                <option key={s.id} value={s.id}>
+                  {s.code} ({s.start_time} - {s.end_time})
+                </option>
+              ))}
             </select>
           </div>
           <div>
@@ -575,7 +598,8 @@ function MarkLeftModal({ employee, onClose }) {
 }
 
 export default function Employees() {
-  const { selectedMonth, selectedYear, selectedCompany } = useAppStore()
+  const { selectedMonth, selectedYear, selectedCompany, user } = useAppStore()
+  const canBulkAssignShift = user?.role === 'admin' || user?.role === 'hr'
   const [search, setSearch] = useState('')
   const [deptFilter, setDeptFilter] = useState('')
   const [editEmp, setEditEmp] = useState(null)
@@ -585,7 +609,11 @@ export default function Employees() {
   const [markLeftEmp, setMarkLeftEmp] = useState(null)
   const [sortField, setSortField] = useState('name')
   const [sortDir, setSortDir] = useState('asc')
+  // Late Coming Phase 1: bulk-select + bulk shift assignment state
+  const [selectedCodes, setSelectedCodes] = useState(new Set())
+  const [showBulkShift, setShowBulkShift] = useState(false)
   const { toggle, isExpanded } = useExpandableRows()
+  const qcEmp = useQueryClient()
 
   const { data: empsRes, isLoading } = useQuery({
     queryKey: ['employees', selectedCompany, statusFilter],
@@ -593,6 +621,29 @@ export default function Employees() {
     retry: 0
   })
   const employees = empsRes?.data?.data || []
+  const { data: shiftsListRes } = useQuery({ queryKey: ['shifts'], queryFn: getShifts, retry: 0 })
+  const allShifts = shiftsListRes?.data?.data || []
+
+  const toggleSelect = (code) => {
+    setSelectedCodes(prev => {
+      const next = new Set(prev)
+      if (next.has(code)) next.delete(code)
+      else next.add(code)
+      return next
+    })
+  }
+  const clearSelection = () => setSelectedCodes(new Set())
+
+  const bulkShiftMutation = useMutation({
+    mutationFn: ({ shiftId, shiftCode }) => bulkAssignShift(Array.from(selectedCodes), shiftId, shiftCode),
+    onSuccess: (res) => {
+      toast.success(`Shift updated for ${res?.data?.updated || selectedCodes.size} employees`)
+      qcEmp.invalidateQueries(['employees'])
+      clearSelection()
+      setShowBulkShift(false)
+    },
+    onError: (err) => toast.error(err?.response?.data?.error || 'Bulk shift assignment failed')
+  })
 
   const departments = [...new Set(employees.map(e => e.department).filter(Boolean))].sort()
 
@@ -653,8 +704,18 @@ export default function Employees() {
           ))}
         </div>
         <div className="text-sm text-slate-400 self-center">{filtered.length} employees</div>
-        <div className="ml-auto">
-          <button onClick={() => setEditEmp({ code: '', name: '', department: '', designation: '', date_of_joining: '', employment_type: 'Permanent', shift_code: 'DAY', weekly_off_day: 0, phone: '', email: '', aadhar: '', pan: '' })} className="btn-primary text-sm">
+        <div className="ml-auto flex items-center gap-2">
+          {/* Late Coming Phase 1: Bulk shift assignment toolbar */}
+          {canBulkAssignShift && selectedCodes.size > 0 && (
+            <>
+              <span className="text-sm text-slate-600">{selectedCodes.size} selected</span>
+              <button onClick={() => setShowBulkShift(true)} className="btn-secondary text-sm">
+                Assign Shift
+              </button>
+              <button onClick={clearSelection} className="text-xs text-slate-400 hover:text-slate-600">Clear</button>
+            </>
+          )}
+          <button onClick={() => setEditEmp({ code: '', name: '', department: '', designation: '', date_of_joining: '', employment_type: 'Permanent', shift_code: '', default_shift_id: null, weekly_off_day: 0, phone: '', email: '', aadhar: '', pan: '' })} className="btn-primary text-sm">
             + Add Employee
           </button>
         </div>
@@ -669,6 +730,21 @@ export default function Employees() {
             <table className="table-compact w-full">
               <thead>
                 <tr>
+                  {canBulkAssignShift && (
+                    <th className="w-8 text-center">
+                      <input
+                        type="checkbox"
+                        checked={filtered.length > 0 && filtered.every(e => selectedCodes.has(e.code))}
+                        onChange={(ev) => {
+                          if (ev.target.checked) {
+                            setSelectedCodes(new Set(filtered.map(e => e.code)))
+                          } else {
+                            clearSelection()
+                          }
+                        }}
+                      />
+                    </th>
+                  )}
                   <th className="cursor-pointer" onClick={() => toggleSort('code')}>
                     Code <SortIcon field="code" />
                   </th>
@@ -691,10 +767,19 @@ export default function Employees() {
               </thead>
               <tbody>
                 {filtered.length === 0 ? (
-                  <tr><td colSpan={10} className="text-center py-8 text-slate-400">No employees found</td></tr>
+                  <tr><td colSpan={canBulkAssignShift ? 11 : 10} className="text-center py-8 text-slate-400">No employees found</td></tr>
                 ) : filtered.map(e => (
                   <React.Fragment key={e.code}>
                     <tr onClick={() => toggle(e.code)} className={clsx('cursor-pointer transition-colors hover:bg-blue-50/50', isExpanded(e.code) && 'bg-blue-50', e.status === 'Left' && 'opacity-60')}>
+                      {canBulkAssignShift && (
+                        <td className="text-center" onClick={(ev) => ev.stopPropagation()}>
+                          <input
+                            type="checkbox"
+                            checked={selectedCodes.has(e.code)}
+                            onChange={() => toggleSelect(e.code)}
+                          />
+                        </td>
+                      )}
                       <td className="font-mono text-sm text-slate-600"><DrillDownChevron isExpanded={isExpanded(e.code)} /> {e.code}</td>
                       <td className="font-medium text-slate-800">
                         {e.name}
@@ -723,7 +808,7 @@ export default function Employees() {
                       </td>
                     </tr>
                     {isExpanded(e.code) && (
-                      <DrillDownRow colSpan={10}>
+                      <DrillDownRow colSpan={canBulkAssignShift ? 11 : 10}>
                         <EmployeeQuickView
                           employeeCode={e.code}
                           contextContent={
@@ -751,6 +836,55 @@ export default function Employees() {
       {salaryEmp && <SalaryModal employee={salaryEmp} onClose={() => setSalaryEmp(null)} />}
       {profileEmp && <EmployeeProfileModal employee={profileEmp} onClose={() => setProfileEmp(null)} />}
       {markLeftEmp && <MarkLeftModal employee={markLeftEmp} onClose={() => setMarkLeftEmp(null)} />}
+
+      {/* Late Coming Phase 1: Bulk shift assignment modal */}
+      {showBulkShift && (
+        <BulkShiftModal
+          count={selectedCodes.size}
+          shifts={allShifts}
+          onConfirm={(shiftId, shiftCode) => bulkShiftMutation.mutate({ shiftId, shiftCode })}
+          isPending={bulkShiftMutation.isPending}
+          onClose={() => setShowBulkShift(false)}
+        />
+      )}
+    </div>
+  )
+}
+
+function BulkShiftModal({ count, shifts, onConfirm, onClose, isPending }) {
+  const [shiftId, setShiftId] = useState('')
+  const chosen = shifts.find(s => s.id === parseInt(shiftId))
+  return (
+    <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4" onClick={onClose}>
+      <div className="bg-white rounded-xl shadow-2xl w-full max-w-md" onClick={e => e.stopPropagation()}>
+        <div className="p-5 border-b">
+          <h3 className="font-bold text-slate-800">Assign Shift</h3>
+          <p className="text-xs text-slate-500">Applies to {count} selected employees</p>
+        </div>
+        <div className="p-5 space-y-4">
+          <div>
+            <label className="label">Shift</label>
+            <select value={shiftId} onChange={e => setShiftId(e.target.value)} className="select">
+              <option value="">— Select shift —</option>
+              {shifts.map(s => (
+                <option key={s.id} value={s.id}>
+                  {s.code} ({s.start_time} - {s.end_time})
+                </option>
+              ))}
+            </select>
+          </div>
+        </div>
+        <div className="p-5 border-t flex gap-2">
+          <button
+            disabled={!chosen || isPending}
+            onClick={() => onConfirm(chosen.id, chosen.code)}
+            className="btn-primary flex-1 disabled:opacity-50"
+          >
+            {isPending ? 'Saving…' : `Assign ${chosen?.code || '…'} to ${count}`}
+          </button>
+          <button onClick={onClose} className="btn-secondary">Cancel</button>
+        </div>
+      </div>
     </div>
   )
 }

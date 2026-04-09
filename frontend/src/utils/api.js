@@ -337,6 +337,30 @@ export const getSessionUsers = (days) => api.get('/session-analytics/users', { p
 export const getSessionPages = (days) => api.get('/session-analytics/pages', { params: { days } })
 export const getSessionErrors = (days) => api.get('/session-analytics/errors', { params: { days } })
 
+// ── Late Coming Management (Phase 1) ───────────────────
+// NOTE: the existing `applyLateDeduction` helper (line ~88) hits the Stage 6
+// day-calculations late-deduction endpoint. The new late-coming workflow uses
+// `applyLateComingDeduction` to avoid colliding with that legacy name.
+export const getLateComingAnalytics = (month, year, params) =>
+  api.get('/late-coming/analytics', { params: { month, year, ...params } })
+export const getLateComingDeptSummary = (month, year, company) =>
+  api.get('/late-coming/department-summary', { params: { month, year, ...(company ? { company } : {}) } })
+export const getLateComingDailyDetail = (date, company) =>
+  api.get('/late-coming/daily-detail', { params: { date, ...(company ? { company } : {}) } })
+export const getLateComingEmployeeHistory = (employeeCode, months) =>
+  api.get('/late-coming/employee-history', { params: { employeeCode, months } })
+export const applyLateComingDeduction = (data) =>
+  api.post('/late-coming/deduction', data)
+export const getLateComingDeductions = (month, year, params) =>
+  api.get('/late-coming/deductions', { params: { month, year, ...params } })
+export const exportLateComingReport = (month, year, company) =>
+  api.get('/late-coming/export', { params: { month, year, ...(company ? { company } : {}) }, responseType: 'blob' })
+export const getDailyMISLateComingSummary = (date, company) =>
+  api.get('/daily-mis/late-coming-summary', { params: { date, ...(company ? { company } : {}) } })
+// Bulk shift assignment for Employee Master
+export const bulkAssignShift = (employeeCodes, shiftId, shiftCode) =>
+  api.put('/employees/bulk-shift', { employeeCodes, shiftId, shiftCode })
+
 // Phase 6: Advanced analytics
 export const getUserSessions = (username, days) => api.get('/session-analytics/user-sessions', { params: { username, days } })
 export const getSessionReplay = (sessionId) => api.get('/session-analytics/session-replay', { params: { sessionId } })

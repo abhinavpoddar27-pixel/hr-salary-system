@@ -17,13 +17,30 @@ import DrillDownRow, { DrillDownChevron } from '../components/ui/DrillDownRow'
 const DAYS = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday']
 
 // ─── Shift Tab ─────────────────────────────────────────────────────
+// Late Coming Phase 1: HR can edit start time + duration (end time is auto-
+// calculated and read-only). Only admin can change the grace period, which
+// is fixed at 9 minutes by plant policy.
+function calcEndTimeFromDuration(startTime, durationHours) {
+  const parts = String(startTime || '').split(':').map(Number)
+  const sh = parts[0], sm = parts[1] || 0
+  const dur = parseFloat(durationHours)
+  if (isNaN(sh) || isNaN(dur)) return ''
+  let totalMin = sh * 60 + sm + Math.round(dur * 60)
+  totalMin = ((totalMin % (24 * 60)) + 24 * 60) % (24 * 60)
+  const eh = Math.floor(totalMin / 60)
+  const em = totalMin % 60
+  return `${String(eh).padStart(2, '0')}:${String(em).padStart(2, '0')}`
+}
+
 function ShiftsTab() {
   const qc = useQueryClient()
+  const { user } = useAppStore()
+  const isAdmin = user?.role === 'admin'
   const [editId, setEditId] = useState(null)
   const [showCreate, setShowCreate] = useState(false)
   const [form, setForm] = useState({
-    name: '', code: '', startTime: '09:00', endTime: '18:00',
-    graceMinutes: 15, isOvernight: false, breakMinutes: 30,
+    name: '', code: '', startTime: '09:00', durationHours: 9,
+    graceMinutes: 9, breakMinutes: 0,
     minHoursFullDay: 8, minHoursHalfDay: 4
   })
 
@@ -40,21 +57,27 @@ function ShiftsTab() {
   })
 
   function resetForm() {
-    setForm({ name: '', code: '', startTime: '09:00', endTime: '18:00', graceMinutes: 15, isOvernight: false, breakMinutes: 30, minHoursFullDay: 8, minHoursHalfDay: 4 })
+    setForm({ name: '', code: '', startTime: '09:00', durationHours: 9, graceMinutes: 9, breakMinutes: 0, minHoursFullDay: 8, minHoursHalfDay: 4 })
   }
   function startEdit(shift) {
     setEditId(shift.id)
     setForm({
-      name: shift.name, code: shift.code, startTime: shift.start_time, endTime: shift.end_time,
-      graceMinutes: shift.grace_minutes, isOvernight: !!shift.is_overnight, breakMinutes: shift.break_minutes || 0,
-      minHoursFullDay: shift.min_hours_full_day, minHoursHalfDay: shift.min_hours_half_day
+      name: shift.name, code: shift.code,
+      startTime: shift.start_time,
+      durationHours: shift.duration_hours || 9,
+      graceMinutes: shift.grace_minutes,
+      breakMinutes: shift.break_minutes || 0,
+      minHoursFullDay: shift.min_hours_full_day,
+      minHoursHalfDay: shift.min_hours_half_day
     })
   }
+
+  const autoEndTime = calcEndTimeFromDuration(form.startTime, form.durationHours)
 
   return (
     <div className="space-y-4">
       <div className="flex justify-between items-center">
-        <p className="text-sm text-slate-500">Configure shift timings, grace periods, and minimum hours</p>
+        <p className="text-sm text-slate-500">Configure shift timings and grace periods. End time is auto-calculated from start + duration.</p>
         <button onClick={() => setShowCreate(true)} className="btn-primary text-sm">+ Add Shift</button>
       </div>
 
@@ -63,6 +86,7 @@ function ShiftsTab() {
           <thead>
             <tr>
               <th>Code</th><th>Name</th><th>Start</th><th>End</th>
+              <th className="text-center">Duration (h)</th>
               <th className="text-center">Grace (min)</th>
               <th className="text-center">Break (min)</th>
               <th className="text-center">Min Full Day (h)</th>
@@ -78,6 +102,7 @@ function ShiftsTab() {
                 <td className="font-medium">{s.name}</td>
                 <td>{s.start_time}</td>
                 <td>{s.end_time}</td>
+                <td className="text-center">{s.duration_hours ?? '—'}</td>
                 <td className="text-center">{s.grace_minutes}</td>
                 <td className="text-center">{s.break_minutes}</td>
                 <td className="text-center">{s.min_hours_full_day}</td>
@@ -96,23 +121,38 @@ function ShiftsTab() {
           <div className="grid grid-cols-3 gap-3">
             <div>
               <label className="label">Shift Name</label>
-              <input type="text" value={form.name} onChange={e => setForm(f => ({ ...f, name: e.target.value }))} className="input" placeholder="Day Shift" />
+              <input type="text" value={form.name} onChange={e => setForm(f => ({ ...f, name: e.target.value }))} className="input" placeholder="12-Hour Shift" />
             </div>
             <div>
               <label className="label">Code</label>
-              <input type="text" value={form.code} onChange={e => setForm(f => ({ ...f, code: e.target.value.toUpperCase() }))} className="input font-mono" placeholder="DAY" disabled={!!editId} />
+              <input type="text" value={form.code} onChange={e => setForm(f => ({ ...f, code: e.target.value.toUpperCase() }))} className="input font-mono" placeholder="12HR" disabled={!!editId} />
             </div>
             <div>
               <label className="label">Start Time</label>
               <input type="time" value={form.startTime} onChange={e => setForm(f => ({ ...f, startTime: e.target.value }))} className="input" />
             </div>
             <div>
-              <label className="label">End Time</label>
-              <input type="time" value={form.endTime} onChange={e => setForm(f => ({ ...f, endTime: e.target.value }))} className="input" />
+              <label className="label">Duration (hours)</label>
+              <input type="number" value={form.durationHours} onChange={e => setForm(f => ({ ...f, durationHours: parseFloat(e.target.value) }))} className="input" step="0.5" min="1" max="24" />
             </div>
             <div>
-              <label className="label">Grace Period (min)</label>
-              <input type="number" value={form.graceMinutes} onChange={e => setForm(f => ({ ...f, graceMinutes: parseInt(e.target.value) }))} className="input" min="0" max="120" />
+              <label className="label">End Time (auto-calculated)</label>
+              <input type="time" value={autoEndTime} readOnly className="input bg-slate-100 cursor-not-allowed" />
+              <p className="text-xs text-slate-400 mt-1">End time auto-calculated from start time + duration</p>
+            </div>
+            <div>
+              <label className="label">
+                Grace Period (min)
+                {!isAdmin && <span className="text-xs text-slate-400 ml-1">(admin only)</span>}
+              </label>
+              <input
+                type="number"
+                value={form.graceMinutes}
+                onChange={e => setForm(f => ({ ...f, graceMinutes: parseInt(e.target.value) }))}
+                className={`input ${!isAdmin ? 'bg-slate-100 cursor-not-allowed' : ''}`}
+                min="0" max="120"
+                disabled={!isAdmin}
+              />
             </div>
             <div>
               <label className="label">Break (min)</label>
@@ -125,18 +165,6 @@ function ShiftsTab() {
             <div>
               <label className="label">Min Hours Half Day</label>
               <input type="number" value={form.minHoursHalfDay} onChange={e => setForm(f => ({ ...f, minHoursHalfDay: parseFloat(e.target.value) }))} className="input" step="0.5" />
-            </div>
-            <div className="flex items-end pb-2">
-              {(() => {
-                const [sh] = (form.startTime || '').split(':').map(Number);
-                const [eh] = (form.endTime || '').split(':').map(Number);
-                const autoOvernight = !isNaN(sh) && !isNaN(eh) && sh > eh;
-                return (
-                  <span className={`text-xs px-2 py-1 rounded-full ${autoOvernight ? 'bg-purple-100 text-purple-700' : 'bg-slate-100 text-slate-500'}`}>
-                    {autoOvernight ? 'Crosses midnight (auto-detected)' : 'Day shift'}
-                  </span>
-                );
-              })()}
             </div>
           </div>
           <div className="flex gap-2 mt-4">

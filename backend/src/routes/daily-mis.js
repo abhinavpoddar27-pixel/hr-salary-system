@@ -164,4 +164,124 @@ router.get('/previous-day-report', (req, res) => {
   res.json({ success: true, data: report });
 });
 
+/**
+ * GET /api/daily-mis/late-coming-summary
+ * Late Coming Phase 1: Summary of employees who arrived late on a specific
+ * date, enriched with month-to-date context and "left late yesterday" flag.
+ * Powers the Daily MIS "Late Arrivals Today" section.
+ */
+router.get('/late-coming-summary', (req, res) => {
+  const db = getDb();
+  const date = req.query.date || new Date().toISOString().split('T')[0];
+  const company = req.query.company || null;
+
+  const [yStr, mStr, dStr] = String(date).split('-');
+  const year = parseInt(yStr);
+  const month = parseInt(mStr);
+  const day = parseInt(dStr);
+  if (!year || !month || !day) {
+    return res.status(400).json({ success: false, error: 'date must be YYYY-MM-DD' });
+  }
+
+  // Previous month (for trend comparison)
+  const pMonth = month === 1 ? 12 : month - 1;
+  const pYear = month === 1 ? year - 1 : year;
+
+  // Yesterday (for "left late yesterday" context)
+  const dt = new Date(Date.UTC(year, month - 1, day));
+  dt.setUTCDate(dt.getUTCDate() - 1);
+  const yesterday = `${dt.getUTCFullYear()}-${String(dt.getUTCMonth() + 1).padStart(2, '0')}-${String(dt.getUTCDate()).padStart(2, '0')}`;
+
+  const companyFilter = company ? ' AND (ap.company = ? OR ap.company IS NULL)' : '';
+  const companyParams = company ? [company] : [];
+
+  const rows = db.prepare(`
+    SELECT
+      ap.employee_code,
+      e.name,
+      e.department,
+      e.shift_code,
+      s.start_time AS shift_start_time,
+      COALESCE(ap.in_time_final, ap.in_time_original) AS in_time,
+      ap.late_by_minutes,
+      (
+        SELECT COUNT(*) FROM attendance_processed ap2
+        WHERE ap2.employee_code = ap.employee_code
+          AND ap2.month = ? AND ap2.year = ?
+          AND CAST(substr(ap2.date, 9, 2) AS INTEGER) <= ?
+          AND ap2.is_late_arrival = 1
+          AND ap2.is_night_out_only = 0
+      ) AS month_to_date_late_count,
+      (
+        SELECT COUNT(*) FROM attendance_processed ap3
+        WHERE ap3.employee_code = ap.employee_code
+          AND ap3.month = ? AND ap3.year = ?
+          AND ap3.is_late_arrival = 1
+          AND ap3.is_night_out_only = 0
+      ) AS last_month_late_count,
+      (
+        SELECT ap4.is_left_late FROM attendance_processed ap4
+        WHERE ap4.employee_code = ap.employee_code AND ap4.date = ?
+        LIMIT 1
+      ) AS yesterday_left_late,
+      (
+        SELECT ap5.left_late_minutes FROM attendance_processed ap5
+        WHERE ap5.employee_code = ap.employee_code AND ap5.date = ?
+        LIMIT 1
+      ) AS yesterday_left_late_minutes
+    FROM attendance_processed ap
+    LEFT JOIN employees e ON ap.employee_code = e.code
+    LEFT JOIN shifts s ON e.default_shift_id = s.id
+    WHERE ap.date = ?
+      AND ap.is_late_arrival = 1
+      AND ap.is_night_out_only = 0
+      AND (e.status IS NULL OR e.status != 'Left')
+      ${companyFilter}
+    ORDER BY ap.late_by_minutes DESC, e.name ASC
+  `).all(month, year, day, pMonth, pYear, yesterday, yesterday, date, ...companyParams);
+
+  // Relative trend (this month's running count vs same-range last month).
+  const employees = rows.map(r => {
+    const cur = Number(r.month_to_date_late_count) || 0;
+    const prev = Number(r.last_month_late_count) || 0;
+    let trend = 'stable';
+    if (cur === prev) trend = 'stable';
+    else if (prev === 0 && cur > 0) trend = 'up';
+    else if (cur > prev * 1.1) trend = 'up';
+    else if (cur < prev * 0.9) trend = 'down';
+    return {
+      employee_code: r.employee_code,
+      name: r.name,
+      department: r.department,
+      shift_code: r.shift_code,
+      shift_start_time: r.shift_start_time,
+      in_time: r.in_time,
+      late_by_minutes: Number(r.late_by_minutes) || 0,
+      month_to_date_late_count: cur,
+      trend,
+      yesterday_left_late: !!(r.yesterday_left_late && Number(r.yesterday_left_late) === 1),
+      yesterday_left_late_minutes: Number(r.yesterday_left_late_minutes) || 0
+    };
+  });
+
+  // Department breakdown for the header card.
+  const deptMap = {};
+  for (const emp of employees) {
+    const key = emp.department || '(none)';
+    deptMap[key] = (deptMap[key] || 0) + 1;
+  }
+  const departmentBreakdown = Object.entries(deptMap)
+    .map(([department, count]) => ({ department, count }))
+    .sort((a, b) => b.count - a.count);
+
+  res.json({
+    success: true,
+    data: {
+      totalLateToday: employees.length,
+      departmentBreakdown,
+      employees
+    }
+  });
+});
+
 module.exports = router;
