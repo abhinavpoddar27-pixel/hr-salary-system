@@ -599,6 +599,7 @@ export default function SalaryComputation() {
                     <th className="cursor-pointer select-none" onClick={() => toggleSort('esi_employee')}>ESI{sortIndicator('esi_employee')}</th>
                     <th>Adv</th>
                     <th>Loan</th>
+                    <th className="cursor-pointer select-none" onClick={() => toggleSort('late_coming_deduction')} title="Finance-approved late coming deduction">Late{sortIndicator('late_coming_deduction')}</th>
                     <th className="cursor-pointer select-none" onClick={() => toggleSort('total_deductions')}>Ded{sortIndicator('total_deductions')}</th>
                     <th className="cursor-pointer select-none bg-slate-50 text-slate-600" onClick={() => toggleSort('net_salary')} title="Net = Gross Earned − Deductions (base only, no OT)">Net{sortIndicator('net_salary')}</th>
                     <th className="cursor-pointer select-none bg-emerald-50 text-emerald-700" onClick={() => toggleSort('take_home')} title="Take Home = Net + OT + Holiday Duty + ED (actual amount paid)">Take Home{sortIndicator('take_home')}</th>
@@ -695,6 +696,10 @@ export default function SalaryComputation() {
                         <td className="text-purple-600 font-mono">{fmtINR(s.esi_employee)}</td>
                         <td className="font-mono">{fmtINR(s.advance_recovery)}</td>
                         <td className="font-mono">{fmtINR(s.loan_recovery)}</td>
+                        <td className={clsx('font-mono', (s.late_coming_deduction || 0) > 0 ? 'bg-amber-50 text-amber-700 font-semibold' : 'text-slate-400')}
+                            title={(s.late_coming_deduction || 0) > 0 ? 'Finance-approved late coming deduction' : ''}>
+                          {(s.late_coming_deduction || 0) > 0 ? fmtINR(s.late_coming_deduction) : '—'}
+                        </td>
                         <td className={clsx('text-red-600 font-mono', s.salary_held && 'cell-caution')}
                             title={s.salary_held ? `Held: ${s.hold_reason || 'No reason specified'}` : undefined}>
                           {fmtINR(s.total_deductions)}
@@ -768,7 +773,7 @@ export default function SalaryComputation() {
                         </td>
                       </tr>
                       {showDetails === s.employee_code && (
-                        <DrillDownRow colSpan={15}>
+                        <DrillDownRow colSpan={16}>
                           <EmployeeQuickView
                             employeeCode={s.employee_code}
                             contextContent={
@@ -799,7 +804,7 @@ export default function SalaryComputation() {
                                 <div>
                                   <p className="font-semibold mb-1 text-slate-600">Deductions</p>
                                   <div className="space-y-0.5">
-                                    {[['PF (Emp)', s.pf_employee], ['PF (Empr)', s.pf_employer], ['ESI (Emp)', s.esi_employee], ['ESI (Empr)', s.esi_employer], ['TDS', s.tds], ['LOP', s.lop_deduction], ['Advance', s.advance_recovery], ['Loan EMI', s.loan_recovery], ['Other', s.other_deductions]].map(([k,v]) => v > 0 && (
+                                    {[['PF (Emp)', s.pf_employee], ['PF (Empr)', s.pf_employer], ['ESI (Emp)', s.esi_employee], ['ESI (Empr)', s.esi_employer], ['TDS', s.tds], ['LOP', s.lop_deduction], ['Advance', s.advance_recovery], ['Loan EMI', s.loan_recovery], ['Late Coming', s.late_coming_deduction], ['Other', s.other_deductions]].map(([k,v]) => v > 0 && (
                                       <div key={k} className="flex justify-between"><span>{k}</span><span className="font-mono font-medium text-red-600">{fmtINR(v)}</span></div>
                                     ))}
                                   </div>
@@ -836,6 +841,7 @@ export default function SalaryComputation() {
                     <td className="font-mono text-indigo-600">{fmtINR(salaries.reduce((s, r) => s + (r.pf_employee || 0), 0))}</td>
                     <td className="font-mono text-purple-600">{fmtINR(salaries.reduce((s, r) => s + (r.esi_employee || 0), 0))}</td>
                     <td colSpan={2} />
+                    <td className="font-mono text-amber-700">{fmtINR(salaries.reduce((s, r) => s + (r.late_coming_deduction || 0), 0))}</td>
                     <td className="font-mono text-red-600">{fmtINR(salaries.reduce((s, r) => s + (r.total_deductions || 0), 0))}</td>
                     <td className="bg-slate-100 text-slate-700 font-mono">{fmtINR(salaries.filter(s => !s.salary_held).reduce((s, r) => s + (r.net_salary || 0), 0))}</td>
                     <td className="bg-emerald-100 text-emerald-700 font-mono">{fmtINR(salaries.filter(s => !s.salary_held).reduce((s, r) => s + (r.take_home || r.total_payable || r.net_salary || 0), 0))}</td>

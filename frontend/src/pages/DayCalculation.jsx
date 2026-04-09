@@ -733,6 +733,20 @@ function DrillDownContent({ r, selectedMonth, selectedYear, daysInMonth, lateDed
                     <span>− Late Deduction</span><span>{r.late_deduction_days}</span>
                   </div>
                 )}
+                {(r.finance_approved_late_days || 0) > 0 && (
+                  <div
+                    className="flex justify-between text-amber-700 bg-amber-50 px-1.5 py-0.5 rounded border border-amber-200"
+                    title={r.finance_late_remark || 'Finance-approved late coming deduction'}
+                  >
+                    <span>★ Finance-approved late deduction</span>
+                    <span>{r.finance_approved_late_days} day(s)</span>
+                  </div>
+                )}
+                {(r.finance_approved_late_days || 0) > 0 && r.finance_late_remark && (
+                  <div className="text-[10px] text-slate-500 italic pl-2">
+                    {r.finance_late_remark}
+                  </div>
+                )}
                 <div className="border-t border-slate-300 pt-1 flex justify-between font-bold text-blue-700">
                   <span>= Total Payable</span><span>{r.total_payable_days} days</span>
                 </div>

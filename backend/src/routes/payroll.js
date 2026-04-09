@@ -239,7 +239,21 @@ router.get('/day-calculations', (req, res) => {
       COALESCE(NULLIF(e.department, ''), ar_name.department) as department,
       e.designation, e.status as employee_status,
       e.date_of_joining, e.date_of_exit,
-      ss.gross_salary
+      ss.gross_salary,
+      -- Phase 2: finance-approved late coming deduction info for this month
+      COALESCE((
+        SELECT SUM(deduction_days) FROM late_coming_deductions lcd
+        WHERE lcd.employee_code = dc.employee_code
+          AND lcd.month = dc.month AND lcd.year = dc.year
+          AND lcd.finance_status = 'approved'
+      ), 0) AS finance_approved_late_days,
+      (
+        SELECT finance_remark FROM late_coming_deductions lcd
+        WHERE lcd.employee_code = dc.employee_code
+          AND lcd.month = dc.month AND lcd.year = dc.year
+          AND lcd.finance_status = 'approved'
+        ORDER BY finance_reviewed_at DESC LIMIT 1
+      ) AS finance_late_remark
     FROM day_calculations dc
     LEFT JOIN employees e ON dc.employee_code = e.code
     LEFT JOIN salary_structures ss ON ss.employee_id = e.id AND ss.id = (
