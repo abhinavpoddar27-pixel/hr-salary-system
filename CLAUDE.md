@@ -43,6 +43,7 @@ backend/
 │   │   ├── sessionAnalytics.js  User session tracking
 │   │   ├── usage-logs.js        Admin usage audit
 │   │   ├── phase5.js            Leave accrual, shift roster, attrition
+│   │   ├── lateComing.js        Late Coming Phase 1: analytics + deductions
 │   │   └── analytics.js         Workforce analytics
 │   └── services/
 │       ├── parser.js                 EESL XLS parsing — dynamic column detection
@@ -265,10 +266,10 @@ frontend/
 - Sensitivity: Read-only consumers; column changes break dashboard widgets
 
 ## Section 4: Database Schema Summary
-- Total tables: **43** (in `backend/src/database/schema.js`)
-- Attendance: `attendance_raw`, `attendance_processed`, `night_shift_pairs`, `monthly_imports`, `manual_attendance_flags`, `day_corrections`, `punch_corrections`
-- Employee/salary: `employees`, `salary_structures`, `salary_computations`, `salary_advances`, `salary_change_requests`, `salary_manual_flags`, `loans`, `loan_repayments`, `tax_declarations`, `extra_duty_grants`
-- Processing: `day_calculations`, `holidays`, `holiday_audit_log`, `shifts`, `shift_roster`, `leave_balances`, `leave_transactions`, `leave_applications`
+- Total tables: **44** (in `backend/src/database/schema.js`) — +1 for late_coming_deductions (Late Coming Phase 1)
+- Attendance: `attendance_raw`, `attendance_processed` (now with `is_left_late`/`left_late_minutes` for late coming tracking), `night_shift_pairs`, `monthly_imports`, `manual_attendance_flags`, `day_corrections`, `punch_corrections`
+- Employee/salary: `employees`, `salary_structures`, `salary_computations`, `salary_advances`, `salary_change_requests`, `salary_manual_flags`, `loans`, `loan_repayments`, `tax_declarations`, `extra_duty_grants`, `late_coming_deductions` (NEW, April 2026)
+- Processing: `day_calculations`, `holidays`, `holiday_audit_log`, `shifts` (now with `duration_hours` + seeded 12HR/10HR/9HR rows), `shift_roster`, `leave_balances`, `leave_transactions`, `leave_applications`
 - Audit: `audit_log`, `usage_logs`, `finance_audit_status`, `finance_audit_comments`, `finance_month_signoff`, `finance_approvals`
 - System: `users`, `policy_config`, `company_config`, `notifications`, `compliance_items`, `alerts`, `employee_documents`, `employee_lifecycle`, `monthly_dept_stats`, `monthly_employee_stats`, `session_events`, `session_daily_summary`
 - **Critical UNIQUE constraints**:
@@ -366,6 +367,68 @@ frontend/
 - **Railway deployment**: `DATA_DIR` and `UPLOADS_DIR` env vars control file paths. Production uses persistent volume mount. SQLite file MUST live in persistent volume, not container fs.
 - **Salary advance recovery loop**: `getAdvanceRecovery()` resets `recovered=0` flag before query so re-runs find advances; ON CONFLICT UPDATE on `salary_computations` includes `advance_recovery` so the value persists.
 - **Holiday duty pay**: National holidays (Mar 4 etc) auto-detected. If employee works the holiday, paid extra at per_day_rate. Tracked separately from OT.
+
+## Late Coming Management System (April 2026 — Phase 1 complete)
+- **Three canonical shifts** seeded in `shifts` table: `12HR` (08:00–20:00, 12h),
+  `10HR` (09:00–19:00, 10h), `9HR` (09:30–18:30, 9h). All shifts have
+  `grace_minutes=9` per plant policy (including legacy DAY/NIGHT/GEN).
+- **Grace period policy**: 9 minutes for ALL shifts. HR cannot change grace —
+  the `PUT /api/settings/shifts/:id` endpoint gates `grace_minutes` writes
+  behind `req.user.role === 'admin'`. HR can edit `start_time` + `duration_hours`,
+  and `end_time` is auto-derived server-side (`calcEndTime()` helper in settings.js).
+- **New columns on `attendance_processed`**: `is_left_late` (INTEGER 0/1),
+  `left_late_minutes` (INTEGER). Calculated alongside late-arrival detection
+  in `import.js` post-processing + `attendance.js POST /recalculate-metrics`.
+  Threshold: 20+ minutes past shift end time. Overnight shifts handle end-time
+  wraparound correctly. These columns are PURELY ADDITIVE — the late-arrival
+  logic, status fields, and all downstream pipeline stages are untouched.
+- **New table `late_coming_deductions`** (April 2026): HR-initiated discretionary
+  deductions with finance review queue. Columns: `employee_code`, `month`, `year`,
+  `company`, `late_count`, `deduction_days` (0.5–5), `remark` (NOT NULL),
+  `applied_by`, `applied_at`, `finance_status` ('pending' | 'approved' |
+  'rejected'), `finance_reviewed_by`, `finance_reviewed_at`, `finance_remark`,
+  `is_applied_to_salary`, `applied_to_salary_at`. UNIQUE constraint:
+  `(employee_code, month, year, company, applied_at)`. Indexed on
+  `(employee_code, month, year)` and `finance_status`.
+- **New routes file `backend/src/routes/lateComing.js`** mounted at `/api/late-coming`:
+  - `GET /analytics` — per-employee late coming with trend vs last month (params: month, year, company, shiftCode)
+  - `GET /department-summary` — per-department rollup with trend + worst offender
+  - `GET /daily-detail` — late arrivals for a specific date (used by Daily MIS)
+  - `GET /employee-history` — N-month late coming history incl. deductions
+  - `POST /deduction` — HR applies deduction (requires HR or admin role; validates days in [0.5, 5] and non-empty remark)
+  - `GET /deductions` — list deductions filtered by status (pending/approved/rejected/all)
+  - `GET /export` — xlsx download (HR/finance/admin)
+- **New route on `daily-mis.js`**: `GET /late-coming-summary` returns today's
+  late arrivals with MTD counts, trend, department breakdown, and "left late
+  yesterday" flag.
+- **Frontend additions**:
+  - Analytics → Punctuality tab: new "Late Coming Management" section with
+    summary cards, shift/dept filters, Excel export, department summary,
+    employee detail table with trend arrows, `LateComingDeductionModal`
+    (HR-only), and a "Pending Deductions" sub-table.
+  - Daily MIS → `LateComingTodaySection` (between Worker Type Breakdown and
+    sub-tabs): department chips, per-employee late minutes + MTD + trend +
+    "Stayed X min late yesterday" badge.
+  - Employee Master: shift dropdown on edit modal (driven by real shifts from
+    `/settings/shifts`), checkbox column + "Assign Shift" toolbar +
+    `BulkShiftModal` (HR/admin only).
+  - Settings → Shifts: end_time field is read-only (auto-calculated from
+    start + duration), grace_minutes disabled for non-admin.
+  - Sidebar: new top-level "Late Coming" entry linking to `/analytics/punctuality`.
+- **Permissions**: `late-coming` page added to `hr` and `finance` roles in
+  `backend/src/config/permissions.js`. HR has full access (view + deduction);
+  finance is view-only (Phase 2 will add approve/reject).
+- **Employee shift audit**: every shift change on `employees` (via PUT /:code
+  or PUT /bulk-shift) writes an `audit_log` row with `field_name='shift_assignment'`,
+  `action_type='shift_change'`, and `changed_by` set to the actual username.
+- **New API endpoint `PUT /api/employees/bulk-shift`** (HR/admin): body
+  `{ employeeCodes: [...], shiftId, shiftCode }`. Transactional update + one
+  audit row per employee. Declared BEFORE `PUT /:code` in the router so Express
+  doesn't interpret "bulk-shift" as an employee code.
+- **Phase 2 (NOT YET BUILT)**: finance approval gate on deductions, salary
+  pipeline integration (Stage 7 reading approved deductions as extra LOP days),
+  month-end checklist entry for unreviewed deductions, employee record view
+  late history tab, department report page, bulk payslip download gating.
 
 ## Section 8: Rules for Claude Code Sessions
 - Before changing ANY pipeline stage: ALWAYS read every downstream stage's service file AND every consumer (finance audit, payslips, exports, analytics) that reads this stage's output tables.
