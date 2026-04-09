@@ -1,7 +1,8 @@
-import React, { useState, useMemo } from 'react'
-import { useQuery, useMutation } from '@tanstack/react-query'
+import React, { useState, useMemo, useEffect } from 'react'
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
+import { Link, useSearchParams } from 'react-router-dom'
 import toast from 'react-hot-toast'
-import { getSalaryRegister, computeSalary, finaliseSalary, getPayslip, getMonthEndChecklist, getSalaryComparison, getBulkPayslips, downloadSalarySlipExcel } from '../utils/api'
+import { getSalaryRegister, computeSalary, finaliseSalary, getPayslip, getMonthEndChecklist, getSalaryComparison, getBulkPayslips, downloadSalarySlipExcel, releaseHeldSalary } from '../utils/api'
 import { useAppStore } from '../store/appStore'
 import CompanyFilter from '../components/shared/CompanyFilter'
 import DateSelector from '../components/common/DateSelector'
@@ -18,15 +19,25 @@ import EmployeeQuickView from '../components/ui/EmployeeQuickView'
 import api from '../utils/api'
 import { downloadPayslipPDF } from '../utils/payslipPdf'
 import ConfirmDialog from '../components/ui/ConfirmDialog'
+import { canFinance as canFinanceFn } from '../utils/role'
 
 export default function SalaryComputation() {
   const { month, year, dateProps } = useDateSelector({ mode: 'month', syncToStore: true })
-  const { selectedCompany } = useAppStore()
+  const { selectedCompany, user } = useAppStore()
+  const qc = useQueryClient()
+  // Held-salary release is gated to finance/admin on the backend; mirror
+  // that here so HR users don't see a Release button they can't actually
+  // click. Both pages (Stage 7 + Finance Verify) use the same gate.
+  const canFinance = canFinanceFn(user)
   const [showDetails, setShowDetails] = useState(null)
   const [calendarEmployee, setCalendarEmployee] = useState(null)
   const [payslipEmployee, setPayslipEmployee] = useState(null)
   const [filterDept, setFilterDept] = useState('')
-  const [filterView, setFilterView] = useState('all')
+  // Initial filter view honours ?filter=held deep-link from Finance
+  // Verification → Held Salaries tab so the cross-page navigation
+  // lands on the held rows immediately.
+  const [searchParams] = useSearchParams()
+  const [filterView, setFilterView] = useState(searchParams.get('filter') === 'held' ? 'held' : 'all')
   const [searchQuery, setSearchQuery] = useState('')
   const [confirmAction, setConfirmAction] = useState(null)
   const [sortCol, setSortCol] = useState('')
@@ -102,9 +113,19 @@ export default function SalaryComputation() {
     onSuccess: () => { toast.success('Salary finalised!'); refetch() }
   })
 
+  // April 2026: the hold-release endpoint is now gated by requireFinanceOrAdmin
+  // so HR sees a 403 if they try (the button is hidden for HR below, but the
+  // onError toast is the user-visible fallback). Invalidates both this page's
+  // query and the Finance Verification held-salaries query so both stay in
+  // sync when used side-by-side.
   const releaseHoldMutation = useMutation({
     mutationFn: (code) => api.put(`/payroll/salary/${code}/hold-release`, { month: month, year: year, company: selectedCompany }),
-    onSuccess: () => { toast.success('Salary hold released'); refetch() }
+    onSuccess: () => {
+      toast.success('Salary hold released')
+      refetch()
+      qc.invalidateQueries({ queryKey: ['fin-held'] })
+    },
+    onError: (e) => toast.error(e?.response?.data?.error || 'Release failed')
   })
 
   const { data: payslipRes } = useQuery({
@@ -444,6 +465,25 @@ export default function SalaryComputation() {
           </div>
         )}
 
+        {/* Held Salaries ↔ Finance Verification interlink banner.
+            Surfaces only when the user is viewing the "Held" filter
+            so the cross-page navigation is contextual. Works both
+            ways — the Finance Verify → Held tab has the reciprocal
+            link back here. */}
+        {filterView === 'held' && heldCount > 0 && (
+          <div className="rounded-lg border border-amber-300 bg-amber-50 px-4 py-2 text-xs text-amber-900 flex items-center gap-3">
+            <span className="font-semibold">⚠ {heldCount} held salaries</span>
+            <span className="text-amber-800">
+              {canFinance
+                ? 'Click Release on any row to unlock the salary, or review them in Finance Verification.'
+                : 'Finance must release these before the month can be finalised.'}
+            </span>
+            <Link to="/finance-verification?tab=held" className="ml-auto text-blue-600 hover:underline font-medium shrink-0">
+              Review in Finance Verify →
+            </Link>
+          </div>
+        )}
+
         {/* Calendar Panel */}
         {calendarEmployee && (
           <div className="card p-5 animate-slide-up">
@@ -632,9 +672,15 @@ export default function SalaryComputation() {
                                 <span className="inline-flex items-center gap-0.5 text-xs px-1.5 py-0.5 rounded bg-red-100 text-red-700 border border-red-200 font-semibold">
                                   <span aria-hidden="true">⚠</span> Held
                                 </span>
-                                <button onClick={(e) => { e.stopPropagation(); releaseHoldMutation.mutate(s.employee_code); }} className="btn-ghost text-xs px-1 text-blue-600">
-                                  Release
-                                </button>
+                                {/* Release gated to finance/admin — HR sees the Held
+                                    badge but not the Release button. Matches the
+                                    requireFinanceOrAdmin gate on the backend endpoint
+                                    added April 2026. */}
+                                {canFinance && (
+                                  <button onClick={(e) => { e.stopPropagation(); releaseHoldMutation.mutate(s.employee_code); }} className="btn-ghost text-xs px-1 text-blue-600">
+                                    Release
+                                  </button>
+                                )}
                               </div>
                               {s.hold_reason && (
                                 <span className="text-[9px] text-red-500 truncate max-w-[120px]" title={s.hold_reason}>

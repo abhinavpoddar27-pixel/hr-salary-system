@@ -850,6 +850,37 @@ function initSchema(db) {
     }
   }
 
+  // ── April 2026: backfill the miss-punch finance review queue ──
+  // resolveMissPunch() now stamps miss_punch_finance_status='pending' on
+  // every fresh HR resolution, but historical resolutions (made before
+  // that stamp existed) still have finance_status='' (the TEXT column
+  // default). Those invisible records never show up in the new
+  // Finance Verification → Miss Punch Review tab, which was the user-
+  // reported bug: "HR already corrected miss punches but they don't
+  // appear for finance verify".
+  //
+  // Promote every resolved-but-unstamped row into the pending queue so
+  // finance can review + bulk approve the backlog. Idempotent via
+  // policy_config flag so it never re-runs on subsequent deploys.
+  const missPunchQueueMigrationDone = db.prepare(
+    "SELECT value FROM policy_config WHERE key = 'migration_miss_punch_finance_queue_v1'"
+  ).get();
+  if (!missPunchQueueMigrationDone) {
+    try {
+      const res = db.prepare(
+        "UPDATE attendance_processed SET miss_punch_finance_status = 'pending' WHERE is_miss_punch = 1 AND miss_punch_resolved = 1 AND (miss_punch_finance_status IS NULL OR miss_punch_finance_status = '')"
+      ).run();
+      if (res.changes > 0) {
+        console.log(`[MIGRATION] Promoted ${res.changes} resolved miss punches to 'pending' finance review`);
+      }
+      db.prepare(
+        "INSERT OR REPLACE INTO policy_config (key, value, description) VALUES ('migration_miss_punch_finance_queue_v1', '1', 'One-time April 2026 miss-punch finance queue backfill (complete)')"
+      ).run();
+    } catch (e) {
+      console.warn('[MIGRATION] miss-punch finance queue backfill failed:', e.message);
+    }
+  }
+
   // notifications: add columns for month-end scheduler
   safeAddColumn('notifications', 'role_target', 'TEXT');
   safeAddColumn('notifications', 'user_id', 'INTEGER');

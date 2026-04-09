@@ -444,13 +444,18 @@ export default function FinanceVerification() {
 
       {/* ── Held Salaries Tab (Phase 5c) ─────────────────────
           Lists all currently-held salaries and lets finance release
-          them via the gated /api/payroll/salary/:code/hold-release. */}
+          them via the gated /api/payroll/salary/:code/hold-release.
+          Interlinked with Stage 7 (Salary Computation) → Held filter
+          view so finance can jump between the two surfaces. */}
       {activeTab === 'held' && (
         <div className="space-y-3">
           <div className="rounded-lg border border-blue-200 bg-blue-50 px-4 py-2 text-[11px] text-blue-900 flex flex-wrap items-center gap-x-4 gap-y-1">
             <span><strong>User:</strong> {user?.username || '(unknown)'}</span>
             <span><strong>canFinance:</strong> <code className={clsx('px-1 rounded', canAct ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800')}>{String(canAct)}</code></span>
             <span className="ml-auto text-slate-500">{heldSalaries.length} held</span>
+            <button onClick={() => navigate('/pipeline/salary?filter=held')} className="text-blue-600 hover:underline font-medium">
+              View in Stage 7 →
+            </button>
           </div>
           <div className="card overflow-x-auto">
             <table className="table-compact w-full text-[11px]">
