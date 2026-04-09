@@ -756,36 +756,16 @@ router.put('/day-calculations/:code/late-deduction', (req, res) => {
 
 /**
  * GET /api/payroll/payslips/bulk
- * Get all payslip data for a month (for client-side bulk PDF generation)
+ * DISABLED per company policy (April 2026). Employees do not receive payslips
+ * and the bulk-download workflow is retired. The endpoint is retained and
+ * returns HTTP 403 so existing clients fail loudly and individual payslip
+ * generation (/payslip/:code) continues to work for internal review.
  */
 router.get('/payslips/bulk', (req, res) => {
-  const db = getDb();
-  const { month, year, company } = req.query;
-
-  if (!month || !year) return res.status(400).json({ success: false, error: 'month and year required' });
-
-  const employees = db.prepare(`
-    SELECT DISTINCT sc.employee_code
-    FROM salary_computations sc
-    LEFT JOIN employees e ON sc.employee_code = e.code
-    WHERE sc.month = ? AND sc.year = ? AND sc.net_salary > 0
-    ${company ? 'AND sc.company = ?' : ''}
-    AND (e.status IS NULL OR e.status NOT IN ('Exited'))
-    ORDER BY sc.employee_code
-  `).all(...[month, year, company].filter(Boolean));
-
-  const payslips = [];
-  for (const emp of employees) {
-    const ps = generatePayslipData(db, emp.employee_code, parseInt(month), parseInt(year));
-    if (ps) payslips.push(ps);
-  }
-
-  // Fetch company config for headers
-  const companyConfig = company
-    ? db.prepare('SELECT * FROM company_config WHERE company_name = ?').get(company)
-    : null;
-
-  res.json({ success: true, data: payslips, companyConfig, count: payslips.length });
+  return res.status(403).json({
+    success: false,
+    error: 'Bulk payslip download is disabled per company policy'
+  });
 });
 
 /**

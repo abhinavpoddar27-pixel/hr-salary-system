@@ -2,7 +2,7 @@ import React, { useState, useMemo, useEffect } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { Link, useSearchParams } from 'react-router-dom'
 import toast from 'react-hot-toast'
-import { getSalaryRegister, computeSalary, finaliseSalary, getPayslip, getMonthEndChecklist, getSalaryComparison, getBulkPayslips, downloadSalarySlipExcel, releaseHeldSalary, getDayCalcStaleness } from '../utils/api'
+import { getSalaryRegister, computeSalary, finaliseSalary, getPayslip, getMonthEndChecklist, getSalaryComparison, downloadSalarySlipExcel, releaseHeldSalary, getDayCalcStaleness } from '../utils/api'
 import { useAppStore } from '../store/appStore'
 import CompanyFilter from '../components/shared/CompanyFilter'
 import DateSelector from '../components/common/DateSelector'
@@ -175,7 +175,6 @@ export default function SalaryComputation() {
   const comparisonSummary = comparisonRes?.data?.summary || {}
 
   const [pdfLoading, setPdfLoading] = useState(false)
-  const [bulkPdfLoading, setBulkPdfLoading] = useState(false)
   async function handleDownloadPayslip() {
     if (!payslip) return
     setPdfLoading(true)
@@ -184,20 +183,6 @@ export default function SalaryComputation() {
       toast.success('Payslip PDF downloaded')
     } catch { toast.error('PDF generation failed') }
     finally { setPdfLoading(false) }
-  }
-
-  async function handleBulkPDF() {
-    setBulkPdfLoading(true)
-    try {
-      const res = await getBulkPayslips(month, year, selectedCompany)
-      const slips = res?.data?.data || []
-      if (slips.length === 0) { toast.error('No payslips to download'); return }
-      for (const slip of slips) {
-        try { await downloadPayslipPDF(slip, null) } catch {}
-      }
-      toast.success(`${slips.length} payslip PDFs generated`)
-    } catch { toast.error('Bulk PDF generation failed') }
-    finally { setBulkPdfLoading(false) }
   }
 
   const [excelLoading, setExcelLoading] = useState(false)
@@ -279,16 +264,10 @@ export default function SalaryComputation() {
               </button>
             )}
             {allSalaries.length > 0 && (
-              <>
-                <button onClick={handleExcelSlip} disabled={excelLoading}
-                  className="px-3 py-2 text-sm bg-green-100 text-green-700 rounded-lg hover:bg-green-200 transition-colors font-medium">
-                  {excelLoading ? 'Generating...' : 'Salary Slip (Excel)'}
-                </button>
-                <button onClick={handleBulkPDF} disabled={bulkPdfLoading}
-                  className="px-3 py-2 text-sm bg-slate-100 text-slate-700 rounded-lg hover:bg-slate-200 transition-colors">
-                  {bulkPdfLoading ? 'Generating...' : 'Bulk PDF'}
-                </button>
-              </>
+              <button onClick={handleExcelSlip} disabled={excelLoading}
+                className="px-3 py-2 text-sm bg-green-100 text-green-700 rounded-lg hover:bg-green-200 transition-colors font-medium">
+                {excelLoading ? 'Generating...' : 'Salary Slip (Excel)'}
+              </button>
             )}
           </div>
         </div>
