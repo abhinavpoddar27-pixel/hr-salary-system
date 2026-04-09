@@ -1,8 +1,9 @@
 const express = require('express');
 const router = express.Router();
-const { getDb } = require('../database/db');
+const { getDb, logAudit } = require('../database/db');
 const { calculateDays, saveDayCalculation } = require('../services/dayCalculation');
 const { computeEmployeeSalary, saveSalaryComputation, generatePayslipData } = require('../services/salaryComputation');
+const { requireFinanceOrAdmin } = require('../middleware/roles');
 const XLSX = require('xlsx');
 
 /**
@@ -436,19 +437,35 @@ router.get('/salary-register', (req, res) => {
 
 /**
  * PUT /api/payroll/salary/:code/hold-release
- * Release a held salary
+ * Finance releases a held salary. Gated by requireFinanceOrAdmin so HR
+ * cannot self-release a hold they themselves placed (or that the
+ * pipeline auto-imposed). Writes an audit_log entry so the release is
+ * traceable to the finance user who approved it.
  */
-router.put('/salary/:code/hold-release', (req, res) => {
+router.put('/salary/:code/hold-release', requireFinanceOrAdmin, (req, res) => {
   const db = getDb();
   const { code } = req.params;
   const { month, year } = req.body;
-  const user = req.user?.username || 'admin';
+  const user = req.user?.username || 'finance';
+
+  const before = db.prepare(
+    'SELECT id, salary_held, hold_reason FROM salary_computations WHERE employee_code = ? AND month = ? AND year = ?'
+  ).get(code, month, year);
+  if (!before) return res.status(404).json({ success: false, error: 'Salary record not found' });
+  if (before.salary_held !== 1) {
+    return res.status(400).json({ success: false, error: 'Salary is not currently held' });
+  }
 
   db.prepare(`
     UPDATE salary_computations SET
       salary_held = 0, hold_released = 1, hold_released_by = ?, hold_released_at = datetime('now')
     WHERE employee_code = ? AND month = ? AND year = ?
   `).run(user, code, month, year);
+
+  try {
+    logAudit('salary_computations', before.id, 'salary_held', '1', '0',
+      'FINANCE_HOLD_RELEASE', `${code} ${month}/${year}: ${before.hold_reason || 'no reason'}`);
+  } catch (e) { /* logAudit failures should never block the release */ }
 
   res.json({ success: true, message: `Salary released for ${code}` });
 });

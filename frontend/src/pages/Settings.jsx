@@ -7,7 +7,7 @@ import {
   getHolidays, createHoliday, deleteHoliday,
   getPolicyConfig, updatePolicyConfig,
   getUsageLogs, getUsageLogsSummary,
-  getUsers, createUser, getAuditTrail
+  getUsers, createUser, updateUser, getAuditTrail
 } from '../utils/api'
 import { useAppStore } from '../store/appStore'
 import clsx from 'clsx'
@@ -625,6 +625,11 @@ function UserManagementTab() {
   const qc = useQueryClient()
   const [showCreate, setShowCreate] = useState(false)
   const [form, setForm] = useState({ username: '', password: '', role: 'viewer', allowedCompanies: ['*'] })
+  // Edit-user modal state. `editing` holds the row being edited (null = closed).
+  // Password is optional in edit — only sent if the admin types a new one,
+  // matching the partial-update behaviour of PUT /api/auth/users/:id.
+  const [editing, setEditing] = useState(null)
+  const [editForm, setEditForm] = useState({ role: 'viewer', allowedCompanies: ['*'], password: '' })
 
   const { data: usersRes, isLoading } = useQuery({
     queryKey: ['users'],
@@ -642,6 +647,35 @@ function UserManagementTab() {
       setForm({ username: '', password: '', role: 'viewer', allowedCompanies: ['*'] })
     }
   })
+
+  const updateMutation = useMutation({
+    mutationFn: ({ id, payload }) => updateUser(id, payload),
+    onSuccess: () => {
+      toast.success('User updated')
+      qc.invalidateQueries(['users'])
+      setEditing(null)
+      setEditForm({ role: 'viewer', allowedCompanies: ['*'], password: '' })
+    },
+    onError: (e) => toast.error(e?.response?.data?.error || 'Update failed')
+  })
+
+  const openEdit = (u) => {
+    setEditing(u)
+    setEditForm({
+      role: u.role || 'viewer',
+      allowedCompanies: u.allowedCompanies || ['*'],
+      password: ''
+    })
+  }
+  const submitEdit = () => {
+    if (!editing) return
+    const payload = {
+      role: editForm.role,
+      allowedCompanies: editForm.allowedCompanies,
+    }
+    if (editForm.password && editForm.password.length >= 6) payload.password = editForm.password
+    updateMutation.mutate({ id: editing.id, payload })
+  }
 
   return (
     <div className="space-y-4">
@@ -666,7 +700,10 @@ function UserManagementTab() {
               <label className="label">Role</label>
               <select value={form.role} onChange={e => setForm(f => ({ ...f, role: e.target.value }))} className="select">
                 <option value="viewer">Viewer (Read Only)</option>
-                <option value="hr">HR (Read/Write)</option>
+                <option value="employee">Employee (Self-service portal)</option>
+                <option value="supervisor">Supervisor</option>
+                <option value="hr">HR (Payroll + Employee Master)</option>
+                <option value="finance">Finance (Audit, Verify, Approvals)</option>
                 <option value="admin">Admin (Full Access)</option>
               </select>
             </div>
@@ -688,7 +725,7 @@ function UserManagementTab() {
             </div>
           </div>
           <div className="mt-3 text-xs text-slate-400">
-            <strong>Roles:</strong> Viewer = read only | HR = payroll + employee management | Admin = full access including settings
+            <strong>Roles:</strong> Viewer = read only | Employee = self-service portal | Supervisor = team dashboards | HR = payroll & employee master | Finance = salary review, extra-duty / gross-salary / miss-punch approval, held-salary release | Admin = full access
           </div>
           <div className="flex gap-2 mt-3">
             <button onClick={() => createMutation.mutate(form)} disabled={!form.username || !form.password || createMutation.isPending} className="btn-primary text-sm">
@@ -704,14 +741,14 @@ function UserManagementTab() {
           <table className="table-compact w-full">
             <thead>
               <tr>
-                <th>ID</th><th>Username</th><th>Role</th><th>Companies</th><th>Created</th>
+                <th>ID</th><th>Username</th><th>Role</th><th>Companies</th><th>Created</th><th>Actions</th>
               </tr>
             </thead>
             <tbody>
               {isLoading ? (
-                <tr><td colSpan={5} className="text-center py-8 text-slate-400">Loading...</td></tr>
+                <tr><td colSpan={6} className="text-center py-8 text-slate-400">Loading...</td></tr>
               ) : users.length === 0 ? (
-                <tr><td colSpan={5} className="text-center py-8 text-slate-400">No users found</td></tr>
+                <tr><td colSpan={6} className="text-center py-8 text-slate-400">No users found</td></tr>
               ) : users.map(u => (
                 <tr key={u.id}>
                   <td className="text-slate-400">{u.id}</td>
@@ -719,7 +756,10 @@ function UserManagementTab() {
                   <td>
                     <span className={clsx('text-xs px-2 py-0.5 rounded-full font-medium',
                       u.role === 'admin' ? 'bg-purple-100 text-purple-700' :
+                      u.role === 'finance' ? 'bg-green-100 text-green-700' :
                       u.role === 'hr' ? 'bg-blue-100 text-blue-700' :
+                      u.role === 'supervisor' ? 'bg-amber-100 text-amber-700' :
+                      u.role === 'employee' ? 'bg-cyan-100 text-cyan-700' :
                       'bg-slate-100 text-slate-600'
                     )}>{u.role}</span>
                   </td>
@@ -730,12 +770,76 @@ function UserManagementTab() {
                     }
                   </td>
                   <td className="text-slate-400 text-sm">{u.created_at?.split('T')[0] || '—'}</td>
+                  <td>
+                    <button onClick={() => openEdit(u)} className="text-blue-600 hover:bg-blue-50 px-2 py-1 rounded text-xs font-medium">Edit</button>
+                  </td>
                 </tr>
               ))}
             </tbody>
           </table>
         </div>
       </div>
+
+      {/* ── Edit User modal (April 2026) ───────────────────────
+          Wired to PUT /api/auth/users/:id which already supports
+          partial updates and runs normalizeRole() on the incoming
+          role. Lets the admin fix any role typo (or change company
+          access / reset a password) without needing a code change
+          or direct DB access. */}
+      {editing && (
+        <div className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center p-4" onClick={() => setEditing(null)}>
+          <div className="bg-white rounded-lg shadow-xl w-full max-w-md p-5" onClick={e => e.stopPropagation()}>
+            <h4 className="font-semibold text-slate-700 mb-1">Edit User</h4>
+            <p className="text-xs text-slate-400 mb-4">Updating <strong>{editing.username}</strong> (id {editing.id}).</p>
+            <div className="space-y-3">
+              <div>
+                <label className="label">Role</label>
+                <select value={editForm.role} onChange={e => setEditForm(f => ({ ...f, role: e.target.value }))} className="select">
+                  <option value="viewer">Viewer (Read Only)</option>
+                  <option value="employee">Employee (Self-service portal)</option>
+                  <option value="supervisor">Supervisor</option>
+                  <option value="hr">HR (Payroll + Employee Master)</option>
+                  <option value="finance">Finance (Audit, Verify, Approvals)</option>
+                  <option value="admin">Admin (Full Access)</option>
+                </select>
+              </div>
+              <div>
+                <label className="label">Company Access</label>
+                <select
+                  value={editForm.allowedCompanies?.includes('*') ? '*' : editForm.allowedCompanies?.join(',') || '*'}
+                  onChange={e => {
+                    const v = e.target.value
+                    setEditForm(f => ({ ...f, allowedCompanies: v === '*' ? ['*'] : v.split(',') }))
+                  }}
+                  className="select"
+                >
+                  <option value="*">All Companies</option>
+                  <option value="Indriyan Beverages Pvt Ltd">Indriyan Beverages Only</option>
+                  <option value="Asian Lakto Ind Ltd">Asian Lakto Only</option>
+                  <option value="Indriyan Beverages Pvt Ltd,Asian Lakto Ind Ltd">Both (Explicit)</option>
+                </select>
+              </div>
+              <div>
+                <label className="label">New Password (optional)</label>
+                <input
+                  type="password"
+                  value={editForm.password}
+                  onChange={e => setEditForm(f => ({ ...f, password: e.target.value }))}
+                  className="input"
+                  placeholder="Leave blank to keep current password"
+                />
+                <div className="text-[10px] text-slate-400 mt-1">Min 6 characters if changing.</div>
+              </div>
+            </div>
+            <div className="flex gap-2 mt-5">
+              <button onClick={submitEdit} disabled={updateMutation.isPending} className="btn-primary text-sm flex-1">
+                {updateMutation.isPending ? 'Saving...' : 'Save Changes'}
+              </button>
+              <button onClick={() => setEditing(null)} className="btn-secondary text-sm">Cancel</button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }

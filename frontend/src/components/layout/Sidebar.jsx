@@ -1,6 +1,7 @@
 import React from 'react'
 import { NavLink, useLocation } from 'react-router-dom'
 import { useAppStore } from '../../store/appStore'
+import { normalizeRole } from '../../utils/role'
 import clsx from 'clsx'
 
 const nav = [
@@ -133,7 +134,9 @@ function NavItem({ item, collapsed, depth = 0, userRole, onNavigate }) {
 export default function Sidebar() {
   const { sidebarCollapsed, toggleSidebar, alertCount, user } = useAppStore()
   const collapsed = sidebarCollapsed
-  const userRole = user?.role || 'viewer'
+  // Normalised so legacy role strings ("Finance Team", "Admin") still
+  // collapse to canonical form before any === 'admin' check downstream.
+  const userRole = normalizeRole(user?.role)
 
   // Close sidebar on mobile after navigation
   const handleMobileNav = () => {

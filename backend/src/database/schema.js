@@ -822,6 +822,34 @@ function initSchema(db) {
     console.warn('[schema] user role normalisation failed:', e.message);
   }
 
+  // ── April 2026: rescue the 'finance' user account ──
+  // The Settings → Users dropdown historically only offered viewer / hr /
+  // admin (Settings.jsx:667-671), so the account named "finance" was
+  // created with role='hr' and silently lost every finance-only
+  // permission (extra-duty approval, finance verification, OT payable,
+  // miss-punch finance review, gross-salary change approval).
+  //
+  // Fix it once, never re-run, never touch a role that the admin has
+  // intentionally set to 'admin'. Tracked via policy_config so a later
+  // admin demotion of the finance account isn't fought on the next deploy.
+  const financeUserMigrationDone = db.prepare(
+    "SELECT value FROM policy_config WHERE key = 'migration_finance_user_role_v1'"
+  ).get();
+  if (!financeUserMigrationDone) {
+    try {
+      const u = db.prepare("SELECT id, role FROM users WHERE username = 'finance'").get();
+      if (u && u.role !== 'finance' && u.role !== 'admin') {
+        db.prepare("UPDATE users SET role = 'finance' WHERE id = ?").run(u.id);
+        console.log(`[MIGRATION] Reset 'finance' user role from '${u.role}' → 'finance'`);
+      }
+      db.prepare(
+        "INSERT OR REPLACE INTO policy_config (key, value, description) VALUES ('migration_finance_user_role_v1', '1', 'One-time April 2026 finance user role correction (complete)')"
+      ).run();
+    } catch (e) {
+      console.warn('[MIGRATION] finance-user role correction failed:', e.message);
+    }
+  }
+
   // notifications: add columns for month-end scheduler
   safeAddColumn('notifications', 'role_target', 'TEXT');
   safeAddColumn('notifications', 'user_id', 'INTEGER');

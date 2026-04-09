@@ -12,14 +12,24 @@ import useExpandableRows from '../hooks/useExpandableRows'
 import DrillDownRow, { DrillDownChevron } from '../components/ui/DrillDownRow'
 import EmployeeQuickView from '../components/ui/EmployeeQuickView'
 import api from '../utils/api'
+import { canFinance as canFinanceFn, canHR as canHRFn } from '../utils/role'
 
 export default function SalaryInput() {
-  const { selectedCompany } = useAppStore()
+  const { selectedCompany, user } = useAppStore()
+  // April 2026: gross-salary changes follow the HR-proposes / Finance-
+  // approves pattern. HR can submit a change, only finance/admin can
+  // approve or reject. Buttons are scoped accordingly. The backend
+  // enforces the same gates so the UI is just for clarity.
+  const canHR = canHRFn(user)
+  const canFinance = canFinanceFn(user)
   const [filterDept, setFilterDept] = useState('')
   const [editEmployee, setEditEmployee] = useState(null)
   const [editForm, setEditForm] = useState({ basic: 0, da: 0, hra: 0, conveyance: 0, other_allowances: 0, pf_applicable: 1, esi_applicable: 1 })
   const [reason, setReason] = useState('')
   const [tab, setTab] = useState('employees') // employees | pending | history
+  // Reject-reason modal state for the new gated reject endpoint
+  const [rejectId, setRejectId] = useState(null)
+  const [rejectReason, setRejectReason] = useState('')
   const { toggle, isExpanded } = useExpandableRows()
 
   // All employees with salary structures
@@ -66,12 +76,20 @@ export default function SalaryInput() {
 
   const approveMutation = useMutation({
     mutationFn: (id) => api.put(`/salary-input/approve/${id}`),
-    onSuccess: () => { toast.success('Salary change approved'); refetchPending(); refetchEmps() }
+    onSuccess: () => { toast.success('Salary change approved'); refetchPending(); refetchEmps() },
+    onError: (e) => toast.error(e?.response?.data?.error || 'Approval failed')
   })
 
+  // Reject now requires a reason (backend gate added April 2026 — see
+  // salary-input.js, the rejection is archived to finance_rejections).
   const rejectMutation = useMutation({
-    mutationFn: (id) => api.put(`/salary-input/reject/${id}`),
-    onSuccess: () => { toast.success('Salary change rejected'); refetchPending() }
+    mutationFn: ({ id, reason }) => api.put(`/salary-input/reject/${id}`, { reason }),
+    onSuccess: () => {
+      toast.success('Salary change rejected')
+      setRejectId(null); setRejectReason('')
+      refetchPending()
+    },
+    onError: (e) => toast.error(e?.response?.data?.error || 'Rejection failed')
   })
 
   const openEdit = (emp) => {
@@ -236,10 +254,17 @@ export default function SalaryInput() {
                       <div className="text-xs text-slate-500">{req.department} | Requested by {req.requested_by}</div>
                       {req.reason && <div className="text-xs text-slate-600 mt-1">Reason: {req.reason}</div>}
                     </div>
-                    <div className="flex gap-2">
-                      <button onClick={() => approveMutation.mutate(req.id)} className="btn-primary text-xs">Approve</button>
-                      <button onClick={() => rejectMutation.mutate(req.id)} className="btn-ghost text-xs text-red-600">Reject</button>
-                    </div>
+                    {/* Approve / Reject are gated to Finance/Admin only.
+                        HR can submit (request-change) but not approve their
+                        own request — backend enforces the same gates. */}
+                    {canFinance ? (
+                      <div className="flex gap-2">
+                        <button onClick={() => approveMutation.mutate(req.id)} disabled={approveMutation.isPending} className="btn-primary text-xs">Approve</button>
+                        <button onClick={() => { setRejectId(req.id); setRejectReason('') }} className="btn-ghost text-xs text-red-600">Reject</button>
+                      </div>
+                    ) : (
+                      <div className="text-[10px] text-slate-400 italic">Awaiting Finance approval</div>
+                    )}
                   </div>
                   <div className="grid grid-cols-2 gap-4 mt-3 text-xs">
                     <div className="bg-slate-50 p-2 rounded-lg">
@@ -363,6 +388,34 @@ export default function SalaryInput() {
         </Modal>
 
         <AbbreviationLegend keys={['PF', 'ESI', 'DA', 'HRA', 'Dept', 'Emp']} />
+
+        {/* Salary Change Reject Modal — backend gate now requires a reason
+            and archives the rejected request to finance_rejections. */}
+        {rejectId && (
+          <Modal open={true} onClose={() => setRejectId(null)} title="Reject Salary Change">
+            <ModalBody>
+              <div className="space-y-3">
+                <p className="text-xs text-slate-500">This rejection will be archived to the finance_rejections audit trail. The HR user will need to submit a new request if they still want the change.</p>
+                <textarea
+                  value={rejectReason}
+                  onChange={e => setRejectReason(e.target.value)}
+                  className="input w-full h-20"
+                  placeholder="Rejection reason (required)..."
+                />
+              </div>
+            </ModalBody>
+            <ModalFooter>
+              <button
+                onClick={() => rejectMutation.mutate({ id: rejectId, reason: rejectReason })}
+                disabled={!rejectReason || rejectMutation.isPending}
+                className="btn-danger text-sm"
+              >
+                {rejectMutation.isPending ? 'Rejecting...' : 'Reject'}
+              </button>
+              <button onClick={() => setRejectId(null)} className="btn-ghost text-sm">Cancel</button>
+            </ModalFooter>
+          </Modal>
+        )}
       </div>
     </div>
   )

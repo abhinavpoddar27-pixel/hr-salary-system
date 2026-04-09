@@ -282,6 +282,31 @@ export const financeRejectGrant = (id, reason) => api.post(`/extra-duty-grants/$
 export const bulkFinanceApproveGrants = (ids) => api.post('/extra-duty-grants/bulk-finance-approve', { ids })
 export const getFinanceReviewQueue = (month, year) => api.get('/extra-duty-grants/finance-review', { params: { month, year } })
 
+// ── Miss Punch Finance Review (April 2026) ─────────────
+// HR resolves miss punches in Stage 2; finance must approve the
+// resolution before salary finalisation. Endpoints already exist on
+// the backend (financeAudit.js:1310-1452); these helpers wire them
+// to the new "Miss Punch Review" tab on FinanceVerification.jsx.
+export const getMissPunchPending = (month, year) => api.get('/finance-audit/miss-punch/pending', { params: { month, year } })
+export const approveMissPunch = (id, notes) => api.post(`/finance-audit/miss-punch/${id}/approve`, { notes })
+export const rejectMissPunch = (id, reason) => api.post(`/finance-audit/miss-punch/${id}/reject`, { rejection_reason: reason })
+export const bulkApproveMissPunch = (ids, notes) => api.post('/finance-audit/miss-punch/bulk-approve', { ids, notes })
+
+// ── Salary Change Request review (April 2026) ──────────
+// Pending gross-salary changes raised by HR; finance approves/rejects.
+// Reuses existing salary-input endpoints (now gated by middleware).
+export const getPendingSalaryChanges = () => api.get('/salary-input/pending-changes')
+export const approveSalaryChange = (id, effectiveFrom) => api.put(`/salary-input/approve/${id}`, { effectiveFrom })
+export const rejectSalaryChange = (id, reason) => api.put(`/salary-input/reject/${id}`, { reason })
+
+// ── Held Salary Release (April 2026) ───────────────────
+// `releaseHeldSalary` is defined earlier in this file (line ~131).
+// The backend endpoint is now gated by requireFinanceOrAdmin so HR
+// users that previously held the call get a clean 403.
+// New helper for the held-salary listing used by the FinanceVerification
+// "Held Salaries" tab and dashboard widget.
+export const getHeldSalaries = (month, year) => api.get('/payroll/salary-register', { params: { month, year } })
+
 // ── Holiday Master ───────────────────────────────────────
 export const updateHoliday = (id, data) => api.put(`/settings/holidays/${id}`, data)
 export const getHolidayAuditLog = (params) => api.get('/settings/holidays/audit-log', { params })

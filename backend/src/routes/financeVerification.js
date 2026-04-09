@@ -2,13 +2,10 @@ const express = require('express');
 const router = express.Router();
 const { getDb } = require('../database/db');
 const { detectRedFlags } = require('../services/financeRedFlags');
-
-function requireFinanceOrAdmin(req, res, next) {
-  if (!req.user || !['finance', 'admin'].includes(req.user.role)) {
-    return res.status(403).json({ success: false, error: 'Finance or admin access required' });
-  }
-  next();
-}
+const { requireFinanceOrAdmin } = require('../middleware/roles');
+// Role gate imported from centralised middleware (April 2026). Used to
+// be a naive `req.user.role` check that broke for any legacy non-
+// canonical role string — the new helper runs roles through normalizeRole.
 
 // GET /dashboard
 router.get('/dashboard', (req, res) => {

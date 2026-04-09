@@ -14,6 +14,7 @@
 const express = require('express');
 const router = express.Router();
 const { getDb, logAudit } = require('../database/db');
+const { requireFinanceOrAdmin } = require('../middleware/roles');
 
 const CORRECTION_REASONS = [
   'Gate register mismatch',
@@ -1335,7 +1336,7 @@ router.get('/miss-punch/pending', (req, res) => {
 });
 
 // POST /miss-punch/:id/approve — Finance approves the HR resolution
-router.post('/miss-punch/:id/approve', (req, res) => {
+router.post('/miss-punch/:id/approve', requireFinanceOrAdmin, (req, res) => {
   const db = getDb();
   const { notes } = req.body || {};
   const existing = db.prepare("SELECT * FROM attendance_processed WHERE id = ? AND is_miss_punch = 1 AND miss_punch_resolved = 1 AND miss_punch_finance_status = 'pending'").get(req.params.id);
@@ -1358,7 +1359,7 @@ router.post('/miss-punch/:id/approve', (req, res) => {
 });
 
 // POST /miss-punch/:id/reject — Finance rejects HR resolution; revert to original
-router.post('/miss-punch/:id/reject', (req, res) => {
+router.post('/miss-punch/:id/reject', requireFinanceOrAdmin, (req, res) => {
   const db = getDb();
   const { rejection_reason } = req.body || {};
   if (!rejection_reason) return res.status(400).json({ success: false, error: 'Rejection reason required' });
@@ -1409,7 +1410,7 @@ router.post('/miss-punch/:id/reject', (req, res) => {
 });
 
 // POST /miss-punch/bulk-approve — Finance bulk approve
-router.post('/miss-punch/bulk-approve', (req, res) => {
+router.post('/miss-punch/bulk-approve', requireFinanceOrAdmin, (req, res) => {
   const db = getDb();
   const { ids, notes } = req.body || {};
   if (!Array.isArray(ids) || !ids.length) return res.status(400).json({ success: false, error: 'ids required' });

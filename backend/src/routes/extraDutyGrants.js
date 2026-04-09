@@ -1,26 +1,11 @@
 const express = require('express');
 const router = express.Router();
 const { getDb, logAudit } = require('../database/db');
-const { normalizeRole } = require('./auth');
+const { requireHrOrAdmin, requireFinanceOrAdmin } = require('../middleware/roles');
 
-// ─── Role gates ────────────────────────────────────────────
-// `requireAuth` runs at mount time (server.js) and populates req.user.role.
-// These helpers add a second check on top of that so only HR/admin can
-// manage the HR queue and only Finance/admin can run finance approvals.
-// Uses the canonical normalizeRole() helper from auth.js so the check
-// never cares about case, whitespace, or legacy capitalised roles.
-function roleIn(req, ...allowed) {
-  const r = normalizeRole(req.user?.role);
-  return allowed.includes(r);
-}
-function requireHrOrAdmin(req, res, next) {
-  if (roleIn(req, 'admin', 'hr')) return next();
-  return res.status(403).json({ success: false, error: 'HR or admin access required' });
-}
-function requireFinanceOrAdmin(req, res, next) {
-  if (roleIn(req, 'admin', 'finance')) return next();
-  return res.status(403).json({ success: false, error: 'Finance or admin access required' });
-}
+// Role gates are imported from the centralised middleware module so the
+// same canonical normalizeRole-based check is enforced everywhere
+// (extraDutyGrants, financeVerification, financeAudit, salary-input).
 
 // ─── Finance Rejections Archive helper ─────────────────────
 // Writes one row per rejection into the unified `finance_rejections` archive.

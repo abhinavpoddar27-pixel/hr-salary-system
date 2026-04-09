@@ -1,7 +1,13 @@
 import React, { useState, useMemo, useEffect } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { useNavigate, useSearchParams } from 'react-router-dom'
-import { getFinanceAuditDashboard, getFinanceAuditEmployees, getFinanceRedFlags, setFinanceAuditStatus, bulkVerifyEmployees, submitFinanceSignoff, getFinanceSignoffStatus, addFinanceComment, getFinanceComments } from '../utils/api'
+import {
+  getFinanceAuditDashboard, getFinanceAuditEmployees, getFinanceRedFlags,
+  setFinanceAuditStatus, bulkVerifyEmployees, submitFinanceSignoff,
+  getFinanceSignoffStatus, addFinanceComment, getFinanceComments,
+  getMissPunchPending, approveMissPunch, rejectMissPunch, bulkApproveMissPunch,
+  getHeldSalaries, releaseHeldSalary
+} from '../utils/api'
 import { useAppStore } from '../store/appStore'
 import DateSelector from '../components/common/DateSelector'
 import useDateSelector from '../hooks/useDateSelector'
@@ -24,13 +30,17 @@ export default function FinanceVerification() {
   const [searchParams] = useSearchParams()
   const deepTab = searchParams.get('tab')
   const deepFilter = searchParams.get('filter')
-  const [activeTab, setActiveTab] = useState(deepTab === 'redflags' ? 'flags' : 'dashboard')
+  const [activeTab, setActiveTab] = useState(deepTab === 'redflags' ? 'flags' : deepTab === 'misspunch' ? 'misspunch' : deepTab === 'held' ? 'held' : 'dashboard')
   const [search, setSearch] = useState('')
   const [statusFilter, setStatusFilter] = useState('')
   const [signoffModal, setSignoffModal] = useState(false)
   const [rejectReason, setRejectReason] = useState('')
   const [expandedFlags, setExpandedFlags] = useState(new Set())
   const [flagCategory, setFlagCategory] = useState(deepFilter || 'all')
+  // Miss-punch review tab state
+  const [mpSelectedIds, setMpSelectedIds] = useState([])
+  const [mpRejectId, setMpRejectId] = useState(null)
+  const [mpRejectReason, setMpRejectReason] = useState('')
   const qc = useQueryClient()
 
   const { data: dashRes } = useQuery({ queryKey: ['fin-dash', month, year], queryFn: () => getFinanceAuditDashboard(month, year), retry: 0 })
@@ -46,11 +56,61 @@ export default function FinanceVerification() {
   const bulkMut = useMutation({ mutationFn: bulkVerifyEmployees, onSuccess: (r) => { qc.invalidateQueries(['fin-dash']); qc.invalidateQueries(['fin-emps']); toast.success(`${r.data.verified} employees verified`) } })
   const signoffMut = useMutation({ mutationFn: submitFinanceSignoff, onSuccess: () => { qc.invalidateQueries(['fin-signoff']); qc.invalidateQueries(['fin-dash']); setSignoffModal(false); toast.success('Sign-off submitted') }, onError: (e) => toast.error(e.response?.data?.error || 'Failed') })
 
+  // ── Miss Punch Review (Phase 4b) ──────────────────────────
+  // HR resolves miss punches in Stage 2; finance must approve before
+  // salary finalisation. Backend endpoints now gated by requireFinanceOrAdmin
+  // (see financeAudit.js miss-punch routes).
+  const { data: mpRes } = useQuery({
+    queryKey: ['fin-misspunch', month, year],
+    queryFn: () => getMissPunchPending(month, year),
+    retry: 0,
+    enabled: activeTab === 'misspunch'
+  })
+  const missPunches = mpRes?.data?.data || []
+  const mpApproveMut = useMutation({
+    mutationFn: ({ id, notes }) => approveMissPunch(id, notes),
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ['fin-misspunch'] }); toast.success('Miss punch approved') }
+  })
+  const mpRejectMut = useMutation({
+    mutationFn: ({ id, reason }) => rejectMissPunch(id, reason),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['fin-misspunch'] })
+      setMpRejectId(null); setMpRejectReason('')
+      toast.success('Rejected — reverted to HR queue')
+    }
+  })
+  const mpBulkMut = useMutation({
+    mutationFn: (ids) => bulkApproveMissPunch(ids, ''),
+    onSuccess: (r) => { qc.invalidateQueries({ queryKey: ['fin-misspunch'] }); setMpSelectedIds([]); toast.success(`${r?.data?.count || 0} miss punches approved`) }
+  })
+
+  // ── Held Salaries widget (Phase 5c) ───────────────────────
+  // Reads from /api/payroll/salary-register and filters to held rows
+  // client-side. The release endpoint is gated by requireFinanceOrAdmin.
+  const { data: heldRes } = useQuery({
+    queryKey: ['fin-held', month, year],
+    queryFn: () => getHeldSalaries(month, year),
+    retry: 0,
+    enabled: activeTab === 'held' || activeTab === 'dashboard'
+  })
+  const heldSalaries = (heldRes?.data?.data || []).filter(r => r.salary_held === 1 && r.hold_released !== 1)
+  const releaseMut = useMutation({
+    mutationFn: ({ code, month: m, year: y }) => releaseHeldSalary(code, m, y),
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ['fin-held'] }); qc.invalidateQueries({ queryKey: ['fin-dash'] }); toast.success('Salary released') },
+    onError: (e) => toast.error(e?.response?.data?.error || 'Release failed')
+  })
+
   // Canonical role check — see frontend/src/utils/role.js. A plain
   // `includes(user.role)` used to silently fail for legacy rows that
   // stored "Finance" / "Finance Team" / "finance " instead of "finance".
   const canAct = canFinanceFn(user)
-  const tabs = [{ id: 'dashboard', label: 'Audit Dashboard' }, { id: 'employees', label: 'Employee Review' }, { id: 'flags', label: `Red Flags (${redFlags.length})` }]
+  const tabs = [
+    { id: 'dashboard', label: 'Audit Dashboard' },
+    { id: 'employees', label: 'Employee Review' },
+    { id: 'flags', label: `Red Flags (${redFlags.length})` },
+    { id: 'misspunch', label: `Miss Punch Review${missPunches.length ? ` (${missPunches.length})` : ''}` },
+    { id: 'held', label: `Held Salaries${heldSalaries.length ? ` (${heldSalaries.length})` : ''}` },
+  ]
 
   return (
     <div className="p-6 space-y-5 animate-fade-in">
@@ -120,6 +180,34 @@ export default function FinanceVerification() {
                 {Object.entries(dash.redFlagSummary).map(([type, count]) => (
                   <span key={type} className="text-xs bg-red-50 text-red-700 px-2 py-1 rounded-full border border-red-200">{type.replace(/_/g, ' ')} ({count})</span>
                 ))}
+              </div>
+            </div>
+          )}
+
+          {/* Held Salaries quick widget (Phase 5c) */}
+          {heldSalaries.length > 0 && (
+            <div className="card p-4">
+              <div className="flex items-center justify-between mb-3">
+                <h3 className="text-sm font-semibold text-red-700">⚠ Held Salaries Pending Release ({heldSalaries.length})</h3>
+                <button onClick={() => setActiveTab('held')} className="text-xs text-blue-600 hover:underline">Review all →</button>
+              </div>
+              <div className="space-y-2">
+                {heldSalaries.slice(0, 5).map(h => (
+                  <div key={h.employee_code} className="flex items-center justify-between text-xs border-b border-slate-100 pb-2 last:border-0">
+                    <div className="min-w-0 flex-1">
+                      <div className="font-medium text-slate-700">{h.employee_name || h.employee_code} <span className="text-slate-400">({h.employee_code})</span></div>
+                      <div className="text-slate-500 mt-0.5 truncate" title={h.hold_reason}>{h.hold_reason || 'No reason recorded'}</div>
+                    </div>
+                    {canAct && (
+                      <button onClick={() => releaseMut.mutate({ code: h.employee_code, month, year })} disabled={releaseMut.isPending} className="text-green-600 hover:bg-green-50 px-2 py-1 rounded text-xs font-medium ml-3 shrink-0">
+                        Release
+                      </button>
+                    )}
+                  </div>
+                ))}
+                {heldSalaries.length > 5 && (
+                  <div className="text-[11px] text-slate-400 text-center pt-1">+{heldSalaries.length - 5} more on the Held Salaries tab</div>
+                )}
               </div>
             </div>
           )}
@@ -263,6 +351,157 @@ export default function FinanceVerification() {
           </div>
         );
       })()}
+
+      {/* ── Miss Punch Review Tab (Phase 4b) ──────────────────
+          Surfaces HR-resolved miss punches awaiting finance approval.
+          Approve/reject/bulk endpoints already exist on the backend
+          (financeAudit.js miss-punch routes), now gated by
+          requireFinanceOrAdmin so HR can't self-approve their own
+          resolutions. Reuses the table+button pattern from
+          ExtraDutyGrants.jsx for consistency. */}
+      {activeTab === 'misspunch' && (
+        <div className="space-y-3">
+          {/* Diagnostic banner — same surface as Extra Duty page so finance
+              users can immediately see what role the frontend detects. */}
+          <div className="rounded-lg border border-blue-200 bg-blue-50 px-4 py-2 text-[11px] text-blue-900 flex flex-wrap items-center gap-x-4 gap-y-1">
+            <span><strong>User:</strong> {user?.username || '(unknown)'}</span>
+            <span><strong>Role:</strong> <code className="bg-blue-100 px-1 rounded">{JSON.stringify(user?.role)}</code></span>
+            <span><strong>canFinance:</strong> <code className={clsx('px-1 rounded', canAct ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800')}>{String(canAct)}</code></span>
+            <span className="ml-auto text-slate-500">{missPunches.length} pending review</span>
+          </div>
+
+          {canAct && mpSelectedIds.length > 0 && (
+            <div className="flex justify-end">
+              <button onClick={() => mpBulkMut.mutate(mpSelectedIds)} disabled={mpBulkMut.isPending} className="btn-primary text-sm">
+                {mpBulkMut.isPending ? 'Approving...' : `Bulk Approve (${mpSelectedIds.length})`}
+              </button>
+            </div>
+          )}
+
+          <div className="card overflow-x-auto">
+            <table className="table-compact w-full text-[11px]">
+              <thead>
+                <tr>
+                  {canAct && (
+                    <th className="w-8">
+                      <input type="checkbox"
+                        checked={missPunches.length > 0 && missPunches.every(m => mpSelectedIds.includes(m.id))}
+                        onChange={() => setMpSelectedIds(s => s.length === missPunches.length ? [] : missPunches.map(m => m.id))}
+                        title="Select all" />
+                    </th>
+                  )}
+                  <th>Employee</th>
+                  <th>Date</th>
+                  <th>Type</th>
+                  <th>Original</th>
+                  <th>HR Resolution</th>
+                  <th>Source</th>
+                  <th>Resolved By</th>
+                  {canAct && <th>Actions</th>}
+                </tr>
+              </thead>
+              <tbody>
+                {missPunches.map(m => (
+                  <tr key={m.id}>
+                    {canAct && (
+                      <td>
+                        <input type="checkbox"
+                          checked={mpSelectedIds.includes(m.id)}
+                          onChange={() => setMpSelectedIds(s => s.includes(m.id) ? s.filter(x => x !== m.id) : [...s, m.id])} />
+                      </td>
+                    )}
+                    <td className="font-medium">{m.employee_name || m.employee_code}<div className="text-[10px] text-slate-400">{m.employee_code}</div></td>
+                    <td className="font-mono">{m.date}</td>
+                    <td className="text-xs">{m.miss_punch_type?.replace(/_/g, ' ')}</td>
+                    <td className="text-xs">
+                      <div>{m.status_original || '—'}</div>
+                      <div className="text-slate-400 font-mono text-[10px]">{m.in_time_original || '—'} / {m.out_time_original || '—'}</div>
+                    </td>
+                    <td className="text-xs">
+                      <div className="text-green-700 font-medium">{m.status_final || '—'}</div>
+                      <div className="text-slate-400 font-mono text-[10px]">{m.in_time_final || '—'} / {m.out_time_final || '—'}</div>
+                    </td>
+                    <td className="text-xs text-slate-500">{m.correction_source || '—'}<div className="text-[10px] text-slate-400 truncate max-w-[120px]" title={m.correction_remark}>{m.correction_remark}</div></td>
+                    <td className="text-xs text-slate-500">{m.miss_punch_finance_status === 'pending' ? 'HR' : '—'}</td>
+                    {canAct && (
+                      <td>
+                        <div className="flex gap-1">
+                          <button onClick={() => mpApproveMut.mutate({ id: m.id, notes: '' })} className="text-green-600 hover:bg-green-50 px-1.5 py-0.5 rounded text-[10px] font-medium">✓ Approve</button>
+                          <button onClick={() => { setMpRejectId(m.id); setMpRejectReason('') }} className="text-red-600 hover:bg-red-50 px-1.5 py-0.5 rounded text-[10px] font-medium">✕ Reject</button>
+                        </div>
+                      </td>
+                    )}
+                  </tr>
+                ))}
+                {missPunches.length === 0 && (
+                  <tr><td colSpan={canAct ? 9 : 8} className="text-center py-8 text-slate-400">No miss punches awaiting finance review for this period</td></tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {/* ── Held Salaries Tab (Phase 5c) ─────────────────────
+          Lists all currently-held salaries and lets finance release
+          them via the gated /api/payroll/salary/:code/hold-release. */}
+      {activeTab === 'held' && (
+        <div className="space-y-3">
+          <div className="rounded-lg border border-blue-200 bg-blue-50 px-4 py-2 text-[11px] text-blue-900 flex flex-wrap items-center gap-x-4 gap-y-1">
+            <span><strong>User:</strong> {user?.username || '(unknown)'}</span>
+            <span><strong>canFinance:</strong> <code className={clsx('px-1 rounded', canAct ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800')}>{String(canAct)}</code></span>
+            <span className="ml-auto text-slate-500">{heldSalaries.length} held</span>
+          </div>
+          <div className="card overflow-x-auto">
+            <table className="table-compact w-full text-[11px]">
+              <thead>
+                <tr>
+                  <th>Employee</th>
+                  <th>Dept</th>
+                  <th>Hold Reason</th>
+                  <th>Days</th>
+                  <th>Net</th>
+                  {canAct && <th>Actions</th>}
+                </tr>
+              </thead>
+              <tbody>
+                {heldSalaries.map(h => (
+                  <tr key={h.employee_code} className="bg-amber-50">
+                    <td className="font-medium">{h.employee_name || h.employee_code}<div className="text-[10px] text-slate-400">{h.employee_code}</div></td>
+                    <td className="text-slate-500">{h.department}</td>
+                    <td className="text-xs text-slate-600">{h.hold_reason || 'No reason recorded'}</td>
+                    <td className="font-mono text-center">{h.payable_days}</td>
+                    <td className="font-mono">{fmtINR(h.net_salary)}</td>
+                    {canAct && (
+                      <td>
+                        <button onClick={() => releaseMut.mutate({ code: h.employee_code, month, year })} disabled={releaseMut.isPending} className="text-green-600 hover:bg-green-50 px-2 py-1 rounded text-xs font-medium">
+                          Release
+                        </button>
+                      </td>
+                    )}
+                  </tr>
+                ))}
+                {heldSalaries.length === 0 && (
+                  <tr><td colSpan={canAct ? 6 : 5} className="text-center py-8 text-slate-400">No held salaries for this period</td></tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {/* Miss Punch Reject Modal */}
+      {mpRejectId && (
+        <Modal onClose={() => setMpRejectId(null)} title="Reject Miss Punch Resolution">
+          <div className="space-y-3">
+            <p className="text-xs text-slate-500">Rejecting will revert the HR resolution and put the record back in the HR queue for re-resolution.</p>
+            <textarea value={mpRejectReason} onChange={e => setMpRejectReason(e.target.value)} className="input w-full h-20" placeholder="Rejection reason (required)..." />
+            <button onClick={() => mpRejectMut.mutate({ id: mpRejectId, reason: mpRejectReason })} disabled={!mpRejectReason || mpRejectMut.isPending} className="btn-danger w-full">
+              {mpRejectMut.isPending ? 'Rejecting...' : 'Reject & Revert'}
+            </button>
+          </div>
+        </Modal>
+      )}
 
       {/* Sign-off Modal */}
       {signoffModal && (

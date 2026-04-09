@@ -1,6 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const { getDb } = require('../database/db');
+const { requireHrOrAdmin, requireFinanceOrAdmin } = require('../middleware/roles');
 
 /**
  * GET /api/salary-input/all
@@ -30,9 +31,12 @@ router.get('/all', (req, res) => {
 
 /**
  * POST /api/salary-input/request-change
- * Submit a salary change request (requires admin approval)
+ * HR proposes a salary structure change. Two-tier workflow modelled on
+ * extra-duty grants: HR submits → Finance approves via /approve/:id.
+ * Gated by requireHrOrAdmin so a viewer / employee / supervisor can't
+ * silently inject gross-salary changes.
  */
-router.post('/request-change', (req, res) => {
+router.post('/request-change', requireHrOrAdmin, (req, res) => {
   const db = getDb();
   const { employeeCode, newStructure, reason } = req.body;
   const requestedBy = req.user?.username || 'admin';
@@ -119,9 +123,11 @@ router.get('/all-changes', (req, res) => {
 
 /**
  * PUT /api/salary-input/approve/:id
- * Approve a salary change request — applies to salary_structures
+ * Finance approves a salary change request — applies to salary_structures.
+ * Gated by requireFinanceOrAdmin so HR cannot self-approve their own
+ * gross-salary change request (the whole point of the two-tier flow).
  */
-router.put('/approve/:id', (req, res) => {
+router.put('/approve/:id', requireFinanceOrAdmin, (req, res) => {
   const db = getDb();
   const { id } = req.params;
   const approvedBy = req.user?.username || 'admin';
@@ -170,16 +176,44 @@ router.put('/approve/:id', (req, res) => {
 
 /**
  * PUT /api/salary-input/reject/:id
+ * Finance rejects a pending salary change request. Gated identical to
+ * /approve/:id and archives the original payload to the unified
+ * `finance_rejections` table so the rejection has a queryable audit
+ * trail (matching the extra-duty / miss-punch reject flows).
  */
-router.put('/reject/:id', (req, res) => {
+router.put('/reject/:id', requireFinanceOrAdmin, (req, res) => {
   const db = getDb();
   const { id } = req.params;
   const { reason } = req.body;
+  if (!reason) return res.status(400).json({ success: false, error: 'Rejection reason required' });
+
+  const rejectedBy = req.user?.username || 'finance';
+  const request = db.prepare("SELECT * FROM salary_change_requests WHERE id = ? AND status = 'Pending'").get(id);
+  if (!request) return res.status(404).json({ success: false, error: 'Request not found or already processed' });
+
+  // Archive snapshot BEFORE flipping status, mirroring the
+  // archiveRejection() helper used by extra-duty grants.
+  try {
+    const emp = db.prepare('SELECT name, department FROM employees WHERE code = ?').get(request.employee_code) || {};
+    db.prepare(`
+      INSERT INTO finance_rejections
+        (rejection_type, source_table, source_record_id, employee_code,
+         employee_name, department, month, year, company,
+         original_details, rejection_reason, rejected_by)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      'GROSS_SALARY_CHANGE_FINANCE', 'salary_change_requests', request.id, request.employee_code,
+      emp.name || '', emp.department || '', null, null, '',
+      JSON.stringify(request), reason, rejectedBy
+    );
+  } catch (e) {
+    console.error('[finance_rejections] gross-salary archive error:', e.message);
+  }
 
   db.prepare(`
     UPDATE salary_change_requests SET status = 'Rejected', approved_by = ?, approved_at = datetime('now')
     WHERE id = ? AND status = 'Pending'
-  `).run(req.user?.username || 'admin', id);
+  `).run(rejectedBy, id);
 
   res.json({ success: true, message: 'Salary change rejected' });
 });
