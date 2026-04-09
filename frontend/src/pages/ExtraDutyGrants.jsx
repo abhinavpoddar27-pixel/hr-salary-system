@@ -31,7 +31,19 @@ export default function ExtraDutyGrants() {
   // accepted by the API is never silently rejected by the UI.
   const role = normalizeRole(user?.role)
   const canHR = canHRFn(user)
-  const canFinance = canFinanceFn(user)
+  // Failsafe: ALSO treat any role that contains "finance" as finance-capable.
+  // This is a defensive net for legacy / custom / exotic role strings that
+  // normalizeRole() might not tokenize cleanly (e.g. "Accounts & Finance",
+  // "Head-Finance-Dept", "financeadmin"). The backend's requireFinanceOrAdmin
+  // middleware on every write endpoint is still the authoritative gate, so
+  // the worst case is a user seeing buttons that 403 on click — never a
+  // silent lockout of a legitimate finance user.
+  const rawRole = String(user?.role || '').toLowerCase()
+  const canFinance = canFinanceFn(user) || rawRole.includes('finance')
+  // Diagnostic: true when the user looks like "finance" by any heuristic but
+  // the strict normalizeRole() didn't land on the canonical value. Surfaces
+  // in the banner below so the admin can clean up the offending DB row.
+  const financeRoleLooksOdd = rawRole.includes('finance') && role !== 'finance' && role !== 'admin'
 
   // Finance users land on the Finance Review tab by default; everyone else
   // starts on the HR queue.
@@ -100,6 +112,24 @@ export default function ExtraDutyGrants() {
           <div className="font-semibold">⚠ No approval access</div>
           <div>You're logged in as <strong>{user?.username || '(unknown)'}</strong> with role <code className="bg-amber-100 px-1 rounded">{JSON.stringify(user?.role)}</code>.</div>
           <div>To get HR or Finance approval buttons your role must be <code>hr</code>, <code>finance</code>, or <code>admin</code>. Ask an admin to update your role under Settings → User Management, then log out and back in.</div>
+        </div>
+      )}
+
+      {/* Role visibility banner on the Finance Review tab — always shown so
+          an admin debugging "where did my buttons go" can immediately see
+          the detected role, the canFinance verdict, and whether the failsafe
+          had to kick in. Harmless for legitimate finance users (it just
+          confirms their role is recognised) and invaluable when a legacy
+          role string is hiding approval controls. */}
+      {activeTab === 'finance' && (canHR || canFinance) && (
+        <div className="rounded-lg border border-blue-200 bg-blue-50 px-4 py-2 text-[11px] text-blue-900 flex flex-wrap items-center gap-x-4 gap-y-1">
+          <span><strong>User:</strong> {user?.username || '(unknown)'}</span>
+          <span><strong>Role (raw):</strong> <code className="bg-blue-100 px-1 rounded">{JSON.stringify(user?.role)}</code></span>
+          <span><strong>Normalised:</strong> <code className="bg-blue-100 px-1 rounded">{role}</code></span>
+          <span><strong>canFinance:</strong> <code className={clsx('px-1 rounded', canFinance ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800')}>{String(canFinance)}</code></span>
+          {financeRoleLooksOdd && (
+            <span className="text-amber-800">⚠ Role contains "finance" but isn't canonical — failsafe engaged. Ask admin to normalise this user record.</span>
+          )}
         </div>
       )}
 
