@@ -43,6 +43,9 @@ const nav = [
       { label: 'Working Hours', to: '/analytics/hours' },
     ]
   },
+  // Late Coming Phase 1: dedicated nav entry points to the Punctuality tab
+  // where the new late-coming management UI lives.
+  { label: 'Late Coming', icon: '⏰', to: '/analytics/punctuality' },
   {
     label: 'Compliance', icon: '✅', to: '/compliance',
     children: [

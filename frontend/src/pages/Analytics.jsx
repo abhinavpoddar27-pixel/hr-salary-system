@@ -1,5 +1,5 @@
 import React, { useState, useMemo } from 'react'
-import { useQuery } from '@tanstack/react-query'
+import { useQuery, useMutation } from '@tanstack/react-query'
 import { Routes, Route, NavLink, Navigate, useLocation } from 'react-router-dom'
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer,
@@ -8,8 +8,13 @@ import {
 import {
   getOrgOverview, getChronicAbsentees, getPunctualityReport,
   getAttendanceHeatmap, getOvertimeReport, getWorkingHoursReport,
-  getDepartmentDeepDive
+  getDepartmentDeepDive,
+  getLateComingAnalytics, getLateComingDeptSummary, getLateComingDeductions,
+  applyLateComingDeduction, exportLateComingReport
 } from '../utils/api'
+import toast from 'react-hot-toast'
+import { useQueryClient } from '@tanstack/react-query'
+// useMutation is already imported above from '@tanstack/react-query'
 import DateSelector from '../components/common/DateSelector'
 import useDateSelector from '../hooks/useDateSelector'
 import { Abbr } from '../components/ui/Tooltip'
@@ -357,11 +362,98 @@ function AbsenteeismTab({ selectedMonth, selectedYear, dateRangeMode, dateRangeS
 // ═══════════════════════════════════════════════════════════
 // PUNCTUALITY TAB
 // ═══════════════════════════════════════════════════════════
+// ── Late Coming Phase 1: trend arrow helpers ────────────────
+function TrendArrow({ trend }) {
+  if (trend === 'up') return <span className="text-red-600 font-bold">↑</span>
+  if (trend === 'down') return <span className="text-green-600 font-bold">↓</span>
+  return <span className="text-slate-400">→</span>
+}
+
+// Late Coming Phase 1: HR deduction modal
+function LateComingDeductionModal({ employee, month, year, company, onClose, onSubmit, isPending }) {
+  const suggested = `Late coming deduction: ${employee.late_count_this_month} late instances in ${new Date(year, month - 1).toLocaleString('en-US', { month: 'long' })} ${year}. Policy: 4 late = 1 day deduction.`
+  const [days, setDays] = useState(Math.max(0.5, Math.min(5, Math.round((employee.late_count_this_month / 4) * 2) / 2 || 0.5)))
+  const [remark, setRemark] = useState(suggested)
+
+  return (
+    <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4" onClick={onClose}>
+      <div className="bg-white rounded-xl shadow-2xl w-full max-w-lg max-h-[90vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
+        <div className="p-5 border-b">
+          <h3 className="font-bold text-slate-800">Apply Late Coming Deduction</h3>
+          <p className="text-xs text-slate-500 mt-0.5">
+            {employee.employee_code} · {employee.name} · {employee.department || '—'} · Shift {employee.shift_code || '—'}
+          </p>
+        </div>
+        <div className="p-5 space-y-4">
+          <div className="bg-amber-50 border border-amber-200 rounded-lg p-3 text-sm space-y-1">
+            <div>
+              Late <strong>{employee.late_count_this_month} times</strong> this month,{' '}
+              <strong>{employee.late_count_last_month} times</strong> last month
+              {' '}<TrendArrow trend={employee.trend} />
+            </div>
+            <div className="text-xs text-slate-600">
+              Left late (20+ min past shift end): <strong>{employee.left_late_count_this_month || 0}</strong> times this month
+              {employee.left_late_count_last_month ? ` · ${employee.left_late_count_last_month} last month` : ''}
+            </div>
+          </div>
+          <div>
+            <label className="label">Deduction Days</label>
+            <input
+              type="number"
+              min="0.5"
+              max="5"
+              step="0.5"
+              value={days}
+              onChange={e => setDays(parseFloat(e.target.value))}
+              className="input"
+            />
+            <p className="text-xs text-slate-400 mt-1">Allowed range: 0.5 – 5 days</p>
+          </div>
+          <div>
+            <label className="label">Remark (required)</label>
+            <textarea
+              rows={3}
+              value={remark}
+              onChange={e => setRemark(e.target.value)}
+              className="input"
+            />
+          </div>
+        </div>
+        <div className="p-5 border-t flex gap-2">
+          <button
+            className="btn-primary flex-1 disabled:opacity-50"
+            disabled={isPending || !remark.trim() || !(days > 0 && days <= 5)}
+            onClick={() => onSubmit({
+              employeeCode: employee.employee_code,
+              month, year, company,
+              lateCount: employee.late_count_this_month,
+              deductionDays: days,
+              remark: remark.trim()
+            })}
+          >
+            {isPending ? 'Applying…' : 'Apply Deduction (Pending Finance Review)'}
+          </button>
+          <button className="btn-secondary" onClick={onClose}>Cancel</button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 function PunctualityTab({ selectedMonth, selectedYear, dateRangeMode, dateRangeStart, dateRangeEnd, selectedCompany }) {
+  const qc = useQueryClient()
+  const { user } = useAppStore()
+  const canApplyDeduction = user?.role === 'admin' || user?.role === 'hr'
   const sort = useSortable('lateRate', 'desc')
   const deptSort = useSortable('lateRate', 'desc')
+  const lcSort = useSortable('late_count_this_month', 'desc')
   const empExpand = useExpandableRows()
   const deptExpand = useExpandableRows()
+
+  // Late Coming Phase 1: filters + deduction modal state
+  const [lcShiftFilter, setLcShiftFilter] = useState('')
+  const [lcDeptFilter, setLcDeptFilter] = useState('')
+  const [deductionEmp, setDeductionEmp] = useState(null)
 
   const { data: res, isLoading } = useQuery({
     queryKey: ['punctuality', selectedMonth, selectedYear, dateRangeMode, dateRangeStart, dateRangeEnd, selectedCompany],
@@ -375,6 +467,74 @@ function PunctualityTab({ selectedMonth, selectedYear, dateRangeMode, dateRangeS
   const allEmployees = useMemo(() => [...(data.allEmployees || [])].sort(sort.sortFn), [data, sort.sortKey, sort.sortDir])
   const deptSummary = useMemo(() => [...(data.departmentSummary || [])].sort(deptSort.sortFn), [data, deptSort.sortKey, deptSort.sortDir])
 
+  // Late Coming Phase 1 queries — fed by /api/late-coming endpoints.
+  const { data: lcAnalytics } = useQuery({
+    queryKey: ['lc-analytics', selectedMonth, selectedYear, selectedCompany, lcShiftFilter],
+    queryFn: () => getLateComingAnalytics(selectedMonth, selectedYear, {
+      ...(selectedCompany ? { company: selectedCompany } : {}),
+      ...(lcShiftFilter ? { shiftCode: lcShiftFilter } : {})
+    }),
+    retry: 0
+  })
+  const lcRows = lcAnalytics?.data?.data || []
+
+  const { data: lcDepts } = useQuery({
+    queryKey: ['lc-depts', selectedMonth, selectedYear, selectedCompany],
+    queryFn: () => getLateComingDeptSummary(selectedMonth, selectedYear, selectedCompany),
+    retry: 0
+  })
+  const lcDeptRows = lcDepts?.data?.data || []
+
+  const { data: lcDeductions } = useQuery({
+    queryKey: ['lc-deductions', selectedMonth, selectedYear, selectedCompany],
+    queryFn: () => getLateComingDeductions(selectedMonth, selectedYear, {
+      ...(selectedCompany ? { company: selectedCompany } : {}),
+      status: 'pending'
+    }),
+    retry: 0
+  })
+  const pendingDeductions = lcDeductions?.data?.data || []
+
+  const lcDeptsFiltered = useMemo(() => {
+    if (!lcDeptFilter) return lcRows
+    return lcRows.filter(r => r.department === lcDeptFilter)
+  }, [lcRows, lcDeptFilter])
+  const lcDisplayRows = useMemo(() => [...lcDeptsFiltered].sort(lcSort.sortFn), [lcDeptsFiltered, lcSort.sortKey, lcSort.sortDir])
+  const uniqueLcDepts = useMemo(() => [...new Set(lcRows.map(r => r.department).filter(Boolean))].sort(), [lcRows])
+
+  // Summary cards
+  const totalLateInstances = lcRows.reduce((s, r) => s + (r.late_count_this_month || 0), 0)
+  const habitualCount = lcRows.filter(r => r.late_count_this_month >= 10).length
+  const totalLateMinutes = lcRows.reduce((s, r) => s + (r.avg_late_minutes || 0) * (r.late_count_this_month || 0), 0)
+  const avgLateDuration = totalLateInstances > 0 ? Math.round(totalLateMinutes / totalLateInstances) : 0
+  const totalLeftLate = lcRows.reduce((s, r) => s + (r.left_late_count_this_month || 0), 0)
+
+  const deductionMutation = useMutation({
+    mutationFn: (data) => applyLateComingDeduction(data),
+    onSuccess: (_, vars) => {
+      toast.success(`Deduction applied for ${vars.employeeCode}. Pending finance review.`)
+      qc.invalidateQueries({ queryKey: ['lc-deductions'] })
+      qc.invalidateQueries({ queryKey: ['lc-analytics'] })
+      setDeductionEmp(null)
+    },
+    onError: (err) => toast.error(err?.response?.data?.error || 'Failed to apply deduction')
+  })
+
+  const handleExport = async () => {
+    try {
+      const res = await exportLateComingReport(selectedMonth, selectedYear, selectedCompany)
+      const blob = new Blob([res.data], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' })
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = `late_coming_${selectedYear}_${String(selectedMonth).padStart(2, '0')}.xlsx`
+      a.click()
+      URL.revokeObjectURL(url)
+    } catch (e) {
+      toast.error('Export failed')
+    }
+  }
+
   const avgLateMin = habituals.length > 0 ? Math.round(habituals.reduce((s, e) => s + e.avgLateMinutes, 0) / habituals.length) : 0
   const displayEmps = habituals.length > 0 ? habituals : allEmployees.filter(e => e.lateDays > 0)
 
@@ -385,6 +545,179 @@ function PunctualityTab({ selectedMonth, selectedYear, dateRangeMode, dateRangeS
           📅 Showing data for custom range: <strong>{new Date(dateRangeStart + 'T12:00:00').toLocaleDateString('en-IN', {day: '2-digit', month: 'short', year: 'numeric'})}</strong> to <strong>{new Date(dateRangeEnd + 'T12:00:00').toLocaleDateString('en-IN', {day: '2-digit', month: 'short', year: 'numeric'})}</strong>
         </div>
       )}
+
+      {/* ═══ Late Coming Management (Phase 1) ═══════════════════ */}
+      <div className="border-2 border-brand-200 rounded-xl p-5 bg-gradient-to-br from-white to-brand-50/30">
+        <div className="flex items-center justify-between mb-4">
+          <div>
+            <h3 className="text-lg font-bold text-slate-800">Late Coming Management</h3>
+            <p className="text-xs text-slate-500">Shift-based punctuality tracking &amp; discretionary deductions</p>
+          </div>
+          <div className="flex items-center gap-2">
+            <select value={lcShiftFilter} onChange={e => setLcShiftFilter(e.target.value)} className="select text-sm">
+              <option value="">All Shifts</option>
+              <option value="12HR">12-Hour</option>
+              <option value="10HR">10-Hour</option>
+              <option value="9HR">9-Hour</option>
+            </select>
+            <select value={lcDeptFilter} onChange={e => setLcDeptFilter(e.target.value)} className="select text-sm">
+              <option value="">All Departments</option>
+              {uniqueLcDepts.map(d => <option key={d} value={d}>{d}</option>)}
+            </select>
+            <button onClick={handleExport} className="btn-secondary text-sm">Export Excel</button>
+          </div>
+        </div>
+
+        {/* Summary cards */}
+        <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-5">
+          <KPI icon="⏰" label="Total Late Instances" value={totalLateInstances} sub="this month" color="amber" />
+          <KPI icon="⚠️" label="Habitual Latecomers" value={habitualCount} sub="≥10 late days" color="red" />
+          <KPI icon="⏳" label="Avg Late Duration" value={`${avgLateDuration} min`} sub="across all instances" color="amber" />
+          <KPI icon="🌙" label="Left Late Count" value={totalLeftLate} sub="20+ min past shift end" color="purple" />
+        </div>
+
+        {/* Department summary */}
+        {lcDeptRows.length > 0 && (
+          <div className="card overflow-hidden mb-5">
+            <div className="card-header"><h4 className="font-semibold text-slate-700">Department Summary</h4></div>
+            <div className="overflow-x-auto">
+              <table className="table-compact w-full">
+                <thead>
+                  <tr>
+                    <th>Department</th>
+                    <th className="text-center">Employees</th>
+                    <th className="text-center">Total Late</th>
+                    <th className="text-center">Trend</th>
+                    <th className="text-center">Left Late</th>
+                    <th>Worst Offender</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {lcDeptRows.map(d => (
+                    <tr key={d.department}>
+                      <td className="font-medium text-slate-700">{d.department}</td>
+                      <td className="text-center">{d.employee_count}</td>
+                      <td className="text-center font-bold text-amber-600">{d.total_late_instances}</td>
+                      <td className="text-center"><TrendArrow trend={d.trend} /></td>
+                      <td className="text-center text-purple-600">{d.left_late_count}</td>
+                      <td className="text-xs text-slate-600">
+                        {d.worst_offender ? `${d.worst_offender.name} (${d.worst_offender.late_count}×)` : '—'}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )}
+
+        {/* Employee detail table */}
+        <div className="card overflow-hidden">
+          <div className="card-header"><h4 className="font-semibold text-slate-700">Employee Late Coming Detail</h4></div>
+          <div className="overflow-x-auto">
+            <table className="table-compact w-full">
+              <thead>
+                <tr>
+                  <SortTh sort={lcSort} k="employee_code">Code</SortTh>
+                  <SortTh sort={lcSort} k="name">Name</SortTh>
+                  <SortTh sort={lcSort} k="department">Dept</SortTh>
+                  <SortTh sort={lcSort} k="shift_code" className="text-center">Shift</SortTh>
+                  <SortTh sort={lcSort} k="late_count_this_month" className="text-center">Late (Month)</SortTh>
+                  <SortTh sort={lcSort} k="late_count_last_month" className="text-center">Late (Prev)</SortTh>
+                  <th className="text-center">Trend</th>
+                  <SortTh sort={lcSort} k="avg_late_minutes" className="text-center">Avg Min</SortTh>
+                  <SortTh sort={lcSort} k="left_late_count_this_month" className="text-center">Left Late</SortTh>
+                  <SortTh sort={lcSort} k="left_late_count_last_month" className="text-center">Left Late (Prev)</SortTh>
+                  {canApplyDeduction && <th>Action</th>}
+                </tr>
+              </thead>
+              <tbody>
+                {lcDisplayRows.length === 0 ? (
+                  <tr><td colSpan={canApplyDeduction ? 11 : 10} className="text-center py-8 text-slate-400">No late arrivals for this period</td></tr>
+                ) : lcDisplayRows.map(r => (
+                  <tr key={r.employee_code}>
+                    <td className="font-mono text-xs text-slate-500">{r.employee_code}</td>
+                    <td className="font-medium text-slate-800">{r.name}</td>
+                    <td className="text-sm">{r.department}</td>
+                    <td className="text-center text-xs">{r.shift_code || '—'}</td>
+                    <td className="text-center font-bold text-red-600">{r.late_count_this_month}</td>
+                    <td className="text-center text-slate-500">{r.late_count_last_month}</td>
+                    <td className="text-center"><TrendArrow trend={r.trend} /></td>
+                    <td className="text-center text-amber-600">{r.avg_late_minutes || 0}</td>
+                    <td className="text-center text-purple-600">{r.left_late_count_this_month}</td>
+                    <td className="text-center text-slate-500">{r.left_late_count_last_month}</td>
+                    {canApplyDeduction && (
+                      <td>
+                        {r.late_count_this_month > 0 && (
+                          <button onClick={() => setDeductionEmp(r)} className="text-xs py-0.5 px-2 bg-red-50 text-red-700 rounded hover:bg-red-100 border border-red-200">
+                            Apply Deduction
+                          </button>
+                        )}
+                      </td>
+                    )}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        {/* Pending deductions */}
+        {pendingDeductions.length > 0 && (
+          <div className="card overflow-hidden mt-5">
+            <div className="card-header"><h4 className="font-semibold text-slate-700">Pending Deductions — awaiting finance review</h4></div>
+            <div className="overflow-x-auto">
+              <table className="table-compact w-full">
+                <thead>
+                  <tr>
+                    <th>Employee</th>
+                    <th>Dept</th>
+                    <th className="text-center">Late Count</th>
+                    <th className="text-center">Deduction Days</th>
+                    <th>Remark</th>
+                    <th>Applied By</th>
+                    <th>Date</th>
+                    <th className="text-center">Status</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {pendingDeductions.map(d => (
+                    <tr key={d.id}>
+                      <td>
+                        <div className="font-medium text-slate-800">{d.name || d.employee_code}</div>
+                        <div className="font-mono text-xs text-slate-500">{d.employee_code}</div>
+                      </td>
+                      <td className="text-sm text-slate-600">{d.department || '—'}</td>
+                      <td className="text-center">{d.late_count}</td>
+                      <td className="text-center font-bold text-red-600">{d.deduction_days}</td>
+                      <td className="text-xs text-slate-600 max-w-[320px] truncate" title={d.remark}>{d.remark}</td>
+                      <td className="text-xs text-slate-500">{d.applied_by}</td>
+                      <td className="text-xs text-slate-500">{(d.applied_at || '').split(' ')[0]}</td>
+                      <td className="text-center">
+                        <span className="px-2 py-0.5 rounded-full text-xs font-semibold bg-amber-100 text-amber-700">Pending Finance Review</span>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )}
+      </div>
+
+      {deductionEmp && (
+        <LateComingDeductionModal
+          employee={deductionEmp}
+          month={selectedMonth}
+          year={selectedYear}
+          company={selectedCompany}
+          isPending={deductionMutation.isPending}
+          onSubmit={(payload) => deductionMutation.mutate(payload)}
+          onClose={() => setDeductionEmp(null)}
+        />
+      )}
+
+      {/* ═══ Legacy punctuality view (kept for backward compatibility) ═══ */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
         <KPI icon="⏰" label="Habitual Latecomers" value={habituals.length} sub="Late >=50% of days" color="red" />
         <KPI icon="⏳" label="Avg Late" value={`${avgLateMin} min`} color="amber" />

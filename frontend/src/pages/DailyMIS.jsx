@@ -7,7 +7,7 @@ import useExpandableRows from '../hooks/useExpandableRows'
 import DrillDownRow, { DrillDownChevron } from '../components/ui/DrillDownRow'
 import EmployeeQuickView from '../components/ui/EmployeeQuickView'
 import clsx from 'clsx'
-import api, { getDailyShiftBreakdown, getDailyWorkerBreakdown, getPreviousDayReport } from '../utils/api'
+import api, { getDailyShiftBreakdown, getDailyWorkerBreakdown, getPreviousDayReport, getDailyMISLateComingSummary } from '../utils/api'
 import { useAppStore } from '../store/appStore'
 import CompanyFilter from '../components/shared/CompanyFilter'
 
@@ -132,6 +132,15 @@ export default function DailyMIS() {
     enabled: mainTab === 'previous',
   })
 
+  // Late Coming Phase 1: today's late arrival summary
+  const { data: lcSummaryRes } = useQuery({
+    queryKey: ['daily-mis-late-coming', selectedDate, selectedCompany],
+    queryFn: () => getDailyMISLateComingSummary(selectedDate, selectedCompany),
+    enabled: mainTab === 'today',
+    retry: 0
+  })
+  const lcSummary = lcSummaryRes?.data?.data || { totalLateToday: 0, departmentBreakdown: [], employees: [] }
+
   // ── Derived Data ────────────────────────────────────────────
 
   const summary = summaryRes?.data?.data || {}
@@ -235,6 +244,10 @@ export default function DailyMIS() {
                 </div>
               </div>
             </div>
+
+            {/* Late Coming Phase 1: Late Arrivals Today section */}
+            <LateComingTodaySection summary={lcSummary} />
+
 
             {/* Sub-tabs: Punched In / Absentees / Night Shift Detail */}
             <div className="flex gap-1 border-b border-slate-200 overflow-x-auto">
@@ -775,6 +788,75 @@ function NightShiftDetailTable({ data, rows }) {
           </React.Fragment>
         ))}</tbody>
       </table></div>
+    </div>
+  )
+}
+
+// ── Late Coming Phase 1: Late arrivals section for Daily MIS ──
+function LateComingTodaySection({ summary }) {
+  if (!summary) return null
+  const trendArrow = (t) => t === 'up' ? <span className="text-red-600 font-bold">↑</span>
+    : t === 'down' ? <span className="text-green-600 font-bold">↓</span>
+    : <span className="text-slate-400">→</span>
+  return (
+    <div className="card overflow-hidden">
+      <div className="card-header">
+        <div className="flex items-center justify-between">
+          <span className="font-semibold text-slate-700">
+            Late Arrivals Today — <span className="text-red-600">{summary.totalLateToday}</span> employees
+          </span>
+          <div className="flex gap-1.5 flex-wrap">
+            {(summary.departmentBreakdown || []).map(d => (
+              <span key={d.department} className="text-[10px] px-2 py-0.5 bg-amber-100 text-amber-700 rounded-full">
+                {d.department}: {d.count}
+              </span>
+            ))}
+          </div>
+        </div>
+      </div>
+      <div className="card-body">
+        {(summary.employees || []).length === 0 ? (
+          <div className="text-center text-slate-400 text-sm py-4">No late arrivals today.</div>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full table-compact text-xs">
+              <thead>
+                <tr>
+                  <th>Employee</th>
+                  <th>Dept</th>
+                  <th>Shift</th>
+                  <th>In Time</th>
+                  <th>Minutes Late</th>
+                  <th>MTD</th>
+                  <th>OT Yesterday</th>
+                </tr>
+              </thead>
+              <tbody>
+                {summary.employees.map(e => (
+                  <tr key={e.employee_code}>
+                    <td>
+                      <div className="font-medium">{e.name}</div>
+                      <div className="text-[10px] text-slate-400 font-mono">{e.employee_code}</div>
+                    </td>
+                    <td>{e.department || '—'}</td>
+                    <td className="font-mono">{e.shift_code || '—'}</td>
+                    <td className="font-mono">{e.in_time || '—'}</td>
+                    <td className="font-bold text-red-600">+{e.late_by_minutes}m</td>
+                    <td>
+                      Late {e.month_to_date_late_count}× this month {trendArrow(e.trend)}
+                    </td>
+                    <td className="text-xs text-slate-600">
+                      {e.yesterday_left_late
+                        ? <span className="badge-amber">Stayed {e.yesterday_left_late_minutes}m late</span>
+                        : <span className="text-slate-300">—</span>}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
     </div>
   )
 }
