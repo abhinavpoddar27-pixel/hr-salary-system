@@ -357,6 +357,13 @@ export const exportLateComingReport = (month, year, company) =>
   api.get('/late-coming/export', { params: { month, year, ...(company ? { company } : {}) }, responseType: 'blob' })
 export const getDailyMISLateComingSummary = (date, company) =>
   api.get('/daily-mis/late-coming-summary', { params: { date, ...(company ? { company } : {}) } })
+// Phase 2 — finance approval workflow
+export const getFinancePendingDeductions = (month, year, company) =>
+  api.get('/late-coming/finance-pending', { params: { month, year, ...(company ? { company } : {}) } })
+export const reviewLateDeduction = (id, data) =>
+  api.put(`/late-coming/finance-review/${id}`, data)
+export const bulkReviewLateDeductions = (data) =>
+  api.put('/late-coming/finance-bulk-review', data)
 // Bulk shift assignment for Employee Master
 export const bulkAssignShift = (employeeCodes, shiftId, shiftCode) =>
   api.put('/employees/bulk-shift', { employeeCodes, shiftId, shiftCode })

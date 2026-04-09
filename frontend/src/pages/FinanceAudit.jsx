@@ -2,7 +2,8 @@ import React, { useState, useMemo, useEffect, useRef } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { useSearchParams, useNavigate } from 'react-router-dom'
 import { getFinanceReport, submitDayCorrection, getCorrectionHistory, getCorrectionsSummary, getManualAttendanceFlags, verifyManualFlag,
-  getSalaryManualFlags, approveManualFlag, bulkApproveFlags, getReadinessCheck, getVarianceReport, getStatutoryCrosscheck } from '../utils/api'
+  getSalaryManualFlags, approveManualFlag, bulkApproveFlags, getReadinessCheck, getVarianceReport, getStatutoryCrosscheck,
+  getFinancePendingDeductions, reviewLateDeduction, bulkReviewLateDeductions, getLateComingDeductions } from '../utils/api'
 import { useAppStore } from '../store/appStore'
 import DateSelector from '../components/common/DateSelector'
 import useDateSelector from '../hooks/useDateSelector'
@@ -929,6 +930,326 @@ function StatutoryTab() {
 }
 
 // ═══════════════════════════════════════════════════════════
+// LATE COMING AUDIT TAB (Phase 2)
+// ═══════════════════════════════════════════════════════════
+function LateComingAuditTab() {
+  const qc = useQueryClient()
+  const { month, year } = useDateSelector({ mode: 'month', syncToStore: true })
+  const { selectedCompany } = useAppStore()
+  const [expandedId, setExpandedId] = useState(null)
+  const [selected, setSelected] = useState(new Set())
+  const [remarkModal, setRemarkModal] = useState(null) // { id|null, ids|null, action: 'approve'|'reject', bulk: bool }
+  const [remarkText, setRemarkText] = useState('')
+
+  const { data: pendingRes } = useQuery({
+    queryKey: ['late-finance-pending', month, year, selectedCompany],
+    queryFn: () => getFinancePendingDeductions(month, year, selectedCompany),
+    retry: 0, staleTime: 30000
+  })
+  const pending = pendingRes?.data?.data || []
+
+  // Full list of deductions for the month (approved + rejected history).
+  const { data: allRes } = useQuery({
+    queryKey: ['late-deductions-all', month, year, selectedCompany],
+    queryFn: () => getLateComingDeductions(month, year, { company: selectedCompany, status: 'all' }),
+    retry: 0, staleTime: 30000
+  })
+  const allDeds = allRes?.data?.data || []
+  const historyRows = allDeds.filter(d => d.finance_status === 'approved' || d.finance_status === 'rejected')
+
+  const reviewMut = useMutation({
+    mutationFn: ({ id, status, remark }) => reviewLateDeduction(id, { status, remark }),
+    onSuccess: () => {
+      qc.invalidateQueries(['late-finance-pending'])
+      qc.invalidateQueries(['late-deductions-all'])
+      qc.invalidateQueries(['readiness'])
+      qc.invalidateQueries(['month-end-checklist'])
+      toast.success('Deduction updated')
+    },
+    onError: (e) => toast.error(e?.response?.data?.error || 'Failed to update')
+  })
+
+  const bulkMut = useMutation({
+    mutationFn: (data) => bulkReviewLateDeductions(data),
+    onSuccess: (res) => {
+      qc.invalidateQueries(['late-finance-pending'])
+      qc.invalidateQueries(['late-deductions-all'])
+      qc.invalidateQueries(['readiness'])
+      qc.invalidateQueries(['month-end-checklist'])
+      setSelected(new Set())
+      toast.success(`${res?.data?.count || 0} deductions updated`)
+    },
+    onError: (e) => toast.error(e?.response?.data?.error || 'Bulk update failed')
+  })
+
+  const approvedThisMonth = allDeds.filter(d => d.finance_status === 'approved').length
+  const rejectedThisMonth = allDeds.filter(d => d.finance_status === 'rejected').length
+  const totalApprovedDays = allDeds
+    .filter(d => d.finance_status === 'approved')
+    .reduce((sum, d) => sum + Number(d.deduction_days || 0), 0)
+
+  const toggleSelect = (id) => {
+    const s = new Set(selected)
+    s.has(id) ? s.delete(id) : s.add(id)
+    setSelected(s)
+  }
+  const selectAll = () => {
+    if (selected.size === pending.length) setSelected(new Set())
+    else setSelected(new Set(pending.map(d => d.id)))
+  }
+
+  const openApprove = (id) => {
+    setRemarkModal({ id, action: 'approve', bulk: false })
+    setRemarkText('')
+  }
+  const openReject = (id) => {
+    setRemarkModal({ id, action: 'reject', bulk: false })
+    setRemarkText('')
+  }
+  const openBulk = (action) => {
+    if (selected.size === 0) return
+    setRemarkModal({ ids: [...selected], action, bulk: true })
+    setRemarkText('')
+  }
+
+  const submitRemark = () => {
+    if (!remarkModal) return
+    const status = remarkModal.action === 'approve' ? 'approved' : 'rejected'
+    if (status === 'rejected' && !remarkText.trim()) {
+      toast.error('Rejection remark is mandatory')
+      return
+    }
+    if (remarkModal.bulk) {
+      bulkMut.mutate({ deductionIds: remarkModal.ids, status, remark: remarkText.trim() })
+    } else {
+      reviewMut.mutate({ id: remarkModal.id, status, remark: remarkText.trim() })
+    }
+    setRemarkModal(null)
+    setRemarkText('')
+  }
+
+  const statusBadge = (val) => {
+    if (val === 'approved') return <span className="text-xs bg-green-100 text-green-700 px-2 py-0.5 rounded-full">Approved</span>
+    if (val === 'rejected') return <span className="text-xs bg-red-100 text-red-700 px-2 py-0.5 rounded-full">Rejected</span>
+    return <span className="text-xs bg-amber-100 text-amber-700 px-2 py-0.5 rounded-full">Pending</span>
+  }
+
+  const fmtDate = (ts) => {
+    if (!ts) return '—'
+    try { return new Date(ts).toLocaleString() } catch { return ts }
+  }
+  const monthLabel = (m, y) => {
+    const names = ['', 'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
+    return `${names[m] || m}'${String(y).slice(-2)}`
+  }
+
+  return (
+    <div className="space-y-4">
+      {/* Summary cards */}
+      <div className="grid grid-cols-4 gap-3">
+        <KPI label="Pending Review" value={pending.length} color="amber" />
+        <KPI label="Approved This Month" value={approvedThisMonth} color="green" />
+        <KPI label="Rejected This Month" value={rejectedThisMonth} color="red" />
+        <KPI label="Total Deduction Days" value={Math.round(totalApprovedDays * 100) / 100} color="blue" />
+      </div>
+
+      {/* Pending deductions table */}
+      <div className="card p-4">
+        <div className="flex items-center justify-between mb-3">
+          <h4 className="font-semibold text-sm">Pending Deductions ({pending.length})</h4>
+          {selected.size > 0 && (
+            <div className="flex items-center gap-2">
+              <span className="text-xs text-slate-500">{selected.size} selected</span>
+              <button onClick={() => openBulk('approve')} className="btn-primary text-xs">Bulk Approve</button>
+              <button onClick={() => openBulk('reject')} className="btn-secondary text-xs">Bulk Reject</button>
+            </div>
+          )}
+        </div>
+        <div className="overflow-x-auto">
+          <table className="table-compact w-full">
+            <thead>
+              <tr>
+                <th><input type="checkbox" onChange={selectAll} checked={selected.size === pending.length && pending.length > 0} /></th>
+                <th></th>
+                <th>Employee</th>
+                <th>Dept</th>
+                <th>Shift</th>
+                <th className="text-right">Late Cnt</th>
+                <th className="text-right">Ded Days</th>
+                <th>HR Remark</th>
+                <th>Applied By</th>
+                <th>Date</th>
+                <th>Actions</th>
+              </tr>
+            </thead>
+            <tbody>
+              {pending.map(d => {
+                const isExpanded = expandedId === d.id
+                return (
+                  <React.Fragment key={d.id}>
+                    <tr className="bg-amber-50/40 hover:bg-amber-50">
+                      <td><input type="checkbox" checked={selected.has(d.id)} onChange={() => toggleSelect(d.id)} /></td>
+                      <td>
+                        <button onClick={() => setExpandedId(isExpanded ? null : d.id)} className="text-slate-400 hover:text-slate-700 text-xs">
+                          {isExpanded ? '▼' : '▶'}
+                        </button>
+                      </td>
+                      <td className="font-medium text-sm">
+                        {d.name || d.employee_code}
+                        <div className="text-[10px] text-slate-400">{d.employee_code}</div>
+                      </td>
+                      <td className="text-xs">{d.department || '—'}</td>
+                      <td className="text-xs">{d.shift_code || '—'}</td>
+                      <td className="text-right text-xs font-mono">{d.late_count || 0}</td>
+                      <td className="text-right text-xs font-mono font-bold">{d.deduction_days}</td>
+                      <td className="text-xs text-slate-500 max-w-[200px] truncate" title={d.remark}>{d.remark}</td>
+                      <td className="text-xs">{d.applied_by}</td>
+                      <td className="text-xs text-slate-500">{fmtDate(d.applied_at)}</td>
+                      <td>
+                        <div className="flex gap-1">
+                          <button onClick={() => openApprove(d.id)} className="text-green-600 hover:bg-green-50 px-1.5 py-0.5 rounded text-xs font-medium">Approve</button>
+                          <button onClick={() => openReject(d.id)} className="text-red-600 hover:bg-red-50 px-1.5 py-0.5 rounded text-xs font-medium">Reject</button>
+                        </div>
+                      </td>
+                    </tr>
+                    {isExpanded && (
+                      <tr>
+                        <td colSpan={11} className="bg-slate-50 p-3">
+                          <div className="space-y-3">
+                            <div className="flex items-center gap-4 text-xs">
+                              <div>
+                                <span className="text-slate-500">Current Shift:</span>{' '}
+                                <span className="font-medium">{d.shift_name || d.shift_code || '—'}</span>
+                                {d.shift_start && <span className="text-slate-400"> ({d.shift_start}–{d.shift_end})</span>}
+                              </div>
+                              <div>
+                                <span className="text-slate-500">This Month:</span>{' '}
+                                <span className="font-medium">{d.current_month_late_count} late arrivals, avg {d.current_month_avg_minutes} min</span>
+                              </div>
+                              <div>
+                                <span className="text-slate-500">Left Late (6mo):</span>{' '}
+                                <span className="font-medium">{d.leftLateTotal} times</span>
+                              </div>
+                            </div>
+                            <div className="italic text-xs text-slate-500">
+                              Employee left late {d.leftLateTotal} times in the last 6 months (20+ min past shift end).
+                            </div>
+                            <div>
+                              <div className="text-xs font-semibold mb-1 text-slate-600">Last 6 Months History</div>
+                              <table className="text-xs w-full">
+                                <thead>
+                                  <tr className="text-slate-500">
+                                    <th className="text-left py-1">Month</th>
+                                    <th className="text-right py-1">Late</th>
+                                    <th className="text-right py-1">Avg Min</th>
+                                    <th className="text-right py-1">Left Late</th>
+                                    <th className="text-left py-1">Deductions</th>
+                                  </tr>
+                                </thead>
+                                <tbody>
+                                  {(d.history || []).map(h => (
+                                    <tr key={`${h.year}-${h.month}`} className="border-t border-slate-200">
+                                      <td className="py-1">{monthLabel(h.month, h.year)}</td>
+                                      <td className="text-right py-1 font-mono">{h.late_count}</td>
+                                      <td className="text-right py-1 font-mono">{h.avg_late_minutes}</td>
+                                      <td className="text-right py-1 font-mono">{h.left_late_count}</td>
+                                      <td className="py-1">
+                                        {h.deductions && h.deductions.length > 0 ? (
+                                          h.deductions.map(ded => (
+                                            <span key={ded.id} className="inline-block mr-1 text-[10px] bg-white border rounded px-1">
+                                              {ded.deduction_days}d {statusBadge(ded.finance_status)}
+                                            </span>
+                                          ))
+                                        ) : (
+                                          <span className="text-slate-300">—</span>
+                                        )}
+                                      </td>
+                                    </tr>
+                                  ))}
+                                </tbody>
+                              </table>
+                            </div>
+                          </div>
+                        </td>
+                      </tr>
+                    )}
+                  </React.Fragment>
+                )
+              })}
+              {pending.length === 0 && (
+                <tr><td colSpan={11} className="text-center py-8 text-slate-400">No pending deductions</td></tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      {/* History table — approved + rejected for the month */}
+      <div className="card p-4">
+        <h4 className="font-semibold text-sm mb-3">Reviewed History — {monthYearLabel(month, year)}</h4>
+        <div className="overflow-x-auto">
+          <table className="table-compact w-full">
+            <thead>
+              <tr>
+                <th>Employee</th>
+                <th>Dept</th>
+                <th className="text-right">Ded Days</th>
+                <th>HR Remark</th>
+                <th>Decision</th>
+                <th>Finance Remark</th>
+                <th>Reviewed By</th>
+                <th>Reviewed At</th>
+              </tr>
+            </thead>
+            <tbody>
+              {historyRows.map(r => (
+                <tr key={r.id}>
+                  <td className="font-medium text-sm">{r.name || r.employee_code}<div className="text-[10px] text-slate-400">{r.employee_code}</div></td>
+                  <td className="text-xs">{r.department || '—'}</td>
+                  <td className="text-right text-xs font-mono">{r.deduction_days}</td>
+                  <td className="text-xs text-slate-500 max-w-[180px] truncate" title={r.remark}>{r.remark}</td>
+                  <td>{statusBadge(r.finance_status)}</td>
+                  <td className="text-xs text-slate-500 max-w-[180px] truncate" title={r.finance_remark}>{r.finance_remark || '—'}</td>
+                  <td className="text-xs">{r.finance_reviewed_by || '—'}</td>
+                  <td className="text-xs text-slate-500">{fmtDate(r.finance_reviewed_at)}</td>
+                </tr>
+              ))}
+              {historyRows.length === 0 && (
+                <tr><td colSpan={8} className="text-center py-6 text-slate-400">No reviewed deductions yet</td></tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      {/* Remark modal */}
+      {remarkModal && (
+        <Modal onClose={() => { setRemarkModal(null); setRemarkText('') }}
+          title={`${remarkModal.action === 'approve' ? 'Approve' : 'Reject'} ${remarkModal.bulk ? `${remarkModal.ids.length} Deduction(s)` : 'Deduction'}`}>
+          <div className="space-y-3">
+            <div className="text-xs text-slate-500">
+              {remarkModal.action === 'reject'
+                ? 'Rejection remark is mandatory.'
+                : 'Remark is optional but recommended for audit trail.'}
+            </div>
+            <textarea
+              value={remarkText}
+              onChange={e => setRemarkText(e.target.value)}
+              className="input w-full h-24"
+              placeholder={remarkModal.action === 'reject' ? 'Why is this being rejected?' : 'Optional approval note...'}
+            />
+            <div className="flex gap-2">
+              <button onClick={submitRemark} className="btn-primary text-sm">Submit</button>
+              <button onClick={() => { setRemarkModal(null); setRemarkText('') }} className="btn-secondary text-sm">Cancel</button>
+            </div>
+          </div>
+        </Modal>
+      )}
+    </div>
+  )
+}
+
+// ═══════════════════════════════════════════════════════════
 // MAIN FINANCE AUDIT COMPONENT
 // ═══════════════════════════════════════════════════════════
 export default function FinanceAudit() {
@@ -961,6 +1282,14 @@ export default function FinanceAudit() {
   const attFlagsData = attFlagsRes?.data?.data || attFlagsRes?.data || []
   const unverifiedFlagCount = attFlagsData.filter(f => !f.verified && !f.verified_by).length
 
+  // Pending late coming deductions count for the tab badge
+  const { data: latePendingRes } = useQuery({
+    queryKey: ['late-finance-pending', month, year, selectedCompany],
+    queryFn: () => getFinancePendingDeductions(month, year, selectedCompany),
+    retry: 0, staleTime: 60000
+  })
+  const pendingLateCount = (latePendingRes?.data?.data || []).length
+
   const tabs = [
     { id: 'readiness', label: 'Readiness' },
     { id: 'interventions', label: 'Manual Interventions', badge: pendingFlagCount },
@@ -968,6 +1297,7 @@ export default function FinanceAudit() {
     { id: 'statutory', label: 'Statutory Check' },
     { id: 'report', label: 'Finance Report' },
     { id: 'manual-flags', label: `Attendance Flags`, badge: unverifiedFlagCount },
+    { id: 'late-coming', label: 'Late Coming', badge: pendingLateCount },
     ...(isAdmin ? [{ id: 'corrections', label: 'Corrections Summary' }] : [])
   ]
 
@@ -1003,6 +1333,7 @@ export default function FinanceAudit() {
         {activeTab === 'statutory' && <StatutoryTab />}
         {activeTab === 'report' && <ReportTab highlightEmployee={highlightEmployee} onClearHighlight={() => setHighlightEmployee(null)} />}
         {activeTab === 'manual-flags' && <ManualFlagsTab />}
+        {activeTab === 'late-coming' && <LateComingAuditTab />}
         {activeTab === 'corrections' && isAdmin && <CorrectionsSummaryTab />}
       </div>
     </ErrorBoundary>
