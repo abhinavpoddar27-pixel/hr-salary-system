@@ -68,9 +68,19 @@ export default function FinanceVerification() {
     enabled: activeTab === 'misspunch'
   })
   const missPunches = mpRes?.data?.data || []
+  // The miss-punch API helpers pass skipErrorToast, so onError handlers
+  // below own the error surface. Without them, failures would be silent.
+  const mpErrorMessage = (e, fallback) => {
+    const backendError = e?.response?.data?.error
+    if (backendError) return backendError
+    if (e?.message === 'Network Error') return 'Network error — backend unreachable. Retry in a moment.'
+    if (e?.code === 'ECONNABORTED') return 'Request timed out — retry in a moment'
+    return e?.message || fallback
+  }
   const mpApproveMut = useMutation({
     mutationFn: ({ id, notes }) => approveMissPunch(id, notes),
-    onSuccess: () => { qc.invalidateQueries({ queryKey: ['fin-misspunch'] }); toast.success('Miss punch approved') }
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ['fin-misspunch'] }); toast.success('Miss punch approved') },
+    onError: (e) => { console.error('[finance approve]', e); toast.error(mpErrorMessage(e, 'Approve failed')) }
   })
   const mpRejectMut = useMutation({
     mutationFn: ({ id, reason }) => rejectMissPunch(id, reason),
@@ -78,11 +88,13 @@ export default function FinanceVerification() {
       qc.invalidateQueries({ queryKey: ['fin-misspunch'] })
       setMpRejectId(null); setMpRejectReason('')
       toast.success('Rejected — reverted to HR queue')
-    }
+    },
+    onError: (e) => { console.error('[finance reject]', e); toast.error(mpErrorMessage(e, 'Reject failed')) }
   })
   const mpBulkMut = useMutation({
     mutationFn: (ids) => bulkApproveMissPunch(ids, ''),
-    onSuccess: (r) => { qc.invalidateQueries({ queryKey: ['fin-misspunch'] }); setMpSelectedIds([]); toast.success(`${r?.data?.count || 0} miss punches approved`) }
+    onSuccess: (r) => { qc.invalidateQueries({ queryKey: ['fin-misspunch'] }); setMpSelectedIds([]); toast.success(`${r?.data?.count || 0} miss punches approved`) },
+    onError: (e) => { console.error('[finance bulk approve]', e); toast.error(mpErrorMessage(e, 'Bulk approve failed')) }
   })
 
   // ── Held Salaries widget (Phase 5c) ───────────────────────

@@ -1335,108 +1335,160 @@ router.get('/miss-punch/pending', (req, res) => {
   res.json({ success: true, data: db.prepare(query).all(...params) });
 });
 
+// Classify the current state of a miss-punch row so approve/reject
+// endpoints can return a SPECIFIC error message instead of a vague
+// "not found or not pending finance review". Returns null if the
+// row is actionable by finance (pending / '' / NULL), or an
+// { status, error } object if it should be rejected upstream.
+// The lenient filter (IS NULL / '' / 'pending') matches the list
+// query in attendance.js:73 so any row visible in the UI is
+// actionable from both endpoints.
+function classifyMissPunchForFinance(row, action /* 'approve' | 'reject' */) {
+  if (!row) return { status: 404, error: 'Miss punch record not found' };
+  if (row.is_miss_punch !== 1) return { status: 400, error: 'This record is not a miss punch' };
+  if (row.miss_punch_resolved !== 1) {
+    return { status: 400, error: 'HR has not resolved this miss punch yet — nothing for finance to ' + action };
+  }
+  const fs = row.miss_punch_finance_status;
+  if (fs === 'approved') {
+    return { status: 409, error: action === 'approve'
+      ? 'Already approved by finance'
+      : 'Already approved by finance — cannot reject' };
+  }
+  if (fs === 'rejected') {
+    return { status: 409, error: action === 'reject'
+      ? 'Already rejected by finance'
+      : 'Already rejected by finance — cannot approve' };
+  }
+  // pending / '' / NULL → actionable
+  return null;
+}
+
 // POST /miss-punch/:id/approve — Finance approves the HR resolution
 router.post('/miss-punch/:id/approve', requireFinanceOrAdmin, (req, res) => {
-  const db = getDb();
-  const { notes } = req.body || {};
-  const existing = db.prepare("SELECT * FROM attendance_processed WHERE id = ? AND is_miss_punch = 1 AND miss_punch_resolved = 1 AND miss_punch_finance_status = 'pending'").get(req.params.id);
-  if (!existing) return res.status(404).json({ success: false, error: 'Miss punch not found or not pending finance review' });
+  try {
+    const db = getDb();
+    const { notes } = req.body || {};
+    const existing = db.prepare('SELECT * FROM attendance_processed WHERE id = ?').get(req.params.id);
+    const bad = classifyMissPunchForFinance(existing, 'approve');
+    if (bad) return res.status(bad.status).json({ success: false, error: bad.error });
 
-  const user = req.user?.username || 'finance';
-  db.prepare(`
-    UPDATE attendance_processed
-    SET miss_punch_finance_status = 'approved',
-        miss_punch_finance_reviewed_by = ?,
-        miss_punch_finance_reviewed_at = datetime('now'),
-        miss_punch_finance_notes = ?
-    WHERE id = ?
-  `).run(user, notes || '', req.params.id);
+    const user = req.user?.username || 'finance';
+    db.prepare(`
+      UPDATE attendance_processed
+      SET miss_punch_finance_status = 'approved',
+          miss_punch_finance_reviewed_by = ?,
+          miss_punch_finance_reviewed_at = datetime('now'),
+          miss_punch_finance_notes = ?
+      WHERE id = ?
+    `).run(user, notes || '', req.params.id);
 
-  logAudit('attendance_processed', req.params.id, 'miss_punch_finance_status', 'pending', 'approved',
-    'FINANCE_MISS_PUNCH_APPROVE', notes || `Approved HR resolution for ${existing.employee_code} ${existing.date}`);
+    logAudit('attendance_processed', req.params.id, 'miss_punch_finance_status', existing.miss_punch_finance_status || '', 'approved',
+      'FINANCE_MISS_PUNCH_APPROVE', notes || `Approved HR resolution for ${existing.employee_code} ${existing.date}`);
 
-  res.json({ success: true });
+    res.json({ success: true });
+  } catch (e) {
+    console.error('[finance] miss-punch approve error:', e);
+    res.status(500).json({ success: false, error: e.message || 'Approve failed' });
+  }
 });
 
 // POST /miss-punch/:id/reject — Finance rejects HR resolution; revert to original
 router.post('/miss-punch/:id/reject', requireFinanceOrAdmin, (req, res) => {
-  const db = getDb();
-  const { rejection_reason } = req.body || {};
-  if (!rejection_reason) return res.status(400).json({ success: false, error: 'Rejection reason required' });
-
-  const existing = db.prepare("SELECT * FROM attendance_processed WHERE id = ? AND is_miss_punch = 1 AND miss_punch_resolved = 1 AND miss_punch_finance_status = 'pending'").get(req.params.id);
-  if (!existing) return res.status(404).json({ success: false, error: 'Miss punch not found or not pending finance review' });
-
-  const user = req.user?.username || 'finance';
-
-  // Archive snapshot BEFORE reverting
   try {
-    const emp = db.prepare('SELECT name, department FROM employees WHERE code = ?').get(existing.employee_code) || {};
+    const db = getDb();
+    const { rejection_reason } = req.body || {};
+    if (!rejection_reason) return res.status(400).json({ success: false, error: 'Rejection reason required' });
+
+    const existing = db.prepare('SELECT * FROM attendance_processed WHERE id = ?').get(req.params.id);
+    const bad = classifyMissPunchForFinance(existing, 'reject');
+    if (bad) return res.status(bad.status).json({ success: false, error: bad.error });
+
+    const user = req.user?.username || 'finance';
+
+    // Archive snapshot BEFORE reverting
+    try {
+      const emp = db.prepare('SELECT name, department FROM employees WHERE code = ?').get(existing.employee_code) || {};
+      db.prepare(`
+        INSERT INTO finance_rejections
+          (rejection_type, source_table, source_record_id, employee_code,
+           employee_name, department, month, year, company,
+           original_details, rejection_reason, rejected_by)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(
+        'MISS_PUNCH_FINANCE', 'attendance_processed', existing.id, existing.employee_code,
+        emp.name || '', emp.department || '', existing.month, existing.year, existing.company || '',
+        JSON.stringify(existing), rejection_reason, user
+      );
+    } catch (e) {
+      console.error('[finance_rejections] miss-punch archive error:', e.message);
+    }
+
+    // Revert: drop HR's corrections, reset to unresolved so it re-enters the HR queue
     db.prepare(`
-      INSERT INTO finance_rejections
-        (rejection_type, source_table, source_record_id, employee_code,
-         employee_name, department, month, year, company,
-         original_details, rejection_reason, rejected_by)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `).run(
-      'MISS_PUNCH_FINANCE', 'attendance_processed', existing.id, existing.employee_code,
-      emp.name || '', emp.department || '', existing.month, existing.year, existing.company || '',
-      JSON.stringify(existing), rejection_reason, user
-    );
+      UPDATE attendance_processed
+      SET status_final = status_original,
+          in_time_final = NULL,
+          out_time_final = NULL,
+          actual_hours = NULL,
+          miss_punch_resolved = 0,
+          stage_2_done = 0,
+          miss_punch_finance_status = 'rejected',
+          miss_punch_finance_reviewed_by = ?,
+          miss_punch_finance_reviewed_at = datetime('now'),
+          miss_punch_finance_notes = ?
+      WHERE id = ?
+    `).run(user, rejection_reason, req.params.id);
+
+    logAudit('attendance_processed', req.params.id, 'miss_punch_finance_status', existing.miss_punch_finance_status || '', 'rejected',
+      'FINANCE_MISS_PUNCH_REJECT', rejection_reason);
+
+    res.json({ success: true, message: 'Rejected — reverted to HR queue for re-resolution' });
   } catch (e) {
-    console.error('[finance_rejections] miss-punch archive error:', e.message);
+    console.error('[finance] miss-punch reject error:', e);
+    res.status(500).json({ success: false, error: e.message || 'Reject failed' });
   }
-
-  // Revert: drop HR's corrections, reset to unresolved so it re-enters the HR queue
-  db.prepare(`
-    UPDATE attendance_processed
-    SET status_final = status_original,
-        in_time_final = NULL,
-        out_time_final = NULL,
-        actual_hours = NULL,
-        miss_punch_resolved = 0,
-        stage_2_done = 0,
-        miss_punch_finance_status = 'rejected',
-        miss_punch_finance_reviewed_by = ?,
-        miss_punch_finance_reviewed_at = datetime('now'),
-        miss_punch_finance_notes = ?
-    WHERE id = ?
-  `).run(user, rejection_reason, req.params.id);
-
-  logAudit('attendance_processed', req.params.id, 'miss_punch_finance_status', 'pending', 'rejected',
-    'FINANCE_MISS_PUNCH_REJECT', rejection_reason);
-
-  res.json({ success: true, message: 'Rejected — reverted to HR queue for re-resolution' });
 });
 
 // POST /miss-punch/bulk-approve — Finance bulk approve
 router.post('/miss-punch/bulk-approve', requireFinanceOrAdmin, (req, res) => {
-  const db = getDb();
-  const { ids, notes } = req.body || {};
-  if (!Array.isArray(ids) || !ids.length) return res.status(400).json({ success: false, error: 'ids required' });
+  try {
+    const db = getDb();
+    const { ids, notes } = req.body || {};
+    if (!Array.isArray(ids) || !ids.length) return res.status(400).json({ success: false, error: 'ids required' });
 
-  const user = req.user?.username || 'finance';
-  const stmt = db.prepare(`
-    UPDATE attendance_processed
-    SET miss_punch_finance_status = 'approved',
-        miss_punch_finance_reviewed_by = ?,
-        miss_punch_finance_reviewed_at = datetime('now'),
-        miss_punch_finance_notes = ?
-    WHERE id = ? AND is_miss_punch = 1 AND miss_punch_resolved = 1 AND miss_punch_finance_status = 'pending'
-  `);
-  let count = 0;
-  const txn = db.transaction(() => {
-    for (const id of ids) {
-      const info = stmt.run(user, notes || '', id);
-      if (info.changes > 0) {
-        logAudit('attendance_processed', id, 'miss_punch_finance_status', 'pending', 'approved',
-          'FINANCE_MISS_PUNCH_BULK_APPROVE', notes || '');
-        count++;
+    const user = req.user?.username || 'finance';
+    // Lenient WHERE — match the list query so any visible row can be bulk-approved.
+    // Rows already approved/rejected are silently skipped (changes=0) so bulk runs
+    // stay idempotent for partial selections.
+    const stmt = db.prepare(`
+      UPDATE attendance_processed
+      SET miss_punch_finance_status = 'approved',
+          miss_punch_finance_reviewed_by = ?,
+          miss_punch_finance_reviewed_at = datetime('now'),
+          miss_punch_finance_notes = ?
+      WHERE id = ? AND is_miss_punch = 1 AND miss_punch_resolved = 1
+        AND (miss_punch_finance_status IS NULL
+          OR miss_punch_finance_status = ''
+          OR miss_punch_finance_status = 'pending')
+    `);
+    let count = 0;
+    const txn = db.transaction(() => {
+      for (const id of ids) {
+        const info = stmt.run(user, notes || '', id);
+        if (info.changes > 0) {
+          logAudit('attendance_processed', id, 'miss_punch_finance_status', 'pending', 'approved',
+            'FINANCE_MISS_PUNCH_BULK_APPROVE', notes || '');
+          count++;
+        }
       }
-    }
-  });
-  txn();
-  res.json({ success: true, count });
+    });
+    txn();
+    res.json({ success: true, count });
+  } catch (e) {
+    console.error('[finance] miss-punch bulk-approve error:', e);
+    res.status(500).json({ success: false, error: e.message || 'Bulk approve failed' });
+  }
 });
 
 // GET /miss-punch/rejections — read the archive (scoped to miss-punch)

@@ -161,11 +161,26 @@ export default function MissPunch() {
   // ── Finance approve/reject (April 2026) ──────────────────
   // Inline actions on HR-resolved rows for finance users. Backend
   // endpoints are gated by requireFinanceOrAdmin via
-  // /finance-audit/miss-punch/:id/approve|reject.
+  // /finance-audit/miss-punch/:id/approve|reject. The API helpers
+  // pass skipErrorToast so the onError handlers below own the error
+  // surface — one toast per failure, with the actual backend message
+  // instead of a generic "Reject failed".
+  const financeErrorMessage = (e, fallback) => {
+    const backendError = e?.response?.data?.error
+    if (backendError) return backendError
+    if (e?.message === 'Network Error') {
+      return 'Network error — backend unreachable. Retry in a moment or check your connection.'
+    }
+    if (e?.code === 'ECONNABORTED') return 'Request timed out — retry in a moment'
+    return e?.message || fallback
+  }
   const finApproveMut = useMutation({
     mutationFn: (id) => approveMissPunch(id, ''),
     onSuccess: () => { toast.success('Approved — Stage 6 recalculation required'); refetch() },
-    onError: (e) => toast.error(e?.response?.data?.error || 'Approve failed')
+    onError: (e) => {
+      console.error('[finance approve]', e)
+      toast.error(financeErrorMessage(e, 'Approve failed'))
+    }
   })
   const finRejectMut = useMutation({
     mutationFn: ({ id, reason }) => rejectMissPunch(id, reason),
@@ -174,7 +189,10 @@ export default function MissPunch() {
       setFinRejectId(null); setFinRejectReason('')
       refetch()
     },
-    onError: (e) => toast.error(e?.response?.data?.error || 'Reject failed')
+    onError: (e) => {
+      console.error('[finance reject]', e)
+      toast.error(financeErrorMessage(e, 'Reject failed'))
+    }
   })
 
   const handleSave = (id, data) => resolveMutation.mutate({ id, data })

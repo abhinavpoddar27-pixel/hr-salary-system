@@ -14,7 +14,11 @@ api.interceptors.request.use(config => {
   return config
 })
 
-// Handle responses: 401 → redirect to login; others → toast error
+// Handle responses: 401 → redirect to login; others → toast error.
+// Callers can opt out of the global error toast by passing
+// `{ skipErrorToast: true }` in the request config — useful when a
+// React Query mutation wants to own the error message and avoid the
+// "Network Error" + "Reject failed" double-toast problem.
 api.interceptors.response.use(
   res => res,
   err => {
@@ -27,6 +31,7 @@ api.interceptors.response.use(
       }
       return Promise.reject(err)
     }
+    if (err.config?.skipErrorToast) return Promise.reject(err)
     const msg = err.response?.data?.error || err.message || 'Request failed'
     toast.error(msg)
     return Promise.reject(err)
@@ -298,9 +303,13 @@ export const getFinanceReviewQueue = (month, year) => api.get('/extra-duty-grant
 // the backend (financeAudit.js:1310-1452); these helpers wire them
 // to the new "Miss Punch Review" tab on FinanceVerification.jsx.
 export const getMissPunchPending = (month, year) => api.get('/finance-audit/miss-punch/pending', { params: { month, year } })
-export const approveMissPunch = (id, notes) => api.post(`/finance-audit/miss-punch/${id}/approve`, { notes })
-export const rejectMissPunch = (id, reason) => api.post(`/finance-audit/miss-punch/${id}/reject`, { rejection_reason: reason })
-export const bulkApproveMissPunch = (ids, notes) => api.post('/finance-audit/miss-punch/bulk-approve', { ids, notes })
+// Finance approve/reject/bulk-approve opt out of the global error
+// toast (skipErrorToast) so the calling React Query mutation owns the
+// error surface — avoids the "Network Error" + "Reject failed"
+// double-toast where both the interceptor and the onError handler fire.
+export const approveMissPunch = (id, notes) => api.post(`/finance-audit/miss-punch/${id}/approve`, { notes }, { skipErrorToast: true })
+export const rejectMissPunch = (id, reason) => api.post(`/finance-audit/miss-punch/${id}/reject`, { rejection_reason: reason }, { skipErrorToast: true })
+export const bulkApproveMissPunch = (ids, notes) => api.post('/finance-audit/miss-punch/bulk-approve', { ids, notes }, { skipErrorToast: true })
 
 // ── Salary Change Request review (April 2026) ──────────
 // Pending gross-salary changes raised by HR; finance approves/rejects.
