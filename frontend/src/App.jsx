@@ -42,6 +42,9 @@ const DailyWageContractors = React.lazy(() => import('./pages/DailyWageContracto
 const DailyWageEntry = React.lazy(() => import('./pages/DailyWageEntry'))
 const DailyWageBatchImport = React.lazy(() => import('./pages/DailyWageBatchImport'))
 const DailyWageRecords = React.lazy(() => import('./pages/DailyWageRecords'))
+const DailyWageFinanceReview = React.lazy(() => import('./pages/DailyWageFinanceReview'))
+const DailyWagePayments = React.lazy(() => import('./pages/DailyWagePayments'))
+const DailyWageDashboard = React.lazy(() => import('./pages/DailyWageDashboard'))
 
 function PageLoader() {
   return (
@@ -168,6 +171,9 @@ export default function App() {
           <Route path="/daily-wage/contractors" element={<RequireAuth><Layout title="Contractor Master"><DailyWageContractors /></Layout></RequireAuth>} />
           <Route path="/daily-wage/new" element={<RequireAuth><Layout title="New Daily Wage Entry"><DailyWageEntry /></Layout></RequireAuth>} />
           <Route path="/daily-wage/import" element={<RequireAuth><Layout title="Batch Import"><DailyWageBatchImport /></Layout></RequireAuth>} />
+          <Route path="/daily-wage/finance/review" element={<RequireAuth><Layout title="Daily Wage Finance Review"><DailyWageFinanceReview /></Layout></RequireAuth>} />
+          <Route path="/daily-wage/finance/payments" element={<RequireAuth><Layout title="Daily Wage Payments"><DailyWagePayments /></Layout></RequireAuth>} />
+          <Route path="/daily-wage/finance/dashboard" element={<RequireAuth><Layout title="Daily Wage Dashboard"><DailyWageDashboard /></Layout></RequireAuth>} />
           <Route path="/daily-wage" element={<RequireAuth><Layout title="Daily Wage Records"><DailyWageRecords /></Layout></RequireAuth>} />
           <Route path="/session-analytics" element={<RequireAuth><Layout title="Session Analytics"><SessionAnalytics /></Layout></RequireAuth>} />
           <Route path="/employees" element={<RequireAuth><Layout title="Employee Master"><Employees /></Layout></RequireAuth>} />
