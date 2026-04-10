@@ -44,8 +44,12 @@ backend/
 │   │   ├── usage-logs.js        Admin usage audit
 │   │   ├── phase5.js            Leave accrual, shift roster, attrition
 │   │   ├── lateComing.js        Late Coming: analytics, deductions, finance approval (Phase 1+2)
+│   │   ├── short-leaves.js     Gate pass / short leave CRUD, quota check
+│   │   ├── early-exits.js      Early exit detection trigger, list, summary, analytics
+│   │   ├── early-exit-deductions.js  HR deduction submit/revise + finance approve/reject
 │   │   └── analytics.js         Workforce analytics
 │   └── services/
+│       ├── earlyExitDetection.js     Detect employees who punched out before shift end
 │       ├── parser.js                 EESL XLS parsing — dynamic column detection
 │       ├── missPunch.js              Stage 2: detect missing IN/OUT, NIGHT_UNPAIRED
 │       ├── nightShift.js             Stage 4: pair IN day D + OUT day D+1
@@ -99,6 +103,9 @@ frontend/
 │   │   ├── pipeline/PipelineProgress.jsx
 │   │   ├── shared/CompanyFilter.jsx
 │   │   ├── common/{DataTable,DateSelector,StatCard}.jsx
+│   │   ├── GatePasses.jsx                     Gate pass tab (Leave Management)
+│   │   ├── EarlyExitDetection.jsx             Early exit detection tab (Analytics)
+│   │   ├── FinanceEarlyExitApprovals.jsx      Finance approval tab (Finance Audit)
 │   │   └── ui/{Modal,ConfirmDialog,Tooltip,CalendarView,...}.jsx
 │   ├── hooks/
 │   │   ├── useDateSelector.js        Month/year picker with store sync
@@ -266,9 +273,9 @@ frontend/
 - Sensitivity: Read-only consumers; column changes break dashboard widgets
 
 ## Section 4: Database Schema Summary
-- Total tables: **44** (in `backend/src/database/schema.js`) — +1 for late_coming_deductions (Late Coming Phase 1)
-- Attendance: `attendance_raw`, `attendance_processed` (now with `is_left_late`/`left_late_minutes` for late coming tracking), `night_shift_pairs`, `monthly_imports`, `manual_attendance_flags`, `day_corrections`, `punch_corrections`
-- Employee/salary: `employees`, `salary_structures`, `salary_computations`, `salary_advances`, `salary_change_requests`, `salary_manual_flags`, `loans`, `loan_repayments`, `tax_declarations`, `extra_duty_grants`, `late_coming_deductions` (NEW, April 2026)
+- Total tables: **48** (in `backend/src/database/schema.js`) — +1 late_coming_deductions, +4 early exit (April 2026)
+- Attendance: `attendance_raw`, `attendance_processed` (now with `is_left_late`/`left_late_minutes` for late coming tracking + `is_early_departure`/`early_by_minutes` for early exit), `night_shift_pairs`, `monthly_imports`, `manual_attendance_flags`, `day_corrections`, `punch_corrections`
+- Employee/salary: `employees`, `salary_structures`, `salary_computations` (now with `early_exit_deduction`), `salary_advances`, `salary_change_requests`, `salary_manual_flags`, `loans`, `loan_repayments`, `tax_declarations`, `extra_duty_grants`, `late_coming_deductions`, `short_leaves` (NEW, April 2026), `early_exit_detections` (NEW), `early_exit_deductions` (NEW), `early_exit_deduction_audit` (NEW)
 - Processing: `day_calculations`, `holidays`, `holiday_audit_log`, `shifts` (now with `duration_hours` + seeded 12HR/10HR/9HR rows), `shift_roster`, `leave_balances`, `leave_transactions`, `leave_applications`
 - Audit: `audit_log`, `usage_logs`, `finance_audit_status`, `finance_audit_comments`, `finance_month_signoff`, `finance_approvals`
 - System: `users`, `policy_config`, `company_config`, `notifications`, `compliance_items`, `alerts`, `employee_documents`, `employee_lifecycle`, `monthly_dept_stats`, `monthly_employee_stats`, `session_events`, `session_daily_summary`
@@ -337,7 +344,11 @@ frontend/
 - **Professional Tax**: **DISABLED** (April 2026). Always 0. `calcProfessionalTax()` helper retained but never invoked.
 - **TDS**: Auto-calculated from `tax_declarations` table; falls back to manually entered TDS preserved across recomputations.
 - **LOP**: NOT a separate deduction — pro-rating handles missed days via earnedRatio (line 338).
-- **Net salary formula**: `Math.max(0, grossEarned - totalDeductions)`. totalDeductions = pf + esi + tds + advance + lop + other + loan (PT always 0).
+- **Early Exit Deduction** (April 2026): Finance-approved deductions for leaving before shift end.
+  Summed from `early_exit_deductions` where `finance_status='approved'` and `deduction_type != 'warning'`.
+  Stored as rupee amount (not days × rate). Contractors excluded. `salary_applied` flag prevents
+  double-counting on recompute (same pattern as late coming). Column: `salary_computations.early_exit_deduction`.
+- **Net salary formula**: `Math.max(0, grossEarned - totalDeductions)`. totalDeductions = pf + esi + tds + advance + lop + other + loan + lateComingDeduction + earlyExitDeduction (PT always 0).
 - **Take-home formula** (April 2026 ED integration): `take_home = net_salary + ot_pay + holiday_duty_pay + ed_pay` (= `total_payable + ed_pay`). New ED bucket sits OUTSIDE deductions and the existing total_payable, so older bank/PF/ESI exports stay stable while the take-home figure on payslips and the OT&ED Payable register reflects everything the employee actually receives.
 - **Rounding**: `Math.round(x * 100) / 100` everywhere (2 decimal precision).
 - **Salary hold logic**: Auto-hold if (a) `rawPayableDays < 5`, OR (b) 7+ consecutive absent days at month-end (unless approved leave exists). Hold reason stored in `salary_computations.hold_reason`.
@@ -367,6 +378,8 @@ frontend/
 - **Railway deployment**: `DATA_DIR` and `UPLOADS_DIR` env vars control file paths. Production uses persistent volume mount. SQLite file MUST live in persistent volume, not container fs.
 - **Salary advance recovery loop**: `getAdvanceRecovery()` resets `recovered=0` flag before query so re-runs find advances; ON CONFLICT UPDATE on `salary_computations` includes `advance_recovery` so the value persists.
 - **Holiday duty pay**: National holidays (Mar 4 etc) auto-detected. If employee works the holiday, paid extra at per_day_rate. Tracked separately from OT.
+- **Early exit detection**: Runs after attendance import (POST /api/early-exits/detect). If detection is not triggered, `is_early_departure` stays 0 and deductions cannot be created. Gate passes in `short_leaves` provide exemption or reduce flagged minutes. Detection is idempotent (UPSERT on employee_code+date).
+- **Gate pass quota**: 2 per employee per calendar month. Breachable with `force_quota_breach: true`. Cancelled gate passes don't count toward quota. Cancellation blocked after employee punches out.
 
 ## Late Coming Management System (April 2026 — Phase 1 + Phase 2 complete)
 - **Three canonical shifts** seeded in `shifts` table: `12HR` (08:00–20:00, 12h),
@@ -504,6 +517,29 @@ frontend/
     `applied_to_salary` (Stage 7 compute), `shift_change` (employee
     shift assignment). All write to `audit_log` with `stage='late_coming'`
     or `stage='salary_compute'`.
+
+## Early Exit Detection & Gate Pass Management (April 2026)
+- **4 new tables**: `short_leaves` (gate pass records), `early_exit_detections`
+  (per-employee per-date detection results), `early_exit_deductions` (HR-initiated,
+  finance-approved deductions), `early_exit_deduction_audit` (state transition log).
+- **New routes**: `short-leaves.js` (5 endpoints at `/api/short-leaves`),
+  `early-exits.js` (5 endpoints at `/api/early-exits`),
+  `early-exit-deductions.js` (8 endpoints at `/api/early-exit-deductions`).
+- **Detection service**: `earlyExitDetection.js` — compares punch-out time against
+  shift end_time. Gate passes provide full exemption (left after authorized time)
+  or partial credit (overage = authorized - punchOut). Upserts into
+  `early_exit_detections` with UNIQUE(employee_code, date). Updates
+  `attendance_processed.is_early_departure` and `early_by_minutes`.
+- **Deduction flow**: HR submits deduction (warning/half_day/full_day/custom) →
+  finance approves or rejects → approved deductions feed into Stage 7 salary
+  computation via `early_exit_deduction` column on `salary_computations`.
+  `salary_applied` flag prevents double-counting (same pattern as late coming).
+- **Salary impact**: `earlyExitDeduction` added to `totalDeductions` in
+  `computeEmployeeSalary()`. Contractors excluded (mirrors OT/ED gate). UPSERT
+  includes `early_exit_deduction = excluded.early_exit_deduction` for safe recompute.
+- **Frontend**: Gate Passes tab in Leave Management, Early Exit tab in Analytics,
+  Early Exit Deductions tab in Finance Audit, Early Exits card in Daily MIS.
+- **Permissions**: `early-exit` added to `hr` and `finance` roles.
 
 ## Section 8: Rules for Claude Code Sessions
 - Before changing ANY pipeline stage: ALWAYS read every downstream stage's service file AND every consumer (finance audit, payslips, exports, analytics) that reads this stage's output tables.
