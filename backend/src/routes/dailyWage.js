@@ -772,7 +772,453 @@ router.put('/entries/:id', requireHrOrAdmin, (req, res) => {
   res.json({ success: true, data: { ...updated, department_allocations: allocations } });
 });
 
-// GET /audit — DW audit log (filterable)
+// ═══════════════════════════════════════════════════════════════
+//  HR SUBMIT WORKFLOW
+// ═══════════════════════════════════════════════════════════════
+
+// PUT /entries/:id/submit — HR submits entry for finance review
+router.put('/entries/:id/submit', requireHrOrAdmin, (req, res) => {
+  const db = getDb();
+  const user = req.user?.username || 'system';
+  const entry = db.prepare('SELECT * FROM dw_entries WHERE id = ?').get(req.params.id);
+  if (!entry) return res.status(404).json({ success: false, error: 'Entry not found' });
+  if (entry.status !== 'hr_entered') {
+    return res.status(400).json({ success: false, error: `Cannot submit entry with status "${entry.status}". Only hr_entered entries can be submitted.` });
+  }
+
+  db.prepare("UPDATE dw_entries SET status = 'pending_finance', updated_at = datetime('now') WHERE id = ?").run(req.params.id);
+  db.prepare("INSERT INTO dw_approvals (entry_id, action, remarks, acted_by) VALUES (?, 'submitted', ?, ?)").run(req.params.id, req.body.remarks || null, user);
+  dwAudit(db, 'entry', Number(req.params.id), 'submit', { status: 'hr_entered' }, { status: 'pending_finance' }, user);
+  res.json({ success: true, message: 'Entry submitted for finance review' });
+});
+
+// POST /entries/batch-submit — HR submits multiple entries
+router.post('/entries/batch-submit', requireHrOrAdmin, (req, res) => {
+  const db = getDb();
+  const user = req.user?.username || 'system';
+  const { entry_ids } = req.body;
+  if (!Array.isArray(entry_ids) || entry_ids.length === 0) {
+    return res.status(400).json({ success: false, error: 'entry_ids must be a non-empty array' });
+  }
+
+  // Validate all are hr_entered
+  const placeholders = entry_ids.map(() => '?').join(',');
+  const entries = db.prepare(`SELECT id, status FROM dw_entries WHERE id IN (${placeholders})`).all(...entry_ids);
+  if (entries.length !== entry_ids.length) {
+    return res.status(400).json({ success: false, error: `Found ${entries.length} of ${entry_ids.length} entries` });
+  }
+  const invalid = entries.filter(e => e.status !== 'hr_entered');
+  if (invalid.length > 0) {
+    return res.status(400).json({ success: false, error: `${invalid.length} entries are not in hr_entered status`, invalid_ids: invalid.map(e => e.id) });
+  }
+
+  const doBatchSubmit = db.transaction(() => {
+    const updStmt = db.prepare("UPDATE dw_entries SET status = 'pending_finance', updated_at = datetime('now') WHERE id = ?");
+    const appStmt = db.prepare("INSERT INTO dw_approvals (entry_id, action, remarks, acted_by) VALUES (?, 'submitted', ?, ?)");
+    for (const id of entry_ids) {
+      updStmt.run(id);
+      appStmt.run(id, req.body.remarks || null, user);
+      dwAudit(db, 'entry', id, 'submit', { status: 'hr_entered' }, { status: 'pending_finance' }, user);
+    }
+  });
+  doBatchSubmit();
+  res.json({ success: true, submitted: entry_ids.length });
+});
+
+// ═══════════════════════════════════════════════════════════════
+//  FINANCE APPROVAL WORKFLOW
+// ═══════════════════════════════════════════════════════════════
+
+// GET /finance/pending — Entries pending finance review with contractor context
+router.get('/finance/pending', (req, res) => {
+  const db = getDb();
+  const entries = db.prepare(`
+    SELECT e.*, c.contractor_name, c.phone_number as contractor_phone
+    FROM dw_entries e
+    JOIN dw_contractors c ON c.id = e.contractor_id
+    WHERE e.status = 'pending_finance'
+    ORDER BY e.entry_date DESC, e.id DESC
+  `).all();
+
+  // Fetch allocations + contractor context for each entry
+  const allocStmt = db.prepare('SELECT * FROM dw_department_allocations WHERE entry_id = ? ORDER BY department');
+  const ctxStmt = db.prepare(`
+    SELECT
+      COUNT(*) as entries_this_month,
+      SUM(total_worker_count) as workers_this_month,
+      SUM(total_liability) as spend_this_month,
+      AVG(wage_rate_applied) as avg_rate
+    FROM dw_entries
+    WHERE contractor_id = ? AND entry_date LIKE ? AND status IN ('approved','paid')
+  `);
+
+  for (const entry of entries) {
+    entry.department_allocations = allocStmt.all(entry.id);
+    const monthPrefix = entry.entry_date.slice(0, 7); // YYYY-MM
+    entry.contractor_context = ctxStmt.get(entry.contractor_id, monthPrefix + '%') || {
+      entries_this_month: 0, workers_this_month: 0, spend_this_month: 0, avg_rate: 0
+    };
+  }
+
+  res.json({ success: true, data: entries, count: entries.length });
+});
+
+// PUT /entries/:id/approve — Finance approves entry
+router.put('/entries/:id/approve', requireFinanceOrAdmin, (req, res) => {
+  const db = getDb();
+  const user = req.user?.username || 'system';
+  const entry = db.prepare('SELECT * FROM dw_entries WHERE id = ?').get(req.params.id);
+  if (!entry) return res.status(404).json({ success: false, error: 'Entry not found' });
+  if (entry.status !== 'pending_finance') {
+    return res.status(400).json({ success: false, error: `Cannot approve entry with status "${entry.status}". Must be pending_finance.` });
+  }
+
+  db.prepare("UPDATE dw_entries SET status = 'approved', updated_at = datetime('now') WHERE id = ?").run(req.params.id);
+  db.prepare("INSERT INTO dw_approvals (entry_id, action, remarks, acted_by) VALUES (?, 'approved', ?, ?)").run(req.params.id, req.body.remarks || null, user);
+  dwAudit(db, 'entry', Number(req.params.id), 'approve', { status: 'pending_finance' }, { status: 'approved' }, user);
+  res.json({ success: true, message: 'Entry approved' });
+});
+
+// PUT /entries/:id/reject — Finance rejects entry (returns to HR)
+router.put('/entries/:id/reject', requireFinanceOrAdmin, (req, res) => {
+  const db = getDb();
+  const user = req.user?.username || 'system';
+  const { remarks } = req.body;
+  if (!remarks || !remarks.trim()) return res.status(400).json({ success: false, error: 'remarks are required for rejection' });
+
+  const entry = db.prepare('SELECT * FROM dw_entries WHERE id = ?').get(req.params.id);
+  if (!entry) return res.status(404).json({ success: false, error: 'Entry not found' });
+  if (entry.status !== 'pending_finance') {
+    return res.status(400).json({ success: false, error: `Cannot reject entry with status "${entry.status}". Must be pending_finance.` });
+  }
+
+  db.prepare("UPDATE dw_entries SET status = 'hr_entered', updated_at = datetime('now') WHERE id = ?").run(req.params.id);
+  db.prepare("INSERT INTO dw_approvals (entry_id, action, remarks, acted_by) VALUES (?, 'rejected', ?, ?)").run(req.params.id, remarks.trim(), user);
+  dwAudit(db, 'entry', Number(req.params.id), 'reject', { status: 'pending_finance' }, { status: 'hr_entered', remarks: remarks.trim() }, user);
+  res.json({ success: true, message: 'Entry rejected and returned to HR' });
+});
+
+// PUT /entries/:id/needs-correction — Finance marks entry for correction
+router.put('/entries/:id/needs-correction', requireFinanceOrAdmin, (req, res) => {
+  const db = getDb();
+  const user = req.user?.username || 'system';
+  const { remarks } = req.body;
+  if (!remarks || !remarks.trim()) return res.status(400).json({ success: false, error: 'remarks are required' });
+
+  const entry = db.prepare('SELECT * FROM dw_entries WHERE id = ?').get(req.params.id);
+  if (!entry) return res.status(404).json({ success: false, error: 'Entry not found' });
+  if (entry.status !== 'pending_finance') {
+    return res.status(400).json({ success: false, error: `Cannot mark needs-correction for status "${entry.status}". Must be pending_finance.` });
+  }
+
+  db.prepare("UPDATE dw_entries SET status = 'needs_correction', updated_at = datetime('now') WHERE id = ?").run(req.params.id);
+  db.prepare("INSERT INTO dw_approvals (entry_id, action, remarks, acted_by) VALUES (?, 'needs_correction', ?, ?)").run(req.params.id, remarks.trim(), user);
+  dwAudit(db, 'entry', Number(req.params.id), 'needs_correction', { status: 'pending_finance' }, { status: 'needs_correction', remarks: remarks.trim() }, user);
+  res.json({ success: true, message: 'Entry marked for correction' });
+});
+
+// PUT /entries/:id/flag — Finance flags entry
+router.put('/entries/:id/flag', requireFinanceOrAdmin, (req, res) => {
+  const db = getDb();
+  const user = req.user?.username || 'system';
+  const { remarks } = req.body;
+  if (!remarks || !remarks.trim()) return res.status(400).json({ success: false, error: 'remarks are required for flagging' });
+
+  const entry = db.prepare('SELECT * FROM dw_entries WHERE id = ?').get(req.params.id);
+  if (!entry) return res.status(404).json({ success: false, error: 'Entry not found' });
+  if (entry.status !== 'pending_finance') {
+    return res.status(400).json({ success: false, error: `Cannot flag entry with status "${entry.status}". Must be pending_finance.` });
+  }
+
+  db.prepare("UPDATE dw_entries SET status = 'flagged', updated_at = datetime('now') WHERE id = ?").run(req.params.id);
+  db.prepare("INSERT INTO dw_approvals (entry_id, action, remarks, acted_by) VALUES (?, 'flagged', ?, ?)").run(req.params.id, remarks.trim(), user);
+  dwAudit(db, 'entry', Number(req.params.id), 'flag', { status: 'pending_finance' }, { status: 'flagged', remarks: remarks.trim() }, user);
+  res.json({ success: true, message: 'Entry flagged' });
+});
+
+// PUT /entries/:id/reopen — Finance reopens an approved entry
+router.put('/entries/:id/reopen', requireFinanceOrAdmin, (req, res) => {
+  const db = getDb();
+  const user = req.user?.username || 'system';
+  const { remarks } = req.body;
+  if (!remarks || !remarks.trim()) return res.status(400).json({ success: false, error: 'remarks are required for reopening' });
+
+  const entry = db.prepare('SELECT * FROM dw_entries WHERE id = ?').get(req.params.id);
+  if (!entry) return res.status(404).json({ success: false, error: 'Entry not found' });
+  if (entry.status !== 'approved') {
+    return res.status(400).json({ success: false, error: `Cannot reopen entry with status "${entry.status}". Must be approved.` });
+  }
+
+  db.prepare("UPDATE dw_entries SET status = 'pending_finance', updated_at = datetime('now') WHERE id = ?").run(req.params.id);
+  db.prepare("INSERT INTO dw_approvals (entry_id, action, remarks, acted_by) VALUES (?, 'reopened', ?, ?)").run(req.params.id, remarks.trim(), user);
+  dwAudit(db, 'entry', Number(req.params.id), 'reopen', { status: 'approved' }, { status: 'pending_finance', remarks: remarks.trim() }, user);
+  res.json({ success: true, message: 'Entry reopened for review' });
+});
+
+// POST /entries/batch-approve — Finance bulk-approves entries
+router.post('/entries/batch-approve', requireFinanceOrAdmin, (req, res) => {
+  const db = getDb();
+  const user = req.user?.username || 'system';
+  const { entry_ids, remarks } = req.body;
+  if (!Array.isArray(entry_ids) || entry_ids.length === 0) {
+    return res.status(400).json({ success: false, error: 'entry_ids must be a non-empty array' });
+  }
+
+  const placeholders = entry_ids.map(() => '?').join(',');
+  const entries = db.prepare(`SELECT id, status FROM dw_entries WHERE id IN (${placeholders})`).all(...entry_ids);
+  if (entries.length !== entry_ids.length) {
+    return res.status(400).json({ success: false, error: `Found ${entries.length} of ${entry_ids.length} entries` });
+  }
+  const invalid = entries.filter(e => e.status !== 'pending_finance');
+  if (invalid.length > 0) {
+    return res.status(400).json({ success: false, error: `${invalid.length} entries are not in pending_finance status`, invalid_ids: invalid.map(e => e.id) });
+  }
+
+  const doBatch = db.transaction(() => {
+    const updStmt = db.prepare("UPDATE dw_entries SET status = 'approved', updated_at = datetime('now') WHERE id = ?");
+    const appStmt = db.prepare("INSERT INTO dw_approvals (entry_id, action, remarks, acted_by) VALUES (?, 'approved', ?, ?)");
+    for (const id of entry_ids) {
+      updStmt.run(id);
+      appStmt.run(id, remarks || null, user);
+      dwAudit(db, 'entry', id, 'approve', { status: 'pending_finance' }, { status: 'approved' }, user);
+    }
+  });
+  doBatch();
+  res.json({ success: true, approved: entry_ids.length });
+});
+
+// ═══════════════════════════════════════════════════════════════
+//  PAYMENT PROCESSING
+// ═══════════════════════════════════════════════════════════════
+
+// GET /payments/pending-liability — Aggregated pending liabilities per contractor
+router.get('/payments/pending-liability', (req, res) => {
+  const db = getDb();
+  const data = db.prepare(`
+    SELECT c.id as contractor_id, c.contractor_name, c.payment_terms,
+      COUNT(e.id) as entry_count,
+      SUM(e.total_wage_amount) as total_wages,
+      SUM(e.total_commission_amount) as total_commission,
+      SUM(e.total_liability) as total_liability,
+      MIN(e.entry_date) as oldest_entry_date
+    FROM dw_entries e
+    JOIN dw_contractors c ON e.contractor_id = c.id
+    WHERE e.status = 'approved'
+    GROUP BY c.id
+    ORDER BY total_liability DESC
+  `).all();
+
+  // Round amounts
+  for (const row of data) {
+    row.total_wages = Math.round((row.total_wages || 0) * 100) / 100;
+    row.total_commission = Math.round((row.total_commission || 0) * 100) / 100;
+    row.total_liability = Math.round((row.total_liability || 0) * 100) / 100;
+  }
+
+  res.json({ success: true, data });
+});
+
+// POST /payments — Process a payment
+router.post('/payments', requireFinanceOrAdmin, (req, res) => {
+  const db = getDb();
+  const user = req.user?.username || 'system';
+  const { contractor_id, entry_ids, payment_reference, payment_date, payment_method, remarks } = req.body;
+
+  if (!contractor_id) return res.status(400).json({ success: false, error: 'contractor_id is required' });
+  if (!Array.isArray(entry_ids) || entry_ids.length === 0) {
+    return res.status(400).json({ success: false, error: 'entry_ids must be a non-empty array' });
+  }
+  if (!payment_reference || !payment_reference.trim()) {
+    return res.status(400).json({ success: false, error: 'payment_reference is required' });
+  }
+  if (!payment_date) return res.status(400).json({ success: false, error: 'payment_date is required' });
+
+  // Check payment_reference uniqueness
+  const existingRef = db.prepare('SELECT id FROM dw_payments WHERE payment_reference = ?').get(payment_reference.trim());
+  if (existingRef) return res.status(409).json({ success: false, error: 'payment_reference already exists' });
+
+  // Validate all entries belong to this contractor and are approved
+  const placeholders = entry_ids.map(() => '?').join(',');
+  const entries = db.prepare(`SELECT id, contractor_id, status, total_liability FROM dw_entries WHERE id IN (${placeholders})`).all(...entry_ids);
+  if (entries.length !== entry_ids.length) {
+    return res.status(400).json({ success: false, error: `Found ${entries.length} of ${entry_ids.length} entries` });
+  }
+  const wrongContractor = entries.filter(e => e.contractor_id !== Number(contractor_id));
+  if (wrongContractor.length > 0) {
+    return res.status(400).json({ success: false, error: `${wrongContractor.length} entries do not belong to contractor ${contractor_id}` });
+  }
+  const notApproved = entries.filter(e => e.status !== 'approved');
+  if (notApproved.length > 0) {
+    return res.status(400).json({ success: false, error: `${notApproved.length} entries are not in approved status`, invalid_ids: notApproved.map(e => e.id) });
+  }
+
+  const totalAmount = Math.round(entries.reduce((sum, e) => sum + (e.total_liability || 0), 0) * 100) / 100;
+
+  const doPayment = db.transaction(() => {
+    const payResult = db.prepare(`
+      INSERT INTO dw_payments (contractor_id, payment_reference, payment_date, total_amount, payment_method, remarks, processed_by)
+      VALUES (?, ?, ?, ?, ?, ?, ?)
+    `).run(contractor_id, payment_reference.trim(), payment_date, totalAmount, payment_method || null, remarks || null, user);
+    const paymentId = payResult.lastInsertRowid;
+
+    const linkStmt = db.prepare('INSERT INTO dw_payment_entries (payment_id, entry_id) VALUES (?, ?)');
+    const updStmt = db.prepare("UPDATE dw_entries SET status = 'paid', updated_at = datetime('now') WHERE id = ?");
+    for (const id of entry_ids) {
+      linkStmt.run(paymentId, id);
+      updStmt.run(id);
+    }
+
+    dwAudit(db, 'payment', paymentId, 'create', null, {
+      contractor_id, entry_ids, payment_reference: payment_reference.trim(),
+      total_amount: totalAmount
+    }, user);
+
+    return paymentId;
+  });
+
+  const paymentId = doPayment();
+  const payment = db.prepare('SELECT * FROM dw_payments WHERE id = ?').get(paymentId);
+  res.json({ success: true, data: payment });
+});
+
+// GET /payments — List payments
+router.get('/payments', (req, res) => {
+  const db = getDb();
+  let where = 'WHERE 1=1';
+  const params = [];
+
+  if (req.query.contractor_id) {
+    where += ' AND p.contractor_id = ?';
+    params.push(Number(req.query.contractor_id));
+  }
+  if (req.query.date_from) {
+    where += ' AND p.payment_date >= ?';
+    params.push(req.query.date_from);
+  }
+  if (req.query.date_to) {
+    where += ' AND p.payment_date <= ?';
+    params.push(req.query.date_to);
+  }
+
+  const data = db.prepare(`
+    SELECT p.*, c.contractor_name
+    FROM dw_payments p
+    JOIN dw_contractors c ON c.id = p.contractor_id
+    ${where}
+    ORDER BY p.payment_date DESC, p.id DESC
+  `).all(...params);
+
+  res.json({ success: true, data });
+});
+
+// GET /payments/:id — Payment detail with linked entries
+router.get('/payments/:id', (req, res) => {
+  const db = getDb();
+  const payment = db.prepare(`
+    SELECT p.*, c.contractor_name, c.phone_number as contractor_phone
+    FROM dw_payments p
+    JOIN dw_contractors c ON c.id = p.contractor_id
+    WHERE p.id = ?
+  `).get(req.params.id);
+  if (!payment) return res.status(404).json({ success: false, error: 'Payment not found' });
+
+  const entries = db.prepare(`
+    SELECT e.* FROM dw_entries e
+    JOIN dw_payment_entries pe ON pe.entry_id = e.id
+    WHERE pe.payment_id = ?
+    ORDER BY e.entry_date
+  `).all(req.params.id);
+
+  res.json({ success: true, data: { ...payment, entries } });
+});
+
+// GET /contractors/:id/payment-history — Payment history for a contractor
+router.get('/contractors/:id/payment-history', (req, res) => {
+  const db = getDb();
+  const contractor = db.prepare('SELECT id, contractor_name FROM dw_contractors WHERE id = ?').get(req.params.id);
+  if (!contractor) return res.status(404).json({ success: false, error: 'Contractor not found' });
+
+  const payments = db.prepare(`
+    SELECT p.*, (SELECT COUNT(*) FROM dw_payment_entries pe WHERE pe.payment_id = p.id) as entry_count
+    FROM dw_payments p
+    WHERE p.contractor_id = ?
+    ORDER BY p.payment_date DESC
+  `).all(req.params.id);
+
+  const totalPaid = payments.reduce((sum, p) => sum + (p.total_amount || 0), 0);
+
+  res.json({
+    success: true,
+    data: {
+      contractor_name: contractor.contractor_name,
+      payments,
+      total_paid: Math.round(totalPaid * 100) / 100,
+      payment_count: payments.length
+    }
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════
+//  AUDIT LOG & DASHBOARD
+// ═══════════════════════════════════════════════════════════════
+
+// GET /audit-log — Paginated, filterable audit log
+router.get('/audit-log', (req, res) => {
+  const db = getDb();
+  const page = Math.max(1, Number(req.query.page) || 1);
+  const limit = Math.min(200, Math.max(1, Number(req.query.limit) || 50));
+  const offset = (page - 1) * limit;
+
+  let where = 'WHERE 1=1';
+  const params = [];
+  if (req.query.entity_type) { where += ' AND entity_type = ?'; params.push(req.query.entity_type); }
+  if (req.query.date_from) { where += ' AND performed_at >= ?'; params.push(req.query.date_from); }
+  if (req.query.date_to) { where += " AND performed_at <= ? || ' 23:59:59'"; params.push(req.query.date_to); }
+  if (req.query.performed_by) { where += ' AND performed_by = ?'; params.push(req.query.performed_by); }
+
+  const countRow = db.prepare(`SELECT COUNT(*) as total FROM dw_audit_log ${where}`).get(...params);
+  const data = db.prepare(`SELECT * FROM dw_audit_log ${where} ORDER BY performed_at DESC LIMIT ? OFFSET ?`).all(...params, limit, offset);
+
+  res.json({
+    success: true,
+    data,
+    pagination: { page, pageSize: limit, total: countRow.total, totalPages: Math.ceil(countRow.total / limit) }
+  });
+});
+
+// GET /dashboard — Aggregate stats for DW module
+router.get('/dashboard', (req, res) => {
+  const db = getDb();
+
+  const pendingLiability = db.prepare(
+    "SELECT COALESCE(SUM(total_liability), 0) as total FROM dw_entries WHERE status = 'approved'"
+  ).get();
+  const pendingReview = db.prepare(
+    "SELECT COUNT(*) as count FROM dw_entries WHERE status = 'pending_finance'"
+  ).get();
+  const rateChangesPending = db.prepare(
+    "SELECT COUNT(*) as count FROM dw_rate_history WHERE approval_status = 'pending'"
+  ).get();
+  const flaggedEntries = db.prepare(
+    "SELECT COUNT(*) as count FROM dw_entries WHERE status = 'flagged'"
+  ).get();
+  const recentActivity = db.prepare(
+    'SELECT * FROM dw_audit_log ORDER BY performed_at DESC LIMIT 10'
+  ).all();
+
+  res.json({
+    success: true,
+    data: {
+      pending_liability_total: Math.round((pendingLiability.total || 0) * 100) / 100,
+      entries_pending_review: pendingReview.count,
+      rate_changes_pending: rateChangesPending.count,
+      flagged_entries: flaggedEntries.count,
+      recent_activity: recentActivity
+    }
+  });
+});
+
+// GET /audit — DW audit log (legacy — kept for backward compat)
 router.get('/audit', (req, res) => {
   const db = getDb();
   const { entity_type, entity_id, limit: lim } = req.query;

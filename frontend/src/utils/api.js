@@ -401,5 +401,24 @@ export const updateDWEntry = (id, data) => api.put(`/daily-wage/entries/${id}`, 
 export const batchImportDWEntries = (entries) => api.post('/daily-wage/entries/batch-import', { entries })
 export const checkDWDuplicates = (data) => api.post('/daily-wage/entries/check-duplicates', data)
 export const getDWEntryTemplate = () => api.get('/daily-wage/entries/template')
+// DW Submit + Finance Approval
+export const submitDWEntry = (id, remarks) => api.put(`/daily-wage/entries/${id}/submit`, { remarks })
+export const batchSubmitDWEntries = (entry_ids, remarks) => api.post('/daily-wage/entries/batch-submit', { entry_ids, remarks })
+export const getDWFinancePending = () => api.get('/daily-wage/finance/pending')
+export const approveDWEntry = (id, remarks) => api.put(`/daily-wage/entries/${id}/approve`, { remarks })
+export const rejectDWEntry = (id, remarks) => api.put(`/daily-wage/entries/${id}/reject`, { remarks })
+export const needsCorrectionDWEntry = (id, remarks) => api.put(`/daily-wage/entries/${id}/needs-correction`, { remarks })
+export const flagDWEntry = (id, remarks) => api.put(`/daily-wage/entries/${id}/flag`, { remarks })
+export const reopenDWEntry = (id, remarks) => api.put(`/daily-wage/entries/${id}/reopen`, { remarks })
+export const batchApproveDWEntries = (entry_ids, remarks) => api.post('/daily-wage/entries/batch-approve', { entry_ids, remarks })
+// DW Payments
+export const getDWPendingLiability = () => api.get('/daily-wage/payments/pending-liability')
+export const processDWPayment = (data) => api.post('/daily-wage/payments', data)
+export const getDWPayments = (params) => api.get('/daily-wage/payments', { params })
+export const getDWPayment = (id) => api.get(`/daily-wage/payments/${id}`)
+export const getDWContractorPaymentHistory = (id) => api.get(`/daily-wage/contractors/${id}/payment-history`)
+// DW Dashboard + Audit
+export const getDWDashboard = () => api.get('/daily-wage/dashboard')
+export const getDWAuditLogPaginated = (params) => api.get('/daily-wage/audit-log', { params })
 
 export default api
