@@ -393,5 +393,13 @@ export const approveDWRateChange = (id) => api.put(`/daily-wage/rates/${id}/appr
 export const rejectDWRateChange = (id, remarks) => api.put(`/daily-wage/rates/${id}/reject`, { remarks })
 export const getPendingDWRateChanges = () => api.get('/daily-wage/rates/pending')
 export const getDWAuditLog = (params) => api.get('/daily-wage/audit', { params })
+// DW Entries
+export const getDWEntries = (params) => api.get('/daily-wage/entries', { params })
+export const getDWEntry = (id) => api.get(`/daily-wage/entries/${id}`)
+export const createDWEntry = (data) => api.post('/daily-wage/entries', data)
+export const updateDWEntry = (id, data) => api.put(`/daily-wage/entries/${id}`, data)
+export const batchImportDWEntries = (entries) => api.post('/daily-wage/entries/batch-import', { entries })
+export const checkDWDuplicates = (data) => api.post('/daily-wage/entries/check-duplicates', data)
+export const getDWEntryTemplate = () => api.get('/daily-wage/entries/template')
 
 export default api
