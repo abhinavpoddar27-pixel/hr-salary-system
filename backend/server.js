@@ -204,6 +204,7 @@ app.use('/api/finance-verify',   requireAuth, require('./src/routes/financeVerif
 app.use('/api/extra-duty-grants', requireAuth, require('./src/routes/extraDutyGrants'));
 app.use('/api/late-coming',      requireAuth, require('./src/routes/lateComing'));
 app.use('/api/daily-wage',       requireAuth, require('./src/routes/dailyWage'));
+app.use('/api/short-leaves',     requireAuth, require('./src/routes/short-leaves'));
 
 // Health check (public)
 app.get('/api/health', (req, res) => {
