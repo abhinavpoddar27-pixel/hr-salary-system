@@ -203,6 +203,7 @@ app.use('/api/portal',           requireAuth, require('./src/routes/employeePort
 app.use('/api/finance-verify',   requireAuth, require('./src/routes/financeVerification'));
 app.use('/api/extra-duty-grants', requireAuth, require('./src/routes/extraDutyGrants'));
 app.use('/api/late-coming',      requireAuth, require('./src/routes/lateComing'));
+app.use('/api/daily-wage',       requireAuth, require('./src/routes/dailyWage'));
 
 // Health check (public)
 app.get('/api/health', (req, res) => {

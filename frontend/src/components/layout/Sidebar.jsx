@@ -61,6 +61,19 @@ const nav = [
   { label: 'Extra Duty', icon: '⭐', to: '/extra-duty-grants' },
   { label: 'Alerts', icon: '🔔', to: '/alerts' },
   { label: 'Employees', icon: '👤', to: '/employees' },
+  {
+    label: 'Daily Wage', icon: '👷', to: '/daily-wage', children: [
+      { label: 'Records', to: '/daily-wage' },
+      { label: 'New Entry', to: '/daily-wage/new' },
+      { label: 'Batch Import', to: '/daily-wage/import' },
+      { label: 'Contractors', to: '/daily-wage/contractors' },
+      { label: 'Reports', to: '/daily-wage/reports' },
+      { label: 'Finance Review', to: '/daily-wage/finance/review', financeOnly: true },
+      { label: 'Payments', to: '/daily-wage/finance/payments', financeOnly: true },
+      { label: 'Dashboard', to: '/daily-wage/finance/dashboard', financeOnly: true },
+      { label: 'Audit Log', to: '/daily-wage/audit', financeOnly: true },
+    ]
+  },
   { label: 'Session Analytics', icon: '📊', to: '/session-analytics', adminOnly: true },
   {
     label: 'Settings', icon: '⚙️', to: '/settings', adminOnly: true,
@@ -83,6 +96,8 @@ function NavItem({ item, collapsed, depth = 0, userRole, onNavigate }) {
 
   // Hide admin-only items from non-admin users
   if (item.adminOnly && userRole !== 'admin') return null
+  // Hide finance-only items from non-finance/non-admin users
+  if (item.financeOnly && userRole !== 'finance' && userRole !== 'admin') return null
 
   // Auto-open active parent
   React.useEffect(() => {
@@ -90,7 +105,11 @@ function NavItem({ item, collapsed, depth = 0, userRole, onNavigate }) {
   }, [isActive])
 
   if (hasChildren) {
-    const visibleChildren = item.children.filter(c => !c.adminOnly || userRole === 'admin')
+    const visibleChildren = item.children.filter(c => {
+      if (c.adminOnly && userRole !== 'admin') return false
+      if (c.financeOnly && userRole !== 'finance' && userRole !== 'admin') return false
+      return true
+    })
     return (
       <li>
         <button

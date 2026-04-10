@@ -1490,6 +1490,117 @@ function initSchema(db) {
   safeCreateIndex('CREATE INDEX IF NOT EXISTS idx_late_deductions_employee ON late_coming_deductions(employee_code, month, year)');
   safeCreateIndex('CREATE INDEX IF NOT EXISTS idx_late_deductions_status ON late_coming_deductions(finance_status)');
 
+  // ── Daily Wage Worker Module (DW) ─────────────────────────────
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS dw_contractors (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      contractor_name TEXT NOT NULL UNIQUE,
+      phone_number TEXT,
+      email TEXT,
+      bank_account TEXT,
+      current_daily_wage_rate REAL NOT NULL DEFAULT 0,
+      current_commission_rate REAL NOT NULL DEFAULT 0,
+      payment_terms TEXT NOT NULL DEFAULT 'monthly',
+      is_active INTEGER NOT NULL DEFAULT 1,
+      created_by TEXT,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+
+    CREATE TABLE IF NOT EXISTS dw_rate_history (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      contractor_id INTEGER NOT NULL REFERENCES dw_contractors(id),
+      old_wage_rate REAL,
+      new_wage_rate REAL NOT NULL,
+      old_commission_rate REAL,
+      new_commission_rate REAL NOT NULL,
+      effective_date TEXT NOT NULL,
+      proposed_by TEXT,
+      proposed_at TEXT NOT NULL DEFAULT (datetime('now')),
+      approved_by TEXT,
+      approved_at TEXT,
+      approval_status TEXT NOT NULL DEFAULT 'pending',
+      remarks TEXT
+    );
+
+    CREATE TABLE IF NOT EXISTS dw_entries (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      contractor_id INTEGER NOT NULL REFERENCES dw_contractors(id),
+      entry_date TEXT NOT NULL,
+      in_time TEXT NOT NULL,
+      out_time TEXT NOT NULL,
+      total_worker_count INTEGER NOT NULL,
+      wage_rate_applied REAL NOT NULL,
+      commission_rate_applied REAL NOT NULL,
+      total_wage_amount REAL NOT NULL DEFAULT 0,
+      total_commission_amount REAL NOT NULL DEFAULT 0,
+      total_liability REAL NOT NULL DEFAULT 0,
+      gate_entry_reference TEXT NOT NULL,
+      notes TEXT,
+      status TEXT NOT NULL DEFAULT 'hr_entered',
+      created_by TEXT,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+
+    CREATE TABLE IF NOT EXISTS dw_department_allocations (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      entry_id INTEGER NOT NULL REFERENCES dw_entries(id) ON DELETE CASCADE,
+      department TEXT NOT NULL,
+      worker_count INTEGER NOT NULL,
+      allocated_wage_amount REAL NOT NULL DEFAULT 0,
+      allocated_commission_amount REAL NOT NULL DEFAULT 0
+    );
+
+    CREATE TABLE IF NOT EXISTS dw_approvals (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      entry_id INTEGER NOT NULL REFERENCES dw_entries(id),
+      action TEXT NOT NULL,
+      remarks TEXT,
+      acted_by TEXT NOT NULL,
+      acted_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+
+    CREATE TABLE IF NOT EXISTS dw_payments (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      contractor_id INTEGER NOT NULL REFERENCES dw_contractors(id),
+      payment_reference TEXT NOT NULL UNIQUE,
+      payment_date TEXT NOT NULL,
+      total_amount REAL NOT NULL,
+      payment_method TEXT,
+      remarks TEXT,
+      processed_by TEXT NOT NULL,
+      processed_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+
+    CREATE TABLE IF NOT EXISTS dw_payment_entries (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      payment_id INTEGER NOT NULL REFERENCES dw_payments(id),
+      entry_id INTEGER NOT NULL REFERENCES dw_entries(id)
+    );
+
+    CREATE TABLE IF NOT EXISTS dw_audit_log (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      entity_type TEXT NOT NULL,
+      entity_id INTEGER NOT NULL,
+      action TEXT NOT NULL,
+      old_values TEXT,
+      new_values TEXT,
+      performed_by TEXT NOT NULL,
+      performed_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+  `);
+
+  safeCreateIndex('CREATE INDEX IF NOT EXISTS idx_dw_rate_history_contractor ON dw_rate_history(contractor_id, effective_date)');
+  safeCreateIndex('CREATE INDEX IF NOT EXISTS idx_dw_entries_contractor ON dw_entries(contractor_id, entry_date)');
+  safeCreateIndex('CREATE INDEX IF NOT EXISTS idx_dw_entries_status ON dw_entries(status)');
+  safeCreateIndex('CREATE INDEX IF NOT EXISTS idx_dw_dept_alloc_entry ON dw_department_allocations(entry_id)');
+  safeCreateIndex('CREATE INDEX IF NOT EXISTS idx_dw_approvals_entry ON dw_approvals(entry_id)');
+  safeCreateIndex('CREATE INDEX IF NOT EXISTS idx_dw_payments_contractor ON dw_payments(contractor_id, payment_date)');
+  safeCreateIndex('CREATE INDEX IF NOT EXISTS idx_dw_payment_entries_payment ON dw_payment_entries(payment_id)');
+  safeCreateIndex('CREATE INDEX IF NOT EXISTS idx_dw_payment_entries_entry ON dw_payment_entries(entry_id)');
+  safeCreateIndex('CREATE INDEX IF NOT EXISTS idx_dw_audit_log_entity ON dw_audit_log(entity_type, entity_id)');
+
   // ── Miss-punch finance verification (April 2026) ───────────
   // After HR resolves a miss punch, finance must verify before the salary
   // month can be finalised. Columns live on attendance_processed to keep

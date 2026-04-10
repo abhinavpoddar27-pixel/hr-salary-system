@@ -7,7 +7,7 @@ import useExpandableRows from '../hooks/useExpandableRows'
 import DrillDownRow, { DrillDownChevron } from '../components/ui/DrillDownRow'
 import EmployeeQuickView from '../components/ui/EmployeeQuickView'
 import clsx from 'clsx'
-import api, { getDailyShiftBreakdown, getDailyWorkerBreakdown, getPreviousDayReport, getDailyMISLateComingSummary } from '../utils/api'
+import api, { getDailyShiftBreakdown, getDailyWorkerBreakdown, getPreviousDayReport, getDailyMISLateComingSummary, getDWDailyMIS } from '../utils/api'
 import { useAppStore } from '../store/appStore'
 import CompanyFilter from '../components/shared/CompanyFilter'
 
@@ -141,6 +141,15 @@ export default function DailyMIS() {
   })
   const lcSummary = lcSummaryRes?.data?.data || { totalLateToday: 0, departmentBreakdown: [], employees: [] }
 
+  // Daily Wage MIS sub-tab
+  const { data: dwMisRes } = useQuery({
+    queryKey: ['daily-mis-dw', selectedDate],
+    queryFn: () => getDWDailyMIS(selectedDate),
+    enabled: mainTab === 'today' && todaySubTab === 'daily-wage',
+    retry: 0
+  })
+  const dwMis = dwMisRes?.data?.data || { contractors: [], department_totals: [], grand_total: {} }
+
   // ── Derived Data ────────────────────────────────────────────
 
   const summary = summaryRes?.data?.data || {}
@@ -255,6 +264,7 @@ export default function DailyMIS() {
                 { key: 'punched-in', label: `Currently Punched In (${summary.punchedIn || 0})` },
                 { key: 'absentees', label: `Absentees` },
                 { key: 'night-detail', label: `Night Shift Detail (${nightShift.count || 0})` },
+                { key: 'daily-wage', label: `Daily Wage (${dwMis.grand_total?.workers || 0})` },
               ].map(t => (
                 <button key={t.key} onClick={() => setTodaySubTab(t.key)}
                   className={clsx('px-4 py-2 text-sm font-medium rounded-t-lg transition-colors -mb-px whitespace-nowrap',
@@ -268,6 +278,73 @@ export default function DailyMIS() {
             {todaySubTab === 'punched-in' && <PunchedInTable data={punchedIn} rows={punchedInRows} />}
             {todaySubTab === 'absentees' && <AbsenteesTable data={absentees} rows={absenteeRows} />}
             {todaySubTab === 'night-detail' && <NightShiftDetailTable data={nightShift} rows={nightDetailRows} />}
+
+            {/* Daily Wage MIS sub-tab */}
+            {todaySubTab === 'daily-wage' && (
+              <div className="space-y-4 mt-3">
+                {/* KPI cards */}
+                <div className="grid grid-cols-3 gap-3">
+                  <div className="bg-white rounded-lg border border-slate-200 p-3">
+                    <div className="text-[10px] text-slate-400 uppercase font-medium">Workers Today</div>
+                    <div className="text-xl font-bold text-blue-700">{dwMis.grand_total?.workers || 0}</div>
+                  </div>
+                  <div className="bg-white rounded-lg border border-slate-200 p-3">
+                    <div className="text-[10px] text-slate-400 uppercase font-medium">Total Spend</div>
+                    <div className="text-xl font-bold text-slate-700">₹{(dwMis.grand_total?.liability || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</div>
+                  </div>
+                  <div className="bg-white rounded-lg border border-slate-200 p-3">
+                    <div className="text-[10px] text-slate-400 uppercase font-medium">Contractors Active</div>
+                    <div className="text-xl font-bold text-slate-700">{dwMis.contractors?.length || 0}</div>
+                  </div>
+                </div>
+
+                {/* Contractor table */}
+                {dwMis.contractors?.length > 0 && (
+                  <div className="bg-white rounded-lg border border-slate-200 overflow-hidden">
+                    <table className="w-full text-sm">
+                      <thead>
+                        <tr className="bg-slate-50 text-left text-xs font-medium text-slate-500 uppercase tracking-wider">
+                          <th className="px-4 py-3">Contractor</th>
+                          <th className="px-4 py-3">Workers</th>
+                          <th className="px-4 py-3">Wages</th>
+                          <th className="px-4 py-3">Commission</th>
+                          <th className="px-4 py-3">Total</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-100">
+                        {dwMis.contractors.map((c, i) => (
+                          <tr key={i} className="hover:bg-slate-50">
+                            <td className="px-4 py-2.5 font-medium text-slate-800">{c.contractor_name}</td>
+                            <td className="px-4 py-2.5">{c.workers}</td>
+                            <td className="px-4 py-2.5">{(c.wages || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
+                            <td className="px-4 py-2.5">{(c.commission || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
+                            <td className="px-4 py-2.5 font-semibold text-blue-700">{(c.liability || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+
+                {/* Department summary */}
+                {dwMis.department_totals?.length > 0 && (
+                  <div className="bg-white rounded-lg border border-slate-200 p-4">
+                    <h4 className="text-xs font-semibold text-slate-500 uppercase mb-2">Department Breakdown</h4>
+                    <div className="flex flex-wrap gap-2">
+                      {dwMis.department_totals.map((d, i) => (
+                        <span key={i} className="inline-flex items-center px-2.5 py-1 rounded-lg bg-slate-100 text-xs text-slate-700">
+                          {d.department}: <strong className="ml-1">{d.workers}</strong> workers — ₹{(d.total || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {dwMis.contractors?.length === 0 && (
+                  <div className="text-center py-8 text-slate-400">No daily wage data for this date</div>
+                )}
+              </div>
+            )}
           </div>
         )}
 
