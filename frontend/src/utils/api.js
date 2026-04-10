@@ -379,4 +379,19 @@ export const getLiveActivity = () => api.get('/session-analytics/live-activity')
 export const getClickDetails = (page, days) => api.get('/session-analytics/click-details', { params: { page, days } })
 export const getUserEngagement = (days) => api.get('/session-analytics/user-engagement', { params: { days } })
 
+// ── Daily Wage Worker Module ───────────────────────────────
+export const getDWContractors = (params) => api.get('/daily-wage/contractors', { params })
+export const getDWContractor = (id) => api.get(`/daily-wage/contractors/${id}`)
+export const createDWContractor = (data) => api.post('/daily-wage/contractors', data)
+export const updateDWContractor = (id, data) => api.put(`/daily-wage/contractors/${id}`, data)
+export const deactivateDWContractor = (id) => api.put(`/daily-wage/contractors/${id}/deactivate`)
+export const reactivateDWContractor = (id) => api.put(`/daily-wage/contractors/${id}/reactivate`)
+export const getDWContractorSummary = (id) => api.get(`/daily-wage/contractors/${id}/summary`)
+export const getDWContractorRates = (id) => api.get(`/daily-wage/contractors/${id}/rates`)
+export const proposeDWRateChange = (id, data) => api.post(`/daily-wage/contractors/${id}/rates`, data)
+export const approveDWRateChange = (id) => api.put(`/daily-wage/rates/${id}/approve`)
+export const rejectDWRateChange = (id, remarks) => api.put(`/daily-wage/rates/${id}/reject`, { remarks })
+export const getPendingDWRateChanges = () => api.get('/daily-wage/rates/pending')
+export const getDWAuditLog = (params) => api.get('/daily-wage/audit', { params })
+
 export default api
