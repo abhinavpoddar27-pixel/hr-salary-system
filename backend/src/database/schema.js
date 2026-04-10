@@ -1490,6 +1490,130 @@ function initSchema(db) {
   safeCreateIndex('CREATE INDEX IF NOT EXISTS idx_late_deductions_employee ON late_coming_deductions(employee_code, month, year)');
   safeCreateIndex('CREATE INDEX IF NOT EXISTS idx_late_deductions_status ON late_coming_deductions(finance_status)');
 
+  // ── Early Exit Detection & Gate Pass (April 2026) ──────────────
+  // Short leave / gate pass records. Each row represents an authorised
+  // early departure for a specific employee on a specific date.
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS short_leaves (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      employee_id INTEGER REFERENCES employees(id),
+      employee_code TEXT NOT NULL,
+      employee_name TEXT,
+      department TEXT,
+      company TEXT,
+      date TEXT NOT NULL,
+      leave_type TEXT NOT NULL DEFAULT 'short_leave',
+      duration_hours REAL NOT NULL DEFAULT 3.0,
+      shift_code TEXT,
+      shift_end_time TEXT,
+      authorized_leave_until TEXT,
+      remark TEXT NOT NULL,
+      quota_breach INTEGER DEFAULT 0,
+      calendar_month INTEGER,
+      calendar_year INTEGER,
+      created_by INTEGER,
+      created_by_name TEXT,
+      created_at TEXT DEFAULT (datetime('now')),
+      cancelled_at TEXT,
+      cancelled_by INTEGER,
+      cancelled_by_name TEXT,
+      cancel_reason TEXT,
+      UNIQUE(employee_code, date, leave_type)
+    )
+  `);
+  safeCreateIndex('CREATE INDEX IF NOT EXISTS idx_short_leaves_employee ON short_leaves(employee_code, calendar_month, calendar_year)');
+  safeCreateIndex('CREATE INDEX IF NOT EXISTS idx_short_leaves_date ON short_leaves(date, company)');
+
+  // Early exit detections — one row per employee per date where punch-out
+  // was before shift end. Detection runs daily (or on demand) and upserts.
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS early_exit_detections (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      employee_id INTEGER REFERENCES employees(id),
+      employee_code TEXT NOT NULL,
+      employee_name TEXT,
+      department TEXT,
+      company TEXT,
+      date TEXT NOT NULL,
+      shift_code TEXT,
+      shift_end_time TEXT,
+      actual_punch_out_time TEXT,
+      minutes_early INTEGER DEFAULT 0,
+      has_gate_pass INTEGER DEFAULT 0,
+      short_leave_id INTEGER REFERENCES short_leaves(id),
+      authorized_leave_until TEXT,
+      gate_pass_overage_minutes INTEGER DEFAULT 0,
+      flagged_minutes INTEGER DEFAULT 0,
+      detection_status TEXT DEFAULT 'flagged',
+      updated_at TEXT DEFAULT (datetime('now')),
+      created_at TEXT DEFAULT (datetime('now')),
+      UNIQUE(employee_code, date)
+    )
+  `);
+  safeCreateIndex('CREATE INDEX IF NOT EXISTS idx_early_exit_det_date ON early_exit_detections(date, company)');
+  safeCreateIndex('CREATE INDEX IF NOT EXISTS idx_early_exit_det_status ON early_exit_detections(detection_status)');
+  safeCreateIndex('CREATE INDEX IF NOT EXISTS idx_early_exit_det_employee ON early_exit_detections(employee_code, date)');
+
+  // Early exit deductions — HR-initiated, finance-approved deductions
+  // linked to an early_exit_detection row.
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS early_exit_deductions (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      early_exit_detection_id INTEGER NOT NULL REFERENCES early_exit_detections(id),
+      employee_id INTEGER REFERENCES employees(id),
+      employee_code TEXT NOT NULL,
+      employee_name TEXT,
+      department TEXT,
+      company TEXT,
+      date TEXT NOT NULL,
+      deduction_type TEXT NOT NULL DEFAULT 'half_day',
+      deduction_amount REAL,
+      daily_gross_at_time REAL,
+      payroll_month INTEGER,
+      payroll_year INTEGER,
+      hr_remark TEXT NOT NULL,
+      hr_auto_remark TEXT,
+      submitted_by INTEGER,
+      submitted_by_name TEXT,
+      submitted_at TEXT DEFAULT (datetime('now')),
+      hr_revised_at TEXT,
+      finance_status TEXT DEFAULT 'pending',
+      finance_remark TEXT,
+      finance_reviewed_by INTEGER,
+      finance_reviewed_by_name TEXT,
+      finance_reviewed_at TEXT,
+      salary_applied INTEGER DEFAULT 0,
+      salary_applied_at TEXT,
+      created_at TEXT DEFAULT (datetime('now'))
+    )
+  `);
+  safeCreateIndex('CREATE INDEX IF NOT EXISTS idx_early_exit_ded_detection ON early_exit_deductions(early_exit_detection_id)');
+  safeCreateIndex('CREATE INDEX IF NOT EXISTS idx_early_exit_ded_employee ON early_exit_deductions(employee_code, payroll_month, payroll_year)');
+  safeCreateIndex('CREATE INDEX IF NOT EXISTS idx_early_exit_ded_status ON early_exit_deductions(finance_status)');
+
+  // Early exit deduction audit trail — every state transition is logged.
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS early_exit_deduction_audit (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      deduction_id INTEGER NOT NULL REFERENCES early_exit_deductions(id),
+      action TEXT NOT NULL,
+      old_deduction_type TEXT,
+      new_deduction_type TEXT,
+      old_amount REAL,
+      new_amount REAL,
+      old_finance_status TEXT,
+      new_finance_status TEXT,
+      remark TEXT,
+      performed_by INTEGER,
+      performed_by_name TEXT,
+      performed_at TEXT DEFAULT (datetime('now'))
+    )
+  `);
+  safeCreateIndex('CREATE INDEX IF NOT EXISTS idx_early_exit_audit_ded ON early_exit_deduction_audit(deduction_id)');
+
+  // salary_computations: add early_exit_deduction column
+  safeAddColumn('salary_computations', 'early_exit_deduction', 'REAL DEFAULT 0');
+
   // ── Daily Wage Worker Module (DW) ─────────────────────────────
   db.exec(`
     CREATE TABLE IF NOT EXISTS dw_contractors (

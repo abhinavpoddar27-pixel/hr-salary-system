@@ -646,6 +646,8 @@ function computeEmployeeSalary(db, employee, month, year, company) {
     loanRecovery,
     // Phase 2 — finance-approved late coming deduction
     lateComingDeduction: Math.round(lateComingDeduction * 100) / 100,
+    // Early exit deduction (April 2026)
+    earlyExitDeduction: 0,
     totalDeductions: Math.round(totalDeductions * 100) / 100,
     netSalary,
     // ═══ TOTAL PAYABLE = netSalary + otPay + holidayDutyPay ═══
@@ -684,7 +686,8 @@ function saveSalaryComputation(db, comp) {
       is_contractor, days_in_month, regular_days, ot_days, ot_daily_rate, manual_extra_duty,
       punch_based_ot, finance_extra_duty, ot_note, total_payable,
       ed_days, ed_pay, take_home,
-      late_coming_deduction
+      late_coming_deduction,
+      early_exit_deduction
     ) VALUES (
       ?, ?, ?, ?, ?, ?, ?,
       ?, ?, ?, ?, ?,
@@ -696,6 +699,7 @@ function saveSalaryComputation(db, comp) {
       ?, ?, ?, ?, ?, ?,
       ?, ?, ?, ?,
       ?, ?, ?,
+      ?,
       ?
     )
     ON CONFLICT(employee_code, month, year, company) DO UPDATE SET
@@ -744,6 +748,7 @@ function saveSalaryComputation(db, comp) {
       ed_pay = excluded.ed_pay,
       take_home = excluded.take_home,
       late_coming_deduction = excluded.late_coming_deduction,
+      early_exit_deduction = excluded.early_exit_deduction,
       is_finalised = 0
   `).run(
     comp.employeeCode, comp.month, comp.year, comp.company,
@@ -758,7 +763,8 @@ function saveSalaryComputation(db, comp) {
     comp.otDays || 0, comp.otDailyRate || 0, comp.manualExtraDuty || 0,
     comp.punchBasedOT || 0, comp.financeExtraDuty || 0, comp.otNote || '', comp.totalPayable || 0,
     comp.edDays || 0, comp.edPay || 0, comp.takeHome || 0,
-    comp.lateComingDeduction || 0
+    comp.lateComingDeduction || 0,
+    comp.earlyExitDeduction || 0
   );
 
   // ── Phase 2 Late Coming: mark approved deductions as applied ──
@@ -916,6 +922,7 @@ function generatePayslipData(db, employeeCode, month, year) {
       { label: 'Loan EMI', amount: comp.loan_recovery },
       { label: 'LOP Deduction', amount: comp.lop_deduction },
       { label: 'Late Coming Deduction', amount: comp.late_coming_deduction || 0 },
+      { label: 'Early Exit Deduction', amount: comp.early_exit_deduction || 0 },
       { label: 'Other Deductions', amount: comp.other_deductions }
     ].filter(d => d.amount > 0),
     grossEarned: comp.gross_earned,
