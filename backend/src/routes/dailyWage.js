@@ -376,7 +376,7 @@ function validateEntryRow(db, row, rowIndex) {
 }
 
 // ── Insert a single entry + allocations (called inside a transaction) ──
-function insertEntry(db, row, user) {
+function insertEntry(db, row, user, company) {
   const c = row._contractor;
   const wageRate = c.current_daily_wage_rate;
   const commRate = c.current_commission_rate;
@@ -389,14 +389,14 @@ function insertEntry(db, row, user) {
     INSERT INTO dw_entries (contractor_id, entry_date, in_time, out_time,
       total_worker_count, wage_rate_applied, commission_rate_applied,
       total_wage_amount, total_commission_amount, total_liability,
-      gate_entry_reference, notes, status, created_by)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'hr_entered', ?)
+      gate_entry_reference, notes, status, created_by, company)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'hr_entered', ?, ?)
   `).run(
     c.id, row.entry_date, row.in_time, row.out_time,
     wc, wageRate, commRate,
     totalWage, totalComm, totalLiability,
     String(row.gate_entry_reference).trim(), row.notes || null,
-    user
+    user, company || ''
   );
   const entryId = result.lastInsertRowid;
 
@@ -511,7 +511,7 @@ router.post('/entries/batch-import', requireHrOrAdmin, (req, res) => {
   const doImport = db.transaction(() => {
     const ids = [];
     for (const row of resolvedRows) {
-      const entryId = insertEntry(db, row, user);
+      const entryId = insertEntry(db, row, user, req.body.company || req.query.company);
       dwAudit(db, 'entry', entryId, 'batch_create', null, {
         contractor_id: row._contractor.id, entry_date: row.entry_date,
         total_worker_count: row.total_worker_count
@@ -554,7 +554,7 @@ router.post('/entries', requireHrOrAdmin, (req, res) => {
   }
 
   const doCreate = db.transaction(() => {
-    const entryId = insertEntry(db, row, user);
+    const entryId = insertEntry(db, row, user, req.body.company || req.query.company);
     dwAudit(db, 'entry', entryId, 'create', null, {
       contractor_id, entry_date: req.body.entry_date,
       total_worker_count: req.body.total_worker_count,
@@ -1267,9 +1267,12 @@ router.get('/reports/daily-mis', (req, res) => {
 // GET /reports/monthly — Monthly rollup grouped by contractor
 router.get('/reports/monthly', (req, res) => {
   const db = getDb();
-  const { month, year } = req.query;
+  const { month, year, company } = req.query;
   if (!month || !year) return res.status(400).json({ success: false, error: 'month and year query params are required' });
   const monthPrefix = `${year}-${String(month).padStart(2, '0')}`;
+
+  const companyFilter = company ? ' AND e.company = ?' : '';
+  const companyParams = company ? [company] : [];
 
   const contractors = db.prepare(`
     SELECT c.id as contractor_id, c.contractor_name,
@@ -1281,23 +1284,23 @@ router.get('/reports/monthly', (req, res) => {
       SUM(e.total_liability) as total_liability
     FROM dw_entries e
     JOIN dw_contractors c ON e.contractor_id = c.id
-    WHERE e.entry_date LIKE ? AND e.status IN ('approved','paid')
+    WHERE e.entry_date LIKE ? AND e.status IN ('approved','paid')${companyFilter}
     GROUP BY c.id
     ORDER BY total_liability DESC
-  `).all(monthPrefix + '%');
+  `).all(monthPrefix + '%', ...companyParams);
 
   // Enrich each contractor with department breakdown and payment status
   const deptStmt = db.prepare(`
     SELECT da.department, SUM(da.worker_count) as workers
     FROM dw_department_allocations da
     JOIN dw_entries e ON da.entry_id = e.id
-    WHERE e.contractor_id = ? AND e.entry_date LIKE ? AND e.status IN ('approved','paid')
+    WHERE e.contractor_id = ? AND e.entry_date LIKE ? AND e.status IN ('approved','paid')${companyFilter}
     GROUP BY da.department ORDER BY workers DESC
   `);
   const paidStmt = db.prepare(`
     SELECT COALESCE(SUM(e.total_liability), 0) as paid
     FROM dw_entries e
-    WHERE e.contractor_id = ? AND e.entry_date LIKE ? AND e.status = 'paid'
+    WHERE e.contractor_id = ? AND e.entry_date LIKE ? AND e.status = 'paid'${companyFilter}
   `);
 
   for (const c of contractors) {
@@ -1305,8 +1308,8 @@ router.get('/reports/monthly', (req, res) => {
     c.total_wages = Math.round((c.total_wages || 0) * 100) / 100;
     c.total_commission = Math.round((c.total_commission || 0) * 100) / 100;
     c.total_liability = Math.round((c.total_liability || 0) * 100) / 100;
-    c.department_breakdown = deptStmt.all(c.contractor_id, monthPrefix + '%');
-    const paid = paidStmt.get(c.contractor_id, monthPrefix + '%');
+    c.department_breakdown = deptStmt.all(c.contractor_id, monthPrefix + '%', ...companyParams);
+    const paid = paidStmt.get(c.contractor_id, monthPrefix + '%', ...companyParams);
     c.payment_status = {
       paid: Math.round((paid.paid || 0) * 100) / 100,
       outstanding: Math.round((c.total_liability - (paid.paid || 0)) * 100) / 100
@@ -1329,9 +1332,12 @@ router.get('/reports/monthly', (req, res) => {
 // GET /reports/department-cost — Department-wise cost breakdown
 router.get('/reports/department-cost', (req, res) => {
   const db = getDb();
-  const { month, year } = req.query;
+  const { month, year, company } = req.query;
   if (!month || !year) return res.status(400).json({ success: false, error: 'month and year query params are required' });
   const monthPrefix = `${year}-${String(month).padStart(2, '0')}`;
+
+  const companyFilter = company ? ' AND e.company = ?' : '';
+  const companyParams = company ? [company] : [];
 
   const departments = db.prepare(`
     SELECT da.department,
@@ -1341,9 +1347,9 @@ router.get('/reports/department-cost', (req, res) => {
       SUM(da.allocated_wage_amount + da.allocated_commission_amount) as total_cost
     FROM dw_department_allocations da
     JOIN dw_entries e ON da.entry_id = e.id
-    WHERE e.entry_date LIKE ? AND e.status IN ('approved','paid')
+    WHERE e.entry_date LIKE ? AND e.status IN ('approved','paid')${companyFilter}
     GROUP BY da.department ORDER BY total_cost DESC
-  `).all(monthPrefix + '%');
+  `).all(monthPrefix + '%', ...companyParams);
 
   for (const d of departments) {
     d.wage_cost = Math.round((d.wage_cost || 0) * 100) / 100;

@@ -2,6 +2,7 @@ import React, { useState, useCallback } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useMutation } from '@tanstack/react-query'
 import { batchImportDWEntries, getDWEntryTemplate } from '../utils/api'
+import { useAppStore } from '../store/appStore'
 import { useDropzone } from 'react-dropzone'
 import * as XLSX from 'xlsx'
 import clsx from 'clsx'
@@ -9,6 +10,7 @@ import toast from 'react-hot-toast'
 
 export default function DailyWageBatchImport() {
   const navigate = useNavigate()
+  const selectedCompany = useAppStore(s => s.selectedCompany)
   const [step, setStep] = useState(1) // 1=upload, 2=review, 3=done
   const [parsedRows, setParsedRows] = useState([])
   const [errors, setErrors] = useState([])
@@ -38,7 +40,7 @@ export default function DailyWageBatchImport() {
     const reader = new FileReader()
     reader.onload = (e) => {
       try {
-        const wb = XLSX.read(e.target.result, { type: 'array' })
+        const wb = XLSX.read(e.target.result, { type: 'array', cellDates: true })
         const ws = wb.Sheets[wb.SheetNames[0]]
         const raw = XLSX.utils.sheet_to_json(ws, { header: 1, defval: '' })
         if (raw.length < 2) { toast.error('File is empty or has no data rows'); return }
@@ -52,9 +54,11 @@ export default function DailyWageBatchImport() {
             return { department: dept || '', worker_count: Number(count) || 0 }
           }).filter(a => a.department)
 
-          // Format date — handle both string and Excel serial dates
+          // Format date — handle Date objects (cellDates:true), serial numbers, and strings
           let dateVal = r[0]
-          if (typeof dateVal === 'number') {
+          if (dateVal instanceof Date) {
+            dateVal = `${dateVal.getFullYear()}-${String(dateVal.getMonth() + 1).padStart(2, '0')}-${String(dateVal.getDate()).padStart(2, '0')}`
+          } else if (typeof dateVal === 'number') {
             const d = XLSX.SSF.parse_date_code(dateVal)
             dateVal = `${d.y}-${String(d.m).padStart(2, '0')}-${String(d.d).padStart(2, '0')}`
           }
@@ -97,7 +101,7 @@ export default function DailyWageBatchImport() {
 
   // ── Import mutation ─────────────────────────────────────────
   const importMut = useMutation({
-    mutationFn: (entries) => batchImportDWEntries(entries),
+    mutationFn: ({ entries, company }) => batchImportDWEntries(entries, company),
     onSuccess: (res) => {
       const count = res?.data?.imported || parsedRows.length
       toast.success(`${count} entries imported successfully`)
@@ -115,7 +119,7 @@ export default function DailyWageBatchImport() {
     }
   })
 
-  const doImport = () => importMut.mutate(parsedRows)
+  const doImport = () => importMut.mutate({ entries: parsedRows, company: selectedCompany })
 
   // ── Row error lookup ────────────────────────────────────────
   const getRowErrors = (idx) => errors.filter(e => e.row === idx)

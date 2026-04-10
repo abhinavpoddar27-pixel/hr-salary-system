@@ -1591,6 +1591,10 @@ function initSchema(db) {
     );
   `);
 
+  // Daily wage company filtering (April 2026)
+  safeAddColumn('dw_entries', 'company', "TEXT DEFAULT ''");
+  safeCreateIndex('CREATE INDEX IF NOT EXISTS idx_dw_entries_company ON dw_entries(company)');
+
   safeCreateIndex('CREATE INDEX IF NOT EXISTS idx_dw_rate_history_contractor ON dw_rate_history(contractor_id, effective_date)');
   safeCreateIndex('CREATE INDEX IF NOT EXISTS idx_dw_entries_contractor ON dw_entries(contractor_id, entry_date)');
   safeCreateIndex('CREATE INDEX IF NOT EXISTS idx_dw_entries_status ON dw_entries(status)');

@@ -49,7 +49,7 @@ export default function DailyWagePayments() {
   const { data: historyRes } = useQuery({
     queryKey: ['dw-payments-history'],
     queryFn: () => getDWPayments(),
-    retry: 0, enabled: activeTab === 'history'
+    retry: 0
   })
   const payments = historyRes?.data?.data || []
   const filteredPayments = useMemo(() => {

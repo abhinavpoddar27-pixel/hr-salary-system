@@ -1,7 +1,8 @@
 import React, { useState, useMemo, useRef, useEffect } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useNavigate, useSearchParams } from 'react-router-dom'
 import { useQuery, useMutation } from '@tanstack/react-query'
-import { getDWContractors, createDWEntry, submitDWEntry, checkDWDuplicates } from '../utils/api'
+import { getDWContractors, getDWEntry, createDWEntry, updateDWEntry, submitDWEntry, checkDWDuplicates } from '../utils/api'
+import { useAppStore } from '../store/appStore'
 import clsx from 'clsx'
 import toast from 'react-hot-toast'
 
@@ -9,12 +10,17 @@ function fmt(n) { return (n || 0).toLocaleString('en-IN', { minimumFractionDigit
 
 export default function DailyWageEntry() {
   const navigate = useNavigate()
+  const [searchParams] = useSearchParams()
+  const editId = searchParams.get('edit')
+  const isEditMode = !!editId
+  const selectedCompany = useAppStore(s => s.selectedCompany)
 
   // ── Contractor search dropdown ──────────────────────────────
   const [cSearch, setCSearch] = useState('')
   const [cOpen, setCOpen] = useState(false)
   const [selectedContractor, setSelectedContractor] = useState(null)
   const dropRef = useRef(null)
+  const [editLoaded, setEditLoaded] = useState(false)
 
   const { data: cRes } = useQuery({
     queryKey: ['dw-contractors-active'],
@@ -34,6 +40,29 @@ export default function DailyWageEntry() {
     return () => document.removeEventListener('mousedown', handler)
   }, [])
 
+  // ── Edit mode: fetch entry and pre-populate ─────────────────
+  useEffect(() => {
+    if (!editId || editLoaded || allContractors.length === 0) return
+    getDWEntry(editId).then(res => {
+      const e = res?.data?.data
+      if (!e) return
+      setEntryDate(e.entry_date || today)
+      setInTime(e.in_time || '08:00')
+      setOutTime(e.out_time || '17:00')
+      setTotalWorkers(String(e.total_worker_count || ''))
+      setGateRef(e.gate_entry_reference || '')
+      setNotes(e.notes || '')
+      if (e.department_allocations?.length > 0) {
+        setAllocations(e.department_allocations.map(a => ({
+          department: a.department || '', worker_count: String(a.worker_count || '')
+        })))
+      }
+      const contractor = allContractors.find(c => c.id === e.contractor_id)
+      if (contractor) setSelectedContractor(contractor)
+      setEditLoaded(true)
+    }).catch(() => {})
+  }, [editId, editLoaded, allContractors])
+
   // ── Form state ──────────────────────────────────────────────
   const today = new Date().toISOString().slice(0, 10)
   const [entryDate, setEntryDate] = useState(today)
@@ -46,6 +75,7 @@ export default function DailyWageEntry() {
   const [showDupConfirm, setShowDupConfirm] = useState(false)
   const [dupInfo, setDupInfo] = useState(null)
   const [submitAfterSave, setSubmitAfterSave] = useState(false)
+  const [contractorError, setContractorError] = useState(false)
 
   // ── Computed values ─────────────────────────────────────────
   const wageRate = selectedContractor?.current_daily_wage_rate || 0
@@ -80,22 +110,22 @@ export default function DailyWageEntry() {
 
   // ── Mutations ───────────────────────────────────────────────
   const createMut = useMutation({
-    mutationFn: createDWEntry,
+    mutationFn: (body) => isEditMode ? updateDWEntry(editId, body) : createDWEntry(body),
     onSuccess: async (res) => {
-      const entryId = res?.data?.data?.id
+      const entryId = isEditMode ? Number(editId) : res?.data?.data?.id
       if (submitAfterSave && entryId) {
         try {
           await submitDWEntry(entryId)
-          toast.success('Entry created and submitted for review')
+          toast.success(isEditMode ? 'Entry updated and submitted for review' : 'Entry created and submitted for review')
         } catch {
-          toast.success('Entry created (submit failed — you can submit from records)')
+          toast.success(isEditMode ? 'Entry updated (submit failed — you can submit from records)' : 'Entry created (submit failed — you can submit from records)')
         }
       } else {
-        toast.success('Entry saved as draft')
+        toast.success(isEditMode ? 'Entry updated' : 'Entry saved as draft')
       }
       navigate('/daily-wage')
     },
-    onError: (e) => toast.error(e.response?.data?.error || 'Failed to create entry')
+    onError: (e) => toast.error(e.response?.data?.error || (isEditMode ? 'Failed to update entry' : 'Failed to create entry'))
   })
 
   // ── Save handler ────────────────────────────────────────────
@@ -109,27 +139,34 @@ export default function DailyWageEntry() {
       total_worker_count: totalWC,
       department_allocations: allocations.map(a => ({ department: a.department.trim(), worker_count: Number(a.worker_count) || 0 })).filter(a => a.department),
       gate_entry_reference: gateRef.trim(),
-      notes: notes.trim() || undefined
+      notes: notes.trim() || undefined,
+      company: selectedCompany || ''
     }
 
     // Basic client-side checks
-    if (!selectedContractor) return toast.error('Select a contractor')
+    setContractorError(false)
+    if (!selectedContractor) {
+      setContractorError(true)
+      return toast.error('Select a contractor')
+    }
     if (!entryDate) return toast.error('Enter a date')
     if (!inTime || !outTime || inTime >= outTime) return toast.error('Check in/out times')
     if (totalWC <= 0) return toast.error('Enter total workers')
     if (!allocMatch) return toast.error('Department allocation must match total workers')
     if (!gateRef.trim()) return toast.error('Enter gate entry reference')
 
-    // Duplicate check
-    try {
-      const dupRes = await checkDWDuplicates({ contractor_id: selectedContractor.id, entry_date: entryDate, in_time: inTime, out_time: outTime })
-      const dups = dupRes?.data?.duplicates || []
-      if (dups.length > 0) {
-        setDupInfo(dups[0])
-        setShowDupConfirm(true)
-        return
-      }
-    } catch { /* proceed if check fails */ }
+    // Duplicate check (skip for edit mode — we're updating the same entry)
+    if (!isEditMode) {
+      try {
+        const dupRes = await checkDWDuplicates({ contractor_id: selectedContractor.id, entry_date: entryDate, in_time: inTime, out_time: outTime })
+        const dups = dupRes?.data?.duplicates || []
+        if (dups.length > 0) {
+          setDupInfo(dups[0])
+          setShowDupConfirm(true)
+          return
+        }
+      } catch { /* proceed if check fails */ }
+    }
 
     createMut.mutate(body)
   }
@@ -140,7 +177,8 @@ export default function DailyWageEntry() {
       contractor_id: selectedContractor.id, entry_date: entryDate, in_time: inTime, out_time: outTime,
       total_worker_count: totalWC,
       department_allocations: allocations.map(a => ({ department: a.department.trim(), worker_count: Number(a.worker_count) || 0 })).filter(a => a.department),
-      gate_entry_reference: gateRef.trim(), notes: notes.trim() || undefined
+      gate_entry_reference: gateRef.trim(), notes: notes.trim() || undefined,
+      company: selectedCompany || ''
     }
     createMut.mutate(body)
   }
@@ -150,8 +188,8 @@ export default function DailyWageEntry() {
     <div className="p-4 md:p-6 max-w-4xl mx-auto space-y-5">
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-xl font-bold text-slate-800">New Daily Wage Entry</h1>
-          <p className="text-sm text-slate-500 mt-0.5">Record daily wage worker attendance</p>
+          <h1 className="text-xl font-bold text-slate-800">{isEditMode ? 'Edit Daily Wage Entry' : 'New Daily Wage Entry'}</h1>
+          <p className="text-sm text-slate-500 mt-0.5">{isEditMode ? 'Update daily wage worker entry' : 'Record daily wage worker attendance'}</p>
         </div>
         <button onClick={() => navigate('/daily-wage')} className="text-sm text-slate-500 hover:text-slate-700">Back to Records</button>
       </div>
@@ -161,9 +199,10 @@ export default function DailyWageEntry() {
         <label className="block text-xs font-semibold text-slate-500 uppercase mb-2">Contractor *</label>
         <div className="relative" ref={dropRef}>
           <input type="text" placeholder="Search contractor..." value={selectedContractor ? selectedContractor.contractor_name : cSearch}
-            onChange={e => { setCSearch(e.target.value); setSelectedContractor(null); setCOpen(true) }}
+            onChange={e => { setCSearch(e.target.value); setSelectedContractor(null); setCOpen(true); setContractorError(false) }}
             onFocus={() => setCOpen(true)}
-            className="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none" />
+            className={clsx('w-full px-3 py-2 text-sm border rounded-lg focus:ring-2 focus:ring-blue-500 outline-none',
+              contractorError ? 'border-red-500 bg-red-50' : 'border-slate-300')} />
           {selectedContractor && (
             <button onClick={() => { setSelectedContractor(null); setCSearch('') }}
               className="absolute right-2 top-2 text-slate-400 hover:text-slate-600">&times;</button>
@@ -173,7 +212,7 @@ export default function DailyWageEntry() {
               {filteredContractors.length === 0 ? (
                 <div className="px-3 py-2 text-sm text-slate-400">No contractors found</div>
               ) : filteredContractors.map(c => (
-                <div key={c.id} onClick={() => { setSelectedContractor(c); setCSearch(''); setCOpen(false) }}
+                <div key={c.id} onClick={() => { setSelectedContractor(c); setCSearch(''); setCOpen(false); setContractorError(false) }}
                   className="px-3 py-2 text-sm hover:bg-blue-50 cursor-pointer flex justify-between">
                   <span className="font-medium text-slate-700">{c.contractor_name}</span>
                   <span className="text-slate-400">Wage: {fmt(c.current_daily_wage_rate)} | Comm: {fmt(c.current_commission_rate)}</span>
@@ -182,6 +221,7 @@ export default function DailyWageEntry() {
             </div>
           )}
         </div>
+        {contractorError && <p className="text-xs text-red-600 mt-1">Contractor is required</p>}
         {selectedContractor && (
           <div className="mt-2 flex items-center gap-4 text-sm bg-blue-50 rounded-lg px-3 py-2">
             <span className="text-slate-600">Wage Rate: <strong className="text-blue-700">{fmt(wageRate)}</strong></span>

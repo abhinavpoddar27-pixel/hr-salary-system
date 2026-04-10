@@ -4,6 +4,7 @@ import {
   getDWMonthlyReport, getDWDepartmentCost, getDWContractorReport,
   getDWSeasonalTrends, getDWContractors
 } from '../utils/api'
+import { useAppStore } from '../store/appStore'
 import { BarChart, Bar, LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, Legend } from 'recharts'
 import * as XLSX from 'xlsx'
 import clsx from 'clsx'
@@ -18,6 +19,7 @@ export default function DailyWageReports() {
   const [month, setMonth] = useState(now.getMonth() + 1)
   const [year, setYear] = useState(now.getFullYear())
   const [selectedContractorId, setSelectedContractorId] = useState('')
+  const selectedCompany = useAppStore(s => s.selectedCompany)
 
   const tabs = [
     { key: 'monthly', label: 'Monthly Report' },
@@ -43,8 +45,8 @@ export default function DailyWageReports() {
         ))}
       </div>
 
-      {tab === 'monthly' && <MonthlyReport month={month} year={year} setMonth={setMonth} setYear={setYear} />}
-      {tab === 'department' && <DepartmentCost month={month} year={year} setMonth={setMonth} setYear={setYear} />}
+      {tab === 'monthly' && <MonthlyReport month={month} year={year} setMonth={setMonth} setYear={setYear} company={selectedCompany} />}
+      {tab === 'department' && <DepartmentCost month={month} year={year} setMonth={setMonth} setYear={setYear} company={selectedCompany} />}
       {tab === 'contractor' && <ContractorSummary contractorId={selectedContractorId} setContractorId={setSelectedContractorId} />}
       {tab === 'trends' && <SeasonalTrends />}
     </div>
@@ -68,10 +70,10 @@ function MonthYearPicker({ month, year, setMonth, setYear }) {
 }
 
 // ── Tab 1: Monthly Report ─────────────────────────────────────
-function MonthlyReport({ month, year, setMonth, setYear }) {
+function MonthlyReport({ month, year, setMonth, setYear, company }) {
   const { data: res, isLoading } = useQuery({
-    queryKey: ['dw-report-monthly', month, year],
-    queryFn: () => getDWMonthlyReport(month, year),
+    queryKey: ['dw-report-monthly', month, year, company],
+    queryFn: () => getDWMonthlyReport(month, year, company),
     retry: 0
   })
   const data = res?.data?.data || {}
@@ -180,10 +182,10 @@ function MonthlyReport({ month, year, setMonth, setYear }) {
 }
 
 // ── Tab 2: Department Cost ────────────────────────────────────
-function DepartmentCost({ month, year, setMonth, setYear }) {
+function DepartmentCost({ month, year, setMonth, setYear, company }) {
   const { data: res, isLoading } = useQuery({
-    queryKey: ['dw-report-dept', month, year],
-    queryFn: () => getDWDepartmentCost(month, year),
+    queryKey: ['dw-report-dept', month, year, company],
+    queryFn: () => getDWDepartmentCost(month, year, company),
     retry: 0
   })
   const data = res?.data?.data || {}
