@@ -14,6 +14,7 @@ import DrillDownRow, { DrillDownChevron } from '../components/ui/DrillDownRow'
 import EmployeeQuickView from '../components/ui/EmployeeQuickView'
 import ErrorBoundary from '../components/ui/ErrorBoundary'
 import CompanyFilter from '../components/shared/CompanyFilter'
+import FinanceEarlyExitApprovals from '../components/FinanceEarlyExitApprovals'
 import clsx from 'clsx'
 import toast from 'react-hot-toast'
 
@@ -1296,6 +1297,14 @@ export default function FinanceAudit() {
   })
   const pendingLateCount = (latePendingRes?.data?.data || []).length
 
+  // Pending early exit deductions count for the tab badge
+  const { data: earlyExitPendingRes } = useQuery({
+    queryKey: ['early-exit-finance-pending', month, year, selectedCompany],
+    queryFn: () => import('../utils/api').then(m => m.getEarlyExitPendingFinance({ month, year, company: selectedCompany })),
+    retry: 0, staleTime: 60000
+  })
+  const pendingEarlyExitCount = (earlyExitPendingRes?.data?.data || []).length
+
   const tabs = [
     { id: 'readiness', label: 'Readiness' },
     { id: 'interventions', label: 'Manual Interventions', badge: pendingFlagCount },
@@ -1304,6 +1313,7 @@ export default function FinanceAudit() {
     { id: 'report', label: 'Finance Report' },
     { id: 'manual-flags', label: `Attendance Flags`, badge: unverifiedFlagCount },
     { id: 'late-coming', label: 'Late Coming', badge: pendingLateCount },
+    { id: 'early-exit', label: 'Early Exit', badge: pendingEarlyExitCount },
     ...(isAdmin ? [{ id: 'corrections', label: 'Corrections Summary' }] : [])
   ]
 
@@ -1340,6 +1350,7 @@ export default function FinanceAudit() {
         {activeTab === 'report' && <ReportTab highlightEmployee={highlightEmployee} onClearHighlight={() => setHighlightEmployee(null)} />}
         {activeTab === 'manual-flags' && <ManualFlagsTab />}
         {activeTab === 'late-coming' && <LateComingAuditTab />}
+        {activeTab === 'early-exit' && <FinanceEarlyExitApprovals month={month} year={year} />}
         {activeTab === 'corrections' && isAdmin && <CorrectionsSummaryTab />}
       </div>
     </ErrorBoundary>
