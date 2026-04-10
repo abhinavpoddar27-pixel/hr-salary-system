@@ -1218,6 +1218,316 @@ router.get('/dashboard', (req, res) => {
   });
 });
 
+// ═══════════════════════════════════════════════════════════════
+//  REPORTS
+// ═══════════════════════════════════════════════════════════════
+
+// GET /reports/daily-mis — Per-contractor summary for a single date
+router.get('/reports/daily-mis', (req, res) => {
+  const db = getDb();
+  const { date } = req.query;
+  if (!date) return res.status(400).json({ success: false, error: 'date query param is required' });
+
+  const contractors = db.prepare(`
+    SELECT c.id as contractor_id, c.contractor_name,
+      SUM(e.total_worker_count) as workers,
+      SUM(e.total_wage_amount) as wages,
+      SUM(e.total_commission_amount) as commission,
+      SUM(e.total_liability) as liability
+    FROM dw_entries e
+    JOIN dw_contractors c ON e.contractor_id = c.id
+    WHERE e.entry_date = ? AND e.status IN ('approved','paid')
+    GROUP BY c.id
+    ORDER BY c.contractor_name
+  `).all(date);
+
+  const department_totals = db.prepare(`
+    SELECT da.department,
+      SUM(da.worker_count) as workers,
+      SUM(da.allocated_wage_amount) as wages,
+      SUM(da.allocated_commission_amount) as commission,
+      SUM(da.allocated_wage_amount + da.allocated_commission_amount) as total
+    FROM dw_department_allocations da
+    JOIN dw_entries e ON da.entry_id = e.id
+    WHERE e.entry_date = ? AND e.status IN ('approved','paid')
+    GROUP BY da.department
+    ORDER BY total DESC
+  `).all(date);
+
+  const grand_total = {
+    workers: contractors.reduce((s, c) => s + (c.workers || 0), 0),
+    wages: Math.round(contractors.reduce((s, c) => s + (c.wages || 0), 0) * 100) / 100,
+    commission: Math.round(contractors.reduce((s, c) => s + (c.commission || 0), 0) * 100) / 100,
+    liability: Math.round(contractors.reduce((s, c) => s + (c.liability || 0), 0) * 100) / 100
+  };
+
+  res.json({ success: true, data: { date, contractors, department_totals, grand_total } });
+});
+
+// GET /reports/monthly — Monthly rollup grouped by contractor
+router.get('/reports/monthly', (req, res) => {
+  const db = getDb();
+  const { month, year } = req.query;
+  if (!month || !year) return res.status(400).json({ success: false, error: 'month and year query params are required' });
+  const monthPrefix = `${year}-${String(month).padStart(2, '0')}`;
+
+  const contractors = db.prepare(`
+    SELECT c.id as contractor_id, c.contractor_name,
+      COUNT(DISTINCT e.entry_date) as total_days_worked,
+      SUM(e.total_worker_count) as total_worker_days,
+      AVG(e.wage_rate_applied) as avg_rate,
+      SUM(e.total_wage_amount) as total_wages,
+      SUM(e.total_commission_amount) as total_commission,
+      SUM(e.total_liability) as total_liability
+    FROM dw_entries e
+    JOIN dw_contractors c ON e.contractor_id = c.id
+    WHERE e.entry_date LIKE ? AND e.status IN ('approved','paid')
+    GROUP BY c.id
+    ORDER BY total_liability DESC
+  `).all(monthPrefix + '%');
+
+  // Enrich each contractor with department breakdown and payment status
+  const deptStmt = db.prepare(`
+    SELECT da.department, SUM(da.worker_count) as workers
+    FROM dw_department_allocations da
+    JOIN dw_entries e ON da.entry_id = e.id
+    WHERE e.contractor_id = ? AND e.entry_date LIKE ? AND e.status IN ('approved','paid')
+    GROUP BY da.department ORDER BY workers DESC
+  `);
+  const paidStmt = db.prepare(`
+    SELECT COALESCE(SUM(e.total_liability), 0) as paid
+    FROM dw_entries e
+    WHERE e.contractor_id = ? AND e.entry_date LIKE ? AND e.status = 'paid'
+  `);
+
+  for (const c of contractors) {
+    c.avg_rate = Math.round((c.avg_rate || 0) * 100) / 100;
+    c.total_wages = Math.round((c.total_wages || 0) * 100) / 100;
+    c.total_commission = Math.round((c.total_commission || 0) * 100) / 100;
+    c.total_liability = Math.round((c.total_liability || 0) * 100) / 100;
+    c.department_breakdown = deptStmt.all(c.contractor_id, monthPrefix + '%');
+    const paid = paidStmt.get(c.contractor_id, monthPrefix + '%');
+    c.payment_status = {
+      paid: Math.round((paid.paid || 0) * 100) / 100,
+      outstanding: Math.round((c.total_liability - (paid.paid || 0)) * 100) / 100
+    };
+  }
+
+  const grand_totals = {
+    total_days_worked: contractors.reduce((s, c) => s + (c.total_days_worked || 0), 0),
+    total_worker_days: contractors.reduce((s, c) => s + (c.total_worker_days || 0), 0),
+    total_wages: Math.round(contractors.reduce((s, c) => s + (c.total_wages || 0), 0) * 100) / 100,
+    total_commission: Math.round(contractors.reduce((s, c) => s + (c.total_commission || 0), 0) * 100) / 100,
+    total_liability: Math.round(contractors.reduce((s, c) => s + (c.total_liability || 0), 0) * 100) / 100,
+    total_paid: Math.round(contractors.reduce((s, c) => s + (c.payment_status.paid || 0), 0) * 100) / 100,
+    total_outstanding: Math.round(contractors.reduce((s, c) => s + (c.payment_status.outstanding || 0), 0) * 100) / 100
+  };
+
+  res.json({ success: true, data: { month: Number(month), year: Number(year), contractors, grand_totals } });
+});
+
+// GET /reports/department-cost — Department-wise cost breakdown
+router.get('/reports/department-cost', (req, res) => {
+  const db = getDb();
+  const { month, year } = req.query;
+  if (!month || !year) return res.status(400).json({ success: false, error: 'month and year query params are required' });
+  const monthPrefix = `${year}-${String(month).padStart(2, '0')}`;
+
+  const departments = db.prepare(`
+    SELECT da.department,
+      SUM(da.worker_count) as worker_days,
+      SUM(da.allocated_wage_amount) as wage_cost,
+      SUM(da.allocated_commission_amount) as commission_cost,
+      SUM(da.allocated_wage_amount + da.allocated_commission_amount) as total_cost
+    FROM dw_department_allocations da
+    JOIN dw_entries e ON da.entry_id = e.id
+    WHERE e.entry_date LIKE ? AND e.status IN ('approved','paid')
+    GROUP BY da.department ORDER BY total_cost DESC
+  `).all(monthPrefix + '%');
+
+  for (const d of departments) {
+    d.wage_cost = Math.round((d.wage_cost || 0) * 100) / 100;
+    d.commission_cost = Math.round((d.commission_cost || 0) * 100) / 100;
+    d.total_cost = Math.round((d.total_cost || 0) * 100) / 100;
+  }
+
+  const grand_total = {
+    worker_days: departments.reduce((s, d) => s + (d.worker_days || 0), 0),
+    wage_cost: Math.round(departments.reduce((s, d) => s + (d.wage_cost || 0), 0) * 100) / 100,
+    commission_cost: Math.round(departments.reduce((s, d) => s + (d.commission_cost || 0), 0) * 100) / 100,
+    total_cost: Math.round(departments.reduce((s, d) => s + (d.total_cost || 0), 0) * 100) / 100
+  };
+
+  res.json({ success: true, data: { month: Number(month), year: Number(year), departments, grand_total } });
+});
+
+// GET /reports/contractor-summary/:id — Contractor snapshot with trends
+router.get('/reports/contractor-summary/:id', (req, res) => {
+  const db = getDb();
+  const contractor = db.prepare('SELECT * FROM dw_contractors WHERE id = ?').get(req.params.id);
+  if (!contractor) return res.status(404).json({ success: false, error: 'Contractor not found' });
+
+  const rateHistory = db.prepare(
+    'SELECT * FROM dw_rate_history WHERE contractor_id = ? ORDER BY effective_date DESC LIMIT 10'
+  ).all(req.params.id);
+
+  // Current month stats
+  const now = new Date();
+  const curPrefix = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+  const thisMonth = db.prepare(`
+    SELECT COALESCE(SUM(total_worker_count), 0) as worker_days,
+           COALESCE(SUM(total_liability), 0) as total_spend
+    FROM dw_entries WHERE contractor_id = ? AND entry_date LIKE ? AND status IN ('approved','paid')
+  `).get(req.params.id, curPrefix + '%');
+
+  // Last 6 months trend
+  const trend = [];
+  for (let i = 0; i < 6; i++) {
+    const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
+    const prefix = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+    const row = db.prepare(`
+      SELECT COALESCE(SUM(total_worker_count), 0) as worker_days,
+             COALESCE(SUM(total_liability), 0) as total_spend
+      FROM dw_entries WHERE contractor_id = ? AND entry_date LIKE ? AND status IN ('approved','paid')
+    `).get(req.params.id, prefix + '%');
+    trend.push({
+      month: d.getMonth() + 1, year: d.getFullYear(),
+      worker_days: row.worker_days,
+      total_spend: Math.round((row.total_spend || 0) * 100) / 100
+    });
+  }
+
+  // Payment summary
+  const paymentSummary = db.prepare(`
+    SELECT COUNT(*) as payment_count, COALESCE(SUM(total_amount), 0) as total_paid
+    FROM dw_payments WHERE contractor_id = ?
+  `).get(req.params.id);
+
+  res.json({
+    success: true,
+    data: {
+      contractor,
+      rate_history: rateHistory,
+      this_month: { worker_days: thisMonth.worker_days, total_spend: Math.round((thisMonth.total_spend || 0) * 100) / 100 },
+      trend,
+      payment_summary: {
+        payment_count: paymentSummary.payment_count,
+        total_paid: Math.round((paymentSummary.total_paid || 0) * 100) / 100
+      }
+    }
+  });
+});
+
+// GET /reports/payment-sheet/:contractorId — Printable payment sheet
+router.get('/reports/payment-sheet/:contractorId', (req, res) => {
+  const db = getDb();
+  const contractor = db.prepare('SELECT * FROM dw_contractors WHERE id = ?').get(req.params.contractorId);
+  if (!contractor) return res.status(404).json({ success: false, error: 'Contractor not found' });
+
+  const { entry_ids } = req.query;
+  if (!entry_ids) return res.status(400).json({ success: false, error: 'entry_ids query param is required (comma-separated)' });
+
+  const ids = String(entry_ids).split(',').map(s => Number(s.trim())).filter(n => n > 0);
+  if (ids.length === 0) return res.status(400).json({ success: false, error: 'No valid entry IDs provided' });
+
+  const placeholders = ids.map(() => '?').join(',');
+  const entries = db.prepare(`
+    SELECT e.* FROM dw_entries e
+    WHERE e.id IN (${placeholders}) AND e.contractor_id = ? AND e.status IN ('approved','paid')
+    ORDER BY e.entry_date, e.in_time
+  `).all(...ids, req.params.contractorId);
+
+  // Fetch allocations for each entry
+  const allocStmt = db.prepare('SELECT * FROM dw_department_allocations WHERE entry_id = ? ORDER BY department');
+  for (const e of entries) {
+    e.department_allocations = allocStmt.all(e.id);
+  }
+
+  const totals = {
+    total_workers: entries.reduce((s, e) => s + (e.total_worker_count || 0), 0),
+    total_wages: Math.round(entries.reduce((s, e) => s + (e.total_wage_amount || 0), 0) * 100) / 100,
+    total_commission: Math.round(entries.reduce((s, e) => s + (e.total_commission_amount || 0), 0) * 100) / 100,
+    total_liability: Math.round(entries.reduce((s, e) => s + (e.total_liability || 0), 0) * 100) / 100,
+    entry_count: entries.length
+  };
+
+  res.json({ success: true, data: { contractor, entries, totals } });
+});
+
+// GET /reports/pending-liabilities — Like /payments/pending-liability but with department breakdown
+router.get('/reports/pending-liabilities', (req, res) => {
+  const db = getDb();
+  const contractors = db.prepare(`
+    SELECT c.id as contractor_id, c.contractor_name, c.payment_terms,
+      COUNT(e.id) as entry_count,
+      SUM(e.total_wage_amount) as total_wages,
+      SUM(e.total_commission_amount) as total_commission,
+      SUM(e.total_liability) as total_liability,
+      MIN(e.entry_date) as oldest_entry_date
+    FROM dw_entries e
+    JOIN dw_contractors c ON e.contractor_id = c.id
+    WHERE e.status = 'approved'
+    GROUP BY c.id
+    ORDER BY total_liability DESC
+  `).all();
+
+  const deptStmt = db.prepare(`
+    SELECT da.department, SUM(da.worker_count) as workers,
+      SUM(da.allocated_wage_amount + da.allocated_commission_amount) as cost
+    FROM dw_department_allocations da
+    JOIN dw_entries e ON da.entry_id = e.id
+    WHERE e.contractor_id = ? AND e.status = 'approved'
+    GROUP BY da.department ORDER BY cost DESC
+  `);
+
+  for (const c of contractors) {
+    c.total_wages = Math.round((c.total_wages || 0) * 100) / 100;
+    c.total_commission = Math.round((c.total_commission || 0) * 100) / 100;
+    c.total_liability = Math.round((c.total_liability || 0) * 100) / 100;
+    c.department_breakdown = deptStmt.all(c.contractor_id);
+  }
+
+  const grand_total = {
+    entry_count: contractors.reduce((s, c) => s + (c.entry_count || 0), 0),
+    total_liability: Math.round(contractors.reduce((s, c) => s + (c.total_liability || 0), 0) * 100) / 100
+  };
+
+  res.json({ success: true, data: { contractors, grand_total } });
+});
+
+// GET /reports/seasonal-trends — Last 12 months of monthly totals
+router.get('/reports/seasonal-trends', (req, res) => {
+  const db = getDb();
+  const months = [];
+  const now = new Date();
+
+  for (let i = 0; i < 12; i++) {
+    const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
+    const prefix = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+    const row = db.prepare(`
+      SELECT
+        COALESCE(SUM(total_worker_count), 0) as worker_days,
+        COALESCE(SUM(total_wage_amount), 0) as total_wages,
+        COALESCE(SUM(total_commission_amount), 0) as total_commission,
+        COALESCE(SUM(total_liability), 0) as total_liability,
+        COUNT(DISTINCT contractor_id) as contractor_count
+      FROM dw_entries
+      WHERE entry_date LIKE ? AND status IN ('approved','paid')
+    `).get(prefix + '%');
+    months.push({
+      month: d.getMonth() + 1,
+      year: d.getFullYear(),
+      worker_days: row.worker_days,
+      total_wages: Math.round((row.total_wages || 0) * 100) / 100,
+      total_commission: Math.round((row.total_commission || 0) * 100) / 100,
+      total_liability: Math.round((row.total_liability || 0) * 100) / 100,
+      contractor_count: row.contractor_count
+    });
+  }
+
+  res.json({ success: true, data: months });
+});
+
 // GET /audit — DW audit log (legacy — kept for backward compat)
 router.get('/audit', (req, res) => {
   const db = getDb();

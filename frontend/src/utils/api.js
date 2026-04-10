@@ -420,5 +420,13 @@ export const getDWContractorPaymentHistory = (id) => api.get(`/daily-wage/contra
 // DW Dashboard + Audit
 export const getDWDashboard = () => api.get('/daily-wage/dashboard')
 export const getDWAuditLogPaginated = (params) => api.get('/daily-wage/audit-log', { params })
+// DW Reports
+export const getDWDailyMIS = (date) => api.get('/daily-wage/reports/daily-mis', { params: { date } })
+export const getDWMonthlyReport = (month, year) => api.get('/daily-wage/reports/monthly', { params: { month, year } })
+export const getDWDepartmentCost = (month, year) => api.get('/daily-wage/reports/department-cost', { params: { month, year } })
+export const getDWContractorReport = (id) => api.get(`/daily-wage/reports/contractor-summary/${id}`)
+export const getDWPaymentSheet = (contractorId, entryIds) => api.get(`/daily-wage/reports/payment-sheet/${contractorId}`, { params: { entry_ids: entryIds.join(',') } })
+export const getDWPendingLiabilities = () => api.get('/daily-wage/reports/pending-liabilities')
+export const getDWSeasonalTrends = () => api.get('/daily-wage/reports/seasonal-trends')
 
 export default api
