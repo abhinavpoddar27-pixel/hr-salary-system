@@ -38,7 +38,7 @@ router.get('/', (req, res) => {
   const { month, year, company, status, finance_status, employee_code } = req.query;
   let query = `SELECT edg.*, e.name as employee_name, e.department, e.designation
     FROM extra_duty_grants edg LEFT JOIN employees e ON edg.employee_code = e.code
-    WHERE edg.month = ? AND edg.year = ?`;
+    WHERE edg.month = ? AND edg.year = ? AND edg.verification_source != 'BIOMETRIC_AUTO'`;
   const params = [month, year];
   if (company) { query += ' AND edg.company = ?'; params.push(company); }
   if (status) { query += ' AND edg.status = ?'; params.push(status); }
@@ -52,7 +52,7 @@ router.get('/', (req, res) => {
 router.get('/summary', (req, res) => {
   const db = getDb();
   const { month, year } = req.query;
-  const all = db.prepare('SELECT id, status, finance_status FROM extra_duty_grants WHERE month = ? AND year = ?').all(month, year);
+  const all = db.prepare("SELECT id, status, finance_status FROM extra_duty_grants WHERE month = ? AND year = ? AND verification_source != 'BIOMETRIC_AUTO'").all(month, year);
   res.json({ success: true, data: {
     total: all.length,
     pending: all.filter(g => g.status === 'PENDING').length,
@@ -68,7 +68,7 @@ router.get('/summary', (req, res) => {
 router.get('/employee/:code', (req, res) => {
   const db = getDb();
   const { month, year } = req.query;
-  const data = db.prepare('SELECT * FROM extra_duty_grants WHERE employee_code = ? AND month = ? AND year = ? ORDER BY grant_date').all(req.params.code, month, year);
+  const data = db.prepare("SELECT * FROM extra_duty_grants WHERE employee_code = ? AND month = ? AND year = ? AND verification_source != 'BIOMETRIC_AUTO' ORDER BY grant_date").all(req.params.code, month, year);
   res.json({ success: true, data });
 });
 
@@ -156,7 +156,7 @@ router.get('/finance-review', (req, res) => {
   const { month, year, finance_status } = req.query;
   let query = `SELECT edg.*, e.name as employee_name, e.department FROM extra_duty_grants edg
     LEFT JOIN employees e ON edg.employee_code = e.code
-    WHERE edg.status = 'APPROVED' AND edg.month = ? AND edg.year = ?`;
+    WHERE edg.status = 'APPROVED' AND edg.month = ? AND edg.year = ? AND edg.verification_source != 'BIOMETRIC_AUTO'`;
   const params = [month, year];
   if (finance_status) { query += ' AND edg.finance_status = ?'; params.push(finance_status); }
   query += ' ORDER BY edg.finance_status ASC, edg.duty_days DESC, edg.grant_date DESC';
