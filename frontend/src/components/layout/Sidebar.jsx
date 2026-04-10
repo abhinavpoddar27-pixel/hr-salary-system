@@ -67,9 +67,11 @@ const nav = [
       { label: 'New Entry', to: '/daily-wage/new' },
       { label: 'Batch Import', to: '/daily-wage/import' },
       { label: 'Contractors', to: '/daily-wage/contractors' },
+      { label: 'Reports', to: '/daily-wage/reports' },
       { label: 'Finance Review', to: '/daily-wage/finance/review', financeOnly: true },
       { label: 'Payments', to: '/daily-wage/finance/payments', financeOnly: true },
       { label: 'Dashboard', to: '/daily-wage/finance/dashboard', financeOnly: true },
+      { label: 'Audit Log', to: '/daily-wage/audit', financeOnly: true },
     ]
   },
   { label: 'Session Analytics', icon: '📊', to: '/session-analytics', adminOnly: true },
