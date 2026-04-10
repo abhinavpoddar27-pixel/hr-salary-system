@@ -63,6 +63,9 @@ const nav = [
   { label: 'Employees', icon: '👤', to: '/employees' },
   {
     label: 'Daily Wage', icon: '👷', to: '/daily-wage', children: [
+      { label: 'Records', to: '/daily-wage' },
+      { label: 'New Entry', to: '/daily-wage/new' },
+      { label: 'Batch Import', to: '/daily-wage/import' },
       { label: 'Contractors', to: '/daily-wage/contractors' },
     ]
   },

@@ -39,6 +39,9 @@ const FinanceVerification = React.lazy(() => import('./pages/FinanceVerification
 const ExtraDutyGrants = React.lazy(() => import('./pages/ExtraDutyGrants'))
 const SessionAnalytics = React.lazy(() => import('./pages/SessionAnalytics'))
 const DailyWageContractors = React.lazy(() => import('./pages/DailyWageContractors'))
+const DailyWageEntry = React.lazy(() => import('./pages/DailyWageEntry'))
+const DailyWageBatchImport = React.lazy(() => import('./pages/DailyWageBatchImport'))
+const DailyWageRecords = React.lazy(() => import('./pages/DailyWageRecords'))
 
 function PageLoader() {
   return (
@@ -163,6 +166,9 @@ export default function App() {
           <Route path="/finance-verification" element={<RequireAuth><Layout title="Finance Verification"><FinanceVerification /></Layout></RequireAuth>} />
           <Route path="/extra-duty-grants" element={<RequireAuth><Layout title="Extra Duty Grants"><ExtraDutyGrants /></Layout></RequireAuth>} />
           <Route path="/daily-wage/contractors" element={<RequireAuth><Layout title="Contractor Master"><DailyWageContractors /></Layout></RequireAuth>} />
+          <Route path="/daily-wage/new" element={<RequireAuth><Layout title="New Daily Wage Entry"><DailyWageEntry /></Layout></RequireAuth>} />
+          <Route path="/daily-wage/import" element={<RequireAuth><Layout title="Batch Import"><DailyWageBatchImport /></Layout></RequireAuth>} />
+          <Route path="/daily-wage" element={<RequireAuth><Layout title="Daily Wage Records"><DailyWageRecords /></Layout></RequireAuth>} />
           <Route path="/session-analytics" element={<RequireAuth><Layout title="Session Analytics"><SessionAnalytics /></Layout></RequireAuth>} />
           <Route path="/employees" element={<RequireAuth><Layout title="Employee Master"><Employees /></Layout></RequireAuth>} />
           <Route path="/alerts" element={<RequireAuth><Layout title="Alerts"><Alerts /></Layout></RequireAuth>} />
