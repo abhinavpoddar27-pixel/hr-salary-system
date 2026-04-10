@@ -133,12 +133,31 @@ router.post('/calculate-days', (req, res) => {
           }
         }
 
-        // Get fully-approved extra duty grants for this employee
+        // Get fully-approved extra duty grants, excluding grants whose
+        // grant_date overlaps with a WOP/WO½P attendance day — those days
+        // are already counted via daysWOP in the attendance loop, so
+        // including them here would double-count and inflate finalPayable.
         let manualExtraDutyDays = 0;
-        try {
-          const grants = db.prepare("SELECT SUM(duty_days) as total FROM extra_duty_grants WHERE employee_code = ? AND month = ? AND year = ? AND status = 'APPROVED' AND finance_status = 'FINANCE_APPROVED'").get(empCode, month, year);
-          manualExtraDutyDays = grants?.total || 0;
-        } catch {}
+        if (!isContract) {
+          try {
+            const wopDates = new Set(
+              records
+                .filter(r => {
+                  const s = r.status_final || r.status_original || '';
+                  return s === 'WOP' || s === 'WO½P';
+                })
+                .map(r => r.date)
+            );
+            const approvedGrants = db.prepare(`
+              SELECT grant_date, duty_days FROM extra_duty_grants
+              WHERE employee_code = ? AND month = ? AND year = ?
+                AND status = 'APPROVED' AND finance_status = 'FINANCE_APPROVED'
+            `).all(empCode, month, year);
+            manualExtraDutyDays = approvedGrants
+              .filter(g => !wopDates.has(g.grant_date))
+              .reduce((sum, g) => sum + (g.duty_days || 0), 0);
+          } catch {}
+        }
 
         // ── Finance-approved ED days (display-only on Stage 6) ──
         // Count grant days that DON'T overlap with WOP/punch-OT dates so the
