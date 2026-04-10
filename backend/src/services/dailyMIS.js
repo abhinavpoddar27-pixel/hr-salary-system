@@ -156,6 +156,19 @@ function getDailySummary(db, date) {
   const todayPunchedCodes = new Set(presentEmployees.map(e => e.employee_code));
   const notYetPunched = allActive.filter(e => !todayPunchedCodes.has(e.code));
 
+  // ── Early exit detections for yesterday (or target date) ──
+  let earlyExits = [];
+  try {
+    earlyExits = db.prepare(`
+      SELECT eed.employee_code, eed.employee_name, eed.department,
+             eed.shift_end_time, eed.actual_punch_out_time,
+             eed.flagged_minutes, eed.has_gate_pass, eed.detection_status
+      FROM early_exit_detections eed
+      WHERE eed.date = ? AND eed.detection_status != 'exempted'
+      ORDER BY eed.flagged_minutes DESC
+    `).all(date);
+  } catch (e) { /* table may not exist yet */ }
+
   return {
     date,
     totalEmployees: totalEmployees?.count || 0,
@@ -185,6 +198,9 @@ function getDailySummary(db, date) {
       permanent: { total: totalPermanent, present: permanentPresent },
       contractor: { total: totalContractor, present: contractorPresent },
     },
+    // Early exits
+    earlyExits,
+    earlyExitsTotal: earlyExits.length,
   };
 }
 
