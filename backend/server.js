@@ -206,6 +206,7 @@ app.use('/api/late-coming',      requireAuth, require('./src/routes/lateComing')
 app.use('/api/daily-wage',       requireAuth, require('./src/routes/dailyWage'));
 app.use('/api/short-leaves',     requireAuth, require('./src/routes/short-leaves'));
 app.use('/api/early-exits',      requireAuth, require('./src/routes/early-exits'));
+app.use('/api/early-exit-deductions', requireAuth, require('./src/routes/early-exit-deductions'));
 
 // Health check (public)
 app.get('/api/health', (req, res) => {
