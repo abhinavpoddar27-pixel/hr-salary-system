@@ -1027,6 +1027,13 @@ function initSchema(db) {
   // the two are independent reportable concepts.
   safeAddColumn('day_calculations', 'finance_ed_days', 'REAL DEFAULT 0');
 
+  // ── Stage 6 freshness tracking (April 2026) ──
+  // Records when each day_calculations row was last written. Used by the miss-punch
+  // staleness banner in payroll.js (SELECT MAX(updated_at)) to warn users when
+  // finance-approved miss punch corrections happened after Stage 6 was last run.
+  // Populated by saveDayCalculation() on both INSERT and UPSERT paths.
+  safeAddColumn('day_calculations', 'updated_at', 'TEXT');
+
   // ── Phase 1: Data integrity & deduplication ─────────────────────
 
   // monthly_imports: track reimports

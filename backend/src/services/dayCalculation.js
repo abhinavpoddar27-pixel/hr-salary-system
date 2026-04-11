@@ -512,7 +512,7 @@ function saveDayCalculation(db, calcResult) {
       weekly_off_day, base_entitlement, total_absences, effective_present,
       days_per_weekly_off, weekly_off_threshold, weekly_off_tier, weekly_off_note,
       date_of_joining, holidays_before_doj, is_mid_month_joiner,
-      finance_ed_days
+      finance_ed_days, updated_at
     ) VALUES (
       ?, ?, ?, ?,
       ?, ?, ?, ?,
@@ -524,7 +524,7 @@ function saveDayCalculation(db, calcResult) {
       ?, ?, ?, ?,
       ?, ?, ?, ?,
       ?, ?, ?,
-      ?
+      ?, datetime('now')
     )
     ON CONFLICT(employee_code, month, year, company) DO UPDATE SET
       total_calendar_days = excluded.total_calendar_days,
@@ -564,6 +564,7 @@ function saveDayCalculation(db, calcResult) {
       holidays_before_doj = excluded.holidays_before_doj,
       is_mid_month_joiner = excluded.is_mid_month_joiner,
       finance_ed_days = excluded.finance_ed_days,
+      updated_at = datetime('now'),
       is_approved = 0
   `);
 
