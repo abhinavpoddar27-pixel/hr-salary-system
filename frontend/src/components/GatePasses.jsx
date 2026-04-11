@@ -271,18 +271,27 @@ function CreateGatePassModal({ show, onClose, company, month, year }) {
           />
           {empSearch && !empCode && (
             <div className="border rounded-md mt-1 max-h-40 overflow-y-auto bg-white shadow-sm">
-              {filteredEmps.map(e => (
-                <button
-                  key={e.code}
-                  className="w-full text-left px-3 py-1.5 text-sm hover:bg-blue-50 border-b border-slate-100"
-                  onClick={() => { setEmpCode(e.code); setEmpSearch(`${e.name} (${e.code})`) }}
-                >
-                  {e.name} <span className="text-slate-400">({e.code})</span> — {e.department}
-                </button>
-              ))}
+              {filteredEmps.length === 0 ? (
+                <div className="px-3 py-2 text-sm text-slate-400 italic">
+                  No employees found matching "{empSearch}"
+                </div>
+              ) : (
+                filteredEmps.map(e => (
+                  <button
+                    key={e.code}
+                    className="w-full text-left px-3 py-1.5 text-sm hover:bg-blue-50 border-b border-slate-100"
+                    onClick={() => { setEmpCode(e.code); setEmpSearch(`${e.name} (${e.code})`) }}
+                  >
+                    {e.name} <span className="text-slate-400">({e.code})</span> — {e.department}
+                  </button>
+                ))
+              )}
             </div>
           )}
           {selectedEmp && <div className="text-xs text-slate-500 mt-1">{selectedEmp.department} | {selectedEmp.company}</div>}
+          {!empCode && !empSearch && (
+            <div className="text-xs text-slate-400 mt-1">Start typing to search by name or code</div>
+          )}
         </div>
 
         {/* Date */}
@@ -336,15 +345,22 @@ function CreateGatePassModal({ show, onClose, company, month, year }) {
           {remarkError && <div className="text-xs text-red-500 mt-1">Remark is required</div>}
         </div>
 
-        <div className="flex justify-end gap-3 pt-2">
-          <button className="btn" onClick={onClose}>Cancel</button>
-          <button
-            className={clsx('btn', quota?.used >= 2 ? 'bg-amber-600 hover:bg-amber-700 text-white' : 'btn-primary')}
-            onClick={handleSubmit}
-            disabled={!empCode || !date || createMut.isPending}
-          >
-            {createMut.isPending ? 'Creating...' : quota?.used >= 2 ? 'Create Gate Pass (Quota Breach)' : 'Create Gate Pass'}
-          </button>
+        <div className="flex items-center justify-between gap-3 pt-2">
+          <div className="text-xs text-slate-500 flex-1">
+            {!empCode && <span className="text-amber-600">⚠ Select an employee to continue</span>}
+            {empCode && !date && <span className="text-amber-600">⚠ Pick a date</span>}
+          </div>
+          <div className="flex gap-3">
+            <button className="btn" onClick={onClose}>Cancel</button>
+            <button
+              className={clsx('btn', quota?.used >= 2 ? 'bg-amber-600 hover:bg-amber-700 text-white' : 'btn-primary')}
+              onClick={handleSubmit}
+              disabled={!empCode || !date || createMut.isPending}
+              title={!empCode ? 'Select an employee first' : !date ? 'Pick a date' : undefined}
+            >
+              {createMut.isPending ? 'Creating...' : quota?.used >= 2 ? 'Create Gate Pass (Quota Breach)' : 'Create Gate Pass'}
+            </button>
+          </div>
         </div>
       </div>
     </Modal>
