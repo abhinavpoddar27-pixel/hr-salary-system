@@ -40,6 +40,15 @@ router.post('/detect', requireHrOrAdmin, (req, res) => {
       date = d.toISOString().split('T')[0];
     }
 
+    // Reject future dates — detection requires actual punch-out data
+    const today = new Date().toISOString().split('T')[0];
+    if (date > today) {
+      return res.status(400).json({
+        success: false,
+        error: 'Detection date cannot be in the future'
+      });
+    }
+
     const result = detectEarlyExits(db, date);
 
     return res.json({

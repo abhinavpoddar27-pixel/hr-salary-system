@@ -23,6 +23,8 @@ export default function EarlyExitDetection({ selectedMonth, selectedYear, select
   const [selectedRow, setSelectedRow] = useState(null)
   const [showDetectModal, setShowDetectModal] = useState(false)
   const [detectDate, setDetectDate] = useState((() => { const d = new Date(); d.setDate(d.getDate() - 1); return d.toISOString().split('T')[0] })())
+  const today = new Date().toISOString().split('T')[0]
+  const isFutureDate = detectDate > today
 
   const { data: summaryRes } = useQuery({
     queryKey: ['early-exit-summary', selectedMonth, selectedYear, selectedCompany],
@@ -174,11 +176,20 @@ export default function EarlyExitDetection({ selectedMonth, selectedYear, select
           <div className="p-4 space-y-4">
             <div>
               <label className="text-sm font-medium text-slate-700 mb-1 block">Detection Date</label>
-              <input type="date" className="input w-full" value={detectDate} onChange={e => setDetectDate(e.target.value)} />
+              <input
+                type="date"
+                className={clsx('input w-full', isFutureDate && 'border-red-400')}
+                value={detectDate}
+                max={today}
+                onChange={e => setDetectDate(e.target.value)}
+              />
+              {isFutureDate && (
+                <div className="text-xs text-red-500 mt-1">Detection date cannot be in the future</div>
+              )}
             </div>
             <div className="flex justify-end gap-3">
               <button className="btn" onClick={() => setShowDetectModal(false)}>Cancel</button>
-              <button className="btn btn-primary" onClick={() => detectMut.mutate()} disabled={detectMut.isPending}>
+              <button className="btn btn-primary" onClick={() => detectMut.mutate()} disabled={detectMut.isPending || isFutureDate}>
                 {detectMut.isPending ? 'Running...' : 'Run Detection'}
               </button>
             </div>
