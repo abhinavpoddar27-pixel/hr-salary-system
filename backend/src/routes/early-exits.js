@@ -338,9 +338,22 @@ router.get('/range-report', requireHrFinanceOrAdmin, (req, res) => {
         eed.detection_status,
         sl.id AS short_leave_id,
         sl.remark AS short_leave_remark,
-        sl.authorized_leave_until
+        sl.authorized_leave_until,
+        ROUND(
+          COALESCE(e.gross_salary, 0) /
+          CAST(strftime('%d', date(eed.date, 'start of month', '+1 month', '-1 day')) AS REAL),
+          2
+        ) AS daily_gross_at_time,
+        exd.id AS deduction_id,
+        exd.deduction_type,
+        exd.deduction_amount,
+        exd.finance_status AS deduction_finance_status,
+        exd.finance_remark
       FROM early_exit_detections eed
       LEFT JOIN short_leaves sl ON eed.short_leave_id = sl.id
+      LEFT JOIN employees e ON e.code = eed.employee_code
+      LEFT JOIN early_exit_deductions exd ON exd.early_exit_detection_id = eed.id
+        AND exd.finance_status != 'cancelled'
       WHERE eed.date BETWEEN ? AND ?
     `;
     const params = [startDate, endDate];
