@@ -1027,6 +1027,11 @@ function initSchema(db) {
   // the two are independent reportable concepts.
   safeAddColumn('day_calculations', 'finance_ed_days', 'REAL DEFAULT 0');
 
+  // Timestamp of the last Stage 6 compute/upsert. Consumed by
+  // /payroll/day-calc-staleness to warn the UI when finance approvals
+  // have drifted past the last day-calc run.
+  safeAddColumn('day_calculations', 'updated_at', 'TEXT');
+
   // ── Phase 1: Data integrity & deduplication ─────────────────────
 
   // monthly_imports: track reimports
