@@ -541,6 +541,61 @@ frontend/
   Early Exit Deductions tab in Finance Audit, Early Exits card in Daily MIS.
 - **Permissions**: `early-exit` added to `hr` and `finance` roles.
 
+## Early Exit Date Range Report (April 2026)
+- **No schema changes** — all new endpoints read from the existing
+  `early_exit_detections` table which already caches one row per
+  employee/date with shift/punch/minutes metadata.
+- **New endpoints** on `backend/src/routes/early-exits.js` (mounted at both
+  `/api/early-exits` and alias `/api/early-exit`):
+  - `GET /range-report` — arbitrary date range (startDate, endDate YYYY-MM-DD;
+    optional company, employeeCode, department, minMinutes). Validates
+    `startDate <= endDate` and enforces 90-day max. LEFT JOINs `short_leaves`
+    so gate-pass context is returned alongside each row. Response includes
+    row data plus a `summary` object with totalIncidents, uniqueEmployees,
+    avgMinutesEarly, totalFlaggedMinutes, withGatePass / withoutGatePass,
+    and dateRange `{ start, end, days }`. Exempted rows are still returned
+    in `data` but excluded from the "non-exempt" aggregates.
+  - `GET /mtd-summary` — per-employee MTD counts for a month/year with
+    previous-month comparison. Uses the same `trendLabel()` helper as
+    `lateComing.js` (up/down/stable with 10% relative threshold). Returns
+    a `totals` block for header KPI cards and a per-employee `data` array.
+  - `GET /department-summary` — per-department rollup for month/year with
+    employee_count, total_incidents, prev_incidents, avg_minutes_early,
+    trend and `worst_offender` (same shape as late coming's dept summary).
+  - `GET /export` — XLSX via SheetJS. Sheet 1 "Summary" (date range +
+    filter criteria + aggregates) and Sheet 2 "Early Exit Details" (all
+    filtered rows). Column widths are pre-sized. Filename format:
+    `EarlyExitReport_STARTDATE_to_ENDDATE.xlsx`. All filters that apply to
+    `range-report` also apply to export.
+  - All four endpoints gated by `requireHrFinanceOrAdmin`, so HR, Finance
+    and Admin roles can read and export. The existing single-day
+    `POST /detect` endpoint is unchanged (backwards compatible).
+- **Frontend — `EarlyExitDetection.jsx` redesign**:
+  - Mirrors Late Coming layout: header + KPI cards grid + department
+    breakdown cards + filter toolbar + sortable detail table.
+  - MTD KPI cards: Early Exits (MTD) with trend arrow vs last month,
+    Unique Employees, Avg Minutes Early (range-scoped), With Gate Pass.
+  - Department breakdown card grid (top 6 departments) shows total exits,
+    employee count, avg minutes early, trend arrow, worst offender.
+  - Date range picker with preset buttons: Today / This Week / This Month
+    (default) / Last Month / Last 3 Months / Custom. Selecting a preset
+    highlights it; manual date edits switch to "custom". 90-day inline
+    validation prevents the query from firing.
+  - Client-side filters stack: employee search (code or name), department
+    dropdown (populated from result set), min-minutes numeric input.
+    Sortable column headers use the `useSortable` helper copied from
+    Analytics.jsx.
+  - "Export Excel" button calls `GET /early-exits/export` with the
+    currently-active filters so the XLSX matches what's on screen. Button
+    is disabled during the download and when the range is invalid.
+  - Empty state: friendly icon + message when no rows match the range.
+  - Detail panel / HR deduction workflow / finance-approval modal from the
+    previous version is preserved unchanged (no pipeline impact).
+- **API helpers** in `frontend/src/utils/api.js`:
+  `getEarlyExitRangeReport`, `getEarlyExitMtdSummary`,
+  `getEarlyExitDeptSummary`, `exportEarlyExitReport`
+  (the last returns `responseType: 'blob'` for XLSX download).
+
 ## Section 8: Rules for Claude Code Sessions
 - Before changing ANY pipeline stage: ALWAYS read every downstream stage's service file AND every consumer (finance audit, payslips, exports, analytics) that reads this stage's output tables.
 - Before changing salary computation: read dayCalculation.js (input) AND every route/component that displays salary data (payroll.js, financeAudit.js, salary-advance, payslip PDF).

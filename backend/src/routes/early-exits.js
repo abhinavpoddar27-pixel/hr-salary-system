@@ -5,8 +5,52 @@
 
 const express = require('express');
 const router = express.Router();
+const XLSX = require('xlsx');
 const { getDb, logAudit } = require('../database/db');
 const { detectEarlyExits } = require('../services/earlyExitDetection');
+
+// ─── Utility: previous month/year ─────────────────────────
+function prevMonth(month, year) {
+  const m = parseInt(month);
+  const y = parseInt(year);
+  if (m === 1) return { month: 12, year: y - 1 };
+  return { month: m - 1, year: y };
+}
+
+// Normalise "up" / "down" / "stable" trend. Uses a relative threshold so tiny
+// swings don't get flagged as regressions. Mirrors lateComing.js.
+function trendLabel(current, previous) {
+  const c = Number(current) || 0;
+  const p = Number(previous) || 0;
+  if (c === p) return 'stable';
+  if (p === 0 && c > 0) return 'up';
+  if (p === 0 && c === 0) return 'stable';
+  const diff = c - p;
+  const rel = Math.abs(diff) / Math.max(p, 1);
+  if (rel < 0.1) return 'stable';
+  return diff > 0 ? 'up' : 'down';
+}
+
+// Validate YYYY-MM-DD. Accepts only ISO dates.
+function isValidDate(s) {
+  if (!s || typeof s !== 'string') return false;
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(s)) return false;
+  const d = new Date(s + 'T00:00:00Z');
+  return !isNaN(d.getTime());
+}
+
+// Days between two YYYY-MM-DD strings (inclusive).
+function daysBetween(start, end) {
+  const a = new Date(start + 'T00:00:00Z').getTime();
+  const b = new Date(end + 'T00:00:00Z').getTime();
+  return Math.floor((b - a) / (1000 * 60 * 60 * 24)) + 1;
+}
+
+// Last day of a given month/year as YYYY-MM-DD (calendar end-of-month).
+function lastDayOfMonth(month, year) {
+  const d = new Date(Date.UTC(year, month, 0));
+  return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}-${String(d.getUTCDate()).padStart(2, '0')}`;
+}
 
 // ─── Role helpers ─────────────────────────────────────────
 function requireHrOrAdmin(req, res, next) {
@@ -245,6 +289,419 @@ router.get('/employee/:employeeCode/analytics', requireHrFinanceOrAdmin, (req, r
     });
   } catch (err) {
     console.error('[early-exits] GET /employee/:code/analytics error:', err);
+    return res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// ────────────────────────────────────────────────────────────
+// GET /range-report — Early exits for an arbitrary date range
+// ────────────────────────────────────────────────────────────
+// Query params: startDate, endDate (YYYY-MM-DD, both required),
+// company, employeeCode, department, minMinutes (optional filters).
+// Max 90-day range. Returns row-level details plus summary aggregates.
+router.get('/range-report', requireHrFinanceOrAdmin, (req, res) => {
+  try {
+    const db = getDb();
+    const { startDate, endDate, company, employeeCode, department } = req.query;
+    const minMinutes = req.query.minMinutes !== undefined && req.query.minMinutes !== ''
+      ? parseInt(req.query.minMinutes)
+      : null;
+
+    if (!startDate || !endDate) {
+      return res.status(400).json({ success: false, error: 'startDate and endDate are required (YYYY-MM-DD)' });
+    }
+    if (!isValidDate(startDate) || !isValidDate(endDate)) {
+      return res.status(400).json({ success: false, error: 'Dates must be valid YYYY-MM-DD' });
+    }
+    if (startDate > endDate) {
+      return res.status(400).json({ success: false, error: 'startDate must be on or before endDate' });
+    }
+    const span = daysBetween(startDate, endDate);
+    if (span > 90) {
+      return res.status(400).json({ success: false, error: 'Maximum range is 90 days' });
+    }
+
+    let sql = `
+      SELECT
+        eed.id,
+        eed.employee_code,
+        eed.employee_name,
+        eed.department,
+        eed.company,
+        eed.date,
+        eed.shift_code,
+        eed.shift_end_time,
+        eed.actual_punch_out_time,
+        eed.minutes_early,
+        eed.has_gate_pass,
+        eed.flagged_minutes,
+        eed.detection_status,
+        sl.id AS short_leave_id,
+        sl.remark AS short_leave_remark,
+        sl.authorized_leave_until
+      FROM early_exit_detections eed
+      LEFT JOIN short_leaves sl ON eed.short_leave_id = sl.id
+      WHERE eed.date BETWEEN ? AND ?
+    `;
+    const params = [startDate, endDate];
+    if (company) { sql += ' AND eed.company = ?'; params.push(company); }
+    if (employeeCode) { sql += ' AND eed.employee_code = ?'; params.push(employeeCode); }
+    if (department) { sql += ' AND eed.department = ?'; params.push(department); }
+    if (minMinutes !== null && !isNaN(minMinutes)) {
+      sql += ' AND eed.minutes_early >= ?';
+      params.push(minMinutes);
+    }
+    sql += ' ORDER BY eed.date DESC, eed.minutes_early DESC';
+
+    const rows = db.prepare(sql).all(...params);
+
+    // Summary aggregates — only flagged rows (exempted rows don't count
+    // against the "early exit" narrative but are still returned in the list).
+    const nonExempt = rows.filter(r => r.detection_status !== 'exempted');
+    const uniqueEmpSet = new Set(nonExempt.map(r => r.employee_code));
+    const totalFlaggedMinutes = nonExempt.reduce((s, r) => s + (Number(r.flagged_minutes) || 0), 0);
+    const totalMinutesEarly = nonExempt.reduce((s, r) => s + (Number(r.minutes_early) || 0), 0);
+    const withGatePass = rows.filter(r => r.has_gate_pass === 1 || r.has_gate_pass === true).length;
+    const withoutGatePass = rows.length - withGatePass;
+    const avgMinutesEarly = nonExempt.length > 0
+      ? Math.round((totalMinutesEarly / nonExempt.length) * 10) / 10
+      : 0;
+
+    return res.json({
+      success: true,
+      data: rows,
+      summary: {
+        totalIncidents: rows.length,
+        nonExemptIncidents: nonExempt.length,
+        uniqueEmployees: uniqueEmpSet.size,
+        avgMinutesEarly,
+        totalFlaggedMinutes,
+        withGatePass,
+        withoutGatePass,
+        dateRange: { start: startDate, end: endDate, days: span }
+      },
+      filters: {
+        company: company || null,
+        employeeCode: employeeCode || null,
+        department: department || null,
+        minMinutes: minMinutes !== null && !isNaN(minMinutes) ? minMinutes : null
+      }
+    });
+  } catch (err) {
+    console.error('[early-exits] GET /range-report error:', err);
+    return res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// ────────────────────────────────────────────────────────────
+// GET /mtd-summary — Per-employee month-to-date with trend
+// ────────────────────────────────────────────────────────────
+router.get('/mtd-summary', requireHrFinanceOrAdmin, (req, res) => {
+  try {
+    const db = getDb();
+    const month = parseInt(req.query.month);
+    const year = parseInt(req.query.year);
+    const company = req.query.company || null;
+    if (!month || !year) {
+      return res.status(400).json({ success: false, error: 'month and year required' });
+    }
+
+    const prev = prevMonth(month, year);
+    const monthStart = `${year}-${String(month).padStart(2, '0')}-01`;
+    const monthEnd = lastDayOfMonth(month, year);
+    const prevStart = `${prev.year}-${String(prev.month).padStart(2, '0')}-01`;
+    const prevEnd = lastDayOfMonth(prev.month, prev.year);
+
+    const companyFilter = company ? ' AND company = ?' : '';
+    const currParams = [monthStart, monthEnd, ...(company ? [company] : [])];
+    const prevParams = [prevStart, prevEnd, ...(company ? [company] : [])];
+
+    const currentRows = db.prepare(`
+      SELECT
+        employee_code,
+        employee_name,
+        department,
+        company,
+        COUNT(*) AS exit_count_this_month,
+        ROUND(AVG(minutes_early), 1) AS avg_minutes_early,
+        SUM(flagged_minutes) AS total_flagged_minutes,
+        SUM(CASE WHEN has_gate_pass = 1 THEN 1 ELSE 0 END) AS gate_pass_count
+      FROM early_exit_detections
+      WHERE date BETWEEN ? AND ?
+        AND detection_status != 'exempted'
+        ${companyFilter}
+      GROUP BY employee_code, employee_name, department, company
+      ORDER BY exit_count_this_month DESC, employee_name ASC
+    `).all(...currParams);
+
+    const prevRows = db.prepare(`
+      SELECT employee_code, COUNT(*) AS prev_count
+      FROM early_exit_detections
+      WHERE date BETWEEN ? AND ?
+        AND detection_status != 'exempted'
+        ${companyFilter}
+      GROUP BY employee_code
+    `).all(...prevParams);
+    const prevMap = {};
+    for (const r of prevRows) prevMap[r.employee_code] = Number(r.prev_count) || 0;
+
+    const data = currentRows.map(r => {
+      const prevCount = prevMap[r.employee_code] || 0;
+      return {
+        employee_code: r.employee_code,
+        name: r.employee_name,
+        department: r.department,
+        company: r.company,
+        exit_count_this_month: Number(r.exit_count_this_month) || 0,
+        exit_count_last_month: prevCount,
+        avg_minutes_early: r.avg_minutes_early ? Number(r.avg_minutes_early) : 0,
+        total_flagged_minutes: Number(r.total_flagged_minutes) || 0,
+        gate_pass_count: Number(r.gate_pass_count) || 0,
+        trend: trendLabel(r.exit_count_this_month, prevCount)
+      };
+    });
+
+    // Aggregate totals for card display
+    const totalIncidents = data.reduce((s, r) => s + r.exit_count_this_month, 0);
+    const totalPrev = data.reduce((s, r) => s + r.exit_count_last_month, 0);
+
+    return res.json({
+      success: true,
+      month,
+      year,
+      totals: {
+        total_this_month: totalIncidents,
+        total_last_month: totalPrev,
+        unique_employees: data.length,
+        trend: trendLabel(totalIncidents, totalPrev)
+      },
+      data
+    });
+  } catch (err) {
+    console.error('[early-exits] GET /mtd-summary error:', err);
+    return res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// ────────────────────────────────────────────────────────────
+// GET /department-summary — Per-department rollup with trend
+// ────────────────────────────────────────────────────────────
+router.get('/department-summary', requireHrFinanceOrAdmin, (req, res) => {
+  try {
+    const db = getDb();
+    const month = parseInt(req.query.month);
+    const year = parseInt(req.query.year);
+    const company = req.query.company || null;
+    if (!month || !year) {
+      return res.status(400).json({ success: false, error: 'month and year required' });
+    }
+
+    const prev = prevMonth(month, year);
+    const monthStart = `${year}-${String(month).padStart(2, '0')}-01`;
+    const monthEnd = lastDayOfMonth(month, year);
+    const prevStart = `${prev.year}-${String(prev.month).padStart(2, '0')}-01`;
+    const prevEnd = lastDayOfMonth(prev.month, prev.year);
+
+    const companyFilter = company ? ' AND company = ?' : '';
+    const currParams = [monthStart, monthEnd, ...(company ? [company] : [])];
+    const prevParams = [prevStart, prevEnd, ...(company ? [company] : [])];
+
+    const currentRows = db.prepare(`
+      SELECT
+        department,
+        COUNT(*) AS total_incidents,
+        COUNT(DISTINCT employee_code) AS employee_count,
+        ROUND(AVG(minutes_early), 1) AS avg_minutes_early,
+        SUM(flagged_minutes) AS total_flagged_minutes
+      FROM early_exit_detections
+      WHERE date BETWEEN ? AND ?
+        AND detection_status != 'exempted'
+        ${companyFilter}
+      GROUP BY department
+      ORDER BY total_incidents DESC
+    `).all(...currParams);
+
+    const prevRows = db.prepare(`
+      SELECT department, COUNT(*) AS prev_count
+      FROM early_exit_detections
+      WHERE date BETWEEN ? AND ?
+        AND detection_status != 'exempted'
+        ${companyFilter}
+      GROUP BY department
+    `).all(...prevParams);
+    const prevMap = {};
+    for (const r of prevRows) prevMap[r.department || ''] = Number(r.prev_count) || 0;
+
+    // Worst offender per department
+    const offenderRows = db.prepare(`
+      SELECT department, employee_code, employee_name,
+             COUNT(*) AS exit_count
+      FROM early_exit_detections
+      WHERE date BETWEEN ? AND ?
+        AND detection_status != 'exempted'
+        ${companyFilter}
+      GROUP BY department, employee_code, employee_name
+    `).all(...currParams);
+    const offenderMap = {};
+    for (const r of offenderRows) {
+      const key = r.department || '';
+      const count = Number(r.exit_count) || 0;
+      if (!offenderMap[key] || count > offenderMap[key].exit_count) {
+        offenderMap[key] = {
+          employee_code: r.employee_code,
+          name: r.employee_name,
+          exit_count: count
+        };
+      }
+    }
+
+    const data = currentRows.map(r => {
+      const prevCount = prevMap[r.department || ''] || 0;
+      const current = Number(r.total_incidents) || 0;
+      return {
+        department: r.department || '(none)',
+        employee_count: Number(r.employee_count) || 0,
+        total_incidents: current,
+        prev_incidents: prevCount,
+        avg_minutes_early: r.avg_minutes_early ? Number(r.avg_minutes_early) : 0,
+        total_flagged_minutes: Number(r.total_flagged_minutes) || 0,
+        trend: trendLabel(current, prevCount),
+        worst_offender: offenderMap[r.department || ''] || null
+      };
+    });
+
+    return res.json({ success: true, data });
+  } catch (err) {
+    console.error('[early-exits] GET /department-summary error:', err);
+    return res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// ────────────────────────────────────────────────────────────
+// GET /export — XLSX download of range-report data
+// ────────────────────────────────────────────────────────────
+router.get('/export', requireHrFinanceOrAdmin, (req, res) => {
+  try {
+    const db = getDb();
+    const { startDate, endDate, company, employeeCode, department } = req.query;
+    const minMinutes = req.query.minMinutes !== undefined && req.query.minMinutes !== ''
+      ? parseInt(req.query.minMinutes)
+      : null;
+
+    if (!startDate || !endDate) {
+      return res.status(400).json({ success: false, error: 'startDate and endDate are required' });
+    }
+    if (!isValidDate(startDate) || !isValidDate(endDate)) {
+      return res.status(400).json({ success: false, error: 'Dates must be valid YYYY-MM-DD' });
+    }
+    if (startDate > endDate) {
+      return res.status(400).json({ success: false, error: 'startDate must be on or before endDate' });
+    }
+    const span = daysBetween(startDate, endDate);
+    if (span > 90) {
+      return res.status(400).json({ success: false, error: 'Maximum range is 90 days' });
+    }
+
+    let sql = `
+      SELECT
+        eed.date,
+        eed.employee_code,
+        eed.employee_name,
+        eed.department,
+        eed.company,
+        eed.shift_code,
+        eed.shift_end_time,
+        eed.actual_punch_out_time,
+        eed.minutes_early,
+        eed.has_gate_pass,
+        eed.flagged_minutes,
+        eed.detection_status
+      FROM early_exit_detections eed
+      WHERE eed.date BETWEEN ? AND ?
+    `;
+    const params = [startDate, endDate];
+    if (company) { sql += ' AND eed.company = ?'; params.push(company); }
+    if (employeeCode) { sql += ' AND eed.employee_code = ?'; params.push(employeeCode); }
+    if (department) { sql += ' AND eed.department = ?'; params.push(department); }
+    if (minMinutes !== null && !isNaN(minMinutes)) {
+      sql += ' AND eed.minutes_early >= ?';
+      params.push(minMinutes);
+    }
+    sql += ' ORDER BY eed.date DESC, eed.minutes_early DESC';
+
+    const rows = db.prepare(sql).all(...params);
+
+    // Summary sheet
+    const nonExempt = rows.filter(r => r.detection_status !== 'exempted');
+    const uniqueEmp = new Set(nonExempt.map(r => r.employee_code)).size;
+    const totalFlaggedMin = nonExempt.reduce((s, r) => s + (Number(r.flagged_minutes) || 0), 0);
+    const avgMin = nonExempt.length > 0
+      ? Math.round((nonExempt.reduce((s, r) => s + (Number(r.minutes_early) || 0), 0) / nonExempt.length) * 10) / 10
+      : 0;
+    const withGp = rows.filter(r => r.has_gate_pass === 1).length;
+
+    const summaryData = [
+      ['Early Exit Report'],
+      [],
+      ['Date Range', `${startDate} to ${endDate}`],
+      ['Days', span],
+      ['Company Filter', company || 'All'],
+      ['Employee Filter', employeeCode || 'All'],
+      ['Department Filter', department || 'All'],
+      ['Min Minutes Filter', minMinutes !== null && !isNaN(minMinutes) ? minMinutes : 'None'],
+      [],
+      ['Total Incidents', rows.length],
+      ['Non-Exempt Incidents', nonExempt.length],
+      ['Unique Employees', uniqueEmp],
+      ['Avg Minutes Early', avgMin],
+      ['Total Flagged Minutes', totalFlaggedMin],
+      ['With Gate Pass', withGp],
+      ['Without Gate Pass', rows.length - withGp]
+    ];
+
+    const detailHeader = [
+      'Date', 'Employee Code', 'Employee Name', 'Department', 'Company',
+      'Shift', 'Shift End', 'Actual Punch Out', 'Minutes Early',
+      'Gate Pass', 'Flagged Minutes', 'Status'
+    ];
+    const detailData = [detailHeader];
+    for (const r of rows) {
+      detailData.push([
+        r.date,
+        r.employee_code,
+        r.employee_name || '',
+        r.department || '',
+        r.company || '',
+        r.shift_code || '',
+        r.shift_end_time || '',
+        r.actual_punch_out_time || '',
+        Number(r.minutes_early) || 0,
+        r.has_gate_pass === 1 ? 'Yes' : 'No',
+        Number(r.flagged_minutes) || 0,
+        r.detection_status || ''
+      ]);
+    }
+
+    const wb = XLSX.utils.book_new();
+    const wsSummary = XLSX.utils.aoa_to_sheet(summaryData);
+    wsSummary['!cols'] = [{ wch: 24 }, { wch: 32 }];
+    XLSX.utils.book_append_sheet(wb, wsSummary, 'Summary');
+
+    const wsDetail = XLSX.utils.aoa_to_sheet(detailData);
+    wsDetail['!cols'] = [
+      { wch: 12 }, { wch: 14 }, { wch: 24 }, { wch: 20 }, { wch: 18 },
+      { wch: 10 }, { wch: 12 }, { wch: 16 }, { wch: 14 },
+      { wch: 10 }, { wch: 16 }, { wch: 12 }
+    ];
+    XLSX.utils.book_append_sheet(wb, wsDetail, 'Early Exit Details');
+
+    const buf = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' });
+    const filename = `EarlyExitReport_${startDate}_to_${endDate}.xlsx`;
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+    return res.send(buf);
+  } catch (err) {
+    console.error('[early-exits] GET /export error:', err);
     return res.status(500).json({ success: false, error: err.message });
   }
 });

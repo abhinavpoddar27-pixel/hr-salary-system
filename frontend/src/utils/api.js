@@ -440,6 +440,10 @@ export const detectEarlyExits = (data) => api.post('/early-exits/detect', data)
 export const getEarlyExits = (params) => api.get('/early-exits', { params })
 export const getEarlyExitSummary = (params) => api.get('/early-exits/summary', { params })
 export const getEarlyExitEmployeeAnalytics = (code) => api.get(`/early-exits/employee/${code}/analytics`)
+export const getEarlyExitRangeReport = (params) => api.get('/early-exits/range-report', { params })
+export const getEarlyExitMtdSummary = (params) => api.get('/early-exits/mtd-summary', { params })
+export const getEarlyExitDeptSummary = (params) => api.get('/early-exits/department-summary', { params })
+export const exportEarlyExitReport = (params) => api.get('/early-exits/export', { params, responseType: 'blob' })
 
 // ── Early Exit Deductions ─────────────────────────────────
 export const submitEarlyExitDeduction = (data) => api.post('/early-exit-deductions', data)
