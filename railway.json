@@ -13,7 +13,7 @@
     "environments": {
           "pr": {
                   "deploy": {
-                            "startCommand": "SEED_DATA=true node backend/scripts/seed-test-data.js && NODE_ENV=production node backend/server.js"
+                            "startCommand": "NODE_ENV=production node backend/server.js"
                   }
           }
     }

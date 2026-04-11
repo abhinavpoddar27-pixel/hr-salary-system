@@ -52,7 +52,11 @@ function checkPipelineStatus() {
   const period = `${MONTHS[checkMonth]} ${checkYear}`;
 
   // Check attendance import
-  const importCount = db.prepare('SELECT COUNT(*) as cnt FROM attendance_raw WHERE month = ? AND year = ?').get(checkMonth, checkYear);
+  // attendance_raw has no month/year columns — join via import_id → monthly_imports
+  const importCount = db.prepare(`
+    SELECT COUNT(*) as cnt FROM attendance_raw
+    WHERE import_id IN (SELECT id FROM monthly_imports WHERE month = ? AND year = ?)
+  `).get(checkMonth, checkYear);
   if (!importCount || importCount.cnt === 0) {
     if (dayOfMonth >= 1) {
       createNotification('hr', 'IMPORT_PENDING', `Attendance import for ${period} is pending`, '/pipeline/import');

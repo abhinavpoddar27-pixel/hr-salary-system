@@ -132,6 +132,16 @@ function computeEmployeeSalary(db, employee, month, year, company) {
     `).run(employee.code, month, year);
   } catch (e) { /* silent — migration may not have run yet */ }
 
+  // ── Early Exit Deduction: reset applied flag for clean recompute ──
+  try {
+    db.prepare(`
+      UPDATE early_exit_deductions
+      SET salary_applied = 0, salary_applied_at = NULL
+      WHERE employee_code = ? AND payroll_month = ? AND payroll_year = ?
+        AND finance_status = 'approved'
+    `).run(employee.code, month, year);
+  } catch (e) { /* silent — migration may not have run yet */ }
+
   // Get day calculation for this employee — try with company, then without
   let dayCalc = null;
   if (company) {
@@ -557,8 +567,30 @@ function computeEmployeeSalary(db, employee, month, year, company) {
     }
   }
 
+  // ─── Early Exit Deduction (April 2026 — finance-approved only) ───
+  // Sum approved deduction amounts from early_exit_deductions. Unlike late
+  // coming (which uses deduction_days × day rate), early exit stores the
+  // actual rupee amount directly. Contractors excluded (mirrors OT/ED gate).
+  let earlyExitDeduction = 0;
+  if (!isContract) {
+    try {
+      const row = db.prepare(`
+        SELECT COALESCE(SUM(deduction_amount), 0) AS total
+        FROM early_exit_deductions
+        WHERE employee_code = ? AND payroll_month = ? AND payroll_year = ?
+          AND finance_status = 'approved' AND deduction_type != 'warning'
+          AND salary_applied = 0
+      `).get(employee.code, month, year);
+      if (row?.total > 0) {
+        earlyExitDeduction = Math.round(row.total * 100) / 100;
+      }
+    } catch (e) {
+      console.warn(`[salary] Early exit deduction lookup failed for ${employee.code}: ${e.message}`);
+    }
+  }
+
   // ─── Total Deductions & Net ───
-  let totalDeductions = pfEmployee + esiEmployee + professionalTax + tds + advanceRecovery + lopDeduction + otherDeductions + loanRecovery + lateComingDeduction;
+  let totalDeductions = pfEmployee + esiEmployee + professionalTax + tds + advanceRecovery + lopDeduction + otherDeductions + loanRecovery + lateComingDeduction + earlyExitDeduction;
   let salaryWarning = '';
 
   // Cap deductions at gross earned — net salary must never go negative
@@ -646,6 +678,8 @@ function computeEmployeeSalary(db, employee, month, year, company) {
     loanRecovery,
     // Phase 2 — finance-approved late coming deduction
     lateComingDeduction: Math.round(lateComingDeduction * 100) / 100,
+    // Early exit deduction (April 2026)
+    earlyExitDeduction: Math.round(earlyExitDeduction * 100) / 100,
     totalDeductions: Math.round(totalDeductions * 100) / 100,
     netSalary,
     // ═══ TOTAL PAYABLE = netSalary + otPay + holidayDutyPay ═══
@@ -684,7 +718,8 @@ function saveSalaryComputation(db, comp) {
       is_contractor, days_in_month, regular_days, ot_days, ot_daily_rate, manual_extra_duty,
       punch_based_ot, finance_extra_duty, ot_note, total_payable,
       ed_days, ed_pay, take_home,
-      late_coming_deduction
+      late_coming_deduction,
+      early_exit_deduction
     ) VALUES (
       ?, ?, ?, ?, ?, ?, ?,
       ?, ?, ?, ?, ?,
@@ -696,6 +731,7 @@ function saveSalaryComputation(db, comp) {
       ?, ?, ?, ?, ?, ?,
       ?, ?, ?, ?,
       ?, ?, ?,
+      ?,
       ?
     )
     ON CONFLICT(employee_code, month, year, company) DO UPDATE SET
@@ -744,6 +780,7 @@ function saveSalaryComputation(db, comp) {
       ed_pay = excluded.ed_pay,
       take_home = excluded.take_home,
       late_coming_deduction = excluded.late_coming_deduction,
+      early_exit_deduction = excluded.early_exit_deduction,
       is_finalised = 0
   `).run(
     comp.employeeCode, comp.month, comp.year, comp.company,
@@ -758,7 +795,8 @@ function saveSalaryComputation(db, comp) {
     comp.otDays || 0, comp.otDailyRate || 0, comp.manualExtraDuty || 0,
     comp.punchBasedOT || 0, comp.financeExtraDuty || 0, comp.otNote || '', comp.totalPayable || 0,
     comp.edDays || 0, comp.edPay || 0, comp.takeHome || 0,
-    comp.lateComingDeduction || 0
+    comp.lateComingDeduction || 0,
+    comp.earlyExitDeduction || 0
   );
 
   // ── Phase 2 Late Coming: mark approved deductions as applied ──
@@ -783,6 +821,28 @@ function saveSalaryComputation(db, comp) {
       );
     } catch (e) {
       console.warn(`[salary] Failed to mark late deductions applied for ${comp.employeeCode}: ${e.message}`);
+    }
+  }
+
+  // ── Early Exit Deduction: mark approved deductions as applied ──
+  if (comp.earlyExitDeduction > 0) {
+    try {
+      db.prepare(`
+        UPDATE early_exit_deductions
+        SET salary_applied = 1, salary_applied_at = datetime('now')
+        WHERE employee_code = ? AND payroll_month = ? AND payroll_year = ?
+          AND finance_status = 'approved' AND salary_applied = 0
+          AND deduction_type != 'warning'
+      `).run(comp.employeeCode, comp.month, comp.year);
+
+      const { logAudit } = require('../database/db');
+      logAudit(
+        'early_exit_deductions', 0, 'salary_applied', '0', '1',
+        'salary_compute',
+        `Early exit deduction of ₹${comp.earlyExitDeduction} applied to ${comp.employeeCode} for ${comp.month}/${comp.year}`
+      );
+    } catch (e) {
+      console.warn(`[salary] Failed to mark early exit deductions applied for ${comp.employeeCode}: ${e.message}`);
     }
   }
 
@@ -916,6 +976,7 @@ function generatePayslipData(db, employeeCode, month, year) {
       { label: 'Loan EMI', amount: comp.loan_recovery },
       { label: 'LOP Deduction', amount: comp.lop_deduction },
       { label: 'Late Coming Deduction', amount: comp.late_coming_deduction || 0 },
+      { label: 'Early Exit Deduction', amount: comp.early_exit_deduction || 0 },
       { label: 'Other Deductions', amount: comp.other_deductions }
     ].filter(d => d.amount > 0),
     grossEarned: comp.gross_earned,

@@ -11,6 +11,7 @@ import toast from 'react-hot-toast'
 import useExpandableRows from '../hooks/useExpandableRows'
 import DrillDownRow, { DrillDownChevron } from '../components/ui/DrillDownRow'
 import EmployeeQuickView from '../components/ui/EmployeeQuickView'
+import GatePasses from '../components/GatePasses'
 
 const STATUS_COLORS = {
   Pending: 'bg-amber-100 text-amber-700',
@@ -120,7 +121,8 @@ const MAIN_TABS = [
   { id: 'applications', label: 'Applications' },
   { id: 'balances', label: 'Leave Balances' },
   { id: 'register', label: 'Leave Register' },
-  { id: 'adjustments', label: 'Adjustments' }
+  { id: 'adjustments', label: 'Adjustments' },
+  { id: 'gate_passes', label: 'Gate Passes' }
 ]
 
 export default function LeaveManagement() {
@@ -651,6 +653,9 @@ export default function LeaveManagement() {
           </div>
         </>
       )}
+
+      {/* ── Gate Passes Tab ── */}
+      {mainTab === 'gate_passes' && <GatePasses />}
 
     </div>
   )

@@ -25,6 +25,7 @@ import EmployeeQuickView from '../components/ui/EmployeeQuickView'
 import DepartmentQuickView from '../components/ui/DepartmentQuickView'
 import CompanyFilter from '../components/shared/CompanyFilter'
 import { useAppStore } from '../store/appStore'
+import EarlyExitDetection from '../components/EarlyExitDetection'
 import clsx from 'clsx'
 
 const CHART_COLORS = ['#3b82f6', '#22c55e', '#f59e0b', '#ef4444', '#8b5cf6', '#06b6d4', '#ec4899', '#14b8a6']
@@ -105,6 +106,7 @@ const TABS = [
   { id: 'punctuality', label: 'Punctuality', path: '/analytics/punctuality' },
   { id: 'overtime', label: 'Overtime', path: '/analytics/overtime' },
   { id: 'hours', label: 'Working Hours', path: '/analytics/hours' },
+  { id: 'early-exit', label: 'Early Exit', path: '/analytics/early-exit' },
 ]
 
 // ═══════════════════════════════════════════════════════════
@@ -1283,6 +1285,7 @@ export default function Analytics() {
         <Route path="punctuality" element={<PunctualityTab {...dp} />} />
         <Route path="overtime" element={<OvertimeTab {...dp} />} />
         <Route path="hours" element={<WorkingHoursTab {...dp} />} />
+        <Route path="early-exit" element={<EarlyExitDetection {...dp} />} />
       </Routes>
     </div>
   )

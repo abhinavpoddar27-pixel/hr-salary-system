@@ -245,7 +245,36 @@ export default function Import() {
         toast.success(`Imported ${succeeded.length} sheet(s) successfully`)
         setSelectedFiles([])
         refetchHistory()
-        queryClient.invalidateQueries(['org-overview'])
+        // Invalidate every downstream pipeline query that reads from
+        // attendance_processed / attendance_raw. Without this, React Query
+        // serves stale cached state from before the upload and the next
+        // pipeline stage appears broken until the user hits browser refresh.
+        const downstreamKeys = [
+          ['miss-punches'],
+          ['processed-records-shift'],
+          ['night-shifts'],
+          ['attendance-register'],
+          ['monthly-attendance-summary'],
+          ['day-calculations'],
+          ['day-calc-staleness'],
+          ['salary-register'],
+          ['month-end-checklist'],
+          ['salary-comparison'],
+          ['org-overview'],
+          ['headcount-trend'],
+          ['alerts'],
+          ['daily-mis-summary'],
+          ['daily-mis-shift'],
+          ['daily-mis-worker'],
+          ['daily-mis-night'],
+          ['daily-mis-late-coming'],
+          ['late-coming'],
+          ['early-exits'],
+          ['early-exit-summary'],
+          ['pipeline-status'],
+          ['import-summary'],
+        ]
+        downstreamKeys.forEach(k => queryClient.invalidateQueries({ queryKey: k }))
       }
       if (failed.length > 0) {
         toast.error(`${failed.length} file(s) failed to import`)

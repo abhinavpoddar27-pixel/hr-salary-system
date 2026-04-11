@@ -121,12 +121,11 @@ router.post('/upload', upload.array('files', 20), async (req, res) => {
           // Also migrate records with NULL company for this month
           db.prepare('UPDATE attendance_processed SET company = ? WHERE month = ? AND year = ? AND company IS NULL')
             .run(company, month, year);
-          db.prepare(`
-            UPDATE attendance_raw SET company = ?
+          // attendance_raw has no month/year columns — join via import_id → monthly_imports
+          db.prepare(`UPDATE attendance_raw SET company = ?
             WHERE import_id IN (
               SELECT id FROM monthly_imports WHERE month = ? AND year = ?
-            ) AND company IS NULL
-          `).run(company, month, year);
+            ) AND company IS NULL`).run(company, month, year);
 
           // Deduplicate: if migration created conflicts with the unique index,
           // keep only the newest record per (employee_code, date, company)

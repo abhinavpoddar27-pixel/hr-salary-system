@@ -947,6 +947,51 @@ router.get('/month-end-checklist', (req, res) => {
     }
   } catch (e) {}
 
+  // 7c. Early exit deductions pending finance review (April 2026)
+  try {
+    const pendingEarlyExit = db.prepare(`
+      SELECT COUNT(*) as cnt FROM early_exit_deductions
+      WHERE payroll_month = ? AND payroll_year = ? AND finance_status = 'pending'
+    `).get(month, year);
+    if (pendingEarlyExit.cnt > 0) {
+      items.push({
+        id: 'early-exit-deductions-pending',
+        label: 'Early exit deductions pending finance review',
+        status: 'warning',
+        count: pendingEarlyExit.cnt,
+        detail: `${pendingEarlyExit.cnt} early exit deduction(s) awaiting finance review`,
+        link: '/finance-audit?tab=early-exit'
+      });
+    } else {
+      items.push({
+        id: 'early-exit-deductions-reviewed',
+        label: 'All early exit deductions reviewed',
+        status: 'ok',
+        count: 0,
+        detail: 'No pending early exit deductions'
+      });
+    }
+  } catch (e) {}
+
+  // 7d. Approved early exit deductions not yet applied to salary
+  try {
+    const earlyExitNotApplied = db.prepare(`
+      SELECT COUNT(*) as cnt FROM early_exit_deductions
+      WHERE payroll_month = ? AND payroll_year = ?
+        AND finance_status = 'approved' AND deduction_type != 'warning' AND salary_applied = 0
+    `).get(month, year);
+    if (earlyExitNotApplied.cnt > 0) {
+      items.push({
+        id: 'early-exit-deductions-unapplied',
+        label: 'Approved early exit deductions not yet in salary',
+        status: 'warning',
+        count: earlyExitNotApplied.cnt,
+        detail: `${earlyExitNotApplied.cnt} approved deduction(s) need salary recomputation`,
+        link: '/pipeline/salary'
+      });
+    }
+  } catch (e) {}
+
   // 8. Already finalised check
   const finalised = db.prepare(`
     SELECT COUNT(*) as cnt FROM salary_computations

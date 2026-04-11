@@ -429,4 +429,26 @@ export const getDWPaymentSheet = (contractorId, entryIds) => api.get(`/daily-wag
 export const getDWPendingLiabilities = () => api.get('/daily-wage/reports/pending-liabilities')
 export const getDWSeasonalTrends = () => api.get('/daily-wage/reports/seasonal-trends')
 
+// ── Short Leaves / Gate Passes ─────────────────────────────
+export const getShortLeaves = (params) => api.get('/short-leaves', { params })
+export const createShortLeave = (data) => api.post('/short-leaves', data)
+export const getShortLeaveQuota = (code, params) => api.get(`/short-leaves/quota/${code}`, { params })
+export const cancelShortLeave = (id, data) => api.put(`/short-leaves/${id}/cancel`, data)
+
+// ── Early Exit Detection ──────────────────────────────────
+export const detectEarlyExits = (data) => api.post('/early-exits/detect', data)
+export const getEarlyExits = (params) => api.get('/early-exits', { params })
+export const getEarlyExitSummary = (params) => api.get('/early-exits/summary', { params })
+export const getEarlyExitEmployeeAnalytics = (code) => api.get(`/early-exits/employee/${code}/analytics`)
+
+// ── Early Exit Deductions ─────────────────────────────────
+export const submitEarlyExitDeduction = (data) => api.post('/early-exit-deductions', data)
+export const getEarlyExitDeductions = (params) => api.get('/early-exit-deductions', { params })
+export const getEarlyExitDeduction = (id) => api.get(`/early-exit-deductions/${id}`)
+export const reviseEarlyExitDeduction = (id, data) => api.put(`/early-exit-deductions/${id}`, data)
+export const cancelEarlyExitDeduction = (id) => api.delete(`/early-exit-deductions/${id}`)
+export const getEarlyExitPendingFinance = (params) => api.get('/early-exit-deductions/finance/pending', { params })
+export const approveEarlyExitDeduction = (id) => api.put(`/early-exit-deductions/${id}/approve`)
+export const rejectEarlyExitDeduction = (id, data) => api.put(`/early-exit-deductions/${id}/reject`, data)
+
 export default api

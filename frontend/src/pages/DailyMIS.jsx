@@ -257,6 +257,8 @@ export default function DailyMIS() {
             {/* Late Coming Phase 1: Late Arrivals Today section */}
             <LateComingTodaySection summary={lcSummary} />
 
+            {/* Early Exits Card */}
+            <EarlyExitsTodayCard earlyExits={summary.earlyExits} />
 
             {/* Sub-tabs: Punched In / Absentees / Night Shift Detail */}
             <div className="flex gap-1 border-b border-slate-200 overflow-x-auto">
@@ -926,6 +928,69 @@ function LateComingTodaySection({ summary }) {
                       {e.yesterday_left_late
                         ? <span className="badge-amber">Stayed {e.yesterday_left_late_minutes}m late</span>
                         : <span className="text-slate-300">—</span>}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+    </div>
+  )
+}
+
+// ═══════════════════════════════════════════════════════════
+// EARLY EXITS TODAY CARD
+// ═══════════════════════════════════════════════════════════
+function EarlyExitsTodayCard({ earlyExits }) {
+  const exits = earlyExits || []
+  return (
+    <div className="card overflow-hidden">
+      <div className="card-header flex items-center gap-2">
+        <span className="font-semibold text-slate-700">Early Exits</span>
+        {exits.length > 0 && (
+          <span className="text-xs px-2 py-0.5 rounded-full bg-amber-100 text-amber-700 font-bold">{exits.length}</span>
+        )}
+      </div>
+      <div className="card-body">
+        {exits.length === 0 ? (
+          <div className="text-sm text-slate-400 py-3 text-center">No early departures detected</div>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="text-left text-xs font-semibold text-slate-500 uppercase tracking-wider border-b">
+                  <th className="px-3 py-2">Employee</th>
+                  <th className="px-3 py-2">Code</th>
+                  <th className="px-3 py-2">Dept</th>
+                  <th className="px-3 py-2">Punch Out</th>
+                  <th className="px-3 py-2">Flagged Min</th>
+                  <th className="px-3 py-2">Gate Pass</th>
+                </tr>
+              </thead>
+              <tbody>
+                {exits.map((r, i) => (
+                  <tr key={i} className="border-b border-slate-100">
+                    <td className="px-3 py-1.5 font-medium">{r.employee_name}</td>
+                    <td className="px-3 py-1.5 text-slate-600">{r.employee_code}</td>
+                    <td className="px-3 py-1.5 text-slate-600">{r.department}</td>
+                    <td className="px-3 py-1.5">{r.actual_punch_out_time}</td>
+                    <td className="px-3 py-1.5">
+                      <span className={clsx('text-xs px-2 py-0.5 rounded-full font-bold',
+                        r.flagged_minutes > 120 ? 'bg-red-100 text-red-700' :
+                        r.flagged_minutes >= 30 ? 'bg-amber-100 text-amber-700' :
+                        'bg-yellow-100 text-yellow-700'
+                      )}>
+                        {r.flagged_minutes}m
+                      </span>
+                    </td>
+                    <td className="px-3 py-1.5">
+                      {r.has_gate_pass ? (
+                        <span className="text-xs px-2 py-0.5 rounded-full bg-blue-50 text-blue-700">Yes</span>
+                      ) : (
+                        <span className="text-xs text-slate-400">No</span>
+                      )}
                     </td>
                   </tr>
                 ))}
