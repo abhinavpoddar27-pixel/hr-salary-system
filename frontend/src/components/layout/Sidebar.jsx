@@ -41,6 +41,7 @@ const nav = [
       { label: 'Punctuality', to: '/analytics/punctuality' },
       { label: 'Overtime', to: '/analytics/overtime' },
       { label: 'Working Hours', to: '/analytics/hours' },
+      { label: 'Early Exit', to: '/analytics/early-exit' },
     ]
   },
   // Late Coming Phase 1: dedicated nav entry points to the Punctuality tab
