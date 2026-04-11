@@ -340,7 +340,15 @@ router.get('/range-report', requireHrFinanceOrAdmin, (req, res) => {
         sl.remark AS short_leave_remark,
         sl.authorized_leave_until,
         ROUND(
-          COALESCE(e.gross_salary, 0) /
+          COALESCE(
+            NULLIF(e.gross_salary, 0),
+            NULLIF((
+              SELECT gross_salary FROM salary_structures
+              WHERE employee_id = e.id
+              ORDER BY effective_from DESC LIMIT 1
+            ), 0),
+            0
+          ) /
           CAST(strftime('%d', date(eed.date, 'start of month', '+1 month', '-1 day')) AS REAL),
           2
         ) AS daily_gross_at_time,
