@@ -293,6 +293,8 @@ app.listen(PORT, () => {
   try { require('./src/services/jobQueue').startWorker(); } catch (e) { console.error('Job queue init failed:', e.message); }
   // Start month-end scheduler
   try { require('./src/services/monthEndScheduler').startScheduler(); } catch (e) { console.error('Scheduler init failed:', e.message); }
+  // Start nightly DB backup scheduler
+  try { require('./src/services/backupScheduler').initBackupScheduler(); } catch (e) { console.error('Backup scheduler init failed:', e.message); }
 });
 
 module.exports = app;

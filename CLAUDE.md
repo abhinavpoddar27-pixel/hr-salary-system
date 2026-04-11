@@ -5,6 +5,27 @@
 - Pipeline: 7-stage attendance-to-salary processing
 - Deployment: Railway | GitHub: abhinavpoddar27-pixel/hr-salary-system
 
+## Section 0: Last Session
+- Date: 2026-04-11
+- Branch: `claude/nightly-db-backup-git-xKhvM`
+- Task: Tier 3.2 — Nightly DB backup scheduler with git push
+- Files changed:
+  - `backend/src/services/backupScheduler.js` (created)
+  - `backend/server.js` (+2 lines: require + `initBackupScheduler()`)
+  - `.gitignore` (+1 entry: `backups/*.db`)
+  - `backups/.gitkeep` (new directory placeholder)
+- Pending: none for this task
+- Notes: Backup cron runs at 23:30 daily via `node-cron`. Copies
+  `backend/data/hr_system.db` → `backups/hr_salary_YYYY-MM-DD_HH-MM.db`,
+  enforces a rolling 7-file window, then runs
+  `git add -f backups/ && git commit --allow-empty && git push origin HEAD`.
+  `git add -f` is required because `backups/*.db` is in `.gitignore` (manual
+  workflow blocks .db adds; only cron is allowed to commit them). Each git
+  step is wrapped in its own try/catch — push failure logs and continues, it
+  never crashes the server. The whole cron callback is wrapped in a top-level
+  try/catch. Tested: single run, double run, and 10→7 rolling window cleanup.
+  No temporary test call remains in `initBackupScheduler()`.
+
 ## Section 2: Directory Map
 ```
 backend/

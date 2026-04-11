@@ -5,6 +5,8 @@ data/*.db
 data/*.db-journal
 data/*.db-wal
 data/*.db-shm
+# DB backups — committed by cron, not manually tracked
+backups/*.db
 uploads/
 *.log
 .DS_Store
