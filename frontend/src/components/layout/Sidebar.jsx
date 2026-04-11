@@ -22,9 +22,9 @@ const nav = [
       { label: 'Payable OT', icon: '⏱️', to: '/payable-ot' },
       { label: 'Salary Input', icon: '📝', to: '/salary-input' },
       { label: 'Loans', icon: '🏦', to: '/loans' },
-      { label: 'Leave Management', icon: '📋', to: '/leave-management' },
     ]
   },
+  { label: 'Leave Management', icon: '📋', to: '/leave-management' },
   {
     label: 'Workforce', icon: '👥', to: '/workforce',
     children: [
