@@ -1200,6 +1200,41 @@ router.get('/readiness-check', (req, res) => {
     }
   } catch {}
 
+  // WARNING: early exit deductions pending finance review (April 2026)
+  try {
+    const pendingEarlyExit = db.prepare(`
+      SELECT COUNT(*) as cnt FROM early_exit_deductions
+      WHERE payroll_month = ? AND payroll_year = ? AND finance_status = 'pending'
+    `).get(month, year);
+    if (pendingEarlyExit.cnt > 0) {
+      warnings.push({
+        type: 'EARLY_EXIT_DEDUCTIONS_PENDING',
+        count: pendingEarlyExit.cnt,
+        severity: 'WARNING',
+        detail: `${pendingEarlyExit.cnt} early exit deduction(s) awaiting finance review`
+      });
+    } else {
+      passed.push({ type: 'EARLY_EXIT_DEDUCTIONS_REVIEWED', severity: 'OK' });
+    }
+  } catch {}
+
+  // WARNING: approved early exit deductions not yet applied to salary
+  try {
+    const earlyExitUnapplied = db.prepare(`
+      SELECT COUNT(*) as cnt FROM early_exit_deductions
+      WHERE payroll_month = ? AND payroll_year = ?
+        AND finance_status = 'approved' AND deduction_type != 'warning' AND salary_applied = 0
+    `).get(month, year);
+    if (earlyExitUnapplied.cnt > 0) {
+      warnings.push({
+        type: 'EARLY_EXIT_DEDUCTIONS_UNAPPLIED',
+        count: earlyExitUnapplied.cnt,
+        severity: 'WARNING',
+        detail: `${earlyExitUnapplied.cnt} approved early exit deduction(s) need salary recomputation`
+      });
+    }
+  } catch {}
+
   // Score: 100 if no blockers, reduce by each
   const totalChecks = blockers.length + warnings.length + passed.length;
   const blockerWeight = 20, warningWeight = 5;
