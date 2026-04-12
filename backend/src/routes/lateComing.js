@@ -669,6 +669,15 @@ router.put('/finance-review/:id', requireFinanceOrAdmin, (req, res) => {
   });
   txn();
 
+  if (status === 'approved') {
+    try {
+      const { createNotification } = require('../services/monthEndScheduler');
+      createNotification('hr', 'LATE_DED_APPROVED',
+        `Late coming deduction approved by finance for ${existing.employee_code}`,
+        '/analytics/punctuality');
+    } catch (e) {}
+  }
+
   res.json({ success: true, id, status });
 });
 

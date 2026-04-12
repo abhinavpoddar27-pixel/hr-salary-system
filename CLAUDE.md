@@ -1,4 +1,25 @@
 ## Section 0: Recent Changes
+**2026-04-12 | Branch: claude/wire-notifications-end-to-end-5zVTq | Tier 3.4 — Notifications End-to-End**
+
+Files modified:
+- `backend/server.js` — removed duplicate `/api/notifications` route mount (was mounted twice at lines 197 and 204; second mount deleted)
+- `backend/src/routes/payroll.js` — 3 `createNotification()` trigger-points added: `DAY_CALC_COMPLETE` (hr, after calculate-days), `SALARY_COMPUTED` (finance, after compute-salary), `SALARY_HELD` (hr, per-employee, iterates `held` array after compute-salary)
+- `backend/src/routes/financeVerification.js` — `FINANCE_SIGNOFF` (admin) trigger added after `POST /signoff` succeeds with `status='approved'`; gated so rejection does not fire
+- `backend/src/routes/extraDutyGrants.js` — `ED_GRANT_APPROVED` (hr) trigger added after `POST /:id/finance-approve`
+- `backend/src/routes/lateComing.js` — `LATE_DED_APPROVED` (hr) trigger added after `PUT /finance-review/:id` when `status='approved'`
+- `frontend/src/components/layout/NotificationBell.jsx` — fully rewritten: SVG bell icon (no emoji/library), manual `useState` + `useEffect` + `setInterval` polling every 60s (replaces React Query), `useRef`-based click-outside handler, coloured left-border by type (red for urgencies, green for completions, grey for others), relative timestamps ("X min/hour/day ago"), unread dot + bold title, mark-one-read + mark-all-read, navigate-on-click via `useNavigate`, loading state on first fetch only
+
+Notes:
+- All `createNotification()` calls wrapped in `try/catch` — notification failure never crashes a route
+- `createNotification()` imported inline via `require('../services/monthEndScheduler')` inside each try block
+- Role filtering: HR sees `role_target IN ('hr', 'all')`; Finance sees `finance+all`; Admin sees everything. Fallback query (no `role_target` column) returns all 50 for old DBs
+- FINANCE_SIGNOFF fires only on approval — `status === 'approved'` guard prevents false positive on rejection
+- SALARY_HELD fires per-employee (one row per held salary) — HR can address each hold individually
+- `financeVerification.js` is mounted at `/api/finance-verify` (not `/api/finance-audit`); signoff endpoint is here, not in `financeAudit.js`
+- Pending: none for this task
+
+---
+
 **2026-04-12 | Branch: claude/request-id-middleware-HLqLt | Tier 3.3 — Request-ID Middleware**
 
 Files created:

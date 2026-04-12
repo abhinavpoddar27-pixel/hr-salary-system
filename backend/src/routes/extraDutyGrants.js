@@ -184,6 +184,13 @@ router.post('/:id/finance-approve', requireFinanceOrAdmin, (req, res) => {
     'FINANCE_APPROVED', 'FINANCE_APPROVE',
     `${grant.employee_code} ${grant.grant_date}: ${grant.duty_days} day(s)`);
 
+  try {
+    const { createNotification } = require('../services/monthEndScheduler');
+    createNotification('hr', 'ED_GRANT_APPROVED',
+      `Extra Duty grant approved by finance for ${grant.employee_code}`,
+      '/extra-duty-grants');
+  } catch (e) {}
+
   res.json({ success: true });
 });
 

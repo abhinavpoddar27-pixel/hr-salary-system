@@ -233,6 +233,13 @@ router.post('/calculate-days', (req, res) => {
   console.log(`[${req.requestId}] Day calculation complete: ${results.length} OK, ${errors.length} failed`);
   db.prepare(`UPDATE monthly_imports SET stage_6_done = 1 WHERE month = ? AND year = ?`).run(month, year);
 
+  try {
+    const { createNotification } = require('../services/monthEndScheduler');
+    createNotification('hr', 'DAY_CALC_COMPLETE',
+      `Day calculation complete for ${month}/${year} — ${results.length || 'all'} employees processed`,
+      '/pipeline/day-calc');
+  } catch (e) {}
+
   res.json({
     success: true,
     message: `Day calculation complete for ${results.length} employees`,
@@ -390,6 +397,22 @@ router.post('/compute-salary', (req, res) => {
   const heldCount = results.filter(r => r.salaryHeld).length;
 
   console.log(`[${req.requestId}] Computation complete: ${results.length} OK, ${errors.length} failed, ${heldCount} held`);
+
+  try {
+    const { createNotification } = require('../services/monthEndScheduler');
+    createNotification('finance', 'SALARY_COMPUTED',
+      `Salary computation complete for ${month}/${year} — ready for finance audit`,
+      '/finance-audit');
+  } catch (e) {}
+
+  for (const h of held) {
+    try {
+      const { createNotification } = require('../services/monthEndScheduler');
+      createNotification('hr', 'SALARY_HELD',
+        `Salary hold placed on ${h.code} for ${month}/${year}: ${h.reason}`,
+        '/pipeline/salary');
+    } catch (e) {}
+  }
 
   res.json({
     success: true,

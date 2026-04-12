@@ -201,7 +201,6 @@ app.use('/api/finance-audit', requireAuth, require('./src/routes/financeAudit'))
 app.use('/api/session-analytics', requireAuth, require('./src/routes/sessionAnalytics'));
 app.use('/api/features',          requireAuth, require('./src/routes/phase5'));
 app.use('/api/jobs',              requireAuth, require('./src/routes/jobs'));
-app.use('/api/notifications',    requireAuth, require('./src/routes/notifications'));
 app.use('/api/tax-declarations', requireAuth, require('./src/routes/taxDeclarations'));
 app.use('/api/portal',           requireAuth, require('./src/routes/employeePortal'));
 app.use('/api/finance-verify',   requireAuth, require('./src/routes/financeVerification'));

@@ -217,6 +217,15 @@ router.post('/signoff', requireFinanceOrAdmin, (req, res) => {
       rejection_reason = excluded.rejection_reason, signed_by = excluded.signed_by, signed_at = datetime('now')
   `).run(month, year, company || null, status, sc?.cnt || 0, verified?.cnt || 0, flagged?.cnt || 0, Math.round(sc?.total || 0), rejectionReason || null, req.user?.username || 'finance');
 
+  if (status === 'approved') {
+    try {
+      const { createNotification } = require('../services/monthEndScheduler');
+      createNotification('admin', 'FINANCE_SIGNOFF',
+        `Finance sign-off given for ${month}/${year} by ${req.user?.username}`,
+        '/finance-audit');
+    } catch (e) {}
+  }
+
   res.json({ success: true });
 });
 
