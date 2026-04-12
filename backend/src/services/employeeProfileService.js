@@ -2,6 +2,14 @@
 const { detectPatterns } = require('./behavioralPatterns');
 // isContractorForPayroll imported for downstream consumers (patternEngine)
 const { isContractorForPayroll } = require('../utils/employeeClassification');
+// Lazy-require to avoid circular: patternEngine → employeeProfileService → patternEngine
+let _analyzeEmployeePatterns = null;
+function getPatternEngine() {
+  if (!_analyzeEmployeePatterns) {
+    ({ analyzeEmployeePatterns: _analyzeEmployeePatterns } = require('./patternEngine'));
+  }
+  return _analyzeEmployeePatterns;
+}
 
 // ── Helpers ────────────────────────────────────────────────────────────────
 
@@ -533,6 +541,18 @@ function computeProfileRange(db, employeeCode, startDate, endDate) {
 
   const leaveUsage = { balances: leaveBalances, applications: leaveApplications };
 
+  // ── Section L: Pattern Analysis ───────────────────────────────────────────
+  let patternAnalysis = null;
+  try {
+    const analyzeEmployeePatterns = getPatternEngine();
+    patternAnalysis = analyzeEmployeePatterns(db, employeeCode, startDate, endDate, {
+      employee, kpis, monthlyBreakdown, behavioralPatterns, regularityScore
+    });
+  } catch (err) {
+    console.warn('[profileService] patternEngine failed:', err.message);
+    patternAnalysis = { patterns: [], compositeScores: { flightRisk: 0, engagement: 100, reliability: 0 }, summary: { totalPatternsDetected: 0 }, generatedAt: new Date().toISOString() };
+  }
+
   // ── Final Assembly ────────────────────────────────────────────────────────
   return {
     employee,
@@ -546,6 +566,7 @@ function computeProfileRange(db, employeeCode, startDate, endDate) {
     salaryHistory,
     corrections,
     leaveUsage,
+    patternAnalysis,
     meta: {
       rangeStart:     startDate,
       rangeEnd:       endDate,
