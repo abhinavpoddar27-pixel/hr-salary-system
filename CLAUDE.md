@@ -1,16 +1,13 @@
 ## Section 0: Last Session
 - **Date:** 2026-04-12
-- **Branch:** main (merged from `claude/fix-early-exit-deduction-gh1DU`)
-- **Last commit:** `2408e5a` chore: update frontend dist with rebuilt assets
-- **Files changed this session:**
-  - `frontend/src/components/EarlyExitDetection.jsx` — added `getEmployee` import + `useQuery` call; replaced broken `detection.daily_gross_at_time || 0` with `gross_salary / daysInDetMonth`; fixed dropdown labels to show `₹${Math.round(amount)}`
-  - `CLAUDE.md` — added Section 0 entry for the deduction amount fix
-  - `frontend/dist/` — rebuilt after EarlyExitDetection.jsx changes
-- **What was fixed/built:** Fixed the early exit deduction modal — `deduction_amount` was always `undefined` because `early_exit_detections` has no gross salary column; the fix fetches employee gross via `getEmployee()` and computes the correct daily rate. The `early_exit_deductions` table had 0 rows before this fix; it can now be populated.
-- **What's fragile:** `deduction_amount: computedAmount || undefined` in `handleSubmit`/`handleRevise` — if `getEmployee()` returns 0 gross (e.g. employee record has no salary set), the amount is 0 and the backend rejects it with the same error. HR must ensure `employees.gross_salary` is set before actioning a deduction.
-- **Unfinished work:** None for this task.
-- **Known issues remaining:** `early_exit_deductions` salary pipeline integration in `salaryComputation.js` exists and is coded (see Section 5) but is untested in production because 0 deductions existed before this fix. First real finance-approved deduction will be the true end-to-end test.
-- **Next session should:** Submit a test Half-Day deduction for an employee with a known gross, get finance approval, re-run Stage 7 compute, and verify `salary_computations.early_exit_deduction` is populated and subtracted from `net_salary` correctly.
+- **Branch:** `claude/session-start-tMDNw`
+- **Last commit:** `3b2ccde` docs: session handoff 2026-04-12
+- **Files changed this session:** None — this was a read-only audit session. No code was written or modified.
+- **What was fixed/built:** Performed a comprehensive codebase audit covering all 41 backend files, 66 frontend files, full schema (1737 lines), and 25+ targeted greps. Produced a tiered feature recommendation report (Tier 1 compliance gaps, Tier 2 operational wins, Tier 3 UX, Tier 4 engineering hygiene, quick wins table, dependency map). Key discovery: the Daily Wage System (1551-line route, 8 frontend pages, 7 DB tables: `dw_contractors`, `dw_entries`, `dw_payments`, etc.) is entirely absent from CLAUDE.md.
+- **What's fragile:** Nothing changed this session. Carry-forward fragility from previous session: `deduction_amount: computedAmount || undefined` in `EarlyExitDetection.jsx handleSubmit` — zero gross employee will still fail.
+- **Unfinished work:** None — audit delivered in full.
+- **Known issues remaining:** (1) `min_wage_*` values are seeded in `policy_config` but read nowhere in business logic — unenforced. (2) Daily Wage System undocumented in CLAUDE.md (Section 2 + Section 4 missing). (3) `early_exit_deductions` pipeline still untested in production (no finance-approved deductions exist yet).
+- **Next session should:** Pick a Tier 1 item from the audit report (T1.4 LWF is the quickest; T1.2 min-wage compliance requires only a `safeAddColumn` + one red-flag detector). OR update CLAUDE.md Section 2/4 to document the Daily Wage System (1h, zero risk).
 
 ---
 
