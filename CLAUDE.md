@@ -144,11 +144,13 @@ backend/
 ├── server.js                                  Express bootstrap, auth seeding, route mounting
 ├── src/
 │   ├── database/
-│   │   ├── schema.js                          56 tables, all CREATE TABLE definitions, migrations
+│   │   ├── schema.js                          58 tables, all CREATE TABLE definitions, migrations
 │   │   └── db.js                              better-sqlite3 wrapper, logAudit() helper
 │   ├── middleware/auth.js                     JWT verify, requireAuth, requireAdmin
 │   ├── middleware/requestId.js               Request-ID stamp, x-request-id header, arrival/completion logging
+│   ├── middleware/roles.js                   Centralised role-gate helpers: requireHrOrAdmin, requireFinanceOrAdmin, requireAdmin (single source of truth since April 2026)
 │   ├── config/permissions.js                  Role → page access matrix
+│   ├── config/schemaReference.js             Static schema reference text for natural-language → SQL translation (Anthropic API)
 │   ├── utils/employeeClassification.js        isContractor() — dept keywords + flag
 │   ├── utils/pagination.js                    Server-side pagination helper
 │   ├── routes/
@@ -167,7 +169,6 @@ backend/
 │   │   ├── extraDutyGrants.js   Dual HR+Finance approval for overnight shifts
 │   │   ├── settings.js          Shifts, holidays, policy_config, companies
 │   │   ├── analytics.js         Workforce + attendance analytics
-│   │   ├── compliance.js        PF/ESI/PT compliance dashboard
 │   │   ├── notifications.js     User notification CRUD
 │   │   ├── jobs.js              Background job queue
 │   │   ├── taxDeclarations.js   FY tax declarations for TDS auto-calc
@@ -177,6 +178,7 @@ backend/
 │   │   ├── sessionAnalytics.js  User session tracking
 │   │   ├── usage-logs.js        Admin usage audit
 │   │   ├── phase5.js            Leave accrual, shift roster, attrition
+│   │   ├── queryTool.js         Admin SQL query tool: natural language + raw SQL, SELECT-only, 100-row limit
 │   │   ├── lateComing.js        Late Coming: analytics, deductions, finance approval (Phase 1+2)
 │   │   ├── short-leaves.js     Gate pass / short leave CRUD, quota check
 │   │   ├── early-exits.js      Early exit detection trigger, list, summary, analytics
@@ -195,11 +197,16 @@ backend/
 │       ├── financeRedFlags.js        8 red flag detectors for finance review
 │       ├── jobQueue.js               SQLite-backed background job worker
 │       ├── monthEndScheduler.js      node-cron pipeline status notifications
+│       ├── backupScheduler.js        Nightly DB backup (23:30 cron), 7-file rolling window, git push
 │       ├── analytics.js              Workforce analytics calculations
 │       ├── dailyMIS.js               Daily MIS report generation
 │       ├── exportFormats.js          PF ECR, ESI, NEFT, bank file generators
 │       ├── behavioralPatterns.js     Late/absenteeism pattern detection
 │       └── phase5Features.js         Leave accrual, attrition risk
+│   └── __tests__/
+│       ├── dayCalculation.test.js    Unit tests for Stage 6 Sunday rule + contractor mode
+│       ├── pagination.test.js        Unit tests for paginateQuery helper
+│       └── tdsCalculation.test.js    Unit tests for Indian tax slab calculation
 
 frontend/
 ├── src/
@@ -226,8 +233,11 @@ frontend/
 │   │   ├── FinanceAudit.jsx          Finance audit (7 tabs)
 │   │   ├── FinanceVerification.jsx   Finance red flag verify + signoff
 │   │   ├── ExtraDutyGrants.jsx       Dual-approval overnight grants
+│   │   ├── HeldSalariesRegister.jsx  Held salary review + finance release workflow
+│   │   ├── PayableOT.jsx             Payable OT register — view/verify biometric OT per employee
+│   │   ├── QueryTool.jsx             Admin SQL query tool — natural language + raw SQL, CSV export (admin only)
 │   │   ├── Settings.jsx              Shifts, holidays, policy, users
-│   │   ├── Compliance.jsx            PF/ESI compliance
+│   │   ├── Compliance.jsx            PF/ESI compliance calendar (read-only; endpoints in settings.js)
 │   │   ├── Analytics.jsx             Attendance analytics
 │   │   ├── WorkforceAnalytics.jsx    Workforce metrics
 │   │   ├── SessionAnalytics.jsx      User session analytics
@@ -416,11 +426,11 @@ frontend/
 - Sensitivity: Read-only consumers; column changes break dashboard widgets
 
 ## Section 4: Database Schema Summary
-- Total tables: **56** (in `backend/src/database/schema.js`) — 48 core tables + 8 Daily Wage tables
+- Total tables: **58** (in `backend/src/database/schema.js`) — 50 core tables + 8 Daily Wage tables
 - Attendance: `attendance_raw`, `attendance_processed` (now with `is_left_late`/`left_late_minutes` for late coming tracking + `is_early_departure`/`early_by_minutes` for early exit), `night_shift_pairs`, `monthly_imports`, `manual_attendance_flags`, `day_corrections`, `punch_corrections`
-- Employee/salary: `employees`, `salary_structures`, `salary_computations` (now with `early_exit_deduction`), `salary_advances`, `salary_change_requests`, `salary_manual_flags`, `loans`, `loan_repayments`, `tax_declarations`, `extra_duty_grants`, `late_coming_deductions`, `short_leaves` (NEW, April 2026), `early_exit_detections` (NEW), `early_exit_deductions` (NEW), `early_exit_deduction_audit` (NEW)
+- Employee/salary: `employees`, `salary_structures`, `salary_computations` (now with `early_exit_deduction`), `salary_advances`, `salary_change_requests`, `salary_manual_flags`, `loans`, `loan_repayments`, `tax_declarations`, `extra_duty_grants`, `late_coming_deductions`, `salary_hold_releases` (hold release audit — released_by, release_notes, hold_amount), `short_leaves` (NEW, April 2026), `early_exit_detections` (NEW), `early_exit_deductions` (NEW), `early_exit_deduction_audit` (NEW)
 - Processing: `day_calculations`, `holidays`, `holiday_audit_log`, `shifts` (now with `duration_hours` + seeded 12HR/10HR/9HR rows), `shift_roster`, `leave_balances`, `leave_transactions`, `leave_applications`
-- Audit: `audit_log`, `usage_logs`, `finance_audit_status`, `finance_audit_comments`, `finance_month_signoff`, `finance_approvals`
+- Audit: `audit_log`, `usage_logs`, `finance_audit_status`, `finance_audit_comments`, `finance_month_signoff`, `finance_approvals`, `finance_rejections` (rejection audit trail for ED grant + miss-punch rejections — stores source_table, source_record_id, rejection_type)
 - System: `users`, `policy_config`, `company_config`, `notifications`, `compliance_items`, `alerts`, `employee_documents`, `employee_lifecycle`, `monthly_dept_stats`, `monthly_employee_stats`, `session_events`, `session_daily_summary`
 - Daily Wage: `dw_contractors` (contractor master, rates), `dw_rate_history` (rate change proposals + approval), `dw_entries` (daily work entries, status flow), `dw_department_allocations` (per-entry dept breakdown, CASCADE on entry delete), `dw_approvals` (entry state-transition log), `dw_payments` (payment records, UNIQUE payment_reference), `dw_payment_entries` (payment↔entry junction), `dw_audit_log` (full entity audit trail)
 - **Critical UNIQUE constraints**:
