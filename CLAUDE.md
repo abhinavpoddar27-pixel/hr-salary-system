@@ -1,19 +1,24 @@
 ## Section 0: Last Session
 - **Date:** 2026-04-12
-- **Branch:** main (cherry-picked from `claude/session-start-Hnp9m`)
-- **Last commit:** `c9cbeb4` feat: add /compose-fix prompt composer command with 7-guardrail scoring
+- **Branch:** `claude/session-start-DL0k6` (pushed to `origin/main` via fast-forward)
+- **Last commit:** `2542b49` feat: AI-powered qualitative employee review via Claude API
 - **Files changed this session:**
-  - `.claude/commands/compose-fix.md` — new slash command: 6-step bug fix prompt composer with FORMULA/WIRING/UPSERT/DATA/STALE_DIST/DOUBLE_COUNT classification, target file identification, DO NOT MODIFY list, 5-phase prompt template, 7-dimension quality scorer (min 28/35 before output)
-  - `backend/src/routes/analytics.js` — added `GET /salary-trend` (T3.4): multi-year monthly aggregation from salary_computations, year summaries with YoY % change (already on main via dad290d from prior session)
-  - `backend/src/routes/reports.js` — added `GET /department-payroll` (T3.6): dept GROUP BY with cost share %, grand totals, company filter (already on main via dad290d)
-  - `frontend/src/pages/WorkforceAnalytics.jsx` — new PayrollTrendTab component + 4th nav tab (T3.4, already on main)
-  - `frontend/src/pages/Reports.jsx` — Department Payroll tab in sidebar (T3.6, already on main)
-  - `frontend/src/utils/api.js` — getSalaryTrend + getDeptPayrollReport exports (already on main)
-- **What was fixed/built:** Added `/compose-fix` slash command — a prompt composer that generates scored, guardrailed bug fix prompts (never writes code itself). T3.4 + T3.6 were built and pushed to the session branch but `origin/main` already had them from a parallel session; only compose-fix was cherry-picked to main.
-- **What's fragile:** T3.4+T3.6 on main came from `dad290d` (different session) — that version uses `COALESCE(sc.ed_pay, 0)` double-wrap and `COALESCE(sc.take_home, sc.total_payable)` fallback which is marginally safer for old DB rows. Our session branch version lacks these fallbacks but was never merged.
-- **Unfinished work:** None.
-- **Known issues remaining:** T3.4 and T3.6 UI untested against real production salary_computations data — both endpoints return empty when Stage 7 hasn't run for the selected month.
-- **Next session should:** Run Stage 7 for a real month, verify Workforce Analytics → Payroll Cost Trend and Reports → Department Payroll render correctly with production figures.
+  - `backend/src/services/employeeProfileService.js` — new: `computeProfileRange()` returning 13 sections (employee, kpis, streaks, arrivalDeparture, regularityScore, behavioralPatterns, monthlyBreakdown, departmentComparison, salaryHistory, corrections, leaveUsage, patternAnalysis, meta)
+  - `backend/src/routes/analytics.js` — added `GET /employee/:code/profile-range` and `POST /employee/:code/ai-review` routes
+  - `backend/src/services/aiReviewService.js` — new: `generateAIReview()` calling Anthropic API; `buildReviewPayload()`, `parseSections()`, `callClaudeAPI()`
+  - `backend/src/services/patternEngine/index.js` — new orchestrator: runs 23 detectors, computes flightRisk/engagement/reliability composite scores
+  - `backend/src/services/patternEngine/individualPatterns.js` — new: 8 detectors (sandwich leave, ghost hours, absence clustering, break drift, miss-punch escalation, half-day addiction, LIFO, post-leave slump)
+  - `backend/src/services/patternEngine/flightRiskPatterns.js` — new: 4 detectors (disengagement cascade, sudden leave burn, OT cliff, attendance entropy)
+  - `backend/src/services/patternEngine/anomalyPatterns.js` — new: 4 detectors (buddy punching, OT gaming, coordinated absence, clock-edge punching)
+  - `backend/src/services/patternEngine/temporalPatterns.js` — new: 3 detectors (payday proximity, seasonal pattern, day-of-month hotspot)
+  - `backend/src/services/patternEngine/shiftPatterns.js` — new: 2 detectors (night shift fatigue, shift transition shock)
+  - `backend/src/services/patternEngine/contractorPatterns.js` — new: 2 detectors (contractor instability, contractor OT exploitation with Factories Act check)
+  - `.env.example` — added `ANTHROPIC_API_KEY` entry with Railway deployment note
+- **What was fixed/built:** Full Employee Intelligence backend — 13-section profile endpoint, 23-pattern behavioral engine, and AI narrative review via Claude API. All three features pushed to `origin/main`. Railway already has `ANTHROPIC_API_KEY` set so the AI review endpoint is live in production.
+- **What's fragile:** `employeeProfileService.js` Section I (salary history) has a try/catch fallback for older DBs missing `take_home`/`ed_pay` columns — if a DB is very old the totals may exclude these fields silently. Pattern engine's `detectLIFO` and `detectCoordinatedAbsence` make per-date DB queries capped at 30/20 samples to avoid N+1 slowness — very large date ranges still do O(30) queries each.
+- **Unfinished work:** `frontend/src/pages/EmployeeProfile.jsx` — NOT created. Phase 4a + 4b frontend was planned (plan file at `/root/.claude/plans/recursive-popping-dove.md`) but interrupted before implementation. App.jsx, Sidebar.jsx, and permissions.js also not yet modified for this page.
+- **Known issues remaining:** Local `main` branch has diverged from `origin/main` (51 vs 71 different commits) — always push via `git push origin claude/session-branch:main` rather than checking out local main.
+- **Next session should:** Implement `frontend/src/pages/EmployeeProfile.jsx` per the approved plan at `/root/.claude/plans/recursive-popping-dove.md` — create the page, wire App.jsx route, add Sidebar.jsx nav item, add `employee-profile` to permissions.js for hr+finance, build dist, commit and push.
 
 ---
 
