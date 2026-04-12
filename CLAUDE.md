@@ -1,12 +1,14 @@
 ## Section 0: Last Session
 - **Date:** 2026-04-12
-- **Branch:** `claude/session-start-B6yrb`
-- **Task:** T3.7 — Role-Differentiated Dashboard (Admin Financial Overview + Finance Workbench)
+- **Branch:** `claude/session-start-B6yrb` (pushed to `origin/main`)
+- **Last commit:** `20a290d` fix: dashboard finance view — use server pendingCount + null-safe dept guard
 - **Files changed this session:**
-  - `frontend/src/pages/Dashboard.jsx` — role-based dashboard: admin sees financial overview (KPIs, action queue, dept cost, readiness) with toggle to HR view; finance sees task workbench (action counts, status banner, checklist); HR/viewer sees original dashboard unchanged
-- **What was built:** Three dashboard view modes in a single file. Admin gets Net Payroll/PF/ESI/Readiness KPI cards, pending actions queue (held salaries, manual flags, late deductions, miss punch review), department cost breakdown table, and month-end readiness checklist — plus a toggle to switch to the original HR view. Finance gets a stripped-down workbench with 4 clickable action-count cards, an overall status banner, and the readiness checklist. All data sourced from existing endpoints (salary-register, readiness-check, salary-manual-flags, late-coming/deductions, miss-punches, department-payroll) via Promise.all parallel fetch. Zero backend changes, zero schema changes.
-- **What's fragile:** Nothing — all endpoints are existing and stable. The finance dashboard fetch uses individual .catch() wrappers so a single failed endpoint doesn't break the whole view.
-- **Pending:** None for this task
+  - `frontend/src/pages/Dashboard.jsx` — T3.7 role-differentiated dashboard: admin financial overview (KPIs, action queue, dept cost, readiness) with toggle to HR view; finance task workbench (action counts, status banner, checklist); HR/viewer original dashboard unchanged. Then bug-fix pass: switched manual flags count to server-side `summary.pendingCount`, changed dept payroll fallback from `[]` to `null` with null guard.
+- **What was fixed/built:** Three dashboard view modes in a single file. Admin gets Net Payroll/PF/ESI/Readiness KPI cards with MoM comparison, pending actions queue (held salaries, manual flags, late deductions, miss punch review), department cost breakdown table (top 8), and month-end readiness checklist — plus toggle to HR view. Finance gets stripped-down workbench with 4 clickable action-count cards, status banner, and checklist. All data from 7 existing endpoints via Promise.all parallel fetch. Zero backend changes, zero schema changes. Bug-fix pass fixed 2 issues (manual flags used server pendingCount; dept payroll null-safe).
+- **What's fragile:** Finance workbench card colors use static Tailwind classes in an array (`borderActive: 'border-red-500'` etc.) — if someone refactors to dynamic `border-${color}` it will break Tailwind JIT purging. The `departments` field in `financeData` is `null` when the dept-payroll endpoint fails (vs `[]` when it succeeds with no data) — the null guard on line 192 handles this but callers must check.
+- **Unfinished work:** None
+- **Known issues remaining:** Local `main` branch has diverged from `origin/main` — always push via `git push origin claude/session-branch:main` rather than checking out local main. The `frontend/src/pages/EmployeeProfile.jsx` from the previous session plan is still NOT created (Phase 4a+4b frontend).
+- **Next session should:** Implement `frontend/src/pages/EmployeeProfile.jsx` per the approved plan at `/root/.claude/plans/recursive-popping-dove.md` — create the page, wire App.jsx route, add Sidebar.jsx nav item, add `employee-profile` to permissions.js for hr+finance, build dist, commit and push.
 
 ---
 
