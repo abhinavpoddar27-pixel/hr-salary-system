@@ -1,4 +1,15 @@
 ## Section 0: Recent Changes
+**2026-04-12 | Branch: claude/auto-fetch-early-exit-HPoMd | Early Exit tab — remove Re-run Detection button, auto-fetch on date change**
+
+Files changed:
+- `frontend/src/components/EarlyExitDetection.jsx` — removed "Re-run Detection" button, its modal, and all associated state/handler code (`showDetectModal`, `detectDate`, `detectMut`, `isFutureDetect`, `detectEarlyExits` import). No new code added — React Query's `useQuery` for `ee-range` already auto-fetches whenever `startDate`/`endDate`/`selectedCompany` change (they are in the query key with `enabled: !!rangeValid`). Export Excel button untouched. Build rebuilt and committed to `frontend/dist/`.
+
+What was fixed: Removed manual "Re-run Detection" button; early exit data now auto-loads when date range or company filter changes.
+What's fragile: nothing — read-only UI change, no pipeline impact.
+Known issues remaining: none.
+
+---
+
 **2026-04-12 | Branch: claude/request-id-middleware-HLqLt | Tier 3.3 — Request-ID Middleware**
 
 Files created:
