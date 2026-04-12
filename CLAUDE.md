@@ -17,6 +17,24 @@
 ---
 
 ## Section 0: Recent Changes
+**2026-04-12 | Branch: claude/fix-early-exit-deduction-gh1DU | Early Exit Deduction Amount Fix**
+
+Files modified:
+- `frontend/src/components/EarlyExitDetection.jsx` — 3 changes: (1) added `getEmployee` import, (2) replaced broken `detection.daily_gross_at_time`-based `dailyGross` (always 0) with a `getEmployee()` query to fetch actual `gross_salary`, then compute `dailyRate = gross / daysInDetMonth`; `halfDayAmount`/`fullDayAmount` now 2-decimal floats; (3) dropdown labels updated to show `Math.round(amount)` display
+
+What was broken: `early_exit_detections` table has no `gross_salary` column; the range-report query also doesn't join `employees`. So `detection.daily_gross_at_time` was always `undefined` → `computedAmount = 0` → `0 || undefined = undefined` → backend rejected with "deduction_amount is required for non-warning deductions" → zero rows ever inserted into `early_exit_deductions`.
+
+What was fixed: `getEmployee(detection.employee_code)` fetches current gross; daily rate computed from detection date's actual month. Submit payload now sends the correct `deduction_amount` (e.g., ₹214.29 for Half-Day, ₹428.57 for Full-Day on gross 12000 / Feb 28 days).
+
+What's fragile: The salary pipeline integration in `salaryComputation.js` for `earlyExitDeduction` is already coded (see Section 5) but was untested because `early_exit_deductions` had zero rows. Now that deductions can be created, the pipeline will pick them up on next Stage 7 compute after finance approval. Verify Stage 7 shows the early_exit_deduction column correctly once real deductions exist.
+
+Notes:
+- `deduction_amount: computedAmount || undefined` in the submit payload is intentional — passes `undefined` for `warning` type (backend ignores amount for warnings) and the computed float for half_day/full_day/custom
+- Detection date's month (not selectedMonth prop) is used for days-in-month, matching the backend's `daysInMonth(detection.date)` calculation
+- Pending: none for this task
+
+---
+
 **2026-04-12 | Branch: claude/admin-sql-query-tool-L9lm8 | Admin SQL Query Tool**
 
 Files created:
