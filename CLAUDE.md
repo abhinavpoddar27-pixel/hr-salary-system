@@ -1,16 +1,19 @@
 ## Section 0: Last Session
 - **Date:** 2026-04-12
-- **Branch:** main (merged from `claude/session-start-5wc8r`)
-- **Last commit:** `867e3c8` feat: add consolidated monthly payroll register Excel export (T2.2)
+- **Branch:** main (merged from `claude/session-start-ZuRmy`)
+- **Last commit:** `dad290d` feat: add YoY payroll cost trend (T3.4) and dept payroll report (T3.6)
 - **Files changed this session:**
-  - `backend/src/routes/payroll.js` — added `GET /salary-register-excel` endpoint (~160 lines) after `salary-register` JSON endpoint; two-sheet XLSX workbook (PAYROLL REGISTER + SUMMARY)
-  - `frontend/src/pages/SalaryComputation.jsx` — added `handleDownloadRegister()` handler + `registerLoading` state + "Download Register" blue button alongside "Salary Slip (Excel)"
-  - `frontend/dist/` — rebuilt after SalaryComputation.jsx changes
-- **What was fixed/built:** T2.2 — Consolidated Monthly Payroll Register Excel export. New `GET /api/payroll/salary-register-excel` endpoint produces a 37-column XLSX register (all earned components, deductions, net/payable/take-home, attendance summary, hold flags) plus a management summary sheet. Frontend "Download Register" button in Stage 7 toolbar. Zero schema changes, zero changes to existing endpoints.
-- **What's fragile:** The endpoint reads `dc.paid_holidays` from `day_calculations` (not `salary_computations` which lacks that column) — if day_calculations rows are missing for a month the join returns NULLs for attendance columns but the row still appears (LEFT JOIN). Expected behavior.
-- **Unfinished work:** None for this task.
-- **Known issues remaining:** Dev DB has no salary_computations data so the 404 path is the only one exercised locally; XLSX generation logic was verified with fake data inline. First production run will be the real end-to-end test.
-- **Next session should:** Run Stage 7 compute for a real month, click "Download Register", open in Excel and verify all 37 columns and both sheets are correct; also spot-check that held employees show ⚠ prefix and "YES" in the Held column.
+  - `backend/src/routes/analytics.js` — added `GET /salary-trend` endpoint (89 lines) before `module.exports`; multi-year monthly aggregation from `salary_computations` with year summaries + YoY %
+  - `backend/src/routes/reports.js` — added `GET /department-payroll` endpoint (95 lines) before `module.exports`; dept GROUP BY with cost share %, grand totals, company filter
+  - `frontend/src/pages/WorkforceAnalytics.jsx` — added `LineChart`/`Line` to recharts import, `getSalaryTrend` to api import, new `PayrollTrendTab` component (~115 lines), 4th tab entry, new Route
+  - `frontend/src/pages/Reports.jsx` — added `getDepartmentPayroll` import, dept-payroll query state, "Department Payroll" entry in REPORTS array, full tab content section (~70 lines)
+  - `frontend/src/utils/api.js` — added `getSalaryTrend` and `getDepartmentPayroll` one-liner exports
+  - `frontend/dist/` — rebuilt after all frontend changes
+- **What was fixed/built:** T3.4 — Payroll Cost Trend: dual-axis line chart (Net Salary + CTC + Headcount) in new Workforce Analytics tab, 1–5 year range selector, YoY summary cards, monthly breakdown table. T3.6 — Department Payroll Cost Centre: dept-wise payroll table in Reports sidebar with PF/ESI employer, OT+ED, cost share %, grand total footer, 4 KPI cards. Both read-only, zero schema changes.
+- **What's fragile:** Both endpoints return empty arrays (not 404) when no salary_computations rows exist — this is correct but means the UI shows "No data" until Stage 7 has been run for the selected month.
+- **Unfinished work:** None.
+- **Known issues remaining:** Dev DB has no salary_computations data so both new endpoints return empty in local testing; production will be the real test. `take_home` column falls back to `total_payable` via `COALESCE` for rows computed before the ED integration (older months).
+- **Next session should:** Run Stage 7 for a real month, open Workforce Analytics → Payroll Cost Trend and Reports → Department Payroll to verify data renders correctly with real figures.
 
 ---
 
