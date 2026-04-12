@@ -1,18 +1,16 @@
 ## Section 0: Last Session
 - **Date:** 2026-04-12
-- **Branch:** main (merged from `claude/batch-early-exit-detection-MKMwd`)
-- **Last commit:** `5032695` feat: add /session-handoff slash command
+- **Branch:** main (merged from `claude/fix-early-exit-deduction-gh1DU`)
+- **Last commit:** `2408e5a` chore: update frontend dist with rebuilt assets
 - **Files changed this session:**
-  - `backend/src/routes/early-exits.js` — added `POST /detect-range` batch endpoint (loops `detectEarlyExits()` per date, max 90 days, caps future endDate to today)
-  - `frontend/src/utils/api.js` — added `detectEarlyExitRange()` API helper
-  - `frontend/src/components/EarlyExitDetection.jsx` — added "🔄 Run Detection" button, `detectRangeMut` mutation, `lastDayOfMonth` helper, `useEffect` to sync date range with parent month/year selector
-  - `frontend/dist/` — rebuilt after above changes
-  - `.claude/commands/session-handoff.md` — created this handoff command
-- **What was fixed/built:** Wired the batch early exit detection pipeline — only 8 of 28 dates in Feb 2026 had detection data; the new `/detect-range` endpoint backfills all dates in one call and the UI button makes it triggerable without curl.
-- **What's fragile:** `detectEarlyExits()` in `earlyExitDetection.js` silently skips employees with `shift_id IS NULL` — detection count will always be slightly below `attendance_processed` raw count; this is expected but can confuse the drift-check query.
-- **Unfinished work:** Piece 2 (auto-detection during import) not implemented — gaps will reappear for future months unless the "Run Detection" button is clicked manually after each import.
-- **Known issues remaining:** `early_exit_detections` still has no data for months before Feb 2026; backfill for Mar + Apr 2026 must be triggered manually via the UI or curl.
-- **Next session should:** Run detection backfill for Mar 2026 (`2026-03-01` → `2026-03-31`) and Apr 2026 (`2026-04-01` → today) via the UI or `POST /api/early-exits/detect-range`, then verify KPI card totals match `attendance_processed` counts.
+  - `frontend/src/components/EarlyExitDetection.jsx` — added `getEmployee` import + `useQuery` call; replaced broken `detection.daily_gross_at_time || 0` with `gross_salary / daysInDetMonth`; fixed dropdown labels to show `₹${Math.round(amount)}`
+  - `CLAUDE.md` — added Section 0 entry for the deduction amount fix
+  - `frontend/dist/` — rebuilt after EarlyExitDetection.jsx changes
+- **What was fixed/built:** Fixed the early exit deduction modal — `deduction_amount` was always `undefined` because `early_exit_detections` has no gross salary column; the fix fetches employee gross via `getEmployee()` and computes the correct daily rate. The `early_exit_deductions` table had 0 rows before this fix; it can now be populated.
+- **What's fragile:** `deduction_amount: computedAmount || undefined` in `handleSubmit`/`handleRevise` — if `getEmployee()` returns 0 gross (e.g. employee record has no salary set), the amount is 0 and the backend rejects it with the same error. HR must ensure `employees.gross_salary` is set before actioning a deduction.
+- **Unfinished work:** None for this task.
+- **Known issues remaining:** `early_exit_deductions` salary pipeline integration in `salaryComputation.js` exists and is coded (see Section 5) but is untested in production because 0 deductions existed before this fix. First real finance-approved deduction will be the true end-to-end test.
+- **Next session should:** Submit a test Half-Day deduction for an employee with a known gross, get finance approval, re-run Stage 7 compute, and verify `salary_computations.early_exit_deduction` is populated and subtracted from `net_salary` correctly.
 
 ---
 
