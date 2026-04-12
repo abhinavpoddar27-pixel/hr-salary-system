@@ -116,7 +116,8 @@ function getLoanDeductions(db, employeeCode, month, year) {
 /**
  * Compute salary for one employee for a month.
  */
-function computeEmployeeSalary(db, employee, month, year, company) {
+function computeEmployeeSalary(db, employee, month, year, company, requestId = '') {
+  const RID = requestId ? `[${requestId}]` : '[salary]';
   // ── Phase 2 Late Coming: reset applied flag for a clean recompute ──
   // saveSalaryComputation() later flips is_applied_to_salary to 1 after writing the
   // row. Clearing it here ensures a re-run picks up the latest approved deductions
@@ -160,6 +161,7 @@ function computeEmployeeSalary(db, employee, month, year, company) {
   }
 
   if (!dayCalc) {
+    console.error(`${RID} MISSING dayCalc for ${employee.code} — Stage 6 not run for ${month}/${year}?`);
     return {
       success: false,
       excluded: true,
@@ -339,6 +341,7 @@ function computeEmployeeSalary(db, employee, month, year, company) {
   // been buggy and persisted wrong flags; re-checking from the live employee
   // record self-heals without requiring Stage 6 to be re-run.
   const isContract = isContractorForPayroll(employee);
+  console.log(`${RID} ${employee.code}: payable=${dayCalc.total_payable_days} gross=${grossMonthly} isContract=${isContract}`);
   const actualWorkDays = daysPresent + daysHalfPresent;
   const workedFullMonth = actualWorkDays >= totalWorkingDays;
   const daysInMonth = calendarDays; // alias for readability in formulas below
@@ -354,6 +357,7 @@ function computeEmployeeSalary(db, employee, month, year, company) {
     regularDays = Math.min(rawPayableDays, daysInMonth);
     earnedRatio = daysInMonth > 0 ? regularDays / daysInMonth : 0;
   }
+  console.log(`${RID} ${employee.code}: earnedRatio=${earnedRatio} regularDays=${regularDays} calendarDays=${calendarDays}`);
   basicEarned = Math.round(basicMonthly * earnedRatio * 100) / 100;
   daEarned = Math.round(daMonthly * earnedRatio * 100) / 100;
   hraEarned = Math.round(hraMonthly * earnedRatio * 100) / 100;
@@ -492,6 +496,8 @@ function computeEmployeeSalary(db, employee, month, year, company) {
     esiEmployer = Math.round(grossEarned * esiEmprRate * 100) / 100;
   }
 
+  console.log(`${RID} ${employee.code}: PF=${pfEmployee} ESI=${esiEmployee} grossEarned=${grossEarned}`);
+
   // ─── Professional Tax ───
   // PT is DISABLED per HR directive (Issue 6). No PT deduction applied.
   const professionalTax = 0;
@@ -563,7 +569,7 @@ function computeEmployeeSalary(db, employee, month, year, company) {
         lateComingDeduction = Math.round(row.totalDays * otPerDayRateDisplay * 100) / 100;
       }
     } catch (e) {
-      console.warn(`[salary] Late coming deduction lookup failed for ${employee.code}: ${e.message}`);
+      console.warn(`${RID} Late coming deduction lookup failed for ${employee.code}: ${e.message}`);
     }
   }
 
@@ -585,7 +591,7 @@ function computeEmployeeSalary(db, employee, month, year, company) {
         earlyExitDeduction = Math.round(row.total * 100) / 100;
       }
     } catch (e) {
-      console.warn(`[salary] Early exit deduction lookup failed for ${employee.code}: ${e.message}`);
+      console.warn(`${RID} Early exit deduction lookup failed for ${employee.code}: ${e.message}`);
     }
   }
 
@@ -612,6 +618,7 @@ function computeEmployeeSalary(db, employee, month, year, company) {
   // approved Extra Duty grants. ED is excluded from total_payable so older
   // exports stay consistent — new reports use take_home instead.
   const takeHome = Math.round((totalPayable + edPay) * 100) / 100;
+  console.log(`${RID} ${employee.code}: totalDed=${totalDeductions} net=${netSalary} takeHome=${takeHome}`);
 
   // ─── Gross Change Detection ───
   const prevMonthGross = getPrevMonthGross(db, employee.code, month, year);
@@ -656,6 +663,10 @@ function computeEmployeeSalary(db, employee, month, year, company) {
         }
       }
     } catch {}
+  }
+
+  if (salaryHeld) {
+    console.warn(`${RID} ${employee.code}: SALARY HELD — ${holdReason}`);
   }
 
   return {

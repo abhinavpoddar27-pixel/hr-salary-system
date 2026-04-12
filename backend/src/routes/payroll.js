@@ -79,6 +79,8 @@ router.post('/calculate-days', (req, res) => {
   const results = [];
   const errors = [];
 
+  console.log(`[${req.requestId}] Starting day calculation: ${empCodes.length} employees, month=${month} year=${year} company=${company || 'all'}`);
+
   const txn = db.transaction(() => {
     for (const empCode of empCodes) {
       try {
@@ -199,7 +201,8 @@ router.post('/calculate-days', (req, res) => {
             // DOJ-based holiday eligibility (April 2026): mid-month joiners
             // must NOT receive paid credit for holidays before their DOJ.
             dateOfJoining: empFull?.date_of_joining || null
-          }
+          },
+          req.requestId
         );
         calcResult.employeeId = emp?.id;
         saveDayCalculation(db, calcResult);
@@ -227,6 +230,7 @@ router.post('/calculate-days', (req, res) => {
   });
 
   txn();
+  console.log(`[${req.requestId}] Day calculation complete: ${results.length} OK, ${errors.length} failed`);
   db.prepare(`UPDATE monthly_imports SET stage_6_done = 1 WHERE month = ? AND year = ?`).run(month, year);
 
   res.json({
@@ -350,10 +354,12 @@ router.post('/compute-salary', (req, res) => {
   const excluded = [];
   const held = [];
 
+  console.log(`[${req.requestId}] Starting salary computation: ${employees.length} employees, month=${month} year=${year} company=${company || 'all'}`);
+
   const txn = db.transaction(() => {
     for (const emp of employees) {
       try {
-        const comp = computeEmployeeSalary(db, emp, parseInt(month), parseInt(year), company || '');
+        const comp = computeEmployeeSalary(db, emp, parseInt(month), parseInt(year), company || '', req.requestId);
         if (comp.success) {
           saveSalaryComputation(db, comp);
           results.push(comp);
@@ -382,6 +388,8 @@ router.post('/compute-salary', (req, res) => {
   const totalGross = results.reduce((s, r) => s + r.grossEarned, 0);
   const grossChangedCount = results.filter(r => r.grossChanged).length;
   const heldCount = results.filter(r => r.salaryHeld).length;
+
+  console.log(`[${req.requestId}] Computation complete: ${results.length} OK, ${errors.length} failed, ${heldCount} held`);
 
   res.json({
     success: true,

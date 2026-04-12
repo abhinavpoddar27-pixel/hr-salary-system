@@ -137,7 +137,8 @@ function countWorkingDays(dayRecords) {
  * @param {string}  options.dateOfJoining  YYYY-MM-DD — pre-DOJ days excluded from
  *                                         working days, weekly offs, holidays, absences
  */
-function calculateDays(employeeCode, month, year, company, attendanceRecords, leaveBalances, holidays, options = {}) {
+function calculateDays(employeeCode, month, year, company, attendanceRecords, leaveBalances, holidays, options = {}, requestId = '') {
+  const RID = requestId ? `[${requestId}]` : '[dayCalc]';
   const contractorMode = options.isContractor || false;
   const weeklyOffDay = Number.isInteger(options.weeklyOffDay) ? options.weeklyOffDay : 0;
   const employmentType = options.employmentType || (contractorMode ? 'Contractor' : 'Permanent');
@@ -402,7 +403,7 @@ function calculateDays(employeeCode, month, year, company, attendanceRecords, le
   const expectedPayable = daysPresent + daysHalfPresent + paidWeeklyOffs + paidHolidays + daysWOP + manualGrantDays;
   if (Math.abs(finalPayable - expectedPayable) > 0.01) {
     console.warn(
-      `[DayCalc] Integrity warning ${employeeCode} ${month}/${year}: ` +
+      `${RID} Integrity warning ${employeeCode} ${month}/${year}: ` +
       `finalPayable=${finalPayable} but expected=${expectedPayable} ` +
       `(present=${daysPresent}, half=${daysHalfPresent}, paidWO=${paidWeeklyOffs}, ` +
       `holidays=${paidHolidays}, wop=${daysWOP}, absent=${daysAbsent}, workingDays=${workingDays})`

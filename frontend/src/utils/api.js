@@ -18,6 +18,7 @@ api.interceptors.request.use(config => {
 api.interceptors.response.use(
   res => res,
   err => {
+    const requestId = err.response?.headers?.['x-request-id'] || ''
     if (err.response?.status === 401) {
       // Don't toast on auth errors — just redirect to login
       localStorage.removeItem('hr_token')
@@ -28,6 +29,10 @@ api.interceptors.response.use(
       return Promise.reject(err)
     }
     const msg = err.response?.data?.error || err.message || 'Request failed'
+    console.error(
+      `[API Error] ${err.config?.url} → HTTP ${err.response?.status}`,
+      requestId ? `| Trace ID: ${requestId}` : ''
+    )
     toast.error(msg)
     return Promise.reject(err)
   }
