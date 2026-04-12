@@ -1,13 +1,14 @@
 ## Section 0: Last Session
 - **Date:** 2026-04-12
 - **Branch:** `claude/session-start-tMDNw`
-- **Last commit:** `3b2ccde` docs: session handoff 2026-04-12
-- **Files changed this session:** None — this was a read-only audit session. No code was written or modified.
-- **What was fixed/built:** Performed a comprehensive codebase audit covering all 41 backend files, 66 frontend files, full schema (1737 lines), and 25+ targeted greps. Produced a tiered feature recommendation report (Tier 1 compliance gaps, Tier 2 operational wins, Tier 3 UX, Tier 4 engineering hygiene, quick wins table, dependency map). Key discovery: the Daily Wage System (1551-line route, 8 frontend pages, 7 DB tables: `dw_contractors`, `dw_entries`, `dw_payments`, etc.) is entirely absent from CLAUDE.md.
-- **What's fragile:** Nothing changed this session. Carry-forward fragility from previous session: `deduction_amount: computedAmount || undefined` in `EarlyExitDetection.jsx handleSubmit` — zero gross employee will still fail.
-- **Unfinished work:** None — audit delivered in full.
-- **Known issues remaining:** (1) `min_wage_*` values are seeded in `policy_config` but read nowhere in business logic — unenforced. (2) Daily Wage System undocumented in CLAUDE.md (Section 2 + Section 4 missing). (3) `early_exit_deductions` pipeline still untested in production (no finance-approved deductions exist yet).
-- **Next session should:** Pick a Tier 1 item from the audit report (T1.4 LWF is the quickest; T1.2 min-wage compliance requires only a `safeAddColumn` + one red-flag detector). OR update CLAUDE.md Section 2/4 to document the Daily Wage System (1h, zero risk).
+- **Last commit:** `8d094a8` docs: fix CLAUDE.md gaps — routes, services, middleware, table count, missing pages
+- **Files changed this session:**
+  - `CLAUDE.md` — two commits: (1) documented Daily Wage System in Section 2, Section 4, and new dedicated section; (2) fixed 12 additional gaps found by codebase audit
+- **What was fixed/built:** Fully documented the Daily Wage System (previously invisible in CLAUDE.md) and fixed every other gap found: removed non-existent `compliance.js` route entry, added `queryTool.js`, `roles.js`, `schemaReference.js`, `backupScheduler.js`, `__tests__/` directory, `HeldSalariesRegister.jsx`, `PayableOT.jsx`, `QueryTool.jsx` to Section 2; corrected table count from 56→58 and added `salary_hold_releases` + `finance_rejections` to Section 4.
+- **What's fragile:** Documentation only — no code changed. Carry-forward: `deduction_amount: computedAmount || undefined` in `EarlyExitDetection.jsx handleSubmit` still fails for zero-gross employees.
+- **Unfinished work:** None — both documentation tasks completed in full.
+- **Known issues remaining:** (1) `min_wage_*` values seeded in `policy_config` but never read in business logic — unenforced. (2) `early_exit_deductions` salary pipeline untested in production (no finance-approved deductions exist yet). (3) Tier 1 compliance gaps from audit report (Form 16, LWF, annual PF returns, min-wage enforcement) all still unbuilt.
+- **Next session should:** Pick a Tier 1 item from the April 2026 audit report — T1.4 LWF is lowest risk (2 safeAddColumns + ~10 lines in salaryComputation.js + payslip update); T1.2 min-wage compliance is second (safeAddColumn on employees + one financeRedFlags.js detector).
 
 ---
 
