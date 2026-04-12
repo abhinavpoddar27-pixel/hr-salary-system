@@ -7,6 +7,7 @@ const {
   computeWorkingHoursReport, computeDepartmentDeepDive, generateAlerts
 } = require('../services/analytics');
 const { detectPatterns, detectAllPatterns, generateNarrative } = require('../services/behavioralPatterns');
+const { computeProfileRange } = require('../services/employeeProfileService');
 
 // GET org overview
 router.get('/overview', (req, res) => {
@@ -795,6 +796,46 @@ router.get('/salary-trend', (req, res) => {
   } catch (err) {
     console.error('Salary trend error:', err.message);
     res.status(500).json({ success: false, error: 'Failed to compute salary trend: ' + err.message });
+  }
+});
+
+// ─────────────────────────────────────────────────────────
+// GET /api/analytics/employee/:code/profile-range
+// Full multi-section employee profile with custom date range
+// ─────────────────────────────────────────────────────────
+router.get('/employee/:code/profile-range', (req, res) => {
+  try {
+    const db = getDb();
+    const { code } = req.params;
+    let { from, to } = req.query;
+
+    // Defaults: from = 6 months ago, to = today
+    if (!to) {
+      to = new Date().toISOString().split('T')[0];
+    }
+    if (!from) {
+      const d = new Date();
+      d.setMonth(d.getMonth() - 6);
+      from = d.toISOString().split('T')[0];
+    }
+
+    const dateRegex = /^\d{4}-\d{2}-\d{2}$/;
+    if (!dateRegex.test(from) || !dateRegex.test(to)) {
+      return res.status(400).json({ success: false, error: 'Invalid date format. Use YYYY-MM-DD.' });
+    }
+    if (from > to) {
+      return res.status(400).json({ success: false, error: '"from" must be <= "to".' });
+    }
+
+    const result = computeProfileRange(db, code, from, to);
+    if (!result) {
+      return res.status(404).json({ success: false, error: 'Employee not found' });
+    }
+
+    res.json({ success: true, data: result });
+  } catch (err) {
+    console.error('Profile range error:', err.message);
+    res.status(500).json({ success: false, error: 'Failed to compute profile: ' + err.message });
   }
 });
 
