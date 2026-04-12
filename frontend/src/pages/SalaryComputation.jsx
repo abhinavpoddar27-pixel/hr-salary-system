@@ -2,7 +2,7 @@ import React, { useState, useMemo, useEffect } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { Link, useSearchParams } from 'react-router-dom'
 import toast from 'react-hot-toast'
-import { getSalaryRegister, computeSalary, finaliseSalary, getPayslip, getMonthEndChecklist, getSalaryComparison, downloadSalarySlipExcel, releaseHeldSalary, getDayCalcStaleness } from '../utils/api'
+import { getSalaryRegister, computeSalary, finaliseSalary, getPayslip, getMonthEndChecklist, getSalaryComparison, downloadSalarySlipExcel, releaseHeldSalary, getDayCalcStaleness, getSanityCheck } from '../utils/api'
 import { useAppStore } from '../store/appStore'
 import CompanyFilter from '../components/shared/CompanyFilter'
 import DateSelector from '../components/common/DateSelector'
@@ -91,6 +91,8 @@ export default function SalaryComputation() {
     onSuccess: (r) => {
       const d = r.data
       setComputeResult(d)
+      // Capture the sanity check result that was auto-run server-side after computation
+      if (d.sanityCheck) setSanityCheckOverride(d.sanityCheck)
       if (d.processed > 0) {
         let msg = `Salary computed for ${d.processed} employees`
         if (d.held?.length) msg += ` | ${d.held.length} held`
@@ -153,6 +155,17 @@ export default function SalaryComputation() {
     retry: 0
   })
   const staleness = stalenessRes?.data || {}
+
+  // Sanity check — loaded on page load and refreshed after every compute
+  const [sanityCheckOverride, setSanityCheckOverride] = useState(null)
+  const { data: sanityCheckRes, isLoading: sanityLoading } = useQuery({
+    queryKey: ['sanity-check', month, year, selectedCompany],
+    queryFn: () => getSanityCheck(month, year, selectedCompany),
+    retry: 0,
+    staleTime: 60000
+  })
+  // Prefer the result freshly returned from the compute mutation (most up-to-date)
+  const sanityCheck = sanityCheckOverride ?? sanityCheckRes?.data?.data ?? null
 
   // Month-end checklist
   const { data: checklistRes } = useQuery({
@@ -556,6 +569,11 @@ export default function SalaryComputation() {
           </div>
         )}
 
+        {/* Salary Sanity Check Banner */}
+        {allSalaries.length > 0 && (
+          <SanityCheckBanner sanityCheck={sanityCheck} isLoading={sanityLoading && !sanityCheckOverride} />
+        )}
+
         {/* Salary Register Table */}
         {salaries.length > 0 && (
           <div className="card overflow-hidden">
@@ -944,6 +962,151 @@ export default function SalaryComputation() {
           onSubmit={(notes) => releaseHoldMutation.mutate({ code: releaseEmployee.code, notes })}
         />
       </div>
+    </div>
+  )
+}
+
+// ── Sanity Check Banner ───────────────────────────────────────────────────────
+// Displayed above the salary register whenever salary data exists.
+// Shows a green "all passed" strip or an expandable amber/red list of failures.
+// Never blocks the table — errors in the sanity check itself show a grey strip.
+function SanityCheckBanner({ sanityCheck, isLoading }) {
+  const [expanded, setExpanded] = useState(false)
+
+  if (isLoading) {
+    return (
+      <div className="rounded-lg border border-slate-200 bg-slate-50 px-4 py-2.5 text-xs text-slate-400 flex items-center gap-2 animate-pulse">
+        <span className="w-3 h-3 rounded-full bg-slate-300 inline-block shrink-0" />
+        Running salary sanity check…
+      </div>
+    )
+  }
+
+  if (!sanityCheck) {
+    return (
+      <div className="rounded-lg border border-slate-200 bg-slate-50 px-4 py-2.5 text-xs text-slate-400 flex items-center gap-2">
+        <span className="text-slate-300">⬤</span>
+        Salary sanity check unavailable
+      </div>
+    )
+  }
+
+  const ts = sanityCheck.timestamp
+    ? new Date(sanityCheck.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+    : ''
+
+  if (sanityCheck.allPassed) {
+    return (
+      <div className="rounded-lg border border-green-200 bg-green-50 border-l-4 border-l-green-500 px-4 py-2.5 text-xs text-green-800 flex items-center gap-2">
+        <span className="text-green-600 text-base">✅</span>
+        <span className="font-medium">Salary Sanity Check: All {sanityCheck.passedCount} checks passed</span>
+        <span className="text-green-600">({sanityCheck.totalEmployees} employees)</span>
+        {ts && <span className="ml-auto text-green-500 shrink-0">— {ts}</span>}
+      </div>
+    )
+  }
+
+  // One or more checks failed
+  const failedChecks = sanityCheck.checks.filter(c => c.status === 'FAIL' || c.status === 'ERROR')
+  const passedChecks = sanityCheck.checks.filter(c => c.status === 'PASS')
+
+  return (
+    <div className="rounded-lg border border-amber-300 bg-amber-50 border-l-4 border-l-amber-500 text-xs overflow-hidden">
+      <button
+        className="w-full px-4 py-2.5 flex items-center gap-2 text-amber-900 hover:bg-amber-100 transition-colors text-left"
+        onClick={() => setExpanded(e => !e)}
+      >
+        <span className="text-base shrink-0">⚠️</span>
+        <span className="font-semibold">
+          Salary Sanity Check: {sanityCheck.failedCount} of {sanityCheck.checks.length} check{sanityCheck.failedCount !== 1 ? 's' : ''} failed
+        </span>
+        {ts && <span className="text-amber-600 ml-1">— {ts}</span>}
+        <span className="ml-auto text-amber-600 shrink-0">{expanded ? '▲ hide' : '▼ expand'}</span>
+      </button>
+
+      {expanded && (
+        <div className="px-4 pb-3 space-y-2 border-t border-amber-200 pt-2">
+          {sanityCheck.checks.map(check => (
+            <SanityCheckRow key={check.id} check={check} />
+          ))}
+          {passedChecks.length > 0 && failedChecks.length > 0 && (
+            <div className="text-green-700 text-[11px] mt-1">
+              ✅ {passedChecks.length} other check{passedChecks.length !== 1 ? 's' : ''} passed
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  )
+}
+
+function SanityCheckRow({ check }) {
+  const [open, setOpen] = useState(false)
+
+  if (check.status === 'PASS') {
+    return (
+      <div className="flex items-center gap-2 text-[11px] text-green-700">
+        <span>✅</span>
+        <span>{check.name}: PASS</span>
+      </div>
+    )
+  }
+
+  if (check.status === 'ERROR') {
+    return (
+      <div className="flex items-center gap-2 text-[11px] text-slate-500">
+        <span>⚠️</span>
+        <span>{check.name}: check error — {check.error}</span>
+      </div>
+    )
+  }
+
+  // FAIL
+  const preview = check.failures.slice(0, 3).map(f => f.name || f.employee_code).join(', ')
+  const hasMore = check.failures.length > 3
+
+  return (
+    <div className="text-[11px]">
+      <button
+        className="flex items-start gap-2 text-red-700 w-full text-left hover:text-red-900"
+        onClick={() => setOpen(o => !o)}
+      >
+        <span className="shrink-0">❌</span>
+        <div className="flex-1 min-w-0">
+          <span className="font-medium">{check.name}:</span>
+          <span className="ml-1 font-semibold">{check.failCount} employee{check.failCount !== 1 ? 's' : ''}</span>
+          <span className="ml-1 text-red-500">
+            ({preview}{hasMore ? `, +${check.failures.length - 3} more` : ''})
+          </span>
+        </div>
+        <span className="shrink-0 text-red-400">{open ? '▲' : '▼'}</span>
+      </button>
+      {open && (
+        <div className="mt-1 ml-5 space-y-1">
+          {check.failures.map((f, i) => (
+            <FailureDetail key={f.employee_code ?? i} check={check} failure={f} />
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
+function FailureDetail({ check, failure }) {
+  const detail = (() => {
+    if (check.id === 'drift') return `net ₹${failure.net_salary} ≠ earned ₹${failure.gross_earned} − ded ₹${failure.total_deductions} (drift ₹${failure.drift})`
+    if (check.id === 'payable_days') return `payable days = ${failure.payable_days}`
+    if (check.id === 'earned_ratio') return `ratio ${failure.earned_ratio} (earned ₹${failure.gross_earned} vs gross ₹${failure.gross_monthly})`
+    if (check.id === 'zero_salary') return `dept: ${failure.department || '—'}`
+    if (check.id === 'negative_net') return `net ₹${failure.net_salary} (earned ₹${failure.gross_earned}, ded ₹${failure.total_deductions})`
+    return ''
+  })()
+
+  return (
+    <div className="flex items-center gap-2 text-[10px] text-red-700 bg-red-50 rounded px-2 py-1">
+      <span className="font-mono text-slate-500 shrink-0">{failure.employee_code}</span>
+      <span className="font-medium">{failure.name}</span>
+      {detail && <span className="text-red-500 ml-auto shrink-0">{detail}</span>}
     </div>
   )
 }

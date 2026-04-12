@@ -3,6 +3,7 @@ const router = express.Router();
 const { getDb, logAudit } = require('../database/db');
 const { calculateDays, saveDayCalculation } = require('../services/dayCalculation');
 const { computeEmployeeSalary, saveSalaryComputation, generatePayslipData } = require('../services/salaryComputation');
+const { runSanityCheck } = require('../services/sanityCheck');
 const { requireFinanceOrAdmin } = require('../middleware/roles');
 const XLSX = require('xlsx');
 
@@ -414,6 +415,14 @@ router.post('/compute-salary', (req, res) => {
     } catch (e) {}
   }
 
+  // Auto-run sanity check after computation — read-only, never crashes computation
+  let sanityCheck = null;
+  try {
+    sanityCheck = runSanityCheck(parseInt(month), parseInt(year), company || '');
+  } catch (e) {
+    console.error(`[${req.requestId}] Sanity check failed: ${e.message}`);
+  }
+
   res.json({
     success: true,
     processed: results.length,
@@ -436,7 +445,8 @@ router.post('/compute-salary', (req, res) => {
       grossChangedCount,
       heldCount,
       excludedCount: excluded.length
-    }
+    },
+    sanityCheck
   });
 });
 
@@ -497,6 +507,25 @@ router.get('/salary-register', (req, res) => {
   } : {};
 
   res.json({ success: true, data: records, totals });
+});
+
+/**
+ * GET /api/payroll/sanity-check?month=X&year=Y&company=Z
+ * Run 5 read-only sanity checks against salary_computations.
+ * Available to any authenticated user — no data is modified.
+ */
+router.get('/sanity-check', (req, res) => {
+  const { month, year, company } = req.query;
+  if (!month || !year) {
+    return res.status(400).json({ success: false, error: 'month and year required' });
+  }
+  try {
+    const result = runSanityCheck(parseInt(month), parseInt(year), company || '');
+    res.json({ success: true, data: result });
+  } catch (e) {
+    console.error('[sanity-check] unexpected error:', e.message);
+    res.status(500).json({ success: false, error: e.message });
+  }
 });
 
 /**

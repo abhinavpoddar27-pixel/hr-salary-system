@@ -225,6 +225,7 @@ export const getBulkPayslips = (month, year, company) => api.get('/payroll/paysl
 export const downloadSalarySlipExcel = (month, year, company) => api.get('/payroll/salary-slip-excel', { params: { month, year, company }, responseType: 'blob' })
 export const getMonthEndChecklist = (month, year, company) => api.get('/payroll/month-end-checklist', { params: { month, year, company } })
 export const getSalaryComparison = (month, year, company) => api.get('/payroll/salary-comparison', { params: { month, year, company } })
+export const getSanityCheck = (month, year, company) => api.get('/payroll/sanity-check', { params: { month, year, ...(company ? { company } : {}) } })
 
 // ── Import Reconciliation ─────────────────────────────
 export const getImportReconciliation = (month, year, company) => api.get(`/import/reconciliation/${month}/${year}`, { params: { company } })
