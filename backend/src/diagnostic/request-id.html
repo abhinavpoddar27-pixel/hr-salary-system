@@ -1,0 +1,352 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Request-ID Middleware — Diagnostic</title>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: 'Consolas', 'Menlo', 'Courier New', monospace; background: #0f1117; color: #e2e8f0; min-height: 100vh; padding: 24px; }
+  h1 { font-size: 1.25rem; font-weight: 700; color: #f8fafc; margin-bottom: 4px; letter-spacing: 0.02em; }
+  .subtitle { font-size: 0.78rem; color: #64748b; margin-bottom: 24px; }
+  .badge { display: inline-block; font-size: 0.65rem; font-weight: 700; padding: 2px 7px; border-radius: 3px; letter-spacing: 0.05em; vertical-align: middle; }
+  .badge-tier { background: #1e293b; color: #94a3b8; border: 1px solid #334155; }
+  .badge-pass { background: #052e16; color: #4ade80; border: 1px solid #166534; }
+  .badge-fail { background: #2d0f0f; color: #f87171; border: 1px solid #7f1d1d; }
+  .badge-running { background: #1e3a5f; color: #60a5fa; border: 1px solid #1e40af; }
+  .badge-pending { background: #1e293b; color: #64748b; border: 1px solid #334155; }
+
+  .toolbar { display: flex; align-items: center; gap: 12px; margin-bottom: 20px; }
+  button { cursor: pointer; font-family: inherit; font-size: 0.8rem; font-weight: 600; padding: 8px 18px; border-radius: 5px; border: none; transition: all 0.15s; }
+  #btn-run { background: #2563eb; color: #fff; }
+  #btn-run:hover:not(:disabled) { background: #1d4ed8; }
+  #btn-run:disabled { opacity: 0.45; cursor: not-allowed; }
+  #btn-clear { background: #1e293b; color: #94a3b8; border: 1px solid #334155; }
+  #btn-clear:hover { background: #263244; }
+  .summary-bar { font-size: 0.75rem; color: #64748b; }
+
+  .section-title { font-size: 0.7rem; font-weight: 700; color: #475569; letter-spacing: 0.1em; text-transform: uppercase; margin: 20px 0 8px; }
+
+  /* Test cards */
+  .tests { display: flex; flex-direction: column; gap: 8px; }
+  .test-card { background: #141820; border: 1px solid #1e293b; border-radius: 6px; padding: 12px 16px; display: grid; grid-template-columns: 22px 1fr auto; gap: 0 12px; align-items: start; }
+  .test-card.pass { border-color: #166534; }
+  .test-card.fail { border-color: #7f1d1d; }
+  .test-card.running { border-color: #1e40af; }
+  .test-status { font-size: 0.9rem; padding-top: 1px; }
+  .test-name { font-size: 0.82rem; font-weight: 600; color: #cbd5e1; margin-bottom: 3px; }
+  .test-desc { font-size: 0.72rem; color: #475569; }
+  .test-detail { font-size: 0.72rem; margin-top: 6px; color: #94a3b8; word-break: break-all; line-height: 1.6; }
+  .test-detail .rid { color: #38bdf8; font-weight: 700; }
+  .test-detail .dim { color: #475569; }
+  .test-detail .ok { color: #4ade80; }
+  .test-detail .err { color: #f87171; }
+  .test-detail .warn { color: #fbbf24; }
+
+  /* Request log table */
+  .log-table-wrap { overflow-x: auto; margin-top: 8px; }
+  table { width: 100%; border-collapse: collapse; font-size: 0.72rem; }
+  thead th { background: #1e293b; color: #64748b; font-weight: 700; text-align: left; padding: 6px 10px; letter-spacing: 0.05em; font-size: 0.65rem; text-transform: uppercase; border-bottom: 1px solid #334155; }
+  tbody tr { border-bottom: 1px solid #1e293b; }
+  tbody tr:last-child { border-bottom: none; }
+  tbody tr:hover { background: #141e2e; }
+  td { padding: 6px 10px; vertical-align: top; }
+  td.rid { color: #38bdf8; font-weight: 700; }
+  td.method-GET { color: #34d399; }
+  td.method-POST { color: #f59e0b; }
+  td.status-2xx { color: #4ade80; }
+  td.status-4xx { color: #f87171; }
+  td.status-5xx { color: #f87171; }
+  td.ms { color: #64748b; text-align: right; }
+  td.path { color: #94a3b8; word-break: break-all; }
+  td.notes { color: #64748b; }
+  .empty-log { text-align: center; padding: 20px; color: #334155; font-size: 0.75rem; }
+
+  /* Server log hint */
+  .server-hint { background: #0d1117; border: 1px solid #1e293b; border-radius: 6px; padding: 12px 16px; font-size: 0.72rem; color: #475569; line-height: 1.7; margin-top: 8px; }
+  .server-hint code { color: #38bdf8; background: #0f2132; padding: 1px 5px; border-radius: 3px; font-size: 0.7rem; }
+
+  .pill { display: inline-block; background: #0f2132; color: #38bdf8; font-size: 0.68rem; padding: 1px 7px; border-radius: 10px; border: 1px solid #164e63; white-space: nowrap; }
+  .spinner { display: inline-block; animation: spin 0.8s linear infinite; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  hr { border: none; border-top: 1px solid #1e293b; margin: 20px 0; }
+</style>
+</head>
+<body>
+
+<h1>Request-ID Middleware &nbsp;<span class="badge badge-tier">Tier 3.3</span></h1>
+<p class="subtitle">Diagnostic test suite · runs in-browser · same-origin API calls · no auth required for public endpoints</p>
+
+<div class="toolbar">
+  <button id="btn-run">▶ Run All Tests</button>
+  <button id="btn-clear">✕ Clear</button>
+  <span class="summary-bar" id="summary"></span>
+</div>
+
+<div class="section-title">Tests</div>
+<div class="tests" id="tests-container"></div>
+
+<hr>
+<div class="section-title">Request Log</div>
+<div class="log-table-wrap">
+  <table id="log-table">
+    <thead>
+      <tr>
+        <th>#</th>
+        <th>Request ID</th>
+        <th>Method</th>
+        <th>Path</th>
+        <th>Status</th>
+        <th style="text-align:right">ms</th>
+        <th>Notes</th>
+      </tr>
+    </thead>
+    <tbody id="log-body">
+      <tr><td colspan="7" class="empty-log">No requests yet — click Run All Tests</td></tr>
+    </tbody>
+  </table>
+</div>
+
+<hr>
+<div class="section-title">Server-side log verification</div>
+<div class="server-hint">
+  After running the tests, check your server terminal for matching log lines:<br><br>
+  <code>[req-xxxxxxxx] → GET /health</code> &nbsp;← arrival (but suppressed for health)<br>
+  <code>[req-xxxxxxxx] ← 200 OK (Xms)</code> &nbsp;← completion<br>
+  <code>[req-xxxxxxxx] ← 401 WARN (Xms)</code> &nbsp;← 4xx warning<br><br>
+  Grep by a specific ID to isolate one request:
+  <code>grep "req-xxxxxxxx" server.log</code>
+</div>
+
+<script>
+const TESTS = [
+  {
+    id: 't1',
+    name: 'Header present on every response',
+    desc: 'Every /api response must carry x-request-id in format req-[8 hex chars]',
+    run: async (log) => {
+      const r = await fetchApi('/api/health', {}, log, 'Health check');
+      const id = r.headers['x-request-id'];
+      if (!id) throw new Error('x-request-id header missing');
+      if (!/^req-[0-9a-f]{8}$/.test(id)) throw new Error(`Bad format: "${id}" — expected req-[8hex]`);
+      return `Header present: <span class="rid">${id}</span> &nbsp;<span class="ok">✓ format ok (req-[8hex])</span>`;
+    }
+  },
+  {
+    id: 't2',
+    name: 'Unique ID per request',
+    desc: 'Three sequential requests to the same endpoint must return three different IDs',
+    run: async (log) => {
+      const [r1, r2, r3] = await Promise.all([
+        fetchApi('/api/health', {}, log, 'unique#1'),
+        fetchApi('/api/health', {}, log, 'unique#2'),
+        fetchApi('/api/health', {}, log, 'unique#3'),
+      ]);
+      const ids = [r1.headers['x-request-id'], r2.headers['x-request-id'], r3.headers['x-request-id']];
+      const unique = new Set(ids);
+      if (unique.size !== 3) throw new Error(`IDs not unique: ${ids.join(', ')}`);
+      return ids.map(id => `<span class="rid">${id}</span>`).join('<br>') + `<br><span class="ok">✓ all 3 unique</span>`;
+    }
+  },
+  {
+    id: 't3',
+    name: 'Concurrent requests — all distinct',
+    desc: 'Five simultaneous requests must each carry a different ID',
+    run: async (log) => {
+      const reqs = await Promise.all(
+        Array.from({length: 5}, (_, i) => fetchApi('/api/health', {}, log, `concurrent#${i+1}`))
+      );
+      const ids = reqs.map(r => r.headers['x-request-id']);
+      const unique = new Set(ids);
+      if (unique.size !== 5) throw new Error(`Duplicate IDs: ${ids.join(', ')}`);
+      return ids.map(id => `<span class="rid">${id}</span>`).join('<br>') + `<br><span class="ok">✓ all 5 unique under concurrency</span>`;
+    }
+  },
+  {
+    id: 't4',
+    name: 'ID echoed on 4xx responses',
+    desc: 'Unauthenticated call to a protected endpoint must still return x-request-id',
+    run: async (log) => {
+      const r = await fetchApi('/api/payroll/salary-register?month=3&year=2026', {}, log, 'protected (no auth)');
+      const id = r.headers['x-request-id'];
+      if (!id) throw new Error('x-request-id missing on 401 response');
+      if (r.status !== 401) throw new Error(`Expected 401, got ${r.status}`);
+      return `Status: <span class="warn">${r.status}</span> &nbsp;ID: <span class="rid">${id}</span> &nbsp;<span class="ok">✓ header present on 4xx</span>`;
+    }
+  },
+  {
+    id: 't5',
+    name: 'Passthrough: custom x-request-id respected',
+    desc: 'If client sends its own x-request-id, the server echoes the same value back',
+    run: async (log) => {
+      const custom = 'req-cafebabe';
+      const r = await fetchApi('/api/health', { headers: { 'x-request-id': custom } }, log, 'custom ID passthrough');
+      const echoed = r.headers['x-request-id'];
+      if (echoed !== custom) throw new Error(`Expected "${custom}", got "${echoed}"`);
+      return `Sent: <span class="rid">${custom}</span><br>Echoed: <span class="rid">${echoed}</span> &nbsp;<span class="ok">✓ passthrough works</span>`;
+    }
+  },
+  {
+    id: 't6',
+    name: 'Health endpoint — ID header still set (logging suppressed)',
+    desc: 'Health gets the header for traceability, but server-side logging is skipped (check terminal — no [req-xxx] line for health)',
+    run: async (log) => {
+      const r = await fetchApi('/api/health', {}, log, 'health (logging suppressed)');
+      const id = r.headers['x-request-id'];
+      if (!id) throw new Error('x-request-id missing on /api/health');
+      return `ID: <span class="rid">${id}</span> &nbsp;<span class="ok">✓ header present</span><br><span class="warn">⚠ Verify no matching log line in server terminal</span>`;
+    }
+  },
+  {
+    id: 't7',
+    name: 'Version endpoint — ID + timing',
+    desc: 'Public /api/version must include ID, confirms middleware fires before any route handler',
+    run: async (log) => {
+      const t0 = Date.now();
+      const r = await fetchApi('/api/version', {}, log, '/api/version');
+      const ms = Date.now() - t0;
+      const id = r.headers['x-request-id'];
+      if (!id) throw new Error('x-request-id missing on /api/version');
+      const body = await r.clone().json().catch(() => ({}));
+      return `ID: <span class="rid">${id}</span>  <span class="dim">(${ms}ms)</span><br>` +
+             `Version: <span class="ok">${body.version || '?'}</span>`;
+    }
+  },
+  {
+    id: 't8',
+    name: 'Ten rapid-fire requests — no collisions',
+    desc: 'Stress-test the uuid generator: 10 back-to-back requests must all have unique IDs',
+    run: async (log) => {
+      const results = [];
+      for (let i = 0; i < 10; i++) {
+        results.push(await fetchApi('/api/health', {}, log, `rapid#${i+1}`));
+      }
+      const ids = results.map(r => r.headers['x-request-id']);
+      const unique = new Set(ids);
+      if (unique.size !== 10) {
+        const dupes = ids.filter((id, i) => ids.indexOf(id) !== i);
+        throw new Error(`${10 - unique.size} collision(s): ${dupes.join(', ')}`);
+      }
+      return `All 10 IDs unique:<br>` +
+             ids.map(id => `<span class="rid">${id}</span>`).join('<br>') +
+             `<br><span class="ok">✓ no collisions in 10 rapid-fire requests</span>`;
+    }
+  }
+];
+
+// ── State ──
+let reqCount = 0;
+const logRows = [];
+
+// ── Fetch helper ──
+async function fetchApi(path, options = {}, logCtx, note = '') {
+  const t0 = Date.now();
+  const headers = { ...(options.headers || {}) };
+  const res = await fetch(path, { ...options, headers });
+  const ms = Date.now() - t0;
+  const id = res.headers.get('x-request-id') || '—';
+  const method = options.method || 'GET';
+  logEntry(id, method, path, res.status, ms, note);
+  // Attach parsed headers map for convenience
+  const allHeaders = {};
+  res.headers.forEach((v, k) => { allHeaders[k] = v; });
+  return { status: res.status, headers: allHeaders, ok: res.ok, clone: res.clone.bind(res) };
+}
+
+function logEntry(id, method, path, status, ms, note) {
+  reqCount++;
+  const row = { n: reqCount, id, method, path, status, ms, note };
+  logRows.push(row);
+  renderLogRow(row);
+}
+
+function renderLogRow(row) {
+  const tbody = document.getElementById('log-body');
+  // Remove empty placeholder
+  const empty = tbody.querySelector('.empty-log');
+  if (empty) empty.parentElement.remove();
+
+  const statusClass = row.status >= 500 ? 'status-5xx' : row.status >= 400 ? 'status-4xx' : 'status-2xx';
+  const methodClass = `method-${row.method}`;
+  const tr = document.createElement('tr');
+  tr.innerHTML = `
+    <td class="dim">${row.n}</td>
+    <td class="rid">${row.id}</td>
+    <td class="${methodClass}">${row.method}</td>
+    <td class="path">${row.path}</td>
+    <td class="${statusClass}">${row.status}</td>
+    <td class="ms">${row.ms}</td>
+    <td class="notes">${row.note || ''}</td>
+  `;
+  tbody.appendChild(tr);
+}
+
+// ── Test card renderer ──
+function renderCard(test, state, detail = '') {
+  const container = document.getElementById('tests-container');
+  let card = document.getElementById(`card-${test.id}`);
+  if (!card) {
+    card = document.createElement('div');
+    card.id = `card-${test.id}`;
+    card.className = 'test-card';
+    container.appendChild(card);
+  }
+  const icons = { pending: '○', running: '<span class="spinner">◌</span>', pass: '✓', fail: '✗' };
+  const badgeMap = { pending: 'badge-pending', running: 'badge-running', pass: 'badge-pass', fail: 'badge-fail' };
+  const labelMap = { pending: 'PENDING', running: 'RUNNING', pass: 'PASS', fail: 'FAIL' };
+  card.className = `test-card ${state === 'pass' || state === 'fail' ? state : state === 'running' ? 'running' : ''}`;
+  card.innerHTML = `
+    <div class="test-status">${icons[state]}</div>
+    <div>
+      <div class="test-name">${test.name} &nbsp;<span class="badge ${badgeMap[state]}">${labelMap[state]}</span></div>
+      <div class="test-desc">${test.desc}</div>
+      ${detail ? `<div class="test-detail">${detail}</div>` : ''}
+    </div>
+    <div></div>
+  `;
+}
+
+// ── Run all ──
+async function runAll() {
+  const btn = document.getElementById('btn-run');
+  btn.disabled = true;
+  document.getElementById('summary').textContent = 'Running…';
+
+  // Render all cards as pending first
+  TESTS.forEach(t => renderCard(t, 'pending'));
+
+  let passed = 0, failed = 0;
+  for (const test of TESTS) {
+    renderCard(test, 'running');
+    try {
+      const detail = await test.run();
+      renderCard(test, 'pass', detail);
+      passed++;
+    } catch (err) {
+      renderCard(test, 'fail', `<span class="err">✗ ${err.message}</span>`);
+      failed++;
+    }
+  }
+
+  const total = TESTS.length;
+  document.getElementById('summary').innerHTML =
+    `<span style="color:#4ade80">✓ ${passed} passed</span>` +
+    (failed ? ` &nbsp;<span style="color:#f87171">✗ ${failed} failed</span>` : '') +
+    ` &nbsp;<span style="color:#475569">of ${total}</span>`;
+  btn.disabled = false;
+}
+
+function clearAll() {
+  document.getElementById('tests-container').innerHTML = '';
+  const tbody = document.getElementById('log-body');
+  tbody.innerHTML = '<tr><td colspan="7" class="empty-log">No requests yet — click Run All Tests</td></tr>';
+  document.getElementById('summary').textContent = '';
+  reqCount = 0;
+  logRows.length = 0;
+}
+
+document.getElementById('btn-run').addEventListener('click', runAll);
+document.getElementById('btn-clear').addEventListener('click', clearAll);
+</script>
+</body>
+</html>

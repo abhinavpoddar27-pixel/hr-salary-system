@@ -218,6 +218,14 @@ app.get('/api/health', (req, res) => {
   res.json({ success: true, message: 'HR Salary System API running', timestamp: new Date().toISOString() });
 });
 
+// ── Request-ID diagnostic page (public, dev/staging only) ─────
+app.get('/diagnostic/request-id', (req, res) => {
+  const htmlPath = path.join(__dirname, 'src/diagnostic/request-id.html');
+  res.setHeader('Content-Type', 'text/html; charset=utf-8');
+  res.setHeader('Cache-Control', 'no-cache');
+  res.sendFile(htmlPath);
+});
+
 // Version endpoint (public) — for deployment diagnostics
 app.get('/api/version', (req, res) => {
   const distIndex = path.join(__dirname, '../frontend/dist/index.html');
