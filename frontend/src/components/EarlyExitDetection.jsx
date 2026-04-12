@@ -4,7 +4,8 @@ import {
   getEarlyExitRangeReport, getEarlyExitMtdSummary, getEarlyExitDeptSummary,
   exportEarlyExitReport, detectEarlyExitRange,
   getEarlyExitEmployeeAnalytics, submitEarlyExitDeduction,
-  cancelEarlyExitDeduction, reviseEarlyExitDeduction
+  cancelEarlyExitDeduction, reviseEarlyExitDeduction,
+  getEmployee
 } from '../utils/api'
 import Modal from '../components/ui/Modal'
 import clsx from 'clsx'
@@ -505,9 +506,19 @@ function EarlyExitDetailPanel({ detection, onClose, month, year }) {
   })
   const analytics = analyticsRes?.data || {}
 
-  const dailyGross = detection.daily_gross_at_time || 0
-  const halfDayAmount = Math.round(dailyGross / 2)
-  const fullDayAmount = dailyGross
+  const { data: empRes } = useQuery({
+    queryKey: ['employee', detection.employee_code],
+    queryFn: () => getEmployee(detection.employee_code),
+    staleTime: 300000
+  })
+  const employeeGross = empRes?.data?.data?.gross_salary || 0
+
+  // Compute daily rate from actual gross salary and days in detection month
+  const detDate = new Date(detection.date + 'T00:00:00')
+  const daysInDetMonth = new Date(detDate.getFullYear(), detDate.getMonth() + 1, 0).getDate()
+  const dailyRate = Math.round((employeeGross / daysInDetMonth) * 100) / 100
+  const halfDayAmount = Math.round(dailyRate / 2 * 100) / 100
+  const fullDayAmount = Math.round(dailyRate * 100) / 100
 
   const computedAmount = deductionType === 'warning' ? 0
     : deductionType === 'half_day' ? halfDayAmount
@@ -637,8 +648,8 @@ function EarlyExitDetailPanel({ detection, onClose, month, year }) {
               <label className="text-sm font-medium text-slate-700 mb-1 block">Deduction Type</label>
               <select className="input w-full" value={deductionType} onChange={e => setDeductionType(e.target.value)}>
                 <option value="warning">Warning (no deduction)</option>
-                <option value="half_day">Half-Day ({halfDayAmount > 0 ? `₹${halfDayAmount}` : ''})</option>
-                <option value="full_day">Full-Day ({fullDayAmount > 0 ? `₹${fullDayAmount}` : ''})</option>
+                <option value="half_day">Half-Day ({halfDayAmount > 0 ? `₹${Math.round(halfDayAmount)}` : ''})</option>
+                <option value="full_day">Full-Day ({fullDayAmount > 0 ? `₹${Math.round(fullDayAmount)}` : ''})</option>
                 <option value="custom">Custom Amount</option>
               </select>
             </div>
