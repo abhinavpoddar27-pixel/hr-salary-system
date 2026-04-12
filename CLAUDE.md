@@ -144,7 +144,7 @@ backend/
 ├── server.js                                  Express bootstrap, auth seeding, route mounting
 ├── src/
 │   ├── database/
-│   │   ├── schema.js                          43 tables, all CREATE TABLE definitions, migrations
+│   │   ├── schema.js                          56 tables, all CREATE TABLE definitions, migrations
 │   │   └── db.js                              better-sqlite3 wrapper, logAudit() helper
 │   ├── middleware/auth.js                     JWT verify, requireAuth, requireAdmin
 │   ├── middleware/requestId.js               Request-ID stamp, x-request-id header, arrival/completion logging
@@ -181,7 +181,7 @@ backend/
 │   │   ├── short-leaves.js     Gate pass / short leave CRUD, quota check
 │   │   ├── early-exits.js      Early exit detection trigger, list, summary, analytics
 │   │   ├── early-exit-deductions.js  HR deduction submit/revise + finance approve/reject
-│   │   └── analytics.js         Workforce analytics
+│   │   └── dailyWage.js         Daily Wage: contractor CRUD, daily entries, HR→Finance approval, payments, reports (mounted at /api/daily-wage)
 │   └── services/
 │       ├── earlyExitDetection.js     Detect employees who punched out before shift end
 │       ├── parser.js                 EESL XLS parsing — dynamic column detection
@@ -231,7 +231,16 @@ frontend/
 │   │   ├── Analytics.jsx             Attendance analytics
 │   │   ├── WorkforceAnalytics.jsx    Workforce metrics
 │   │   ├── SessionAnalytics.jsx      User session analytics
-│   │   └── Alerts.jsx                System alerts
+│   │   ├── Alerts.jsx                System alerts
+│   │   ├── DailyWageDashboard.jsx    Finance KPI dashboard — pending liability, review queue depth, flagged entries, recent activity
+│   │   ├── DailyWageEntry.jsx        Create/edit single daily wage entry with department allocation
+│   │   ├── DailyWageRecords.jsx      List all entries with status filter, bulk submit to finance
+│   │   ├── DailyWageContractors.jsx  Contractor master CRUD + rate proposal/approval workflow
+│   │   ├── DailyWageBatchImport.jsx  XLSX/CSV batch import up to 500 entries with validation preview
+│   │   ├── DailyWageFinanceReview.jsx Finance review queue — approve/reject/flag/reopen entries
+│   │   ├── DailyWagePayments.jsx     Process payments for approved entries, view payment history
+│   │   ├── DailyWageReports.jsx      Monthly rollup, department cost, contractor summary, seasonal trends
+│   │   └── DailyWageAuditLog.jsx     Paginated, filterable audit log of all DW operations
 │   ├── components/
 │   │   ├── layout/{Sidebar,Header,NotificationBell}.jsx
 │   │   ├── pipeline/PipelineProgress.jsx
@@ -407,12 +416,13 @@ frontend/
 - Sensitivity: Read-only consumers; column changes break dashboard widgets
 
 ## Section 4: Database Schema Summary
-- Total tables: **48** (in `backend/src/database/schema.js`) — +1 late_coming_deductions, +4 early exit (April 2026)
+- Total tables: **56** (in `backend/src/database/schema.js`) — 48 core tables + 8 Daily Wage tables
 - Attendance: `attendance_raw`, `attendance_processed` (now with `is_left_late`/`left_late_minutes` for late coming tracking + `is_early_departure`/`early_by_minutes` for early exit), `night_shift_pairs`, `monthly_imports`, `manual_attendance_flags`, `day_corrections`, `punch_corrections`
 - Employee/salary: `employees`, `salary_structures`, `salary_computations` (now with `early_exit_deduction`), `salary_advances`, `salary_change_requests`, `salary_manual_flags`, `loans`, `loan_repayments`, `tax_declarations`, `extra_duty_grants`, `late_coming_deductions`, `short_leaves` (NEW, April 2026), `early_exit_detections` (NEW), `early_exit_deductions` (NEW), `early_exit_deduction_audit` (NEW)
 - Processing: `day_calculations`, `holidays`, `holiday_audit_log`, `shifts` (now with `duration_hours` + seeded 12HR/10HR/9HR rows), `shift_roster`, `leave_balances`, `leave_transactions`, `leave_applications`
 - Audit: `audit_log`, `usage_logs`, `finance_audit_status`, `finance_audit_comments`, `finance_month_signoff`, `finance_approvals`
 - System: `users`, `policy_config`, `company_config`, `notifications`, `compliance_items`, `alerts`, `employee_documents`, `employee_lifecycle`, `monthly_dept_stats`, `monthly_employee_stats`, `session_events`, `session_daily_summary`
+- Daily Wage: `dw_contractors` (contractor master, rates), `dw_rate_history` (rate change proposals + approval), `dw_entries` (daily work entries, status flow), `dw_department_allocations` (per-entry dept breakdown, CASCADE on entry delete), `dw_approvals` (entry state-transition log), `dw_payments` (payment records, UNIQUE payment_reference), `dw_payment_entries` (payment↔entry junction), `dw_audit_log` (full entity audit trail)
 - **Critical UNIQUE constraints**:
   - `employees(code)`, `shifts(code)`
   - `day_calculations(employee_code, month, year, company)` ← prevents duplicate stage-6 runs
@@ -729,6 +739,38 @@ frontend/
   `getEarlyExitRangeReport`, `getEarlyExitMtdSummary`,
   `getEarlyExitDeptSummary`, `exportEarlyExitReport`
   (the last returns `responseType: 'blob'` for XLSX download).
+
+## Daily Wage System (fully implemented)
+- **Mount point**: `/api/daily-wage` (`backend/src/routes/dailyWage.js`, 1551 lines)
+- **8 DB tables**: `dw_contractors`, `dw_rate_history`, `dw_entries`, `dw_department_allocations`, `dw_approvals`, `dw_payments`, `dw_payment_entries`, `dw_audit_log`
+- **9 frontend pages**: `DailyWageDashboard` (`/daily-wage/finance/dashboard`), `DailyWageEntry` (`/daily-wage/new`), `DailyWageRecords` (`/daily-wage`), `DailyWageContractors` (`/daily-wage/contractors`), `DailyWageBatchImport` (`/daily-wage/import`), `DailyWageFinanceReview` (`/daily-wage/finance/review`), `DailyWagePayments` (`/daily-wage/finance/payments`), `DailyWageReports` (`/daily-wage/reports`), `DailyWageAuditLog` (`/daily-wage/audit`)
+- **Entry status flow**:
+  ```
+  hr_entered
+    ↓ (HR submits)
+  pending_finance
+    ├→ (Finance approves)  approved → (payment processed) paid
+    │                         └→ (Finance reopens) pending_finance
+    ├→ (Finance rejects)   hr_entered
+    ├→ (Finance corrects)  needs_correction → (HR re-submits) pending_finance
+    └→ (Finance flags)     flagged
+  ```
+- **Rate change flow**: `pending` → `approved` (rates applied to contractor) / `rejected`
+- **Business rules**:
+  - Rates are **snapshotted at entry creation time** (`wage_rate_applied`, `commission_rate_applied`) — changing a contractor's rate does NOT retroactively affect already-created entries
+  - **Duplicate guard**: same contractor + date + overlapping in/out time is rejected; `POST /entries/check-duplicates` must be called before `POST /entries`
+  - **Liability formula**: `total_liability = (worker_count × wage_rate) + (worker_count × commission_rate)`
+  - **Department allocation invariant**: sum of `dw_department_allocations.worker_count` must equal `dw_entries.total_worker_count` — validated on create/update
+  - **Payment gate**: only `approved` entries can be paid; attempting to pay `hr_entered`/`pending_finance`/`flagged` entries returns an error
+  - **Audit trail**: every state transition (create, update, approve, reject, flag, reopen, paid) writes to `dw_audit_log` with `old_values`/`new_values` JSON
+- **Permissions**:
+  - `requireHrOrAdmin`: contractor create/update/deactivate, entry create/update/submit, batch import
+  - `requireFinanceOrAdmin`: rate approve/reject, entry approve/reject/flag/reopen/batch-approve, payment processing, dashboard, audit log
+  - Authenticated (no role gate): GET contractors, GET entries, GET reports
+  - Visibility in sidebar: `daily-wage` page key is in `hr`, `finance`, and `admin` roles in `permissions.js`
+- **Reports available**: daily MIS (per-contractor per-date), monthly rollup (by contractor), department cost breakdown, contractor summary with 6-month trend, seasonal trends (12 months), pending liability, payment sheet (printable)
+- **Batch import**: up to 500 entries via XLSX/CSV upload; `POST /entries/batch-import` validates each row independently and returns per-row errors; partial import is NOT supported (all-or-nothing transaction)
+- **No link to permanent employee payroll pipeline**: Daily Wage is a fully independent subsystem. `dw_*` tables have no FK relationship to `employees`, `salary_computations`, or any Stage 1–7 pipeline table. Costs are tracked separately via `dw_entries` and paid directly to contractors.
 
 ## Section 8: Rules for Claude Code Sessions
 - Before changing ANY pipeline stage: ALWAYS read every downstream stage's service file AND every consumer (finance audit, payslips, exports, analytics) that reads this stage's output tables.
