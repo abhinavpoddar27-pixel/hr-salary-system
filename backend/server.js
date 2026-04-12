@@ -22,6 +22,7 @@ const compression = require('compression');
 const path = require('path');
 const fs = require('fs');
 const bcrypt = require('bcryptjs');
+const { requestIdMiddleware } = require('./src/middleware/requestId');
 console.log('[BOOT] Core modules loaded');
 
 // ── Directory setup ───────────────────────────────────────────
@@ -136,6 +137,9 @@ app.use('/api', (req, res, next) => {
   }
   next();
 });
+
+// ── Request-ID Middleware ─────────────────────────────────────
+app.use('/api', requestIdMiddleware);
 
 // ── Auth middleware ────────────────────────────────────────────
 const { requireAuth } = require('./src/middleware/auth');
