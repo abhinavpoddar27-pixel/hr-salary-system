@@ -3,7 +3,8 @@
  * Used throughout the app for tooltips and legend panels.
  */
 
-const ABBREVIATIONS = {
+// Internal flat dict — used by getAbbreviation / getPageAbbreviations / getAllAbbreviations
+const _dict = {
   // ── Attendance Statuses ───────────────────────
   P:     { full: 'Present', desc: 'Employee was present for the full shift' },
   A:     { full: 'Absent', desc: 'Employee did not report for duty' },
@@ -27,8 +28,8 @@ const ABBREVIATIONS = {
 
   // ── Statutory Compliance ──────────────────────
   PF:    { full: 'Provident Fund', desc: 'Retirement savings: 12% employee + 12% employer of basic + DA' },
-  EPF:   { full: 'Employee Provident Fund', desc: 'Employee\'s 12% contribution towards PF' },
-  EPS:   { full: 'Employee Pension Scheme', desc: 'Employer\'s 8.33% contribution (max ₹1,250/month) for pension' },
+  EPF:   { full: 'Employee Provident Fund', desc: "Employee's 12% contribution towards PF" },
+  EPS:   { full: 'Employee Pension Scheme', desc: "Employer's 8.33% contribution (max ₹1,250/month) for pension" },
   ESI:   { full: 'Employee State Insurance', desc: 'Health insurance for employees earning up to ₹21,000/month' },
   PT:    { full: 'Professional Tax', desc: 'State-level tax on employment income (varies by state)' },
   UAN:   { full: 'Universal Account Number', desc: 'Unique 12-digit PF account identifier assigned by EPFO' },
@@ -60,13 +61,85 @@ const ABBREVIATIONS = {
   YTD:   { full: 'Year to Date', desc: 'Cumulative total from the start of the financial year' },
 };
 
+// ── Categorised legend data (used by AbbreviationLegend global modal) ──────────
+export const ABBREVIATIONS = [
+  {
+    category: 'Attendance Status Codes',
+    entries: [
+      { abbr: 'P',     meaning: 'Present' },
+      { abbr: 'A',     meaning: 'Absent' },
+      { abbr: 'WO',    meaning: 'Weekly Off' },
+      { abbr: 'WOP',   meaning: 'Weekly Off Present',
+        note: 'Employee worked on their weekly off day — always paid, adds on top of base entitlement' },
+      { abbr: '½P',    meaning: 'Half Day Present', note: 'Counts as 0.5 working day' },
+      { abbr: 'WO½P',  meaning: 'Weekly Off, Half Day Present' },
+      { abbr: 'NH',    meaning: 'National Holiday', note: 'Paid holiday — counts toward payable days' },
+      { abbr: 'ED',    meaning: 'Extra Duty', note: 'Biometric-detected overnight or extra shift' },
+    ],
+  },
+  {
+    category: 'Payroll & Earnings',
+    entries: [
+      { abbr: 'OT',      meaning: 'Overtime', note: 'Paid at gross ÷ calendar days per day' },
+      { abbr: 'ED Pay',  meaning: 'Extra Duty Pay', note: 'Finance-approved grant — paid outside base salary, does not affect PF/ESI' },
+      { abbr: 'WOP Pay', meaning: 'Weekly Off Present Pay', note: 'Paid at same rate as OT' },
+      { abbr: 'Gross',   meaning: 'Gross Salary', note: 'Total monthly CTC before deductions' },
+      { abbr: 'Earned',  meaning: 'Gross Earned', note: 'Pro-rated gross based on payable days' },
+    ],
+  },
+  {
+    category: 'Deductions',
+    entries: [
+      { abbr: 'PF',      meaning: 'Provident Fund', note: '12% of Basic + DA, capped at ₹15,000 wage base' },
+      { abbr: 'ESI',     meaning: "Employees' State Insurance", note: '0.75% employee / 3.25% employer — only if gross ≤ ₹21,000' },
+      { abbr: 'PT',      meaning: 'Professional Tax', note: 'Currently disabled per HR directive' },
+      { abbr: 'TDS',     meaning: 'Tax Deducted at Source', note: 'Auto-calculated from tax declarations' },
+      { abbr: 'LOP',     meaning: 'Loss of Pay', note: 'Handled via pro-rating — no separate deduction line' },
+      { abbr: 'Tot Ded', meaning: 'Total Deductions', note: 'PF + ESI + TDS + Advance + Loan + Late Deduction' },
+    ],
+  },
+  {
+    category: 'Leave Types',
+    entries: [
+      { abbr: 'CL', meaning: 'Casual Leave' },
+      { abbr: 'EL', meaning: 'Earned Leave' },
+      { abbr: 'SL', meaning: 'Sick Leave' },
+    ],
+  },
+  {
+    category: 'Day Calculation',
+    entries: [
+      { abbr: 'WO Paid',   meaning: 'Paid Weekly Offs', note: 'Granted based on 3-tier attendance model' },
+      { abbr: 'WO Unpaid', meaning: 'Unpaid Weekly Offs', note: 'Lost when attendance falls below threshold' },
+      { abbr: 'DOJ',       meaning: 'Date of Joining', note: 'Pre-DOJ days are excluded from attendance and salary' },
+      { abbr: 'Payable',   meaning: 'Payable Days', note: 'Days actually used to compute earned salary' },
+    ],
+  },
+  {
+    category: 'Compliance & Exports',
+    entries: [
+      { abbr: 'ECR',   meaning: 'Electronic Challan cum Return', note: 'EPFO PF filing format — pipe-delimited text' },
+      { abbr: 'NEFT',  meaning: 'National Electronic Funds Transfer', note: 'Bank salary upload file format' },
+      { abbr: 'UAN',   meaning: 'Universal Account Number', note: 'Permanent PF identifier for the employee' },
+      { abbr: 'IP No', meaning: 'Insurance Policy Number', note: 'ESIC identifier for ESI filing' },
+    ],
+  },
+  {
+    category: 'Pipeline & System',
+    entries: [
+      { abbr: 'MIS',       meaning: 'Management Information System', note: 'Daily attendance dashboard' },
+      { abbr: 'Stage 1–7', meaning: 'Pipeline stages', note: 'Import → Miss Punch → Shift → Night Shift → Corrections → Day Calc → Salary' },
+    ],
+  },
+];
+
 /**
  * Get the full form and description for an abbreviation.
  * @param {string} abbr - The abbreviation key
  * @returns {{ full: string, desc: string } | null}
  */
 export function getAbbreviation(abbr) {
-  return ABBREVIATIONS[abbr] || null;
+  return _dict[abbr] || null;
 }
 
 /**
@@ -76,8 +149,8 @@ export function getAbbreviation(abbr) {
  */
 export function getPageAbbreviations(keys) {
   return keys
-    .filter(k => ABBREVIATIONS[k])
-    .map(k => ({ key: k, ...ABBREVIATIONS[k] }));
+    .filter(k => _dict[k])
+    .map(k => ({ key: k, ..._dict[k] }));
 }
 
 /**
@@ -85,7 +158,7 @@ export function getPageAbbreviations(keys) {
  * @returns {Array<{ key: string, full: string, desc: string }>}
  */
 export function getAllAbbreviations() {
-  return Object.entries(ABBREVIATIONS).map(([key, val]) => ({ key, ...val }));
+  return Object.entries(_dict).map(([key, val]) => ({ key, ...val }));
 }
 
-export default ABBREVIATIONS;
+export default _dict;

@@ -20,6 +20,23 @@ Notes:
 
 ---
 
+**2026-04-12 | Branch: claude/abbreviation-legend-HLrmz | Tier 3.5 — Abbreviation Legend**
+
+Files modified:
+- `frontend/src/utils/abbreviations.js` — added named `ABBREVIATIONS` export (7 categories, 30+ entries); internal dict renamed to `_dict`; all 3 helpers (`getAbbreviation`, `getPageAbbreviations`, `getAllAbbreviations`) preserved — `Tooltip.jsx` and all existing per-page usages continue to work
+- `frontend/src/components/ui/AbbreviationLegend.jsx` — full rewrite: global floating `?` button (fixed bottom-right, `z-50`), searchable modal with real-time category filtering, keyboard shortcut (`?` key outside inputs), ESC + overlay click to close; `keys` prop guard (`keys.length > 0 → return null`) makes the 12 existing per-page usages silently become no-ops
+- `frontend/src/App.jsx` — 1 import line + 1 JSX line: `<AbbreviationLegend />` added as last child inside the `Layout` wrapper function
+
+Pending: none
+
+Notes:
+- Legend only visible on authenticated pages (inside `Layout`), not on `/login`
+- Keyboard shortcut: press `?` anywhere outside an input/textarea to toggle the modal
+- Search filters live across all 7 categories simultaneously; "No results for X" shown when nothing matches
+- Per-page collapsible panels (12 pages) silently become no-ops via the `keys` prop guard — no page files modified
+
+---
+
 **2026-04-12 | Branch: claude/request-id-middleware-HLqLt | Tier 3.3 — Request-ID Middleware**
 
 Files created:

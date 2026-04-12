@@ -3,6 +3,7 @@ import { BrowserRouter, Routes, Route, Navigate, useLocation } from 'react-route
 import Sidebar from './components/layout/Sidebar'
 import Header from './components/layout/Header'
 import ErrorBoundary from './components/ui/ErrorBoundary'
+import AbbreviationLegend from './components/ui/AbbreviationLegend'
 import { useAppStore } from './store/appStore'
 import { getMe } from './utils/api'
 import { tracker } from './utils/sessionTracker'
@@ -73,6 +74,7 @@ function Layout({ children, title }) {
           </ErrorBoundary>
         </main>
       </div>
+      <AbbreviationLegend />
     </div>
   )
 }
