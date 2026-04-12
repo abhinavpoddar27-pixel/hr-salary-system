@@ -1,3 +1,24 @@
+## Section 0: Recent Changes
+**2026-04-12 | Branch: claude/request-id-middleware-HLqLt | Tier 3.3 — Request-ID Middleware**
+
+Files created:
+- `backend/src/middleware/requestId.js` — stamps every `/api` request with `req-xxxxxxxx` (8 hex chars from uuid v4); sets `x-request-id` response header; logs arrival (`→`) and completion (`←`) with method/path/status/duration. Health endpoint excluded from logging.
+
+Files modified:
+- `backend/server.js` — `require('./src/middleware/requestId')` + `app.use('/api', requestIdMiddleware)` inserted after cache-control block, before usage logger
+- `backend/src/services/salaryComputation.js` — `computeEmployeeSalary()` signature extended with `requestId = ''` (6th param); `const RID = ...` at top; `[salary]` prefixes replaced with `${RID}` in existing warns; 5 checkpoint logs added: dayCalc lookup, earnedRatio, PF/ESI, totalDeductions/net/takeHome, salary-held
+- `backend/src/services/dayCalculation.js` — `calculateDays()` signature extended with `requestId = ''` (9th param); `const RID = ...` at top; `[DayCalc]` prefix in integrity-warning log replaced with `${RID}`
+- `backend/src/routes/payroll.js` — `POST /calculate-days` and `POST /compute-salary` pass `req.requestId` as last arg to respective service calls; before/after loop logs added with employee counts
+- `frontend/src/utils/api.js` — axios error interceptor reads `err.response?.headers?.['x-request-id']` and `console.error`s the Trace ID alongside endpoint URL and HTTP status
+
+Notes:
+- `req.requestId` is available in ALL route handlers (set before auth middleware runs)
+- Salary computation emits one RID-prefixed trace block per employee — grep by `req-xxxxxxxx` to isolate a single computation run from concurrent traffic
+- Health endpoint (`/health`) is excluded from req-ID logging to prevent noise in production monitoring
+- Pending: none for this task
+
+---
+
 # HR Intelligence & Salary Processing Platform
 - Stack: React (Vite) + Tailwind frontend, Node.js/Express backend, SQLite (better-sqlite3, WAL mode)
 - Companies: Indriyan Beverages, Asian Lakto Ind. Ltd. (global company filter)
@@ -35,6 +56,7 @@ backend/
 │   │   ├── schema.js                          43 tables, all CREATE TABLE definitions, migrations
 │   │   └── db.js                              better-sqlite3 wrapper, logAudit() helper
 │   ├── middleware/auth.js                     JWT verify, requireAuth, requireAdmin
+│   ├── middleware/requestId.js               Request-ID stamp, x-request-id header, arrival/completion logging
 │   ├── config/permissions.js                  Role → page access matrix
 │   ├── utils/employeeClassification.js        isContractor() — dept keywords + flag
 │   ├── utils/pagination.js                    Server-side pagination helper
