@@ -1,3 +1,21 @@
+## Section 0: Last Session
+- **Date:** 2026-04-12
+- **Branch:** main (merged from `claude/batch-early-exit-detection-MKMwd`)
+- **Last commit:** `5032695` feat: add /session-handoff slash command
+- **Files changed this session:**
+  - `backend/src/routes/early-exits.js` — added `POST /detect-range` batch endpoint (loops `detectEarlyExits()` per date, max 90 days, caps future endDate to today)
+  - `frontend/src/utils/api.js` — added `detectEarlyExitRange()` API helper
+  - `frontend/src/components/EarlyExitDetection.jsx` — added "🔄 Run Detection" button, `detectRangeMut` mutation, `lastDayOfMonth` helper, `useEffect` to sync date range with parent month/year selector
+  - `frontend/dist/` — rebuilt after above changes
+  - `.claude/commands/session-handoff.md` — created this handoff command
+- **What was fixed/built:** Wired the batch early exit detection pipeline — only 8 of 28 dates in Feb 2026 had detection data; the new `/detect-range` endpoint backfills all dates in one call and the UI button makes it triggerable without curl.
+- **What's fragile:** `detectEarlyExits()` in `earlyExitDetection.js` silently skips employees with `shift_id IS NULL` — detection count will always be slightly below `attendance_processed` raw count; this is expected but can confuse the drift-check query.
+- **Unfinished work:** Piece 2 (auto-detection during import) not implemented — gaps will reappear for future months unless the "Run Detection" button is clicked manually after each import.
+- **Known issues remaining:** `early_exit_detections` still has no data for months before Feb 2026; backfill for Mar + Apr 2026 must be triggered manually via the UI or curl.
+- **Next session should:** Run detection backfill for Mar 2026 (`2026-03-01` → `2026-03-31`) and Apr 2026 (`2026-04-01` → today) via the UI or `POST /api/early-exits/detect-range`, then verify KPI card totals match `attendance_processed` counts.
+
+---
+
 ## Section 0: Recent Changes
 **2026-04-12 | Branch: claude/admin-sql-query-tool-L9lm8 | Admin SQL Query Tool**
 
