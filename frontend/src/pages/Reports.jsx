@@ -6,7 +6,7 @@ import {
   getBankTransferSheet, getPFStatement, getESIStatement, getAuditTrail,
   getHeadcountReport, getPFECR, downloadPFECR, getESIContribution,
   downloadESIContribution, getBankSalaryFile, downloadBankSalaryFile,
-  getBulkPayslips, getCompanyConfig
+  getBulkPayslips, getCompanyConfig, getDeptPayrollReport
 } from '../utils/api'
 import { useAppStore } from '../store/appStore'
 import DateSelector from '../components/common/DateSelector'
@@ -161,6 +161,15 @@ export default function Reports() {
 
   const [bulkPdfLoading, setBulkPdfLoading] = useState(false)
 
+  // Department Payroll Cost Centre (T3.6)
+  const { data: deptPayrollRes, isLoading: deptPayrollLoading } = useQuery({
+    queryKey: ['dept-payroll', month, year, companyFilter],
+    queryFn: () => getDeptPayrollReport(month, year, companyFilter),
+    enabled: activeReport === 'dept-payroll',
+    retry: 0
+  })
+  const deptPayrollData = deptPayrollRes?.data?.data || {}
+
   async function handleDownloadFile(downloadFn, month, year, company) {
     try {
       const response = await downloadFn(month, year, company)
@@ -206,6 +215,7 @@ export default function Reports() {
     { id: 'bank-file', label: 'Bank Salary File', desc: 'PNB bulk salary upload CSV' },
     { id: 'payslips', label: 'Payslips (Bulk PDF)', desc: 'Download all employee payslips' },
     { id: 'audit', label: 'Audit Trail', desc: 'All field-level changes with before/after' },
+    { id: 'dept-payroll', label: 'Department Payroll', desc: 'Cost centre breakdown by department' },
   ]
 
   const monthLabel = `${MONTH_NAMES[month]}_${year}`
@@ -959,6 +969,94 @@ export default function Reports() {
                     </table>
                   </div>
                 </div>
+              )}
+            </div>
+          )}
+
+          {/* Department Payroll Cost Centre (T3.6) */}
+          {activeReport === 'dept-payroll' && (
+            <div className="space-y-4">
+              <div className="flex items-center justify-between">
+                <h3 className="text-base font-bold text-slate-800">Department Payroll — {MONTH_NAMES[month]} {year}</h3>
+              </div>
+              {deptPayrollLoading ? (
+                <div className="card p-8 text-center text-slate-400">Loading...</div>
+              ) : deptPayrollData.departments?.length > 0 ? (
+                <>
+                  {/* Summary KPI cards */}
+                  <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+                    <div className="card p-3 bg-blue-50">
+                      <div className="text-xs text-slate-500">Total Headcount</div>
+                      <div className="text-xl font-bold text-slate-800">{deptPayrollData.grandTotals.headcount}</div>
+                    </div>
+                    <div className="card p-3 bg-green-50">
+                      <div className="text-xs text-slate-500">Total Net Salary</div>
+                      <div className="text-xl font-bold text-slate-800">₹{(deptPayrollData.grandTotals.netSalary / 100000).toFixed(1)}L</div>
+                    </div>
+                    <div className="card p-3 bg-purple-50">
+                      <div className="text-xs text-slate-500">Total CTC (incl. ER PF/ESI)</div>
+                      <div className="text-xl font-bold text-slate-800">₹{(deptPayrollData.grandTotals.totalCTC / 100000).toFixed(1)}L</div>
+                    </div>
+                    <div className="card p-3 bg-amber-50">
+                      <div className="text-xs text-slate-500">Departments</div>
+                      <div className="text-xl font-bold text-slate-800">{deptPayrollData.departments.length}</div>
+                    </div>
+                  </div>
+
+                  {/* Department table */}
+                  <div className="card overflow-hidden">
+                    <div className="overflow-x-auto">
+                      <table className="table-compact w-full">
+                        <thead>
+                          <tr>
+                            <th>Department</th>
+                            <th className="text-right">HC</th>
+                            <th className="text-right">Gross Earned</th>
+                            <th className="text-right">PF (ER)</th>
+                            <th className="text-right">ESI (ER)</th>
+                            <th className="text-right">Net Salary</th>
+                            <th className="text-right">OT + ED</th>
+                            <th className="text-right">Total CTC</th>
+                            <th className="text-right">Per Employee</th>
+                            <th className="text-right">Cost %</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {deptPayrollData.departments.map(d => (
+                            <tr key={d.department}>
+                              <td className="font-medium text-slate-800">{d.department}</td>
+                              <td className="text-right">{d.headcount}</td>
+                              <td className="text-right">₹{d.grossEarned.toLocaleString('en-IN')}</td>
+                              <td className="text-right">₹{d.pfEmployer.toLocaleString('en-IN')}</td>
+                              <td className="text-right">₹{d.esiEmployer.toLocaleString('en-IN')}</td>
+                              <td className="text-right">₹{d.netSalary.toLocaleString('en-IN')}</td>
+                              <td className="text-right">₹{(d.otPay + d.edPay).toLocaleString('en-IN')}</td>
+                              <td className="text-right font-semibold">₹{d.totalCTC.toLocaleString('en-IN')}</td>
+                              <td className="text-right">₹{d.perEmployeeCost.toLocaleString('en-IN')}</td>
+                              <td className="text-right">{d.costShare}%</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                        <tfoot>
+                          <tr className="font-bold bg-slate-50">
+                            <td>TOTAL</td>
+                            <td className="text-right">{deptPayrollData.grandTotals.headcount}</td>
+                            <td className="text-right">₹{deptPayrollData.grandTotals.grossEarned.toLocaleString('en-IN')}</td>
+                            <td className="text-right">₹{deptPayrollData.grandTotals.pfEmployer.toLocaleString('en-IN')}</td>
+                            <td className="text-right">₹{deptPayrollData.grandTotals.esiEmployer.toLocaleString('en-IN')}</td>
+                            <td className="text-right">₹{deptPayrollData.grandTotals.netSalary.toLocaleString('en-IN')}</td>
+                            <td className="text-right">—</td>
+                            <td className="text-right">₹{deptPayrollData.grandTotals.totalCTC.toLocaleString('en-IN')}</td>
+                            <td className="text-right">—</td>
+                            <td className="text-right">100%</td>
+                          </tr>
+                        </tfoot>
+                      </table>
+                    </div>
+                  </div>
+                </>
+              ) : (
+                <div className="card p-8 text-center text-slate-400">No salary data found. Run Stage 7 first.</div>
               )}
             </div>
           )}

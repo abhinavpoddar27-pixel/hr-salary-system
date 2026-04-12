@@ -461,4 +461,12 @@ export const getEarlyExitPendingFinance = (params) => api.get('/early-exit-deduc
 export const approveEarlyExitDeduction = (id) => api.put(`/early-exit-deductions/${id}/approve`)
 export const rejectEarlyExitDeduction = (id, data) => api.put(`/early-exit-deductions/${id}/reject`, data)
 
+// ── T3.4: Salary Cost Trend ───────────────────────────────
+export const getSalaryTrend = (month, year, years, company) =>
+  api.get('/analytics/salary-trend', { params: { month, year, years, ...(company ? { company } : {}) } })
+
+// ── T3.6: Department Payroll Cost Centre ─────────────────
+export const getDeptPayrollReport = (month, year, company) =>
+  api.get('/reports/department-payroll', { params: { month, year, ...(company ? { company } : {}) } })
+
 export default api
