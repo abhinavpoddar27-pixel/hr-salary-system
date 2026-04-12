@@ -202,6 +202,26 @@ export default function SalaryComputation() {
     finally { setExcelLoading(false) }
   }
 
+  const [registerLoading, setRegisterLoading] = useState(false)
+  async function handleDownloadRegister() {
+    setRegisterLoading(true)
+    try {
+      const res = await api.get('/payroll/salary-register-excel', {
+        params: { month, year, company: selectedCompany || undefined },
+        responseType: 'blob'
+      })
+      const blob = new Blob([res.data], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' })
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = `Payroll_Register_${month}_${year}.xlsx`
+      a.click()
+      URL.revokeObjectURL(url)
+      toast.success('Payroll register downloaded')
+    } catch { toast.error('Register download failed') }
+    finally { setRegisterLoading(false) }
+  }
+
   const computedTotals = useMemo(() => {
     const active = allSalaries.filter(s => !s.salary_held)
     return {
@@ -267,6 +287,13 @@ export default function SalaryComputation() {
               <button onClick={handleExcelSlip} disabled={excelLoading}
                 className="px-3 py-2 text-sm bg-green-100 text-green-700 rounded-lg hover:bg-green-200 transition-colors font-medium">
                 {excelLoading ? 'Generating...' : 'Salary Slip (Excel)'}
+              </button>
+            )}
+            {allSalaries.length > 0 && (
+              <button onClick={handleDownloadRegister} disabled={registerLoading}
+                className="px-3 py-2 text-sm bg-blue-100 text-blue-700 rounded-lg hover:bg-blue-200 transition-colors font-medium"
+                title="Download full payroll register as Excel">
+                {registerLoading ? 'Generating...' : 'Download Register'}
               </button>
             )}
           </div>

@@ -500,6 +500,266 @@ router.get('/salary-register', (req, res) => {
 });
 
 /**
+ * GET /api/payroll/salary-register-excel
+ * Consolidated monthly payroll register — full columnar Excel with all salary
+ * components, deductions, net/payable/take-home, attendance summary, and hold
+ * status. Two sheets: detailed register + management summary.
+ * Read-only consumer of salary_computations + employees + day_calculations.
+ */
+router.get('/salary-register-excel', (req, res) => {
+  const db = getDb();
+  const { month, year, company } = req.query;
+  if (!month || !year) return res.status(400).json({ success: false, error: 'month and year required' });
+
+  try {
+    const MONTHS = ['', 'JANUARY', 'FEBRUARY', 'MARCH', 'APRIL', 'MAY', 'JUNE',
+      'JULY', 'AUGUST', 'SEPTEMBER', 'OCTOBER', 'NOVEMBER', 'DECEMBER'];
+
+    const rows = db.prepare(`
+      SELECT
+        sc.employee_code,
+        COALESCE(NULLIF(e.name, ''), sc.employee_code) as employee_name,
+        e.department,
+        e.designation,
+        e.date_of_joining,
+        e.employment_type,
+        sc.company,
+        sc.gross_salary,
+        sc.payable_days,
+        sc.days_in_month,
+        sc.basic_earned,
+        sc.da_earned,
+        sc.hra_earned,
+        sc.conveyance_earned,
+        sc.other_allowances_earned,
+        sc.gross_earned,
+        sc.ot_days,
+        sc.ot_pay,
+        sc.ed_days,
+        sc.ed_pay,
+        sc.holiday_duty_pay,
+        sc.pf_employee,
+        sc.pf_employer,
+        sc.esi_employee,
+        sc.esi_employer,
+        sc.professional_tax,
+        sc.tds,
+        sc.advance_recovery,
+        sc.loan_recovery,
+        sc.late_coming_deduction,
+        sc.lop_deduction,
+        sc.other_deductions,
+        sc.total_deductions,
+        sc.net_salary,
+        sc.total_payable,
+        sc.take_home,
+        sc.salary_held,
+        sc.hold_reason,
+        sc.is_contractor,
+        dc.days_present,
+        dc.days_absent,
+        dc.days_wop,
+        dc.paid_sundays,
+        dc.paid_holidays
+      FROM salary_computations sc
+      LEFT JOIN employees e ON sc.employee_code = e.code
+      LEFT JOIN day_calculations dc ON sc.employee_code = dc.employee_code
+        AND sc.month = dc.month AND sc.year = dc.year
+      WHERE sc.month = ? AND sc.year = ?
+        ${company ? 'AND sc.company = ?' : ''}
+      AND (e.status IS NULL OR e.status NOT IN ('Exited'))
+      ORDER BY e.department, e.name, sc.employee_code
+    `).all(...[parseInt(month), parseInt(year), company].filter(Boolean));
+
+    if (rows.length === 0) {
+      return res.status(404).json({ success: false, error: 'No salary records found for this period' });
+    }
+
+    const companyName = company || 'ASIAN LAKTO IND LTD.';
+    const monthName = MONTHS[parseInt(month)] || '';
+
+    const fmtDOJ = (iso) => {
+      if (!iso) return '';
+      const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(iso);
+      return m ? `${m[3]}/${m[2]}/${m[1]}` : iso;
+    };
+
+    const wb = XLSX.utils.book_new();
+
+    // ── Sheet 1: PAYROLL REGISTER ──────────────────────────────────
+    const HEADERS = [
+      'S.No', 'Code', 'Name', 'Dept', 'Desig', 'DOJ', 'Type', 'Gross',
+      'Days Payable', 'Basic', 'DA', 'HRA', 'Conv', 'Other', 'Gross Earned',
+      'OT Days', 'OT Pay', 'ED Days', 'ED Pay', 'Hol Duty',
+      'PF(EE)', 'PF(ER)', 'ESI(EE)', 'ESI(ER)', 'PT', 'TDS',
+      'Advance', 'Loan', 'Late Ded', 'LOP', 'Other Ded', 'Total Ded',
+      'Net Salary', 'Total Payable', 'Take Home', 'Held', 'Hold Reason'
+    ];
+    const NUM_COLS = HEADERS.length; // 37
+
+    const regData = [
+      [companyName],
+      [`PAYROLL REGISTER — ${monthName} ${year}`],
+      [],
+      HEADERS
+    ];
+
+    rows.forEach((r, i) => {
+      const held = r.salary_held === 1 || r.salary_held === true;
+      regData.push([
+        i + 1,
+        r.employee_code,
+        held ? `⚠ ${r.employee_name || r.employee_code}` : (r.employee_name || r.employee_code),
+        r.department || '',
+        r.designation || '',
+        fmtDOJ(r.date_of_joining),
+        r.is_contractor ? 'Contract' : (r.employment_type || 'Permanent'),
+        Math.round(r.gross_salary || 0),
+        r.payable_days != null ? r.payable_days : '',
+        Math.round(r.basic_earned || 0),
+        Math.round(r.da_earned || 0),
+        Math.round(r.hra_earned || 0),
+        Math.round(r.conveyance_earned || 0),
+        Math.round(r.other_allowances_earned || 0),
+        Math.round(r.gross_earned || 0),
+        r.ot_days || 0,
+        Math.round(r.ot_pay || 0),
+        r.ed_days || 0,
+        Math.round(r.ed_pay || 0),
+        Math.round(r.holiday_duty_pay || 0),
+        Math.round(r.pf_employee || 0),
+        Math.round(r.pf_employer || 0),
+        Math.round(r.esi_employee || 0),
+        Math.round(r.esi_employer || 0),
+        Math.round(r.professional_tax || 0),
+        Math.round(r.tds || 0),
+        Math.round(r.advance_recovery || 0),
+        Math.round(r.loan_recovery || 0),
+        Math.round(r.late_coming_deduction || 0),
+        Math.round(r.lop_deduction || 0),
+        Math.round(r.other_deductions || 0),
+        Math.round(r.total_deductions || 0),
+        Math.round(r.net_salary || 0),
+        Math.round(r.total_payable || 0),
+        Math.round(r.take_home || r.total_payable || r.net_salary || 0),
+        held ? 'YES' : '',
+        r.hold_reason || ''
+      ]);
+    });
+
+    // Blank separator then totals row
+    regData.push([]);
+    const sum = (field) => rows.reduce((s, r) => s + Math.round(r[field] || 0), 0);
+    regData.push([
+      'TOTAL', `${rows.length} employees`, '', '', '', '', '',
+      sum('gross_salary'), '',
+      sum('basic_earned'), sum('da_earned'), sum('hra_earned'),
+      sum('conveyance_earned'), sum('other_allowances_earned'), sum('gross_earned'),
+      '', sum('ot_pay'), '', sum('ed_pay'), sum('holiday_duty_pay'),
+      sum('pf_employee'), sum('pf_employer'), sum('esi_employee'), sum('esi_employer'),
+      sum('professional_tax'), sum('tds'), sum('advance_recovery'), sum('loan_recovery'),
+      sum('late_coming_deduction'), sum('lop_deduction'), sum('other_deductions'),
+      sum('total_deductions'), sum('net_salary'), sum('total_payable'),
+      rows.reduce((s, r) => s + Math.round(r.take_home || r.total_payable || r.net_salary || 0), 0),
+      '', ''
+    ]);
+
+    const regSheet = XLSX.utils.aoa_to_sheet(regData);
+
+    regSheet['!cols'] = [
+      { wch: 5 }, { wch: 8 }, { wch: 24 }, { wch: 16 }, { wch: 16 }, { wch: 12 }, { wch: 10 },
+      { wch: 10 }, { wch: 8 },
+      { wch: 10 }, { wch: 8 }, { wch: 8 }, { wch: 8 }, { wch: 8 }, { wch: 12 },
+      { wch: 6 }, { wch: 10 }, { wch: 6 }, { wch: 10 }, { wch: 10 },
+      { wch: 10 }, { wch: 10 }, { wch: 10 }, { wch: 10 }, { wch: 6 }, { wch: 8 },
+      { wch: 10 }, { wch: 10 }, { wch: 8 }, { wch: 8 }, { wch: 8 },
+      { wch: 10 }, { wch: 12 }, { wch: 12 }, { wch: 12 },
+      { wch: 6 }, { wch: 30 }
+    ];
+
+    regSheet['!merges'] = [
+      { s: { r: 0, c: 0 }, e: { r: 0, c: NUM_COLS - 1 } },
+      { s: { r: 1, c: 0 }, e: { r: 1, c: NUM_COLS - 1 } }
+    ];
+
+    XLSX.utils.book_append_sheet(wb, regSheet, 'PAYROLL REGISTER');
+
+    // ── Sheet 2: SUMMARY ──────────────────────────────────────────
+    const heldCount = rows.filter(r => r.salary_held === 1 || r.salary_held === true).length;
+    const contractorCount = rows.filter(r => r.is_contractor).length;
+
+    const sumGross = sum('gross_salary');
+    const sumGrossEarned = sum('gross_earned');
+    const sumOT = sum('ot_pay');
+    const sumED = sum('ed_pay');
+    const sumHolDuty = sum('holiday_duty_pay');
+    const sumPFEE = sum('pf_employee');
+    const sumPFER = sum('pf_employer');
+    const sumESIEE = sum('esi_employee');
+    const sumESIER = sum('esi_employer');
+    const sumPT = sum('professional_tax');
+    const sumTDS = sum('tds');
+    const sumAdv = sum('advance_recovery');
+    const sumLoan = sum('loan_recovery');
+    const sumLate = sum('late_coming_deduction');
+    const sumLOP = sum('lop_deduction');
+    const sumOther = sum('other_deductions');
+    const sumTotalDed = sum('total_deductions');
+    const sumNet = sum('net_salary');
+    const sumTotalPayable = sum('total_payable');
+    const sumTakeHome = rows.reduce((s, r) => s + Math.round(r.take_home || r.total_payable || r.net_salary || 0), 0);
+
+    const summaryData = [
+      [`PAYROLL SUMMARY — ${monthName} ${year}`],
+      [],
+      ['Total Employees', rows.length],
+      ['Held Salaries', heldCount],
+      ['Contractors', contractorCount],
+      [],
+      ['CATEGORY', 'AMOUNT'],
+      ['Total Gross Salary (CTC)', sumGross],
+      ['Total Gross Earned', sumGrossEarned],
+      ['Total OT Pay', sumOT],
+      ['Total ED Pay', sumED],
+      ['Total Holiday Duty', sumHolDuty],
+      [],
+      ['DEDUCTIONS', ''],
+      ['PF (Employee)', sumPFEE],
+      ['PF (Employer)', sumPFER],
+      ['ESI (Employee)', sumESIEE],
+      ['ESI (Employer)', sumESIER],
+      ['Professional Tax', sumPT],
+      ['TDS', sumTDS],
+      ['Advance Recovery', sumAdv],
+      ['Loan Recovery', sumLoan],
+      ['Late Coming Deduction', sumLate],
+      ['LOP Deduction', sumLOP],
+      ['Other Deductions', sumOther],
+      ['Total Deductions', sumTotalDed],
+      [],
+      ['NET SALARY (Total)', sumNet],
+      ['TOTAL PAYABLE', sumTotalPayable],
+      ['TAKE HOME (incl. ED)', sumTakeHome],
+      [],
+      ['Total CTC (Gross + PF(ER) + ESI(ER))', sumGross + sumPFER + sumESIER]
+    ];
+
+    const summarySheet = XLSX.utils.aoa_to_sheet(summaryData);
+    summarySheet['!cols'] = [{ wch: 36 }, { wch: 18 }];
+    XLSX.utils.book_append_sheet(wb, summarySheet, 'SUMMARY');
+
+    const buf = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' });
+    const filename = `Payroll_Register_${monthName}_${year}.xlsx`;
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+    res.send(Buffer.from(buf));
+  } catch (err) {
+    console.error('[salary-register-excel]', err);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+/**
  * PUT /api/payroll/salary/:code/hold-release
  * Finance releases a held salary. Gated by requireFinanceOrAdmin so HR
  * cannot self-release a hold they themselves placed (or that the
