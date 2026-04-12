@@ -1,16 +1,16 @@
 ## Section 0: Last Session
 - **Date:** 2026-04-12
-- **Branch:** main (merged from `claude/fix-early-exit-deduction-gh1DU`)
-- **Last commit:** `2408e5a` chore: update frontend dist with rebuilt assets
+- **Branch:** main (merged from `claude/session-start-5wc8r`)
+- **Last commit:** `867e3c8` feat: add consolidated monthly payroll register Excel export (T2.2)
 - **Files changed this session:**
-  - `frontend/src/components/EarlyExitDetection.jsx` — added `getEmployee` import + `useQuery` call; replaced broken `detection.daily_gross_at_time || 0` with `gross_salary / daysInDetMonth`; fixed dropdown labels to show `₹${Math.round(amount)}`
-  - `CLAUDE.md` — added Section 0 entry for the deduction amount fix
-  - `frontend/dist/` — rebuilt after EarlyExitDetection.jsx changes
-- **What was fixed/built:** Fixed the early exit deduction modal — `deduction_amount` was always `undefined` because `early_exit_detections` has no gross salary column; the fix fetches employee gross via `getEmployee()` and computes the correct daily rate. The `early_exit_deductions` table had 0 rows before this fix; it can now be populated.
-- **What's fragile:** `deduction_amount: computedAmount || undefined` in `handleSubmit`/`handleRevise` — if `getEmployee()` returns 0 gross (e.g. employee record has no salary set), the amount is 0 and the backend rejects it with the same error. HR must ensure `employees.gross_salary` is set before actioning a deduction.
+  - `backend/src/routes/payroll.js` — added `GET /salary-register-excel` endpoint (~160 lines) after `salary-register` JSON endpoint; two-sheet XLSX workbook (PAYROLL REGISTER + SUMMARY)
+  - `frontend/src/pages/SalaryComputation.jsx` — added `handleDownloadRegister()` handler + `registerLoading` state + "Download Register" blue button alongside "Salary Slip (Excel)"
+  - `frontend/dist/` — rebuilt after SalaryComputation.jsx changes
+- **What was fixed/built:** T2.2 — Consolidated Monthly Payroll Register Excel export. New `GET /api/payroll/salary-register-excel` endpoint produces a 37-column XLSX register (all earned components, deductions, net/payable/take-home, attendance summary, hold flags) plus a management summary sheet. Frontend "Download Register" button in Stage 7 toolbar. Zero schema changes, zero changes to existing endpoints.
+- **What's fragile:** The endpoint reads `dc.paid_holidays` from `day_calculations` (not `salary_computations` which lacks that column) — if day_calculations rows are missing for a month the join returns NULLs for attendance columns but the row still appears (LEFT JOIN). Expected behavior.
 - **Unfinished work:** None for this task.
-- **Known issues remaining:** `early_exit_deductions` salary pipeline integration in `salaryComputation.js` exists and is coded (see Section 5) but is untested in production because 0 deductions existed before this fix. First real finance-approved deduction will be the true end-to-end test.
-- **Next session should:** Submit a test Half-Day deduction for an employee with a known gross, get finance approval, re-run Stage 7 compute, and verify `salary_computations.early_exit_deduction` is populated and subtracted from `net_salary` correctly.
+- **Known issues remaining:** Dev DB has no salary_computations data so the 404 path is the only one exercised locally; XLSX generation logic was verified with fake data inline. First production run will be the real end-to-end test.
+- **Next session should:** Run Stage 7 compute for a real month, click "Download Register", open in Excel and verify all 37 columns and both sheets are correct; also spot-check that held employees show ⚠ prefix and "YES" in the Held column.
 
 ---
 
