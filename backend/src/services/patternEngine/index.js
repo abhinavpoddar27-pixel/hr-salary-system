@@ -20,6 +20,19 @@ const {
   detectOvertimeCliff, detectAttendanceEntropy
 } = require('./flightRiskPatterns');
 
+// Phase 2b
+const {
+  detectBuddyPunching, detectOvertimeGaming,
+  detectCoordinatedAbsence, detectClockEdgePunching
+} = require('./anomalyPatterns');
+
+const {
+  detectPaydayProximity, detectSeasonalPattern, detectDayOfMonthHotspot
+} = require('./temporalPatterns');
+
+const { detectNightShiftFatigue, detectShiftTransitionShock } = require('./shiftPatterns');
+const { detectContractorInstability, detectContractorOTExploitation } = require('./contractorPatterns');
+
 const PRESENT = ['P', 'WOP', '½P', 'WO½P'];
 
 /**
@@ -69,15 +82,24 @@ function analyzeEmployeePatterns(db, employeeCode, startDate, endDate, profileDa
     regularityScore:    regularityScore     ?? null
   };
 
-  // ── Run all 12 detectors (Phase 2a) ────────────────────────────────────────
+  // ── Run all 23 detectors (Phase 2a × 12 + Phase 2b × 11) ──────────────────
   const detectors = [
-    // Individual
+    // Individual (Phase 2a)
     detectSandwichLeave, detectGhostHours, detectAbsenceClustering,
     detectBreakPatternDrift, detectMissPunchEscalation, detectHalfDayAddiction,
     detectLIFO, detectPostLeaveSlump,
-    // Flight Risk
+    // Flight Risk (Phase 2a)
     detectDisengagementCascade, detectSuddenLeaveBurn,
-    detectOvertimeCliff, detectAttendanceEntropy
+    detectOvertimeCliff, detectAttendanceEntropy,
+    // Anomaly (Phase 2b)
+    detectBuddyPunching, detectOvertimeGaming,
+    detectCoordinatedAbsence, detectClockEdgePunching,
+    // Temporal (Phase 2b)
+    detectPaydayProximity, detectSeasonalPattern, detectDayOfMonthHotspot,
+    // Shift (Phase 2b)
+    detectNightShiftFatigue, detectShiftTransitionShock,
+    // Contractor (Phase 2b)
+    detectContractorInstability, detectContractorOTExploitation
   ];
 
   const detected = [];
