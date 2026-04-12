@@ -4,8 +4,7 @@ import {
   getEarlyExitRangeReport, getEarlyExitMtdSummary, getEarlyExitDeptSummary,
   exportEarlyExitReport,
   getEarlyExitEmployeeAnalytics, submitEarlyExitDeduction,
-  cancelEarlyExitDeduction, reviseEarlyExitDeduction,
-  detectEarlyExits
+  cancelEarlyExitDeduction, reviseEarlyExitDeduction
 } from '../utils/api'
 import Modal from '../components/ui/Modal'
 import clsx from 'clsx'
@@ -133,12 +132,8 @@ export default function EarlyExitDetection({ selectedMonth, selectedYear, select
   // Sort
   const sort = useSortable('date', 'desc')
 
-  // Detail panel & detect modal
+  // Detail panel
   const [selectedRow, setSelectedRow] = useState(null)
-  const [showDetectModal, setShowDetectModal] = useState(false)
-  const [detectDate, setDetectDate] = useState(() => {
-    const d = new Date(); d.setDate(d.getDate() - 1); return toIso(d)
-  })
   const [exporting, setExporting] = useState(false)
 
   // Validate range client-side before firing query
@@ -215,19 +210,6 @@ export default function EarlyExitDetection({ selectedMonth, selectedYear, select
     setStartDate(r.start); setEndDate(r.end); setActivePreset(preset)
   }
 
-  const detectMut = useMutation({
-    mutationFn: () => detectEarlyExits({ date: detectDate }),
-    onSuccess: (res) => {
-      const d = res.data
-      toast.success(`Detection complete: ${d.detected} flagged, ${d.exempted} exempted, ${d.skipped} skipped`)
-      queryClient.invalidateQueries({ queryKey: ['ee-range'] })
-      queryClient.invalidateQueries({ queryKey: ['ee-mtd'] })
-      queryClient.invalidateQueries({ queryKey: ['ee-dept'] })
-      setShowDetectModal(false)
-    },
-    onError: (err) => toast.error(err?.response?.data?.error || 'Detection failed')
-  })
-
   const handleExport = async () => {
     if (!rangeValid) return
     setExporting(true)
@@ -255,7 +237,6 @@ export default function EarlyExitDetection({ selectedMonth, selectedYear, select
   }
 
   const today = toIso(new Date())
-  const isFutureDetect = detectDate > today
 
   return (
     <div className="space-y-4">
@@ -272,9 +253,6 @@ export default function EarlyExitDetection({ selectedMonth, selectedYear, select
                   disabled={!rangeValid || exporting || filtered.length === 0}
                   className="btn-secondary text-sm">
             {exporting ? 'Exporting…' : '⬇ Export Excel'}
-          </button>
-          <button onClick={() => setShowDetectModal(true)} className="btn-secondary text-sm">
-            Re-run Detection
           </button>
         </div>
       </div>
@@ -446,29 +424,6 @@ export default function EarlyExitDetection({ selectedMonth, selectedYear, select
           </table>
         </div>
       </div>
-
-      {/* Detection modal */}
-      {showDetectModal && (
-        <Modal show={true} onClose={() => setShowDetectModal(false)} title="Run Early Exit Detection" size="sm">
-          <div className="p-4 space-y-4">
-            <div>
-              <label className="text-sm font-medium text-slate-700 mb-1 block">Detection Date</label>
-              <input type="date"
-                     className={clsx('input w-full', isFutureDetect && 'border-red-400')}
-                     value={detectDate} max={today}
-                     onChange={e => setDetectDate(e.target.value)} />
-              {isFutureDetect && <div className="text-xs text-red-500 mt-1">Date cannot be in the future</div>}
-            </div>
-            <div className="flex justify-end gap-3">
-              <button className="btn" onClick={() => setShowDetectModal(false)}>Cancel</button>
-              <button className="btn btn-primary" onClick={() => detectMut.mutate()}
-                      disabled={detectMut.isPending || isFutureDetect}>
-                {detectMut.isPending ? 'Running…' : 'Run Detection'}
-              </button>
-            </div>
-          </div>
-        </Modal>
-      )}
 
       {/* Detail panel */}
       {selectedRow && (
