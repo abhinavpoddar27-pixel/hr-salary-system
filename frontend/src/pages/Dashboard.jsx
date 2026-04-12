@@ -96,11 +96,11 @@ export default function Dashboard() {
         readiness: readinessRes.success ? (readinessRes.data || { ready: false, score: 0, blockers: [], warnings: [], passed: [] }) : { ready: false, score: 0, blockers: [], warnings: [], passed: [] },
         actions: {
           heldSalaries: registerRes.success ? (registerRes.totals?.heldCount || 0) : 0,
-          manualFlags: manualFlagsRes.success ? (manualFlagsRes.data || []).filter(f => f.finance_approved === 0).length : 0,
+          manualFlags: manualFlagsRes.success ? (manualFlagsRes.summary?.pendingCount || 0) : 0,
           lateDeductions: lateDeductionsRes.success ? (lateDeductionsRes.data || []).length : 0,
           missPunchFinance: missPunchRes.success ? (missPunchRes.summary?.financePending || 0) : 0,
         },
-        departments: deptPayrollRes.success ? (deptPayrollRes.data?.departments || []).slice(0, 8) : [],
+        departments: deptPayrollRes.success ? (deptPayrollRes.data?.departments || []).slice(0, 8) : null,
       })
     } catch (err) {
       console.error('Finance dashboard fetch failed:', err)
@@ -189,7 +189,7 @@ export default function Dashboard() {
         </div>
 
         {/* Department Cost (admin only) */}
-        {departments.length > 0 && (
+        {departments !== null && departments.length > 0 && (
           <div className="bg-white rounded-lg shadow">
             <div className="px-4 py-3 border-b flex items-center justify-between">
               <span className="font-semibold text-slate-700">Department Cost Breakdown</span>
