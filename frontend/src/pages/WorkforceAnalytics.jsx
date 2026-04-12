@@ -2,12 +2,13 @@ import React, { useState, useMemo } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { Routes, Route, NavLink, Navigate } from 'react-router-dom'
 import {
-  AreaChart, Area, BarChart, Bar, XAxis, YAxis, CartesianGrid,
+  AreaChart, Area, BarChart, Bar, LineChart, Line, XAxis, YAxis, CartesianGrid,
   Tooltip, Legend, ResponsiveContainer, PieChart, Pie, Cell
 } from 'recharts'
 import {
   getHeadcountTrend, getAttritionData, getOrgOverview,
-  detectInactiveEmployees, getInactiveEmployees, reactivateEmployee
+  detectInactiveEmployees, getInactiveEmployees, reactivateEmployee,
+  getSalaryTrend
 } from '../utils/api'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import DateSelector from '../components/common/DateSelector'
@@ -45,6 +46,7 @@ const TABS = [
   { id: 'headcount', label: 'Headcount & Composition', path: '/workforce/headcount' },
   { id: 'attrition', label: 'Hiring & Attrition', path: '/workforce/attrition' },
   { id: 'contractors', label: 'Contractor Management', path: '/workforce/contractors' },
+  { id: 'payroll-trend', label: 'Payroll Cost Trend', path: '/workforce/payroll-trend' },
 ]
 
 // ═══════════════════════════════════════════════════════════
@@ -666,6 +668,142 @@ function ContractorTab({ selectedMonth, selectedYear, selectedCompany }) {
 }
 
 // ═══════════════════════════════════════════════════════════
+// PAYROLL COST TREND TAB
+// ═══════════════════════════════════════════════════════════
+function PayrollTrendTab({ selectedMonth, selectedYear, selectedCompany }) {
+  const [trendYears, setTrendYears] = useState(3)
+
+  const { data: trendRes, isLoading } = useQuery({
+    queryKey: ['salary-trend', selectedMonth, selectedYear, selectedCompany, trendYears],
+    queryFn: () => getSalaryTrend(selectedMonth, selectedYear, trendYears, selectedCompany),
+    retry: 0
+  })
+  const trendData = trendRes?.data?.data || {}
+  const months = trendData.months || []
+  const yearSummaries = trendData.yearSummaries || []
+
+  return (
+    <div className="space-y-6">
+      <div className="card">
+        <div className="card-header">
+          <div className="flex items-center justify-between">
+            <h3 className="font-semibold text-slate-700">Payroll Cost Trend</h3>
+            <select
+              value={trendYears}
+              onChange={(e) => setTrendYears(parseInt(e.target.value))}
+              className="text-sm border border-slate-200 rounded-lg px-3 py-1.5 focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+            >
+              <option value={1}>1 Year</option>
+              <option value={2}>2 Years</option>
+              <option value={3}>3 Years</option>
+              <option value={5}>5 Years</option>
+            </select>
+          </div>
+        </div>
+        <div className="p-4">
+          {isLoading ? (
+            <div className="text-center py-8 text-slate-400">Loading...</div>
+          ) : months.length > 0 ? (
+            <>
+              {/* Year-over-Year Summary Cards */}
+              {yearSummaries.length > 0 && (
+                <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-5">
+                  {yearSummaries.map(y => (
+                    <div key={y.year} className="bg-slate-50 rounded-xl p-3 border border-slate-100">
+                      <div className="text-xs text-slate-500 font-medium">{y.year}</div>
+                      <div className="text-lg font-bold text-slate-800 mt-0.5">
+                        ₹{(y.avgMonthlyCost / 100000).toFixed(1)}L<span className="text-xs font-normal text-slate-400">/mo</span>
+                      </div>
+                      <div className="text-xs text-slate-500">{y.avgHeadcount} avg employees</div>
+                      {y.yoyChange !== null && (
+                        <div className={`text-xs font-semibold mt-1 ${y.yoyChange > 0 ? 'text-red-600' : 'text-green-600'}`}>
+                          {y.yoyChange > 0 ? '↑' : '↓'} {Math.abs(y.yoyChange)}% YoY
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              {/* Line Chart */}
+              <ResponsiveContainer width="100%" height={320}>
+                <LineChart data={months} margin={{ top: 5, right: 20, left: 10, bottom: 5 }}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" />
+                  <XAxis dataKey="label" tick={{ fontSize: 11 }} interval="preserveStartEnd" />
+                  <YAxis
+                    yAxisId="cost"
+                    tickFormatter={(v) => `₹${(v / 100000).toFixed(0)}L`}
+                    tick={{ fontSize: 11 }}
+                    width={60}
+                  />
+                  <YAxis
+                    yAxisId="headcount"
+                    orientation="right"
+                    tick={{ fontSize: 11 }}
+                    width={40}
+                  />
+                  <Tooltip
+                    formatter={(value, name) => {
+                      if (name === 'Headcount') return [value, name]
+                      return [`₹${Math.round(value).toLocaleString('en-IN')}`, name]
+                    }}
+                  />
+                  <Legend />
+                  <Line yAxisId="cost" type="monotone" dataKey="totalNetSalary" name="Net Salary" stroke="#2563eb" strokeWidth={2} dot={false} />
+                  <Line yAxisId="cost" type="monotone" dataKey="totalCTC" name="Total CTC" stroke="#dc2626" strokeWidth={2} dot={false} strokeDasharray="5 5" />
+                  <Line yAxisId="headcount" type="monotone" dataKey="headcount" name="Headcount" stroke="#16a34a" strokeWidth={1} dot={false} />
+                </LineChart>
+              </ResponsiveContainer>
+            </>
+          ) : (
+            <div className="text-center py-8 text-slate-400">No salary data found for the selected period. Run Stage 7 first.</div>
+          )}
+        </div>
+      </div>
+
+      {/* Month detail table */}
+      {months.length > 0 && (
+        <div className="card overflow-hidden">
+          <div className="card-header"><h3 className="font-semibold text-slate-700">Monthly Breakdown</h3></div>
+          <div className="overflow-x-auto">
+            <table className="table-compact w-full text-xs">
+              <thead>
+                <tr>
+                  <th>Month</th>
+                  <th className="text-center">HC</th>
+                  <th className="text-right">Gross Earned</th>
+                  <th className="text-right">Net Salary</th>
+                  <th className="text-right">Total CTC</th>
+                  <th className="text-right">OT + ED</th>
+                  <th className="text-right">PF (ER)</th>
+                  <th className="text-right">ESI (ER)</th>
+                  <th className="text-right">Per Employee</th>
+                </tr>
+              </thead>
+              <tbody>
+                {[...months].reverse().map((m, i) => (
+                  <tr key={i}>
+                    <td className="font-medium whitespace-nowrap">{m.label}</td>
+                    <td className="text-center">{m.headcount}</td>
+                    <td className="text-right">₹{m.totalGrossEarned.toLocaleString('en-IN')}</td>
+                    <td className="text-right text-blue-700">₹{m.totalNetSalary.toLocaleString('en-IN')}</td>
+                    <td className="text-right font-semibold">₹{m.totalCTC.toLocaleString('en-IN')}</td>
+                    <td className="text-right text-amber-600">₹{(m.totalOT + m.totalED).toLocaleString('en-IN')}</td>
+                    <td className="text-right">₹{m.totalPFEmployer.toLocaleString('en-IN')}</td>
+                    <td className="text-right">₹{m.totalESIEmployer.toLocaleString('en-IN')}</td>
+                    <td className="text-right text-slate-500">₹{m.perEmployeeCost.toLocaleString('en-IN')}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
+// ═══════════════════════════════════════════════════════════
 // MAIN WORKFORCE COMPONENT WITH ROUTES
 // ═══════════════════════════════════════════════════════════
 export default function WorkforceAnalytics() {
@@ -696,6 +834,7 @@ export default function WorkforceAnalytics() {
         <Route path="headcount" element={<HeadcountTab {...dp} />} />
         <Route path="attrition" element={<AttritionTab {...dp} />} />
         <Route path="contractors" element={<ContractorTab {...dp} />} />
+        <Route path="payroll-trend" element={<PayrollTrendTab {...dp} />} />
       </Routes>
     </div>
   )

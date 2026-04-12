@@ -324,4 +324,99 @@ router.put('/company-config/:id', (req, res) => {
   res.json({ success: true, message: 'Company config updated' });
 });
 
+// GET department payroll cost centre
+router.get('/department-payroll', (req, res) => {
+  try {
+    const db = getDb();
+    const { month, year, company } = req.query;
+    if (!month || !year) return res.status(400).json({ success: false, error: 'month and year required' });
+
+    const params = [parseInt(month), parseInt(year)];
+    if (company) params.push(company);
+
+    const rows = db.prepare(`
+      SELECT
+        e.department,
+        COUNT(DISTINCT sc.employee_code) as headcount,
+        COALESCE(SUM(sc.gross_salary), 0) as total_gross_ctc,
+        COALESCE(SUM(sc.gross_earned), 0) as total_gross_earned,
+        COALESCE(SUM(sc.basic_earned), 0) as total_basic,
+        COALESCE(SUM(sc.da_earned), 0) as total_da,
+        COALESCE(SUM(sc.hra_earned), 0) as total_hra,
+        COALESCE(SUM(sc.conveyance_earned), 0) as total_conv,
+        COALESCE(SUM(sc.other_allowances_earned), 0) as total_other,
+        COALESCE(SUM(sc.ot_pay), 0) as total_ot,
+        COALESCE(SUM(COALESCE(sc.ed_pay, 0)), 0) as total_ed,
+        COALESCE(SUM(sc.holiday_duty_pay), 0) as total_holiday_duty,
+        COALESCE(SUM(sc.pf_employee), 0) as total_pf_ee,
+        COALESCE(SUM(sc.pf_employer), 0) as total_pf_er,
+        COALESCE(SUM(sc.esi_employee), 0) as total_esi_ee,
+        COALESCE(SUM(sc.esi_employer), 0) as total_esi_er,
+        COALESCE(SUM(sc.professional_tax), 0) as total_pt,
+        COALESCE(SUM(sc.total_deductions), 0) as total_deductions,
+        COALESCE(SUM(sc.net_salary), 0) as total_net_salary,
+        COALESCE(SUM(sc.total_payable), 0) as total_payable,
+        COALESCE(SUM(COALESCE(sc.take_home, sc.total_payable)), 0) as total_take_home,
+        SUM(CASE WHEN sc.salary_held = 1 THEN 1 ELSE 0 END) as held_count
+      FROM salary_computations sc
+      LEFT JOIN employees e ON sc.employee_code = e.code
+      WHERE sc.month = ? AND sc.year = ?
+        ${company ? 'AND sc.company = ?' : ''}
+        AND (e.status IS NULL OR e.status NOT IN ('Exited'))
+      GROUP BY e.department
+      ORDER BY total_gross_earned DESC
+    `).all(...params);
+
+    const grandTotalGrossEarned = rows.reduce((s, r) => s + r.total_gross_earned, 0);
+
+    const departments = rows.map(r => ({
+      department: r.department || 'Unknown',
+      headcount: r.headcount,
+      grossCTC: Math.round(r.total_gross_ctc),
+      grossEarned: Math.round(r.total_gross_earned),
+      basic: Math.round(r.total_basic),
+      da: Math.round(r.total_da),
+      hra: Math.round(r.total_hra),
+      conveyance: Math.round(r.total_conv),
+      otherAllowances: Math.round(r.total_other),
+      otPay: Math.round(r.total_ot),
+      edPay: Math.round(r.total_ed),
+      holidayDuty: Math.round(r.total_holiday_duty),
+      pfEmployee: Math.round(r.total_pf_ee),
+      pfEmployer: Math.round(r.total_pf_er),
+      esiEmployee: Math.round(r.total_esi_ee),
+      esiEmployer: Math.round(r.total_esi_er),
+      professionalTax: Math.round(r.total_pt),
+      totalDeductions: Math.round(r.total_deductions),
+      netSalary: Math.round(r.total_net_salary),
+      totalPayable: Math.round(r.total_payable),
+      takeHome: Math.round(r.total_take_home),
+      perEmployeeCost: r.headcount > 0 ? Math.round(r.total_gross_earned / r.headcount) : 0,
+      totalCTC: Math.round(r.total_gross_ctc + r.total_pf_er + r.total_esi_er),
+      heldCount: r.held_count || 0,
+      costShare: grandTotalGrossEarned > 0
+        ? Math.round(r.total_gross_earned / grandTotalGrossEarned * 1000) / 10
+        : 0
+    }));
+
+    const grandTotals = {
+      headcount: departments.reduce((s, d) => s + d.headcount, 0),
+      grossCTC: departments.reduce((s, d) => s + d.grossCTC, 0),
+      grossEarned: departments.reduce((s, d) => s + d.grossEarned, 0),
+      netSalary: departments.reduce((s, d) => s + d.netSalary, 0),
+      pfEmployee: departments.reduce((s, d) => s + d.pfEmployee, 0),
+      pfEmployer: departments.reduce((s, d) => s + d.pfEmployer, 0),
+      esiEmployee: departments.reduce((s, d) => s + d.esiEmployee, 0),
+      esiEmployer: departments.reduce((s, d) => s + d.esiEmployer, 0),
+      totalDeductions: departments.reduce((s, d) => s + d.totalDeductions, 0),
+      totalCTC: departments.reduce((s, d) => s + d.totalCTC, 0)
+    };
+
+    res.json({ success: true, data: { departments, grandTotals }, month: parseInt(month), year: parseInt(year) });
+  } catch (err) {
+    console.error('Department payroll error:', err.message);
+    res.status(500).json({ success: false, error: 'Failed to compute department payroll: ' + err.message });
+  }
+});
+
 module.exports = router;

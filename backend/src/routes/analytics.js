@@ -709,4 +709,93 @@ router.get('/working-hours-by-dept', (req, res) => {
   }
 });
 
+// ─────────────────────────────────────────────────────────
+// GET /api/analytics/salary-trend
+// Multi-year monthly payroll cost trend from salary_computations
+// ─────────────────────────────────────────────────────────
+router.get('/salary-trend', (req, res) => {
+  try {
+    const db = getDb();
+    const endMonth = parseInt(req.query.month) || new Date().getMonth() + 1;
+    const endYear = parseInt(req.query.year) || new Date().getFullYear();
+    const numYears = Math.min(parseInt(req.query.years) || 3, 5);
+    const company = req.query.company || null;
+
+    const startYear = endYear - numYears;
+    const startKey = startYear * 12 + 1;
+    const endKey = endYear * 12 + endMonth;
+
+    const params = [startKey, endKey];
+    if (company) params.push(company);
+
+    const rows = db.prepare(`
+      SELECT
+        sc.month,
+        sc.year,
+        COUNT(DISTINCT sc.employee_code) as headcount,
+        COALESCE(SUM(sc.gross_salary), 0) as total_gross_ctc,
+        COALESCE(SUM(sc.gross_earned), 0) as total_gross_earned,
+        COALESCE(SUM(sc.net_salary), 0) as total_net_salary,
+        COALESCE(SUM(sc.total_payable), 0) as total_payable,
+        COALESCE(SUM(COALESCE(sc.take_home, sc.total_payable)), 0) as total_take_home,
+        COALESCE(SUM(sc.pf_employee), 0) as total_pf_ee,
+        COALESCE(SUM(sc.pf_employer), 0) as total_pf_er,
+        COALESCE(SUM(sc.esi_employee), 0) as total_esi_ee,
+        COALESCE(SUM(sc.esi_employer), 0) as total_esi_er,
+        COALESCE(SUM(sc.ot_pay), 0) as total_ot,
+        COALESCE(SUM(COALESCE(sc.ed_pay, 0)), 0) as total_ed
+      FROM salary_computations sc
+      WHERE (sc.year * 12 + sc.month) >= ?
+        AND (sc.year * 12 + sc.month) <= ?
+        ${company ? 'AND sc.company = ?' : ''}
+      GROUP BY sc.year, sc.month
+      ORDER BY sc.year ASC, sc.month ASC
+    `).all(...params);
+
+    const MN = ['','Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+
+    const months = rows.map(r => ({
+      month: r.month,
+      year: r.year,
+      label: `${MN[r.month]} ${r.year}`,
+      headcount: r.headcount,
+      totalGrossCTC: Math.round(r.total_gross_ctc),
+      totalGrossEarned: Math.round(r.total_gross_earned),
+      totalNetSalary: Math.round(r.total_net_salary),
+      totalTakeHome: Math.round(r.total_take_home),
+      totalPFEmployee: Math.round(r.total_pf_ee),
+      totalPFEmployer: Math.round(r.total_pf_er),
+      totalESIEmployee: Math.round(r.total_esi_ee),
+      totalESIEmployer: Math.round(r.total_esi_er),
+      totalOT: Math.round(r.total_ot),
+      totalED: Math.round(r.total_ed),
+      perEmployeeCost: r.headcount > 0 ? Math.round(r.total_gross_earned / r.headcount) : 0,
+      totalCTC: Math.round(r.total_gross_ctc + r.total_pf_er + r.total_esi_er)
+    }));
+
+    const byYear = {};
+    for (const m of months) {
+      if (!byYear[m.year]) byYear[m.year] = { year: m.year, months: [], totalNet: 0, headcounts: [] };
+      byYear[m.year].months.push(m);
+      byYear[m.year].totalNet += m.totalNetSalary;
+      byYear[m.year].headcounts.push(m.headcount);
+    }
+
+    const yearSummaries = Object.values(byYear).map((y, idx, arr) => {
+      const avgHC = y.headcounts.length > 0 ? Math.round(y.headcounts.reduce((a, b) => a + b, 0) / y.headcounts.length) : 0;
+      const avgMonthly = y.months.length > 0 ? Math.round(y.totalNet / y.months.length) : 0;
+      const prevYear = idx > 0 ? arr[idx - 1] : null;
+      const yoyChange = prevYear && prevYear.totalNet > 0
+        ? Math.round((y.totalNet - prevYear.totalNet) / prevYear.totalNet * 1000) / 10
+        : null;
+      return { year: y.year, avgHeadcount: avgHC, totalNetSalary: Math.round(y.totalNet), avgMonthlyCost: avgMonthly, yoyChange };
+    });
+
+    res.json({ success: true, data: { months, yearSummaries } });
+  } catch (err) {
+    console.error('Salary trend error:', err.message);
+    res.status(500).json({ success: false, error: 'Failed to compute salary trend: ' + err.message });
+  }
+});
+
 module.exports = router;

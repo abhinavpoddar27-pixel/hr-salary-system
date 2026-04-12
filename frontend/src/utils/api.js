@@ -123,6 +123,7 @@ export const getOrgOverview = (month, year, startDateOrOpts, endDate, company) =
   return api.get('/analytics/overview', { params })
 }
 export const getHeadcountTrend = (month, year, months, company, opts = {}) => api.get('/analytics/headcount-trend', { params: { month, year, months, ...(company ? { company } : {}), ...opts } })
+export const getSalaryTrend = (month, year, years, company) => api.get('/analytics/salary-trend', { params: { month, year, years, ...(company ? { company } : {}) } })
 export const getAttritionData = (month, year, company) => api.get('/analytics/attrition', { params: { month, year, ...(company ? { company } : {}) } })
 export const getAttrition = (month, year) => api.get('/analytics/attrition', { params: { month, year } })
 export const getChronicAbsentees = (month, year, startDate, endDate, company) => api.get('/analytics/absentees', { params: { month, year, startDate, endDate, ...(company ? { company } : {}) } })
@@ -201,6 +202,7 @@ export const addLifecycleEvent = (data) => api.post('/lifecycle', data)
 // ── Reports ────────────────────────────────────────────
 export const getAttendanceSummaryReport = (month, year, company) => api.get('/reports/attendance-summary', { params: { month, year, company } })
 export const getMissPunchReport = (month, year, company) => api.get('/reports/miss-punch-report', { params: { month, year, ...(company ? { company } : {}) } })
+export const getDepartmentPayroll = (month, year, company) => api.get('/reports/department-payroll', { params: { month, year, ...(company ? { company } : {}) } })
 export const getLateComingReport = (month, year) => api.get('/reports/late-coming', { params: { month, year } })
 export const getOvertimeReportData = (month, year) => api.get('/reports/overtime', { params: { month, year } })
 export const getPFStatement = (month, year, company) => api.get('/reports/pf-statement', { params: { month, year, ...(company ? { company } : {}) } })
