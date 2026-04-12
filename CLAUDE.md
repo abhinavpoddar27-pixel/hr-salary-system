@@ -686,3 +686,4 @@ frontend/
 - Financial calculations: always verify rounding, check for divide-by-zero on salary divisor, and ensure earned ratio is capped at 1.0 for base components.
 - Run lint before marking any task complete.
 - Update this CLAUDE.md file after completing any major feature or pipeline change.
+- **Use curl for all API/endpoint diagnostic and verification queries** — never build a UI/HTML page for tests that can be done with curl. Start the backend server, run curl commands, check headers and response bodies directly. This applies to this project and any other project where curl can reach the server.
