@@ -1,19 +1,19 @@
 ## Section 0: Last Session
 - **Date:** 2026-04-12
-- **Branch:** main (merged from `claude/session-start-ZuRmy`)
-- **Last commit:** `dad290d` feat: add YoY payroll cost trend (T3.4) and dept payroll report (T3.6)
+- **Branch:** main (cherry-picked from `claude/session-start-Hnp9m`)
+- **Last commit:** `c9cbeb4` feat: add /compose-fix prompt composer command with 7-guardrail scoring
 - **Files changed this session:**
-  - `backend/src/routes/analytics.js` — added `GET /salary-trend` endpoint (89 lines) before `module.exports`; multi-year monthly aggregation from `salary_computations` with year summaries + YoY %
-  - `backend/src/routes/reports.js` — added `GET /department-payroll` endpoint (95 lines) before `module.exports`; dept GROUP BY with cost share %, grand totals, company filter
-  - `frontend/src/pages/WorkforceAnalytics.jsx` — added `LineChart`/`Line` to recharts import, `getSalaryTrend` to api import, new `PayrollTrendTab` component (~115 lines), 4th tab entry, new Route
-  - `frontend/src/pages/Reports.jsx` — added `getDepartmentPayroll` import, dept-payroll query state, "Department Payroll" entry in REPORTS array, full tab content section (~70 lines)
-  - `frontend/src/utils/api.js` — added `getSalaryTrend` and `getDepartmentPayroll` one-liner exports
-  - `frontend/dist/` — rebuilt after all frontend changes
-- **What was fixed/built:** T3.4 — Payroll Cost Trend: dual-axis line chart (Net Salary + CTC + Headcount) in new Workforce Analytics tab, 1–5 year range selector, YoY summary cards, monthly breakdown table. T3.6 — Department Payroll Cost Centre: dept-wise payroll table in Reports sidebar with PF/ESI employer, OT+ED, cost share %, grand total footer, 4 KPI cards. Both read-only, zero schema changes.
-- **What's fragile:** Both endpoints return empty arrays (not 404) when no salary_computations rows exist — this is correct but means the UI shows "No data" until Stage 7 has been run for the selected month.
+  - `.claude/commands/compose-fix.md` — new slash command: 6-step bug fix prompt composer with FORMULA/WIRING/UPSERT/DATA/STALE_DIST/DOUBLE_COUNT classification, target file identification, DO NOT MODIFY list, 5-phase prompt template, 7-dimension quality scorer (min 28/35 before output)
+  - `backend/src/routes/analytics.js` — added `GET /salary-trend` (T3.4): multi-year monthly aggregation from salary_computations, year summaries with YoY % change (already on main via dad290d from prior session)
+  - `backend/src/routes/reports.js` — added `GET /department-payroll` (T3.6): dept GROUP BY with cost share %, grand totals, company filter (already on main via dad290d)
+  - `frontend/src/pages/WorkforceAnalytics.jsx` — new PayrollTrendTab component + 4th nav tab (T3.4, already on main)
+  - `frontend/src/pages/Reports.jsx` — Department Payroll tab in sidebar (T3.6, already on main)
+  - `frontend/src/utils/api.js` — getSalaryTrend + getDeptPayrollReport exports (already on main)
+- **What was fixed/built:** Added `/compose-fix` slash command — a prompt composer that generates scored, guardrailed bug fix prompts (never writes code itself). T3.4 + T3.6 were built and pushed to the session branch but `origin/main` already had them from a parallel session; only compose-fix was cherry-picked to main.
+- **What's fragile:** T3.4+T3.6 on main came from `dad290d` (different session) — that version uses `COALESCE(sc.ed_pay, 0)` double-wrap and `COALESCE(sc.take_home, sc.total_payable)` fallback which is marginally safer for old DB rows. Our session branch version lacks these fallbacks but was never merged.
 - **Unfinished work:** None.
-- **Known issues remaining:** Dev DB has no salary_computations data so both new endpoints return empty in local testing; production will be the real test. `take_home` column falls back to `total_payable` via `COALESCE` for rows computed before the ED integration (older months).
-- **Next session should:** Run Stage 7 for a real month, open Workforce Analytics → Payroll Cost Trend and Reports → Department Payroll to verify data renders correctly with real figures.
+- **Known issues remaining:** T3.4 and T3.6 UI untested against real production salary_computations data — both endpoints return empty when Stage 7 hasn't run for the selected month.
+- **Next session should:** Run Stage 7 for a real month, verify Workforce Analytics → Payroll Cost Trend and Reports → Department Payroll render correctly with production figures.
 
 ---
 
