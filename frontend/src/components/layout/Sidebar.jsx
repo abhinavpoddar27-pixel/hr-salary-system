@@ -76,6 +76,7 @@ const nav = [
     ]
   },
   { label: 'Session Analytics', icon: '📊', to: '/session-analytics', adminOnly: true },
+  { label: 'Query Tool', icon: '🔎', to: '/admin/query-tool', adminOnly: true },
   {
     label: 'Settings', icon: '⚙️', to: '/settings', adminOnly: true,
     children: [

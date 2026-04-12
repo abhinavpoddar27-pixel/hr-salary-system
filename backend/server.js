@@ -212,6 +212,7 @@ app.use('/api/early-exits',      requireAuth, require('./src/routes/early-exits'
 // Alias — range report + MTD endpoints are also exposed under the singular path.
 app.use('/api/early-exit',       requireAuth, require('./src/routes/early-exits'));
 app.use('/api/early-exit-deductions', requireAuth, require('./src/routes/early-exit-deductions'));
+app.use('/api/query-tool',       requireAuth, require('./src/routes/queryTool'));
 
 // Health check (public)
 app.get('/api/health', (req, res) => {

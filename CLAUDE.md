@@ -1,4 +1,26 @@
 ## Section 0: Recent Changes
+**2026-04-12 | Branch: claude/admin-sql-query-tool-L9lm8 | Admin SQL Query Tool**
+
+Files created:
+- `backend/src/config/schemaReference.js` — static schema reference text sent to Anthropic API for English→SQL translation
+- `backend/src/routes/queryTool.js` — admin-only route: POST /run (natural language + raw SQL), GET /saved (5 diagnostic queries), SELECT-only validation, 100-row limit
+- `frontend/src/pages/QueryTool.jsx` — admin-only page at /admin/query-tool: English + SQL tabs, saved query buttons, sortable results table, CSV export
+
+Files modified:
+- `backend/server.js` — 1 line: mount `/api/query-tool` route
+- `frontend/src/App.jsx` — 2 lines: lazy import + Route entry for /admin/query-tool
+- `frontend/src/components/layout/Sidebar.jsx` — 1 line: "Query Tool" nav item with `adminOnly: true`
+
+Notes:
+- Natural language mode requires ANTHROPIC_API_KEY env var (not set locally — Railway only)
+- Raw SQL paste mode works without API key
+- Admin-only: backend middleware checks `req.user.role === 'admin'`, returns 403 for non-admin
+- SQL validation blocks INSERT/UPDATE/DELETE/DROP/ALTER/CREATE/TRUNCATE/REPLACE/ATTACH/DETACH/PRAGMA/VACUUM/REINDEX
+- 5 saved diagnostic queries: drift check, payable days > 31, zero deductions, stuck ED grants, present vs payable gap
+- Pending: none
+
+---
+
 **2026-04-12 | Branch: claude/wire-notifications-end-to-end-5zVTq | Tier 3.4 — Notifications End-to-End**
 
 Files modified:
