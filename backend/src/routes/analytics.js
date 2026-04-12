@@ -8,6 +8,7 @@ const {
 } = require('../services/analytics');
 const { detectPatterns, detectAllPatterns, generateNarrative } = require('../services/behavioralPatterns');
 const { computeProfileRange } = require('../services/employeeProfileService');
+const { generateAIReview } = require('../services/aiReviewService');
 
 // GET org overview
 router.get('/overview', (req, res) => {
@@ -836,6 +837,56 @@ router.get('/employee/:code/profile-range', (req, res) => {
   } catch (err) {
     console.error('Profile range error:', err.message);
     res.status(500).json({ success: false, error: 'Failed to compute profile: ' + err.message });
+  }
+});
+
+// ─────────────────────────────────────────────────────────
+// POST /api/analytics/employee/:code/ai-review
+// AI-powered qualitative review via Claude API
+// Body (all optional): { from, to }
+// Requires ANTHROPIC_API_KEY env var
+// ─────────────────────────────────────────────────────────
+router.post('/employee/:code/ai-review', async (req, res) => {
+  try {
+    const db = getDb();
+    const { code } = req.params;
+    let { from, to } = req.body || {};
+
+    // Defaults: from = 6 months ago, to = today
+    if (!to) {
+      to = new Date().toISOString().split('T')[0];
+    }
+    if (!from) {
+      const d = new Date();
+      d.setMonth(d.getMonth() - 6);
+      from = d.toISOString().split('T')[0];
+    }
+
+    const dateRegex = /^\d{4}-\d{2}-\d{2}$/;
+    if (!dateRegex.test(from) || !dateRegex.test(to)) {
+      return res.status(400).json({ success: false, error: 'Invalid date format. Use YYYY-MM-DD.' });
+    }
+    if (from > to) {
+      return res.status(400).json({ success: false, error: '"from" must be <= "to".' });
+    }
+
+    const result = await generateAIReview(db, code, from, to);
+
+    if (!result.success) {
+      // Distinguish missing API key (503) from employee not found (404) from other errors (500)
+      if (result.error === 'Employee not found') {
+        return res.status(404).json(result);
+      }
+      if (result.error && result.error.includes('ANTHROPIC_API_KEY not configured')) {
+        return res.status(503).json(result);
+      }
+      return res.status(500).json(result);
+    }
+
+    res.json(result);
+  } catch (err) {
+    console.error('[AI Review] route error:', err.message);
+    res.status(500).json({ success: false, error: 'AI review failed: ' + err.message });
   }
 });
 
