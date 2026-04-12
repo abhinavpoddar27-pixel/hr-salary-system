@@ -1,18 +1,18 @@
 ## Section 0: Last Session
 - **Date:** 2026-04-12
-- **Branch:** main (merged from `claude/batch-early-exit-detection-MKMwd`)
-- **Last commit:** `5032695` feat: add /session-handoff slash command
+- **Branch:** `claude/add-salary-sanity-check-rNsku`
+- **Last commit:** `7dfbc53` feat: auto-run salary sanity check after Stage 7 computation with persistent banner
 - **Files changed this session:**
-  - `backend/src/routes/early-exits.js` — added `POST /detect-range` batch endpoint (loops `detectEarlyExits()` per date, max 90 days, caps future endDate to today)
-  - `frontend/src/utils/api.js` — added `detectEarlyExitRange()` API helper
-  - `frontend/src/components/EarlyExitDetection.jsx` — added "🔄 Run Detection" button, `detectRangeMut` mutation, `lastDayOfMonth` helper, `useEffect` to sync date range with parent month/year selector
-  - `frontend/dist/` — rebuilt after above changes
-  - `.claude/commands/session-handoff.md` — created this handoff command
-- **What was fixed/built:** Wired the batch early exit detection pipeline — only 8 of 28 dates in Feb 2026 had detection data; the new `/detect-range` endpoint backfills all dates in one call and the UI button makes it triggerable without curl.
-- **What's fragile:** `detectEarlyExits()` in `earlyExitDetection.js` silently skips employees with `shift_id IS NULL` — detection count will always be slightly below `attendance_processed` raw count; this is expected but can confuse the drift-check query.
-- **Unfinished work:** Piece 2 (auto-detection during import) not implemented — gaps will reappear for future months unless the "Run Detection" button is clicked manually after each import.
-- **Known issues remaining:** `early_exit_detections` still has no data for months before Feb 2026; backfill for Mar + Apr 2026 must be triggered manually via the UI or curl.
-- **Next session should:** Run detection backfill for Mar 2026 (`2026-03-01` → `2026-03-31`) and Apr 2026 (`2026-04-01` → today) via the UI or `POST /api/early-exits/detect-range`, then verify KPI card totals match `attendance_processed` counts.
+  - `backend/src/services/sanityCheck.js` — NEW: `runSanityCheck(month, year, company)` — 5 read-only checks against `salary_computations`; returns structured result with per-check pass/fail/error status; never modifies data
+  - `backend/src/routes/payroll.js` — import `runSanityCheck`; auto-run after `POST /compute-salary` transaction, adds `sanityCheck` field to response; new `GET /sanity-check` endpoint
+  - `frontend/src/utils/api.js` — added `getSanityCheck(month, year, company)` helper
+  - `frontend/src/pages/SalaryComputation.jsx` — `sanityCheckOverride` state from compute response; `useQuery` on page load; `SanityCheckBanner` / `SanityCheckRow` / `FailureDetail` components at file bottom; banner renders above salary register table
+  - `frontend/dist/` — rebuilt
+- **What was fixed/built:** 5-check salary sanity system that auto-runs after every computation and also loads on page open. Green strip when all pass; expandable amber/red banner with per-employee drill-down when any fail; grey unavailable strip if endpoint errors (never blocks the page).
+- **What's fragile:** The sanity check reads `salary_computations` — if column names change (e.g. `gross_earned`, `total_deductions`, `net_salary`, `payable_days`) the queries break silently (each check returns `status:'ERROR'`). Check 3 (earned ratio) only fires when both `ot_pay=0` AND `ed_pay=0` to avoid false positives on OT employees.
+- **Unfinished work:** None for this task.
+- **Known issues remaining:** None expected — all additive, no existing pipeline logic modified.
+- **Next session should:** Merge to main; then run early exit detection backfill for Mar 2026 (`2026-03-01` → `2026-03-31`) and Apr 2026 (`2026-04-01` → today) via the UI or `POST /api/early-exits/detect-range`.
 
 ---
 
