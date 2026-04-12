@@ -1,8 +1,20 @@
 ## Section 0: Last Session
 - **Date:** 2026-04-12
+- **Branch:** `claude/session-start-B6yrb`
+- **Task:** T3.7 — Role-Differentiated Dashboard (Admin Financial Overview + Finance Workbench)
+- **Files changed this session:**
+  - `frontend/src/pages/Dashboard.jsx` — role-based dashboard: admin sees financial overview (KPIs, action queue, dept cost, readiness) with toggle to HR view; finance sees task workbench (action counts, status banner, checklist); HR/viewer sees original dashboard unchanged
+- **What was built:** Three dashboard view modes in a single file. Admin gets Net Payroll/PF/ESI/Readiness KPI cards, pending actions queue (held salaries, manual flags, late deductions, miss punch review), department cost breakdown table, and month-end readiness checklist — plus a toggle to switch to the original HR view. Finance gets a stripped-down workbench with 4 clickable action-count cards, an overall status banner, and the readiness checklist. All data sourced from existing endpoints (salary-register, readiness-check, salary-manual-flags, late-coming/deductions, miss-punches, department-payroll) via Promise.all parallel fetch. Zero backend changes, zero schema changes.
+- **What's fragile:** Nothing — all endpoints are existing and stable. The finance dashboard fetch uses individual .catch() wrappers so a single failed endpoint doesn't break the whole view.
+- **Pending:** None for this task
+
+---
+
+## Section 0: Previous Session
+- **Date:** 2026-04-12
 - **Branch:** `claude/session-start-DL0k6` (pushed to `origin/main` via fast-forward)
 - **Last commit:** `2542b49` feat: AI-powered qualitative employee review via Claude API
-- **Files changed this session:**
+- **Files changed that session:**
   - `backend/src/services/employeeProfileService.js` — new: `computeProfileRange()` returning 13 sections (employee, kpis, streaks, arrivalDeparture, regularityScore, behavioralPatterns, monthlyBreakdown, departmentComparison, salaryHistory, corrections, leaveUsage, patternAnalysis, meta)
   - `backend/src/routes/analytics.js` — added `GET /employee/:code/profile-range` and `POST /employee/:code/ai-review` routes
   - `backend/src/services/aiReviewService.js` — new: `generateAIReview()` calling Anthropic API; `buildReviewPayload()`, `parseSections()`, `callClaudeAPI()`
