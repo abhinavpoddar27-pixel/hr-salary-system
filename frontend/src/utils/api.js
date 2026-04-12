@@ -442,6 +442,7 @@ export const cancelShortLeave = (id, data) => api.put(`/short-leaves/${id}/cance
 
 // ── Early Exit Detection ──────────────────────────────────
 export const detectEarlyExits = (data) => api.post('/early-exits/detect', data)
+export const detectEarlyExitRange = (data) => api.post('/early-exits/detect-range', data)
 export const getEarlyExits = (params) => api.get('/early-exits', { params })
 export const getEarlyExitSummary = (params) => api.get('/early-exits/summary', { params })
 export const getEarlyExitEmployeeAnalytics = (code) => api.get(`/early-exits/employee/${code}/analytics`)

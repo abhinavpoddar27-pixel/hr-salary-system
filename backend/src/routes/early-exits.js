@@ -109,6 +109,62 @@ router.post('/detect', requireHrOrAdmin, (req, res) => {
 });
 
 // ────────────────────────────────────────────────────────────
+// POST /detect-range — Batch detect early exits for a date range
+// Loops detectEarlyExits() for each date in the range.
+// Max 90 days. Returns per-date results.
+// ────────────────────────────────────────────────────────────
+router.post('/detect-range', requireHrOrAdmin, (req, res) => {
+  try {
+    const db = getDb();
+    const { startDate, endDate } = req.body;
+
+    if (!startDate || !endDate) {
+      return res.status(400).json({ success: false, error: 'startDate and endDate required (YYYY-MM-DD)' });
+    }
+    if (!isValidDate(startDate) || !isValidDate(endDate)) {
+      return res.status(400).json({ success: false, error: 'Invalid date format' });
+    }
+    if (startDate > endDate) {
+      return res.status(400).json({ success: false, error: 'startDate must be <= endDate' });
+    }
+    const today = new Date().toISOString().split('T')[0];
+    const effectiveEnd = endDate > today ? today : endDate;
+    const span = daysBetween(startDate, effectiveEnd);
+    if (span > 90) {
+      return res.status(400).json({ success: false, error: 'Maximum range is 90 days' });
+    }
+
+    const results = [];
+    let totalDetected = 0, totalExempted = 0, totalSkipped = 0;
+
+    const current = new Date(startDate + 'T00:00:00Z');
+    const end = new Date(effectiveEnd + 'T00:00:00Z');
+
+    while (current <= end) {
+      const dateStr = current.toISOString().split('T')[0];
+      const result = detectEarlyExits(db, dateStr);
+      results.push({ date: dateStr, ...result });
+      totalDetected += result.detected;
+      totalExempted += result.exempted;
+      totalSkipped += result.skipped;
+      current.setUTCDate(current.getUTCDate() + 1);
+    }
+
+    return res.json({
+      success: true,
+      datesProcessed: results.length,
+      totalDetected,
+      totalExempted,
+      totalSkipped,
+      details: results
+    });
+  } catch (err) {
+    console.error('[early-exits] POST /detect-range error:', err);
+    return res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// ────────────────────────────────────────────────────────────
 // GET / — List detections with filters
 // ────────────────────────────────────────────────────────────
 router.get('/', requireHrFinanceOrAdmin, (req, res) => {

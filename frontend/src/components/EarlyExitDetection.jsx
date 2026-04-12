@@ -2,7 +2,7 @@ import React, { useState, useMemo, useEffect } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import {
   getEarlyExitRangeReport, getEarlyExitMtdSummary, getEarlyExitDeptSummary,
-  exportEarlyExitReport,
+  exportEarlyExitReport, detectEarlyExitRange,
   getEarlyExitEmployeeAnalytics, submitEarlyExitDeduction,
   cancelEarlyExitDeduction, reviseEarlyExitDeduction
 } from '../utils/api'
@@ -80,6 +80,10 @@ function daysDiff(a, b) {
   const ms = new Date(b + 'T00:00:00').getTime() - new Date(a + 'T00:00:00').getTime()
   return Math.floor(ms / 86400000) + 1
 }
+function lastDayOfMonth(month, year) {
+  const d = new Date(year, month, 0)
+  return toIso(d)
+}
 
 function computePreset(preset) {
   const today = new Date()
@@ -144,7 +148,35 @@ export default function EarlyExitDetection({ selectedMonth, selectedYear, select
     setRangeError('')
   }, [startDate, endDate])
 
+  // Sync date range when the parent month/year selector changes
+  useEffect(() => {
+    if (selectedMonth && selectedYear) {
+      const firstDay = `${selectedYear}-${String(selectedMonth).padStart(2, '0')}-01`
+      const last = lastDayOfMonth(selectedMonth, selectedYear)
+      const todayStr = toIso(new Date())
+      const effectiveEnd = last > todayStr ? todayStr : last
+      setStartDate(firstDay)
+      setEndDate(effectiveEnd)
+      setActivePreset('month')
+    }
+  }, [selectedMonth, selectedYear])
+
   const rangeValid = !rangeError && startDate && endDate
+
+  // ─── Detect range mutation ────────────────────────────────
+  const detectRangeMut = useMutation({
+    mutationFn: (data) => detectEarlyExitRange(data),
+    onSuccess: (res) => {
+      const d = res.data
+      toast.success(`Detection complete: ${d.totalDetected} flagged across ${d.datesProcessed} days`)
+      queryClient.invalidateQueries({ queryKey: ['ee-range'] })
+      queryClient.invalidateQueries({ queryKey: ['ee-mtd'] })
+      queryClient.invalidateQueries({ queryKey: ['ee-dept'] })
+    },
+    onError: (err) => {
+      toast.error(err.response?.data?.error || 'Detection failed')
+    }
+  })
 
   // ─── Queries ──────────────────────────────────────────
   const { data: rangeRes, isLoading } = useQuery({
@@ -338,6 +370,17 @@ export default function EarlyExitDetection({ selectedMonth, selectedYear, select
                 {daysDiff(startDate, endDate)} day{daysDiff(startDate, endDate) !== 1 ? 's' : ''}
               </span>
             )}
+            <button
+              onClick={() => detectRangeMut.mutate({ startDate, endDate })}
+              disabled={!rangeValid || detectRangeMut.isPending}
+              className={clsx(
+                'px-3 py-1.5 text-xs rounded-lg border transition-colors',
+                'bg-emerald-50 text-emerald-700 border-emerald-300 hover:bg-emerald-100',
+                'disabled:opacity-50 disabled:cursor-not-allowed'
+              )}
+            >
+              {detectRangeMut.isPending ? 'Detecting...' : '🔄 Run Detection'}
+            </button>
           </div>
           {rangeError && (
             <div className="text-xs text-red-600 font-medium">{rangeError}</div>
