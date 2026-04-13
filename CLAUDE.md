@@ -1,5 +1,21 @@
 ## Section 0: Last Session
 - **Date:** 2026-04-13
+- **Branch:** `claude/session-start-SFwgo` (pushed to `origin/main`)
+- **Last commit:** `8d24ac0` feat: early exit employee summary view with grouped analysis
+- **Files changed this session:**
+  - `backend/src/routes/early-exits.js` — added `GET /employee-summary` endpoint: groups exits by employee across a date range, prev-period trend, habitual flag, per-employee incidents array from GROUP_CONCAT
+  - `frontend/src/utils/api.js` — added `getEarlyExitEmployeeSummary` export
+  - `frontend/src/components/EarlyExitDetection.jsx` — added "By Employee" / "All Incidents" view toggle (default: employee); employee summary table with HABITUAL badge, colour-coded exit count, sortable columns, click-to-expand incident sub-table; existing incidents table unchanged except wrapped in viewMode guard
+- **What was fixed/built:** Early Exit grouped analysis view — replaces the unusable 3800-row flat list with an employee-grouped table that identifies repeat offenders at a glance. Previous period comparison and habitual offender flagging built into the backend endpoint. Build clean, pushed to main.
+- **What's fragile:** `empDisplayRows` memo uses `empSort.sortKey` / `empSort.sortDir` as dependencies directly from the `useSortable` return object — if `useSortable` is ever refactored to return a single object ref these deps will silently stop triggering re-sorts. `GROUP_CONCAT` order within SQLite is not guaranteed — incident sub-table rows may appear unsorted by date on some SQLite versions.
+- **Unfinished work:** None for this feature.
+- **Known issues remaining:** `EmployeeProfile.jsx` AI Review "Regenerate" button shown even after an error (pre-existing). `DeptAnalytics.jsx` overtime tab field names not tested against real production data (pre-existing).
+- **Next session should:** Test the employee summary view against real production data on Railway; verify HABITUAL thresholds (≥5 exits OR ≥3 exits + avg ≥60 min) feel right with actual data; consider adding "Export" button to the employee summary view if HR requests it.
+
+---
+
+## Section 0: Previous Session
+- **Date:** 2026-04-13
 - **Branch:** `claude/session-start-ObkfF` (pushed to `origin/main`)
 - **Last commit:** `f4bffca` fix: AI review response parsing and display
 - **Files changed this session:**
