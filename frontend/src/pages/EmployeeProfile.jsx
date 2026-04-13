@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import api from '../utils/api';
-import { LineChart, Line, BarChart, Bar, RadarChart, Radar, PolarGrid, PolarAngleAxis, PolarRadiusAxis, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts';
+import { LineChart, Line, BarChart, Bar, RadarChart, Radar, PolarGrid, PolarAngleAxis, PolarRadiusAxis, ScatterChart, Scatter, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts';
 
 export default function EmployeeProfile() {
   const [employees, setEmployees] = useState([]);
@@ -197,6 +197,38 @@ export default function EmployeeProfile() {
                   ['Miss Punches', kpis.missPunchCount], ['Resolved', fmtPct(kpis.missPunchResolutionRate)], ['Holiday Duty', kpis.holidayDutyDays], ['ED Approved', kpis.edDaysApproved]
                 ].map(([l, v]) => <div key={l}><span className="text-gray-500">{l}: </span><span className="font-medium">{v ?? '-'}</span></div>)}
               </div>
+              {(profileData.arrivalDeparture?.dailyTimes || []).length > 0 && (() => {
+                const arrData = (profileData.arrivalDeparture.dailyTimes || []).slice(-90).map(d => {
+                  if (!d.inTime) return null;
+                  const parts = d.inTime.split(':');
+                  const h = parseInt(parts[0]), m = parseInt(parts[1] || '0');
+                  if (isNaN(h)) return null;
+                  return { date: d.date.slice(5), minutes: h * 60 + m, isLate: d.isLate };
+                }).filter(Boolean);
+                const onTime = arrData.filter(d => !d.isLate);
+                const late = arrData.filter(d => d.isLate);
+                const fmtTime = (v) => { const hh = Math.floor(v / 60); const mm = v % 60; return hh + ':' + String(mm).padStart(2, '0'); };
+                return (
+                  <div className="bg-white rounded-lg shadow p-4">
+                    <h3 className="font-semibold text-gray-900 mb-3">Daily Arrival Times (last 90 days)</h3>
+                    <ResponsiveContainer width="100%" height={250}>
+                      <ScatterChart>
+                        <CartesianGrid strokeDasharray="3 3" />
+                        <XAxis dataKey="date" type="category" allowDuplicatedCategory={false}
+                          data={[...onTime, ...late].sort((a, b) => a.date.localeCompare(b.date))}
+                          tick={{ fontSize: 9 }} interval="preserveStartEnd" />
+                        <YAxis dataKey="minutes" type="number" domain={['auto', 'auto']}
+                          tickFormatter={fmtTime} tick={{ fontSize: 10 }} />
+                        <Tooltip formatter={(v, name) => name === 'minutes' ? fmtTime(v) : v}
+                          labelFormatter={(l) => 'Date: ' + l} />
+                        <Legend />
+                        <Scatter name="On Time" data={onTime} fill="#22c55e" />
+                        <Scatter name="Late" data={late} fill="#ef4444" />
+                      </ScatterChart>
+                    </ResponsiveContainer>
+                  </div>
+                );
+              })()}
               {(profileData.monthlyBreakdown || []).length > 0 && (
                 <div className="bg-white rounded-lg shadow p-4 overflow-x-auto">
                   <h3 className="font-semibold mb-2">Monthly Breakdown</h3>
