@@ -34,6 +34,18 @@ function detectEarlyExits(db, targetDate) {
       AND ap.shift_id IS NOT NULL
   `).all(targetDate);
 
+  // ── Reset previous detections for this date so re-runs are idempotent ──
+  db.prepare(`
+    UPDATE attendance_processed
+    SET is_early_departure = 0, early_by_minutes = 0
+    WHERE date = ? AND is_night_out_only = 0
+  `).run(targetDate);
+
+  db.prepare(`
+    DELETE FROM early_exit_detections
+    WHERE date = ? AND detection_status != 'actioned'
+  `).run(targetDate);
+
   let detected = 0, exempted = 0, skipped = 0;
 
   for (const rec of records) {
