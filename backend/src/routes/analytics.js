@@ -9,6 +9,8 @@ const {
 const { detectPatterns, detectAllPatterns, generateNarrative } = require('../services/behavioralPatterns');
 const { computeProfileRange } = require('../services/employeeProfileService');
 const { generateAIReview } = require('../services/aiReviewService');
+const { computeDepartmentAnalytics } = require('../services/deptAnalyticsService');
+const { computeOrgMetrics } = require('../services/orgMetricsService');
 
 // GET org overview
 router.get('/overview', (req, res) => {
@@ -887,6 +889,44 @@ router.post('/employee/:code/ai-review', async (req, res) => {
   } catch (err) {
     console.error('[AI Review] route error:', err.message);
     res.status(500).json({ success: false, error: 'AI review failed: ' + err.message });
+  }
+});
+
+// GET /api/analytics/department-dashboard
+router.get('/department-dashboard', (req, res) => {
+  try {
+    const db = getDb();
+    let { from, to } = req.query;
+    if (!to) to = new Date().toISOString().split('T')[0];
+    if (!from) { const d = new Date(); d.setMonth(d.getMonth() - 6); from = d.toISOString().split('T')[0]; }
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(from) || !/^\d{4}-\d{2}-\d{2}$/.test(to)) {
+      return res.status(400).json({ success: false, error: 'Invalid date format' });
+    }
+    if (from > to) return res.status(400).json({ success: false, error: 'from must be <= to' });
+    const result = computeDepartmentAnalytics(db, from, to);
+    res.json({ success: true, data: result });
+  } catch (err) {
+    console.error('Department dashboard error:', err.message);
+    res.status(500).json({ success: false, error: 'Failed: ' + err.message });
+  }
+});
+
+// GET /api/analytics/org-metrics
+router.get('/org-metrics', (req, res) => {
+  try {
+    const db = getDb();
+    let { from, to } = req.query;
+    if (!to) to = new Date().toISOString().split('T')[0];
+    if (!from) { const d = new Date(); d.setMonth(d.getMonth() - 6); from = d.toISOString().split('T')[0]; }
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(from) || !/^\d{4}-\d{2}-\d{2}$/.test(to)) {
+      return res.status(400).json({ success: false, error: 'Invalid date format' });
+    }
+    if (from > to) return res.status(400).json({ success: false, error: 'from must be <= to' });
+    const result = computeOrgMetrics(db, from, to);
+    res.json({ success: true, data: result });
+  } catch (err) {
+    console.error('Org metrics error:', err.message);
+    res.status(500).json({ success: false, error: 'Failed: ' + err.message });
   }
 });
 
