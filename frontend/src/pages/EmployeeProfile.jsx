@@ -21,25 +21,36 @@ function KpiCard({ label, value, sub, color = 'blue' }) {
   );
 }
 
+// API returns capitalized severity: 'High', 'Medium', 'Low', 'Critical', 'Info'
 function SeverityBadge({ s }) {
-  const map = { high: 'bg-red-100 text-red-700', medium: 'bg-amber-100 text-amber-700', low: 'bg-yellow-100 text-yellow-700', info: 'bg-blue-100 text-blue-700' };
-  return <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${map[s] || map.info}`}>{s}</span>;
+  const map = {
+    Critical: 'bg-red-100 text-red-800',
+    High:     'bg-red-100 text-red-700',
+    Medium:   'bg-amber-100 text-amber-700',
+    Low:      'bg-yellow-100 text-yellow-700',
+    Info:     'bg-blue-100 text-blue-700',
+  };
+  return <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${map[s] || map.Info}`}>{s}</span>;
 }
 
 export default function EmployeeProfile() {
   const today = new Date().toISOString().split('T')[0];
   const sixAgo = (() => { const d = new Date(); d.setMonth(d.getMonth() - 6); return d.toISOString().split('T')[0]; })();
 
-  const [employees, setEmployees]     = useState([]);
-  const [selectedCode, setSelected]   = useState('');
-  const [searchTerm, setSearch]       = useState('');
-  const [showDropdown, setDropdown]   = useState(false);
-  const [fromDate, setFrom]           = useState(sixAgo);
-  const [toDate, setTo]               = useState(today);
-  const [profileData, setProfile]     = useState(null);
-  const [loading, setLoading]         = useState(false);
-  const [error, setError]             = useState('');
-  const [activeTab, setTab]           = useState('overview');
+  const [employees, setEmployees]   = useState([]);
+  const [selectedCode, setSelected] = useState('');
+  const [searchTerm, setSearch]     = useState('');
+  const [showDropdown, setDropdown] = useState(false);
+  const [fromDate, setFrom]         = useState(sixAgo);
+  const [toDate, setTo]             = useState(today);
+  const [profileData, setProfile]   = useState(null);
+  const [loading, setLoading]       = useState(false);
+  const [error, setError]           = useState('');
+  const [activeTab, setTab]         = useState('overview');
+  // AI Review state
+  const [aiReview, setAiReview]     = useState(null);
+  const [aiLoading, setAiLoading]   = useState(false);
+  const [aiError, setAiError]       = useState('');
   const dropRef = useRef(null);
 
   // Load employee list once
@@ -56,6 +67,9 @@ export default function EmployeeProfile() {
     return () => document.removeEventListener('mousedown', handler);
   }, []);
 
+  // Reset AI review when employee or dates change
+  useEffect(() => { setAiReview(null); setAiError(''); }, [selectedCode, fromDate, toDate]);
+
   const filtered = employees.filter(e =>
     !searchTerm || e.name?.toLowerCase().includes(searchTerm.toLowerCase()) || e.code?.toLowerCase().includes(searchTerm.toLowerCase())
   ).slice(0, 30);
@@ -71,6 +85,19 @@ export default function EmployeeProfile() {
   }, [selectedCode, fromDate, toDate]);
 
   useEffect(() => { if (selectedCode) fetchProfile(); }, [selectedCode, fromDate, toDate, fetchProfile]);
+
+  const generateAiReview = async () => {
+    setAiLoading(true); setAiError(''); setAiReview(null);
+    try {
+      const r = await api.post(`/analytics/employee/${selectedCode}/ai-review`, { from: fromDate, to: toDate });
+      setAiReview(r.data?.sections || r.data?.data?.sections || null);
+      if (!r.data?.sections && !r.data?.data?.sections) setAiError('No review content returned');
+    } catch (e) {
+      const status = e.response?.status;
+      if (status === 503) setAiError('AI review unavailable — ANTHROPIC_API_KEY not configured on this server.');
+      else setAiError(e.response?.data?.error || e.message);
+    } finally { setAiLoading(false); }
+  };
 
   const emp = profileData?.employee;
   const kpis = profileData?.kpis;
@@ -91,7 +118,6 @@ export default function EmployeeProfile() {
 
       {/* Controls */}
       <div className="bg-white rounded-lg shadow p-4 flex flex-wrap gap-4 items-end">
-        {/* Employee search */}
         <div className="flex-1 min-w-48 relative" ref={dropRef}>
           <label className="block text-sm font-medium text-gray-700 mb-1">Employee</label>
           <input
@@ -175,7 +201,7 @@ export default function EmployeeProfile() {
               </div>
 
               {streaks && (
-                <div className="bg-white rounded-lg shadow p-4 flex gap-6 text-sm">
+                <div className="bg-white rounded-lg shadow p-4 flex gap-6 text-sm flex-wrap">
                   <div><span className="text-gray-500">Best streak:</span> <span className="font-bold text-green-700">{streaks.maxPresentStreak}d present</span></div>
                   <div><span className="text-gray-500">Longest absence run:</span> <span className="font-bold text-red-700">{streaks.maxAbsentStreak}d</span></div>
                   {streaks.currentStreak?.days > 0 && (
@@ -211,12 +237,12 @@ export default function EmployeeProfile() {
                       ['Attendance%', deptComp.employee?.attendanceRate, deptComp.department?.attendanceRate, deptComp.org?.attendanceRate],
                       ['Late%',       deptComp.employee?.lateRate,       deptComp.department?.lateRate,       deptComp.org?.lateRate],
                       ['Avg Hours',   deptComp.employee?.avgHours,       deptComp.department?.avgHours,       deptComp.org?.avgHours],
-                    ].map(([label, emp, dept, org]) => (
+                    ].map(([label, e, d, o]) => (
                       <tr key={label} className="border-b even:bg-gray-50">
                         <td className="py-1.5 font-medium">{label}</td>
-                        <td className="font-bold">{emp != null ? emp : '—'}</td>
-                        <td className="text-gray-600">{dept != null ? dept : '—'}</td>
-                        <td className="text-gray-600">{org != null ? org : '—'}</td>
+                        <td className="font-bold">{e != null ? e : '—'}</td>
+                        <td className="text-gray-600">{d != null ? d : '—'}</td>
+                        <td className="text-gray-600">{o != null ? o : '—'}</td>
                       </tr>
                     ))}
                   </tbody></table>
@@ -296,10 +322,12 @@ export default function EmployeeProfile() {
                     {salary.months.map(m => (
                       <tr key={`${m.year}-${m.month}`} className="border-b even:bg-gray-50">
                         <td className="py-1.5">{m.year}-{String(m.month).padStart(2,'0')}</td>
-                        <td>{inr(m.grossEarned)}</td><td>{inr(m.netSalary)}</td>
-                        <td className="font-medium">{inr(m.takeHome ?? m.totalPayable)}</td>
-                        <td className="text-red-700">{inr(m.totalDeductions)}</td>
-                        <td>{inr(m.pfEmployee)}</td><td>{inr(m.esiEmployee)}</td>
+                        <td>{inr(m.gross_earned)}</td>
+                        <td>{inr(m.net_salary)}</td>
+                        <td className="font-medium">{inr(m.take_home ?? m.total_payable)}</td>
+                        <td className="text-red-700">{inr(m.total_deductions)}</td>
+                        <td>{inr(m.pf_employee)}</td>
+                        <td>{inr(m.esi_employee)}</td>
                       </tr>
                     ))}
                   </tbody></table>
@@ -309,7 +337,7 @@ export default function EmployeeProfile() {
                 <div className="bg-white rounded-lg shadow p-4">
                   <h3 className="font-semibold mb-3 text-sm">Net Salary Trend</h3>
                   <ResponsiveContainer width="100%" height={220}>
-                    <BarChart data={salary.months.map(m => ({ name: `${m.year}-${String(m.month).padStart(2,'0')}`, net: m.netSalary, gross: m.grossEarned }))}>
+                    <BarChart data={salary.months.map(m => ({ name: `${m.year}-${String(m.month).padStart(2,'0')}`, net: m.net_salary, gross: m.gross_earned }))}>
                       <CartesianGrid strokeDasharray="3 3" />
                       <XAxis dataKey="name" tick={{ fontSize: 10 }} />
                       <YAxis tickFormatter={v => `₹${(v/1000).toFixed(0)}k`} />
@@ -337,15 +365,19 @@ export default function EmployeeProfile() {
                     <KpiCard label="Reliability"  value={`${patterns.compositeScores?.reliability ?? 0}/100`} color={patterns.compositeScores?.reliability > 60 ? 'green' : 'amber'} />
                   </div>
                   {patterns.patterns?.length > 0 ? (
-                    <div className="bg-white rounded-lg shadow p-4 space-y-2">
-                      <h3 className="font-semibold text-sm mb-3">Detected Patterns ({patterns.patterns.length})</h3>
+                    <div className="bg-white rounded-lg shadow p-4 space-y-3">
+                      <h3 className="font-semibold text-sm">Detected Patterns ({patterns.patterns.length})</h3>
                       {patterns.patterns.map((p, i) => (
-                        <div key={i} className="border rounded p-3 flex justify-between items-start gap-3">
-                          <div>
-                            <div className="font-medium text-sm">{p.name || p.patternType}</div>
-                            {p.description && <div className="text-xs text-gray-500 mt-0.5">{p.description}</div>}
+                        <div key={i} className="border rounded p-3 space-y-1">
+                          <div className="flex justify-between items-center gap-3">
+                            <span className="font-medium text-sm text-gray-900">{p.label}</span>
+                            <div className="flex items-center gap-2 shrink-0">
+                              {p.score != null && <span className="text-xs text-gray-500">score: {p.score}</span>}
+                              <SeverityBadge s={p.severity} />
+                            </div>
                           </div>
-                          <SeverityBadge s={p.severity} />
+                          {p.detail && <div className="text-xs text-gray-600">{p.detail}</div>}
+                          {p.hrAction && <div className="text-xs text-indigo-700 italic">HR: {p.hrAction}</div>}
                         </div>
                       ))}
                     </div>
@@ -362,11 +394,51 @@ export default function EmployeeProfile() {
 
           {/* ── AI Review ── */}
           {activeTab === 'aiReview' && (
-            <div className="bg-white rounded-lg shadow p-8 text-center space-y-4">
-              <div className="text-4xl">🤖</div>
-              <h3 className="font-semibold text-lg">AI Narrative Review</h3>
-              <p className="text-sm text-gray-500 max-w-md mx-auto">Generate a qualitative AI-powered analysis of this employee's attendance patterns, behavioral signals, and performance indicators.</p>
-              <button disabled className="px-6 py-2 bg-indigo-600 text-white rounded opacity-50 cursor-not-allowed text-sm">Generate AI Review (coming soon)</button>
+            <div className="space-y-4">
+              {!aiReview && !aiLoading && (
+                <div className="bg-white rounded-lg shadow p-8 text-center space-y-4">
+                  <div className="text-4xl">🤖</div>
+                  <h3 className="font-semibold text-lg">AI Narrative Review</h3>
+                  <p className="text-sm text-gray-500 max-w-md mx-auto">Generate a qualitative AI-powered analysis of attendance patterns, behavioral signals, and performance indicators for the selected date range.</p>
+                  {aiError && <div className="bg-red-50 border border-red-200 rounded p-3 text-red-700 text-sm">{aiError}</div>}
+                  <button onClick={generateAiReview} disabled={aiLoading}
+                    className="px-6 py-2 bg-indigo-600 text-white rounded hover:bg-indigo-700 text-sm disabled:opacity-50">
+                    Generate AI Review
+                  </button>
+                </div>
+              )}
+
+              {aiLoading && (
+                <div className="bg-white rounded-lg shadow p-12 text-center">
+                  <div className="animate-spin h-8 w-8 border-4 border-indigo-200 border-t-indigo-600 rounded-full mx-auto mb-4" />
+                  <p className="text-sm text-gray-500">Analysing {emp?.name}'s data with Claude AI…</p>
+                </div>
+              )}
+
+              {aiReview && !aiLoading && (
+                <div className="space-y-3">
+                  <div className="flex justify-end">
+                    <button onClick={generateAiReview} className="px-4 py-1.5 border border-indigo-600 text-indigo-600 rounded hover:bg-indigo-50 text-sm">
+                      Regenerate
+                    </button>
+                  </div>
+                  {aiError && <div className="bg-red-50 border border-red-200 rounded p-3 text-red-700 text-sm">{aiError}</div>}
+
+                  {[
+                    { key: 'executiveSummary', title: 'Executive Summary', color: 'border-indigo-500 bg-indigo-50' },
+                    { key: 'strengths',        title: 'Key Strengths',     color: 'border-green-500 bg-green-50' },
+                    { key: 'concerns',         title: 'Areas of Concern',  color: 'border-red-500 bg-red-50' },
+                    { key: 'riskAssessment',   title: 'Risk Assessment',   color: 'border-amber-500 bg-amber-50' },
+                    { key: 'recommendations',  title: 'Recommendations',   color: 'border-blue-500 bg-blue-50' },
+                    { key: 'departmentContext',title: 'Department Context', color: 'border-gray-400 bg-gray-50' },
+                  ].filter(s => aiReview[s.key]).map(s => (
+                    <div key={s.key} className={`rounded-lg shadow p-4 border-l-4 ${s.color}`}>
+                      <h3 className="font-semibold text-sm mb-2 text-gray-800">{s.title}</h3>
+                      <div className="text-sm text-gray-700 whitespace-pre-line">{aiReview[s.key]}</div>
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
           )}
         </>
