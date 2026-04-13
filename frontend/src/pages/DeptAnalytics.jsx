@@ -276,7 +276,78 @@ export default function DeptAnalytics() {
               )}
             </div>
           )}
-          {activeTab === 'alerts' && <div className="bg-white rounded-lg shadow p-8 text-center text-gray-400">Alerts — next prompt</div>}
+          {activeTab === 'alerts' && (
+            <div className="space-y-4">
+              {(orgData?.coordinatedAbsenceAlerts || []).length > 0 ? (
+                <div className="bg-white rounded-lg shadow p-4">
+                  <h3 className="font-semibold mb-3 text-red-700">Coordinated Absence Alerts</h3>
+                  <p className="text-xs text-gray-500 mb-3">Days where &gt;40% of a department was absent without notice. May indicate informal protest or grievance.</p>
+                  <div className="space-y-2">
+                    {orgData.coordinatedAbsenceAlerts.map((a, i) => (
+                      <div key={i} className="border-l-4 border-red-500 bg-red-50 rounded p-3 flex justify-between items-center flex-wrap gap-2">
+                        <div>
+                          <span className="font-medium text-gray-900">{a.department}</span>
+                          <span className="text-sm text-gray-500 ml-2">{a.date}</span>
+                        </div>
+                        <div className="text-sm">
+                          <span className="font-bold text-red-700">{a.absentCount}/{a.deptSize}</span>
+                          <span className="text-gray-500 ml-1">({a.rate}% absent)</span>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              ) : (
+                <div className="bg-green-50 rounded-lg shadow p-6 text-center text-green-700">
+                  <div className="text-2xl mb-2">✓</div>
+                  <p className="font-medium">No coordinated absence alerts</p>
+                  <p className="text-sm text-green-600">No department had &gt;40% unplanned absence on any single day</p>
+                </div>
+              )}
+
+              {(deptData?.nightShiftBurden || []).filter(d => d.flagged).length > 0 && (
+                <div className="bg-white rounded-lg shadow p-4">
+                  <h3 className="font-semibold mb-3 text-orange-700">Overburdened Night Shift Departments</h3>
+                  <div className="space-y-2">
+                    {deptData.nightShiftBurden.filter(d => d.flagged).map(d => (
+                      <div key={d.department} className="border-l-4 border-orange-400 bg-orange-50 rounded p-3 flex justify-between">
+                        <span className="font-medium">{d.department}</span>
+                        <span className="text-sm">{d.burden}x org average ({d.nightRatio}% vs {d.orgAvgNightRatio}%)</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {(deptData?.attendanceInequality || []).filter(d => d.flagged).length > 0 && (
+                <div className="bg-white rounded-lg shadow p-4">
+                  <h3 className="font-semibold mb-3 text-yellow-700">Unequal Attendance Standards</h3>
+                  <div className="space-y-2">
+                    {deptData.attendanceInequality.filter(d => d.flagged).map(d => (
+                      <div key={d.department} className="border-l-4 border-yellow-400 bg-yellow-50 rounded p-3 flex justify-between">
+                        <span className="font-medium">{d.department}</span>
+                        <span className="text-sm">CV: {d.cv} | Range: {d.range}pp | Mean absence: {d.meanAbsenceRate}%</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {(deptData?.departments || []).filter(d => d.healthScore < 60).length > 0 && (
+                <div className="bg-white rounded-lg shadow p-4">
+                  <h3 className="font-semibold mb-3 text-red-700">Low Health Score Departments</h3>
+                  <div className="space-y-2">
+                    {deptData.departments.filter(d => d.healthScore < 60).map(d => (
+                      <div key={d.department} className="border-l-4 border-red-400 bg-red-50 rounded p-3 flex justify-between">
+                        <span className="font-medium">{d.department}</span>
+                        <span className="text-sm font-bold text-red-700">Score: {d.healthScore}/100 ({d.trend})</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
         </>
       )}
     </div>
