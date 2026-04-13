@@ -1,13 +1,21 @@
 ## Section 0: Last Session
-- **Date:** 2026-04-12
-- **Branch:** `claude/session-start-B6yrb` (pushed to `origin/main`)
-- **Last commit:** `20a290d` fix: dashboard finance view — use server pendingCount + null-safe dept guard
+- **Date:** 2026-04-13
+- **Branch:** `claude/session-start-ObkfF` (pushed to `origin/main`)
+- **Last commit:** `f4bffca` fix: AI review response parsing and display
 - **Files changed this session:**
-  - `frontend/src/pages/Dashboard.jsx` — T3.7 role-differentiated dashboard: admin financial overview (KPIs, action queue, dept cost, readiness) with toggle to HR view; finance task workbench (action counts, status banner, checklist); HR/viewer original dashboard unchanged. Then bug-fix pass: switched manual flags count to server-side `summary.pendingCount`, changed dept payroll fallback from `[]` to `null` with null guard.
-- **What was fixed/built:** Three dashboard view modes in a single file. Admin gets Net Payroll/PF/ESI/Readiness KPI cards with MoM comparison, pending actions queue (held salaries, manual flags, late deductions, miss punch review), department cost breakdown table (top 8), and month-end readiness checklist — plus toggle to HR view. Finance gets stripped-down workbench with 4 clickable action-count cards, status banner, and checklist. All data from 7 existing endpoints via Promise.all parallel fetch. Zero backend changes, zero schema changes. Bug-fix pass fixed 2 issues (manual flags used server pendingCount; dept payroll null-safe).
-- **What's fragile:** Finance workbench card colors use static Tailwind classes in an array (`borderActive: 'border-red-500'` etc.) — if someone refactors to dynamic `border-${color}` it will break Tailwind JIT purging. The `departments` field in `financeData` is `null` when the dept-payroll endpoint fails (vs `[]` when it succeeds with no data) — the null guard on line 192 handles this but callers must check.
-- **Unfinished work:** None
-- **Known issues remaining:** Local `main` branch has diverged from `origin/main` — always push via `git push origin claude/session-branch:main` rather than checking out local main. The `frontend/src/pages/EmployeeProfile.jsx` from the previous session plan is still NOT created (Phase 4a+4b frontend).
+  - `frontend/src/pages/DeptAnalytics.jsx` — new page: 5-tab dept/org analytics (health ranking + bar chart, OT Gini, night burden, inequality, org trends, punctuality histogram, costs, alerts); recharts LineChart + BarChart; date range picker defaulting 6mo
+  - `frontend/src/pages/EmployeeProfile.jsx` — new page: searchable employee dropdown, identity card, 5 tabs (overview KPIs+streaks+chart+dept-vs-org, attendance detail+monthly table, salary snake_case fields+bar chart, patterns with severity badges, AI review with section cards + narrative fallback)
+  - `backend/src/services/deptAnalyticsService.js` — new: `computeDepartmentAnalytics(db, startDate, endDate)` — health scores, OT Gini, night burden, attendance inequality
+  - `backend/src/services/orgMetricsService.js` — new: `computeOrgMetrics(db, startDate, endDate)` — 6 independent sections: utilization, punctuality curve, absenteeism cost, contractor gap, coordinated absence alerts, stability index
+  - `backend/src/routes/analytics.js` — added `GET /department-dashboard` and `GET /org-metrics` endpoints; imports for both new services
+  - `frontend/src/App.jsx` — lazy imports + routes for `/dept-analytics` and `/employee-profile`
+  - `frontend/src/components/layout/Sidebar.jsx` — added "Employee Profile" and "Dept Analytics" nav items
+  - `backend/src/config/permissions.js` — added `dept-analytics` and `employee-profile` to hr + finance roles
+- **What was fixed/built:** Full Employee Intelligence Profile page (5 tabs, AI review via Claude API with section parsing) and Department/Org Analytics page (5 tabs: health ranking, OT concentration, org trends, absenteeism costs, alerts). Three bug fixes: pattern cards used wrong field names (`label`/`detail` not `name`/`description`), salary table used camelCase but API returns snake_case, AI review stored only `sections` discarding `narrative` fallback.
+- **What's fragile:** `orgMetricsService.js` Section B (punctuality curve) falls back to `09:00` shift start when `employees.shift_id` is null — employees without a shift assignment will skew the arrival offset distribution. `deptAnalyticsService.js` health score uses `avgHours / 9` ratio — if standard shift is 10h or 12h this underscores hours-based component.
+- **Unfinished work:** `DeptAnalytics.jsx` overtime tab uses `deptData.otConcentration/nightShiftBurden/attendanceInequality` but these fields come from `deptAnalyticsService` — not tested against real data; confirm field names match if backend is changed.
+- **Known issues remaining:** `EmployeeProfile.jsx` AI Review "Regenerate" button is shown even after an error — minor UX issue. Local `main` branch still diverged from `origin/main`; always push via `git push origin claude/session-branch:main`.
+- **Next session should:** Test Employee Profile and Dept Analytics against real production data on Railway; fix any field-name mismatches found; consider adding `employee-profile` link from the Employees master page per-row.
 - **Next session should:** Implement `frontend/src/pages/EmployeeProfile.jsx` per the approved plan at `/root/.claude/plans/recursive-popping-dove.md` — create the page, wire App.jsx route, add Sidebar.jsx nav item, add `employee-profile` to permissions.js for hr+finance, build dist, commit and push.
 
 ---
