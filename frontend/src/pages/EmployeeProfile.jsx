@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import api from '../utils/api';
-import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts';
+import { LineChart, Line, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts';
 
 export default function EmployeeProfile() {
   const [employees, setEmployees] = useState([]);
@@ -207,6 +207,28 @@ export default function EmployeeProfile() {
                   <KPI label="Total Net Salary" value={'₹' + fmt(profileData.salaryHistory.totals.totalNetSalary)} />
                   <KPI label="Total Take Home" value={'₹' + fmt(profileData.salaryHistory.totals.totalTakeHome)} />
                   <KPI label="Total Deductions" value={'₹' + fmt(profileData.salaryHistory.totals.totalDeductions)} />
+                </div>
+              )}
+              {(profileData.salaryHistory?.months || []).length > 1 && (
+                <div className="bg-white rounded-lg shadow p-4">
+                  <h3 className="font-semibold text-gray-900 mb-3">Monthly Salary Breakdown</h3>
+                  <ResponsiveContainer width="100%" height={300}>
+                    <BarChart data={(profileData.salaryHistory?.months || []).map(m => ({
+                      period: new Date(m.year, m.month - 1).toLocaleDateString('en-IN', { month: 'short', year: '2-digit' }),
+                      'Gross Earned': m.gross_earned || 0,
+                      'Deductions': m.total_deductions || 0,
+                      'OT + ED': (m.ot_pay || 0) + (m.ed_pay || 0)
+                    }))}>
+                      <CartesianGrid strokeDasharray="3 3" />
+                      <XAxis dataKey="period" />
+                      <YAxis tickFormatter={v => '\u20B9' + (v / 1000).toFixed(0) + 'k'} />
+                      <Tooltip formatter={v => '\u20B9' + Number(v).toLocaleString('en-IN')} />
+                      <Legend />
+                      <Bar dataKey="Gross Earned" fill="#93c5fd" />
+                      <Bar dataKey="Deductions" fill="#fca5a5" />
+                      <Bar dataKey="OT + ED" fill="#86efac" />
+                    </BarChart>
+                  </ResponsiveContainer>
                 </div>
               )}
               {(profileData.salaryHistory?.months || []).length > 0 && (
