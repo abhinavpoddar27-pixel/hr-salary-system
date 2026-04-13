@@ -14,6 +14,9 @@ export default function EmployeeProfile() {
   const [error, setError] = useState('');
   const [activeTab, setActiveTab] = useState('overview');
   const dropRef = useRef(null);
+  const [aiReview, setAiReview] = useState(null);
+  const [aiLoading, setAiLoading] = useState(false);
+  const [aiError, setAiError] = useState('');
 
   useEffect(() => {
     api.get('/employees?status=Active&limit=500').then(r => setEmployees(r.data?.data || [])).catch(() => {});
@@ -377,9 +380,74 @@ export default function EmployeeProfile() {
           )}
 
           {activeTab === 'aiReview' && (
-            <div className="bg-white rounded-lg shadow p-8 text-center text-gray-400">
-              <p className="text-lg mb-2">AI Review</p>
-              <p>Coming soon — will be added in next update</p>
+            <div className="space-y-4">
+              {!aiReview && !aiLoading && (
+                <div className="bg-white rounded-lg shadow p-8 text-center">
+                  <div className="text-4xl mb-3">🤖</div>
+                  <h3 className="text-lg font-semibold text-gray-900 mb-2">AI-Powered Employee Review</h3>
+                  <p className="text-gray-500 text-sm mb-4 max-w-md mx-auto">
+                    Generate a qualitative assessment powered by Claude AI. Analyzes attendance patterns, behavioral signals, salary data, and department benchmarks.
+                  </p>
+                  <button onClick={async () => {
+                    setAiLoading(true); setAiError('');
+                    try {
+                      const r = await api.post('/analytics/employee/' + selectedCode + '/ai-review', { from: fromDate, to: toDate });
+                      if (r.data?.success) setAiReview(r.data.data);
+                      else setAiError(r.data?.error || 'Failed');
+                    } catch (e) { setAiError(e.response?.data?.error || e.message || 'Failed to generate AI review'); }
+                    finally { setAiLoading(false); }
+                  }} className="px-6 py-2.5 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition font-medium">
+                    Generate AI Review
+                  </button>
+                  {aiError && <p className="mt-3 text-red-600 text-sm">{aiError}</p>}
+                </div>
+              )}
+
+              {aiLoading && (
+                <div className="bg-white rounded-lg shadow p-8 text-center">
+                  <div className="animate-spin h-8 w-8 border-4 border-indigo-200 border-t-indigo-600 rounded-full mx-auto mb-4" />
+                  <p className="text-gray-600">Analyzing employee data and generating review...</p>
+                  <p className="text-gray-400 text-sm mt-1">This typically takes 5-10 seconds</p>
+                </div>
+              )}
+
+              {aiReview && !aiLoading && (
+                <div className="space-y-4">
+                  <div className="flex items-center justify-between bg-gray-50 rounded-lg px-4 py-2 text-sm text-gray-500 flex-wrap gap-2">
+                    <span>Generated {new Date(aiReview.generatedAt).toLocaleString('en-IN')}</span>
+                    <span>Tokens: {(aiReview.usage?.input_tokens || 0) + (aiReview.usage?.output_tokens || 0)}</span>
+                    <button onClick={async () => {
+                      setAiLoading(true); setAiError('');
+                      try {
+                        const r = await api.post('/analytics/employee/' + selectedCode + '/ai-review', { from: fromDate, to: toDate });
+                        if (r.data?.success) setAiReview(r.data.data);
+                        else setAiError(r.data?.error || 'Failed');
+                      } catch (e) { setAiError(e.response?.data?.error || e.message); }
+                      finally { setAiLoading(false); }
+                    }} className="text-indigo-600 hover:text-indigo-800 font-medium">Regenerate</button>
+                  </div>
+
+                  {[
+                    ['Executive Summary', aiReview.sections?.executiveSummary, '📋', 'border-gray-400'],
+                    ['Key Strengths', aiReview.sections?.strengths, '💪', 'border-green-500'],
+                    ['Areas of Concern', aiReview.sections?.concerns, '⚠️', 'border-orange-500'],
+                    ['Risk Assessment', aiReview.sections?.riskAssessment, '📊', 'border-blue-500'],
+                    ['Recommendations', aiReview.sections?.recommendations, '💡', 'border-indigo-500'],
+                    ['Department Context', aiReview.sections?.departmentContext, '👥', 'border-gray-400']
+                  ].filter(([, content]) => content).map(([title, content, icon, border]) => (
+                    <div key={title} className={`bg-white rounded-lg shadow border-l-4 ${border} p-5`}>
+                      <h3 className="font-semibold text-gray-900 mb-2">{icon} {title}</h3>
+                      <div className="text-sm text-gray-700 whitespace-pre-wrap leading-relaxed">{content}</div>
+                    </div>
+                  ))}
+
+                  {!aiReview.sections?.executiveSummary && aiReview.narrative && (
+                    <div className="bg-white rounded-lg shadow p-6">
+                      <div className="text-sm text-gray-700 whitespace-pre-wrap">{aiReview.narrative}</div>
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
           )}
         </>
