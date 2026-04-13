@@ -9,6 +9,8 @@ const {
 const { detectPatterns, detectAllPatterns, generateNarrative } = require('../services/behavioralPatterns');
 const { computeProfileRange } = require('../services/employeeProfileService');
 const { generateAIReview } = require('../services/aiReviewService');
+const { computeDepartmentAnalytics } = require('../services/deptAnalyticsService');
+const { computeOrgMetrics } = require('../services/orgMetricsService');
 
 // GET org overview
 router.get('/overview', (req, res) => {
@@ -887,6 +889,62 @@ router.post('/employee/:code/ai-review', async (req, res) => {
   } catch (err) {
     console.error('[AI Review] route error:', err.message);
     res.status(500).json({ success: false, error: 'AI review failed: ' + err.message });
+  }
+});
+
+// GET /department-dashboard — dept health, OT Gini, night burden, inequality
+router.get('/department-dashboard', (req, res) => {
+  try {
+    const db = getDb();
+    let { from, to } = req.query;
+    if (!to) {
+      to = new Date().toISOString().split('T')[0];
+    }
+    if (!from) {
+      const d = new Date();
+      d.setMonth(d.getMonth() - 6);
+      from = d.toISOString().split('T')[0];
+    }
+    const dateRegex = /^\d{4}-\d{2}-\d{2}$/;
+    if (!dateRegex.test(from) || !dateRegex.test(to)) {
+      return res.status(400).json({ success: false, error: 'Invalid date format. Use YYYY-MM-DD.' });
+    }
+    if (from > to) {
+      return res.status(400).json({ success: false, error: '"from" must be <= "to".' });
+    }
+    const data = computeDepartmentAnalytics(db, from, to);
+    res.json({ success: true, data });
+  } catch (err) {
+    console.error('[dept-dashboard]', err.message);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// GET /org-metrics — utilization, punctuality curve, costs, contractor gap, alerts, stability
+router.get('/org-metrics', (req, res) => {
+  try {
+    const db = getDb();
+    let { from, to } = req.query;
+    if (!to) {
+      to = new Date().toISOString().split('T')[0];
+    }
+    if (!from) {
+      const d = new Date();
+      d.setMonth(d.getMonth() - 6);
+      from = d.toISOString().split('T')[0];
+    }
+    const dateRegex = /^\d{4}-\d{2}-\d{2}$/;
+    if (!dateRegex.test(from) || !dateRegex.test(to)) {
+      return res.status(400).json({ success: false, error: 'Invalid date format. Use YYYY-MM-DD.' });
+    }
+    if (from > to) {
+      return res.status(400).json({ success: false, error: '"from" must be <= "to".' });
+    }
+    const data = computeOrgMetrics(db, from, to);
+    res.json({ success: true, data });
+  } catch (err) {
+    console.error('[org-metrics]', err.message);
+    res.status(500).json({ success: false, error: err.message });
   }
 });
 
