@@ -1,7 +1,9 @@
 import React, { useState, useRef } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
+import { useNavigate } from 'react-router-dom'
 import toast from 'react-hot-toast'
-import { getEmployees, getEmployee, createEmployee, updateEmployee, updateSalaryStructure, getLeaveBalances, updateLeaveBalance, getEmployeeDocuments, uploadEmployeeDocument, deleteEmployeeDocument, getEmployeeLoans, markEmployeeLeft, getShifts, bulkAssignShift, getLateComingEmployeeHistory } from '../utils/api'
+import * as XLSX from 'xlsx'
+import { getEmployees, getEmployee, createEmployee, updateEmployee, updateSalaryStructure, getLeaveBalances, updateLeaveBalance, getEmployeeDocuments, uploadEmployeeDocument, deleteEmployeeDocument, getEmployeeLoans, markEmployeeLeft, getShifts, bulkAssignShift, getLateComingEmployeeHistory, getDepartments } from '../utils/api'
 import { fmtINR } from '../utils/formatters'
 import { useAppStore } from '../store/appStore'
 import Modal from '../components/ui/Modal'
@@ -22,6 +24,20 @@ import EmployeeQuickView from '../components/ui/EmployeeQuickView'
 // whitelist.
 const LEGACY_SHIFT_CODES = new Set(['DAY', 'NIGHT', 'GEN', 'DUBLE'])
 const isLegacyShiftCode = (code) => !code || LEGACY_SHIFT_CODES.has(code)
+const isContractorEmployee = (e) => e.is_contractor === 1 || e.employment_type === 'Contract' || e.employment_type === 'Temporary'
+
+function formatLastPresent(dateStr) {
+  if (!dateStr) return { text: 'No data', daysAgo: null }
+  const d = new Date(dateStr + 'T00:00:00')
+  const today = new Date()
+  today.setHours(0, 0, 0, 0)
+  const diff = Math.floor((today - d) / 86400000)
+  if (diff === 0) return { text: 'Today', daysAgo: 0 }
+  if (diff === 1) return { text: '1d ago', daysAgo: 1 }
+  if (diff <= 7) return { text: `${diff}d ago`, daysAgo: diff }
+  const months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec']
+  return { text: `${d.getDate()} ${months[d.getMonth()]} ${d.getFullYear()}`, daysAgo: diff }
+}
 
 function SalaryModal({ employee, onClose }) {
   const qc = useQueryClient()
@@ -130,12 +146,16 @@ function SalaryModal({ employee, onClose }) {
 
           {/* Applicability */}
           <div className="flex gap-4">
-            {[['pf_applicable', 'PF'], ['esi_applicable', 'ESI'], ['pt_applicable', 'PT']].map(([k, label]) => (
+            {[['pf_applicable', 'PF'], ['esi_applicable', 'ESI']].map(([k, label]) => (
               <label key={k} className="flex items-center gap-2 text-sm cursor-pointer">
                 <input type="checkbox" checked={!!form[k]} onChange={e => setForm(f => ({ ...f, [k]: e.target.checked ? 1 : 0 }))} className="rounded" />
                 {label} Applicable
               </label>
             ))}
+            <label className="flex items-center gap-2 text-sm cursor-not-allowed opacity-50">
+              <input type="checkbox" checked={!!form.pt_applicable} onChange={e => setForm(f => ({ ...f, pt_applicable: e.target.checked ? 1 : 0 }))} className="rounded" disabled />
+              PT Applicable <span className="text-[10px] text-slate-400">(Currently disabled)</span>
+            </label>
           </div>
 
           {/* Banking */}
@@ -188,6 +208,11 @@ function EditEmployeeModal({ employee, onClose }) {
     pan: employee.pan || ''
   })
 
+  // Fetch departments for the searchable combobox
+  const { data: deptRes } = useQuery({ queryKey: ['departments'], queryFn: getDepartments, retry: 0, staleTime: 300000 })
+  const deptList = deptRes?.data?.departments || []
+  const isNewDept = form.department && !deptList.some(d => d.toLowerCase() === form.department.toLowerCase())
+
   // Late Coming Phase 1: fetch real shifts for the dropdown so HR can assign
   // 12HR / 10HR / 9HR (plus any admin-defined custom shift). Legacy
   // DAY/NIGHT/GEN/DUBLE rows are filtered out here so HR cannot
@@ -224,7 +249,13 @@ function EditEmployeeModal({ employee, onClose }) {
           </div>
           <div>
             <label className="label">Department</label>
-            <input type="text" value={form.department} onChange={e => setForm(f => ({ ...f, department: e.target.value }))} className="input" />
+            <input type="text" list="dept-list" value={form.department} onChange={e => setForm(f => ({ ...f, department: e.target.value }))} className="input" autoComplete="off" />
+            <datalist id="dept-list">
+              {deptList.map(d => <option key={d} value={d} />)}
+            </datalist>
+            {isNewDept && form.department && (
+              <div className="text-[10px] text-amber-600 italic mt-0.5">New department: {form.department}</div>
+            )}
           </div>
           <div>
             <label className="label">Designation</label>
@@ -308,6 +339,7 @@ function EditEmployeeModal({ employee, onClose }) {
 
 function EmployeeProfileModal({ employee, onClose }) {
   const { selectedMonth, selectedYear } = useAppStore()
+  const profileNav = useNavigate()
   const qc = useQueryClient()
   const [activeTab, setActiveTab] = useState('info')
   const fileRef = useRef(null)
@@ -392,11 +424,16 @@ function EmployeeProfileModal({ employee, onClose }) {
           <div>
             <div className="text-lg font-bold text-slate-800">{emp.name}</div>
             <div className="text-sm text-slate-500">{emp.code} · {emp.department} · {emp.designation}</div>
-            <div className="flex gap-2 mt-1">
+            <div className="flex gap-2 mt-1 items-center">
               <span className={clsx('text-xs px-2 py-0.5 rounded-full font-medium',
-                emp.status === 'Active' ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'
+                emp.status === 'Active' ? 'bg-green-100 text-green-700' :
+                emp.status === 'Exited' ? 'bg-red-200 text-red-800' :
+                'bg-red-100 text-red-700'
               )}>{emp.status || 'Active'}</span>
               <span className="text-xs px-2 py-0.5 rounded-full bg-blue-50 text-blue-700">{emp.employment_type || 'Permanent'}</span>
+              <button onClick={() => { onClose(); profileNav(`/employee-profile?code=${emp.code}`) }} className="text-[10px] text-violet-600 hover:text-violet-800 underline ml-auto">
+                View Full Intelligence Profile &rarr;
+              </button>
             </div>
           </div>
         </div>
@@ -463,6 +500,10 @@ function EmployeeProfileModal({ employee, onClose }) {
                 ['Probation End', emp.probation_end_date],
                 ['Confirmation Date', emp.confirmation_date],
                 ['Previous Employer', emp.previous_employer],
+                ...((emp.status === 'Left' || emp.status === 'Exited') ? [
+                  ['Date of Exit', emp.date_of_exit || emp.date_of_leaving],
+                  ['Exit Reason', emp.exit_reason],
+                ] : []),
               ].map(([label, val]) => (
                 <div key={label} className="flex flex-col">
                   <span className="text-xs text-slate-400">{label}</span>
@@ -752,9 +793,11 @@ function MarkLeftModal({ employee, onClose }) {
 
 export default function Employees() {
   const { selectedMonth, selectedYear, selectedCompany, user } = useAppStore()
+  const navigate = useNavigate()
   const canBulkAssignShift = user?.role === 'admin' || user?.role === 'hr'
   const [search, setSearch] = useState('')
   const [deptFilter, setDeptFilter] = useState('')
+  const [typeFilter, setTypeFilter] = useState('All')
   const [editEmp, setEditEmp] = useState(null)
   const [salaryEmp, setSalaryEmp] = useState(null)
   const [profileEmp, setProfileEmp] = useState(null)
@@ -776,6 +819,8 @@ export default function Employees() {
   const employees = empsRes?.data?.data || []
   const { data: shiftsListRes } = useQuery({ queryKey: ['shifts'], queryFn: getShifts, retry: 0 })
   const allShifts = shiftsListRes?.data?.data || []
+  const { data: deptsRes } = useQuery({ queryKey: ['departments'], queryFn: getDepartments, retry: 0, staleTime: 300000 })
+  const allDepartments = deptsRes?.data?.departments || []
 
   const toggleSelect = (code) => {
     setSelectedCodes(prev => {
@@ -798,12 +843,14 @@ export default function Employees() {
     onError: (err) => toast.error(err?.response?.data?.error || 'Bulk shift assignment failed')
   })
 
-  const departments = [...new Set(employees.map(e => e.department).filter(Boolean))].sort()
+  const departments = allDepartments.length > 0 ? allDepartments : [...new Set(employees.map(e => e.department).filter(Boolean))].sort()
 
   const filtered = employees
     .filter(e => {
       if (deptFilter && e.department !== deptFilter) return false
       if (search && !e.name?.toLowerCase().includes(search.toLowerCase()) && !e.code?.includes(search)) return false
+      if (typeFilter === 'Contractor' && !isContractorEmployee(e)) return false
+      if (typeFilter === 'Permanent' && isContractorEmployee(e)) return false
       return true
     })
     .sort((a, b) => {
@@ -815,6 +862,36 @@ export default function Employees() {
   function toggleSort(field) {
     if (sortField === field) setSortDir(d => d === 'asc' ? 'desc' : 'asc')
     else { setSortField(field); setSortDir('asc') }
+  }
+
+  function exportExcel() {
+    if (filtered.length === 0) return toast.error('No data to export')
+    const rows = filtered.map(e => ({
+      'Code': e.code,
+      'Name': e.name,
+      'Department': e.department || '',
+      'Designation': e.designation || '',
+      'Company': e.company || '',
+      'Employment Type': e.employment_type || 'Permanent',
+      'Shift': e.shift_code || '',
+      'Gross Salary': e.gross_salary || 0,
+      'PF Applicable': e.pf_applicable ? 'Yes' : 'No',
+      'ESI Applicable': e.esi_applicable ? 'Yes' : 'No',
+      'Date of Joining': e.date_of_joining || '',
+      'Last Present': e.last_present_date || '',
+      'Status': e.status || 'Active',
+      ...((e.status === 'Left' || e.status === 'Exited') ? {
+        'Date of Exit': e.date_of_exit || e.date_of_leaving || '',
+        'Exit Reason': e.exit_reason || '',
+      } : {}),
+    }))
+    const ws = XLSX.utils.json_to_sheet(rows)
+    ws['!cols'] = [{ wch: 8 }, { wch: 25 }, { wch: 18 }, { wch: 18 }, { wch: 22 }, { wch: 14 }, { wch: 8 }, { wch: 12 }, { wch: 10 }, { wch: 10 }, { wch: 14 }, { wch: 10 }, { wch: 14 }, { wch: 20 }]
+    const wb = XLSX.utils.book_new()
+    XLSX.utils.book_append_sheet(wb, ws, 'Employees')
+    const dateStr = new Date().toISOString().split('T')[0]
+    XLSX.writeFile(wb, `Employee_Master_${selectedCompany || 'All'}_${dateStr}.xlsx`)
+    toast.success('Employee data exported')
   }
 
   const SortIcon = ({ field }) => (
@@ -847,10 +924,22 @@ export default function Employees() {
           {departments.map(d => <option key={d}>{d}</option>)}
         </select>
         <div className="flex bg-slate-100 rounded-lg p-0.5 gap-0.5">
-          {['Active', 'Left', 'All'].map(s => (
+          {['All', 'Permanent', 'Contractor'].map(t => (
+            <button key={t} onClick={() => setTypeFilter(t)}
+              className={clsx('px-2.5 py-1 text-xs font-medium rounded-md transition-colors',
+                typeFilter === t ? 'bg-white text-slate-800 shadow-sm' : 'text-slate-500 hover:text-slate-700'
+              )}>
+              {t}
+            </button>
+          ))}
+        </div>
+        <div className="flex bg-slate-100 rounded-lg p-0.5 gap-0.5">
+          {['Active', 'Left', 'Exited', 'All'].map(s => (
             <button key={s} onClick={() => setStatusFilter(s)}
               className={clsx('px-3 py-1 text-xs font-medium rounded-md transition-colors',
-                statusFilter === s ? 'bg-white text-slate-800 shadow-sm' : 'text-slate-500 hover:text-slate-700'
+                statusFilter === s
+                  ? s === 'Exited' ? 'bg-white text-red-700 shadow-sm' : 'bg-white text-slate-800 shadow-sm'
+                  : 'text-slate-500 hover:text-slate-700'
               )}>
               {s}
             </button>
@@ -868,6 +957,9 @@ export default function Employees() {
               <button onClick={clearSelection} className="text-xs text-slate-400 hover:text-slate-600">Clear</button>
             </>
           )}
+          <button onClick={exportExcel} className="px-3 py-1.5 text-sm font-medium rounded-lg border border-slate-300 text-slate-600 hover:bg-slate-50">
+            Export .xlsx
+          </button>
           <button onClick={() => setEditEmp({ code: '', name: '', department: '', designation: '', date_of_joining: '', employment_type: 'Permanent', shift_code: '', default_shift_id: null, weekly_off_day: 0, phone: '', email: '', aadhar: '', pan: '' })} className="btn-primary text-sm">
             + Add Employee
           </button>
@@ -915,15 +1007,18 @@ export default function Employees() {
                   <th className="text-right">Gross</th>
                   <th className="text-center">PF</th>
                   <th className="text-center">ESI</th>
+                  <th className="cursor-pointer" onClick={() => toggleSort('last_present_date')}>
+                    Last Present <SortIcon field="last_present_date" />
+                  </th>
                   <th>Actions</th>
                 </tr>
               </thead>
               <tbody>
                 {filtered.length === 0 ? (
-                  <tr><td colSpan={canBulkAssignShift ? 11 : 10} className="text-center py-8 text-slate-400">No employees found</td></tr>
+                  <tr><td colSpan={canBulkAssignShift ? 12 : 11} className="text-center py-8 text-slate-400">No employees found</td></tr>
                 ) : filtered.map(e => (
                   <React.Fragment key={e.code}>
-                    <tr onClick={() => toggle(e.code)} className={clsx('cursor-pointer transition-colors hover:bg-blue-50/50', isExpanded(e.code) && 'bg-blue-50', e.status === 'Left' && 'opacity-60')}>
+                    <tr onClick={() => toggle(e.code)} className={clsx('cursor-pointer transition-colors hover:bg-blue-50/50', isExpanded(e.code) && 'bg-blue-50', (e.status === 'Left' || e.status === 'Exited') && 'opacity-60', isContractorEmployee(e) && 'border-l-3 border-l-amber-400')}>
                       {canBulkAssignShift && (
                         <td className="text-center" onClick={(ev) => ev.stopPropagation()}>
                           <input
@@ -935,8 +1030,16 @@ export default function Employees() {
                       )}
                       <td className="font-mono text-sm text-slate-600"><DrillDownChevron isExpanded={isExpanded(e.code)} /> {e.code}</td>
                       <td className="font-medium text-slate-800">
-                        {e.name}
-                        {e.status === 'Left' && <span className="ml-2 text-[10px] px-1.5 py-0.5 bg-red-100 text-red-600 rounded-full font-semibold align-middle">Left</span>}
+                        <div>{e.name}
+                          {(e.status === 'Left' || e.status === 'Exited') && (
+                            <span className={clsx('ml-2 text-[10px] px-1.5 py-0.5 rounded-full font-semibold align-middle',
+                              e.status === 'Exited' ? 'bg-red-200 text-red-800' : 'bg-red-100 text-red-600'
+                            )} title={e.exit_reason || undefined}>{e.status}</span>
+                          )}
+                        </div>
+                        {(e.status === 'Left' || e.status === 'Exited') && (e.date_of_exit || e.date_of_leaving) && (
+                          <div className="text-[10px] text-slate-400 font-normal">{e.status}: {e.date_of_exit || e.date_of_leaving}</div>
+                        )}
                       </td>
                       <td className="text-slate-600">{e.department}</td>
                       <td className="text-slate-500">{e.designation || '—'}</td>
@@ -950,22 +1053,46 @@ export default function Employees() {
                           ? <span className="text-[10px] px-2 py-0.5 bg-amber-100 text-amber-700 rounded-full font-semibold">— needs shift</span>
                           : <span className="text-slate-600 font-mono text-xs">{e.shift_code}</span>}
                       </td>
-                      <td className="text-right font-medium">{e.gross_salary ? fmtINR(e.gross_salary) : <span className="text-slate-300">Not Set</span>}</td>
-                      <td className="text-center">{e.pf_applicable !== 0 ? <span className="text-green-500 text-xs">✓</span> : <span className="text-slate-300 text-xs">—</span>}</td>
-                      <td className="text-center">{e.esi_applicable !== 0 ? <span className="text-green-500 text-xs">✓</span> : <span className="text-slate-300 text-xs">—</span>}</td>
+                      <td className="text-right font-medium">
+                        {e.gross_salary ? (
+                          <div>
+                            {fmtINR(e.gross_salary)}
+                            {isContractorEmployee(e) && <div className="text-[9px] text-amber-600 font-normal">(pro-rata)</div>}
+                          </div>
+                        ) : <span className="text-slate-300">Not Set</span>}
+                      </td>
+                      <td className="text-center">{isContractorEmployee(e) && !e.pf_applicable ? <span className="text-slate-400 text-[10px]">N/A</span> : e.pf_applicable !== 0 ? <span className="text-green-500 text-xs">✓</span> : <span className="text-slate-300 text-xs">—</span>}</td>
+                      <td className="text-center">{isContractorEmployee(e) && !e.esi_applicable ? <span className="text-slate-400 text-[10px]">N/A</span> : e.esi_applicable !== 0 ? <span className="text-green-500 text-xs">✓</span> : <span className="text-slate-300 text-xs">—</span>}</td>
+                      {(() => {
+                        const lp = formatLastPresent(e.last_present_date)
+                        const isInactive = e.status === 'Left' || e.status === 'Exited'
+                        const colorCls = isInactive ? 'text-slate-400'
+                          : lp.daysAgo === null ? 'text-slate-300'
+                          : lp.daysAgo <= 1 ? 'text-green-600'
+                          : lp.daysAgo <= 7 ? 'text-slate-600'
+                          : lp.daysAgo <= 14 ? 'text-amber-600'
+                          : 'text-red-600'
+                        return (
+                          <td className={clsx('text-xs', colorCls)}>
+                            {lp.daysAgo !== null && lp.daysAgo >= 15 && !isInactive && <span className="mr-0.5">&#x26A0;</span>}
+                            {lp.text}
+                          </td>
+                        )
+                      })()}
                       <td>
                         <div className="flex gap-1.5">
                           <button onClick={(ev) => { ev.stopPropagation(); setProfileEmp(e) }} className="text-xs py-0.5 px-2 bg-blue-50 text-blue-700 rounded hover:bg-blue-100 border border-blue-200">Profile</button>
+                          <button onClick={(ev) => { ev.stopPropagation(); navigate(`/employee-profile?code=${e.code}`) }} className="text-xs py-0.5 px-2 bg-violet-50 text-violet-700 rounded hover:bg-violet-100 border border-violet-200" title="Full Intelligence Profile">Intel</button>
                           <button onClick={(ev) => { ev.stopPropagation(); setEditEmp(e) }} className="btn-secondary text-xs py-0.5 px-2">Edit</button>
                           <button onClick={(ev) => { ev.stopPropagation(); setSalaryEmp(e) }} className="text-xs py-0.5 px-2 bg-brand-50 text-brand-600 rounded hover:bg-brand-100 border border-brand-200">₹</button>
-                          {e.status !== 'Left' && (
+                          {e.status !== 'Left' && e.status !== 'Exited' && (
                             <button onClick={(ev) => { ev.stopPropagation(); setMarkLeftEmp(e) }} className="text-xs py-0.5 px-2 bg-red-50 text-red-600 rounded hover:bg-red-100 border border-red-200">Mark Left</button>
                           )}
                         </div>
                       </td>
                     </tr>
                     {isExpanded(e.code) && (
-                      <DrillDownRow colSpan={canBulkAssignShift ? 11 : 10}>
+                      <DrillDownRow colSpan={canBulkAssignShift ? 12 : 11}>
                         <EmployeeQuickView
                           employeeCode={e.code}
                           contextContent={
@@ -998,7 +1125,7 @@ export default function Employees() {
       {showBulkShift && (
         <BulkShiftModal
           count={selectedCodes.size}
-          shifts={allShifts}
+          shifts={allShifts.filter(s => !LEGACY_SHIFT_CODES.has(s.code))}
           onConfirm={(shiftId, shiftCode) => bulkShiftMutation.mutate({ shiftId, shiftCode })}
           isPending={bulkShiftMutation.isPending}
           onClose={() => setShowBulkShift(false)}
