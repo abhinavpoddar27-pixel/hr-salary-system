@@ -18,20 +18,27 @@ function timeToMinutes(timeStr) {
  * @returns {{ detected: number, exempted: number, skipped: number }}
  */
 function detectEarlyExits(db, targetDate) {
+  // Build shift lookup maps so detection resolves shifts directly
+  const allShifts = db.prepare('SELECT * FROM shifts').all();
+  const shiftById = {};
+  const shiftByCode = {};
+  for (const s of allShifts) { shiftById[s.id] = s; shiftByCode[s.code] = s; }
+  const defaultDayShift = shiftByCode['DAY'] || allShifts[0];
+
   // 1. Query attendance_processed for the target date
   const records = db.prepare(`
     SELECT ap.id, ap.employee_id, ap.employee_code, ap.shift_id,
            COALESCE(ap.out_time_final, ap.out_time_original) as actual_out,
            COALESCE(ap.status_final, ap.status_original) as status,
            ap.is_night_out_only,
-           e.name as employee_name, e.department, e.company
+           e.name as employee_name, e.department, e.company,
+           e.default_shift_id, e.shift_code
     FROM attendance_processed ap
     JOIN employees e ON e.id = ap.employee_id
     WHERE ap.date = ?
       AND ap.is_night_out_only = 0
       AND COALESCE(ap.status_final, ap.status_original) IN ('P', '½P', 'WOP')
       AND COALESCE(ap.out_time_final, ap.out_time_original) IS NOT NULL
-      AND ap.shift_id IS NOT NULL
   `).all(targetDate);
 
   // ── Reset previous detections for this date so re-runs are idempotent ──
@@ -49,8 +56,10 @@ function detectEarlyExits(db, targetDate) {
   let detected = 0, exempted = 0, skipped = 0;
 
   for (const rec of records) {
-    // 2. Get shift end_time
-    const shift = db.prepare('SELECT code, end_time FROM shifts WHERE id = ?').get(rec.shift_id);
+    // 2. Resolve shift: employee master first, then ap.shift_id, then DAY fallback
+    const empShift = rec.default_shift_id ? shiftById[rec.default_shift_id]
+                   : (rec.shift_code ? shiftByCode[rec.shift_code] : null);
+    const shift = empShift || (rec.shift_id ? shiftById[rec.shift_id] : null) || defaultDayShift;
     if (!shift || !shift.end_time) { skipped++; continue; }
 
     const shiftEndMinutes = timeToMinutes(shift.end_time);
