@@ -90,6 +90,20 @@ export default function EmployeeQuickView({
           </div>
         </div>
 
+        {/* Contractor banner */}
+        {(emp.is_contractor === 1 || emp.employment_type === 'Contract' || emp.employment_type === 'Temporary') && (
+          <div className="mb-2 px-2.5 py-1.5 bg-amber-50 border border-amber-200 rounded-lg text-[11px] text-amber-800 font-medium">
+            Contractor &mdash; Daily pro-rata pay, no weekly offs/holidays included
+          </div>
+        )}
+
+        {/* Exit info */}
+        {(emp.status === 'Left' || emp.status === 'Exited') && (emp.date_of_exit || emp.date_of_leaving) && (
+          <div className="mb-2 px-2.5 py-1.5 bg-red-50 border border-red-200 rounded-lg text-[11px] text-red-700">
+            {emp.status}: {emp.date_of_exit || emp.date_of_leaving}{emp.exit_reason ? ` — ${emp.exit_reason}` : ''}
+          </div>
+        )}
+
         {/* Key Stats */}
         <div className="grid grid-cols-2 gap-1.5 mb-3">
           <Stat label="Gross" value={fmtINR(grossSalary)} />

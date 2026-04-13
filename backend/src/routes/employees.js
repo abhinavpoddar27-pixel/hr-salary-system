@@ -189,12 +189,20 @@ router.get('/', (req, res) => {
     ss.pf_applicable AS struct_pf_applicable,
     ss.esi_applicable AS struct_esi_applicable,
     ss.pt_applicable AS struct_pt_applicable,
-    ss.pf_wage_ceiling
+    ss.pf_wage_ceiling,
+    lp.last_present_date
     FROM employees e
     LEFT JOIN shifts s ON e.default_shift_id = s.id
     LEFT JOIN salary_structures ss ON ss.employee_id = e.id AND ss.id = (
       SELECT id FROM salary_structures WHERE employee_id = e.id ORDER BY effective_from DESC LIMIT 1
-    ) ${where}`;
+    )
+    LEFT JOIN (
+      SELECT employee_code, MAX(date) as last_present_date
+      FROM attendance_processed
+      WHERE status_final IN ('P', '½P', 'WOP', 'WO½P', 'HP', 'ED')
+      GROUP BY employee_code
+    ) lp ON lp.employee_code = e.code
+    ${where}`;
 
   // If no page param, return all (backward compatible)
   if (!page) {
@@ -207,7 +215,8 @@ router.get('/', (req, res) => {
   // Whitelist sortable columns to avoid SQL "no such column: e." errors when
   // an unknown or empty sort field is passed in.
   const SORTABLE = new Set(['code','name','department','designation','company','status','date_of_joining','date_of_exit','gross_salary']);
-  const sortCol = (sort && SORTABLE.has(sort)) ? `e.${sort}` : 'e.department, e.name';
+  const sortCol = sort === 'last_present_date' ? 'lp.last_present_date'
+    : (sort && SORTABLE.has(sort)) ? `e.${sort}` : 'e.department, e.name';
   const result = paginateQuery(db, {
     baseQuery: baseQuery + ` ORDER BY ${sortCol} ${order === 'desc' ? 'DESC' : 'ASC'}`,
     countQuery, params, page, limit
@@ -222,6 +231,15 @@ router.get('/', (req, res) => {
   const data = db.prepare(baseQuery + ` ORDER BY ${sortCol} ${order === 'desc' ? 'DESC' : 'ASC'} LIMIT ? OFFSET ?`).all(...params, pageSize, offset);
 
   res.json({ success: true, data, total, page: pageNum, pageSize, totalPages: Math.ceil(total / pageSize) });
+});
+
+// GET all distinct departments (declared BEFORE /:code to avoid param capture)
+router.get('/departments', (req, res) => {
+  const db = getDb();
+  const depts = db.prepare(
+    "SELECT DISTINCT department FROM employees WHERE department IS NOT NULL AND department != '' ORDER BY department"
+  ).all();
+  res.json({ success: true, departments: depts.map(d => d.department) });
 });
 
 // GET single employee
