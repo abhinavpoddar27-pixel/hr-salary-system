@@ -1,19 +1,9 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import api from '../utils/api';
-import { fmtINR, fmtPct, fmtDate, fmtDateTime } from '../utils/formatters';
+import { fmtINR, fmtDate } from '../utils/formatters';
 
-// ── Helpers ──────────────────────────────────────────────────────────────────
-
-const inr = v => (v || 0).toLocaleString('en-IN');
 const pct1 = v => `${(+(v || 0)).toFixed(1)}%`;
-
-function kpiColor(value, thresholds) {
-  // thresholds: { green: v => bool, yellow: v => bool }
-  if (thresholds.green(value)) return 'border-green-500 bg-green-50';
-  if (thresholds.yellow(value)) return 'border-yellow-500 bg-yellow-50';
-  return 'border-red-500 bg-red-50';
-}
-
+const kpiColor = (value, t) => t.green(value) ? 'border-green-500 bg-green-50' : t.yellow(value) ? 'border-yellow-500 bg-yellow-50' : 'border-red-500 bg-red-50';
 const TABS = [
   { key: 'overview', label: 'Overview' },
   { key: 'attendance', label: 'Attendance' },
@@ -377,12 +367,29 @@ const SalaryMonthsTable = ({ months }) => {
   );
 };
 
+const HeldSalaryNotes = ({ months }) => {
+  const held = (months || []).filter(m => m.salary_held);
+  if (!held.length) return null;
+  const MONTHS = ['', 'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+  return (
+    <div className="bg-amber-50 border border-amber-200 rounded-lg p-3 mt-4 text-sm">
+      <p className="font-medium text-amber-800 mb-1">Held Salaries</p>
+      {held.map((m, i) => (
+        <p key={i} className="text-amber-700">
+          {MONTHS[m.month]} {m.year}: {m.hold_reason || 'No reason specified'}
+        </p>
+      ))}
+    </div>
+  );
+};
+
 const SalaryTab = ({ salaryHistory }) => {
   if (!salaryHistory) return <p className="text-sm text-gray-400">No salary data.</p>;
   return (
     <>
       <SalaryTotals totals={salaryHistory.totals} />
       <SalaryMonthsTable months={salaryHistory.months} />
+      <HeldSalaryNotes months={salaryHistory.months} />
     </>
   );
 };
