@@ -5,7 +5,7 @@ import {
   exportEarlyExitReport, detectEarlyExitRange,
   getEarlyExitEmployeeAnalytics, submitEarlyExitDeduction,
   cancelEarlyExitDeduction, reviseEarlyExitDeduction,
-  getEmployee
+  getEmployee, getEarlyExitEmployeeSummary
 } from '../utils/api'
 import Modal from '../components/ui/Modal'
 import clsx from 'clsx'
@@ -134,8 +134,13 @@ export default function EarlyExitDetection({ selectedMonth, selectedYear, select
   const [deptFilter, setDeptFilter] = useState('')
   const [minMinutes, setMinMinutes] = useState('')
 
-  // Sort
+  // Sort — incidents table (existing) + employee summary table (new)
   const sort = useSortable('date', 'desc')
+  const empSort = useSortable('total_exits', 'desc')
+
+  // View mode toggle
+  const [viewMode, setViewMode] = useState('employee')  // 'employee' | 'incidents'
+  const [expandedCode, setExpandedCode] = useState(null)
 
   // Detail panel
   const [selectedRow, setSelectedRow] = useState(null)
@@ -213,10 +218,26 @@ export default function EarlyExitDetection({ selectedMonth, selectedYear, select
   })
   const deptRows = deptRes?.data?.data || []
 
-  // Department options — from range data
+  // ── Employee summary query (grouped view) ──────────────────
+  const { data: empSummaryRes, isLoading: empSummaryLoading } = useQuery({
+    queryKey: ['ee-emp-summary', startDate, endDate, selectedCompany],
+    queryFn: () => getEarlyExitEmployeeSummary({
+      startDate, endDate,
+      ...(selectedCompany ? { company: selectedCompany } : {})
+    }),
+    enabled: !!rangeValid,
+    retry: 0
+  })
+  const empSummaryRows = empSummaryRes?.data?.data || []
+  const empSummary = empSummaryRes?.data?.summary || {}
+
+  // Department options — from both range data and employee summary
   const departments = useMemo(() =>
-    [...new Set(rows.map(r => r.department).filter(Boolean))].sort(),
-    [rows])
+    [...new Set([
+      ...rows.map(r => r.department),
+      ...empSummaryRows.map(r => r.department)
+    ].filter(Boolean))].sort(),
+    [rows, empSummaryRows])
 
   // Apply filters + sort client-side
   const filtered = useMemo(() => {
@@ -235,6 +256,20 @@ export default function EarlyExitDetection({ selectedMonth, selectedYear, select
     }
     return [...arr].sort(sort.sortFn)
   }, [rows, search, deptFilter, minMinutes, sort.sortKey, sort.sortDir])
+
+  // Employee summary filtered + sorted
+  const empDisplayRows = useMemo(() => {
+    let arr = empSummaryRows
+    if (search.trim()) {
+      const s = search.toLowerCase()
+      arr = arr.filter(r =>
+        (r.employee_code && r.employee_code.toLowerCase().includes(s)) ||
+        (r.employee_name && r.employee_name.toLowerCase().includes(s))
+      )
+    }
+    if (deptFilter) arr = arr.filter(r => r.department === deptFilter)
+    return [...arr].sort(empSort.sortFn)
+  }, [empSummaryRows, search, deptFilter, empSort.sortKey, empSort.sortDir])
 
   // ─── Handlers ─────────────────────────────────────────
   const applyPreset = (preset) => {
@@ -408,66 +443,201 @@ export default function EarlyExitDetection({ selectedMonth, selectedYear, select
         </div>
       </div>
 
-      {/* ── Detail Table ── */}
-      <div className="card overflow-hidden">
-        <div className="overflow-x-auto">
-          <table className="table-compact w-full">
-            <thead>
-              <tr>
-                <SortTh sort={sort} k="date">Date</SortTh>
-                <SortTh sort={sort} k="employee_name">Employee</SortTh>
-                <th>Code</th>
-                <SortTh sort={sort} k="department">Dept</SortTh>
-                <th className="text-center">Shift End</th>
-                <SortTh sort={sort} k="actual_punch_out_time" className="text-center">Punch Out</SortTh>
-                <SortTh sort={sort} k="minutes_early" className="text-center">Min Early</SortTh>
-                <SortTh sort={sort} k="flagged_minutes" className="text-center">Flagged</SortTh>
-                <th className="text-center">Gate Pass</th>
-                <th className="text-center">Status</th>
-              </tr>
-            </thead>
-            <tbody>
-              {!rangeValid ? (
-                <tr><td colSpan={10} className="text-center py-8 text-slate-400">Select a valid date range</td></tr>
-              ) : isLoading ? (
-                <tr><td colSpan={10} className="text-center py-8 text-slate-400">Loading…</td></tr>
-              ) : filtered.length === 0 ? (
-                <tr><td colSpan={10} className="text-center py-12 text-slate-400">
-                  <div className="text-4xl mb-2 opacity-40">🚪</div>
-                  <div className="text-sm">No early exits detected in the selected date range</div>
-                  <div className="text-xs mt-1">Try widening the range or clearing filters</div>
-                </td></tr>
-              ) : filtered.map(r => (
-                <tr key={r.id} className="hover:bg-slate-50 cursor-pointer"
-                    onClick={() => setSelectedRow(r)}>
-                  <td className="text-sm">{r.date}</td>
-                  <td className="font-medium text-slate-800">{r.employee_name}</td>
-                  <td className="text-xs font-mono text-slate-500">{r.employee_code}</td>
-                  <td className="text-sm text-slate-600">{r.department}</td>
-                  <td className="text-center text-xs">{r.shift_end_time}</td>
-                  <td className="text-center text-xs">{r.actual_punch_out_time}</td>
-                  <td className="text-center font-semibold text-slate-700">{r.minutes_early}m</td>
-                  <td className="text-center">
-                    <span className={clsx('text-xs px-2 py-0.5 rounded-full font-bold', flagColor(r.flagged_minutes))}>
-                      {r.flagged_minutes}m
-                    </span>
-                  </td>
-                  <td className="text-center">
-                    {r.has_gate_pass ? (
-                      <span className="text-xs px-2 py-0.5 rounded-full bg-blue-50 text-blue-700">Yes</span>
-                    ) : (
-                      <span className="text-xs text-slate-400">—</span>
-                    )}
-                  </td>
-                  <td className="text-center">
-                    <StatusBadge status={r.detection_status} />
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+      {/* ── View mode toggle ── */}
+      <div className="flex items-center gap-2">
+        <span className="text-xs text-slate-500 font-medium">View:</span>
+        {[
+          { k: 'employee', label: 'By Employee' },
+          { k: 'incidents', label: 'All Incidents' }
+        ].map(v => (
+          <button key={v.k}
+            onClick={() => setViewMode(v.k)}
+            className={clsx('px-3 py-1.5 text-xs rounded-lg border transition-colors',
+              viewMode === v.k
+                ? 'bg-brand-600 text-white border-brand-600'
+                : 'bg-white text-slate-600 border-slate-300 hover:bg-slate-50'
+            )}>
+            {v.label}
+          </button>
+        ))}
       </div>
+
+      {/* ── Employee Summary Table (By Employee view) ── */}
+      {viewMode === 'employee' && (
+        <div className="card overflow-hidden">
+          <div className="px-4 py-2 border-b border-slate-200 bg-slate-50 flex items-center gap-4 text-xs text-slate-500">
+            <span><strong>{empSummary.totalEmployees || 0}</strong> employees</span>
+            <span><strong>{empSummary.totalIncidents || 0}</strong> total exits</span>
+            {(empSummary.habitualCount || 0) > 0 && (
+              <span className="text-red-600 font-semibold">{empSummary.habitualCount} habitual offender{empSummary.habitualCount !== 1 ? 's' : ''}</span>
+            )}
+          </div>
+          {!rangeValid ? (
+            <div className="p-8 text-center text-slate-400 text-sm">Select a valid date range</div>
+          ) : empSummaryLoading ? (
+            <div className="p-8 text-center text-slate-400 text-sm">Loading employee summary…</div>
+          ) : empDisplayRows.length === 0 ? (
+            <div className="p-8 text-center text-slate-400 text-sm">
+              <div className="text-4xl mb-2 opacity-40">🚪</div>
+              <div>No employees found for this range.</div>
+              <div className="text-xs mt-1">Try widening the range or clearing filters</div>
+            </div>
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="table-compact w-full">
+                <thead>
+                  <tr>
+                    <SortTh sort={empSort} k="employee_code">Code</SortTh>
+                    <SortTh sort={empSort} k="employee_name">Employee</SortTh>
+                    <SortTh sort={empSort} k="department">Dept</SortTh>
+                    <SortTh sort={empSort} k="total_exits" className="text-center">Total Exits</SortTh>
+                    <SortTh sort={empSort} k="avg_minutes_early" className="text-center">Avg Min</SortTh>
+                    <SortTh sort={empSort} k="max_minutes_early" className="text-center">Max Min</SortTh>
+                    <th className="text-center">Gate Pass %</th>
+                    <SortTh sort={empSort} k="prev_exits" className="text-center">Prev Period</SortTh>
+                    <th className="text-center">Trend</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {empDisplayRows.map(row => {
+                    const isExpanded = expandedCode === row.employee_code
+                    const gpPct = row.total_exits > 0
+                      ? Math.round((row.gate_pass_count / row.total_exits) * 100)
+                      : 0
+                    return (
+                      <React.Fragment key={row.employee_code}>
+                        <tr
+                          className="hover:bg-slate-50 cursor-pointer"
+                          onClick={() => setExpandedCode(isExpanded ? null : row.employee_code)}
+                        >
+                          <td className="text-xs font-mono text-slate-500">{row.employee_code}</td>
+                          <td className="font-medium text-slate-800">
+                            <div className="flex items-center gap-2">
+                              <span>{row.employee_name}</span>
+                              {row.is_habitual && (
+                                <span className="px-1.5 py-0.5 text-[10px] font-bold bg-red-100 text-red-700 rounded leading-none">
+                                  HABITUAL
+                                </span>
+                              )}
+                            </div>
+                          </td>
+                          <td className="text-sm text-slate-600">{row.department}</td>
+                          <td className={clsx('text-center font-bold',
+                            row.total_exits >= 10 ? 'text-red-600' :
+                            row.total_exits >= 5  ? 'text-amber-600' : 'text-slate-700'
+                          )}>{row.total_exits}</td>
+                          <td className="text-center text-slate-600">{row.avg_minutes_early}m</td>
+                          <td className="text-center text-slate-600">{row.max_minutes_early}m</td>
+                          <td className="text-center text-slate-600">{gpPct}%</td>
+                          <td className="text-center text-slate-500">{row.prev_exits}</td>
+                          <td className="text-center"><TrendArrow trend={row.trend} /></td>
+                        </tr>
+                        {isExpanded && (
+                          <tr className="bg-slate-50">
+                            <td colSpan={9} className="px-6 py-3">
+                              <table className="w-full text-xs border border-slate-200 rounded">
+                                <thead className="bg-slate-100">
+                                  <tr>
+                                    <th className="px-3 py-1.5 text-left text-slate-600 font-medium">Date</th>
+                                    <th className="px-3 py-1.5 text-left text-slate-600 font-medium">Punch Out</th>
+                                    <th className="px-3 py-1.5 text-center text-slate-600 font-medium">Min Early</th>
+                                    <th className="px-3 py-1.5 text-center text-slate-600 font-medium">Gate Pass</th>
+                                    <th className="px-3 py-1.5 text-center text-slate-600 font-medium">Status</th>
+                                  </tr>
+                                </thead>
+                                <tbody className="divide-y divide-slate-100">
+                                  {(row.incidents || []).map((inc, i) => (
+                                    <tr key={i} className="hover:bg-white">
+                                      <td className="px-3 py-1.5 text-slate-700">{inc.date}</td>
+                                      <td className="px-3 py-1.5 font-mono text-slate-600">{inc.punch_out || '—'}</td>
+                                      <td className="px-3 py-1.5 text-center font-medium text-amber-700">{inc.minutes_early}m</td>
+                                      <td className="px-3 py-1.5 text-center">
+                                        {inc.has_gate_pass
+                                          ? <span className="text-blue-600 font-medium">Yes</span>
+                                          : <span className="text-slate-400">—</span>}
+                                      </td>
+                                      <td className="px-3 py-1.5 text-center">
+                                        <StatusBadge status={inc.status} />
+                                      </td>
+                                    </tr>
+                                  ))}
+                                </tbody>
+                              </table>
+                            </td>
+                          </tr>
+                        )}
+                      </React.Fragment>
+                    )
+                  })}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* ── Detail Table (All Incidents view) ── */}
+      {viewMode === 'incidents' && (
+        <div className="card overflow-hidden">
+          <div className="overflow-x-auto">
+            <table className="table-compact w-full">
+              <thead>
+                <tr>
+                  <SortTh sort={sort} k="date">Date</SortTh>
+                  <SortTh sort={sort} k="employee_name">Employee</SortTh>
+                  <th>Code</th>
+                  <SortTh sort={sort} k="department">Dept</SortTh>
+                  <th className="text-center">Shift End</th>
+                  <SortTh sort={sort} k="actual_punch_out_time" className="text-center">Punch Out</SortTh>
+                  <SortTh sort={sort} k="minutes_early" className="text-center">Min Early</SortTh>
+                  <SortTh sort={sort} k="flagged_minutes" className="text-center">Flagged</SortTh>
+                  <th className="text-center">Gate Pass</th>
+                  <th className="text-center">Status</th>
+                </tr>
+              </thead>
+              <tbody>
+                {!rangeValid ? (
+                  <tr><td colSpan={10} className="text-center py-8 text-slate-400">Select a valid date range</td></tr>
+                ) : isLoading ? (
+                  <tr><td colSpan={10} className="text-center py-8 text-slate-400">Loading…</td></tr>
+                ) : filtered.length === 0 ? (
+                  <tr><td colSpan={10} className="text-center py-12 text-slate-400">
+                    <div className="text-4xl mb-2 opacity-40">🚪</div>
+                    <div className="text-sm">No early exits detected in the selected date range</div>
+                    <div className="text-xs mt-1">Try widening the range or clearing filters</div>
+                  </td></tr>
+                ) : filtered.map(r => (
+                  <tr key={r.id} className="hover:bg-slate-50 cursor-pointer"
+                      onClick={() => setSelectedRow(r)}>
+                    <td className="text-sm">{r.date}</td>
+                    <td className="font-medium text-slate-800">{r.employee_name}</td>
+                    <td className="text-xs font-mono text-slate-500">{r.employee_code}</td>
+                    <td className="text-sm text-slate-600">{r.department}</td>
+                    <td className="text-center text-xs">{r.shift_end_time}</td>
+                    <td className="text-center text-xs">{r.actual_punch_out_time}</td>
+                    <td className="text-center font-semibold text-slate-700">{r.minutes_early}m</td>
+                    <td className="text-center">
+                      <span className={clsx('text-xs px-2 py-0.5 rounded-full font-bold', flagColor(r.flagged_minutes))}>
+                        {r.flagged_minutes}m
+                      </span>
+                    </td>
+                    <td className="text-center">
+                      {r.has_gate_pass ? (
+                        <span className="text-xs px-2 py-0.5 rounded-full bg-blue-50 text-blue-700">Yes</span>
+                      ) : (
+                        <span className="text-xs text-slate-400">—</span>
+                      )}
+                    </td>
+                    <td className="text-center">
+                      <StatusBadge status={r.detection_status} />
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
 
       {/* Detail panel */}
       {selectedRow && (

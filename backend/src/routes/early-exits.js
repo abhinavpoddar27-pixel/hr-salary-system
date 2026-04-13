@@ -450,6 +450,130 @@ router.get('/range-report', requireHrFinanceOrAdmin, (req, res) => {
 });
 
 // ────────────────────────────────────────────────────────────
+// GET /employee-summary — Per-employee grouped view for date range
+// Groups early exits by employee with prev-period comparison and
+// habitual offender flag. Max 90-day range.
+// Query params: startDate, endDate (required), company, department,
+//               minExits (optional, default 1)
+// ────────────────────────────────────────────────────────────
+router.get('/employee-summary', requireHrFinanceOrAdmin, (req, res) => {
+  try {
+    const db = getDb();
+    const { startDate, endDate, company, department } = req.query;
+    const minExits = req.query.minExits !== undefined && req.query.minExits !== ''
+      ? Math.max(1, parseInt(req.query.minExits) || 1)
+      : 1;
+
+    if (!startDate || !endDate) {
+      return res.status(400).json({ success: false, error: 'startDate and endDate are required (YYYY-MM-DD)' });
+    }
+    if (!isValidDate(startDate) || !isValidDate(endDate)) {
+      return res.status(400).json({ success: false, error: 'Dates must be valid YYYY-MM-DD' });
+    }
+    if (startDate > endDate) {
+      return res.status(400).json({ success: false, error: 'startDate must be on or before endDate' });
+    }
+    const days = daysBetween(startDate, endDate);
+    if (days > 90) {
+      return res.status(400).json({ success: false, error: 'Maximum range is 90 days' });
+    }
+
+    // ── Main GROUP BY query ──────────────────────────────────
+    let sql = `
+      SELECT
+        eed.employee_code,
+        eed.employee_name,
+        eed.department,
+        eed.company,
+        COUNT(*) AS total_exits,
+        ROUND(AVG(eed.minutes_early), 1) AS avg_minutes_early,
+        MAX(eed.minutes_early) AS max_minutes_early,
+        MIN(eed.date) AS first_exit_date,
+        MAX(eed.date) AS last_exit_date,
+        SUM(CASE WHEN eed.has_gate_pass = 1 THEN 1 ELSE 0 END) AS gate_pass_count,
+        SUM(CASE WHEN eed.detection_status = 'actioned' THEN 1 ELSE 0 END) AS actioned_count,
+        SUM(CASE WHEN eed.detection_status = 'exempted' THEN 1 ELSE 0 END) AS exempted_count,
+        GROUP_CONCAT(
+          eed.date || ':' || eed.minutes_early || ':' ||
+          COALESCE(eed.actual_punch_out_time, '') || ':' ||
+          eed.has_gate_pass || ':' || eed.detection_status,
+          '|'
+        ) AS date_details
+      FROM early_exit_detections eed
+      WHERE eed.date BETWEEN ? AND ?
+    `;
+    const params = [startDate, endDate];
+    if (company) { sql += ' AND eed.company = ?'; params.push(company); }
+    if (department) { sql += ' AND eed.department = ?'; params.push(department); }
+    sql += ' GROUP BY eed.employee_code HAVING COUNT(*) >= ? ORDER BY total_exits DESC, avg_minutes_early DESC';
+    params.push(minExits);
+
+    const rows = db.prepare(sql).all(...params);
+
+    // ── Previous period comparison (same duration, immediately before startDate) ─
+    const prevEnd = new Date(startDate + 'T00:00:00Z');
+    prevEnd.setUTCDate(prevEnd.getUTCDate() - 1);
+    const prevStart = new Date(prevEnd);
+    prevStart.setUTCDate(prevStart.getUTCDate() - days + 1);
+    const prevStartStr = prevStart.toISOString().slice(0, 10);
+    const prevEndStr = prevEnd.toISOString().slice(0, 10);
+
+    let prevSql = `
+      SELECT employee_code, COUNT(*) AS prev_exits
+      FROM early_exit_detections
+      WHERE date BETWEEN ? AND ?
+    `;
+    const prevParams = [prevStartStr, prevEndStr];
+    if (company) { prevSql += ' AND company = ?'; prevParams.push(company); }
+    if (department) { prevSql += ' AND department = ?'; prevParams.push(department); }
+    prevSql += ' GROUP BY employee_code';
+
+    const prevRows = db.prepare(prevSql).all(...prevParams);
+    const prevMap = {};
+    prevRows.forEach(r => { prevMap[r.employee_code] = r.prev_exits; });
+
+    // ── Enrich each row ──────────────────────────────────────
+    rows.forEach(row => {
+      // Parse date_details into per-incident array
+      row.incidents = (row.date_details || '').split('|').filter(Boolean).map(s => {
+        const parts = s.split(':');
+        return {
+          date: parts[0] || '',
+          minutes_early: Number(parts[1]) || 0,
+          punch_out: parts[2] || '',
+          has_gate_pass: parts[3] === '1',
+          status: parts[4] || 'flagged'
+        };
+      });
+      delete row.date_details;
+
+      row.prev_exits = prevMap[row.employee_code] || 0;
+      row.trend = trendLabel(row.total_exits, row.prev_exits);
+      row.is_habitual = row.total_exits >= 5 || (row.total_exits >= 3 && row.avg_minutes_early >= 60);
+    });
+
+    // ── Summary block ────────────────────────────────────────
+    const totalIncidents = rows.reduce((s, r) => s + r.total_exits, 0);
+    return res.json({
+      success: true,
+      data: rows,
+      summary: {
+        totalEmployees: rows.length,
+        habitualCount: rows.filter(r => r.is_habitual).length,
+        totalIncidents,
+        avgExitsPerEmployee: rows.length
+          ? Math.round((totalIncidents / rows.length) * 10) / 10
+          : 0,
+        dateRange: { start: startDate, end: endDate, days }
+      }
+    });
+  } catch (err) {
+    console.error('[early-exits] GET /employee-summary error:', err);
+    return res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// ────────────────────────────────────────────────────────────
 // GET /mtd-summary — Per-employee month-to-date with trend
 // ────────────────────────────────────────────────────────────
 router.get('/mtd-summary', requireHrFinanceOrAdmin, (req, res) => {

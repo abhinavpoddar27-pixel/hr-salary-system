@@ -452,6 +452,7 @@ export const getEarlyExitRangeReport = (params) => api.get('/early-exits/range-r
 export const getEarlyExitMtdSummary = (params) => api.get('/early-exits/mtd-summary', { params })
 export const getEarlyExitDeptSummary = (params) => api.get('/early-exits/department-summary', { params })
 export const exportEarlyExitReport = (params) => api.get('/early-exits/export', { params, responseType: 'blob' })
+export const getEarlyExitEmployeeSummary = (params) => api.get('/early-exits/employee-summary', { params })
 
 // ── Early Exit Deductions ─────────────────────────────────
 export const submitEarlyExitDeduction = (data) => api.post('/early-exit-deductions', data)
