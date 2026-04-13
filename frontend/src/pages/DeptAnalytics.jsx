@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
 import api from '../utils/api';
-import { BarChart, Bar, Cell, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts';
+import { BarChart, Bar, Cell, LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts';
 
 export default function DeptAnalytics() {
   const [fromDate, setFromDate] = useState('');
@@ -175,8 +175,107 @@ export default function DeptAnalytics() {
             </div>
           )}
 
-          {activeTab === 'org' && <div className="bg-white rounded-lg shadow p-8 text-center text-gray-400">Org Trends — next prompt</div>}
-          {activeTab === 'costs' && <div className="bg-white rounded-lg shadow p-8 text-center text-gray-400">Costs — next prompt</div>}
+          {activeTab === 'org' && orgData && (
+            <div className="space-y-4">
+              {orgData.punctualityCurve?.bins && (
+                <div className="bg-white rounded-lg shadow p-4">
+                  <h3 className="font-semibold mb-1">Arrival Time Distribution</h3>
+                  <p className="text-xs text-gray-500 mb-3">Minutes relative to shift start. Median offset: {orgData.punctualityCurve.medianOffset} min. Late &gt;15min: {orgData.punctualityCurve.pctLate15Plus}%</p>
+                  <ResponsiveContainer width="100%" height={280}>
+                    <BarChart data={orgData.punctualityCurve.bins}>
+                      <CartesianGrid strokeDasharray="3 3" />
+                      <XAxis dataKey="offset" tickFormatter={v => (v > 0 ? '+' : '') + v} tick={{ fontSize: 10 }} />
+                      <YAxis />
+                      <Tooltip labelFormatter={v => (v > 0 ? '+' : '') + v + ' min'} />
+                      <Bar dataKey="count">
+                        {orgData.punctualityCurve.bins.map((b, i) => (
+                          <Cell key={i} fill={b.offset >= -5 && b.offset <= 5 ? '#22c55e' : b.offset <= 15 ? '#f59e0b' : '#ef4444'} />
+                        ))}
+                      </Bar>
+                    </BarChart>
+                  </ResponsiveContainer>
+                </div>
+              )}
+              {orgData.contractorPermanentGap?.monthly?.length > 1 && (
+                <div className="bg-white rounded-lg shadow p-4">
+                  <h3 className="font-semibold mb-1">Contractor vs Permanent Attendance</h3>
+                  <p className="text-xs text-gray-500 mb-3">Avg gap: {orgData.contractorPermanentGap.avgGap}pp {orgData.contractorPermanentGap.flagged ? '⚠ Significant' : ''}</p>
+                  <ResponsiveContainer width="100%" height={280}>
+                    <LineChart data={orgData.contractorPermanentGap.monthly.map(m => ({
+                      period: m.year + '-' + String(m.month).padStart(2, '0'),
+                      Permanent: m.permRate,
+                      Contractor: m.contractorRate
+                    }))}>
+                      <CartesianGrid strokeDasharray="3 3" />
+                      <XAxis dataKey="period" />
+                      <YAxis domain={[0, 100]} />
+                      <Tooltip formatter={v => v != null ? v + '%' : 'N/A'} />
+                      <Legend />
+                      <Line type="monotone" dataKey="Permanent" stroke="#3b82f6" strokeWidth={2} dot={{ r: 3 }} />
+                      <Line type="monotone" dataKey="Contractor" stroke="#ef4444" strokeWidth={2} strokeDasharray="5 5" dot={{ r: 3 }} />
+                    </LineChart>
+                  </ResponsiveContainer>
+                </div>
+              )}
+              {orgData.workforceUtilization && (
+                <div className="bg-white rounded-lg shadow p-4">
+                  <h3 className="font-semibold mb-3">Workforce Utilization Breakdown</h3>
+                  <div className="flex h-8 rounded-full overflow-hidden text-xs text-white font-medium">
+                    {[
+                      ['Actual', orgData.workforceUtilization.actualHours, '#22c55e'],
+                      ['Absence', orgData.workforceUtilization.absenceLoss, '#ef4444'],
+                      ['Late', orgData.workforceUtilization.lateLoss, '#f59e0b'],
+                      ['Early', orgData.workforceUtilization.earlyLoss, '#fb923c'],
+                      ['Other', orgData.workforceUtilization.otherLoss, '#9ca3af']
+                    ].filter(([, v]) => v > 0).map(([label, val, color]) => {
+                      const pct = orgData.workforceUtilization.expectedHours > 0 ? (val / orgData.workforceUtilization.expectedHours * 100) : 0;
+                      return pct > 2 ? <div key={label} style={{ width: pct + '%', backgroundColor: color }} className="flex items-center justify-center">{label} {Math.round(pct)}%</div> : null;
+                    })}
+                  </div>
+                  <div className="flex gap-4 mt-2 text-xs text-gray-500">
+                    <span>Expected: {orgData.workforceUtilization.expectedHours?.toLocaleString()}h</span>
+                    <span>Actual: {orgData.workforceUtilization.actualHours?.toLocaleString()}h</span>
+                    <span>Employees: {orgData.workforceUtilization.activeEmployees}</span>
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+
+          {activeTab === 'costs' && orgData && (
+            <div className="space-y-4">
+              {orgData.absenteeismCost && (
+                <>
+                  <div className="bg-white rounded-lg shadow p-6 text-center">
+                    <div className="text-sm text-gray-500 mb-1">Total Absenteeism Cost</div>
+                    <div className="text-4xl font-bold text-red-700">₹{Number(orgData.absenteeismCost.totalAbsenteeismCost || 0).toLocaleString('en-IN')}</div>
+                  </div>
+                  <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+                    <div className="bg-white rounded-lg shadow p-4"><div className="text-xs text-gray-500">Direct Absence Cost</div><div className="text-xl font-bold">₹{Number(orgData.absenteeismCost.directAbsenceCost || 0).toLocaleString('en-IN')}</div></div>
+                    <div className="bg-white rounded-lg shadow p-4"><div className="text-xs text-gray-500">Lateness Cost</div><div className="text-xl font-bold">₹{Number(orgData.absenteeismCost.latenessCost || 0).toLocaleString('en-IN')}</div></div>
+                    <div className="bg-white rounded-lg shadow p-4"><div className="text-xs text-gray-500">Absent Days</div><div className="text-xl font-bold">{orgData.absenteeismCost.totalAbsentDays}</div></div>
+                    <div className="bg-white rounded-lg shadow p-4"><div className="text-xs text-gray-500">Avg Cost / Absent Day</div><div className="text-xl font-bold">₹{Number(orgData.absenteeismCost.avgCostPerAbsentDay || 0).toLocaleString('en-IN')}</div></div>
+                  </div>
+                  {(orgData.absenteeismCost.topDepartmentsByAbsenteeismCost || []).length > 0 && (
+                    <div className="bg-white rounded-lg shadow p-4 overflow-x-auto">
+                      <h3 className="font-semibold mb-3">Top 5 Departments by Absenteeism Cost</h3>
+                      <table className="w-full text-sm"><thead><tr className="text-left text-gray-500 border-b">
+                        <th className="py-2">#</th><th>Department</th><th>Cost</th><th>Absent Days</th>
+                      </tr></thead><tbody>
+                        {orgData.absenteeismCost.topDepartmentsByAbsenteeismCost.map((d, i) => (
+                          <tr key={d.department} className="border-b even:bg-gray-50">
+                            <td className="py-2">{i + 1}</td><td className="font-medium">{d.department}</td>
+                            <td className="font-bold text-red-700">₹{Number(d.cost || 0).toLocaleString('en-IN')}</td>
+                            <td>{d.absentDays}</td>
+                          </tr>
+                        ))}
+                      </tbody></table>
+                    </div>
+                  )}
+                </>
+              )}
+            </div>
+          )}
           {activeTab === 'alerts' && <div className="bg-white rounded-lg shadow p-8 text-center text-gray-400">Alerts — next prompt</div>}
         </>
       )}
