@@ -4,6 +4,7 @@ const path = require('path');
 const fs = require('fs');
 const multer = require('multer');
 const { getDb } = require('../database/db');
+const { requireHrOrAdmin } = require('../middleware/roles');
 
 // ── Salary structure sync helper ──────────────────────────────────
 // Single source of truth for keeping `salary_structures` in sync with
@@ -494,9 +495,11 @@ router.put('/:code/leaves', (req, res) => {
 });
 
 // UPDATE salary structure (dedicated endpoint)
-router.put('/:code/salary', (req, res) => {
+// When gross_salary changes, route through salary_change_requests for finance approval.
+// Non-salary fields (banking, statutory IDs, flags) are always applied immediately.
+router.put('/:code/salary', requireHrOrAdmin, (req, res) => {
   const db = getDb();
-  const emp = db.prepare('SELECT id FROM employees WHERE code = ?').get(req.params.code);
+  const emp = db.prepare('SELECT * FROM employees WHERE code = ?').get(req.params.code);
   if (!emp) return res.status(404).json({ success: false, error: 'Employee not found' });
 
   const {
@@ -506,45 +509,141 @@ router.put('/:code/salary', (req, res) => {
     uan, esi_number, account_number, bank_name, ifsc_code
   } = req.body;
 
-  const gross = parseFloat(gross_salary) || 0;
-  const basicPct = parseFloat(basic_percent) || 50;
-  const hraPct = parseFloat(hra_percent) || 20;
-  const daPct = parseFloat(da_percent) || 0;
-  const specialPct = parseFloat(special_allowance_percent) || 0;
-  const otherAllow = parseFloat(other_allowance) || 0;
+  const newGross = parseFloat(gross_salary) || 0;
+  const currentGross = parseFloat(emp.gross_salary) || 0;
 
-  const basic = gross * basicPct / 100;
-  const hra = gross * hraPct / 100;
-  const da = gross * daPct / 100;
-  const specialAllow = gross * specialPct / 100;
+  // Always apply banking / statutory ID fields immediately (no approval needed)
+  db.prepare(`UPDATE employees SET
+    uan = ?, esi_number = ?, bank_account = ?, bank_name = ?, ifsc = ?,
+    pf_applicable = ?, esi_applicable = ?, pt_applicable = ?,
+    updated_at = datetime('now')
+    WHERE code = ?`
+  ).run(
+    uan !== undefined ? uan || null : emp.uan,
+    esi_number !== undefined ? esi_number || null : emp.esi_number,
+    account_number !== undefined ? account_number || null : emp.bank_account,
+    bank_name !== undefined ? bank_name || null : emp.bank_name,
+    ifsc_code !== undefined ? ifsc_code || null : emp.ifsc,
+    pf_applicable !== undefined ? (pf_applicable ? 1 : 0) : (emp.pf_applicable ?? 0),
+    esi_applicable !== undefined ? (esi_applicable ? 1 : 0) : (emp.esi_applicable ?? 0),
+    pt_applicable !== undefined ? (pt_applicable ? 1 : 0) : (emp.pt_applicable ?? 1),
+    req.params.code
+  );
 
-  // Update employee banking/statutory fields + gross salary
-  db.prepare(`UPDATE employees SET gross_salary=?, uan=?, esi_number=?, bank_account=?, bank_name=?, ifsc=?, updated_at=datetime('now') WHERE code=?`)
-    .run(gross, uan || null, esi_number || null, account_number || null, bank_name || null, ifsc_code || null, req.params.code);
+  // Sync statutory flags to salary_structures (pf/esi/pt only — NOT gross)
+  if (pf_applicable !== undefined || esi_applicable !== undefined || pt_applicable !== undefined) {
+    try {
+      syncSalaryStructureFromEmployee(db, emp.id, { pf_applicable, esi_applicable, pt_applicable });
+    } catch (e) { /* silent */ }
+  }
 
-  // Upsert salary structure
-  const existing = db.prepare('SELECT id FROM salary_structures WHERE employee_id = ? ORDER BY effective_from DESC LIMIT 1').get(emp.id);
-  if (existing) {
-    db.prepare(`UPDATE salary_structures SET
-      gross_salary=?, basic=?, da=?, hra=?, special_allowance=?, other_allowances=?,
-      basic_percent=?, hra_percent=?, da_percent=?,
-      pf_applicable=?, esi_applicable=?, pt_applicable=?, pf_wage_ceiling=?,
-      updated_at=datetime('now')
-      WHERE id=?`).run(
-        gross, basic, da, hra, specialAllow, otherAllow,
-        basicPct, hraPct, daPct,
-        pf_applicable ?? 0, esi_applicable ?? 0, pt_applicable ?? 1, pf_wage_ceiling || 15000,
-        existing.id
+  // ── Gross is changing → route through finance approval ───────────────
+  if (newGross > 0 && Math.abs(newGross - currentGross) > 0.01) {
+    const requestedBy = req.user?.username || 'admin';
+
+    const basicPct = parseFloat(basic_percent) || 50;
+    const hraPct   = parseFloat(hra_percent)   || 20;
+    const daPct    = parseFloat(da_percent)    || 0;
+    const specialPct = parseFloat(special_allowance_percent) || 0;
+    const otherAllow = parseFloat(other_allowance) || 0;
+
+    const newStructure = {
+      gross_salary:     newGross,
+      basic:            Math.round(newGross * basicPct / 100 * 100) / 100,
+      da:               Math.round(newGross * daPct    / 100 * 100) / 100,
+      hra:              Math.round(newGross * hraPct   / 100 * 100) / 100,
+      special_allowance: Math.round(newGross * specialPct / 100 * 100) / 100,
+      other_allowances: otherAllow,
+      basic_percent:    basicPct,
+      hra_percent:      hraPct,
+      da_percent:       daPct,
+      pf_applicable:    pf_applicable !== undefined ? (pf_applicable ? 1 : 0) : (emp.pf_applicable ?? 0),
+      esi_applicable:   esi_applicable !== undefined ? (esi_applicable ? 1 : 0) : (emp.esi_applicable ?? 0),
+      pt_applicable:    pt_applicable !== undefined ? (pt_applicable ? 1 : 0) : (emp.pt_applicable ?? 1),
+      pf_wage_ceiling:  pf_wage_ceiling || 15000
+    };
+
+    const currentStruct = db.prepare(
+      'SELECT * FROM salary_structures WHERE employee_id = ? ORDER BY effective_from DESC LIMIT 1'
+    ).get(emp.id);
+
+    // Don't create duplicate pending requests for the same employee
+    const existingPending = db.prepare(
+      "SELECT id FROM salary_change_requests WHERE employee_code = ? AND status = 'Pending'"
+    ).get(req.params.code);
+
+    if (existingPending) {
+      return res.json({
+        success: true,
+        pendingApproval: true,
+        message: 'A salary change request is already pending finance approval for this employee.'
+      });
+    }
+
+    db.prepare(`
+      INSERT INTO salary_change_requests (
+        employee_id, employee_code, requested_by, old_gross, new_gross,
+        old_structure, new_structure, reason, status
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'Pending')
+    `).run(
+      emp.id, req.params.code, requestedBy,
+      currentGross, newGross,
+      JSON.stringify(currentStruct || {}),
+      JSON.stringify(newStructure),
+      'Salary structure change via Employee Master'
     );
-  } else {
-    db.prepare(`INSERT INTO salary_structures
-      (employee_id, effective_from, gross_salary, basic, da, hra, special_allowance, other_allowances,
-       basic_percent, hra_percent, da_percent, pf_applicable, esi_applicable, pt_applicable, pf_wage_ceiling)
-      VALUES (?, '2025-01-01', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
-        emp.id, gross, basic, da, hra, specialAllow, otherAllow,
-        basicPct, hraPct, daPct,
-        pf_applicable ?? 1, esi_applicable ?? 1, pt_applicable ?? 1, pf_wage_ceiling || 15000
-    );
+
+    return res.json({
+      success: true,
+      pendingApproval: true,
+      message: 'Salary change submitted for finance approval. Current salary unchanged until approved.'
+    });
+  }
+
+  // ── Gross is NOT changing — allow direct component/percentage updates ─
+  if (newGross > 0 && Math.abs(newGross - currentGross) <= 0.01) {
+    const basicPct = parseFloat(basic_percent) || 50;
+    const hraPct   = parseFloat(hra_percent)   || 20;
+    const daPct    = parseFloat(da_percent)    || 0;
+    const specialPct = parseFloat(special_allowance_percent) || 0;
+    const otherAllow = parseFloat(other_allowance) || 0;
+
+    const basic      = Math.round(newGross * basicPct   / 100 * 100) / 100;
+    const hra        = Math.round(newGross * hraPct     / 100 * 100) / 100;
+    const da         = Math.round(newGross * daPct      / 100 * 100) / 100;
+    const specialAllow = Math.round(newGross * specialPct / 100 * 100) / 100;
+
+    const existing = db.prepare(
+      'SELECT id FROM salary_structures WHERE employee_id = ? ORDER BY effective_from DESC LIMIT 1'
+    ).get(emp.id);
+
+    if (existing) {
+      db.prepare(`UPDATE salary_structures SET
+        gross_salary=?, basic=?, da=?, hra=?, special_allowance=?, other_allowances=?,
+        basic_percent=?, hra_percent=?, da_percent=?,
+        pf_applicable=?, esi_applicable=?, pt_applicable=?, pf_wage_ceiling=?,
+        updated_at=datetime('now')
+        WHERE id=?`).run(
+          newGross, basic, da, hra, specialAllow, otherAllow,
+          basicPct, hraPct, daPct,
+          pf_applicable !== undefined ? (pf_applicable ? 1 : 0) : (emp.pf_applicable ?? 0),
+          esi_applicable !== undefined ? (esi_applicable ? 1 : 0) : (emp.esi_applicable ?? 0),
+          pt_applicable !== undefined ? (pt_applicable ? 1 : 0) : (emp.pt_applicable ?? 1),
+          pf_wage_ceiling || 15000, existing.id
+      );
+    } else {
+      db.prepare(`INSERT INTO salary_structures
+        (employee_id, effective_from, gross_salary, basic, da, hra, special_allowance, other_allowances,
+         basic_percent, hra_percent, da_percent, pf_applicable, esi_applicable, pt_applicable, pf_wage_ceiling)
+        VALUES (?, '2025-01-01', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
+          emp.id, newGross, basic, da, hra, specialAllow, otherAllow,
+          basicPct, hraPct, daPct,
+          pf_applicable !== undefined ? (pf_applicable ? 1 : 0) : 1,
+          esi_applicable !== undefined ? (esi_applicable ? 1 : 0) : 1,
+          pt_applicable !== undefined ? (pt_applicable ? 1 : 0) : 1,
+          pf_wage_ceiling || 15000
+      );
+    }
   }
 
   res.json({ success: true, message: 'Salary structure updated' });

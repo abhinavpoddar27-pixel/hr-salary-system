@@ -54,7 +54,16 @@ function SalaryModal({ employee, onClose }) {
 
   const updateMutation = useMutation({
     mutationFn: (data) => updateSalaryStructure(employee.code, data),
-    onSuccess: () => { toast.success('Salary structure saved'); qc.invalidateQueries(['employee-detail', employee.code]); onClose() }
+    onSuccess: (response) => {
+      const data = response?.data || response
+      if (data?.pendingApproval) {
+        toast.success('Salary change submitted for finance approval', { duration: 5000 })
+      } else {
+        toast.success('Salary structure saved')
+      }
+      qc.invalidateQueries(['employee-detail', employee.code])
+      onClose()
+    }
   })
 
   const gross = parseFloat(form.gross_salary) || 0
