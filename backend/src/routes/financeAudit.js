@@ -15,6 +15,7 @@ const express = require('express');
 const router = express.Router();
 const { getDb, logAudit } = require('../database/db');
 const { requireFinanceOrAdmin } = require('../middleware/roles');
+const { syncSalaryStructureFromEmployee } = require('./employees');
 
 const CORRECTION_REASONS = [
   'Gate register mismatch',
@@ -999,10 +1000,54 @@ router.put('/approve-flag/:flagId', (req, res) => {
     .run(flag.employee_code, flag.month, flag.year, flagId, status, reviewer, comments || '');
 
   try {
-    const { logAudit } = require('../database/db');
     logAudit('salary_manual_flags', flagId, 'finance_approved', String(flag.finance_approved), String(approvedVal), reviewer,
       `Flag ${status}: ${flag.flag_type} for ${flag.employee_code}. ${comments || ''}`);
   } catch {}
+
+  // GROSS_STRUCTURE_CHANGE revert: when finance rejects, restore old gross to
+  // employees + salary_structures so Stage 7 recomputes with the original value.
+  // flag.system_value = old gross (before the change); flag.manual_value = new gross (what was rejected).
+  if (status === 'REJECTED' && flag.flag_type === 'GROSS_STRUCTURE_CHANGE') {
+    const oldGross = parseFloat(flag.system_value);
+    if (oldGross > 0) {
+      try {
+        const emp = db.prepare('SELECT id, code, name, department FROM employees WHERE code = ?')
+          .get(flag.employee_code);
+
+        // Archive rejection snapshot (mirrors miss-punch pattern)
+        db.prepare(`
+          INSERT INTO finance_rejections
+            (rejection_type, source_table, source_record_id, employee_code,
+             employee_name, department, month, year, company,
+             original_details, rejection_reason, rejected_by)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `).run(
+          'GROSS_STRUCTURE_CHANGE_REVERT', 'salary_manual_flags', flag.id,
+          flag.employee_code, emp?.name || '', emp?.department || '',
+          flag.month, flag.year, '',
+          JSON.stringify({ old_gross: flag.system_value, new_gross: flag.manual_value, flag }),
+          comments || 'Finance rejected gross change — reverting to original',
+          reviewer
+        );
+
+        // Revert employees.gross_salary to old value
+        db.prepare("UPDATE employees SET gross_salary = ?, updated_at = datetime('now') WHERE code = ?")
+          .run(oldGross, flag.employee_code);
+
+        // Revert salary_structures proportionally (preserves component ratios)
+        if (emp) {
+          syncSalaryStructureFromEmployee(db, emp.id, { gross_salary: oldGross });
+        }
+
+        // Audit log for the gross revert
+        logAudit('employees', emp?.id || flag.employee_code, 'gross_salary',
+          String(flag.manual_value), String(flag.system_value), reviewer,
+          `GROSS REVERT: Finance rejected gross change ${flag.manual_value} → ${flag.system_value} for ${flag.employee_code}`);
+      } catch (e) {
+        console.error('[GROSS_REVERT] revert failed, flag status still updated:', e.message);
+      }
+    }
+  }
 
   res.json({ success: true });
 });

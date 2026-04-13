@@ -1029,3 +1029,4 @@ router.post('/admin/integrity-fix', (req, res) => {
 });
 
 module.exports = router;
+module.exports.syncSalaryStructureFromEmployee = syncSalaryStructureFromEmployee;
