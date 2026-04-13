@@ -1745,6 +1745,7 @@ function initSchema(db) {
   safeAddColumn('attendance_processed', 'miss_punch_finance_reviewed_at', 'TEXT');
   safeAddColumn('attendance_processed', 'miss_punch_finance_notes', 'TEXT');
   safeCreateIndex('CREATE INDEX IF NOT EXISTS idx_ap_mp_fin_status ON attendance_processed(miss_punch_finance_status, month, year)');
+  safeCreateIndex('CREATE INDEX IF NOT EXISTS idx_ap_last_present ON attendance_processed(employee_code, status_final, date)');
 
   // ── Salary hold release audit trail (April 2026) ───────────
   // Every time finance releases a held salary, write one row here with
