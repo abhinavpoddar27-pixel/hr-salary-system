@@ -75,6 +75,7 @@ const nav = [
       { label: 'Audit Log', to: '/daily-wage/audit', financeOnly: true },
     ]
   },
+  { label: 'Dept Analytics', icon: '🏢', to: '/dept-analytics' },
   { label: 'Session Analytics', icon: '📊', to: '/session-analytics', adminOnly: true },
   { label: 'Query Tool', icon: '🔎', to: '/admin/query-tool', adminOnly: true },
   {
