@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import api from '../utils/api';
+import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts';
 
 export default function EmployeeProfile() {
   const [employees, setEmployees] = useState([]);
@@ -136,6 +137,29 @@ export default function EmployeeProfile() {
                       ))}
                     </tbody>
                   </table>
+                </div>
+              )}
+              {(profileData.monthlyBreakdown || []).length > 1 && (
+                <div className="bg-white rounded-lg shadow p-4">
+                  <h3 className="font-semibold text-gray-900 mb-3">Monthly Trends</h3>
+                  <ResponsiveContainer width="100%" height={300}>
+                    <LineChart data={(profileData.monthlyBreakdown || []).map(m => ({
+                      period: new Date(m.year, m.month - 1).toLocaleDateString('en-IN', { month: 'short', year: '2-digit' }),
+                      'Attendance %': m.attendanceRate,
+                      'Late %': m.lateRate,
+                      'Avg Hours': m.avgHours
+                    }))}>
+                      <CartesianGrid strokeDasharray="3 3" />
+                      <XAxis dataKey="period" />
+                      <YAxis yAxisId="left" domain={[0, 100]} />
+                      <YAxis yAxisId="right" orientation="right" domain={[0, 14]} />
+                      <Tooltip />
+                      <Legend />
+                      <Line yAxisId="left" type="monotone" dataKey="Attendance %" stroke="#22c55e" strokeWidth={2} dot={{ r: 3 }} />
+                      <Line yAxisId="left" type="monotone" dataKey="Late %" stroke="#ef4444" strokeWidth={2} dot={{ r: 3 }} />
+                      <Line yAxisId="right" type="monotone" dataKey="Avg Hours" stroke="#3b82f6" strokeWidth={2} dot={{ r: 3 }} />
+                    </LineChart>
+                  </ResponsiveContainer>
                 </div>
               )}
             </div>
