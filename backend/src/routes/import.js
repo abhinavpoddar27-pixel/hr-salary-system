@@ -342,7 +342,7 @@ router.post('/upload', upload.array('files', 20), async (req, res) => {
             is_overtime = ?, overtime_minutes = ?,
             is_left_late = ?, left_late_minutes = ?,
             is_night_shift = CASE WHEN ? = 1 THEN 1 ELSE is_night_shift END,
-            shift_id = COALESCE(shift_id, ?), shift_detected = COALESCE(shift_detected, ?)
+            shift_id = ?, shift_detected = ?
           WHERE id = ?
         `);
 
