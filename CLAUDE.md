@@ -1,24 +1,14 @@
 ## Section 0: Last Session
-- **Date:** 2026-04-12
-- **Branch:** `claude/session-start-DL0k6` (pushed to `origin/main` via fast-forward)
-- **Last commit:** `2542b49` feat: AI-powered qualitative employee review via Claude API
+- **Date:** 2026-04-13
+- **Branch:** `claude/session-start-2y2jU`
+- **Last commit:** `128df3a` build: frontend dist for employee profile
 - **Files changed this session:**
-  - `backend/src/services/employeeProfileService.js` — new: `computeProfileRange()` returning 13 sections (employee, kpis, streaks, arrivalDeparture, regularityScore, behavioralPatterns, monthlyBreakdown, departmentComparison, salaryHistory, corrections, leaveUsage, patternAnalysis, meta)
-  - `backend/src/routes/analytics.js` — added `GET /employee/:code/profile-range` and `POST /employee/:code/ai-review` routes
-  - `backend/src/services/aiReviewService.js` — new: `generateAIReview()` calling Anthropic API; `buildReviewPayload()`, `parseSections()`, `callClaudeAPI()`
-  - `backend/src/services/patternEngine/index.js` — new orchestrator: runs 23 detectors, computes flightRisk/engagement/reliability composite scores
-  - `backend/src/services/patternEngine/individualPatterns.js` — new: 8 detectors (sandwich leave, ghost hours, absence clustering, break drift, miss-punch escalation, half-day addiction, LIFO, post-leave slump)
-  - `backend/src/services/patternEngine/flightRiskPatterns.js` — new: 4 detectors (disengagement cascade, sudden leave burn, OT cliff, attendance entropy)
-  - `backend/src/services/patternEngine/anomalyPatterns.js` — new: 4 detectors (buddy punching, OT gaming, coordinated absence, clock-edge punching)
-  - `backend/src/services/patternEngine/temporalPatterns.js` — new: 3 detectors (payday proximity, seasonal pattern, day-of-month hotspot)
-  - `backend/src/services/patternEngine/shiftPatterns.js` — new: 2 detectors (night shift fatigue, shift transition shock)
-  - `backend/src/services/patternEngine/contractorPatterns.js` — new: 2 detectors (contractor instability, contractor OT exploitation with Factories Act check)
-  - `.env.example` — added `ANTHROPIC_API_KEY` entry with Railway deployment note
-- **What was fixed/built:** Full Employee Intelligence backend — 13-section profile endpoint, 23-pattern behavioral engine, and AI narrative review via Claude API. All three features pushed to `origin/main`. Railway already has `ANTHROPIC_API_KEY` set so the AI review endpoint is live in production.
-- **What's fragile:** `employeeProfileService.js` Section I (salary history) has a try/catch fallback for older DBs missing `take_home`/`ed_pay` columns — if a DB is very old the totals may exclude these fields silently. Pattern engine's `detectLIFO` and `detectCoordinatedAbsence` make per-date DB queries capped at 30/20 samples to avoid N+1 slowness — very large date ranges still do O(30) queries each.
-- **Unfinished work:** `frontend/src/pages/EmployeeProfile.jsx` — NOT created. Phase 4a + 4b frontend was planned (plan file at `/root/.claude/plans/recursive-popping-dove.md`) but interrupted before implementation. App.jsx, Sidebar.jsx, and permissions.js also not yet modified for this page.
-- **Known issues remaining:** Local `main` branch has diverged from `origin/main` (51 vs 71 different commits) — always push via `git push origin claude/session-branch:main` rather than checking out local main.
-- **Next session should:** Implement `frontend/src/pages/EmployeeProfile.jsx` per the approved plan at `/root/.claude/plans/recursive-popping-dove.md` — create the page, wire App.jsx route, add Sidebar.jsx nav item, add `employee-profile` to permissions.js for hr+finance, build dist, commit and push.
+  - `frontend/src/pages/EmployeeProfile.jsx` — new: 595-line page with searchable employee selector, date range picker, 3-column identity card, 5 tabs (Overview with 8 KPI cards + streaks + dept comparison, Attendance with 16 detail metrics + monthly breakdown table + 3 collapsible corrections sections, Salary with INR-formatted totals + monthly table + held-salary notes, Patterns placeholder with composite scores, AI Review placeholder)
+- **What was fixed/built:** Created the Employee Profile frontend page (Phase 4a). All data sections render from the `GET /analytics/employee/:code/profile-range` API. Click-outside dropdown handler, Indian currency formatting, color-coded KPI thresholds, department comparison with green/red coloring. Frontend dist built and committed.
+- **What's fragile:** The page is NOT yet routed — `App.jsx` has no `<Route>` for `/employee-profile`, `Sidebar.jsx` has no nav entry, and `permissions.js` doesn't include `employee-profile` for hr/finance roles. The page file exists but is unreachable until those 3 wiring changes are made. Vite tree-shakes it out of the build since nothing imports it.
+- **Unfinished work:** Three wiring changes needed: (1) `App.jsx` — add `const EmployeeProfile = React.lazy(() => import('./pages/EmployeeProfile'))` and `<Route path="/employee-profile" ...>`, (2) `Sidebar.jsx` — add `{ label: 'Employee Profile', icon: '👤', to: '/employee-profile' }` near Employees entry, (3) `permissions.js` — add `'employee-profile'` to hr and finance arrays. Phase 4b (enhanced patterns display, AI review generation with streaming) not started.
+- **Known issues remaining:** Local `main` branch has diverged from `origin/main` — always push via `git push origin claude/session-branch:main` rather than checking out local main. The `CorrectionsSection` sub-component defines a `Section` component inside its render function — this works but causes re-mount on every parent render; could be extracted if performance matters.
+- **Next session should:** Wire the Employee Profile page into App.jsx, Sidebar.jsx, and permissions.js (3 small edits), rebuild dist, then implement Phase 4b enhancements (AI review generation with Claude API streaming, richer pattern display cards).
 
 ---
 
