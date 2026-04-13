@@ -50,6 +50,7 @@ const DailyWageReports = React.lazy(() => import('./pages/DailyWageReports'))
 const DailyWageAuditLog = React.lazy(() => import('./pages/DailyWageAuditLog'))
 const QueryTool = React.lazy(() => import('./pages/QueryTool'))
 const DeptAnalytics = React.lazy(() => import('./pages/DeptAnalytics'))
+const EmployeeProfile = React.lazy(() => import('./pages/EmployeeProfile'))
 
 function PageLoader() {
   return (
@@ -186,6 +187,7 @@ export default function App() {
           <Route path="/session-analytics" element={<RequireAuth><Layout title="Session Analytics"><SessionAnalytics /></Layout></RequireAuth>} />
           <Route path="/admin/query-tool" element={<RequireAuth><Layout title="Database Query Tool"><QueryTool /></Layout></RequireAuth>} />
           <Route path="/dept-analytics" element={<RequireAuth><Layout title="Department & Org Analytics"><DeptAnalytics /></Layout></RequireAuth>} />
+          <Route path="/employee-profile" element={<RequireAuth><Layout title="Employee Intelligence Profile"><EmployeeProfile /></Layout></RequireAuth>} />
           <Route path="/employees" element={<RequireAuth><Layout title="Employee Master"><Employees /></Layout></RequireAuth>} />
           <Route path="/alerts" element={<RequireAuth><Layout title="Alerts"><Alerts /></Layout></RequireAuth>} />
           <Route path="/settings/*" element={<RequireAuth><Layout title="Settings"><Settings /></Layout></RequireAuth>} />

@@ -1,0 +1,376 @@
+import { useState, useEffect, useRef, useCallback } from 'react';
+import api from '../utils/api';
+import { LineChart, Line, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts';
+
+const TABS = ['overview', 'attendance', 'salary', 'patterns', 'aiReview'];
+const TAB_LABELS = { overview: 'Overview', attendance: 'Attendance', salary: 'Salary', patterns: 'Patterns', aiReview: 'AI Review' };
+
+function fmt(n) { return n != null ? Number(n).toLocaleString('en-IN') : '—'; }
+function pct(n) { return n != null ? `${n}%` : '—'; }
+function hrs(n) { return n != null ? `${n}h` : '—'; }
+function inr(n) { return n != null ? `₹${Number(n).toLocaleString('en-IN')}` : '—'; }
+
+function KpiCard({ label, value, sub, color = 'blue' }) {
+  const border = { blue: 'border-blue-500', green: 'border-green-500', red: 'border-red-500', amber: 'border-amber-500', indigo: 'border-indigo-500', purple: 'border-purple-500', teal: 'border-teal-500', orange: 'border-orange-500' };
+  return (
+    <div className={`bg-white rounded-lg shadow p-4 border-l-4 ${border[color] || border.blue}`}>
+      <div className="text-xs text-gray-500">{label}</div>
+      <div className="text-2xl font-bold text-gray-900 mt-1">{value}</div>
+      {sub && <div className="text-xs text-gray-400 mt-1">{sub}</div>}
+    </div>
+  );
+}
+
+function SeverityBadge({ s }) {
+  const map = { high: 'bg-red-100 text-red-700', medium: 'bg-amber-100 text-amber-700', low: 'bg-yellow-100 text-yellow-700', info: 'bg-blue-100 text-blue-700' };
+  return <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${map[s] || map.info}`}>{s}</span>;
+}
+
+export default function EmployeeProfile() {
+  const today = new Date().toISOString().split('T')[0];
+  const sixAgo = (() => { const d = new Date(); d.setMonth(d.getMonth() - 6); return d.toISOString().split('T')[0]; })();
+
+  const [employees, setEmployees]     = useState([]);
+  const [selectedCode, setSelected]   = useState('');
+  const [searchTerm, setSearch]       = useState('');
+  const [showDropdown, setDropdown]   = useState(false);
+  const [fromDate, setFrom]           = useState(sixAgo);
+  const [toDate, setTo]               = useState(today);
+  const [profileData, setProfile]     = useState(null);
+  const [loading, setLoading]         = useState(false);
+  const [error, setError]             = useState('');
+  const [activeTab, setTab]           = useState('overview');
+  const dropRef = useRef(null);
+
+  // Load employee list once
+  useEffect(() => {
+    api.get('/employees?status=Active&limit=500').then(r => {
+      setEmployees(r.data?.employees || r.data?.data || []);
+    }).catch(() => {});
+  }, []);
+
+  // Click-outside to close dropdown
+  useEffect(() => {
+    function handler(e) { if (dropRef.current && !dropRef.current.contains(e.target)) setDropdown(false); }
+    document.addEventListener('mousedown', handler);
+    return () => document.removeEventListener('mousedown', handler);
+  }, []);
+
+  const filtered = employees.filter(e =>
+    !searchTerm || e.name?.toLowerCase().includes(searchTerm.toLowerCase()) || e.code?.toLowerCase().includes(searchTerm.toLowerCase())
+  ).slice(0, 30);
+
+  const fetchProfile = useCallback(async () => {
+    if (!selectedCode) return;
+    setLoading(true); setError('');
+    try {
+      const r = await api.get(`/analytics/employee/${selectedCode}/profile-range?from=${fromDate}&to=${toDate}`);
+      setProfile(r.data?.data || r.data);
+    } catch (e) { setError(e.response?.data?.error || e.message); }
+    finally { setLoading(false); }
+  }, [selectedCode, fromDate, toDate]);
+
+  useEffect(() => { if (selectedCode) fetchProfile(); }, [selectedCode, fromDate, toDate, fetchProfile]);
+
+  const emp = profileData?.employee;
+  const kpis = profileData?.kpis;
+  const streaks = profileData?.streaks;
+  const monthly = profileData?.monthlyBreakdown || [];
+  const deptComp = profileData?.departmentComparison;
+  const salary = profileData?.salaryHistory;
+  const patterns = profileData?.patternAnalysis;
+  const corrections = profileData?.corrections;
+
+  const tenure = emp?.date_of_joining
+    ? (() => { const m = Math.round((new Date() - new Date(emp.date_of_joining)) / (1000 * 60 * 60 * 24 * 30)); return m >= 12 ? `${Math.floor(m/12)}y ${m%12}m` : `${m}m`; })()
+    : null;
+
+  return (
+    <div className="max-w-7xl mx-auto p-4 space-y-4">
+      <h1 className="text-2xl font-bold">Employee Intelligence Profile</h1>
+
+      {/* Controls */}
+      <div className="bg-white rounded-lg shadow p-4 flex flex-wrap gap-4 items-end">
+        {/* Employee search */}
+        <div className="flex-1 min-w-48 relative" ref={dropRef}>
+          <label className="block text-sm font-medium text-gray-700 mb-1">Employee</label>
+          <input
+            type="text" placeholder="Search name or code…"
+            value={searchTerm}
+            onChange={e => { setSearch(e.target.value); setDropdown(true); }}
+            onFocus={() => setDropdown(true)}
+            className="w-full border rounded px-3 py-2 text-sm"
+          />
+          {showDropdown && filtered.length > 0 && (
+            <ul className="absolute z-20 top-full left-0 right-0 bg-white border rounded shadow-lg max-h-52 overflow-y-auto mt-0.5">
+              {filtered.map(e => (
+                <li key={e.code}
+                  className="px-3 py-2 text-sm cursor-pointer hover:bg-indigo-50"
+                  onMouseDown={() => { setSelected(e.code); setSearch(`${e.name} (${e.code})`); setDropdown(false); }}>
+                  <span className="font-medium">{e.name}</span>
+                  <span className="text-gray-400 ml-2">{e.code}</span>
+                  <span className="text-gray-400 ml-2 text-xs">{e.department}</span>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+        <div><label className="block text-sm font-medium text-gray-700 mb-1">From</label>
+          <input type="date" value={fromDate} onChange={e => setFrom(e.target.value)} className="border rounded px-3 py-2 text-sm" /></div>
+        <div><label className="block text-sm font-medium text-gray-700 mb-1">To</label>
+          <input type="date" value={toDate} onChange={e => setTo(e.target.value)} className="border rounded px-3 py-2 text-sm" /></div>
+        <button onClick={fetchProfile} disabled={!selectedCode || loading}
+          className="px-4 py-2 bg-indigo-600 text-white rounded hover:bg-indigo-700 text-sm disabled:opacity-50">
+          {loading ? 'Loading…' : 'Refresh'}
+        </button>
+      </div>
+
+      {error && <div className="bg-red-50 border border-red-200 rounded p-4 text-red-700">{error}</div>}
+      {!selectedCode && <div className="bg-white rounded-lg shadow p-12 text-center text-gray-400">Select an employee to view their intelligence profile</div>}
+
+      {emp && (
+        <>
+          {/* Identity card */}
+          <div className="bg-white rounded-lg shadow p-5 grid grid-cols-1 md:grid-cols-3 gap-4">
+            <div>
+              <div className="text-xl font-bold text-gray-900">{emp.name}</div>
+              <div className="text-sm text-gray-500 mt-1">{emp.code} · {emp.designation || emp.department}</div>
+            </div>
+            <div className="text-sm space-y-1 text-gray-600">
+              <div><span className="text-gray-400">Dept:</span> {emp.department || '—'}</div>
+              <div><span className="text-gray-400">Company:</span> {emp.company || '—'}</div>
+              <div><span className="text-gray-400">Type:</span> {emp.is_contractor ? 'Contractor' : 'Permanent'}</div>
+              <div><span className="text-gray-400">Shift:</span> {emp.shift_code || '—'}</div>
+            </div>
+            <div className="text-sm space-y-1 text-gray-600">
+              <div><span className={`inline-block px-2 py-0.5 rounded-full text-xs font-medium ${emp.status === 'Active' ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}`}>{emp.status}</span></div>
+              {emp.date_of_joining && <div><span className="text-gray-400">DOJ:</span> {emp.date_of_joining}</div>}
+              {tenure && <div><span className="text-gray-400">Tenure:</span> {tenure}</div>}
+              <div><span className="text-gray-400">Gross:</span> {inr(emp.gross_salary)}/mo</div>
+            </div>
+          </div>
+
+          {/* Tab bar */}
+          <div className="flex gap-1 bg-gray-100 rounded-lg p-1 overflow-x-auto">
+            {TABS.map(t => (
+              <button key={t} onClick={() => setTab(t)}
+                className={`px-4 py-2 rounded-lg text-sm font-medium whitespace-nowrap ${activeTab === t ? 'bg-white shadow text-gray-900' : 'text-gray-500'}`}>
+                {TAB_LABELS[t]}
+              </button>
+            ))}
+          </div>
+
+          {/* ── Overview ── */}
+          {activeTab === 'overview' && kpis && (
+            <div className="space-y-4">
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+                <KpiCard label="Attendance Rate"   value={pct(kpis.attendanceRate)}  sub={`${kpis.presentDays}/${kpis.workingDays} days`} color="green" />
+                <KpiCard label="Late Arrivals"     value={kpis.lateCount}             sub={`${pct(kpis.lateRate)} of present`}            color="amber" />
+                <KpiCard label="Avg Hours/Day"     value={hrs(kpis.avgHoursWorked)}   sub="from punch times"                              color="blue" />
+                <KpiCard label="Regularity"        value={pct(profileData?.regularityScore?.score)} sub="consistency score"              color="indigo" />
+                <KpiCard label="Absences"          value={kpis.totalAbsences}         sub={`${pct(kpis.absenteeismRate)} rate`}           color="red" />
+                <KpiCard label="OT Days"           value={kpis.otDays}                sub={`${kpis.wopDays} WOP days`}                    color="teal" />
+                <KpiCard label="Miss Punches"      value={kpis.missPunchCount}        sub={`${kpis.missPunchResolved} resolved`}          color="orange" />
+                <KpiCard label="Early Exits"       value={kpis.earlyExitCount}        sub={kpis.avgEarlyMinutes ? `avg ${kpis.avgEarlyMinutes}m early` : null} color="purple" />
+              </div>
+
+              {streaks && (
+                <div className="bg-white rounded-lg shadow p-4 flex gap-6 text-sm">
+                  <div><span className="text-gray-500">Best streak:</span> <span className="font-bold text-green-700">{streaks.maxPresentStreak}d present</span></div>
+                  <div><span className="text-gray-500">Longest absence run:</span> <span className="font-bold text-red-700">{streaks.maxAbsentStreak}d</span></div>
+                  {streaks.currentStreak?.days > 0 && (
+                    <div><span className="text-gray-500">Current:</span> <span className="font-bold">{streaks.currentStreak.days}d {streaks.currentStreak.type}</span></div>
+                  )}
+                </div>
+              )}
+
+              {monthly.length > 1 && (
+                <div className="bg-white rounded-lg shadow p-4">
+                  <h3 className="font-semibold mb-3 text-sm">Monthly Attendance Trend</h3>
+                  <ResponsiveContainer width="100%" height={220}>
+                    <LineChart data={monthly.map(m => ({ name: `${m.year}-${String(m.month).padStart(2,'0')}`, att: m.attendanceRate, late: m.lateRate }))}>
+                      <CartesianGrid strokeDasharray="3 3" />
+                      <XAxis dataKey="name" tick={{ fontSize: 10 }} />
+                      <YAxis domain={[0, 100]} />
+                      <Tooltip formatter={v => v + '%'} />
+                      <Legend />
+                      <Line type="monotone" dataKey="att"  name="Attendance%" stroke="#22c55e" strokeWidth={2} dot={{ r: 3 }} />
+                      <Line type="monotone" dataKey="late" name="Late%"        stroke="#f59e0b" strokeWidth={2} dot={{ r: 3 }} />
+                    </LineChart>
+                  </ResponsiveContainer>
+                </div>
+              )}
+
+              {deptComp && (
+                <div className="bg-white rounded-lg shadow p-4 overflow-x-auto">
+                  <h3 className="font-semibold mb-3 text-sm">Vs Department & Org</h3>
+                  <table className="w-full text-sm"><thead><tr className="text-left text-gray-500 border-b">
+                    <th className="py-2">Metric</th><th>This Employee</th><th>{deptComp.departmentName || 'Dept'}</th><th>Org</th>
+                  </tr></thead><tbody>
+                    {[
+                      ['Attendance%', deptComp.employee?.attendanceRate, deptComp.department?.attendanceRate, deptComp.org?.attendanceRate],
+                      ['Late%',       deptComp.employee?.lateRate,       deptComp.department?.lateRate,       deptComp.org?.lateRate],
+                      ['Avg Hours',   deptComp.employee?.avgHours,       deptComp.department?.avgHours,       deptComp.org?.avgHours],
+                    ].map(([label, emp, dept, org]) => (
+                      <tr key={label} className="border-b even:bg-gray-50">
+                        <td className="py-1.5 font-medium">{label}</td>
+                        <td className="font-bold">{emp != null ? emp : '—'}</td>
+                        <td className="text-gray-600">{dept != null ? dept : '—'}</td>
+                        <td className="text-gray-600">{org != null ? org : '—'}</td>
+                      </tr>
+                    ))}
+                  </tbody></table>
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* ── Attendance ── */}
+          {activeTab === 'attendance' && kpis && (
+            <div className="space-y-4">
+              <div className="bg-white rounded-lg shadow p-4 grid grid-cols-2 md:grid-cols-4 gap-x-6 gap-y-3 text-sm">
+                {[
+                  ['Working Days', kpis.workingDays], ['Present Days', kpis.presentDays],
+                  ['Absences', kpis.totalAbsences], ['Half Days', kpis.halfDayCount],
+                  ['WOP Days', kpis.wopDays], ['Night Shift', kpis.nightShiftDays],
+                  ['Holiday Duty', kpis.holidayDutyDays], ['ED Approved', kpis.edDaysApproved],
+                  ['Late Count', kpis.lateCount], ['Avg Late Min', kpis.avgLateMinutes ?? '—'],
+                  ['Early Exits', kpis.earlyExitCount], ['Avg Early Min', kpis.avgEarlyMinutes ?? '—'],
+                  ['OT Days', kpis.otDays], ['Total OT Min', kpis.totalOTMinutes],
+                  ['Miss Punches', kpis.missPunchCount], ['Resolved', kpis.missPunchResolved],
+                ].map(([l, v]) => (
+                  <div key={l}><span className="text-gray-400">{l}: </span><span className="font-medium">{v ?? '—'}</span></div>
+                ))}
+              </div>
+
+              {monthly.length > 0 && (
+                <div className="bg-white rounded-lg shadow p-4 overflow-x-auto">
+                  <h3 className="font-semibold mb-3 text-sm">Monthly Breakdown</h3>
+                  <table className="w-full text-sm min-w-[600px]"><thead><tr className="text-left text-gray-500 border-b">
+                    <th className="py-2">Month</th><th>Att%</th><th>Present</th><th>Absent</th><th>Late</th><th>Early</th><th>Avg Hrs</th><th>OT</th>
+                  </tr></thead><tbody>
+                    {monthly.map(m => (
+                      <tr key={`${m.year}-${m.month}`} className="border-b even:bg-gray-50">
+                        <td className="py-1.5">{m.year}-{String(m.month).padStart(2,'0')}</td>
+                        <td className={`font-bold ${m.attendanceRate >= 90 ? 'text-green-700' : m.attendanceRate >= 75 ? 'text-yellow-700' : 'text-red-700'}`}>{m.attendanceRate}%</td>
+                        <td>{m.presentDays}</td><td>{m.absences}</td>
+                        <td>{m.lateCount}</td><td>{m.earlyExitCount}</td>
+                        <td>{m.avgHours ?? '—'}</td><td>{m.otDays}</td>
+                      </tr>
+                    ))}
+                  </tbody></table>
+                </div>
+              )}
+
+              {corrections?.dayCorrections?.length > 0 && (
+                <div className="bg-white rounded-lg shadow p-4">
+                  <h3 className="font-semibold mb-3 text-sm">Day Corrections ({corrections.dayCorrections.length})</h3>
+                  <div className="space-y-1 text-sm max-h-48 overflow-y-auto">
+                    {corrections.dayCorrections.map((c, i) => (
+                      <div key={i} className="flex justify-between border-b py-1">
+                        <span>{c.date} — {c.reason || c.correction_type}</span>
+                        <span className="text-gray-400">{c.applied_by}</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* ── Salary ── */}
+          {activeTab === 'salary' && salary && (
+            <div className="space-y-4">
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+                <KpiCard label="Total Gross Earned"  value={inr(salary.totals?.totalGrossEarned)}  color="green" />
+                <KpiCard label="Total Net Salary"    value={inr(salary.totals?.totalNetSalary)}    color="blue" />
+                <KpiCard label="Total Deductions"    value={inr(salary.totals?.totalDeductions)}   color="red" />
+                <KpiCard label="Total Take-Home"     value={inr(salary.totals?.totalTakeHome)}     color="indigo" />
+              </div>
+              {salary.months?.length > 0 && (
+                <div className="bg-white rounded-lg shadow p-4 overflow-x-auto">
+                  <h3 className="font-semibold mb-3 text-sm">Monthly Salary History</h3>
+                  <table className="w-full text-sm min-w-[600px]"><thead><tr className="text-left text-gray-500 border-b">
+                    <th className="py-2">Month</th><th>Gross Earned</th><th>Net</th><th>Take-Home</th><th>Deductions</th><th>PF</th><th>ESI</th>
+                  </tr></thead><tbody>
+                    {salary.months.map(m => (
+                      <tr key={`${m.year}-${m.month}`} className="border-b even:bg-gray-50">
+                        <td className="py-1.5">{m.year}-{String(m.month).padStart(2,'0')}</td>
+                        <td>{inr(m.grossEarned)}</td><td>{inr(m.netSalary)}</td>
+                        <td className="font-medium">{inr(m.takeHome ?? m.totalPayable)}</td>
+                        <td className="text-red-700">{inr(m.totalDeductions)}</td>
+                        <td>{inr(m.pfEmployee)}</td><td>{inr(m.esiEmployee)}</td>
+                      </tr>
+                    ))}
+                  </tbody></table>
+                </div>
+              )}
+              {salary.months?.length > 1 && (
+                <div className="bg-white rounded-lg shadow p-4">
+                  <h3 className="font-semibold mb-3 text-sm">Net Salary Trend</h3>
+                  <ResponsiveContainer width="100%" height={220}>
+                    <BarChart data={salary.months.map(m => ({ name: `${m.year}-${String(m.month).padStart(2,'0')}`, net: m.netSalary, gross: m.grossEarned }))}>
+                      <CartesianGrid strokeDasharray="3 3" />
+                      <XAxis dataKey="name" tick={{ fontSize: 10 }} />
+                      <YAxis tickFormatter={v => `₹${(v/1000).toFixed(0)}k`} />
+                      <Tooltip formatter={v => `₹${Number(v).toLocaleString('en-IN')}`} />
+                      <Legend />
+                      <Bar dataKey="gross" name="Gross Earned" fill="#6366f1" radius={[3,3,0,0]} />
+                      <Bar dataKey="net"   name="Net Salary"   fill="#22c55e" radius={[3,3,0,0]} />
+                    </BarChart>
+                  </ResponsiveContainer>
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* ── Patterns ── */}
+          {activeTab === 'patterns' && (
+            <div className="space-y-4">
+              {!patterns ? (
+                <div className="bg-white rounded-lg shadow p-8 text-center text-gray-400">Pattern analysis not available for this range</div>
+              ) : (
+                <>
+                  <div className="grid grid-cols-3 gap-3">
+                    <KpiCard label="Flight Risk"  value={`${patterns.compositeScores?.flightRisk ?? 0}/100`}  color={patterns.compositeScores?.flightRisk > 60 ? 'red' : 'green'} />
+                    <KpiCard label="Engagement"   value={`${patterns.compositeScores?.engagement ?? 0}/100`}  color={patterns.compositeScores?.engagement > 60 ? 'green' : 'amber'} />
+                    <KpiCard label="Reliability"  value={`${patterns.compositeScores?.reliability ?? 0}/100`} color={patterns.compositeScores?.reliability > 60 ? 'green' : 'amber'} />
+                  </div>
+                  {patterns.patterns?.length > 0 ? (
+                    <div className="bg-white rounded-lg shadow p-4 space-y-2">
+                      <h3 className="font-semibold text-sm mb-3">Detected Patterns ({patterns.patterns.length})</h3>
+                      {patterns.patterns.map((p, i) => (
+                        <div key={i} className="border rounded p-3 flex justify-between items-start gap-3">
+                          <div>
+                            <div className="font-medium text-sm">{p.name || p.patternType}</div>
+                            {p.description && <div className="text-xs text-gray-500 mt-0.5">{p.description}</div>}
+                          </div>
+                          <SeverityBadge s={p.severity} />
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <div className="bg-green-50 rounded-lg shadow p-6 text-center text-green-700">
+                      <div className="text-2xl mb-2">✓</div>
+                      <p className="font-medium">No concerning patterns detected</p>
+                    </div>
+                  )}
+                </>
+              )}
+            </div>
+          )}
+
+          {/* ── AI Review ── */}
+          {activeTab === 'aiReview' && (
+            <div className="bg-white rounded-lg shadow p-8 text-center space-y-4">
+              <div className="text-4xl">🤖</div>
+              <h3 className="font-semibold text-lg">AI Narrative Review</h3>
+              <p className="text-sm text-gray-500 max-w-md mx-auto">Generate a qualitative AI-powered analysis of this employee's attendance patterns, behavioral signals, and performance indicators.</p>
+              <button disabled className="px-6 py-2 bg-indigo-600 text-white rounded opacity-50 cursor-not-allowed text-sm">Generate AI Review (coming soon)</button>
+            </div>
+          )}
+        </>
+      )}
+    </div>
+  );
+}
