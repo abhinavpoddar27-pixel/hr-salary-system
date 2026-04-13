@@ -313,7 +313,7 @@ router.get('/monthly-summary', (req, res) => {
     const recsToFix = db.prepare(`
       SELECT ap.id, ap.in_time_original, ap.out_time_original, ap.in_time_final, ap.out_time_final,
              ap.status_original, ap.is_night_shift, ap.is_night_out_only,
-             e.default_shift_id
+             e.default_shift_id, e.shift_code
       FROM attendance_processed ap
       LEFT JOIN employees e ON ap.employee_code = e.code
       WHERE ap.month = ? AND ap.year = ?
@@ -355,7 +355,8 @@ router.get('/monthly-summary', (req, res) => {
 
         const [inH] = inTime.split(':').map(Number);
         const isNight = (!isNaN(inH) && (inH >= 19 || inH < 6)) || rec.is_night_shift === 1;
-        const empShift = rec.default_shift_id ? shiftById[rec.default_shift_id] : null;
+        const empShift = rec.default_shift_id ? shiftById[rec.default_shift_id]
+                       : (rec.shift_code ? shiftByCode[rec.shift_code] : null);
         const shift = isNight ? (defaultNightShift || empShift || defaultDayShift) : (empShift || defaultDayShift);
 
         let isLate = 0, lateBy = 0;
@@ -565,7 +566,7 @@ router.post('/recalculate-metrics', (req, res) => {
       is_late_arrival = ?, late_by_minutes = ?,
       is_left_late = ?, left_late_minutes = ?,
       is_night_shift = CASE WHEN ? = 1 THEN 1 ELSE is_night_shift END,
-      shift_id = COALESCE(shift_id, ?), shift_detected = COALESCE(shift_detected, ?)
+      shift_id = ?, shift_detected = ?
     WHERE id = ?
   `);
 
@@ -591,7 +592,8 @@ router.post('/recalculate-metrics', (req, res) => {
       const [inH] = inTime.split(':').map(Number);
       const isNight = (!isNaN(inH) && (inH >= 19 || inH < 6)) || rec.is_night_shift === 1;
 
-      const empShift = rec.default_shift_id ? shiftById[rec.default_shift_id] : null;
+      const empShift = rec.default_shift_id ? shiftById[rec.default_shift_id]
+                     : (rec.shift_code ? shiftByCode[rec.shift_code] : null);
       const shift = isNight ? (defaultNightShift || empShift || defaultDayShift) : (empShift || defaultDayShift);
 
       let isLate = 0, lateBy = 0;
