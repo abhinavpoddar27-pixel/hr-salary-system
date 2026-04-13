@@ -90,8 +90,13 @@ export default function EmployeeProfile() {
     setAiLoading(true); setAiError(''); setAiReview(null);
     try {
       const r = await api.post(`/analytics/employee/${selectedCode}/ai-review`, { from: fromDate, to: toDate });
-      setAiReview(r.data?.sections || r.data?.data?.sections || null);
-      if (!r.data?.sections && !r.data?.data?.sections) setAiError('No review content returned');
+      // Backend returns { success, data: { narrative, sections: {...}, generatedAt, model, usage } }
+      const payload = r.data?.data || r.data;
+      if (payload && (payload.sections || payload.narrative)) {
+        setAiReview(payload);
+      } else {
+        setAiError('No review content returned');
+      }
     } catch (e) {
       const status = e.response?.status;
       if (status === 503) setAiError('AI review unavailable — ANTHROPIC_API_KEY not configured on this server.');
@@ -431,12 +436,19 @@ export default function EmployeeProfile() {
                     { key: 'riskAssessment',   title: 'Risk Assessment',   color: 'border-amber-500 bg-amber-50' },
                     { key: 'recommendations',  title: 'Recommendations',   color: 'border-blue-500 bg-blue-50' },
                     { key: 'departmentContext',title: 'Department Context', color: 'border-gray-400 bg-gray-50' },
-                  ].filter(s => aiReview[s.key]).map(s => (
+                  ].filter(s => aiReview.sections?.[s.key]).map(s => (
                     <div key={s.key} className={`rounded-lg shadow p-4 border-l-4 ${s.color}`}>
                       <h3 className="font-semibold text-sm mb-2 text-gray-800">{s.title}</h3>
-                      <div className="text-sm text-gray-700 whitespace-pre-line">{aiReview[s.key]}</div>
+                      <div className="text-sm text-gray-700 whitespace-pre-line">{aiReview.sections[s.key]}</div>
                     </div>
                   ))}
+                  {/* Fallback: show raw narrative if sections didn't parse */}
+                  {!aiReview.sections && aiReview.narrative && (
+                    <div className="rounded-lg shadow p-4 border-l-4 border-gray-400 bg-gray-50">
+                      <h3 className="font-semibold text-sm mb-2 text-gray-800">AI Review</h3>
+                      <div className="text-sm text-gray-700 whitespace-pre-line">{aiReview.narrative}</div>
+                    </div>
+                  )}
                 </div>
               )}
             </div>
