@@ -609,7 +609,7 @@ function PunctualityTab({ selectedMonth, selectedYear, dateRangeMode, dateRangeS
             placeholder="Search name or code..."
             value={lcSearch}
             onChange={e => setLcSearch(e.target.value)}
-            className="input w-48 text-xs"
+            className="px-3 py-2 text-sm bg-white border border-slate-200 rounded-xl shadow-inner-sm placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-400/40 focus:border-blue-400 w-48"
           />
           <select value={lcShiftFilter} onChange={e => setLcShiftFilter(e.target.value)} className="select text-sm">
             <option value="">All Shifts</option>
