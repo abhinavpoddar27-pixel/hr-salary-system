@@ -609,15 +609,15 @@ function PunctualityTab({ selectedMonth, selectedYear, dateRangeMode, dateRangeS
             placeholder="Search name or code..."
             value={lcSearch}
             onChange={e => setLcSearch(e.target.value)}
-            className="px-3 py-2 text-sm bg-white border border-slate-200 rounded-xl shadow-inner-sm placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-400/40 focus:border-blue-400 w-48"
+            className="px-3 py-2 text-sm bg-white border border-slate-200 rounded-xl placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-400/40 focus:border-blue-400 w-48 flex-shrink-0"
           />
-          <select value={lcShiftFilter} onChange={e => setLcShiftFilter(e.target.value)} className="select text-sm">
+          <select value={lcShiftFilter} onChange={e => setLcShiftFilter(e.target.value)} className="select text-sm w-auto">
             <option value="">All Shifts</option>
             <option value="12HR">12-Hour</option>
             <option value="10HR">10-Hour</option>
             <option value="9HR">9-Hour</option>
           </select>
-          <select value={lcDeptFilter} onChange={e => setLcDeptFilter(e.target.value)} className="select text-sm">
+          <select value={lcDeptFilter} onChange={e => setLcDeptFilter(e.target.value)} className="select text-sm w-auto">
             <option value="">All Departments</option>
             {uniqueLcDepts.map(d => <option key={d} value={d}>{d}</option>)}
           </select>
