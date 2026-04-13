@@ -62,6 +62,7 @@ const nav = [
   { label: 'Extra Duty', icon: '⭐', to: '/extra-duty-grants' },
   { label: 'Alerts', icon: '🔔', to: '/alerts' },
   { label: 'Employees', icon: '👤', to: '/employees' },
+  { label: 'Employee Profile', icon: '🧑', to: '/employee-profile' },
   {
     label: 'Daily Wage', icon: '👷', to: '/daily-wage', children: [
       { label: 'Records', to: '/daily-wage' },
