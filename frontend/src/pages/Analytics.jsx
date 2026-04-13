@@ -481,6 +481,7 @@ function PunctualityTab({ selectedMonth, selectedYear, dateRangeMode, dateRangeS
   // Late Coming Phase 1: filters + deduction modal state
   const [lcShiftFilter, setLcShiftFilter] = useState('')
   const [lcDeptFilter, setLcDeptFilter] = useState('')
+  const [lcSearch, setLcSearch] = useState('')
   const [deductionEmp, setDeductionEmp] = useState(null)
   // Phase 2: view mode toggle (employee list vs department rollup)
   const [lcViewMode, setLcViewMode] = useState('employee')
@@ -527,9 +528,17 @@ function PunctualityTab({ selectedMonth, selectedYear, dateRangeMode, dateRangeS
   const pendingDeductions = lcDeductions?.data?.data || []
 
   const lcDeptsFiltered = useMemo(() => {
-    if (!lcDeptFilter) return lcRows
-    return lcRows.filter(r => r.department === lcDeptFilter)
-  }, [lcRows, lcDeptFilter])
+    let rows = lcRows
+    if (lcDeptFilter) rows = rows.filter(r => r.department === lcDeptFilter)
+    if (lcSearch.trim()) {
+      const term = lcSearch.trim().toLowerCase()
+      rows = rows.filter(r =>
+        (r.name || '').toLowerCase().includes(term) ||
+        String(r.employee_code || '').toLowerCase().includes(term)
+      )
+    }
+    return rows
+  }, [lcRows, lcDeptFilter, lcSearch])
   const lcDisplayRows = useMemo(() => [...lcDeptsFiltered].sort(lcSort.sortFn), [lcDeptsFiltered, lcSort.sortKey, lcSort.sortDir])
   const uniqueLcDepts = useMemo(() => [...new Set(lcRows.map(r => r.department).filter(Boolean))].sort(), [lcRows])
   const lcDeptRowsSorted = useMemo(() => [...lcDeptRows].sort(lcDeptSummarySort.sortFn), [lcDeptRows, lcDeptSummarySort.sortKey, lcDeptSummarySort.sortDir])
@@ -595,6 +604,13 @@ function PunctualityTab({ selectedMonth, selectedYear, dateRangeMode, dateRangeS
               className={clsx('px-3 py-1.5 font-medium transition-colors border-l border-slate-300',
                 lcViewMode === 'department' ? 'bg-brand-600 text-white' : 'bg-white text-slate-600 hover:bg-slate-50')}>Departments</button>
           </div>
+          <input
+            type="text"
+            placeholder="Search name or code..."
+            value={lcSearch}
+            onChange={e => setLcSearch(e.target.value)}
+            className="input w-48 text-xs"
+          />
           <select value={lcShiftFilter} onChange={e => setLcShiftFilter(e.target.value)} className="select text-sm">
             <option value="">All Shifts</option>
             <option value="12HR">12-Hour</option>
