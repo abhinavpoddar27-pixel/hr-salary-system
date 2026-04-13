@@ -1,4 +1,25 @@
 ## Section 0: Last Session
+- **Date:** 2026-04-13
+- **Branch:** `claude/session-start-cgOl8`
+- **Last commit:** `7a00945` feat: wire department-dashboard and org-metrics endpoints
+- **Files changed this session:**
+  - `frontend/src/pages/EmployeeProfile.jsx` — NEW: full employee profile page (233 lines base) with employee search dropdown, date range picker, 5 tabs (Overview, Attendance, Salary, Patterns, AI Review). Then 6 incremental commits adding: (1) monthly trend line chart (recharts LineChart, dual Y-axes for % and hours), (2) salary bar chart (BarChart with Gross/Deductions/OT+ED), (3) department comparison radar chart (RadarChart with 5 axes: Attendance/Punctuality/Hours/Regularity/Low Absence comparing Employee vs Dept vs Org), (4) arrival time scatter chart (ScatterChart color-coded On Time green vs Late red, last 90 days), (5) enhanced patterns tab with color-coded composite score bars (Flight Risk/Engagement/Reliability), severity badges, category tags, and HR action recommendations, (6) full AI Review tab calling `POST /analytics/employee/:code/ai-review` with 6 section cards (Executive Summary, Strengths, Concerns, Risk Assessment, Recommendations, Dept Context) + regenerate button + token usage display
+  - `frontend/src/App.jsx` — added lazy import and route for `/employee-profile`
+  - `frontend/src/components/layout/Sidebar.jsx` — added "Employee Profile" nav item after Employees
+  - `backend/src/config/permissions.js` — added `employee-profile` to hr and finance role arrays
+  - `backend/src/services/deptAnalyticsService.js` — NEW: `computeDepartmentAnalytics(db, startDate, endDate)` — per-department health scores (weighted: 30% attendance, 20% punctuality, 15% hours, 15% absence, 10% trend, 10% baseline), OT Gini coefficient, night shift burden ratio, attendance inequality (CV + range)
+  - `backend/src/services/orgMetricsService.js` — NEW: `computeOrgMetrics(db, startDate, endDate)` — 6 sections: workforce utilization (expected vs actual hours, loss breakdown), punctuality curve (5-min histogram bins), absenteeism cost (direct + lateness, top 5 depts), contractor vs permanent gap (monthly), coordinated absence alerts (>40% dept absent), stability index (composite 0-100)
+  - `backend/src/routes/analytics.js` — added 2 imports + 2 endpoints: `GET /department-dashboard` and `GET /org-metrics` (both accept `?from=&to=` with 6-month default, date validation)
+  - `frontend/dist/` — rebuilt twice (after initial page creation and after all chart additions)
+- **What was fixed/built:** Complete Employee Profile page (frontend) with 4 recharts visualizations, 23-pattern behavioral analysis tab, and AI-powered narrative review via Claude API. Two new backend analytics services: department-level health scoring with OT fairness (Gini) and night burden analysis, and org-level metrics with utilization waterfall, punctuality distribution, absenteeism costing, contractor gap tracking, coordinated absence detection, and composite stability index. Both wired as REST endpoints on the analytics router.
+- **What's fragile:** The `EmployeeProfile.jsx` scatter chart uses an IIFE pattern `(() => { ... })()` inside JSX which is unusual — if someone extracts it to a component they must handle the `arrivalDeparture.dailyTimes` null guard. The `deptAnalyticsService.js` trend calculation splits the date range at the midpoint and compares first-half vs second-half attendance — edge case: if the range is <14 days, both halves may have too few records for a meaningful trend. The `orgMetricsService.js` punctuality curve assumes shift start times exist in the `shifts` table — falls back to 480 (08:00) if missing, which is wrong for night shifts. The radar chart's "Regularity" axis uses hardcoded department=65 and org=60 since the backend doesn't return dept/org regularity scores.
+- **Unfinished work:** The frontend dist includes the wiring changes but does NOT include the two new backend service files or the analytics.js route changes — a frontend rebuild is not needed for backend-only changes but the dist committed at `302f06f` is current for frontend. No frontend page consumes the new `/department-dashboard` or `/org-metrics` endpoints yet.
+- **Known issues remaining:** Local `main` branch has diverged from `origin/main` — always push via `git push origin claude/session-branch:main` rather than checking out local main. The admin login password is `Admin@123` (not `admin123`). Rate limiting on the login endpoint is aggressive (blocks after ~5 failed attempts for 15 minutes, resets on server restart).
+- **Next session should:** Build a frontend page or dashboard tab that consumes the `/department-dashboard` and `/org-metrics` endpoints — the data is ready but no UI renders it yet. Consider adding the department/org regularity scores to the backend profile-range endpoint so the radar chart can use real data instead of hardcoded values.
+
+---
+
+## Section 0: Previous Session
 - **Date:** 2026-04-12
 - **Branch:** `claude/session-start-B6yrb` (pushed to `origin/main`)
 - **Last commit:** `20a290d` fix: dashboard finance view — use server pendingCount + null-safe dept guard
@@ -7,27 +28,8 @@
 - **What was fixed/built:** Three dashboard view modes in a single file. Admin gets Net Payroll/PF/ESI/Readiness KPI cards with MoM comparison, pending actions queue (held salaries, manual flags, late deductions, miss punch review), department cost breakdown table (top 8), and month-end readiness checklist — plus toggle to HR view. Finance gets stripped-down workbench with 4 clickable action-count cards, status banner, and checklist. All data from 7 existing endpoints via Promise.all parallel fetch. Zero backend changes, zero schema changes. Bug-fix pass fixed 2 issues (manual flags used server pendingCount; dept payroll null-safe).
 - **What's fragile:** Finance workbench card colors use static Tailwind classes in an array (`borderActive: 'border-red-500'` etc.) — if someone refactors to dynamic `border-${color}` it will break Tailwind JIT purging. The `departments` field in `financeData` is `null` when the dept-payroll endpoint fails (vs `[]` when it succeeds with no data) — the null guard on line 192 handles this but callers must check.
 - **Unfinished work:** None
-- **Known issues remaining:** Local `main` branch has diverged from `origin/main` — always push via `git push origin claude/session-branch:main` rather than checking out local main. The `frontend/src/pages/EmployeeProfile.jsx` from the previous session plan is still NOT created (Phase 4a+4b frontend).
+- **Known issues remaining:** Local `main` branch has diverged from `origin/main` — always push via `git push origin claude/session-branch:main` rather than checking out local main.
 - **Next session should:** Implement `frontend/src/pages/EmployeeProfile.jsx` per the approved plan at `/root/.claude/plans/recursive-popping-dove.md` — create the page, wire App.jsx route, add Sidebar.jsx nav item, add `employee-profile` to permissions.js for hr+finance, build dist, commit and push.
-
----
-
-## Section 0: Previous Session
-- **Date:** 2026-04-12
-- **Branch:** `claude/session-start-DL0k6` (pushed to `origin/main` via fast-forward)
-- **Last commit:** `2542b49` feat: AI-powered qualitative employee review via Claude API
-- **Files changed that session:**
-  - `backend/src/services/employeeProfileService.js` — new: `computeProfileRange()` returning 13 sections (employee, kpis, streaks, arrivalDeparture, regularityScore, behavioralPatterns, monthlyBreakdown, departmentComparison, salaryHistory, corrections, leaveUsage, patternAnalysis, meta)
-  - `backend/src/routes/analytics.js` — added `GET /employee/:code/profile-range` and `POST /employee/:code/ai-review` routes
-  - `backend/src/services/aiReviewService.js` — new: `generateAIReview()` calling Anthropic API; `buildReviewPayload()`, `parseSections()`, `callClaudeAPI()`
-  - `backend/src/services/patternEngine/index.js` — new orchestrator: runs 23 detectors, computes flightRisk/engagement/reliability composite scores
-  - `backend/src/services/patternEngine/individualPatterns.js` — new: 8 detectors (sandwich leave, ghost hours, absence clustering, break drift, miss-punch escalation, half-day addiction, LIFO, post-leave slump)
-  - `backend/src/services/patternEngine/flightRiskPatterns.js` — new: 4 detectors (disengagement cascade, sudden leave burn, OT cliff, attendance entropy)
-  - `backend/src/services/patternEngine/anomalyPatterns.js` — new: 4 detectors (buddy punching, OT gaming, coordinated absence, clock-edge punching)
-  - `backend/src/services/patternEngine/temporalPatterns.js` — new: 3 detectors (payday proximity, seasonal pattern, day-of-month hotspot)
-  - `backend/src/services/patternEngine/shiftPatterns.js` — new: 2 detectors (night shift fatigue, shift transition shock)
-  - `backend/src/services/patternEngine/contractorPatterns.js` — new: 2 detectors (contractor instability, contractor OT exploitation with Factories Act check)
-  - `.env.example` — added `ANTHROPIC_API_KEY` entry with Railway deployment note
 - **What was fixed/built:** Full Employee Intelligence backend — 13-section profile endpoint, 23-pattern behavioral engine, and AI narrative review via Claude API. All three features pushed to `origin/main`. Railway already has `ANTHROPIC_API_KEY` set so the AI review endpoint is live in production.
 - **What's fragile:** `employeeProfileService.js` Section I (salary history) has a try/catch fallback for older DBs missing `take_home`/`ed_pay` columns — if a DB is very old the totals may exclude these fields silently. Pattern engine's `detectLIFO` and `detectCoordinatedAbsence` make per-date DB queries capped at 30/20 samples to avoid N+1 slowness — very large date ranges still do O(30) queries each.
 - **Unfinished work:** `frontend/src/pages/EmployeeProfile.jsx` — NOT created. Phase 4a + 4b frontend was planned (plan file at `/root/.claude/plans/recursive-popping-dove.md`) but interrupted before implementation. App.jsx, Sidebar.jsx, and permissions.js also not yet modified for this page.
