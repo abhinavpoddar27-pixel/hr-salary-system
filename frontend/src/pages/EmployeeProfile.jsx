@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import api from '../utils/api';
-import { LineChart, Line, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts';
+import { LineChart, Line, BarChart, Bar, RadarChart, Radar, PolarGrid, PolarAngleAxis, PolarRadiusAxis, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts';
 
 export default function EmployeeProfile() {
   const [employees, setEmployees] = useState([]);
@@ -159,6 +159,29 @@ export default function EmployeeProfile() {
                       <Line yAxisId="left" type="monotone" dataKey="Late %" stroke="#ef4444" strokeWidth={2} dot={{ r: 3 }} />
                       <Line yAxisId="right" type="monotone" dataKey="Avg Hours" stroke="#3b82f6" strokeWidth={2} dot={{ r: 3 }} />
                     </LineChart>
+                  </ResponsiveContainer>
+                </div>
+              )}
+              {profileData.departmentComparison && (
+                <div className="bg-white rounded-lg shadow p-4">
+                  <h3 className="font-semibold text-gray-900 mb-3">Performance Radar</h3>
+                  <ResponsiveContainer width="100%" height={320}>
+                    <RadarChart data={[
+                      { metric: 'Attendance', employee: kpis.attendanceRate || 0, department: profileData.departmentComparison.department?.attendanceRate || 0, org: profileData.departmentComparison.org?.attendanceRate || 0 },
+                      { metric: 'Punctuality', employee: 100 - (kpis.lateRate || 0), department: 100 - (profileData.departmentComparison.department?.lateRate || 0), org: 100 - (profileData.departmentComparison.org?.lateRate || 0) },
+                      { metric: 'Hours', employee: ((kpis.avgHoursWorked || 0) / 12) * 100, department: ((profileData.departmentComparison.department?.avgHours || 0) / 12) * 100, org: ((profileData.departmentComparison.org?.avgHours || 0) / 12) * 100 },
+                      { metric: 'Regularity', employee: profileData.regularityScore || 0, department: 65, org: 60 },
+                      { metric: 'Low Absence', employee: 100 - (kpis.absenteeismRate || 0), department: 100 - (100 - (profileData.departmentComparison.department?.attendanceRate || 85)), org: 100 - (100 - (profileData.departmentComparison.org?.attendanceRate || 85)) }
+                    ]}>
+                      <PolarGrid />
+                      <PolarAngleAxis dataKey="metric" tick={{ fontSize: 12 }} />
+                      <PolarRadiusAxis angle={30} domain={[0, 100]} tick={{ fontSize: 10 }} />
+                      <Radar name="Employee" dataKey="employee" stroke="#3b82f6" fill="#3b82f6" fillOpacity={0.3} />
+                      <Radar name="Dept Avg" dataKey="department" stroke="#9ca3af" fill="none" strokeDasharray="5 5" />
+                      <Radar name="Org Avg" dataKey="org" stroke="#d1d5db" fill="none" strokeDasharray="3 3" />
+                      <Legend />
+                      <Tooltip />
+                    </RadarChart>
                   </ResponsiveContainer>
                 </div>
               )}
