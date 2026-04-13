@@ -301,23 +301,78 @@ export default function EmployeeProfile() {
           )}
 
           {activeTab === 'patterns' && (
-            <div className="bg-white rounded-lg shadow p-6">
+            <div className="space-y-6">
               {profileData.patternAnalysis ? (
-                <div className="space-y-4">
-                  <div className="grid grid-cols-3 gap-3 text-center">
-                    <div className="p-3 bg-gray-50 rounded"><div className="text-xs text-gray-500">Flight Risk</div><div className="text-2xl font-bold">{profileData.patternAnalysis.compositeScores?.flightRisk ?? '-'}</div></div>
-                    <div className="p-3 bg-gray-50 rounded"><div className="text-xs text-gray-500">Engagement</div><div className="text-2xl font-bold">{profileData.patternAnalysis.compositeScores?.engagement ?? '-'}</div></div>
-                    <div className="p-3 bg-gray-50 rounded"><div className="text-xs text-gray-500">Reliability</div><div className="text-2xl font-bold">{profileData.patternAnalysis.compositeScores?.reliability ?? '-'}</div></div>
+                <>
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                    {[
+                      ['Flight Risk', profileData.patternAnalysis.compositeScores?.flightRisk, v => v >= 60 ? 'red' : v >= 30 ? 'yellow' : 'green'],
+                      ['Engagement', profileData.patternAnalysis.compositeScores?.engagement, v => v >= 75 ? 'green' : v >= 50 ? 'yellow' : 'red'],
+                      ['Reliability', profileData.patternAnalysis.compositeScores?.reliability, v => v >= 80 ? 'green' : v >= 60 ? 'yellow' : 'red']
+                    ].map(([label, score, colorFn]) => {
+                      const s = score ?? 0;
+                      const c = colorFn(s);
+                      const border = c === 'green' ? 'border-green-500 bg-green-50 text-green-700' : c === 'yellow' ? 'border-yellow-500 bg-yellow-50 text-yellow-700' : 'border-red-500 bg-red-50 text-red-700';
+                      const barColor = c === 'green' ? '#22c55e' : c === 'yellow' ? '#eab308' : '#ef4444';
+                      return (
+                        <div key={label} className={`rounded-lg border-l-4 p-4 ${border}`}>
+                          <div className="text-sm font-medium opacity-75">{label}</div>
+                          <div className="text-3xl font-bold">{Math.round(s)}<span className="text-lg">/100</span></div>
+                          <div className="mt-2 h-2 bg-gray-200 rounded-full overflow-hidden">
+                            <div className="h-full rounded-full transition-all duration-500" style={{ width: Math.min(s, 100) + '%', backgroundColor: barColor }} />
+                          </div>
+                        </div>
+                      );
+                    })}
                   </div>
-                  <div className="text-sm text-gray-500">{profileData.patternAnalysis.summary?.totalPatternsDetected || 0} patterns detected</div>
-                  {(profileData.patternAnalysis.patterns || []).map((p, i) => (
-                    <div key={i} className={'p-3 rounded border-l-4 ' + (p.severity === 'Critical' ? 'border-red-500 bg-red-50' : p.severity === 'High' ? 'border-orange-400 bg-orange-50' : p.severity === 'Medium' ? 'border-yellow-400 bg-yellow-50' : 'border-blue-300 bg-blue-50')}>
-                      <div className="flex justify-between"><span className="font-medium">{p.label}</span><span className="text-sm text-gray-500">{p.score}/100</span></div>
-                      <div className="text-sm text-gray-600 mt-1">{p.detail}</div>
-                    </div>
-                  ))}
-                </div>
-              ) : <p className="text-gray-400 text-center">Pattern analysis not available</p>}
+
+                  <div className="flex flex-wrap gap-2 text-sm">
+                    {(profileData.patternAnalysis.summary?.criticalCount > 0) && <span className="px-2 py-1 bg-red-100 text-red-800 rounded-full">{profileData.patternAnalysis.summary.criticalCount} Critical</span>}
+                    {(profileData.patternAnalysis.summary?.highCount > 0) && <span className="px-2 py-1 bg-orange-100 text-orange-800 rounded-full">{profileData.patternAnalysis.summary.highCount} High</span>}
+                    {(profileData.patternAnalysis.summary?.mediumCount > 0) && <span className="px-2 py-1 bg-yellow-100 text-yellow-800 rounded-full">{profileData.patternAnalysis.summary.mediumCount} Medium</span>}
+                    {(profileData.patternAnalysis.summary?.lowCount > 0) && <span className="px-2 py-1 bg-blue-100 text-blue-800 rounded-full">{profileData.patternAnalysis.summary.lowCount} Low</span>}
+                    {(profileData.patternAnalysis.patterns || []).length === 0 && <span className="px-2 py-1 bg-green-100 text-green-800 rounded-full">No patterns flagged</span>}
+                  </div>
+
+                  <div className="space-y-3">
+                    {(profileData.patternAnalysis.patterns || [])
+                      .sort((a, b) => {
+                        const sev = { Critical: 0, High: 1, Medium: 2, Low: 3 };
+                        return (sev[a.severity] ?? 4) - (sev[b.severity] ?? 4);
+                      })
+                      .map((p, i) => {
+                        const styles = {
+                          Critical: 'border-red-500 bg-red-50',
+                          High: 'border-orange-400 bg-orange-50',
+                          Medium: 'border-yellow-400 bg-yellow-50',
+                          Low: 'border-blue-300 bg-blue-50'
+                        };
+                        const badges = {
+                          Critical: 'bg-red-600 text-white',
+                          High: 'bg-orange-500 text-white',
+                          Medium: 'bg-yellow-500 text-white',
+                          Low: 'bg-blue-500 text-white'
+                        };
+                        return (
+                          <div key={i} className={`rounded-lg border-l-4 p-4 ${styles[p.severity] || 'border-gray-300 bg-gray-50'}`}>
+                            <div className="flex items-center justify-between flex-wrap gap-2">
+                              <div className="flex items-center gap-2">
+                                <span className={`px-2 py-0.5 rounded text-xs font-bold ${badges[p.severity]}`}>{p.severity}</span>
+                                <span className="font-semibold text-gray-900">{p.label}</span>
+                                {p.category && <span className="text-xs text-gray-500 bg-gray-200 px-2 py-0.5 rounded">{p.category}</span>}
+                              </div>
+                              <span className="text-lg font-bold text-gray-700">{p.score}/100</span>
+                            </div>
+                            <p className="mt-1 text-sm text-gray-700">{p.detail}</p>
+                            {p.hrAction && <p className="mt-2 text-xs text-gray-500 italic">Recommended: {p.hrAction}</p>}
+                          </div>
+                        );
+                      })}
+                  </div>
+                </>
+              ) : (
+                <div className="bg-white rounded-lg shadow p-8 text-center text-gray-400">Pattern analysis not available</div>
+              )}
             </div>
           )}
 
