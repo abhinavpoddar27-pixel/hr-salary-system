@@ -16,7 +16,22 @@
 - **Unfinished work:** `DeptAnalytics.jsx` overtime tab uses `deptData.otConcentration/nightShiftBurden/attendanceInequality` but these fields come from `deptAnalyticsService` — not tested against real data; confirm field names match if backend is changed.
 - **Known issues remaining:** `EmployeeProfile.jsx` AI Review "Regenerate" button is shown even after an error — minor UX issue. Local `main` branch still diverged from `origin/main`; always push via `git push origin claude/session-branch:main`.
 - **Next session should:** Test Employee Profile and Dept Analytics against real production data on Railway; fix any field-name mismatches found; consider adding `employee-profile` link from the Employees master page per-row.
-- **Next session should:** Implement `frontend/src/pages/EmployeeProfile.jsx` per the approved plan at `/root/.claude/plans/recursive-popping-dove.md` — create the page, wire App.jsx route, add Sidebar.jsx nav item, add `employee-profile` to permissions.js for hr+finance, build dist, commit and push.
+
+---
+
+## Section 0: Also This Session (Finance Approval Wiring Fixes)
+- **Date:** 2026-04-13
+- **Branch:** `claude/session-start-Sc3cc` (pushed to `origin/main`)
+- **Last commit:** `2de9157` fix: gate gross_salary changes behind finance approval flow
+- **Files changed this session:**
+  - `backend/src/routes/financeAudit.js` — imported `syncSalaryStructureFromEmployee`; added GROSS_STRUCTURE_CHANGE revert block in `PUT /approve-flag/:flagId` — on rejection: archives to `finance_rejections`, reverts `employees.gross_salary` + `salary_structures` to pre-change value, writes audit log
+  - `backend/src/routes/employees.js` — exported `syncSalaryStructureFromEmployee` as named export; added `requireHrOrAdmin` middleware; rewrote `PUT /:code/salary` to gate gross changes through `salary_change_requests` approval flow; banking/statutory fields still apply immediately; same-gross component updates still apply directly
+  - `frontend/src/pages/Employees.jsx` — `updateMutation.onSuccess` checks `data.pendingApproval`, shows 5-second "Salary change submitted for finance approval" toast vs plain "Salary structure saved"
+- **What was fixed/built:** Two finance approval wiring fixes. (1) Rejecting a GROSS_STRUCTURE_CHANGE flag now reverts `employees.gross_salary` + `salary_structures` to the pre-change value. (2) `PUT /employees/:code/salary` now routes gross changes through `salary_change_requests` (pending → finance approve/reject) instead of writing directly — Stage 7 no longer reflects unapproved salary changes.
+- **What's fragile:** GROSS_STRUCTURE_CHANGE revert only fires on NEW rejections; already-rejected flags before this deploy are NOT retroactively reverted (manual fix needed via Employee Master). The duplicate-pending guard silently drops a second gross-change submission if one is already pending.
+- **Unfinished work:** Stale PAWAN KUMAR (19222) has `employees.gross_salary = 84502` instead of `84500` — Abhinav must manually set it back to 84500 via Employee Master and re-run Stage 7.
+- **Known issues remaining:** Local `main` branch diverged from `origin/main` — always push via `git push origin claude/session-branch:main`.
+- **Next session should:** Verify the salary approval gate works end-to-end in production (change gross → pending toast → Salary Input page shows pending → finance approve → Stage 7 picks up new gross).
 
 ---
 
