@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
 import api from '../utils/api';
-import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts';
+import { BarChart, Bar, Cell, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts';
 
 export default function DeptAnalytics() {
   const [fromDate, setFromDate] = useState('');
@@ -117,11 +117,67 @@ export default function DeptAnalytics() {
             </div>
           )}
 
-          {activeTab !== 'health' && (
-            <div className="bg-white rounded-lg shadow p-8 text-center text-gray-400">
-              {activeTab} tab — content coming in next prompt
+          {activeTab === 'overtime' && deptData && (
+            <div className="space-y-4">
+              {(deptData.otConcentration || []).length > 0 && (
+                <div className="bg-white rounded-lg shadow p-4">
+                  <h3 className="font-semibold mb-3">OT Concentration (Gini Coefficient)</h3>
+                  <p className="text-xs text-gray-500 mb-3">0 = perfectly equal OT distribution, 1 = one person does all OT. Above 0.6 = highly concentrated.</p>
+                  <ResponsiveContainer width="100%" height={Math.max(200, deptData.otConcentration.length * 40)}>
+                    <BarChart layout="vertical" data={deptData.otConcentration.map(d => ({ name: d.department, gini: d.giniCoefficient }))}>
+                      <CartesianGrid strokeDasharray="3 3" />
+                      <XAxis type="number" domain={[0, 1]} />
+                      <YAxis type="category" dataKey="name" width={120} tick={{ fontSize: 11 }} />
+                      <Tooltip formatter={v => v.toFixed(2)} />
+                      <Bar dataKey="gini" radius={[0, 4, 4, 0]}>
+                        {deptData.otConcentration.map((d, i) => (
+                          <Cell key={i} fill={d.giniCoefficient > 0.6 ? '#ef4444' : d.giniCoefficient > 0.4 ? '#f59e0b' : '#22c55e'} />
+                        ))}
+                      </Bar>
+                    </BarChart>
+                  </ResponsiveContainer>
+                </div>
+              )}
+              {(deptData.nightShiftBurden || []).length > 0 && (
+                <div className="bg-white rounded-lg shadow p-4 overflow-x-auto">
+                  <h3 className="font-semibold mb-3">Night Shift Burden</h3>
+                  <table className="w-full text-sm"><thead><tr className="text-left text-gray-500 border-b">
+                    <th className="py-2">Department</th><th>Night Ratio</th><th>Org Avg</th><th>Burden</th><th>Status</th>
+                  </tr></thead><tbody>
+                    {deptData.nightShiftBurden.map(d => (
+                      <tr key={d.department} className="border-b even:bg-gray-50">
+                        <td className="py-2 font-medium">{d.department}</td>
+                        <td>{d.nightRatio}%</td><td>{d.orgAvgNightRatio}%</td>
+                        <td className="font-medium">{d.burden}x</td>
+                        <td>{d.flagged ? <span className="text-red-600 font-medium">⚠ Overburdened</span> : <span className="text-green-600">Normal</span>}</td>
+                      </tr>
+                    ))}
+                  </tbody></table>
+                </div>
+              )}
+              {(deptData.attendanceInequality || []).length > 0 && (
+                <div className="bg-white rounded-lg shadow p-4 overflow-x-auto">
+                  <h3 className="font-semibold mb-3">Attendance Inequality</h3>
+                  <p className="text-xs text-gray-500 mb-2">CV &gt; 1.0 or range &gt; 25pp suggests unequal attendance standards within the department.</p>
+                  <table className="w-full text-sm"><thead><tr className="text-left text-gray-500 border-b">
+                    <th className="py-2">Department</th><th>CV</th><th>Range</th><th>Mean Absence</th><th>Status</th>
+                  </tr></thead><tbody>
+                    {deptData.attendanceInequality.map(d => (
+                      <tr key={d.department} className="border-b even:bg-gray-50">
+                        <td className="py-2 font-medium">{d.department}</td>
+                        <td>{d.cv}</td><td>{d.range}pp</td><td>{d.meanAbsenceRate}%</td>
+                        <td>{d.flagged ? <span className="text-red-600 font-medium">⚠ Unequal</span> : <span className="text-green-600">Fair</span>}</td>
+                      </tr>
+                    ))}
+                  </tbody></table>
+                </div>
+              )}
             </div>
           )}
+
+          {activeTab === 'org' && <div className="bg-white rounded-lg shadow p-8 text-center text-gray-400">Org Trends — next prompt</div>}
+          {activeTab === 'costs' && <div className="bg-white rounded-lg shadow p-8 text-center text-gray-400">Costs — next prompt</div>}
+          {activeTab === 'alerts' && <div className="bg-white rounded-lg shadow p-8 text-center text-gray-400">Alerts — next prompt</div>}
         </>
       )}
     </div>
