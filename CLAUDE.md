@@ -1,5 +1,24 @@
 ## Section 0: Last Session
 - **Date:** 2026-04-14
+- **Branch:** `claude/session-start-fM5iz`
+- **Fixed:** `resolveMissPunch()` now recalculates all 6 shift metrics (late, early,
+  OT, left-late) after correcting IN/OUT times. Previously these stayed frozen
+  from the original import calculation, causing stale `late_count` in
+  `day_calculations` and analytics (real case: Nandini 60131 Apr 2026 — 163-min
+  stale late flag after correcting IN from 10:43 → 07:55). Added private helper
+  `recalcShiftMetrics()` in `missPunch.js`. `bulkResolveMissPunches()` gets the
+  fix for free (calls `resolveMissPunch` internally). Leave-conversion path
+  (`convertToLeave=true`) skips the recalc — no shift-metric meaning there.
+- **Files changed:** `backend/src/services/missPunch.js` (only file)
+- **Fragile:** The shift metric logic now exists in 3 places: `import.js`
+  post-processing, `attendance.js` `recalculate-metrics`, and `missPunch.js`
+  `recalcShiftMetrics()`. If the formula changes (e.g. grace period logic), all
+  3 must be updated. Future refactor candidate: extract to a shared utility.
+
+---
+
+## Section 0: Previous Session
+- **Date:** 2026-04-14
 - **Branch:** `claude/session-start-9ihVA` (pushed to `origin/main` and to branch)
 - **Last commit:** `efa311d` feat: mobile-friendly responsive pass - Reports, Compliance, Alerts, Settings, pipeline pages
 - **Files changed this session:**
