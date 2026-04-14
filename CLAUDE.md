@@ -1,4 +1,32 @@
 ## Section 0: Last Session
+- **Date:** 2026-04-14
+- **Branch:** `claude/session-start-9ihVA` (pushed to `origin/main` and to branch)
+- **Last commit:** `efa311d` feat: mobile-friendly responsive pass - Reports, Compliance, Alerts, Settings, pipeline pages
+- **Files changed this session:**
+  - `frontend/src/pages/Reports.jsx` — wrapper `p-4 md:p-6`, controls `flex-wrap`, sidebar+content stack on mobile (`flex-col md:flex-row`), report nav buttons horizontally-scrollable on mobile, 6 stat grids made responsive (2-col/3-col/4-col across breakpoints)
+  - `frontend/src/pages/Compliance.jsx` — wrapper `p-4 md:p-6`, controls group `flex-wrap`, 2 stat grids `grid-cols-2 md:grid-cols-4`
+  - `frontend/src/pages/Alerts.jsx` — wrapper `p-4 md:p-6`, controls `flex-wrap`, summary cards grid `grid-cols-2 sm:grid-cols-3 md:grid-cols-5`
+  - `frontend/src/pages/Settings.jsx` — 2 wrapper paddings (admin-gate + main) `p-4 md:p-6`, holiday form grid `grid-cols-2 sm:grid-cols-3 md:grid-cols-5`
+  - `frontend/src/pages/SalaryComputation.jsx` — wrapper `p-4 md:p-6`, controls `flex-wrap`, salary register table `min-w-[1200px]` for horizontal scroll on mobile
+  - `frontend/src/pages/DayCalculation.jsx` — wrapper `p-4 md:p-6`, controls `flex-wrap`, register table `min-w-[1100px]`, late-deduction input row wraps
+  - `frontend/src/pages/Employees.jsx` — wrapper `p-4 md:p-6`, header stacked on mobile (`flex-col sm:flex-row`), employee table `min-w-[900px]`
+  - `frontend/dist/*` — rebuilt via `npm run build` (vite output refreshed)
+- **What was fixed/built:** Mobile-friendly responsive pass — Part 1 of N. Applied Tailwind `md:`/`sm:` breakpoints to 7 pages so the app is usable on phones (page padding, flex-wrap controls, responsive stat grids, `min-w-[N]` on wide data tables inside `overflow-x-auto`). Pure CSS/className only — no logic, state, API, or backend touched. Desktop layout fully preserved. Build clean, pushed to `origin/main` and `origin/claude/session-start-9ihVA`.
+- **What's fragile:** None — additive className changes only. BUT Part 2 of the pass was started (state reported in Phase 0) then interrupted before edits — expectation is next session picks up from the Phase 0 report (see Unfinished work).
+- **Unfinished work:** Part 2 pass was scoped but not executed this session. Remaining items per Phase 0 state report:
+  - `Compliance.jsx`: wrapper `space-y-4 md:space-y-6`; header row mobile stack + merge Generate button into controls; line 367 `grid-cols-3` → `grid-cols-1 sm:grid-cols-3`
+  - `Alerts.jsx`: header `justify-between` mobile stack; filter row (line 147) add `flex-wrap`
+  - `Settings.jsx`: lines 79 + 710 header rows mobile stack; lines 121 + 718 `grid-cols-3` → `grid-cols-1 sm:grid-cols-3`
+  - `SalaryComputation.jsx`: header (line 268) `flex-col sm:flex-row` stack
+  - `DayCalculation.jsx`: header (line 205) `flex-col sm:flex-row` stack; line 546 3-pill leave balance grid — open question (leave alone vs. add `sm:grid-cols-3` no-op)
+  - `Employees.jsx`: line 517 drilldown `grid-cols-3` → `grid-cols-1 sm:grid-cols-3`; filter search input `w-full sm:w-auto sm:flex-1`
+  - Two pending judgment calls raised to user in Phase 0 report: (1) DayCalc line 546 apply or skip; (2) Alerts line 124 `gap-3` → `gap-4` per spec letter or keep as `gap-3`
+- **Known issues remaining:** None new. Pre-existing: `EmployeeProfile.jsx` AI Review "Regenerate" button shown even after error. `DeptAnalytics.jsx` overtime tab field names not tested against real production data. Local `main` branch still diverges from `origin/main` — always push via `git push origin claude/session-branch:main`.
+- **Next session should:** Resume Part 2 pass — apply the 6 remaining file edits listed in Unfinished work, resolve the two judgment calls (DayCalc line 546, Alerts gap), run `npm run build`, commit, push `claude/session-start-9ihVA:main`. Queue table from prior handoff has more pages to pass through after this (Dashboard already done per prior session note; remaining: verify and extend to any additional pages HR surfaces as unusable on mobile).
+
+---
+
+## Section 0: Previous Session
 - **Date:** 2026-04-13
 - **Branch:** `claude/session-start-SFwgo` (pushed to `origin/main`)
 - **Last commit:** `8d24ac0` feat: early exit employee summary view with grouped analysis
