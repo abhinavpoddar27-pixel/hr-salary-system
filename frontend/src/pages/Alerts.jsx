@@ -106,7 +106,7 @@ export default function Alerts() {
   const uniqueTypes = [...new Set(alerts.map(a => a.alert_type))].filter(Boolean)
 
   return (
-    <div className="p-6 space-y-6">
+    <div className="p-4 md:p-6 space-y-6">
       <div className="flex items-center justify-between">
         <div>
           <h2 className="text-lg font-bold text-slate-800">Alerts & Notifications</h2>
@@ -114,14 +114,14 @@ export default function Alerts() {
             System-generated alerts for {['', 'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'][selectedMonth]} {selectedYear}
           </p>
         </div>
-        <div className="flex items-center gap-3">
+        <div className="flex items-center gap-3 flex-wrap">
           <CompanyFilter />
           <button onClick={refetch} className="btn-secondary text-sm">↻ Refresh</button>
         </div>
       </div>
 
       {/* Summary Cards */}
-      <div className="grid grid-cols-5 gap-3">
+      <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-5 gap-3">
         {[
           { key: 'critical', label: 'Critical', icon: '🔴', bg: 'bg-red-50 border-red-200' },
           { key: 'high', label: 'High', icon: '🟠', bg: 'bg-orange-50 border-orange-200' },

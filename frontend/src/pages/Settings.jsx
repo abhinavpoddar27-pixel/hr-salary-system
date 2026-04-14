@@ -209,7 +209,7 @@ function HolidaysTab() {
     <div className="space-y-4">
       <div className="card p-4">
         <h4 className="font-semibold text-slate-700 mb-3">Add Holiday</h4>
-        <div className="grid grid-cols-5 gap-3">
+        <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-5 gap-3">
           <div>
             <label className="label">Date</label>
             <input type="date" value={form.date} onChange={e => setForm(f => ({ ...f, date: e.target.value }))} className="input" />
@@ -889,7 +889,7 @@ export default function Settings() {
   // Block non-admin users entirely
   if (userRole !== 'admin') {
     return (
-      <div className="p-6 flex items-center justify-center min-h-[50vh]">
+      <div className="p-4 md:p-6 flex items-center justify-center min-h-[50vh]">
         <div className="text-center">
           <div className="text-4xl mb-3">🔒</div>
           <h2 className="text-lg font-semibold text-slate-700">Admin Access Required</h2>
@@ -902,7 +902,7 @@ export default function Settings() {
   const visibleTabs = SETTINGS_TABS.filter(t => !t.adminOnly || userRole === 'admin')
 
   return (
-    <div className="p-6 space-y-6 animate-fade-in">
+    <div className="p-4 md:p-6 space-y-6 animate-fade-in">
       <div>
         <h2 className="section-title">Settings</h2>
         <p className="section-subtitle mt-1">Shift master, holidays, salary policy, and system configuration</p>

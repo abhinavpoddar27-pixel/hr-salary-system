@@ -221,21 +221,21 @@ export default function Reports() {
   const monthLabel = `${MONTH_NAMES[month]}_${year}`
 
   return (
-    <div className="p-6">
-      <div className="flex items-center gap-3">
+    <div className="p-4 md:p-6">
+      <div className="flex items-center gap-3 flex-wrap">
         <CompanyFilter />
         <DateSelector {...dateProps} />
       </div>
-      <div className="flex gap-6 mt-4">
+      <div className="flex flex-col md:flex-row gap-4 md:gap-6 mt-4">
         {/* Left: report list */}
-        <div className="w-60 flex-shrink-0">
+        <div className="w-full md:w-60 md:flex-shrink-0">
           <h2 className="text-sm font-bold text-slate-600 uppercase tracking-wide mb-3">Reports</h2>
-          <div className="space-y-1">
+          <div className="flex md:flex-col gap-1 overflow-x-auto pb-1 md:overflow-visible md:pb-0">
             {REPORTS.map(r => (
               <button
                 key={r.id}
                 onClick={() => setActiveReport(r.id)}
-                className={`w-full text-left px-3 py-2.5 rounded-lg text-sm transition-colors ${
+                className={`shrink-0 md:shrink w-full text-left px-3 py-2.5 rounded-lg text-sm transition-colors ${
                   activeReport === r.id ? 'bg-brand-50 text-brand-700 font-medium' : 'text-slate-600 hover:bg-slate-50'
                 }`}
               >
@@ -445,7 +445,7 @@ export default function Reports() {
               </div>
               {/* Totals */}
               {Object.keys(salTotals).length > 0 && (
-                <div className="grid grid-cols-4 gap-3">
+                <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
                   <div className="card p-3 text-center"><div className="text-lg font-bold text-slate-700">{fmtINR(salTotals.totalGross || 0)}</div><div className="text-xs text-slate-500">Gross Payroll</div></div>
                   <div className="card p-3 text-center"><div className="text-lg font-bold text-red-600">{fmtINR(salTotals.totalDeductions || 0)}</div><div className="text-xs text-slate-500">Total Deductions</div></div>
                   <div className="card p-3 text-center bg-green-50"><div className="text-lg font-bold text-green-700">{fmtINR(salTotals.totalNet || 0)}</div><div className="text-xs text-slate-500 font-medium">Net Payroll</div></div>
@@ -588,7 +588,7 @@ export default function Reports() {
                   { key: 'eps', label: 'EPS (8.33%)' }
                 ], `pf_statement_${monthLabel}.csv`)} className="btn-secondary text-sm">⬇ Export CSV</button>
               </div>
-              <div className="grid grid-cols-4 gap-3">
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
                 <div className="card p-3 text-center"><div className="font-bold text-blue-600">{fmtINR(pfData.totals?.employeePF || 0)}</div><div className="text-xs text-slate-500">EE PF</div></div>
                 <div className="card p-3 text-center"><div className="font-bold text-green-600">{fmtINR(pfData.totals?.employerPF || 0)}</div><div className="text-xs text-slate-500">ER PF</div></div>
                 <div className="card p-3 text-center"><div className="font-bold text-purple-600">{fmtINR(pfData.totals?.eps || 0)}</div><div className="text-xs text-slate-500">EPS</div></div>
@@ -657,7 +657,7 @@ export default function Reports() {
                   { key: 'employee_esi', label: 'EE ESI (0.75%)' }, { key: 'employer_esi', label: 'ER ESI (3.25%)' }
                 ], `esi_statement_${monthLabel}.csv`)} className="btn-secondary text-sm">⬇ Export CSV</button>
               </div>
-              <div className="grid grid-cols-3 gap-3">
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                 <div className="card p-3 text-center"><div className="font-bold text-blue-600">{fmtINR(esiData.totals?.employeeESI || 0)}</div><div className="text-xs text-slate-500">EE ESI</div></div>
                 <div className="card p-3 text-center"><div className="font-bold text-green-600">{fmtINR(esiData.totals?.employerESI || 0)}</div><div className="text-xs text-slate-500">ER ESI</div></div>
                 <div className="card p-3 text-center bg-purple-50"><div className="font-bold text-purple-700">{fmtINR(esiData.totals?.total || 0)}</div><div className="text-xs text-slate-600 font-semibold">Total</div></div>
@@ -724,7 +724,7 @@ export default function Reports() {
                 </button>
               </div>
               {ecrData.length > 0 && (
-                <div className="grid grid-cols-4 gap-3">
+                <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
                   <div className="card p-3 text-center"><div className="font-bold text-slate-700">{ecrTotals.count}</div><div className="text-xs text-slate-500">Employees</div></div>
                   <div className="card p-3 text-center"><div className="font-bold text-blue-600">{fmtINR(ecrTotals.totalEEPF)}</div><div className="text-xs text-slate-500">EE PF</div></div>
                   <div className="card p-3 text-center"><div className="font-bold text-green-600">{fmtINR(ecrTotals.totalEPS)}</div><div className="text-xs text-slate-500">EPS</div></div>
@@ -774,7 +774,7 @@ export default function Reports() {
                 </button>
               </div>
               {esiContribData.length > 0 && (
-                <div className="grid grid-cols-3 gap-3">
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                   <div className="card p-3 text-center"><div className="font-bold text-slate-700">{esiContribTotals.count}</div><div className="text-xs text-slate-500">Employees</div></div>
                   <div className="card p-3 text-center"><div className="font-bold text-blue-600">{fmtINR(esiContribTotals.totalEEESI)}</div><div className="text-xs text-slate-500">IP Contribution</div></div>
                   <div className="card p-3 text-center"><div className="font-bold text-green-600">{fmtINR(esiContribTotals.totalERESI)}</div><div className="text-xs text-slate-500">ER Contribution</div></div>
@@ -820,7 +820,7 @@ export default function Reports() {
                   Download Bank File (.csv)
                 </button>
               </div>
-              <div className="grid grid-cols-3 gap-3">
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                 <div className="card p-3 text-center"><div className="font-bold text-green-700">{fmtINR(bankFileTotals.totalAmount || 0)}</div><div className="text-xs text-slate-500">Total Transfer Amount</div></div>
                 <div className="card p-3 text-center"><div className="font-bold text-slate-700">{bankFileTotals.count || 0}</div><div className="text-xs text-slate-500">Employees</div></div>
                 {bankFileTotals.missingCount > 0 && (

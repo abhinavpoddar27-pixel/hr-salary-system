@@ -264,13 +264,13 @@ export default function SalaryComputation() {
     <div className="animate-fade-in">
       <PipelineProgress stageStatus={{ 1:'done', 2:'done', 3:'done', 4:'done', 5:'done', 6:'done', 7:'active' }} />
 
-      <div className="p-6 space-y-5 max-w-screen-xl">
+      <div className="p-4 md:p-6 space-y-5 max-w-screen-xl">
         <div className="flex items-start justify-between">
           <div>
             <h2 className="section-title">Stage 7: Salary Computation</h2>
             <p className="section-subtitle mt-1">{monthYearLabel(month, year)} — Compute, review, and finalise salary.</p>
           </div>
-          <div className="flex items-center gap-3">
+          <div className="flex items-center gap-3 flex-wrap">
             <CompanyFilter />
             <DateSelector {...dateProps} />
           </div>
@@ -591,7 +591,7 @@ export default function SalaryComputation() {
               {allSalaries[0]?.is_finalised && <span className="badge-green text-xs">Finalised</span>}
             </div>
             <div className="overflow-x-auto">
-              <table className="w-full table-compact text-[11px]">
+              <table className="w-full min-w-[1200px] table-compact text-[11px]">
                 <thead>
                   <tr>
                     <th className="cursor-pointer select-none" onClick={() => toggleSort('employee_name')}>Emp{sortIndicator('employee_name')}</th>

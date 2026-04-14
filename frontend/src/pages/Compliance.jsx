@@ -150,13 +150,13 @@ export default function Compliance() {
   const filedCount = items.filter(i => i.status === 'Filed').length
 
   return (
-    <div className="p-6 space-y-6">
+    <div className="p-4 md:p-6 space-y-6">
       <div className="flex items-center justify-between">
         <div>
           <h2 className="text-lg font-bold text-slate-800">Compliance</h2>
           <p className="text-sm text-slate-500">PF/ESI filings, statutory compliance tracking</p>
         </div>
-        <div className="flex items-center gap-3">
+        <div className="flex items-center gap-3 flex-wrap">
           <CompanyFilter />
           <DateSelector {...dateProps} />
         </div>
@@ -166,7 +166,7 @@ export default function Compliance() {
       </div>
 
       {/* Summary */}
-      <div className="grid grid-cols-4 gap-4">
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
         <div className="card p-4 text-center border-l-4 border-l-green-500">
           <div className="text-2xl font-bold text-green-600">{filedCount}</div>
           <div className="text-xs text-slate-500 mt-1">Filed</div>
@@ -253,7 +253,7 @@ export default function Compliance() {
       {activeTab === 'pf' && (
         <div className="space-y-4">
           {/* Totals */}
-          <div className="grid grid-cols-4 gap-4">
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
             <div className="card p-4 text-center">
               <div className="text-xl font-bold text-blue-600">{fmtINR(pfData.totals?.employeePF || 0)}</div>
               <div className="text-xs text-slate-500 mt-1">Employee PF (12%)</div>

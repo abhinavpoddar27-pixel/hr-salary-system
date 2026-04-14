@@ -901,8 +901,8 @@ export default function Employees() {
   )
 
   return (
-    <div className="p-6 space-y-4">
-      <div className="flex items-center justify-between">
+    <div className="p-4 md:p-6 space-y-4">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
         <div>
           <h2 className="text-lg font-bold text-slate-800">Employee Master</h2>
           <p className="text-sm text-slate-500">{employees.length} employees · auto-synced from biometric data</p>
@@ -972,7 +972,7 @@ export default function Employees() {
           <div className="p-8 text-center text-slate-400">Loading employees...</div>
         ) : (
           <div className="overflow-x-auto">
-            <table className="table-compact w-full">
+            <table className="table-compact w-full min-w-[900px]">
               <thead>
                 <tr>
                   {canBulkAssignShift && (

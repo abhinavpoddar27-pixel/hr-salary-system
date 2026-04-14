@@ -201,7 +201,7 @@ export default function DayCalculation() {
     <div className="animate-fade-in">
       <PipelineProgress stageStatus={{ 1: 'done', 2: 'done', 3: 'done', 4: 'done', 5: 'done', 6: 'active' }} />
 
-      <div className="p-6 space-y-5 max-w-screen-2xl">
+      <div className="p-4 md:p-6 space-y-5 max-w-screen-2xl">
         <div className="flex items-start justify-between">
           <div>
             <h2 className="section-title">Stage 6: Day Calculation & Leave Adjustment</h2>
@@ -210,7 +210,7 @@ export default function DayCalculation() {
               <span className="ml-2 text-xs text-slate-400">({monthNames[month]} {year} — {daysInMonth} days)</span>
             </p>
           </div>
-          <div className="flex items-center gap-3">
+          <div className="flex items-center gap-3 flex-wrap">
             <CompanyFilter />
             <DateSelector {...dateProps} />
           </div>
@@ -309,7 +309,7 @@ export default function DayCalculation() {
               <span className="font-semibold text-slate-700">Day Calculation Register — {calcs.length} employees</span>
             </div>
             <div className="overflow-x-auto">
-              <table className="w-full table-compact text-xs">
+              <table className="w-full min-w-[1100px] table-compact text-xs">
                 <thead>
                   <tr>
                     <th className="cursor-pointer select-none" onClick={() => toggleSort('employee')}>
@@ -806,7 +806,7 @@ function DrillDownContent({ r, selectedMonth, selectedYear, daysInMonth, lateDed
           <p className="text-xs font-semibold text-amber-800 mb-2">
             ⚠ This employee was late {r.late_count} times. Apply late deduction?
           </p>
-          <div className="flex items-center gap-3">
+          <div className="flex items-center gap-3 flex-wrap">
             <div>
               <label className="label text-xs">Deduction (days)</label>
               <input
