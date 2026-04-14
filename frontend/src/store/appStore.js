@@ -87,6 +87,12 @@ export const useAppStore = create(
       sidebarCollapsed: typeof window !== 'undefined' && window.innerWidth < 768,
       toggleSidebar: () => set(state => ({ sidebarCollapsed: !state.sidebarCollapsed })),
 
+      // ── Salary Explainer slide-over ─────────────────────────
+      salaryExplainerOpen: false,
+      toggleSalaryExplainer: () => set(state => ({ salaryExplainerOpen: !state.salaryExplainerOpen })),
+      openSalaryExplainer: () => set({ salaryExplainerOpen: true }),
+      closeSalaryExplainer: () => set({ salaryExplainerOpen: false }),
+
       // ── Alert count ─────────────────────────────────────────
       alertCount: 0,
       setAlertCount: (count) => set({ alertCount: count }),

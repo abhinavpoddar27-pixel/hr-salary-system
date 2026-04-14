@@ -77,6 +77,7 @@ const nav = [
   },
   { label: 'Employee Profile', icon: '🔬', to: '/employee-profile' },
   { label: 'Dept Analytics', icon: '🏢', to: '/dept-analytics' },
+  { label: 'Salary Explainer', icon: '🤖', action: 'salaryExplainer', hrFinanceOrAdmin: true },
   { label: 'Session Analytics', icon: '📊', to: '/session-analytics', adminOnly: true },
   { label: 'Query Tool', icon: '🔎', to: '/admin/query-tool', adminOnly: true },
   {
@@ -92,21 +93,42 @@ const nav = [
   },
 ]
 
-function NavItem({ item, collapsed, depth = 0, userRole, onNavigate }) {
+function NavItem({ item, collapsed, depth = 0, userRole, onNavigate, onAction }) {
   const [open, setOpen] = React.useState(false)
   const location = useLocation()
-  const isActive = location.pathname === item.to || location.pathname.startsWith(item.to + '/')
+  const isActive = item.to ? (location.pathname === item.to || location.pathname.startsWith(item.to + '/')) : false
   const hasChildren = item.children && item.children.length > 0
 
   // Hide admin-only items from non-admin users
   if (item.adminOnly && userRole !== 'admin') return null
   // Hide finance-only items from non-finance/non-admin users
   if (item.financeOnly && userRole !== 'finance' && userRole !== 'admin') return null
+  // Hide HR/Finance/Admin-only items from other roles (Salary Explainer)
+  if (item.hrFinanceOrAdmin && !['hr', 'finance', 'admin'].includes(userRole)) return null
 
   // Auto-open active parent
   React.useEffect(() => {
     if (isActive && hasChildren) setOpen(true)
   }, [isActive])
+
+  // Action items (no route, just trigger a handler in the parent)
+  if (item.action) {
+    return (
+      <li>
+        <button
+          type="button"
+          onClick={() => { onAction?.(item.action); onNavigate?.() }}
+          className={clsx(
+            'w-full flex items-center gap-2.5 px-3 py-2 rounded-lg text-sm transition-colors text-slate-600 hover:bg-slate-100 hover:text-slate-900',
+            depth > 0 && 'pl-6'
+          )}
+        >
+          {item.icon && <span className="text-base shrink-0">{item.icon}</span>}
+          {!collapsed && <span className="flex-1 text-left">{item.label}</span>}
+        </button>
+      </li>
+    )
+  }
 
   if (hasChildren) {
     const visibleChildren = item.children.filter(c => {
@@ -159,7 +181,7 @@ function NavItem({ item, collapsed, depth = 0, userRole, onNavigate }) {
 }
 
 export default function Sidebar() {
-  const { sidebarCollapsed, toggleSidebar, alertCount, user } = useAppStore()
+  const { sidebarCollapsed, toggleSidebar, alertCount, user, openSalaryExplainer } = useAppStore()
   const collapsed = sidebarCollapsed
   // Normalised so legacy role strings ("Finance Team", "Admin") still
   // collapse to canonical form before any === 'admin' check downstream.
@@ -168,6 +190,11 @@ export default function Sidebar() {
   // Close sidebar on mobile after navigation
   const handleMobileNav = () => {
     if (window.innerWidth < 768 && !collapsed) toggleSidebar()
+  }
+
+  // Nav-level actions (sidebar items without routes).
+  const handleAction = (action) => {
+    if (action === 'salaryExplainer') openSalaryExplainer()
   }
 
   return (
@@ -207,7 +234,7 @@ export default function Sidebar() {
         <nav className="flex-1 overflow-y-auto px-2 py-3">
           <ul className="space-y-0.5">
             {nav.map(item => (
-              <NavItem key={item.to} item={item} collapsed={collapsed} userRole={userRole} onNavigate={handleMobileNav} />
+              <NavItem key={item.to || item.action || item.label} item={item} collapsed={collapsed} userRole={userRole} onNavigate={handleMobileNav} onAction={handleAction} />
             ))}
           </ul>
         </nav>

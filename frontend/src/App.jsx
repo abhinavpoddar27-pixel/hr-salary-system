@@ -4,6 +4,7 @@ import Sidebar from './components/layout/Sidebar'
 import Header from './components/layout/Header'
 import ErrorBoundary from './components/ui/ErrorBoundary'
 import AbbreviationLegend from './components/ui/AbbreviationLegend'
+import SalaryExplainer from './components/SalaryExplainer'
 import { useAppStore } from './store/appStore'
 import { getMe } from './utils/api'
 import { tracker } from './utils/sessionTracker'
@@ -78,6 +79,7 @@ function Layout({ children, title }) {
         </main>
       </div>
       <AbbreviationLegend />
+      <SalaryExplainer />
     </div>
   )
 }

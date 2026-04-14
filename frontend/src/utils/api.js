@@ -465,4 +465,8 @@ export const getEarlyExitPendingFinance = (params) => api.get('/early-exit-deduc
 export const approveEarlyExitDeduction = (id) => api.put(`/early-exit-deductions/${id}/approve`)
 export const rejectEarlyExitDeduction = (id, data) => api.put(`/early-exit-deductions/${id}/reject`, data)
 
+// ── Salary Explainer (AI) ────────────────────────────────
+export const searchEmployeesForAI = (q) => api.get('/ai/employee-search', { params: { q } })
+export const explainSalary = (data) => api.post('/ai/explain-salary', data)
+
 export default api

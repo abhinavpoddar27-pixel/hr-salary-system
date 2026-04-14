@@ -213,6 +213,7 @@ app.use('/api/early-exits',      requireAuth, require('./src/routes/early-exits'
 app.use('/api/early-exit',       requireAuth, require('./src/routes/early-exits'));
 app.use('/api/early-exit-deductions', requireAuth, require('./src/routes/early-exit-deductions'));
 app.use('/api/query-tool',       requireAuth, require('./src/routes/queryTool'));
+app.use('/api/ai',               requireAuth, require('./src/routes/ai'));
 
 // Health check (public)
 app.get('/api/health', (req, res) => {

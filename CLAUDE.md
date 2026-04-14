@@ -1,5 +1,28 @@
 ## Section 0: Last Session
 - **Date:** 2026-04-14
+- **Branch:** `claude/session-start-BGRNn`
+- **Task:** Salary Explainer — AI-powered slide-over panel accessible from any page
+- **Files created:**
+  - `backend/src/routes/ai.js` — new route with two endpoints: `POST /api/ai/explain-salary` (role-gated to admin/hr/finance; gathers employee/day-calc/salary/prev-month/late-deductions/loans/corrections data, calls Anthropic, caches narrative in `salary_computations.ai_explanation`, graceful fallback on missing/failed API) and `GET /api/ai/employee-search?q=...` (autocomplete, top 10 active employees by code/name)
+  - `frontend/src/components/SalaryExplainer.jsx` — slide-over panel (right side, `w-96` desktop / full-width mobile). Debounced employee autocomplete, month/year pickers defaulting from Zustand, Ctrl+Shift+E shortcut, Esc to close, parses AI response into SUMMARY/EARNINGS/DEDUCTIONS/CHANGES/FLAGS sections, always renders a "Quick Numbers" structured card so output is useful even when the AI narrative is unavailable, floating trigger button (`fixed bottom-16 right-4 z-40`) stacked above the `?` AbbreviationLegend button. Role-gated: hidden for viewer/employee
+- **Files modified:**
+  - `backend/server.js` — 1 line: mount `/api/ai` route after `/api/query-tool`
+  - `backend/src/database/schema.js` — 2 `safeAddColumn` calls (`salary_computations.ai_explanation TEXT`, `ai_explanation_at TEXT`) + a trigger `invalidate_salary_ai_cache` that nulls both columns whenever any salary column (payable_days, gross_salary, basic_earned … net_salary, late_coming_deduction, early_exit_deduction, ed_pay, take_home, etc.) is updated. The trigger uses `AFTER UPDATE OF <cols>` + `WHEN NEW.ai_explanation IS NOT NULL` so it fires only when there's actually a cache to invalidate and never on cache-writes themselves
+  - `frontend/src/store/appStore.js` — 4 lines: `salaryExplainerOpen` state + `toggleSalaryExplainer`/`openSalaryExplainer`/`closeSalaryExplainer` actions
+  - `frontend/src/App.jsx` — import `SalaryExplainer` + render it inside `<Layout>` after `<AbbreviationLegend />` so it mounts on every authenticated page
+  - `frontend/src/components/layout/Sidebar.jsx` — added "Salary Explainer" nav item (`action: 'salaryExplainer'`, `hrFinanceOrAdmin: true`), extended `NavItem` to support action items and the new role gate, wired `openSalaryExplainer` from the store into a `handleAction` callback
+  - `frontend/src/utils/api.js` — added `searchEmployeesForAI(q)` and `explainSalary(data)` helpers
+  - `frontend/dist/*` — rebuilt via `npm run build --prefix frontend`
+- **What was fixed/built:** HR can now open a right-side slide-over from any page, search by employee code/name, pick a month, and get a plain-language salary breakdown (or, if `ANTHROPIC_API_KEY` is missing/rate-limited, the same structured numbers in the "Quick Numbers" fallback card). Cache is automatic: first lookup calls Anthropic, repeat lookups return instantly; cache auto-invalidates on any salary recomputation via the new schema trigger. End-to-end verified locally: fallback, 404 on unknown employee, 400 on missing params, "no salary data" message on future month, 403 on viewer role, and trigger-based cache invalidation all pass. Salary drift query clean.
+- **New env var:** `ANTHROPIC_API_KEY` — set on Railway. Backend logs a warning on startup if missing, but does NOT crash — explainer returns `{explanation: null, data_summary: {...}}` so the UI still shows structured numbers.
+- **What's fragile:** (1) Anthropic API model name hard-coded to `claude-sonnet-4-20250514` — switch to `claude-sonnet-4-5` or `claude-sonnet-4-6` if/when HR wants the newer reasoning. (2) Cache invalidation relies on the trigger firing — if a future schema migration replaces `salary_computations` or any listed watched column, the trigger silently stops working (narrative will never go stale, appearing fresh after recompute). Re-create the trigger after such migrations. (3) `audit_log.employee_code` filter in the corrections query assumes that column is populated; old audit rows may have NULL — those corrections won't appear in the prompt but won't crash the endpoint.
+- **Known issues remaining:** None new. Pre-existing: `EmployeeProfile.jsx` AI Review "Regenerate" button shown even after error. `DeptAnalytics.jsx` overtime tab field names not tested against real production data.
+- **Next session should:** (a) Verify the Salary Explainer end-to-end on Railway with real production data + a valid `ANTHROPIC_API_KEY` — confirm the narrative reads naturally, the cache returns `cached: true` on second lookup, and recomputing Stage 7 for that employee invalidates the cache. (b) Resume the Part 2 mobile-responsive pass queued from the previous session (Compliance/Alerts/Settings/SalaryComputation/DayCalculation/Employees — 6 files and 2 judgment calls, already documented in the prior Section 0 block below).
+
+---
+
+## Section 0: Previous Session (Same Day — Shift Metrics Fix)
+- **Date:** 2026-04-14
 - **Branch:** `claude/session-start-fM5iz`
 - **Fixed:** `resolveMissPunch()` now recalculates all 6 shift metrics (late, early,
   OT, left-late) after correcting IN/OUT times. Previously these stayed frozen

@@ -1621,6 +1621,36 @@ function initSchema(db) {
   // salary_computations: add early_exit_deduction column
   safeAddColumn('salary_computations', 'early_exit_deduction', 'REAL DEFAULT 0');
 
+  // Salary Explainer cache (April 2026) — persists the AI-generated narrative
+  // so repeat lookups return instantly without a second Anthropic round-trip.
+  // The trigger below nulls both columns whenever any salary column changes,
+  // so presence of ai_explanation is a sufficient freshness check.
+  safeAddColumn('salary_computations', 'ai_explanation', 'TEXT');
+  safeAddColumn('salary_computations', 'ai_explanation_at', 'TEXT');
+  try {
+    db.exec(`
+      CREATE TRIGGER IF NOT EXISTS invalidate_salary_ai_cache
+      AFTER UPDATE OF
+        payable_days, gross_salary, basic_earned, da_earned, hra_earned,
+        conveyance_earned, other_allowances_earned, ot_pay, gross_earned,
+        pf_employee, esi_employee, professional_tax, tds, advance_recovery,
+        loan_recovery, lop_deduction, other_deductions, total_deductions,
+        net_salary, late_coming_deduction, early_exit_deduction,
+        ed_pay, ed_days, holiday_duty_pay, take_home, total_payable,
+        salary_held, hold_reason, gross_changed
+      ON salary_computations
+      FOR EACH ROW
+      WHEN NEW.ai_explanation IS NOT NULL
+      BEGIN
+        UPDATE salary_computations
+        SET ai_explanation = NULL, ai_explanation_at = NULL
+        WHERE id = NEW.id;
+      END;
+    `);
+  } catch (e) {
+    console.warn('[schema] Could not create invalidate_salary_ai_cache trigger:', e.message);
+  }
+
   // ── Daily Wage Worker Module (DW) ─────────────────────────────
   db.exec(`
     CREATE TABLE IF NOT EXISTS dw_contractors (
