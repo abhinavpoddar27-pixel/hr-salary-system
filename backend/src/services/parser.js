@@ -119,7 +119,7 @@ function findLandmarks(ws) {
           const cv = getCellValue(ws, r, cc);
           if (cv && /^\d{1,2}\s+[A-Z]/.test(cv)) dayCount++;
         }
-        if (dayCount >= 3) dayHeaderRow = r;
+        if (dayCount >= 2) dayHeaderRow = r;
       }
     }
   }
