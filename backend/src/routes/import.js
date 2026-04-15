@@ -174,14 +174,15 @@ router.post('/upload', upload.array('files', 20), async (req, res) => {
 
           // 4. Upsert attendance_processed with audit logging
           const getExisting = db.prepare(`
-            SELECT id, status_final, in_time_final, out_time_final
-            FROM attendance_processed WHERE employee_code = ? AND date = ? AND company = ?
+            SELECT id, status_final, in_time_final, out_time_final, company
+            FROM attendance_processed WHERE employee_code = ? AND date = ?
           `);
           const updateProcessed = db.prepare(`
             UPDATE attendance_processed SET
               raw_id = NULL, employee_id = ?, status_original = ?, status_final = ?,
               in_time_original = ?, in_time_final = ?,
               out_time_original = ?, out_time_final = ?,
+              company = ?,
               actual_hours = NULL, is_night_shift = 0, night_pair_date = NULL,
               night_pair_confidence = NULL, is_night_out_only = 0,
               is_miss_punch = 0, miss_punch_type = NULL, miss_punch_resolved = 0,
@@ -190,7 +191,7 @@ router.post('/upload', upload.array('files', 20), async (req, res) => {
               is_early_departure = 0, early_by_minutes = 0,
               is_overtime = 0, overtime_minutes = 0,
               stage_2_done = 0, stage_3_done = 0, stage_4_done = 0, stage_5_done = 0
-            WHERE employee_code = ? AND date = ? AND company = ?
+            WHERE employee_code = ? AND date = ?
           `);
           const insertProcessed = db.prepare(`
             INSERT INTO attendance_processed (
@@ -198,24 +199,35 @@ router.post('/upload', upload.array('files', 20), async (req, res) => {
               in_time_original, in_time_final, out_time_original, out_time_final,
               actual_hours, month, year, company
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?)
+            ON CONFLICT(employee_code, date) DO UPDATE SET
+              employee_id = excluded.employee_id,
+              status_original = excluded.status_original,
+              status_final = excluded.status_final,
+              in_time_original = excluded.in_time_original,
+              in_time_final = excluded.in_time_final,
+              out_time_original = excluded.out_time_original,
+              out_time_final = excluded.out_time_final,
+              month = excluded.month,
+              year = excluded.year,
+              company = excluded.company
           `);
 
           const upsertTxn = db.transaction((recs) => {
             for (const r of recs) {
               const empRow = db.prepare('SELECT id FROM employees WHERE code = ?').get(r.employeeCode);
               const empId = empRow ? empRow.id : null;
-              const existingRec = getExisting.get(r.employeeCode, r.date, r.company);
+              const existingRec = getExisting.get(r.employeeCode, r.date);
 
               if (existingRec) {
                 // Log changes to audit_log before overwriting
-                if (existingRec.status_final !== r.status || existingRec.in_time_final !== r.inTime || existingRec.out_time_final !== r.outTime) {
+                if (existingRec.status_final !== r.status || existingRec.in_time_final !== r.inTime || existingRec.out_time_final !== r.outTime || existingRec.company !== r.company) {
                   logAudit('attendance_processed', existingRec.id, 'reimport',
-                    JSON.stringify({ status: existingRec.status_final, in: existingRec.in_time_final, out: existingRec.out_time_final }),
-                    JSON.stringify({ status: r.status, in: r.inTime, out: r.outTime }),
+                    JSON.stringify({ status: existingRec.status_final, in: existingRec.in_time_final, out: existingRec.out_time_final, company: existingRec.company }),
+                    JSON.stringify({ status: r.status, in: r.inTime, out: r.outTime, company: r.company }),
                     'reimport', `EESL reimport: ${file.originalname}`
                   );
                   updateProcessed.run(empId, r.status, r.status, r.inTime, r.inTime, r.outTime, r.outTime,
-                    r.employeeCode, r.date, r.company);
+                    r.company, r.employeeCode, r.date);
                   upsertStats.updated++;
                 }
                 // If data is identical, skip (no-op)
