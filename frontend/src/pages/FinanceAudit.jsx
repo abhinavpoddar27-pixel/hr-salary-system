@@ -3,7 +3,8 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { useSearchParams, useNavigate } from 'react-router-dom'
 import { getFinanceReport, submitDayCorrection, getCorrectionHistory, getCorrectionsSummary, getManualAttendanceFlags, verifyManualFlag,
   getSalaryManualFlags, approveManualFlag, bulkApproveFlags, getReadinessCheck, getVarianceReport, getStatutoryCrosscheck,
-  getFinancePendingDeductions, reviewLateDeduction, bulkReviewLateDeductions, getLateComingDeductions } from '../utils/api'
+  getFinancePendingDeductions, reviewLateDeduction, bulkReviewLateDeductions, getLateComingDeductions,
+  getCompOffPending, getCompOffList, reviewCompOff, bulkReviewCompOff } from '../utils/api'
 import { useAppStore } from '../store/appStore'
 import DateSelector from '../components/common/DateSelector'
 import useDateSelector from '../hooks/useDateSelector'
@@ -1305,6 +1306,14 @@ export default function FinanceAudit() {
   })
   const pendingEarlyExitCount = (earlyExitPendingRes?.data?.data || []).length
 
+  // Pending comp-off / OD requests count for the tab badge (Phase 4)
+  const { data: compOffPendingRes } = useQuery({
+    queryKey: ['comp-off-finance-pending', month, year, selectedCompany],
+    queryFn: () => getCompOffPending({ month, year, company: selectedCompany }),
+    retry: 0, staleTime: 60000
+  })
+  const pendingCompOffCount = (compOffPendingRes?.data?.data || []).length
+
   const tabs = [
     { id: 'readiness', label: 'Readiness' },
     { id: 'interventions', label: 'Manual Interventions', badge: pendingFlagCount },
@@ -1314,6 +1323,7 @@ export default function FinanceAudit() {
     { id: 'manual-flags', label: `Attendance Flags`, badge: unverifiedFlagCount },
     { id: 'late-coming', label: 'Late Coming', badge: pendingLateCount },
     { id: 'early-exit', label: 'Early Exit', badge: pendingEarlyExitCount },
+    { id: 'comp-off', label: 'Comp Off / OD', badge: pendingCompOffCount },
     ...(isAdmin ? [{ id: 'corrections', label: 'Corrections Summary' }] : [])
   ]
 
@@ -1351,6 +1361,7 @@ export default function FinanceAudit() {
         {activeTab === 'manual-flags' && <ManualFlagsTab />}
         {activeTab === 'late-coming' && <LateComingAuditTab />}
         {activeTab === 'early-exit' && <FinanceEarlyExitApprovals month={month} year={year} />}
+        {activeTab === 'comp-off' && <CompOffAuditTab />}
         {activeTab === 'corrections' && isAdmin && <CorrectionsSummaryTab />}
       </div>
     </ErrorBoundary>
@@ -1377,6 +1388,285 @@ function MiniStat({ label, value, sub, color = 'slate' }) {
       <div className={clsx('text-sm font-bold', text[color])}>{value}</div>
       <div className="text-[10px] text-slate-400">{label}</div>
       {sub && <div className="text-[10px] text-slate-500 font-medium">{sub}</div>}
+    </div>
+  )
+}
+
+// ═══════════════════════════════════════════════════════════
+// COMP OFF / OD AUDIT TAB (Phase 4)
+// ═══════════════════════════════════════════════════════════
+function CompOffAuditTab() {
+  const qc = useQueryClient()
+  const { month, year } = useDateSelector({ mode: 'month', syncToStore: true })
+  const { selectedCompany } = useAppStore()
+  const [selected, setSelected] = useState(new Set())
+  const [remarkModal, setRemarkModal] = useState(null) // { ids, action, bulk }
+  const [remarkText, setRemarkText] = useState('')
+
+  const { data: pendingRes } = useQuery({
+    queryKey: ['comp-off-finance-pending', month, year, selectedCompany],
+    queryFn: () => getCompOffPending({ month, year, company: selectedCompany }),
+    retry: 0, staleTime: 30000
+  })
+  const pending = pendingRes?.data?.data || []
+
+  const { data: allRes } = useQuery({
+    queryKey: ['comp-off-all', month, year, selectedCompany],
+    queryFn: () => getCompOffList({ month, year, company: selectedCompany, status: 'all' }),
+    retry: 0, staleTime: 30000
+  })
+  const all = allRes?.data?.data || []
+  const history = all.filter(d => d.finance_status === 'approved' || d.finance_status === 'rejected')
+
+  const approvedCount = all.filter(d => d.finance_status === 'approved').length
+  const rejectedCount = all.filter(d => d.finance_status === 'rejected').length
+  const approvedDays = all
+    .filter(d => d.finance_status === 'approved')
+    .reduce((s, d) => s + Number(d.days || 0), 0)
+
+  const reviewMut = useMutation({
+    mutationFn: ({ id, status, finance_remark }) => reviewCompOff(id, { status, finance_remark }),
+    onSuccess: () => {
+      qc.invalidateQueries(['comp-off-finance-pending'])
+      qc.invalidateQueries(['comp-off-all'])
+      qc.invalidateQueries(['comp-off-list'])
+      toast.success('Comp-off updated')
+    },
+    onError: (e) => toast.error(e?.response?.data?.error || 'Review failed')
+  })
+
+  const bulkMut = useMutation({
+    mutationFn: (data) => bulkReviewCompOff(data),
+    onSuccess: (res) => {
+      qc.invalidateQueries(['comp-off-finance-pending'])
+      qc.invalidateQueries(['comp-off-all'])
+      qc.invalidateQueries(['comp-off-list'])
+      setSelected(new Set())
+      toast.success(`${res?.data?.count || 0} comp-off requests updated`)
+    },
+    onError: (e) => toast.error(e?.response?.data?.error || 'Bulk review failed')
+  })
+
+  const toggleSelect = (id) => {
+    const s = new Set(selected)
+    s.has(id) ? s.delete(id) : s.add(id)
+    setSelected(s)
+  }
+  const selectAll = () => {
+    if (selected.size === pending.length) setSelected(new Set())
+    else setSelected(new Set(pending.map(d => d.id)))
+  }
+
+  const openBulk = (action) => {
+    if (selected.size === 0) return
+    setRemarkModal({ ids: [...selected], action, bulk: true })
+    setRemarkText('')
+  }
+  const openSingle = (id, action) => {
+    setRemarkModal({ ids: [id], action, bulk: false })
+    setRemarkText('')
+  }
+
+  const submitRemark = () => {
+    if (!remarkModal) return
+    const status = remarkModal.action === 'approve' ? 'approved' : 'rejected'
+    if (!remarkText.trim()) {
+      toast.error('Finance remark is required for both approve and reject')
+      return
+    }
+    if (remarkModal.bulk) {
+      bulkMut.mutate({ ids: remarkModal.ids, status, finance_remark: remarkText.trim() })
+    } else {
+      reviewMut.mutate({ id: remarkModal.ids[0], status, finance_remark: remarkText.trim() })
+    }
+    setRemarkModal(null)
+    setRemarkText('')
+  }
+
+  const statusBadge = (val) => {
+    if (val === 'approved') return <span className="text-xs bg-green-100 text-green-700 px-2 py-0.5 rounded-full">Approved</span>
+    if (val === 'rejected') return <span className="text-xs bg-red-100 text-red-700 px-2 py-0.5 rounded-full">Rejected</span>
+    return <span className="text-xs bg-amber-100 text-amber-700 px-2 py-0.5 rounded-full">Pending</span>
+  }
+
+  const fmtDate = (ts) => {
+    if (!ts) return '-'
+    try { return new Date(ts).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' }) }
+    catch { return ts }
+  }
+
+  return (
+    <div className="space-y-4">
+      {/* Summary KPI cards */}
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+        <KPI label="Pending" value={pending.length} color="amber" />
+        <KPI label="Approved" value={approvedCount} color="green" />
+        <KPI label="Rejected" value={rejectedCount} color="red" />
+        <KPI label="Total Approved Days" value={approvedDays} color="blue" />
+      </div>
+
+      {/* Pending requests table */}
+      <div className="card">
+        <div className="px-4 py-3 border-b border-slate-100 flex items-center justify-between flex-wrap gap-2">
+          <h3 className="text-sm font-semibold text-slate-700">Pending Comp-Off / OD Requests</h3>
+          {pending.length > 0 && (
+            <div className="flex items-center gap-2">
+              <button
+                onClick={selectAll}
+                className="text-xs px-3 py-1 rounded bg-slate-100 hover:bg-slate-200"
+              >{selected.size === pending.length ? 'Clear All' : 'Select All'}</button>
+              <button
+                disabled={selected.size === 0}
+                onClick={() => openBulk('approve')}
+                className="text-xs px-3 py-1 rounded bg-green-100 text-green-700 hover:bg-green-200 disabled:opacity-40"
+              >Approve Selected ({selected.size})</button>
+              <button
+                disabled={selected.size === 0}
+                onClick={() => openBulk('reject')}
+                className="text-xs px-3 py-1 rounded bg-red-100 text-red-700 hover:bg-red-200 disabled:opacity-40"
+              >Reject Selected</button>
+            </div>
+          )}
+        </div>
+        {pending.length === 0 ? (
+          <div className="p-8 text-center text-slate-400 text-sm">No pending comp-off requests</div>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full table-compact text-xs">
+              <thead>
+                <tr>
+                  <th className="w-8"></th>
+                  <th>Employee</th>
+                  <th>From</th>
+                  <th>To</th>
+                  <th className="text-center">Days</th>
+                  <th>Reason</th>
+                  <th>HR Remark</th>
+                  <th>Applied</th>
+                  <th className="text-center">Actions</th>
+                </tr>
+              </thead>
+              <tbody>
+                {pending.map(d => (
+                  <tr key={d.id}>
+                    <td>
+                      <input type="checkbox" checked={selected.has(d.id)} onChange={() => toggleSelect(d.id)} />
+                    </td>
+                    <td>
+                      <div className="font-medium text-slate-800">{d.name || d.employee_code}</div>
+                      <div className="text-[10px] text-slate-500">{d.employee_code}{d.department ? ` | ${d.department}` : ''}</div>
+                    </td>
+                    <td>{fmtDate(d.start_date)}</td>
+                    <td>{fmtDate(d.end_date)}</td>
+                    <td className="text-center font-bold">{d.days}</td>
+                    <td className="max-w-48 truncate" title={d.reason}>{d.reason || '-'}</td>
+                    <td className="max-w-48 truncate" title={d.hr_remark}>{d.hr_remark || '-'}</td>
+                    <td className="text-[10px] text-slate-500">
+                      {fmtDate(d.applied_at)}
+                      {d.applied_by && <div>by {d.applied_by}</div>}
+                    </td>
+                    <td className="text-center">
+                      <div className="flex items-center justify-center gap-1">
+                        <button
+                          onClick={() => openSingle(d.id, 'approve')}
+                          className="px-2 py-1 text-xs font-medium bg-green-100 text-green-700 rounded hover:bg-green-200"
+                        >Approve</button>
+                        <button
+                          onClick={() => openSingle(d.id, 'reject')}
+                          className="px-2 py-1 text-xs font-medium bg-red-100 text-red-700 rounded hover:bg-red-200"
+                        >Reject</button>
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+
+      {/* History */}
+      <div className="card">
+        <div className="px-4 py-3 border-b border-slate-100">
+          <h3 className="text-sm font-semibold text-slate-700">Review History ({history.length})</h3>
+        </div>
+        {history.length === 0 ? (
+          <div className="p-8 text-center text-slate-400 text-sm">No reviewed comp-off requests for this month</div>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full table-compact text-xs">
+              <thead>
+                <tr>
+                  <th>Employee</th>
+                  <th>Period</th>
+                  <th className="text-center">Days</th>
+                  <th>Reason</th>
+                  <th>Status</th>
+                  <th>Finance Remark</th>
+                  <th>Reviewed</th>
+                </tr>
+              </thead>
+              <tbody>
+                {history.map(d => (
+                  <tr key={d.id}>
+                    <td>
+                      <div className="font-medium text-slate-800">{d.name || d.employee_code}</div>
+                      <div className="text-[10px] text-slate-500">{d.employee_code}</div>
+                    </td>
+                    <td className="text-[11px]">{fmtDate(d.start_date)} → {fmtDate(d.end_date)}</td>
+                    <td className="text-center font-bold">{d.days}</td>
+                    <td className="max-w-48 truncate" title={d.reason}>{d.reason || '-'}</td>
+                    <td>{statusBadge(d.finance_status)}</td>
+                    <td className="max-w-56 truncate" title={d.finance_remark}>{d.finance_remark || '-'}</td>
+                    <td className="text-[10px] text-slate-500">
+                      {fmtDate(d.finance_reviewed_at)}
+                      {d.finance_reviewed_by && <div>by {d.finance_reviewed_by}</div>}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+
+      {/* Remark Modal */}
+      {remarkModal && (
+        <Modal
+          show={true}
+          open={true}
+          onClose={() => { setRemarkModal(null); setRemarkText('') }}
+          title={`${remarkModal.action === 'approve' ? 'Approve' : 'Reject'} Comp-Off${remarkModal.bulk ? ` (${remarkModal.ids.length})` : ''}`}
+          size="sm"
+        >
+          <div className="space-y-4">
+            <div>
+              <label className="block text-sm font-medium text-slate-700 mb-1">
+                Finance Remark <span className="text-red-500">*</span>
+              </label>
+              <textarea
+                className="input w-full"
+                rows={3}
+                value={remarkText}
+                onChange={e => setRemarkText(e.target.value)}
+                placeholder="Mandatory remark for both approval and rejection..."
+              />
+            </div>
+            <div className="flex justify-end gap-3">
+              <button className="btn btn-secondary" onClick={() => { setRemarkModal(null); setRemarkText('') }}>Cancel</button>
+              <button
+                className={clsx('btn', remarkModal.action === 'approve'
+                  ? 'bg-green-600 text-white hover:bg-green-700'
+                  : 'bg-red-600 text-white hover:bg-red-700')}
+                disabled={!remarkText.trim() || reviewMut.isPending || bulkMut.isPending}
+                onClick={submitRemark}
+              >
+                {(reviewMut.isPending || bulkMut.isPending) ? 'Saving...' : `Confirm ${remarkModal.action === 'approve' ? 'Approval' : 'Rejection'}`}
+              </button>
+            </div>
+          </div>
+        </Modal>
+      )}
     </div>
   )
 }

@@ -2,8 +2,8 @@ import { useState, useEffect, useRef, useCallback } from 'react';
 import api from '../utils/api';
 import { LineChart, Line, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts';
 
-const TABS = ['overview', 'attendance', 'salary', 'patterns', 'aiReview'];
-const TAB_LABELS = { overview: 'Overview', attendance: 'Attendance', salary: 'Salary', patterns: 'Patterns', aiReview: 'AI Review' };
+const TABS = ['overview', 'attendance', 'salary', 'leaveRegister', 'patterns', 'aiReview'];
+const TAB_LABELS = { overview: 'Overview', attendance: 'Attendance', salary: 'Salary', leaveRegister: 'Leave Register', patterns: 'Patterns', aiReview: 'AI Review' };
 
 function fmt(n) { return n != null ? Number(n).toLocaleString('en-IN') : '—'; }
 function pct(n) { return n != null ? `${n}%` : '—'; }
@@ -112,6 +112,7 @@ export default function EmployeeProfile() {
   const salary = profileData?.salaryHistory;
   const patterns = profileData?.patternAnalysis;
   const corrections = profileData?.corrections;
+  const leaveUsage = profileData?.leaveUsage;
 
   const tenure = emp?.date_of_joining
     ? (() => { const m = Math.round((new Date() - new Date(emp.date_of_joining)) / (1000 * 60 * 60 * 24 * 30)); return m >= 12 ? `${Math.floor(m/12)}y ${m%12}m` : `${m}m`; })()
@@ -354,6 +355,155 @@ export default function EmployeeProfile() {
                   </ResponsiveContainer>
                 </div>
               )}
+            </div>
+          )}
+
+          {/* ── Leave Register ── */}
+          {activeTab === 'leaveRegister' && (
+            <div className="space-y-4">
+              {/* Current balances */}
+              <div>
+                <h3 className="font-semibold mb-2 text-sm text-gray-700">Current Leave Balances</h3>
+                <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+                  {(() => {
+                    const thisYear = new Date().getFullYear();
+                    const balRows = (leaveUsage?.balances || []).filter(b => b.year === thisYear);
+                    const byType = Object.fromEntries(balRows.map(b => [b.leave_type, b]));
+                    const types = [
+                      { key: 'CL', color: 'amber' },
+                      { key: 'EL', color: 'green' },
+                      { key: 'SL', color: 'teal' }
+                    ];
+                    return types.map(({ key, color }) => {
+                      const b = byType[key] || {};
+                      return (
+                        <KpiCard
+                          key={key}
+                          label={`${key} Balance (${thisYear})`}
+                          value={b.balance ?? 0}
+                          sub={`Opening ${b.opening ?? 0} + Accrued ${b.accrued ?? 0} − Used ${b.used ?? 0}`}
+                          color={color}
+                        />
+                      );
+                    });
+                  })()}
+                  <KpiCard
+                    label="Total Applications"
+                    value={(leaveUsage?.applications || []).length}
+                    sub={`In range ${fromDate} → ${toDate}`}
+                    color="blue"
+                  />
+                </div>
+              </div>
+
+              {/* YTD totals from monthlyBreakdown */}
+              {monthly.length > 0 && (() => {
+                const sum = (k) => monthly.reduce((s, m) => s + Number(m[k] || 0), 0);
+                const cards = [
+                  { k: 'cl_used',              label: 'CL Used (range)',        color: 'amber' },
+                  { k: 'el_used',              label: 'EL Used (range)',        color: 'green' },
+                  { k: 'lwp_days',             label: 'LWP Days (range)',       color: 'orange' },
+                  { k: 'od_days',              label: 'OD / Comp-Off (range)',  color: 'blue' },
+                  { k: 'short_leave_days',     label: 'Short Leaves (range)',   color: 'teal' },
+                  { k: 'uninformed_absent',    label: 'Uninformed Absent',      color: 'red' }
+                ];
+                return (
+                  <div>
+                    <h3 className="font-semibold mb-2 text-sm text-gray-700">Range Leave Summary</h3>
+                    <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3">
+                      {cards.map(c => (
+                        <KpiCard key={c.k} label={c.label} value={fmt(sum(c.k))} color={c.color} />
+                      ))}
+                    </div>
+                  </div>
+                );
+              })()}
+
+              {/* Month-by-month breakdown */}
+              {monthly.length > 0 && (
+                <div className="bg-white rounded-lg shadow p-4 overflow-x-auto">
+                  <h3 className="font-semibold mb-3 text-sm">Monthly Leave Breakdown</h3>
+                  <table className="w-full text-sm min-w-[720px]">
+                    <thead>
+                      <tr className="text-left text-gray-500 border-b">
+                        <th className="py-2">Month</th>
+                        <th className="text-center text-amber-700">CL</th>
+                        <th className="text-center text-green-700">EL</th>
+                        <th className="text-center text-orange-700">LWP</th>
+                        <th className="text-center text-blue-700">OD</th>
+                        <th className="text-center text-teal-700">SL</th>
+                        <th className="text-center text-red-700">UA</th>
+                        <th className="text-center">Payable Days</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {monthly.map(m => (
+                        <tr key={`${m.year}-${m.month}`} className="border-b even:bg-gray-50">
+                          <td className="py-1.5">{m.year}-{String(m.month).padStart(2, '0')}</td>
+                          <td className="text-center">{fmt(m.cl_used)}</td>
+                          <td className="text-center">{fmt(m.el_used)}</td>
+                          <td className="text-center">{fmt(m.lwp_days)}</td>
+                          <td className="text-center">{fmt(m.od_days)}</td>
+                          <td className="text-center">{fmt(m.short_leave_days)}</td>
+                          <td className="text-center">{fmt(m.uninformed_absent)}</td>
+                          <td className="text-center font-medium">{fmt(m.payable_days)}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+
+              {/* Leave applications timeline */}
+              <div className="bg-white rounded-lg shadow p-4">
+                <h3 className="font-semibold mb-3 text-sm">Leave Applications Timeline</h3>
+                {(!leaveUsage?.applications || leaveUsage.applications.length === 0) ? (
+                  <div className="text-center py-6 text-gray-400 text-sm">No leave applications in this range</div>
+                ) : (
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-sm min-w-[720px]">
+                      <thead>
+                        <tr className="text-left text-gray-500 border-b">
+                          <th className="py-2">Type</th>
+                          <th>From</th>
+                          <th>To</th>
+                          <th className="text-center">Days</th>
+                          <th>Reason</th>
+                          <th>Status</th>
+                          <th>Applied</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {leaveUsage.applications.map(a => (
+                          <tr key={a.id} className="border-b even:bg-gray-50">
+                            <td className="py-1.5">
+                              <span className="px-2 py-0.5 rounded-full text-xs font-medium bg-slate-100 text-slate-700">
+                                {a.leave_type}
+                              </span>
+                            </td>
+                            <td>{a.start_date}</td>
+                            <td>{a.end_date}</td>
+                            <td className="text-center font-medium">{a.days}</td>
+                            <td className="max-w-64 truncate" title={a.reason}>{a.reason || '-'}</td>
+                            <td>
+                              <span className={`px-2 py-0.5 rounded-full text-xs font-semibold ${
+                                a.status === 'Approved' ? 'bg-green-100 text-green-700' :
+                                a.status === 'Rejected' ? 'bg-red-100 text-red-700' :
+                                'bg-amber-100 text-amber-700'
+                              }`}>
+                                {a.status}
+                              </span>
+                            </td>
+                            <td className="text-xs text-gray-500">
+                              {a.applied_at ? new Date(a.applied_at).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' }) : '-'}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </div>
             </div>
           )}
 

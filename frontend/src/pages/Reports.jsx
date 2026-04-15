@@ -6,7 +6,8 @@ import {
   getBankTransferSheet, getPFStatement, getESIStatement, getAuditTrail,
   getHeadcountReport, getPFECR, downloadPFECR, getESIContribution,
   downloadESIContribution, getBankSalaryFile, downloadBankSalaryFile,
-  getBulkPayslips, getCompanyConfig, getDepartmentPayroll
+  getBulkPayslips, getCompanyConfig, getDepartmentPayroll,
+  getLeaveRegisterReport, downloadLeaveRegisterReport
 } from '../utils/api'
 import { useAppStore } from '../store/appStore'
 import DateSelector from '../components/common/DateSelector'
@@ -58,6 +59,7 @@ export default function Reports() {
   const { month, year, dateProps } = useDateSelector({ mode: 'month', syncToStore: true })
   const { selectedCompany } = useAppStore()
   const [activeReport, setActiveReport] = useState('attendance')
+  const [leaveRegFormat, setLeaveRegFormat] = useState('monthly')
   const companyFilter = selectedCompany
   const { toggle, isExpanded, collapseAll } = useExpandableRows()
 
@@ -168,6 +170,32 @@ export default function Reports() {
   })
   const deptPayrollData = deptPayrollRes?.data?.data || {}
 
+  // Leave Register Report (Phase 4)
+  const { data: leaveRegRes, isLoading: leaveRegLoading } = useQuery({
+    queryKey: ['leave-register', leaveRegFormat, month, year, companyFilter],
+    queryFn: () => getLeaveRegisterReport({ format: leaveRegFormat, month, year, company: companyFilter }),
+    enabled: activeReport === 'leave-register',
+    retry: 0
+  })
+  const leaveRegData = leaveRegRes?.data?.data || []
+  const leaveRegTotals = leaveRegRes?.data?.totals || {}
+
+  async function handleDownloadLeaveRegister() {
+    try {
+      const response = await downloadLeaveRegisterReport({ format: leaveRegFormat, month, year, company: companyFilter })
+      const contentDisposition = response.headers['content-disposition'] || ''
+      const filenameMatch = contentDisposition.match(/filename="?(.+?)"?$/i)
+      const filename = filenameMatch ? filenameMatch[1] : `leave_register_${leaveRegFormat}_${MONTH_NAMES[month]}_${year}.xlsx`
+      const blob = new Blob([response.data], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' })
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a'); a.href = url; a.download = filename; a.click()
+      URL.revokeObjectURL(url)
+      toast.success(`Downloaded ${filename}`)
+    } catch (err) {
+      toast.error('Download failed')
+    }
+  }
+
   const [bulkPdfLoading, setBulkPdfLoading] = useState(false)
 
   async function handleDownloadFile(downloadFn, month, year, company) {
@@ -216,6 +244,7 @@ export default function Reports() {
     { id: 'payslips', label: 'Payslips (Bulk PDF)', desc: 'Download all employee payslips' },
     { id: 'audit', label: 'Audit Trail', desc: 'All field-level changes with before/after' },
     { id: 'department-payroll', label: 'Department Payroll', desc: 'Dept-wise payroll cost centre' },
+    { id: 'leave-register', label: 'Leave Reports', desc: 'Monthly leave register + annual CL/EL summary' },
   ]
 
   const monthLabel = `${MONTH_NAMES[month]}_${year}`
@@ -1054,6 +1083,160 @@ export default function Reports() {
                 </>
               ) : (
                 <div className="card p-8 text-center text-slate-400">No salary data found. Run Stage 7 salary computation first.</div>
+              )}
+            </div>
+          )}
+
+          {/* Leave Register (Monthly / Annual) */}
+          {activeReport === 'leave-register' && (
+            <div className="space-y-4">
+              <div className="flex items-center justify-between flex-wrap gap-3">
+                <h3 className="text-base font-bold text-slate-800">
+                  Leave Register — {leaveRegFormat === 'monthly' ? `${MONTH_NAMES[month]} ${year}` : `FY ${year}`}
+                </h3>
+                <div className="flex items-center gap-2">
+                  <div className="inline-flex rounded-lg border border-slate-200 p-0.5 bg-slate-50">
+                    <button
+                      onClick={() => setLeaveRegFormat('monthly')}
+                      className={`px-3 py-1.5 text-xs font-medium rounded-md transition-colors ${
+                        leaveRegFormat === 'monthly' ? 'bg-white text-brand-700 shadow-sm' : 'text-slate-500 hover:text-slate-700'
+                      }`}
+                    >
+                      Monthly
+                    </button>
+                    <button
+                      onClick={() => setLeaveRegFormat('annual')}
+                      className={`px-3 py-1.5 text-xs font-medium rounded-md transition-colors ${
+                        leaveRegFormat === 'annual' ? 'bg-white text-brand-700 shadow-sm' : 'text-slate-500 hover:text-slate-700'
+                      }`}
+                    >
+                      Annual (FY)
+                    </button>
+                  </div>
+                  <button onClick={handleDownloadLeaveRegister} className="btn-secondary text-sm" disabled={leaveRegLoading}>
+                    ⬇ Download Excel
+                  </button>
+                </div>
+              </div>
+              <div className="text-xs text-slate-500">
+                {leaveRegFormat === 'monthly'
+                  ? 'Per-employee leave consumption for the selected month (CL / EL / SL / LWP / OD / Short Leave / Uninformed Absent)'
+                  : 'Per-employee annual CL & EL ledger (opening → accrued → used → lapsed → closing) for the selected financial year'}
+              </div>
+
+              {leaveRegLoading ? (
+                <div className="card p-8 text-center text-slate-400">Loading...</div>
+              ) : leaveRegData.length === 0 ? (
+                <div className="card p-8 text-center text-slate-400">
+                  No leave data for this {leaveRegFormat === 'monthly' ? 'month' : 'financial year'}.
+                </div>
+              ) : (
+                <div className="card overflow-hidden">
+                  <div className="overflow-x-auto">
+                    {leaveRegFormat === 'monthly' ? (
+                      <table className="table-compact w-full text-xs">
+                        <thead>
+                          <tr>
+                            <th>Code</th>
+                            <th>Name</th>
+                            <th>Department</th>
+                            <th className="text-center">CL</th>
+                            <th className="text-center">EL</th>
+                            <th className="text-center">SL</th>
+                            <th className="text-center">LWP</th>
+                            <th className="text-center">OD</th>
+                            <th className="text-center">Short Lv</th>
+                            <th className="text-center">Uninfo. Abs</th>
+                            <th className="text-center font-bold">Total Leave</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {leaveRegData.map((r, i) => {
+                            const total = (r.cl_used || 0) + (r.el_used || 0) + (r.sl_used || 0) + (r.lwp_days || 0) + (r.od_days || 0)
+                            return (
+                              <tr key={r.employee_code || i}>
+                                <td className="text-slate-500">{r.employee_code}</td>
+                                <td className="font-medium">{r.employee_name}</td>
+                                <td className="text-slate-500">{r.department}</td>
+                                <td className={`text-center ${(r.cl_used || 0) > 0 ? 'text-amber-700 font-semibold' : 'text-slate-300'}`}>{r.cl_used || '—'}</td>
+                                <td className={`text-center ${(r.el_used || 0) > 0 ? 'text-green-700 font-semibold' : 'text-slate-300'}`}>{r.el_used || '—'}</td>
+                                <td className={`text-center ${(r.sl_used || 0) > 0 ? 'text-blue-700 font-semibold' : 'text-slate-300'}`}>{r.sl_used || '—'}</td>
+                                <td className={`text-center ${(r.lwp_days || 0) > 0 ? 'text-orange-700 font-semibold' : 'text-slate-300'}`}>{r.lwp_days || '—'}</td>
+                                <td className={`text-center ${(r.od_days || 0) > 0 ? 'text-indigo-700 font-semibold' : 'text-slate-300'}`}>{r.od_days || '—'}</td>
+                                <td className={`text-center ${(r.short_leave_days || 0) > 0 ? 'text-slate-700' : 'text-slate-300'}`}>{r.short_leave_days || '—'}</td>
+                                <td className={`text-center ${(r.uninformed_absent || 0) > 0 ? 'text-red-600 font-semibold' : 'text-slate-300'}`}>{r.uninformed_absent || '—'}</td>
+                                <td className="text-center font-bold text-brand-700">{total > 0 ? total.toFixed(1) : '—'}</td>
+                              </tr>
+                            )
+                          })}
+                        </tbody>
+                        {leaveRegTotals && Object.keys(leaveRegTotals).length > 0 && (
+                          <tfoot>
+                            <tr className="font-bold bg-slate-50 border-t-2 border-slate-200">
+                              <td colSpan={3}>TOTAL ({leaveRegData.length} employees)</td>
+                              <td className="text-center text-amber-700">{leaveRegTotals.cl_used || '—'}</td>
+                              <td className="text-center text-green-700">{leaveRegTotals.el_used || '—'}</td>
+                              <td className="text-center text-blue-700">{leaveRegTotals.sl_used || '—'}</td>
+                              <td className="text-center text-orange-700">{leaveRegTotals.lwp_days || '—'}</td>
+                              <td className="text-center text-indigo-700">{leaveRegTotals.od_days || '—'}</td>
+                              <td className="text-center">{leaveRegTotals.short_leave_days || '—'}</td>
+                              <td className="text-center text-red-600">{leaveRegTotals.uninformed_absent || '—'}</td>
+                              <td className="text-center text-brand-700">
+                                {(() => {
+                                  const t = (leaveRegTotals.cl_used || 0) + (leaveRegTotals.el_used || 0) + (leaveRegTotals.sl_used || 0) + (leaveRegTotals.lwp_days || 0) + (leaveRegTotals.od_days || 0)
+                                  return t > 0 ? t.toFixed(1) : '—'
+                                })()}
+                              </td>
+                            </tr>
+                          </tfoot>
+                        )}
+                      </table>
+                    ) : (
+                      <table className="table-compact w-full text-xs">
+                        <thead>
+                          <tr>
+                            <th rowSpan={2} className="align-bottom">Code</th>
+                            <th rowSpan={2} className="align-bottom">Name</th>
+                            <th rowSpan={2} className="align-bottom">Department</th>
+                            <th colSpan={5} className="text-center bg-amber-50 border-l border-amber-200">Casual Leave (CL)</th>
+                            <th colSpan={5} className="text-center bg-green-50 border-l border-green-200">Earned Leave (EL)</th>
+                          </tr>
+                          <tr>
+                            <th className="text-center bg-amber-50 border-l border-amber-200">Opening</th>
+                            <th className="text-center bg-amber-50">Accrued</th>
+                            <th className="text-center bg-amber-50">Used</th>
+                            <th className="text-center bg-amber-50">Lapsed</th>
+                            <th className="text-center bg-amber-50 font-bold">Closing</th>
+                            <th className="text-center bg-green-50 border-l border-green-200">Opening</th>
+                            <th className="text-center bg-green-50">Accrued</th>
+                            <th className="text-center bg-green-50">Used</th>
+                            <th className="text-center bg-green-50">Lapsed</th>
+                            <th className="text-center bg-green-50 font-bold">Closing</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {leaveRegData.map((r, i) => (
+                            <tr key={r.employee_code || i}>
+                              <td className="text-slate-500">{r.employee_code}</td>
+                              <td className="font-medium">{r.employee_name}</td>
+                              <td className="text-slate-500">{r.department}</td>
+                              <td className="text-center border-l border-amber-100">{r.cl_opening ?? 0}</td>
+                              <td className="text-center">{r.cl_accrued ?? 0}</td>
+                              <td className="text-center text-amber-700">{r.cl_used ?? 0}</td>
+                              <td className="text-center text-slate-500">{r.cl_lapsed ?? 0}</td>
+                              <td className="text-center font-bold text-amber-800">{r.cl_closing ?? 0}</td>
+                              <td className="text-center border-l border-green-100">{r.el_opening ?? 0}</td>
+                              <td className="text-center">{r.el_accrued ?? 0}</td>
+                              <td className="text-center text-green-700">{r.el_used ?? 0}</td>
+                              <td className="text-center text-slate-500">{r.el_lapsed ?? 0}</td>
+                              <td className="text-center font-bold text-green-800">{r.el_closing ?? 0}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    )}
+                  </div>
+                </div>
               )}
             </div>
           )}

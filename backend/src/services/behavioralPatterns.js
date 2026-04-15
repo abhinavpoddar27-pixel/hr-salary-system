@@ -222,6 +222,121 @@ function detectPatterns(db, employeeCode, month, year) {
     });
   }
 
+  // ── Leave Discipline: Informed Leave Ratio (Phase 4) ──
+  // What % of non-present days are covered by approved leave applications?
+  // Read from day_calculations (populated by Phase 2 leave post-processing).
+  try {
+    const dcData = db.prepare(`
+      SELECT cl_used, el_used, lop_days, od_days, uninformed_absent
+      FROM day_calculations
+      WHERE employee_code = ? AND month = ? AND year = ?
+    `).get(employeeCode, month, year);
+
+    if (dcData) {
+      const totalLeaves = (dcData.cl_used || 0) + (dcData.el_used || 0) + (dcData.lop_days || 0) + (dcData.od_days || 0);
+      const totalNonPresent = totalLeaves + (dcData.uninformed_absent || 0);
+      if (totalNonPresent > 0) {
+        const ratio = Math.round((totalLeaves / totalNonPresent) * 100);
+        if (ratio >= 80) {
+          patterns.push({
+            type: 'LEAVE_DISCIPLINE_HIGH',
+            severity: 'Low',
+            label: 'Strong Leave Discipline',
+            detail: `${ratio}% of absences are covered by approved leaves (CL:${dcData.cl_used || 0} EL:${dcData.el_used || 0} LWP:${dcData.lop_days || 0} OD:${dcData.od_days || 0}, Uninformed:${dcData.uninformed_absent || 0})`,
+            value: ratio
+          });
+        } else if (ratio < 50 && (dcData.uninformed_absent || 0) >= 3) {
+          patterns.push({
+            type: 'LEAVE_DISCIPLINE_LOW',
+            severity: 'High',
+            label: 'Poor Leave Discipline',
+            detail: `Only ${ratio}% of absences covered by leaves. ${dcData.uninformed_absent} uninformed absent days.`,
+            value: ratio
+          });
+        }
+      }
+    }
+  } catch {}
+
+  // ── Leave Planning: advance vs after-the-fact applications ──
+  try {
+    const monthPad = String(month).padStart(2, '0');
+    const monthStart = `${year}-${monthPad}-01`;
+    const daysInMonth = new Date(year, month, 0).getDate();
+    const monthEnd = `${year}-${monthPad}-${String(daysInMonth).padStart(2, '0')}`;
+    const leaveApps = db.prepare(`
+      SELECT applied_at, start_date
+      FROM leave_applications
+      WHERE employee_code = ? AND status = 'Approved'
+        AND start_date <= ? AND end_date >= ?
+    `).all(employeeCode, monthEnd, monthStart);
+
+    if (leaveApps.length >= 2) {
+      const advanceCount = leaveApps.filter(la => {
+        if (!la.applied_at || !la.start_date) return false;
+        return la.applied_at.slice(0, 10) < la.start_date;
+      }).length;
+      const advancePct = Math.round((advanceCount / leaveApps.length) * 100);
+      if (advancePct >= 75) {
+        patterns.push({
+          type: 'LEAVE_PLANNER',
+          severity: 'Low',
+          label: 'Advance Leave Planner',
+          detail: `${advancePct}% of ${leaveApps.length} leave applications were submitted before the leave start date`,
+          value: advancePct
+        });
+      } else if (advancePct < 30 && leaveApps.length >= 3) {
+        patterns.push({
+          type: 'LEAVE_REACTIVE',
+          severity: 'Medium',
+          label: 'Reactive Leave Behaviour',
+          detail: `Only ${advancePct}% of ${leaveApps.length} leaves were planned in advance — most applied after the fact`,
+          value: advancePct
+        });
+      }
+    }
+  } catch {}
+
+  // ── Absence Improvement: informed ratio improving over 3 months? ──
+  try {
+    const prevMonthsLeave = getPrev3MonthKeys(month, year);
+    const ratios = [];
+
+    for (const pm of prevMonthsLeave) {
+      const prevDc = db.prepare(`
+        SELECT cl_used, el_used, lop_days, od_days, uninformed_absent
+        FROM day_calculations
+        WHERE employee_code = ? AND month = ? AND year = ?
+      `).get(employeeCode, pm.month, pm.year);
+      if (prevDc) {
+        const tl = (prevDc.cl_used || 0) + (prevDc.el_used || 0) + (prevDc.lop_days || 0) + (prevDc.od_days || 0);
+        const tnp = tl + (prevDc.uninformed_absent || 0);
+        ratios.push(tnp > 0 ? tl / tnp : 1);
+      }
+    }
+
+    const curDc = db.prepare(`
+      SELECT cl_used, el_used, lop_days, od_days, uninformed_absent
+      FROM day_calculations WHERE employee_code = ? AND month = ? AND year = ?
+    `).get(employeeCode, month, year);
+    if (curDc && ratios.length >= 2) {
+      const curTl = (curDc.cl_used || 0) + (curDc.el_used || 0) + (curDc.lop_days || 0) + (curDc.od_days || 0);
+      const curTnp = curTl + (curDc.uninformed_absent || 0);
+      const curRatio = curTnp > 0 ? curTl / curTnp : 1;
+      const prevAvg = ratios.reduce((s, v) => s + v, 0) / ratios.length;
+
+      if (curRatio > prevAvg + 0.20 && curRatio >= 0.60) {
+        patterns.push({
+          type: 'ABSENCE_IMPROVING',
+          severity: 'Low',
+          label: 'Leave Discipline Improving',
+          detail: `Informed leave ratio improved from ${Math.round(prevAvg * 100)}% to ${Math.round(curRatio * 100)}% — employee is shifting from uninformed absents to approved leaves`,
+          value: Math.round(curRatio * 100)
+        });
+      }
+    }
+  } catch {}
+
   // ── Compute stats ─────────────────────────────────────
   const avgHours = presentRecords.length > 0
     ? Math.round(presentRecords.reduce((s, r) => s + (r.actual_hours || 0), 0) / presentRecords.length * 100) / 100
@@ -293,6 +408,12 @@ function generateNarrative(db, employeeCode, month, year) {
     if (p.type === 'SHORT_HOURS') narrative += `Warning: ${p.detail}. `;
     if (p.type === 'TREND_IMPROVING') narrative += `Positive trend: attendance/punctuality improving vs previous 3 months. `;
     if (p.type === 'TREND_DECLINING') narrative += `Attention needed: attendance/punctuality declining vs previous 3 months. `;
+    // Leave discipline patterns (Phase 4)
+    if (p.type === 'LEAVE_DISCIPLINE_HIGH') narrative += `Excellent leave discipline: ${p.detail}. `;
+    if (p.type === 'LEAVE_DISCIPLINE_LOW') narrative += `Attention: poor leave discipline — ${p.detail}. `;
+    if (p.type === 'LEAVE_PLANNER') narrative += `Plans leaves in advance: ${p.detail}. `;
+    if (p.type === 'LEAVE_REACTIVE') narrative += `Tends to apply for leave after the fact: ${p.detail}. `;
+    if (p.type === 'ABSENCE_IMPROVING') narrative += `Positive: ${p.detail}. `;
   }
 
   return narrative.trim();

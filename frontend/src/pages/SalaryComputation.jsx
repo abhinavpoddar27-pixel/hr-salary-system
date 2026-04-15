@@ -607,6 +607,12 @@ export default function SalaryComputation() {
                     <th>Loan</th>
                     <th className="cursor-pointer select-none" onClick={() => toggleSort('late_coming_deduction')} title="Finance-approved late coming deduction">Late{sortIndicator('late_coming_deduction')}</th>
                     <th className="cursor-pointer select-none" onClick={() => toggleSort('early_exit_deduction')} title="Finance-approved early exit deduction">Early Exit{sortIndicator('early_exit_deduction')}</th>
+                    <th className="cursor-pointer select-none text-amber-700 text-center" onClick={() => toggleSort('cl_days')} title="Casual Leave days consumed this month">CL{sortIndicator('cl_days')}</th>
+                    <th className="cursor-pointer select-none text-green-700 text-center" onClick={() => toggleSort('el_days')} title="Earned Leave days consumed this month">EL{sortIndicator('el_days')}</th>
+                    <th className="cursor-pointer select-none text-orange-700 text-center" onClick={() => toggleSort('lwp_days')} title="Leave Without Pay days">LWP{sortIndicator('lwp_days')}</th>
+                    <th className="cursor-pointer select-none text-blue-700 text-center" onClick={() => toggleSort('od_days')} title="On-Duty / Comp-Off days (finance approved)">OD{sortIndicator('od_days')}</th>
+                    <th className="cursor-pointer select-none text-slate-600 text-center" onClick={() => toggleSort('short_leave_days')} title="Short Leave (gate pass) days-equivalent">SL{sortIndicator('short_leave_days')}</th>
+                    <th className="cursor-pointer select-none text-red-700 text-center" onClick={() => toggleSort('uninformed_absent_days')} title="Uninformed Absent days">UA{sortIndicator('uninformed_absent_days')}</th>
                     <th className="cursor-pointer select-none" onClick={() => toggleSort('total_deductions')}>Ded{sortIndicator('total_deductions')}</th>
                     <th className="cursor-pointer select-none bg-slate-50 text-slate-600" onClick={() => toggleSort('net_salary')} title="Net = Gross Earned − Deductions (base only, no OT)">Net{sortIndicator('net_salary')}</th>
                     <th className="cursor-pointer select-none bg-emerald-50 text-emerald-700" onClick={() => toggleSort('take_home')} title="Take Home = Net + OT + Holiday Duty + ED (actual amount paid)">Take Home{sortIndicator('take_home')}</th>
@@ -711,6 +717,24 @@ export default function SalaryComputation() {
                             title={(s.early_exit_deduction || 0) > 0 ? 'Finance-approved early exit deduction' : ''}>
                           {(s.early_exit_deduction || 0) > 0 ? fmtINR(s.early_exit_deduction) : '—'}
                         </td>
+                        <td className={clsx('text-center font-mono', (s.cl_days || 0) > 0 ? 'bg-amber-50 text-amber-700 font-semibold' : 'text-slate-300')}>
+                          {(s.cl_days || 0) > 0 ? s.cl_days : '—'}
+                        </td>
+                        <td className={clsx('text-center font-mono', (s.el_days || 0) > 0 ? 'bg-green-50 text-green-700 font-semibold' : 'text-slate-300')}>
+                          {(s.el_days || 0) > 0 ? s.el_days : '—'}
+                        </td>
+                        <td className={clsx('text-center font-mono', (s.lwp_days || 0) > 0 ? 'bg-orange-50 text-orange-700 font-semibold' : 'text-slate-300')}>
+                          {(s.lwp_days || 0) > 0 ? s.lwp_days : '—'}
+                        </td>
+                        <td className={clsx('text-center font-mono', (s.od_days || 0) > 0 ? 'bg-blue-50 text-blue-700 font-semibold' : 'text-slate-300')}>
+                          {(s.od_days || 0) > 0 ? s.od_days : '—'}
+                        </td>
+                        <td className={clsx('text-center font-mono', (s.short_leave_days || 0) > 0 ? 'bg-slate-100 text-slate-700 font-semibold' : 'text-slate-300')}>
+                          {(s.short_leave_days || 0) > 0 ? s.short_leave_days : '—'}
+                        </td>
+                        <td className={clsx('text-center font-mono', (s.uninformed_absent_days || 0) > 0 ? 'bg-red-50 text-red-700 font-semibold' : 'text-slate-300')}>
+                          {(s.uninformed_absent_days || 0) > 0 ? s.uninformed_absent_days : '—'}
+                        </td>
                         <td className={clsx('text-red-600 font-mono', s.salary_held && 'cell-caution')}
                             title={s.salary_held ? `Held: ${s.hold_reason || 'No reason specified'}` : undefined}>
                           {fmtINR(s.total_deductions)}
@@ -784,7 +808,7 @@ export default function SalaryComputation() {
                         </td>
                       </tr>
                       {showDetails === s.employee_code && (
-                        <DrillDownRow colSpan={16}>
+                        <DrillDownRow colSpan={22}>
                           <EmployeeQuickView
                             employeeCode={s.employee_code}
                             contextContent={
@@ -854,6 +878,12 @@ export default function SalaryComputation() {
                     <td colSpan={2} />
                     <td className="font-mono text-amber-700">{fmtINR(salaries.reduce((s, r) => s + (r.late_coming_deduction || 0), 0))}</td>
                     <td className="font-mono text-rose-700">{fmtINR(salaries.reduce((s, r) => s + (r.early_exit_deduction || 0), 0))}</td>
+                    <td className="font-mono text-center text-amber-700">{salaries.reduce((s, r) => s + (r.cl_days || 0), 0) || '—'}</td>
+                    <td className="font-mono text-center text-green-700">{salaries.reduce((s, r) => s + (r.el_days || 0), 0) || '—'}</td>
+                    <td className="font-mono text-center text-orange-700">{salaries.reduce((s, r) => s + (r.lwp_days || 0), 0) || '—'}</td>
+                    <td className="font-mono text-center text-blue-700">{salaries.reduce((s, r) => s + (r.od_days || 0), 0) || '—'}</td>
+                    <td className="font-mono text-center text-slate-700">{salaries.reduce((s, r) => s + (r.short_leave_days || 0), 0) || '—'}</td>
+                    <td className="font-mono text-center text-red-700">{salaries.reduce((s, r) => s + (r.uninformed_absent_days || 0), 0) || '—'}</td>
                     <td className="font-mono text-red-600">{fmtINR(salaries.reduce((s, r) => s + (r.total_deductions || 0), 0))}</td>
                     <td className="bg-slate-100 text-slate-700 font-mono">{fmtINR(salaries.filter(s => !s.salary_held).reduce((s, r) => s + (r.net_salary || 0), 0))}</td>
                     <td className="bg-emerald-100 text-emerald-700 font-mono">{fmtINR(salaries.filter(s => !s.salary_held).reduce((s, r) => s + (r.take_home || r.total_payable || r.net_salary || 0), 0))}</td>

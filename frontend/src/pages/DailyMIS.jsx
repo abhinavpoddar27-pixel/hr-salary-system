@@ -7,7 +7,7 @@ import useExpandableRows from '../hooks/useExpandableRows'
 import DrillDownRow, { DrillDownChevron } from '../components/ui/DrillDownRow'
 import EmployeeQuickView from '../components/ui/EmployeeQuickView'
 import clsx from 'clsx'
-import api, { getDailyShiftBreakdown, getDailyWorkerBreakdown, getPreviousDayReport, getDailyMISLateComingSummary, getDWDailyMIS } from '../utils/api'
+import api, { getDailyShiftBreakdown, getDailyWorkerBreakdown, getPreviousDayReport, getDailyMISLateComingSummary, getDWDailyMIS, getOnLeaveToday } from '../utils/api'
 import { useAppStore } from '../store/appStore'
 import CompanyFilter from '../components/shared/CompanyFilter'
 
@@ -141,6 +141,15 @@ export default function DailyMIS() {
   })
   const lcSummary = lcSummaryRes?.data?.data || { totalLateToday: 0, departmentBreakdown: [], employees: [] }
 
+  // Leave Management Phase 4 — "On Leave Today" panel
+  const { data: onLeaveRes } = useQuery({
+    queryKey: ['daily-mis-on-leave', selectedCompany],
+    queryFn: () => getOnLeaveToday(selectedCompany),
+    enabled: mainTab === 'today',
+    retry: 0
+  })
+  const onLeaveToday = onLeaveRes?.data?.data || []
+
   // Daily Wage MIS sub-tab
   const { data: dwMisRes } = useQuery({
     queryKey: ['daily-mis-dw', selectedDate],
@@ -253,6 +262,9 @@ export default function DailyMIS() {
                 </div>
               </div>
             </div>
+
+            {/* Leave Management Phase 4: On Leave Today */}
+            <OnLeaveTodaySection rows={onLeaveToday} />
 
             {/* Late Coming Phase 1: Late Arrivals Today section */}
             <LateComingTodaySection summary={lcSummary} />
@@ -872,6 +884,148 @@ function NightShiftDetailTable({ data, rows }) {
 }
 
 // ── Late Coming Phase 1: Late arrivals section for Daily MIS ──
+// ═══════════════════════════════════════════════════════════
+// ON LEAVE TODAY — Leave Management Phase 4
+// ═══════════════════════════════════════════════════════════
+const LEAVE_TYPE_STYLE = {
+  EL:   { bg: 'bg-green-100',  text: 'text-green-700',  ring: 'ring-green-300',  label: 'EL' },
+  CL:   { bg: 'bg-amber-100',  text: 'text-amber-700',  ring: 'ring-amber-300',  label: 'CL' },
+  SL:   { bg: 'bg-amber-100',  text: 'text-amber-700',  ring: 'ring-amber-300',  label: 'SL' },
+  LWP:  { bg: 'bg-orange-100', text: 'text-orange-700', ring: 'ring-orange-300', label: 'LWP' },
+  OD:   { bg: 'bg-blue-100',   text: 'text-blue-700',   ring: 'ring-blue-300',   label: 'OD'  }
+}
+function leaveTypeStyle(t) {
+  const key = String(t || '').toUpperCase()
+  return LEAVE_TYPE_STYLE[key] || { bg: 'bg-slate-100', text: 'text-slate-700', ring: 'ring-slate-300', label: key || '—' }
+}
+
+function OnLeaveTodaySection({ rows }) {
+  const safeRows = Array.isArray(rows) ? rows : []
+  const [deptFilter, setDeptFilter] = useState('all')
+
+  // Department chips derived from rows
+  const deptCounts = useMemo(() => {
+    const m = {}
+    for (const r of safeRows) {
+      const d = r.department || 'Unknown'
+      m[d] = (m[d] || 0) + 1
+    }
+    return Object.entries(m).sort((a, b) => b[1] - a[1]).map(([department, count]) => ({ department, count }))
+  }, [safeRows])
+
+  const filtered = deptFilter === 'all' ? safeRows : safeRows.filter(r => (r.department || 'Unknown') === deptFilter)
+
+  // Group by leave_type
+  const groups = useMemo(() => {
+    const g = {}
+    for (const r of filtered) {
+      const key = String(r.leave_type || 'OTHER').toUpperCase()
+      if (!g[key]) g[key] = []
+      g[key].push(r)
+    }
+    // Preferred display order
+    const order = ['EL', 'CL', 'LWP', 'OD', 'SL']
+    const sorted = {}
+    for (const k of order) if (g[k]) sorted[k] = g[k]
+    for (const k of Object.keys(g)) if (!sorted[k]) sorted[k] = g[k]
+    return sorted
+  }, [filtered])
+
+  const total = safeRows.length
+
+  return (
+    <div className="card overflow-hidden">
+      <div className="card-header">
+        <div className="flex items-center justify-between gap-3 flex-wrap">
+          <span className="font-semibold text-slate-700">
+            Employees on Leave Today — <span className="text-blue-600">{total}</span> employee{total === 1 ? '' : 's'}
+          </span>
+          {deptCounts.length > 0 && (
+            <div className="flex gap-1.5 flex-wrap">
+              <button
+                onClick={() => setDeptFilter('all')}
+                className={clsx('text-[10px] px-2 py-0.5 rounded-full',
+                  deptFilter === 'all' ? 'bg-blue-600 text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200')}>
+                All ({total})
+              </button>
+              {deptCounts.map(d => (
+                <button key={d.department}
+                  onClick={() => setDeptFilter(d.department)}
+                  className={clsx('text-[10px] px-2 py-0.5 rounded-full',
+                    deptFilter === d.department ? 'bg-blue-600 text-white' : 'bg-blue-100 text-blue-700 hover:bg-blue-200')}>
+                  {d.department}: {d.count}
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+      </div>
+      <div className="card-body">
+        {total === 0 ? (
+          <div className="text-center text-sm py-4 bg-green-50 text-green-700 rounded">
+            No employees on leave today.
+          </div>
+        ) : (
+          <div className="space-y-3">
+            {Object.keys(groups).map(lt => {
+              const style = leaveTypeStyle(lt)
+              const list = groups[lt]
+              return (
+                <div key={lt} className={clsx('rounded-lg ring-1 ring-inset', style.ring, style.bg, 'bg-opacity-50')}>
+                  <div className={clsx('px-3 py-1.5 text-xs font-semibold flex items-center justify-between', style.text)}>
+                    <span>{style.label} ({list.length})</span>
+                  </div>
+                  <div className="overflow-x-auto bg-white rounded-b-lg">
+                    <table className="w-full table-compact text-xs">
+                      <thead>
+                        <tr>
+                          <th className="text-left">Employee</th>
+                          <th className="text-left">Dept</th>
+                          <th className="text-left">Type</th>
+                          <th className="text-left">From → To</th>
+                          <th className="text-left">Days</th>
+                          <th className="text-left">Returns</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {list.map(r => (
+                          <tr key={r.id}>
+                            <td>
+                              <div className="font-medium">{r.name}</div>
+                              <div className="text-[10px] text-slate-400 font-mono">{r.employee_code}</div>
+                            </td>
+                            <td>{r.department || '—'}</td>
+                            <td>
+                              <span className={clsx('px-1.5 py-0.5 rounded text-[10px] font-semibold', style.bg, style.text)}>
+                                {style.label}
+                              </span>
+                            </td>
+                            <td className="font-mono text-[11px]">{r.start_date} → {r.end_date}</td>
+                            <td>{r.days}</td>
+                            <td className="font-bold">{nextDayAfter(r.end_date)}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              )
+            })}
+          </div>
+        )}
+      </div>
+    </div>
+  )
+}
+function nextDayAfter(dateStr) {
+  if (!dateStr) return '—'
+  try {
+    const d = new Date(dateStr + 'T12:00:00')
+    d.setDate(d.getDate() + 1)
+    return d.toISOString().slice(0, 10)
+  } catch { return dateStr }
+}
+
 function LateComingTodaySection({ summary }) {
   if (!summary) return null
   const trendArrow = (t) => t === 'up' ? <span className="text-red-600 font-bold">↑</span>

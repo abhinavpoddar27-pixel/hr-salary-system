@@ -261,6 +261,23 @@ function generatePayslipHTML(payslip, companyConfig) {
         <td style="padding:3px 6px;border:1px solid #ddd;"><strong>LOP:</strong> ${att.lop_days || 0}</td>
       </tr>
     </table>
+    ${(() => {
+      const lv = payslip.leaveSummary || {};
+      const parts = [];
+      if ((lv.cl || 0) > 0) parts.push(`<strong>CL:</strong> ${lv.cl}`);
+      if ((lv.el || 0) > 0) parts.push(`<strong>EL:</strong> ${lv.el}`);
+      if ((lv.sl || 0) > 0) parts.push(`<strong>SL:</strong> ${lv.sl}`);
+      if ((lv.lwp || 0) > 0) parts.push(`<strong>LWP:</strong> ${lv.lwp}`);
+      if ((lv.od || 0) > 0) parts.push(`<strong>OD:</strong> ${lv.od}`);
+      if ((lv.shortLeave || 0) > 0) parts.push(`<strong>Short Lv:</strong> ${lv.shortLeave}`);
+      if ((lv.uninformedAbsent || 0) > 0) parts.push(`<strong>Uninfo. Abs:</strong> ${lv.uninformedAbsent}`);
+      if (parts.length === 0) return '';
+      return `<table style="width:100%;border-collapse:collapse;margin-bottom:8px;font-size:10px;">
+      <tr style="background:#fef3c7;">
+        <td style="padding:3px 6px;border:1px solid #fcd34d;" colspan="4"><strong>Leave Summary:</strong> ${parts.join(' &nbsp;|&nbsp; ')}</td>
+      </tr>
+    </table>`;
+    })()}
     <div style="display:flex;gap:12px;">
       <div style="flex:1;"><table style="width:100%;border-collapse:collapse;font-size:10px;">
         <thead><tr style="background:#e8f4fd;"><th style="padding:4px 8px;border:1px solid #ddd;text-align:left;" colspan="2">Earnings</th></tr></thead>

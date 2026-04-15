@@ -189,6 +189,17 @@ export const adjustLeave = (data) => api.post('/leaves/adjust', data)
 export const getLeaveTransactions = (code, params) => api.get(`/leaves/transactions/${code}`, { params })
 export const getLeaveRegister = (params) => api.get('/leaves/register', { params })
 export const bulkAdjustLeaves = (data) => api.post('/leaves/bulk-adjust', data)
+// Leave Management Phase 4 — additional read helpers
+export const getLeaveAccrualLedger = (code, params) => api.get(`/leaves/accrual-ledger/${code}`, { params })
+export const getLeaveAnnualSummary = (code, params) => api.get(`/leaves/annual-summary/${code}`, { params })
+
+// ── Compensatory Off / OD (Phase 4) ─────────────────────
+export const getCompOffList = (params) => api.get('/comp-off', { params })
+export const getCompOffPending = (params) => api.get('/comp-off/pending', { params })
+export const createCompOff = (data) => api.post('/comp-off', data)
+export const reviewCompOff = (id, data) => api.put(`/comp-off/${id}/finance-review`, data)
+export const bulkReviewCompOff = (data) => api.put('/comp-off/bulk-review', data)
+export const deleteCompOff = (id) => api.delete(`/comp-off/${id}`)
 
 // ── Notifications ────────────────────────────────────────
 export const getNotifications = (unread) => api.get('/notifications', { params: unread ? { unread: 'true' } : {} })
@@ -365,6 +376,14 @@ export const exportLateComingReport = (month, year, company) =>
   api.get('/late-coming/export', { params: { month, year, ...(company ? { company } : {}) }, responseType: 'blob' })
 export const getDailyMISLateComingSummary = (date, company) =>
   api.get('/daily-mis/late-coming-summary', { params: { date, ...(company ? { company } : {}) } })
+// Leave Management Phase 4 — Daily MIS "on leave today"
+export const getOnLeaveToday = (company) =>
+  api.get('/leaves/on-leave-today', { params: { ...(company ? { company } : {}) } })
+// Leave Management Phase 4 — Leave register reports (monthly / annual)
+export const getLeaveRegisterReport = (params) =>
+  api.get('/reports/leave-register', { params })
+export const downloadLeaveRegisterReport = (params) =>
+  api.get('/reports/leave-register', { params: { ...params, download: 'xlsx' }, responseType: 'blob' })
 // Phase 2 — finance approval workflow
 export const getFinancePendingDeductions = (month, year, company) =>
   api.get('/late-coming/finance-pending', { params: { month, year, ...(company ? { company } : {}) } })
