@@ -48,10 +48,12 @@ FORMAT RULES:
 - Keep each section 2-4 lines max
 - If something doesn't add up, say so clearly — never guess
 - Use simple Hindi-English terms where natural (like "weekly off", "half day", "present")
-- Never mention "AI" or "Claude" — speak as if you are the payroll system explaining itself`;
+- Never mention "AI" or "Claude" — speak as if you are the payroll system explaining itself
+
+CRITICAL: A CALCULATION CHAIN section is provided in the data. Always use the scaled monthly values and earned ratio from that section to explain earnings. NEVER derive your own monthly component values from gross salary. If the chain shows a scale factor != 1, mention that components were proportionally scaled to match the employee's gross salary.`;
 
 function buildExplainerPrompt(data) {
-  const { employee, comp, prevComp, dayCalc, lateDeductions, loans, corrections } = data;
+  const { employee, comp, prevComp, dayCalc, lateDeductions, loans, corrections, salStruct } = data;
 
   const prevLabel = prevComp ? `${MONTHS[prevComp.month]} ${prevComp.year}` : null;
 
@@ -81,6 +83,59 @@ function buildExplainerPrompt(data) {
     lines.push(`- Mid-Month Joiner: Yes (DOJ: ${dayCalc.date_of_joining || employee.date_of_joining || 'N/A'})`);
   } else {
     lines.push('- Mid-Month Joiner: No');
+  }
+  lines.push('');
+  if (salStruct) {
+    const rawBasic = salStruct.basic || 0;
+    const rawDa = salStruct.da || 0;
+    const rawHra = salStruct.hra || 0;
+    const rawConv = salStruct.conveyance || 0;
+    const rawOther = salStruct.other_allowances || 0;
+    const rawComponentSum = rawBasic + rawDa + rawHra + rawConv + rawOther;
+    const statedGross = (employee.gross_salary > 0 ? employee.gross_salary : 0)
+                     || (salStruct.gross_salary > 0 ? salStruct.gross_salary : 0);
+
+    let grossMonthly;
+    let scaleFactor = 1;
+    if (rawComponentSum > 0 && statedGross > 0 && Math.abs(rawComponentSum - statedGross) > 1) {
+      grossMonthly = statedGross;
+      scaleFactor = statedGross / rawComponentSum;
+    } else if (statedGross > 0) {
+      grossMonthly = statedGross;
+    } else if (rawComponentSum > 0) {
+      grossMonthly = rawComponentSum;
+    } else {
+      grossMonthly = 0;
+    }
+
+    let scaledBasic = rawBasic;
+    let scaledDa = rawDa;
+    let scaledHra = rawHra;
+    let scaledConv = rawConv;
+    let scaledOther = rawOther;
+    if (scaleFactor !== 1 && rawComponentSum > 0) {
+      scaledBasic = Math.round(rawBasic * scaleFactor * 100) / 100;
+      scaledDa = Math.round(rawDa * scaleFactor * 100) / 100;
+      scaledHra = Math.round(rawHra * scaleFactor * 100) / 100;
+      scaledConv = Math.round(rawConv * scaleFactor * 100) / 100;
+      scaledOther = Math.round(rawOther * scaleFactor * 100) / 100;
+    }
+
+    const calendarDays = new Date(comp.year, comp.month, 0).getDate();
+    const payableDays = comp.payable_days || dayCalc.total_payable_days || 0;
+    const earnedRatio = calendarDays > 0 ? Math.min(payableDays / calendarDays, 1.0) : 0;
+    const otDailyRate = calendarDays > 0 ? grossMonthly / calendarDays : 0;
+
+    lines.push('CALCULATION CHAIN (as computed by the salary system — use these numbers, do NOT derive your own):');
+    lines.push(`- Salary Structure: Basic=${rawBasic}, DA=${rawDa}, HRA=${rawHra}, Conv=${rawConv}, Other=${rawOther}, Sum=${Math.round(rawComponentSum * 100) / 100}`);
+    lines.push(`- Employee Gross: ${statedGross}${scaleFactor !== 1 ? ` -> Components scaled by ${scaleFactor.toFixed(4)} to match gross` : ' (components match gross)'}`);
+    lines.push(`- Scaled Monthly: Basic=${scaledBasic}, DA=${scaledDa}, HRA=${scaledHra}, Conv=${scaledConv}, Other=${scaledOther}`);
+    lines.push(`- Calendar Days: ${calendarDays}, Payable Days: ${payableDays}`);
+    lines.push(`- Earned Ratio: ${payableDays}/${calendarDays} = ${earnedRatio.toFixed(6)}`);
+    lines.push('- Formula: each component earned = scaled monthly x earned ratio');
+    lines.push(`- OT/ED daily rate: ${statedGross} / ${calendarDays} = ${otDailyRate.toFixed(2)} per day`);
+  } else {
+    lines.push('CALCULATION CHAIN: No salary structure found — component breakdown unavailable.');
   }
   lines.push('');
   lines.push('CURRENT MONTH SALARY:');
@@ -263,6 +318,11 @@ router.post('/explain-salary', async (req, res) => {
 
   const db = getDb();
 
+  // One-time cache clear — uncomment and run via /admin/query-tool after deploying
+  // this fix to flush stale AI explanations generated before the calculation chain
+  // was added. After verifying the new prompt works, leave this commented:
+  // db.prepare("UPDATE salary_computations SET ai_explanation = NULL, ai_explanation_at = NULL WHERE ai_explanation IS NOT NULL").run();
+
   const employee = db.prepare('SELECT * FROM employees WHERE code = ?').get(employee_code);
   if (!employee) {
     return res.status(404).json({
@@ -292,6 +352,12 @@ router.post('/explain-salary', async (req, res) => {
   const dayCalc = db.prepare(
     'SELECT * FROM day_calculations WHERE employee_code = ? AND month = ? AND year = ?'
   ).get(employee_code, monthInt, yearInt) || {};
+
+  const salStruct = db.prepare(`
+    SELECT * FROM salary_structures
+    WHERE employee_id = ? AND effective_from <= ?
+    ORDER BY effective_from DESC LIMIT 1
+  `).get(employee.id, `${yearInt}-${String(monthInt).padStart(2, '0')}-01`);
 
   const lateDeductions = db.prepare(`
     SELECT * FROM late_coming_deductions
@@ -341,7 +407,7 @@ router.post('/explain-salary', async (req, res) => {
 
   try {
     const userPrompt = buildExplainerPrompt({
-      employee, comp, prevComp, dayCalc, lateDeductions, loans, corrections
+      employee, comp, prevComp, dayCalc, lateDeductions, loans, corrections, salStruct
     });
 
     const response = await fetch('https://api.anthropic.com/v1/messages', {
@@ -415,3 +481,13 @@ router.post('/explain-salary', async (req, res) => {
 });
 
 module.exports = router;
+
+// One-time cache clear after deploying the CALCULATION CHAIN prompt fix.
+// Run this once via /admin/query-tool (admin role) to flush stale narratives
+// generated before the chain was added:
+//
+//   UPDATE salary_computations
+//   SET ai_explanation = NULL, ai_explanation_at = NULL
+//   WHERE ai_explanation IS NOT NULL;
+//
+// The schema-level invalidation trigger handles future cache busts automatically.
