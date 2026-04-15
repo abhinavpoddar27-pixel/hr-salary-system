@@ -10,7 +10,23 @@
 const express = require('express');
 const router = express.Router();
 const { getDb } = require('../database/db');
-const { runLeaveAccrual, generateComplianceAlerts, computeAttritionRisk } = require('../services/phase5Features');
+const {
+  runLeaveAccrual,
+  initCLOpening,
+  yearEndLapse,
+  generateComplianceAlerts,
+  computeAttritionRisk
+} = require('../services/phase5Features');
+
+// Local role helper — other routes here are currently auth-gated only. The
+// two new Phase 1 endpoints below mutate balances so they need HR-or-admin.
+function requireHrOrAdmin(req, res, next) {
+  const role = req.user?.role;
+  if (role !== 'hr' && role !== 'admin') {
+    return res.status(403).json({ success: false, error: 'HR or admin access required' });
+  }
+  next();
+}
 
 // ── Leave Accrual ────────────────────────────────────────
 
@@ -24,6 +40,47 @@ router.post('/accrue-leaves', (req, res) => {
   } catch (err) {
     console.error('Leave accrual error:', err.message);
     res.status(500).json({ success: false, error: 'Failed to accrue leaves: ' + err.message });
+  }
+});
+
+// ── Init CL Opening Balances ─────────────────────────────
+// One-time-per-year seed of Casual Leave opening balances. Pro-rata by DOJ
+// month (Jan/Feb=7 … Nov/Dec=2). Safe to re-run — UPSERTs the opening on
+// leave_balances and the anchor row on leave_accrual_ledger.
+router.post('/init-cl-opening', requireHrOrAdmin, (req, res) => {
+  try {
+    const db = getDb();
+    const { year, deploymentMonth } = req.body || {};
+    const y = parseInt(year);
+    if (!y) return res.status(400).json({ success: false, error: 'year required' });
+    const dm = deploymentMonth ? parseInt(deploymentMonth) : 1;
+    const result = initCLOpening(db, y, dm);
+    res.json({
+      success: true,
+      ...result,
+      message: `CL opening seeded for ${result.seeded} employees (deploymentMonth=${dm})`
+    });
+  } catch (err) {
+    console.error('Init CL opening error:', err.message);
+    res.status(500).json({ success: false, error: 'Failed to init CL opening: ' + err.message });
+  }
+});
+
+// ── Year-End Lapse ───────────────────────────────────────
+// Zeros out remaining CL + EL for the given year. Writes lapse rows to
+// leave_accrual_ledger (month=12) and Year-End Lapse transactions. Run once
+// at year-end (typically around Dec 31 / Jan 1).
+router.post('/year-end-lapse', requireHrOrAdmin, (req, res) => {
+  try {
+    const db = getDb();
+    const { year } = req.body || {};
+    const y = parseInt(year);
+    if (!y) return res.status(400).json({ success: false, error: 'year required' });
+    const result = yearEndLapse(db, y);
+    res.json({ success: true, ...result, message: `Lapsed ${result.lapsed} balance rows for ${y}` });
+  } catch (err) {
+    console.error('Year-end lapse error:', err.message);
+    res.status(500).json({ success: false, error: 'Failed to lapse balances: ' + err.message });
   }
 });
 

@@ -42,10 +42,15 @@ router.get('/', (req, res) => {
 /**
  * POST /api/leaves
  * Submit a leave application
+ *
+ * Phase 1 leave-management additions:
+ *  - CL / EL requests hard-blocked at zero balance (no more warnings)
+ *  - hr_remark mandatory for CL / EL / LWP
+ *  - finalization lock: no new leave against a finalised month
  */
 router.post('/', (req, res) => {
   const db = getDb();
-  const { employeeCode, leaveType, startDate, endDate, days, reason } = req.body;
+  const { employeeCode, leaveType, startDate, endDate, days, reason, hrRemark } = req.body;
 
   if (!employeeCode || !leaveType || !startDate || !endDate) {
     return res.status(400).json({ success: false, error: 'Missing required fields' });
@@ -57,10 +62,52 @@ router.post('/', (req, res) => {
   // Calculate days if not provided
   const leaveDays = days || Math.ceil((new Date(endDate) - new Date(startDate)) / (1000 * 60 * 60 * 24)) + 1;
 
+  // Mandatory HR remark on CL / EL / LWP
+  if (['CL', 'EL', 'LWP'].includes(leaveType) && (!hrRemark || !String(hrRemark).trim())) {
+    return res.status(400).json({
+      success: false,
+      error: `hrRemark is required for ${leaveType} leave`
+    });
+  }
+
+  // Hard block: CL and EL cannot go negative on submission.
+  // (SL and LWP are not balance-backed; OD is its own table.)
+  if (['CL', 'EL'].includes(leaveType)) {
+    const year = new Date(startDate).getFullYear();
+    const bal = db.prepare(`
+      SELECT balance FROM leave_balances WHERE employee_id = ? AND year = ? AND leave_type = ?
+    `).get(emp.id, year, leaveType);
+    const currentBalance = bal?.balance || 0;
+    if (currentBalance < leaveDays) {
+      return res.status(400).json({
+        success: false,
+        error: `Insufficient ${leaveType} balance (current: ${currentBalance}, requested: ${leaveDays})`
+      });
+    }
+  }
+
+  // Finalization lock — block leaves against months that are locked for payroll.
+  const leaveMonth = new Date(startDate).getMonth() + 1;
+  const leaveYear = new Date(startDate).getFullYear();
+  const finalized = db.prepare(`
+    SELECT 1 FROM monthly_imports
+    WHERE month = ? AND year = ? AND is_finalised = 1
+    LIMIT 1
+  `).get(leaveMonth, leaveYear);
+  if (finalized) {
+    return res.status(400).json({
+      success: false,
+      error: `Cannot apply leaves for a finalized month (${leaveMonth}/${leaveYear})`
+    });
+  }
+
+  const cleanHrRemark = hrRemark ? String(hrRemark).trim() : null;
+
   const result = db.prepare(`
-    INSERT INTO leave_applications (employee_id, employee_code, leave_type, start_date, end_date, days, reason)
-    VALUES (?, ?, ?, ?, ?, ?, ?)
-  `).run(emp.id, employeeCode, leaveType, startDate, endDate, leaveDays, reason || '');
+    INSERT INTO leave_applications
+      (employee_id, employee_code, leave_type, start_date, end_date, days, reason, hr_remark)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(emp.id, employeeCode, leaveType, startDate, endDate, leaveDays, reason || '', cleanHrRemark);
 
   // Create notification
   db.prepare(`
@@ -73,6 +120,10 @@ router.post('/', (req, res) => {
 
 /**
  * PUT /api/leaves/:id/approve
+ *
+ * Phase 1: CL / EL approval is hard-blocked when balance would go negative.
+ * Previously the approval went through with a "balance will go negative"
+ * warning, which silently created LWP-shaped liabilities on the books.
  */
 router.put('/:id/approve', (req, res) => {
   const db = getDb();
@@ -81,16 +132,21 @@ router.put('/:id/approve', (req, res) => {
   const leave = db.prepare('SELECT * FROM leave_applications WHERE id = ? AND status = ?').get(req.params.id, 'Pending');
   if (!leave) return res.status(404).json({ success: false, error: 'Leave not found or already processed' });
 
-  // Check leave balance before approving
-  let balanceWarning = null;
   const emp = db.prepare('SELECT id FROM employees WHERE code = ?').get(leave.employee_code);
-  if (emp && ['CL', 'EL', 'SL'].includes(leave.leave_type)) {
+
+  // Hard-block CL / EL when balance is insufficient. SL has no balance model
+  // so it passes through (historic behaviour preserved).
+  if (emp && ['CL', 'EL'].includes(leave.leave_type)) {
     const year = new Date(leave.start_date).getFullYear();
-    const bal = db.prepare('SELECT balance FROM leave_balances WHERE employee_id = ? AND year = ? AND leave_type = ?').get(emp.id, year, leave.leave_type);
+    const bal = db.prepare(`
+      SELECT balance FROM leave_balances WHERE employee_id = ? AND year = ? AND leave_type = ?
+    `).get(emp.id, year, leave.leave_type);
     const currentBalance = bal?.balance || 0;
     if (currentBalance < leave.days) {
-      const newBalance = currentBalance - leave.days;
-      balanceWarning = `Employee has only ${currentBalance} day(s) of ${leave.leave_type} remaining. Balance will go negative (${newBalance} days).`;
+      return res.status(400).json({
+        success: false,
+        error: `Cannot approve: insufficient ${leave.leave_type} balance (current: ${currentBalance}, requested: ${leave.days})`
+      });
     }
   }
 
@@ -110,9 +166,69 @@ router.put('/:id/approve', (req, res) => {
   });
   txn();
 
-  const response = { success: true, message: 'Leave approved' };
-  if (balanceWarning) response.warning = balanceWarning;
-  res.json(response);
+  res.json({ success: true, message: 'Leave approved' });
+});
+
+/**
+ * DELETE /api/leaves/:id
+ *
+ * Soft-cancellation: sets status='Cancelled' so the audit trail is preserved.
+ * If the leave was already Approved and was CL / EL / SL, the consumed
+ * balance is credited back. Blocked when the underlying month is finalised.
+ */
+router.delete('/:id', (req, res) => {
+  const db = getDb();
+  const id = parseInt(req.params.id);
+  if (!id) return res.status(400).json({ success: false, error: 'id required' });
+
+  const leave = db.prepare('SELECT * FROM leave_applications WHERE id = ?').get(id);
+  if (!leave) return res.status(404).json({ success: false, error: 'Leave not found' });
+
+  if (!['Pending', 'Approved'].includes(leave.status)) {
+    return res.status(400).json({
+      success: false,
+      error: `Cannot cancel leave with status '${leave.status}'`
+    });
+  }
+
+  const month = new Date(leave.start_date).getMonth() + 1;
+  const year = new Date(leave.start_date).getFullYear();
+  const finalized = db.prepare(`
+    SELECT 1 FROM monthly_imports WHERE month = ? AND year = ? AND is_finalised = 1 LIMIT 1
+  `).get(month, year);
+  if (finalized) {
+    return res.status(400).json({
+      success: false,
+      error: `Cannot cancel leave in a finalized month (${month}/${year})`
+    });
+  }
+
+  const emp = db.prepare('SELECT id FROM employees WHERE code = ?').get(leave.employee_code);
+  const cancelledBy = req.user?.username || 'admin';
+
+  const txn = db.transaction(() => {
+    db.prepare(`
+      UPDATE leave_applications
+      SET status = 'Cancelled', approved_by = ?, approved_at = datetime('now')
+      WHERE id = ?
+    `).run(cancelledBy, id);
+
+    // Credit balance back only if the leave was Approved and was balance-backed
+    if (leave.status === 'Approved' && emp && ['CL', 'EL', 'SL'].includes(leave.leave_type)) {
+      db.prepare(`
+        UPDATE leave_balances
+        SET used = MAX(0, used - ?), balance = balance + ?
+        WHERE employee_id = ? AND year = ? AND leave_type = ?
+      `).run(leave.days, leave.days, emp.id, year, leave.leave_type);
+    }
+  });
+  txn();
+
+  try {
+    logAudit('leave_applications', id, 'status', leave.status, 'Cancelled', 'leave_cancel', `Cancelled by ${cancelledBy}`);
+  } catch (e) { /* audit failure must not break cancellation */ }
+
+  res.json({ success: true, id });
 });
 
 /**
@@ -403,6 +519,132 @@ router.post('/bulk-adjust', (req, res) => {
   txn();
 
   res.json({ success: true, processed, errors });
+});
+
+/**
+ * GET /api/leaves/accrual-ledger/:code
+ * Monthly leave accrual ledger rows for a single employee across a year.
+ * Backed by the leave_accrual_ledger table written by Phase 1 accrual.
+ */
+router.get('/accrual-ledger/:code', (req, res) => {
+  const db = getDb();
+  const year = parseInt(req.query.year) || new Date().getFullYear();
+  const rows = db.prepare(`
+    SELECT year, month, leave_type, opening_balance, accrued, used, lapsed,
+           closing_balance, paid_days_this_month, paid_days_ytd, el_earned_ytd, company
+    FROM leave_accrual_ledger
+    WHERE employee_code = ? AND year = ?
+    ORDER BY month ASC, leave_type ASC
+  `).all(req.params.code, year);
+  res.json({ success: true, data: rows });
+});
+
+/**
+ * GET /api/leaves/annual-summary/:code
+ * Full-year appraisal-grade summary: CL/EL opening/used/lapsed/closing, LWP
+ * days, OD days, uninformed-absence count, and informed-leave ratio. Pulls
+ * from leave_accrual_ledger + day_calculations so it reflects the paid
+ * picture even for months where accrual hasn't caught up.
+ */
+router.get('/annual-summary/:code', (req, res) => {
+  const db = getDb();
+  const year = parseInt(req.query.year) || new Date().getFullYear();
+  const code = req.params.code;
+
+  const empty = { opening: 0, used: 0, lapsed: 0, closing: 0 };
+
+  // CL — opening is January's opening_balance, closing is December's closing
+  // (or the latest month we have a ledger row for).
+  const clRows = db.prepare(`
+    SELECT month, opening_balance, used, lapsed, closing_balance
+    FROM leave_accrual_ledger
+    WHERE employee_code = ? AND year = ? AND leave_type = 'CL'
+    ORDER BY month ASC
+  `).all(code, year);
+  const cl = { ...empty };
+  if (clRows.length) {
+    cl.opening = clRows[0].opening_balance || 0;
+    cl.used = clRows.reduce((s, r) => s + (r.used || 0), 0);
+    cl.lapsed = clRows.reduce((s, r) => s + (r.lapsed || 0), 0);
+    cl.closing = clRows[clRows.length - 1].closing_balance || 0;
+  }
+
+  // EL — same shape but also tracks accrued.
+  const elRows = db.prepare(`
+    SELECT month, opening_balance, accrued, used, lapsed, closing_balance
+    FROM leave_accrual_ledger
+    WHERE employee_code = ? AND year = ? AND leave_type = 'EL'
+    ORDER BY month ASC
+  `).all(code, year);
+  const el = { ...empty, accrued: 0 };
+  if (elRows.length) {
+    el.opening = elRows[0].opening_balance || 0;
+    el.accrued = elRows.reduce((s, r) => s + (r.accrued || 0), 0);
+    el.used = elRows.reduce((s, r) => s + (r.used || 0), 0);
+    el.lapsed = elRows.reduce((s, r) => s + (r.lapsed || 0), 0);
+    el.closing = elRows[elRows.length - 1].closing_balance || 0;
+  }
+
+  // LWP days + OD days + uninformed-absence count — all from day_calculations
+  const dayAgg = db.prepare(`
+    SELECT COALESCE(SUM(lop_days), 0)   AS lwp_total,
+           COALESCE(SUM(od_days), 0)    AS od_total,
+           COALESCE(SUM(uninformed_absent), 0) AS uninf_total,
+           COALESCE(SUM(days_absent), 0) AS absent_total
+    FROM day_calculations
+    WHERE employee_code = ? AND year = ?
+  `).get(code, year);
+
+  const lwpDays = Number(dayAgg?.lwp_total) || 0;
+  const odDays = Number(dayAgg?.od_total) || 0;
+  const uninformedAbsent = Number(dayAgg?.uninf_total) || 0;
+  const absentDays = Number(dayAgg?.absent_total) || 0;
+
+  const informedLeaveDays = cl.used + el.used + lwpDays + odDays;
+  const totalNonPresent = informedLeaveDays + uninformedAbsent;
+  const informedLeaveRatio = totalNonPresent > 0
+    ? Math.round((informedLeaveDays / totalNonPresent) * 1000) / 10
+    : 100;
+
+  res.json({
+    success: true,
+    data: {
+      cl,
+      el,
+      lwpDays,
+      odDays,
+      uninformedAbsent,
+      absentDays,
+      totalNonPresent,
+      informedLeaveRatio
+    }
+  });
+});
+
+/**
+ * GET /api/leaves/on-leave-today
+ * Daily MIS helper — approved leaves that cover today's date. Company filter
+ * optional.
+ */
+router.get('/on-leave-today', (req, res) => {
+  const db = getDb();
+  const { company } = req.query;
+
+  let query = `
+    SELECT la.id, la.employee_code, la.leave_type, la.start_date, la.end_date,
+           la.days, la.reason, la.hr_remark,
+           e.name, e.department, e.company
+    FROM leave_applications la
+    JOIN employees e ON la.employee_code = e.code
+    WHERE la.status = 'Approved'
+      AND date('now') BETWEEN la.start_date AND la.end_date
+  `;
+  const params = [];
+  if (company) { query += ' AND e.company = ?'; params.push(company); }
+  query += ' ORDER BY e.department, e.name';
+
+  const rows = db.prepare(query).all(...params);
+  res.json({ success: true, count: rows.length, data: rows });
 });
 
 module.exports = router;

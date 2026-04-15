@@ -1527,6 +1527,89 @@ function initSchema(db) {
   safeCreateIndex('CREATE INDEX IF NOT EXISTS idx_late_deductions_employee ON late_coming_deductions(employee_code, month, year)');
   safeCreateIndex('CREATE INDEX IF NOT EXISTS idx_late_deductions_status ON late_coming_deductions(finance_status)');
 
+  // ── Leave Management Phase 1 (April 2026) ──────────────────────
+  // Compensatory Off / On-Duty (OD) requests: HR-initiated day grant with
+  // mandatory Finance approval before the day counts in payroll. Mirrors
+  // late_coming_deductions / extra_duty_grants in shape — pending rows sit in
+  // a finance queue, approval is immutable (no row ever deleted), and the
+  // is_applied_to_salary flag prevents double counting on Stage 7 recompute.
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS compensatory_off_requests (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      employee_code TEXT NOT NULL,
+      employee_id INTEGER REFERENCES employees(id),
+      start_date TEXT NOT NULL,
+      end_date TEXT NOT NULL,
+      days REAL NOT NULL,
+      month INTEGER NOT NULL,
+      year INTEGER NOT NULL,
+      company TEXT,
+      reason TEXT NOT NULL,
+      hr_remark TEXT NOT NULL,
+      applied_by TEXT NOT NULL,
+      applied_at TEXT DEFAULT (datetime('now')),
+      finance_status TEXT DEFAULT 'pending',
+      finance_reviewed_by TEXT,
+      finance_reviewed_at TEXT,
+      finance_remark TEXT,
+      is_applied_to_salary INTEGER DEFAULT 0,
+      applied_to_salary_at TEXT,
+      created_at TEXT DEFAULT (datetime('now')),
+      UNIQUE(employee_code, start_date, month, year, company)
+    )
+  `);
+  safeCreateIndex('CREATE INDEX IF NOT EXISTS idx_comp_off_status ON compensatory_off_requests(finance_status)');
+  safeCreateIndex('CREATE INDEX IF NOT EXISTS idx_comp_off_employee ON compensatory_off_requests(employee_code, month, year)');
+
+  // Leave accrual ledger: one row per employee × year × month × leave_type.
+  // Captures opening balance, accrued, used, lapsed, closing — the canonical
+  // audit trail behind the leave_balances aggregate. Populated by the new
+  // paid-days-based accrual in phase5Features.runLeaveAccrual() and by the
+  // year-end lapse / CL opening initialisation helpers.
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS leave_accrual_ledger (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      employee_code TEXT NOT NULL,
+      employee_id INTEGER,
+      year INTEGER NOT NULL,
+      month INTEGER NOT NULL,
+      leave_type TEXT NOT NULL,
+      opening_balance REAL DEFAULT 0,
+      accrued REAL DEFAULT 0,
+      used REAL DEFAULT 0,
+      lapsed REAL DEFAULT 0,
+      closing_balance REAL DEFAULT 0,
+      paid_days_this_month REAL DEFAULT 0,
+      paid_days_ytd REAL DEFAULT 0,
+      el_earned_ytd REAL DEFAULT 0,
+      company TEXT,
+      created_at TEXT DEFAULT (datetime('now')),
+      UNIQUE(employee_code, year, month, leave_type)
+    )
+  `);
+  safeCreateIndex('CREATE INDEX IF NOT EXISTS idx_accrual_ledger_employee ON leave_accrual_ledger(employee_code, year)');
+
+  // Phase 2/3 will read these day_calculations / salary_computations columns.
+  // They are added here (Phase 1) so the schema is in place before the
+  // pipeline code starts emitting them.
+  safeAddColumn('day_calculations', 'od_days', 'REAL DEFAULT 0');
+  safeAddColumn('day_calculations', 'short_leave_days', 'REAL DEFAULT 0');
+  safeAddColumn('day_calculations', 'uninformed_absent', 'INTEGER DEFAULT 0');
+
+  safeAddColumn('salary_computations', 'cl_days', 'REAL DEFAULT 0');
+  safeAddColumn('salary_computations', 'el_days', 'REAL DEFAULT 0');
+  safeAddColumn('salary_computations', 'lwp_days', 'REAL DEFAULT 0');
+  safeAddColumn('salary_computations', 'od_days', 'REAL DEFAULT 0');
+  safeAddColumn('salary_computations', 'short_leave_days', 'REAL DEFAULT 0');
+  safeAddColumn('salary_computations', 'uninformed_absent_days', 'REAL DEFAULT 0');
+
+  // Mandatory HR remark on CL/EL/LWP applications (hard-gated in routes/leaves).
+  safeAddColumn('leave_applications', 'hr_remark', 'TEXT');
+
+  // Policy: EL eligibility floor. Employee must be at least this many days
+  // past DOJ before EL starts accruing. Used by runLeaveAccrual().
+  insertPolicyIfMissing.run('el_eligibility_days', '180', 'Minimum days since DOJ before EL begins accruing');
+
   // ── Early Exit Detection & Gate Pass (April 2026) ──────────────
   // Short leave / gate pass records. Each row represents an authorised
   // early departure for a specific employee on a specific date.
