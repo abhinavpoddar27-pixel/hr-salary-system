@@ -189,6 +189,34 @@ router.post('/calculate-days', (req, res) => {
           } catch {}
         }
 
+        // ── Phase 2 (April 2026): fetch approved leaves + comp-off grants ──
+        // Approved leave_applications that overlap this month and finance-approved
+        // compensatory_off_requests for this month. Passed into calculateDays so
+        // the pipeline can restore absences (EL → paid, OD → present) and
+        // reclassify CL/SL/LWP days as informed-but-unpaid. Balance debiting is
+        // already handled at leave-approval time in leaves.js — Stage 6 is read-only.
+        const monthStrLeave = String(month).padStart(2, '0');
+        const monthStartDate = `${year}-${monthStrLeave}-01`;
+        const lastDay = new Date(year, month, 0).getDate();
+        const monthEndDate = `${year}-${monthStrLeave}-${String(lastDay).padStart(2,'0')}`;
+
+        const approvedLeaves = db.prepare(`
+          SELECT leave_type, start_date, end_date, days, status
+          FROM leave_applications
+          WHERE employee_code = ?
+            AND status = 'Approved'
+            AND start_date <= ?
+            AND end_date >= ?
+        `).all(empCode, monthEndDate, monthStartDate);
+
+        const approvedCompOff = db.prepare(`
+          SELECT start_date, end_date, duty_days, finance_status
+          FROM compensatory_off_requests
+          WHERE employee_code = ?
+            AND month = ? AND year = ?
+            AND finance_status = 'approved'
+        `).all(empCode, parseInt(month), parseInt(year));
+
         const calcResult = calculateDays(
           empCode, parseInt(month), parseInt(year), company || '',
           records, leaveBalances, holidays,
@@ -200,27 +228,21 @@ router.post('/calculate-days', (req, res) => {
             financeEDDays,
             // DOJ-based holiday eligibility (April 2026): mid-month joiners
             // must NOT receive paid credit for holidays before their DOJ.
-            dateOfJoining: empFull?.date_of_joining || null
+            dateOfJoining: empFull?.date_of_joining || null,
+            // Phase 2 leave integration (April 2026)
+            approvedLeaves,
+            approvedCompOff
           },
           req.requestId
         );
         calcResult.employeeId = emp?.id;
         saveDayCalculation(db, calcResult);
 
-        if (emp && (calcResult.clUsed > 0 || calcResult.elUsed > 0)) {
-          if (calcResult.clUsed > 0) {
-            db.prepare(`
-              UPDATE leave_balances SET used = used + ?, balance = balance - ?
-              WHERE employee_id = ? AND year = ? AND leave_type = 'CL'
-            `).run(calcResult.clUsed, calcResult.clUsed, emp.id, year);
-          }
-          if (calcResult.elUsed > 0) {
-            db.prepare(`
-              UPDATE leave_balances SET used = used + ?, balance = balance - ?
-              WHERE employee_id = ? AND year = ? AND leave_type = 'EL'
-            `).run(calcResult.elUsed, calcResult.elUsed, emp.id, year);
-          }
-        }
+        // NOTE: The old leave_balances UPDATE block that used to run here
+        // (debiting CL/EL on every calculate-days) has been removed in Phase 2.
+        // It would now double-debit because leaves.js POST /approve already
+        // debits leave_balances at approval time. Stage 6 is read-only w.r.t.
+        // leave balances — it only consumes approved leaves to adjust day counts.
 
         results.push({ employeeCode: empCode, ...calcResult });
       } catch (err) {

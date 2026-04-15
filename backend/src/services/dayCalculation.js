@@ -151,6 +151,15 @@ function calculateDays(employeeCode, month, year, company, attendanceRecords, le
   const dateOfJoining = options.dateOfJoining || null;
   const isPreDOJ = (dateStr) => dateOfJoining && dateStr < dateOfJoining;
 
+  // ── Approved leave + comp-off inputs (Phase 2 — April 2026) ──
+  // Passed in by caller (payroll.js POST /calculate-days and jobQueue.js).
+  // approvedLeaves: leave_applications rows with status='Approved' overlapping
+  // this month. approvedCompOff: compensatory_off_requests rows with
+  // finance_status='approved' for this month. Both default to [] so older
+  // callers (and tests) keep working without modification.
+  const approvedLeaves = Array.isArray(options.approvedLeaves) ? options.approvedLeaves : [];
+  const approvedCompOff = Array.isArray(options.approvedCompOff) ? options.approvedCompOff : [];
+
   const allDates = getMonthDates(month, year);
   const daysInMonth = allDates.length;
 
@@ -315,6 +324,9 @@ function calculateDays(employeeCode, month, year, company, attendanceRecords, le
       unpaidSundays: totalWeeklyOffs,
       paidHolidays: 0,
       clUsed: 0, elUsed: 0, slUsed: 0, lopDays: 0,
+      odDays: 0,
+      shortLeaveDays: Math.round(daysHalfPresent * 100) / 100,
+      uninformedAbsent: Math.max(0, Math.round(daysAbsent * 100) / 100),
       baseEntitlement: 0,
       totalAbsences: 0,
       effectivePresent: Math.round((daysPresent + daysHalfPresent + daysWOP) * 100) / 100,
@@ -347,6 +359,116 @@ function calculateDays(employeeCode, month, year, company, attendanceRecords, le
   // PERMANENT PATH — baseline minus absences + extra work
   // ══════════════════════════════════════════════════════════════
   const paidHolidays = holidayCount;
+
+  // ── Leave + Comp-Off post-processing (Phase 2 — April 2026) ──
+  // Apply approved leaves and finance-approved comp-off grants BEFORE the
+  // weekly-off tier is computed so that restored absences (EL / OD) push
+  // effectivePresent upward and can flip a Tier 2/3 employee back to Tier 1.
+  //
+  // Rules:
+  //   EL  → daysAbsent--          (absence restored as paid leave — payable ↑)
+  //   OD  → daysPresent++         (comp-off grant restores day as worked — payable ↑)
+  //   CL  → daysAbsent-- + unpaidLeaveDays++  (reclassify absence; payable unchanged)
+  //   SL  → same as CL (treated as informed but unpaid for pipeline math)
+  //   LWP → same as CL
+  //
+  // consumedDates prevents a single calendar date from being consumed by both
+  // a comp-off grant and an overlapping leave application.
+  let leaveClUsed = 0;
+  let leaveElUsed = 0;
+  let leaveSlUsed = 0;
+  let leaveLwpUsed = 0;
+  let odDays = 0;
+  let unpaidLeaveDays = 0;
+  const consumedDates = new Set();
+
+  function expandLeaveDates(startDate, endDate) {
+    const out = [];
+    if (!startDate) return out;
+    const s = new Date(startDate + 'T12:00:00');
+    const e = new Date((endDate || startDate) + 'T12:00:00');
+    while (s <= e) {
+      out.push(s.toISOString().slice(0, 10));
+      s.setDate(s.getDate() + 1);
+    }
+    return out;
+  }
+
+  // Build set of dates flagged absent by the attendance loop — used to decide
+  // whether a leave application actually restores an absence or is merely an
+  // informational credit on a day the employee was already present/on WO.
+  const absentDates = new Set();
+  for (const dateStr of allDates) {
+    if (isPreDOJ(dateStr)) continue;
+    const isWeeklyOff = getDayOfWeek(dateStr) === weeklyOffDay;
+    const isHoliday = holidayDates.has(dateStr);
+    if (isWeeklyOff || isHoliday) continue;
+    const rec = recordByDate[dateStr];
+    if (!rec) { absentDates.add(dateStr); continue; }
+    const status = effectiveStatusForDay(rec);
+    // Anything that was counted as absent in the main loop goes here:
+    // bare 'A', or a ghost status (empty/whitespace/unknown) on a working day.
+    const isKnownNonAbsent = (
+      status === 'P' || status === 'WOP' ||
+      status === '½P' || status === 'HP' || status === 'WO½P' ||
+      status === 'WO' || status === 'NH'
+    );
+    if (!isKnownNonAbsent) absentDates.add(dateStr);
+  }
+
+  // ── Apply OD (compensatory-off) first ──
+  // OD restores an absent working day as present. Only fires when the day was
+  // actually flagged absent — if the employee was already present, the comp-off
+  // grant is an audit-only record and must NOT double-count daysPresent.
+  for (const c of approvedCompOff) {
+    const d = c.start_date || c.grant_date;
+    if (!d) continue;
+    if (!allDates.includes(d)) continue;
+    if (isPreDOJ(d)) continue;
+    if (consumedDates.has(d)) continue;
+    const isWeeklyOff = getDayOfWeek(d) === weeklyOffDay;
+    const isHoliday = holidayDates.has(d);
+    if (isWeeklyOff || isHoliday) continue;
+    if (!absentDates.has(d)) continue;
+    consumedDates.add(d);
+    absentDates.delete(d);
+    daysAbsent = Math.max(0, daysAbsent - 1);
+    daysPresent += 1;
+    odDays += 1;
+  }
+
+  // ── Apply approved leaves ──
+  for (const leave of approvedLeaves) {
+    const leaveType = (leave.leave_type || '').toUpperCase();
+    const dates = expandLeaveDates(leave.start_date, leave.end_date);
+    for (const d of dates) {
+      if (!allDates.includes(d)) continue;
+      if (isPreDOJ(d)) continue;
+      if (consumedDates.has(d)) continue;
+      const isWeeklyOff = getDayOfWeek(d) === weeklyOffDay;
+      const isHoliday = holidayDates.has(d);
+      if (isWeeklyOff || isHoliday) continue;
+      consumedDates.add(d);
+      const wasAbsent = absentDates.has(d);
+      if (wasAbsent) {
+        absentDates.delete(d);
+        daysAbsent = Math.max(0, daysAbsent - 1);
+      }
+      if (leaveType === 'EL') {
+        leaveElUsed += 1;
+        // EL restores payable automatically via daysAbsent-- (no offset).
+      } else if (leaveType === 'CL') {
+        leaveClUsed += 1;
+        unpaidLeaveDays += 1;
+      } else if (leaveType === 'SL') {
+        leaveSlUsed += 1;
+        unpaidLeaveDays += 1;
+      } else if (leaveType === 'LWP') {
+        leaveLwpUsed += 1;
+        unpaidLeaveDays += 1;
+      }
+    }
+  }
 
   // daysPerWeeklyOff — how many working days "earn" one weekly off
   const daysPerWeeklyOff = totalWeeklyOffs > 0 ? workingDays / totalWeeklyOffs : workingDays;
@@ -382,25 +504,33 @@ function calculateDays(employeeCode, month, year, company, attendanceRecords, le
   }
 
   // ── Baseline model ──
-  const baseEntitlement = workingDays + paidWeeklyOffs + paidHolidays;
-  const totalAbsences = daysAbsent + daysHalfPresent;
+  // After leave post-processing:
+  //   daysAbsent has been decremented for every restored absence
+  //   daysPresent has been incremented for every OD (comp-off) grant
+  //   unpaidLeaveDays (CL+SL+LWP) is added back so those absences don't
+  //   double-count as restored payable — CL/SL/LWP reclassify the absence
+  //   from "uninformed" to "informed" without changing the payable total.
+  let baseEntitlement = workingDays + paidWeeklyOffs + paidHolidays;
+  let totalAbsences = daysAbsent + daysHalfPresent + unpaidLeaveDays;
   // WOP is ADDITIONAL — on top of entitlement
-  const rawPayable = baseEntitlement - totalAbsences + daysWOP;
+  let rawPayable = baseEntitlement - totalAbsences + daysWOP;
   const manualGrantDays = options.manualExtraDutyDays || 0;
-  const finalPayable = Math.max(0, Math.round((rawPayable + manualGrantDays) * 100) / 100);
+  let finalPayable = Math.max(0, Math.round((rawPayable + manualGrantDays) * 100) / 100);
 
   // Extra duty — anything above daysInMonth
-  const extraDutyDays = Math.max(0, Math.round((finalPayable - daysInMonth) * 100) / 100);
+  let extraDutyDays = Math.max(0, Math.round((finalPayable - daysInMonth) * 100) / 100);
 
   // ── Integrity assertion (ghost-status detector) ──
   // finalPayable should equal the sum of paid components:
-  //   daysPresent + daysHalfPresent + paidWeeklyOffs + paidHolidays + daysWOP + manualGrantDays
-  // Derivation: finalPayable = workingDays - daysAbsent - daysHalfPresent + paidWeeklyOffs + paidHolidays + daysWOP,
-  // and workingDays = daysPresent + 2*daysHalfPresent + daysAbsent (assuming every
-  // working day is accounted for as P / ½P / A — no ghost statuses).
-  // If this mismatches, either a ghost record slipped through or the status
-  // classification is missing a new code.
-  const expectedPayable = daysPresent + daysHalfPresent + paidWeeklyOffs + paidHolidays + daysWOP + manualGrantDays;
+  //   daysPresent + daysHalfPresent + paidWeeklyOffs + paidHolidays + daysWOP
+  //   + manualGrantDays + leaveElUsed
+  // Derivation: finalPayable = base - (daysAbsent + daysHalfPresent + unpaidLeaveDays) + daysWOP,
+  // and workingDays = daysPresent + 2*daysHalfPresent + daysAbsent + leaveElUsed + unpaidLeaveDays
+  //                   - odDays (OD increased daysPresent beyond the original working-day set)
+  // Substituting and simplifying gives the expression below. If this
+  // mismatches, either a ghost record slipped through, the status
+  // classification is missing a new code, or the leave accounting drifted.
+  const expectedPayable = daysPresent + daysHalfPresent + paidWeeklyOffs + paidHolidays + daysWOP + manualGrantDays + leaveElUsed;
   if (Math.abs(finalPayable - expectedPayable) > 0.01) {
     console.warn(
       `${RID} Integrity warning ${employeeCode} ${month}/${year}: ` +
@@ -467,11 +597,15 @@ function calculateDays(employeeCode, month, year, company, attendanceRecords, le
     totalAbsences: Math.round(totalAbsences * 100) / 100,
     effectivePresent: Math.round(effectivePresent * 100) / 100,
 
-    // Leave fields — retained for backward compat, unused by WO logic
-    clUsed: 0,
-    elUsed: 0,
-    slUsed: 0,
-    lopDays: 0,
+    // Leave fields (Phase 2 — April 2026). CL/SL/LWP reclassify absences
+    // without changing payable; EL restores payable; OD restores as present.
+    clUsed: Math.round(leaveClUsed * 100) / 100,
+    elUsed: Math.round(leaveElUsed * 100) / 100,
+    slUsed: Math.round(leaveSlUsed * 100) / 100,
+    lopDays: Math.round(leaveLwpUsed * 100) / 100,
+    odDays: Math.round(odDays * 100) / 100,
+    shortLeaveDays: Math.round(daysHalfPresent * 100) / 100,
+    uninformedAbsent: Math.max(0, Math.round(daysAbsent * 100) / 100),
 
     totalPayableDays: finalPayable,
     extraDutyDays,
@@ -513,7 +647,9 @@ function saveDayCalculation(db, calcResult) {
       weekly_off_day, base_entitlement, total_absences, effective_present,
       days_per_weekly_off, weekly_off_threshold, weekly_off_tier, weekly_off_note,
       date_of_joining, holidays_before_doj, is_mid_month_joiner,
-      finance_ed_days, updated_at
+      finance_ed_days,
+      od_days, short_leave_days, uninformed_absent,
+      updated_at
     ) VALUES (
       ?, ?, ?, ?,
       ?, ?, ?, ?,
@@ -525,7 +661,9 @@ function saveDayCalculation(db, calcResult) {
       ?, ?, ?, ?,
       ?, ?, ?, ?,
       ?, ?, ?,
-      ?, datetime('now')
+      ?,
+      ?, ?, ?,
+      datetime('now')
     )
     ON CONFLICT(employee_code, month, year, company) DO UPDATE SET
       total_calendar_days = excluded.total_calendar_days,
@@ -565,6 +703,9 @@ function saveDayCalculation(db, calcResult) {
       holidays_before_doj = excluded.holidays_before_doj,
       is_mid_month_joiner = excluded.is_mid_month_joiner,
       finance_ed_days = excluded.finance_ed_days,
+      od_days = excluded.od_days,
+      short_leave_days = excluded.short_leave_days,
+      uninformed_absent = excluded.uninformed_absent,
       updated_at = datetime('now'),
       is_approved = 0
   `);
@@ -592,7 +733,10 @@ function saveDayCalculation(db, calcResult) {
     calcResult.dateOfJoining || null,
     calcResult.holidaysBeforeDOJ || 0,
     calcResult.isMidMonthJoiner ? 1 : 0,
-    calcResult.financeEDDays || 0
+    calcResult.financeEDDays || 0,
+    calcResult.odDays || 0,
+    calcResult.shortLeaveDays || 0,
+    calcResult.uninformedAbsent != null ? calcResult.uninformedAbsent : 0
   );
 
   return calcResult;
