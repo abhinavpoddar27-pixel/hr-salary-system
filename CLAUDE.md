@@ -1,7 +1,8 @@
 ## Section 0: Last Session
 - **Date:** 2026-04-15
-- **Branch:** `claude/session-start-FyzhO`
-- **Task:** Shift Night Variant Architecture + Shared Metric Utility + Night Pair Dissolution (plus two fixes earlier the same session: (a) UNIQUE constraint crash on `attendance_processed` reimport — commit `a80c1b0`; (b) Salary Explainer AI prompt missing calculation chain — commit `22e2509`).
+- **Branch:** `claude/session-start-FyzhO` (pushed to `origin/main` at `18fc12a`)
+- **Last commit:** `18fc12a` refactor: extract shared shift metric utility with variant-aware night timings
+- **Task:** Shift Night Variant Architecture + Shared Metric Utility + Night Pair Dissolution (plus two fixes earlier the same session, both now on main: (a) UNIQUE constraint crash on `attendance_processed` reimport — commit `a80c1b0`; (b) Salary Explainer AI prompt missing calculation chain — commit `22e2509`).
 - **Files created:**
   - `backend/src/utils/shiftMetrics.js` — pure function `calcShiftMetrics({ inTime, outTime, statusOriginal, shift, otThresholdHours })`. Single source of truth for late/early/OT/left-late/actualHours computation. No DB access, no side effects. Returns `{ isNight, isLate, lateBy, isEarly, earlyBy, isOT, otMinutes, isLeftLate, leftLateMinutes, actualHours, shiftId, shiftName }`. Variant-aware: shifts with `night_start_time`/`night_end_time` (12HR, DAY, NIGHT, DUBLE) use those for evening punches; shifts without (10HR, 9HR, HK7:30, GEN) treat evening punches as day-window overtime.
 - **Files modified:**
