@@ -1,4 +1,35 @@
 ## Section 0: Last Session
+- **Date:** 2026-04-15
+- **Branch:** `claude/session-start-FyzhO`
+- **Task:** Shift Night Variant Architecture + Shared Metric Utility + Night Pair Dissolution (plus two fixes earlier the same session: (a) UNIQUE constraint crash on `attendance_processed` reimport — commit `a80c1b0`; (b) Salary Explainer AI prompt missing calculation chain — commit `22e2509`).
+- **Files created:**
+  - `backend/src/utils/shiftMetrics.js` — pure function `calcShiftMetrics({ inTime, outTime, statusOriginal, shift, otThresholdHours })`. Single source of truth for late/early/OT/left-late/actualHours computation. No DB access, no side effects. Returns `{ isNight, isLate, lateBy, isEarly, earlyBy, isOT, otMinutes, isLeftLate, leftLateMinutes, actualHours, shiftId, shiftName }`. Variant-aware: shifts with `night_start_time`/`night_end_time` (12HR, DAY, NIGHT, DUBLE) use those for evening punches; shifts without (10HR, 9HR, HK7:30, GEN) treat evening punches as day-window overtime.
+- **Files modified:**
+  - `backend/src/database/schema.js` — two `safeAddColumn('shifts', 'night_start_time'/'night_end_time', 'TEXT')` calls; one-time migration gated by policy_config key `migration_shift_night_variants_v1` populates `'20:00'`/`'08:00'` for the four shifts that need night variants.
+  - `backend/src/routes/settings.js` — POST `/shifts` and PUT `/shifts/:id` accept optional `nightStartTime` / `nightEndTime`; PUT uses "only overwrite if provided" pattern (`undefined` → keep existing value, `''` → `NULL`).
+  - `backend/src/routes/import.js` — removed the inline ~110-line shift-metric calculation block from `postTxn`; replaced with a single call to `calcShiftMetrics`. Removed `defaultNightShift` lookup. Employee's assigned shift is now always used — no global NIGHT fallback.
+  - `backend/src/routes/attendance.js` — `POST /recalculate-metrics` rewritten identically: uses shared utility, and the UPDATE now includes the 4 previously-missing fields (`is_early_departure`, `early_by_minutes`, `is_overtime`, `overtime_minutes`). `is_night_shift` changed from one-way CASE to DIRECT assignment so corrections can flip night→day. `shift_id` / `shift_detected` still use COALESCE to preserve HR manual overrides.
+  - `backend/src/services/missPunch.js` — deleted the private `recalcShiftMetrics` helper (~119 lines) added in `50cdd54`; `resolveMissPunch()` now calls the shared utility, does DIRECT assignment for `shift_id` / `is_night_shift` / `shift_detected`, and — when a correction flips an evening punch to a day-time punch — dissolves the `night_shift_pairs` row (`is_rejected=1, is_confirmed=0`), clears `is_night_out_only`/`night_pair_date`/`night_pair_confidence` on the OTHER record, and re-flags that OTHER record as a miss punch (`NO_PUNCH` / `MISSING_IN` / `MISSING_OUT` / `NIGHT_UNPAIRED`) when its IN/OUT is incomplete.
+- **What was fixed/built:**
+  1. **Shared metric utility** — the calculation formula previously existed in 3 call sites (import, recalculate-metrics, miss-punch resolution), with subtle drift (e.g. miss-punch didn't set `is_early_departure`/`is_overtime`). Now all three call the same pure function — guaranteed identical output.
+  2. **Variant-aware shift timings** — removed the hard-coded global NIGHT fallback. An employee on 12HR punching at 20:15 uses `night_start_time=20:00` from their own shift row (15-min late), not some separate NIGHT shift. A 10HR employee punching at 20:00 is no longer misclassified as a shift change — it's day-window overtime.
+  3. **Night detection threshold** — lowered from `inH >= 19` to `inH >= 18` (matches plant reality for 12HR shifts that start at 20:00; a 19:45 punch was previously misclassified as day).
+  4. **Gap 1** (is_night_shift flip): corrections can now switch a record back to `is_night_shift=0` (was one-way-only via CASE).
+  5. **Gap 2** (shift reassignment on correction): `shift_id` is now directly reassigned when a night punch is corrected to a day punch and the employee's assigned shift is day.
+  6. **Gap 3** (night pair dissolution): when a miss-punch resolution flips an evening punch to a day punch, the `night_shift_pairs` row is marked rejected and the OTHER record is reopened for Stage 6 (no longer suppressed via `is_night_out_only`), re-flagged as a miss punch if its IN/OUT is incomplete.
+  7. **Gap 4** (recalculate-metrics completeness): attendance.js `POST /recalculate-metrics` now writes all 6 metric pairs including `is_early_departure` and `is_overtime`, not just late/left-late.
+- **What's fragile:**
+  - The `night_start_time`/`night_end_time` columns are nullable. Shifts left empty will use day timings for evening punches — treating them as overtime, not a shift change. If HR adds a new shift code that needs night variants, they must populate those columns via Settings → Shifts.
+  - The night-pair dissolution block only fires when `m.isNight === 0` for the corrected record. If a correction preserves night status but changes the shift (e.g. 12HR night → 10HR night — not a real scenario today), the pair is NOT dissolved. Acceptable because the 3 current night-variant shifts share the same 20:00/08:00 timings.
+  - If `policy_config` lacks an `ot_threshold_hours` row, all three call sites fall back to 12. Change this value in one place (policy_config) — not hard-coded anywhere.
+  - Variant detection uses `shift.night_start_time` truthy check. Migration only ran for 12HR/DAY/NIGHT/DUBLE. If a legacy shift code (e.g. RSS, ABD) also acted as a rotator, HR needs to populate the columns manually.
+- **Unfinished work:** None for this task.
+- **Known issues remaining:** Pre-existing — `EmployeeProfile.jsx` AI Review "Regenerate" button shown even after error. `DeptAnalytics.jsx` overtime tab field names not tested against real production data. Part 2 mobile-responsive pass (6 files + 2 judgment calls) still queued from earlier session.
+- **Next session should:** Verify on Railway with real data that (a) 12HR employees punching 20:15 are marked 15-min late (not 12h late from comparing to day 08:00 start), (b) 10HR employees punching 20:00 stay as day overtime (not shift-changed), (c) a corrected night→day flip dissolves the night pair and re-flags the next-day OUT-only record. Sanity SQL: `SELECT code, night_start_time, night_end_time FROM shifts WHERE code IN ('12HR','10HR','9HR','DAY','NIGHT','DUBLE');`
+
+---
+
+## Section 0: Previous Session
 - **Date:** 2026-04-14 (impl) + 2026-04-15 (rebase/push/verify)
 - **Branch:** `claude/session-start-BGRNn` (pushed to `origin/main` at commit `c0ec4fa`)
 - **Last commit:** `c0ec4fa` feat: Salary Explainer — AI-powered slide-over panel

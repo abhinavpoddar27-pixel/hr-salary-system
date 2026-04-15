@@ -7,6 +7,7 @@ const { getDb, logAudit } = require('../database/db');
 const { parseEESLFile, extractEmployees, getImportSummary } = require('../services/parser');
 const { pairNightShifts, applyPairingToDb } = require('../services/nightShift');
 const { detectMissPunches, applyMissPunchFlags } = require('../services/missPunch');
+const { calcShiftMetrics } = require('../utils/shiftMetrics');
 
 function friendlyParseError(errorMsg) {
   if (!errorMsg) return 'Import failed due to an unexpected error. Please verify the file and try again.';
@@ -335,13 +336,15 @@ router.post('/upload', upload.array('files', 20), async (req, res) => {
           WHERE ap.month = ? AND ap.year = ? AND ap.company = ?
         `).all(month, year, company);
 
-        // Get all shifts for lookup
+        // Get all shifts for lookup. The employee's assigned shift (via
+        // default_shift_id or shift_code) is always used — night vs day timings
+        // come from the shift's own night_start_time/night_end_time columns,
+        // not from a separate global NIGHT shift row.
         const allShifts = db.prepare('SELECT * FROM shifts').all();
         const shiftByCode = {};
         const shiftById = {};
         for (const s of allShifts) { shiftByCode[s.code] = s; shiftById[s.id] = s; }
         const defaultDayShift = shiftByCode['DAY'] || allShifts[0];
-        const defaultNightShift = shiftByCode['NIGHT'];
 
         // Get OT threshold from policy config
         const otThresholdRow = db.prepare("SELECT value FROM policy_config WHERE key = 'ot_threshold_hours'").get();
@@ -365,108 +368,23 @@ router.post('/upload', upload.array('files', 20), async (req, res) => {
             const outTime = rec.out_time_final || rec.out_time_original;
             if (!inTime) continue;
 
-            // Calculate actual hours
-            let actualHours = null;
-            if (inTime && outTime) {
-              const [ih, im] = inTime.split(':').map(Number);
-              const [oh, om] = outTime.split(':').map(Number);
-              if (!isNaN(ih) && !isNaN(oh)) {
-                let hrs = (oh * 60 + om - (ih * 60 + im)) / 60;
-                if (hrs < 0) hrs += 24;
-                actualHours = Math.round(hrs * 100) / 100;
-              }
-            }
-
-            // Detect night shift from in_time (>= 18:00 or < 06:00)
-            const [inH] = inTime.split(':').map(Number);
-            const isNight = (!isNaN(inH) && (inH >= 19 || inH < 6)) || rec.is_night_shift === 1;
-
-            // Pick shift based on time
             const empShift = rec.default_shift_id ? shiftById[rec.default_shift_id]
                            : (rec.shift_code ? shiftByCode[rec.shift_code] : null);
-            const shift = isNight ? (defaultNightShift || empShift || defaultDayShift) : (empShift || defaultDayShift);
+            const shift = empShift || defaultDayShift;
 
-            const status = rec.status_original;
-            const isPresent = status === 'P' || status === 'WOP';
-            const inMin = inH * 60 + (parseInt(inTime.split(':')[1]) || 0);
-
-            // Detect late arrival
-            let isLate = 0, lateBy = 0;
-            if (inTime && shift && shift.start_time && isPresent) {
-              const [sh, sm] = shift.start_time.split(':').map(Number);
-              if (!isNaN(inH) && !isNaN(sh)) {
-                let diffMin = inMin - (sh * 60 + sm);
-                if (isNight && diffMin < -600) diffMin += 1440;
-                if (!isNight && diffMin < 0) diffMin = 0;
-                const grace = shift.grace_minutes || 9;
-                if (diffMin > grace) {
-                  isLate = 1;
-                  lateBy = diffMin;
-                }
-              }
-            }
-
-            // Detect early departure
-            let isEarly = 0, earlyBy = 0;
-            if (outTime && shift && shift.end_time && isPresent && status !== '½P' && status !== 'WO½P') {
-              const [oh2, om2] = outTime.split(':').map(Number);
-              const [eh, em] = shift.end_time.split(':').map(Number);
-              if (!isNaN(oh2) && !isNaN(eh)) {
-                let outMin = oh2 * 60 + om2;
-                let endMin = eh * 60 + em;
-                // Handle overnight shift end (e.g., end_time=08:00 for night shift)
-                if (isNight && endMin < 720) endMin += 1440;
-                if (isNight && outMin < 720) outMin += 1440;
-                const diffMin = endMin - outMin;
-                const grace = shift.grace_minutes || 9;
-                if (diffMin > grace) {
-                  isEarly = 1;
-                  earlyBy = diffMin;
-                }
-              }
-            }
-
-            // Detect overtime
-            let isOT = 0, otMinutes = 0;
-            if (actualHours && actualHours > otThresholdHours && isPresent) {
-              isOT = 1;
-              otMinutes = Math.round((actualHours - otThresholdHours) * 60);
-            }
-
-            // ── Late Coming Phase 1: Detect "left late" ─────────────
-            // Employee stayed 20+ minutes past their shift end time → flag
-            // for overtime context in the late-coming analytics. Purely
-            // additive — does not touch actual_hours, status, or any other
-            // pipeline-critical field. Uses a 20-minute hard threshold
-            // (separate from the shift grace used for early-departure).
-            let isLeftLate = 0, leftLateMinutes = 0;
-            if (outTime && shift && shift.end_time && isPresent) {
-              const [oh3, om3] = outTime.split(':').map(Number);
-              const [eh3, em3] = shift.end_time.split(':').map(Number);
-              if (!isNaN(oh3) && !isNaN(eh3)) {
-                let outMin = oh3 * 60 + (om3 || 0);
-                let endMin = eh3 * 60 + (em3 || 0);
-                // For overnight shifts (e.g. end=08:00) the OUT punch lands the
-                // next calendar morning — wrap both values so the delta is
-                // meaningful.
-                if (isNight) {
-                  if (endMin < 12 * 60) endMin += 24 * 60;
-                  if (outMin < 12 * 60) outMin += 24 * 60;
-                }
-                const diff = outMin - endMin;
-                if (diff >= 20) {
-                  isLeftLate = 1;
-                  leftLateMinutes = diff;
-                }
-              }
-            }
+            const m = calcShiftMetrics({
+              inTime, outTime,
+              statusOriginal: rec.status_original,
+              shift,
+              otThresholdHours
+            });
 
             updatePost.run(
-              actualHours, isLate, lateBy,
-              isEarly, earlyBy,
-              isOT, otMinutes,
-              isLeftLate, leftLateMinutes,
-              isNight ? 1 : 0,
+              m.actualHours, m.isLate, m.lateBy,
+              m.isEarly, m.earlyBy,
+              m.isOT, m.otMinutes,
+              m.isLeftLate, m.leftLateMinutes,
+              m.isNight,
               shift?.id || null, shift?.name || null,
               rec.id
             );

@@ -37,7 +37,8 @@ router.post('/shifts', (req, res) => {
     return res.status(403).json({ success: false, error: 'HR or admin access required' });
   }
   const db = getDb();
-  const { name, code, startTime, durationHours, graceMinutes, breakMinutes, minHoursFullDay, minHoursHalfDay } = req.body;
+  const { name, code, startTime, durationHours, graceMinutes, breakMinutes,
+          minHoursFullDay, minHoursHalfDay, nightStartTime, nightEndTime } = req.body;
 
   if (!name || !code || !startTime || durationHours === undefined || durationHours === null) {
     return res.status(400).json({ success: false, error: 'name, code, startTime, and durationHours are required' });
@@ -56,11 +57,12 @@ router.post('/shifts', (req, res) => {
   const finalGrace = req.user?.role === 'admin' ? (graceMinutes ?? 9) : 9;
 
   const result = db.prepare(
-    'INSERT INTO shifts (name, code, start_time, end_time, grace_minutes, is_overnight, break_minutes, min_hours_full_day, min_hours_half_day, duration_hours) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
+    'INSERT INTO shifts (name, code, start_time, end_time, grace_minutes, is_overnight, break_minutes, min_hours_full_day, min_hours_half_day, duration_hours, night_start_time, night_end_time) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
   ).run(
     name, code, startTime, endTime, finalGrace, autoOvernight,
     breakMinutes || 0, minHoursFullDay || 10, minHoursHalfDay || 4,
-    parseFloat(durationHours)
+    parseFloat(durationHours),
+    nightStartTime || null, nightEndTime || null
   );
   res.json({ success: true, id: result.lastInsertRowid, endTime });
 });
@@ -73,7 +75,8 @@ router.put('/shifts/:id', (req, res) => {
   const existing = db.prepare('SELECT * FROM shifts WHERE id = ?').get(req.params.id);
   if (!existing) return res.status(404).json({ success: false, error: 'Shift not found' });
 
-  const { name, startTime, durationHours, graceMinutes, breakMinutes, minHoursFullDay, minHoursHalfDay } = req.body;
+  const { name, startTime, durationHours, graceMinutes, breakMinutes,
+          minHoursFullDay, minHoursHalfDay, nightStartTime, nightEndTime } = req.body;
 
   // Use incoming values if provided, fall back to existing values otherwise.
   const newStart = startTime !== undefined ? startTime : existing.start_time;
@@ -92,8 +95,17 @@ router.put('/shifts/:id', (req, res) => {
     ? graceMinutes
     : existing.grace_minutes;
 
+  // Night variant: only overwrite when the caller explicitly sends a field.
+  // `undefined` = leave existing alone, `null` / empty string = clear to NULL.
+  const newNightStart = nightStartTime !== undefined
+    ? (nightStartTime || null)
+    : existing.night_start_time;
+  const newNightEnd = nightEndTime !== undefined
+    ? (nightEndTime || null)
+    : existing.night_end_time;
+
   db.prepare(
-    'UPDATE shifts SET name=?, start_time=?, end_time=?, grace_minutes=?, is_overnight=?, break_minutes=?, min_hours_full_day=?, min_hours_half_day=?, duration_hours=? WHERE id=?'
+    'UPDATE shifts SET name=?, start_time=?, end_time=?, grace_minutes=?, is_overnight=?, break_minutes=?, min_hours_full_day=?, min_hours_half_day=?, duration_hours=?, night_start_time=?, night_end_time=? WHERE id=?'
   ).run(
     name || existing.name,
     newStart,
@@ -104,6 +116,8 @@ router.put('/shifts/:id', (req, res) => {
     minHoursFullDay !== undefined ? minHoursFullDay : existing.min_hours_full_day,
     minHoursHalfDay !== undefined ? minHoursHalfDay : existing.min_hours_half_day,
     newDuration,
+    newNightStart,
+    newNightEnd,
     req.params.id
   );
   res.json({ success: true, endTime: newEnd });

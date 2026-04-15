@@ -781,6 +781,13 @@ function initSchema(db) {
   // shifts: add duration_hours column for auto-calculated end time (Late Coming Phase 1)
   safeAddColumn('shifts', 'duration_hours', 'REAL');
 
+  // shifts: night-variant columns so a single shift row can carry both its day
+  // and night time windows (see utils/shiftMetrics.js). NULL on these columns
+  // means "day-only" — evening punches on such shifts are overtime, not a
+  // shift change. Populated below for 12HR / DAY / NIGHT / DUBLE.
+  safeAddColumn('shifts', 'night_start_time', 'TEXT');
+  safeAddColumn('shifts', 'night_end_time', 'TEXT');
+
   // shifts: update grace to 9 minutes for ALL shifts (per actual plant policy, Late Coming Phase 1)
   db.prepare("UPDATE shifts SET grace_minutes = 9 WHERE grace_minutes != 9").run();
 
@@ -811,6 +818,29 @@ function initSchema(db) {
     }
   } catch (e) {
     console.warn('[schema] duration_hours backfill failed:', e.message);
+  }
+
+  // One-time migration: populate night_start_time / night_end_time on the
+  // 12-hour family of shifts (12HR, DAY, NIGHT, DUBLE). 10HR / 9HR / HK7:30
+  // are deliberately LEFT NULL — on those shifts a late evening punch is
+  // overtime against the day window, not a shift change. Gated via
+  // policy_config so this runs exactly once per database.
+  const nightVariantDone = db.prepare(
+    "SELECT value FROM policy_config WHERE key = 'migration_shift_night_variants_v1'"
+  ).get();
+  if (!nightVariantDone) {
+    try {
+      db.prepare("UPDATE shifts SET night_start_time = '20:00', night_end_time = '08:00' WHERE code = '12HR'").run();
+      db.prepare("UPDATE shifts SET night_start_time = '20:00', night_end_time = '08:00' WHERE code = 'DAY'").run();
+      db.prepare("UPDATE shifts SET night_start_time = '20:00', night_end_time = '08:00' WHERE code = 'NIGHT'").run();
+      db.prepare("UPDATE shifts SET night_start_time = '20:00', night_end_time = '08:00' WHERE code = 'DUBLE'").run();
+      db.prepare(
+        "INSERT OR REPLACE INTO policy_config (key, value, description) VALUES ('migration_shift_night_variants_v1', '1', 'Populated night_start_time/night_end_time for 12HR/DAY/NIGHT/DUBLE shifts')"
+      ).run();
+      console.log('[MIGRATION] Shift night variants populated for 12HR, DAY, NIGHT, DUBLE');
+    } catch (e) {
+      console.warn('[MIGRATION] Shift night variant migration failed:', e.message);
+    }
   }
 
   // PF/ESI: disabled by default — set all existing records to 0 unless explicitly set via master import

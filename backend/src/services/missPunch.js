@@ -5,6 +5,8 @@
  * ~145 miss punch cases per month expected from actual data.
  */
 
+const { calcShiftMetrics } = require('../utils/shiftMetrics');
+
 const PRESENT_STATUSES = ['P', 'WOP', '½P', 'WO½P'];
 
 /**
@@ -95,126 +97,6 @@ function applyMissPunchFlags(db, missPunches) {
 }
 
 /**
- * Recalculate shift-derived metrics for a single attendance record using the
- * corrected in/out times. Mirrors the canonical post-import calculation block
- * in `routes/import.js`. Called by `resolveMissPunch()` so that HR corrections
- * don't leave `is_late_arrival` / `is_early_departure` / `is_overtime` /
- * `is_left_late` frozen at their pre-correction values.
- *
- * Private — not exported.
- */
-function recalcShiftMetrics(db, recordId, inTime, outTime, statusOriginal) {
-  if (!inTime) return; // Can't calculate without IN time
-
-  // 1. Look up the employee's shift
-  const rec = db.prepare(`
-    SELECT ap.employee_code, ap.is_night_shift, e.default_shift_id
-    FROM attendance_processed ap
-    LEFT JOIN employees e ON ap.employee_code = e.code
-    WHERE ap.id = ?
-  `).get(recordId);
-  if (!rec) return;
-
-  const allShifts = db.prepare('SELECT * FROM shifts').all();
-  const shiftById = {};
-  const shiftByCode = {};
-  for (const s of allShifts) { shiftById[s.id] = s; shiftByCode[s.code] = s; }
-  const defaultDayShift = shiftByCode['DAY'] || allShifts[0];
-  const defaultNightShift = shiftByCode['NIGHT'];
-
-  const [inH, inM_] = inTime.split(':').map(Number);
-  const isNight = (!isNaN(inH) && (inH >= 19 || inH < 6)) || rec.is_night_shift === 1;
-  const empShift = rec.default_shift_id ? shiftById[rec.default_shift_id] : null;
-  const shift = isNight ? (defaultNightShift || empShift || defaultDayShift) : (empShift || defaultDayShift);
-
-  const isPresent = statusOriginal === 'P' || statusOriginal === 'WOP';
-  const inMin = inH * 60 + (parseInt(inTime.split(':')[1]) || 0);
-
-  // 2. Late arrival
-  let isLate = 0, lateBy = 0;
-  if (inTime && shift && shift.start_time && isPresent) {
-    const [sh, sm] = shift.start_time.split(':').map(Number);
-    if (!isNaN(inH) && !isNaN(sh)) {
-      let diffMin = inMin - (sh * 60 + sm);
-      if (isNight && diffMin < -600) diffMin += 1440;
-      if (!isNight && diffMin < 0) diffMin = 0;
-      const grace = shift.grace_minutes || 9;
-      if (diffMin > grace) { isLate = 1; lateBy = diffMin; }
-    }
-  }
-
-  // 3. Early departure
-  let isEarly = 0, earlyBy = 0;
-  if (outTime && shift && shift.end_time && isPresent
-      && statusOriginal !== '½P' && statusOriginal !== 'WO½P') {
-    const [oh, om] = outTime.split(':').map(Number);
-    const [eh, em] = shift.end_time.split(':').map(Number);
-    if (!isNaN(oh) && !isNaN(eh)) {
-      let outMin = oh * 60 + om;
-      let endMin = eh * 60 + em;
-      if (isNight && endMin < 720) endMin += 1440;
-      if (isNight && outMin < 720) outMin += 1440;
-      const diffMin = endMin - outMin;
-      const grace = shift.grace_minutes || 9;
-      if (diffMin > grace) { isEarly = 1; earlyBy = diffMin; }
-    }
-  }
-
-  // 4. Overtime
-  let isOT = 0, otMinutes = 0;
-  if (inTime && outTime && isPresent) {
-    const [ih2, im2] = inTime.split(':').map(Number);
-    const [oh2, om2] = outTime.split(':').map(Number);
-    let hrs = (oh2 * 60 + om2 - (ih2 * 60 + im2)) / 60;
-    if (hrs < 0) hrs += 24;
-    const otThresholdRow = db.prepare(
-      "SELECT value FROM policy_config WHERE key = 'ot_threshold_hours'"
-    ).get();
-    const otThreshold = parseFloat(otThresholdRow?.value || '12');
-    if (hrs > otThreshold) { isOT = 1; otMinutes = Math.round((hrs - otThreshold) * 60); }
-  }
-
-  // 5. Left late (20+ min past shift end)
-  let isLeftLate = 0, leftLateMinutes = 0;
-  if (outTime && shift && shift.end_time && isPresent) {
-    const [oh3, om3] = outTime.split(':').map(Number);
-    const [eh3, em3] = shift.end_time.split(':').map(Number);
-    if (!isNaN(oh3) && !isNaN(eh3)) {
-      let outMin = oh3 * 60 + (om3 || 0);
-      let endMin = eh3 * 60 + (em3 || 0);
-      if (isNight) {
-        if (endMin < 12 * 60) endMin += 24 * 60;
-        if (outMin < 12 * 60) outMin += 24 * 60;
-      }
-      const diff = outMin - endMin;
-      if (diff >= 20) { isLeftLate = 1; leftLateMinutes = diff; }
-    }
-  }
-
-  // 6. Write all 6 metric pairs + shift assignment in one UPDATE
-  db.prepare(`
-    UPDATE attendance_processed SET
-      is_late_arrival = ?, late_by_minutes = ?,
-      is_early_departure = ?, early_by_minutes = ?,
-      is_overtime = ?, overtime_minutes = ?,
-      is_left_late = ?, left_late_minutes = ?,
-      is_night_shift = CASE WHEN ? = 1 THEN 1 ELSE is_night_shift END,
-      shift_id = COALESCE(shift_id, ?),
-      shift_detected = COALESCE(shift_detected, ?)
-    WHERE id = ?
-  `).run(
-    isLate, lateBy,
-    isEarly, earlyBy,
-    isOT, otMinutes,
-    isLeftLate, leftLateMinutes,
-    isNight ? 1 : 0,
-    shift?.id || null,
-    shift?.name || null,
-    recordId
-  );
-}
-
-/**
  * Resolve a miss punch correction
  *
  * April 2026: Every HR resolution now enters a "pending" finance-verification
@@ -267,10 +149,132 @@ function resolveMissPunch(db, recordId, { inTime, outTime, source, remark, conve
   // in day_calculations.late_count, late-coming analytics, and potential salary
   // deductions. See: Nandini 60131 Apr 2026 — 163-min stale late flag after
   // correcting IN from 10:43 → 07:55.
+  //
+  // Uses the shared calcShiftMetrics utility — same formula as import.js and
+  // attendance.js recalculate-metrics. Variant-aware: employees on shifts with
+  // night_start_time use those timings for evening punches.
+  //
+  // Gap 1+2 fix: shift_id / is_night_shift are now DIRECTLY assigned (no
+  // COALESCE / one-way CASE). When a correction flips an evening punch to a
+  // day-time punch, is_night_shift goes back to 0 and the day shift is
+  // recorded — previously both stayed frozen to the original detection.
+  //
+  // Gap 3 fix: if this record was part of a night_shift_pairs row and the
+  // corrected times are no longer a night shift, dissolve the pair and
+  // re-flag the OTHER half of the pair as a miss-punch.
   if (!convertToLeave) {
     const finalIn = updates.in_time_final || existing.in_time_final || existing.in_time_original;
     const finalOut = updates.out_time_final || existing.out_time_final || existing.out_time_original;
-    recalcShiftMetrics(db, recordId, finalIn, finalOut, existing.status_original);
+
+    if (finalIn) {
+      // Look up employee's assigned shift (no NIGHT fallback — variant-aware)
+      const empRow = db.prepare(`
+        SELECT e.default_shift_id
+        FROM attendance_processed ap
+        LEFT JOIN employees e ON ap.employee_code = e.code
+        WHERE ap.id = ?
+      `).get(recordId);
+
+      const allShifts = db.prepare('SELECT * FROM shifts').all();
+      const shiftById = {};
+      const shiftByCode = {};
+      for (const s of allShifts) { shiftById[s.id] = s; shiftByCode[s.code] = s; }
+      const defaultDayShift = shiftByCode['DAY'] || allShifts[0];
+      const empShift = empRow?.default_shift_id ? shiftById[empRow.default_shift_id] : null;
+      const shift = empShift || defaultDayShift;
+
+      const otThresholdRow = db.prepare(
+        "SELECT value FROM policy_config WHERE key = 'ot_threshold_hours'"
+      ).get();
+      const otThreshold = parseFloat(otThresholdRow?.value || '12');
+
+      const m = calcShiftMetrics({
+        inTime: finalIn,
+        outTime: finalOut,
+        statusOriginal: existing.status_original,
+        shift,
+        otThresholdHours: otThreshold
+      });
+
+      // DIRECT assignment — corrections can flip night→day, shift can change
+      db.prepare(`
+        UPDATE attendance_processed SET
+          is_late_arrival = ?, late_by_minutes = ?,
+          is_early_departure = ?, early_by_minutes = ?,
+          is_overtime = ?, overtime_minutes = ?,
+          is_left_late = ?, left_late_minutes = ?,
+          is_night_shift = ?,
+          shift_id = ?,
+          shift_detected = ?
+        WHERE id = ?
+      `).run(
+        m.isLate, m.lateBy,
+        m.isEarly, m.earlyBy,
+        m.isOT, m.otMinutes,
+        m.isLeftLate, m.leftLateMinutes,
+        m.isNight,
+        m.shiftId,
+        m.shiftName,
+        recordId
+      );
+
+      // ── Gap 3: Night pair dissolution ──
+      // If this record was paired as a night shift and the corrected punch is
+      // no longer a night punch, dissolve the pair so the OTHER record is no
+      // longer suppressed from Stage 6.
+      if (m.isNight === 0) {
+        const pair = db.prepare(`
+          SELECT * FROM night_shift_pairs
+          WHERE (in_record_id = ? OR out_record_id = ?)
+            AND is_rejected = 0
+          ORDER BY id DESC LIMIT 1
+        `).get(recordId, recordId);
+
+        if (pair) {
+          db.prepare(`
+            UPDATE night_shift_pairs
+            SET is_rejected = 1, is_confirmed = 0
+            WHERE id = ?
+          `).run(pair.id);
+
+          const otherId = pair.in_record_id === recordId ? pair.out_record_id : pair.in_record_id;
+          if (otherId) {
+            // Clear night-pair flags on the other record
+            db.prepare(`
+              UPDATE attendance_processed
+              SET is_night_out_only = 0,
+                  night_pair_date = NULL,
+                  night_pair_confidence = NULL
+              WHERE id = ?
+            `).run(otherId);
+
+            // Re-flag the other record as a miss punch if its IN/OUT is incomplete
+            const other = db.prepare('SELECT * FROM attendance_processed WHERE id = ?').get(otherId);
+            if (other && PRESENT_STATUSES.includes(other.status_final || other.status_original)) {
+              const oIn = other.in_time_final || other.in_time_original;
+              const oOut = other.out_time_final || other.out_time_original;
+              let otherIssue = null;
+              if (!oIn && !oOut) otherIssue = 'NO_PUNCH';
+              else if (!oIn && oOut) otherIssue = 'MISSING_IN';
+              else if (oIn && !oOut) {
+                const h = parseInt(oIn.split(':')[0]);
+                otherIssue = h >= 18 ? 'NIGHT_UNPAIRED' : 'MISSING_OUT';
+              }
+              if (otherIssue) {
+                db.prepare(`
+                  UPDATE attendance_processed
+                  SET is_miss_punch = 1, miss_punch_type = ?, stage_2_done = 0
+                  WHERE id = ?
+                `).run(otherIssue, otherId);
+              }
+            }
+
+            logAudit('night_shift_pairs', pair.id, 'is_rejected', '0', '1', 'Stage 2',
+              `Pair dissolved: record ${recordId} corrected to non-night`);
+          }
+        }
+      }
+    }
   }
 
   // Audit log

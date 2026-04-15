@@ -3,6 +3,7 @@ const router = express.Router();
 const { getDb, logAudit } = require('../database/db');
 const { resolveMissPunch, bulkResolveMissPunches } = require('../services/missPunch');
 const { applyPairingToDb } = require('../services/nightShift');
+const { calcShiftMetrics } = require('../utils/shiftMetrics');
 
 /**
  * GET /api/attendance/processed
@@ -550,23 +551,31 @@ router.post('/recalculate-metrics', (req, res) => {
     WHERE ap.month = ? AND ap.year = ?
   `).all(month, year);
 
+  // The employee's assigned shift is always used; night vs day timings come
+  // from the shift's own night_start_time/night_end_time columns (see
+  // utils/shiftMetrics.js). No global NIGHT fallback.
   const allShifts = db.prepare('SELECT * FROM shifts').all();
   const shiftByCode = {};
   const shiftById = {};
   for (const s of allShifts) { shiftByCode[s.code] = s; shiftById[s.id] = s; }
   const defaultDayShift = shiftByCode['DAY'] || allShifts[0];
-  const defaultNightShift = shiftByCode['NIGHT'];
 
-  // Late Coming Phase 1: also persist is_left_late / left_late_minutes here so
-  // HR can re-run the recalc after assigning shifts and see the new data
-  // reflected in analytics without a full re-import.
+  const otThresholdRow = db.prepare("SELECT value FROM policy_config WHERE key = 'ot_threshold_hours'").get();
+  const otThresholdHours = parseFloat(otThresholdRow?.value || '12');
+
+  // Full recalculation — overwrite late/early/OT/left-late/night flags
+  // directly (direct assignment, not one-way CASE) so corrections that
+  // flip a record from night to day can actually clear the night flag.
+  // shift_id / shift_detected preserve any HR manual override via COALESCE.
   const updateStmt = db.prepare(`
     UPDATE attendance_processed SET
       actual_hours = COALESCE(?, actual_hours),
       is_late_arrival = ?, late_by_minutes = ?,
+      is_early_departure = ?, early_by_minutes = ?,
+      is_overtime = ?, overtime_minutes = ?,
       is_left_late = ?, left_late_minutes = ?,
-      is_night_shift = CASE WHEN ? = 1 THEN 1 ELSE is_night_shift END,
-      shift_id = ?, shift_detected = ?
+      is_night_shift = ?,
+      shift_id = COALESCE(shift_id, ?), shift_detected = COALESCE(shift_detected, ?)
     WHERE id = ?
   `);
 
@@ -578,64 +587,26 @@ router.post('/recalculate-metrics', (req, res) => {
       const outTime = rec.out_time_final || rec.out_time_original;
       if (!inTime) continue;
 
-      let actualHours = null;
-      if (inTime && outTime) {
-        const [ih, im] = inTime.split(':').map(Number);
-        const [oh, om] = outTime.split(':').map(Number);
-        if (!isNaN(ih) && !isNaN(oh)) {
-          let hrs = (oh * 60 + om - (ih * 60 + im)) / 60;
-          if (hrs < 0) hrs += 24;
-          actualHours = Math.round(hrs * 100) / 100;
-        }
-      }
-
-      const [inH] = inTime.split(':').map(Number);
-      const isNight = (!isNaN(inH) && (inH >= 19 || inH < 6)) || rec.is_night_shift === 1;
-
       const empShift = rec.default_shift_id ? shiftById[rec.default_shift_id]
                      : (rec.shift_code ? shiftByCode[rec.shift_code] : null);
-      const shift = isNight ? (defaultNightShift || empShift || defaultDayShift) : (empShift || defaultDayShift);
+      const shift = empShift || defaultDayShift;
 
-      let isLate = 0, lateBy = 0;
-      const status = rec.status_original;
-      const isPresent = status === 'P' || status === 'WOP';
-      if (inTime && shift && shift.start_time && isPresent) {
-        const [sh, sm] = shift.start_time.split(':').map(Number);
-        if (!isNaN(inH) && !isNaN(sh)) {
-          let diffMin = (inH * 60 + (parseInt(inTime.split(':')[1]) || 0)) - (sh * 60 + sm);
-          if (isNight && diffMin < -600) diffMin += 1440;
-          if (!isNight && diffMin < 0) diffMin = 0;
-          const grace = shift.grace_minutes || 9;
-          if (diffMin > grace) {
-            isLate = 1;
-            lateBy = diffMin;
-          }
-        }
-      }
-
-      // Late Coming Phase 1: left-late detection (20+ min past shift end).
-      let isLeftLate = 0, leftLateMinutes = 0;
-      if (outTime && shift && shift.end_time && isPresent) {
-        const [oh3, om3] = outTime.split(':').map(Number);
-        const [eh3, em3] = shift.end_time.split(':').map(Number);
-        if (!isNaN(oh3) && !isNaN(eh3)) {
-          let outMin = oh3 * 60 + (om3 || 0);
-          let endMin = eh3 * 60 + (em3 || 0);
-          if (isNight) {
-            if (endMin < 12 * 60) endMin += 24 * 60;
-            if (outMin < 12 * 60) outMin += 24 * 60;
-          }
-          const diff = outMin - endMin;
-          if (diff >= 20) {
-            isLeftLate = 1;
-            leftLateMinutes = diff;
-          }
-        }
-      }
+      const m = calcShiftMetrics({
+        inTime, outTime,
+        statusOriginal: rec.status_original,
+        shift,
+        otThresholdHours
+      });
 
       updateStmt.run(
-        actualHours, isLate, lateBy, isLeftLate, leftLateMinutes,
-        isNight ? 1 : 0, shift?.id || null, shift?.name || null, rec.id
+        m.actualHours,
+        m.isLate, m.lateBy,
+        m.isEarly, m.earlyBy,
+        m.isOT, m.otMinutes,
+        m.isLeftLate, m.leftLateMinutes,
+        m.isNight,
+        shift?.id || null, shift?.name || null,
+        rec.id
       );
       updated++;
     }
