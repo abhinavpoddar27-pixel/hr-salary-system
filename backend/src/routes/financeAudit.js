@@ -64,6 +64,13 @@ router.get('/report', (req, res) => {
         sc.pf_employee, sc.esi_employee, sc.professional_tax,
         sc.advance_recovery, sc.loan_recovery, sc.total_deductions,
         sc.late_coming_deduction,
+        -- Phase 3: leave buckets sourced from salary_computations
+        COALESCE(sc.cl_days, 0) AS cl_days,
+        COALESCE(sc.el_days, 0) AS el_days,
+        COALESCE(sc.lwp_days, 0) AS lwp_days,
+        COALESCE(sc.od_days, 0) AS od_days,
+        COALESCE(sc.short_leave_days, 0) AS short_leave_days,
+        COALESCE(sc.uninformed_absent_days, 0) AS uninformed_absent_days,
         sc.gross_changed, sc.salary_held, sc.hold_reason,
         sc.is_finalised,
         dcorr.id as correction_id, dcorr.correction_delta, dcorr.corrected_days as corrected_payable_days,
@@ -164,6 +171,13 @@ router.get('/report', (req, res) => {
         lateComingDeduction: emp.late_coming_deduction || 0,
         lateDeductionApprovedDays: Number(emp.late_deduction_approved_days || 0),
         lateDeductionStatus: emp.late_deduction_status || null,
+        // Phase 3 — leave buckets
+        clDays: Number(emp.cl_days || 0),
+        elDays: Number(emp.el_days || 0),
+        lwpDays: Number(emp.lwp_days || 0),
+        odDays: Number(emp.od_days || 0),
+        shortLeaveDays: Number(emp.short_leave_days || 0),
+        uninformedAbsentDays: Number(emp.uninformed_absent_days || 0),
         // Comparison
         salaryStatus,
         prevGross: prev?.prev_gross || null,
@@ -1277,6 +1291,48 @@ router.get('/readiness-check', (req, res) => {
         severity: 'WARNING',
         detail: `${earlyExitUnapplied.cnt} approved early exit deduction(s) need salary recomputation`
       });
+    }
+  } catch {}
+
+  // WARNING: compensatory-off requests pending finance review (Phase 3)
+  try {
+    const pendingCompOff = db.prepare(`
+      SELECT COUNT(*) as cnt FROM compensatory_off_requests
+      WHERE month = ? AND year = ? AND finance_status = 'pending'
+    `).get(month, year);
+    if (pendingCompOff.cnt > 0) {
+      warnings.push({
+        type: 'COMP_OFF_PENDING',
+        count: pendingCompOff.cnt,
+        severity: 'WARNING',
+        detail: `${pendingCompOff.cnt} comp-off request(s) awaiting finance review`
+      });
+    } else {
+      passed.push({ type: 'COMP_OFF_REVIEWED', severity: 'OK' });
+    }
+  } catch {}
+
+  // WARNING: leave applications still pending approval that overlap this month (Phase 3)
+  try {
+    const monthStrChk = String(month).padStart(2, '0');
+    const monthStartChk = `${year}-${monthStrChk}-01`;
+    const lastDayChk = new Date(year, month, 0).getDate();
+    const monthEndChk = `${year}-${monthStrChk}-${String(lastDayChk).padStart(2,'0')}`;
+    const pendingLeaves = db.prepare(`
+      SELECT COUNT(*) as cnt FROM leave_applications
+      WHERE status = 'Pending'
+        AND start_date <= ?
+        AND end_date >= ?
+    `).get(monthEndChk, monthStartChk);
+    if (pendingLeaves.cnt > 0) {
+      warnings.push({
+        type: 'LEAVE_APPLICATIONS_PENDING',
+        count: pendingLeaves.cnt,
+        severity: 'WARNING',
+        detail: `${pendingLeaves.cnt} leave application(s) overlapping this month awaiting approval`
+      });
+    } else {
+      passed.push({ type: 'LEAVE_APPLICATIONS_REVIEWED', severity: 'OK' });
     }
   } catch {}
 

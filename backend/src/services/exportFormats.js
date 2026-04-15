@@ -38,6 +38,13 @@ function generatePFECR(db, month, year, company) {
     const eps = Math.round(emp.eps || 0);
     const erPFDiff = Math.round((emp.pf_employer || 0) - (emp.eps || 0));
     // NCP days = calendar days - payable days (excluding sundays/holidays that are non-working)
+    // Leave Management Phase 3 (April 2026): payable_days already reflects EL / OD
+    // leave restorations from Stage 6 (EL decrements absences; OD credits present
+    // on absent working days). Therefore NCP is computed directly from payable_days
+    // with no separate leave adjustment here — the leave post-processing in
+    // dayCalculation.js is the single source of truth. CL / SL / LWP do NOT
+    // increase payable_days (absence stays absent, just reclassified), so NCP
+    // correctly stays high for unpaid-leave employees — matching PF rules.
     const calendarDays = emp.total_calendar_days || 30;
     const ncpDays = Math.max(0, Math.round(calendarDays - (emp.total_sundays || 0) - (emp.total_holidays || 0) - (emp.payable_days || 0)));
     const refund = 0;

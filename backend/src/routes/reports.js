@@ -1,7 +1,17 @@
 const express = require('express');
 const router = express.Router();
+const XLSX = require('xlsx');
 const { getDb } = require('../database/db');
 const { generatePFECR, generateESIFile, generateBankFile } = require('../services/exportFormats');
+
+// Role gate — HR / finance / admin may read the leave register.
+function requireHrFinanceOrAdmin(req, res, next) {
+  const role = req.user?.role;
+  if (role !== 'hr' && role !== 'finance' && role !== 'admin') {
+    return res.status(403).json({ success: false, error: 'HR, finance, or admin access required' });
+  }
+  next();
+}
 
 // GET monthly attendance summary
 router.get('/attendance-summary', (req, res) => {
@@ -416,6 +426,208 @@ router.get('/department-payroll', (req, res) => {
   } catch (err) {
     console.error('Department payroll error:', err.message);
     res.status(500).json({ success: false, error: 'Failed to compute department payroll: ' + err.message });
+  }
+});
+
+// ─── Leave Register (April 2026, Phase 3) ─────────────────────────────────
+// GET /leave-register?format=monthly|annual&month=MM&year=YYYY[&company=...][&download=xlsx]
+//
+// • monthly  — one row per employee for the given month; pulls CL/EL/LWP/OD
+//              /short-leave/uninformed-absent straight off day_calculations
+//              (already populated by the Stage-6 leave post-processing).
+// • annual   — one row per employee for the given year; CL/EL opening /
+//              accrued / used / lapsed / closing comes from
+//              leave_accrual_ledger (closing = latest month's closing),
+//              LWP/OD/short-leave/uninformed are summed across
+//              day_calculations for the year.
+//
+// Pass ?download=xlsx to stream an XLSX file. Otherwise responds with JSON.
+router.get('/leave-register', requireHrFinanceOrAdmin, (req, res) => {
+  try {
+    const db = getDb();
+    const { format = 'monthly', month, year, company, download } = req.query;
+    if (!year) return res.status(400).json({ success: false, error: 'year is required' });
+    if (format === 'monthly' && !month) {
+      return res.status(400).json({ success: false, error: 'month is required for monthly format' });
+    }
+    if (format !== 'monthly' && format !== 'annual') {
+      return res.status(400).json({ success: false, error: "format must be 'monthly' or 'annual'" });
+    }
+
+    let rows = [];
+    let headers = [];
+    let sheetName = '';
+    let filename = '';
+
+    if (format === 'monthly') {
+      const params = [parseInt(month), parseInt(year)];
+      let companyClause = '';
+      if (company) { companyClause = 'AND dc.company = ?'; params.push(company); }
+
+      rows = db.prepare(`
+        SELECT dc.employee_code,
+               COALESCE(e.name, dc.employee_code) AS name,
+               e.department, e.designation, dc.company,
+               COALESCE(dc.cl_used, 0)           AS cl_used,
+               COALESCE(dc.el_used, 0)           AS el_used,
+               COALESCE(dc.lop_days, 0)          AS lwp_days,
+               COALESCE(dc.od_days, 0)           AS od_days,
+               COALESCE(dc.short_leave_days, 0)  AS short_leave_days,
+               COALESCE(dc.uninformed_absent, 0) AS uninformed_absent,
+               COALESCE(dc.total_payable_days, 0) AS payable_days,
+               COALESCE(dc.days_absent, 0)       AS days_absent
+        FROM day_calculations dc
+        LEFT JOIN employees e ON dc.employee_code = e.code
+        WHERE dc.month = ? AND dc.year = ?
+          ${companyClause}
+        ORDER BY e.department, e.name
+      `).all(...params);
+
+      headers = [
+        'Employee Code', 'Name', 'Department', 'Designation', 'Company',
+        'CL Used', 'EL Used', 'LWP Days', 'OD Days',
+        'Short Leave Days', 'Uninformed Absent', 'Days Absent', 'Payable Days'
+      ];
+      sheetName = 'Leave Register (Monthly)';
+      filename = `leave_register_monthly_${year}_${String(month).padStart(2, '0')}.xlsx`;
+    } else {
+      // annual
+      const params = [parseInt(year)];
+      let companyClause = '';
+      if (company) { companyClause = 'AND dc.company = ?'; params.push(company); }
+
+      const aggregates = db.prepare(`
+        SELECT dc.employee_code,
+               COALESCE(e.name, dc.employee_code) AS name,
+               e.department, e.designation, dc.company,
+               SUM(COALESCE(dc.lop_days, 0))          AS lwp_days,
+               SUM(COALESCE(dc.od_days, 0))           AS od_days,
+               SUM(COALESCE(dc.short_leave_days, 0))  AS short_leave_days,
+               SUM(COALESCE(dc.uninformed_absent, 0)) AS uninformed_absent,
+               SUM(COALESCE(dc.cl_used, 0))           AS cl_used_ytd,
+               SUM(COALESCE(dc.el_used, 0))           AS el_used_ytd
+        FROM day_calculations dc
+        LEFT JOIN employees e ON dc.employee_code = e.code
+        WHERE dc.year = ?
+          ${companyClause}
+        GROUP BY dc.employee_code, e.name, e.department, e.designation, dc.company
+        ORDER BY e.department, e.name
+      `).all(...params);
+
+      // Fetch per-employee CL / EL accrual ledger once for the year.
+      // Opening = Jan's opening, closing = latest month's closing.
+      // Accrued / used / lapsed = sums across the year.
+      const ledger = db.prepare(`
+        SELECT employee_code, leave_type,
+               SUM(accrued)  AS accrued_total,
+               SUM(used)     AS used_total,
+               SUM(lapsed)   AS lapsed_total,
+               MIN(month)    AS first_month,
+               MAX(month)    AS last_month
+        FROM leave_accrual_ledger
+        WHERE year = ?
+        GROUP BY employee_code, leave_type
+      `).all(parseInt(year));
+
+      const firstMonthStmt = db.prepare(`
+        SELECT opening_balance FROM leave_accrual_ledger
+        WHERE employee_code = ? AND year = ? AND leave_type = ? AND month = ?
+      `);
+      const lastMonthStmt = db.prepare(`
+        SELECT closing_balance FROM leave_accrual_ledger
+        WHERE employee_code = ? AND year = ? AND leave_type = ? AND month = ?
+      `);
+
+      const ledgerMap = {};
+      for (const l of ledger) {
+        const key = l.employee_code;
+        if (!ledgerMap[key]) ledgerMap[key] = {};
+        const opening = firstMonthStmt.get(l.employee_code, parseInt(year), l.leave_type, l.first_month);
+        const closing = lastMonthStmt.get(l.employee_code, parseInt(year), l.leave_type, l.last_month);
+        ledgerMap[key][l.leave_type] = {
+          opening: opening?.opening_balance || 0,
+          accrued: l.accrued_total || 0,
+          used: l.used_total || 0,
+          lapsed: l.lapsed_total || 0,
+          closing: closing?.closing_balance || 0
+        };
+      }
+
+      rows = aggregates.map(a => {
+        const lg = ledgerMap[a.employee_code] || {};
+        const cl = lg.CL || { opening: 0, accrued: 0, used: a.cl_used_ytd || 0, lapsed: 0, closing: 0 };
+        const el = lg.EL || { opening: 0, accrued: 0, used: a.el_used_ytd || 0, lapsed: 0, closing: 0 };
+        return {
+          employee_code: a.employee_code,
+          name: a.name,
+          department: a.department,
+          designation: a.designation,
+          company: a.company,
+          cl_opening: cl.opening, cl_accrued: cl.accrued,
+          cl_used: cl.used,       cl_lapsed: cl.lapsed,  cl_closing: cl.closing,
+          el_opening: el.opening, el_accrued: el.accrued,
+          el_used: el.used,       el_lapsed: el.lapsed,  el_closing: el.closing,
+          lwp_days: a.lwp_days || 0,
+          od_days: a.od_days || 0,
+          short_leave_days: a.short_leave_days || 0,
+          uninformed_absent: a.uninformed_absent || 0
+        };
+      });
+
+      headers = [
+        'Employee Code', 'Name', 'Department', 'Designation', 'Company',
+        'CL Opening', 'CL Accrued', 'CL Used', 'CL Lapsed', 'CL Closing',
+        'EL Opening', 'EL Accrued', 'EL Used', 'EL Lapsed', 'EL Closing',
+        'LWP Days (YTD)', 'OD Days (YTD)', 'Short Leave Days (YTD)', 'Uninformed Absent (YTD)'
+      ];
+      sheetName = 'Leave Register (Annual)';
+      filename = `leave_register_annual_${year}.xlsx`;
+    }
+
+    if (String(download).toLowerCase() === 'xlsx') {
+      const data = [headers];
+      for (const r of rows) {
+        if (format === 'monthly') {
+          data.push([
+            r.employee_code, r.name, r.department || '', r.designation || '', r.company || '',
+            Number(r.cl_used) || 0, Number(r.el_used) || 0, Number(r.lwp_days) || 0,
+            Number(r.od_days) || 0, Number(r.short_leave_days) || 0,
+            Number(r.uninformed_absent) || 0, Number(r.days_absent) || 0,
+            Number(r.payable_days) || 0
+          ]);
+        } else {
+          data.push([
+            r.employee_code, r.name, r.department || '', r.designation || '', r.company || '',
+            Number(r.cl_opening) || 0, Number(r.cl_accrued) || 0, Number(r.cl_used) || 0,
+            Number(r.cl_lapsed) || 0, Number(r.cl_closing) || 0,
+            Number(r.el_opening) || 0, Number(r.el_accrued) || 0, Number(r.el_used) || 0,
+            Number(r.el_lapsed) || 0, Number(r.el_closing) || 0,
+            Number(r.lwp_days) || 0, Number(r.od_days) || 0,
+            Number(r.short_leave_days) || 0, Number(r.uninformed_absent) || 0
+          ]);
+        }
+      }
+      const wb = XLSX.utils.book_new();
+      const ws = XLSX.utils.aoa_to_sheet(data);
+      XLSX.utils.book_append_sheet(wb, ws, sheetName);
+      const buf = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' });
+      res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+      res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+      return res.end(buf);
+    }
+
+    res.json({
+      success: true,
+      format,
+      month: month ? parseInt(month) : null,
+      year: parseInt(year),
+      company: company || null,
+      count: rows.length,
+      data: rows
+    });
+  } catch (err) {
+    console.error('[leave-register] error:', err.message);
+    res.status(500).json({ success: false, error: 'Failed to build leave register: ' + err.message });
   }
 });
 

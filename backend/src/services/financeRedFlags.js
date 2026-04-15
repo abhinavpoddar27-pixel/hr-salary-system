@@ -221,6 +221,28 @@ function detectRedFlags(db, month, year) {
     }
   } catch {}
 
+  // 12. high_uninformed_absent (WARNING) — April 2026 Phase 3
+  // Employees with ≥3 uninformed absences this month (after leave
+  // post-processing: EL / OD / CL / SL / LWP have all been subtracted).
+  // These are days the employee was absent without any approved leave or
+  // comp-off — the pure "did not show up and did not inform" bucket.
+  try {
+    const rows = db.prepare(`
+      SELECT sc.employee_code, COALESCE(e.name, sc.employee_code) AS name, e.department,
+             COALESCE(sc.uninformed_absent_days, 0) AS uninformed
+      FROM salary_computations sc
+      LEFT JOIN employees e ON sc.employee_code = e.code
+      WHERE sc.month = ? AND sc.year = ?
+        AND COALESCE(sc.uninformed_absent_days, 0) >= 3
+    `).all(month, year);
+    for (const r of rows) {
+      flags.push(mkFlag('high_uninformed_absent', 'warning', r.employee_code, r.name, r.department,
+        `${r.uninformed} uninformed absence day(s) this month`,
+        { uninformedAbsentDays: r.uninformed },
+        'Verify no leave applications were missed; escalate if pattern persists'));
+    }
+  } catch {}
+
   // Sort: critical first, then warning, then info
   const sev = { critical: 0, warning: 1, info: 2 };
   flags.sort((a, b) => (sev[a.severity] || 9) - (sev[b.severity] || 9));

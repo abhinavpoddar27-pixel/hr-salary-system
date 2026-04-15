@@ -691,6 +691,15 @@ function computeEmployeeSalary(db, employee, month, year, company, requestId = '
     lateComingDeduction: Math.round(lateComingDeduction * 100) / 100,
     // Early exit deduction (April 2026)
     earlyExitDeduction: Math.round(earlyExitDeduction * 100) / 100,
+    // Phase 3 — leave display buckets sourced from Stage 6 day_calculations.
+    // These are DISPLAY-ONLY. All salary math already flowed through
+    // payable_days via Phase 2's dayCalculation.js leave post-processing.
+    clDays: Math.round((dayCalc.cl_used || 0) * 100) / 100,
+    elDays: Math.round((dayCalc.el_used || 0) * 100) / 100,
+    lwpDays: Math.round((dayCalc.lop_days || 0) * 100) / 100,
+    odDays: Math.round((dayCalc.od_days || 0) * 100) / 100,
+    shortLeaveDays: Math.round((dayCalc.short_leave_days || 0) * 100) / 100,
+    uninformedAbsentDays: Math.max(0, Math.round((dayCalc.uninformed_absent || 0) * 100) / 100),
     totalDeductions: Math.round(totalDeductions * 100) / 100,
     netSalary,
     // ═══ TOTAL PAYABLE = netSalary + otPay + holidayDutyPay ═══
@@ -730,7 +739,8 @@ function saveSalaryComputation(db, comp) {
       punch_based_ot, finance_extra_duty, ot_note, total_payable,
       ed_days, ed_pay, take_home,
       late_coming_deduction,
-      early_exit_deduction
+      early_exit_deduction,
+      cl_days, el_days, lwp_days, od_days, short_leave_days, uninformed_absent_days
     ) VALUES (
       ?, ?, ?, ?, ?, ?, ?,
       ?, ?, ?, ?, ?,
@@ -743,7 +753,8 @@ function saveSalaryComputation(db, comp) {
       ?, ?, ?, ?,
       ?, ?, ?,
       ?,
-      ?
+      ?,
+      ?, ?, ?, ?, ?, ?
     )
     ON CONFLICT(employee_code, month, year, company) DO UPDATE SET
       gross_salary = excluded.gross_salary,
@@ -792,6 +803,12 @@ function saveSalaryComputation(db, comp) {
       take_home = excluded.take_home,
       late_coming_deduction = excluded.late_coming_deduction,
       early_exit_deduction = excluded.early_exit_deduction,
+      cl_days = excluded.cl_days,
+      el_days = excluded.el_days,
+      lwp_days = excluded.lwp_days,
+      od_days = excluded.od_days,
+      short_leave_days = excluded.short_leave_days,
+      uninformed_absent_days = excluded.uninformed_absent_days,
       is_finalised = 0
   `).run(
     comp.employeeCode, comp.month, comp.year, comp.company,
@@ -807,7 +824,9 @@ function saveSalaryComputation(db, comp) {
     comp.punchBasedOT || 0, comp.financeExtraDuty || 0, comp.otNote || '', comp.totalPayable || 0,
     comp.edDays || 0, comp.edPay || 0, comp.takeHome || 0,
     comp.lateComingDeduction || 0,
-    comp.earlyExitDeduction || 0
+    comp.earlyExitDeduction || 0,
+    comp.clDays || 0, comp.elDays || 0, comp.lwpDays || 0,
+    comp.odDays || 0, comp.shortLeaveDays || 0, comp.uninformedAbsentDays || 0
   );
 
   // ── Phase 2 Late Coming: mark approved deductions as applied ──
@@ -968,6 +987,15 @@ function generatePayslipData(db, employeeCode, month, year) {
     },
     period: { month, year, monthName: MONTHS[month], period: `${MONTHS[month]} ${year}` },
     attendance: dayCalc,
+    // Phase 3 — leave breakdown for payslip display
+    leaveSummary: {
+      cl: comp.cl_days || 0,
+      el: comp.el_days || 0,
+      lwp: comp.lwp_days || 0,
+      od: comp.od_days || 0,
+      shortLeave: comp.short_leave_days || 0,
+      uninformedAbsent: comp.uninformed_absent_days || 0
+    },
     earnings: [
       { label: 'Basic Pay', amount: comp.basic_earned },
       { label: 'DA (Dearness Allowance)', amount: comp.da_earned },
