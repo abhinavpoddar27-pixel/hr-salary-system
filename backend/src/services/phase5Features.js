@@ -6,19 +6,37 @@
  * 3. Attrition risk scoring
  */
 
-// ── Leave classification constants ──────────────────────────
-// Pro-rata CL opening by month — the company grants 7 CL at year start and
-// pro-rates down for employees whose DOJ falls mid-year.
-const CL_PRORATA_BY_MONTH = {
-  1: 7, 2: 7,
-  3: 6, 4: 6,
-  5: 5, 6: 5,
-  7: 4, 8: 4,
-  9: 3, 10: 3,
-  11: 2, 12: 2
-};
+// ── Leave eligibility config (Apr 2026) ──
+// Only these employment_types get CL + EL accrual. To extend later (e.g., add
+// 'Sales'), append to this array — no other code changes required.
+const LEAVE_ELIGIBLE_TYPES = ['Permanent'];
 
 const { isContractorForPayroll } = require('../utils/employeeClassification');
+
+/**
+ * CL entitlement for a given year based on effective join month.
+ * Effective month = DOJ month (if DOJ day === 1) or DOJ month + 1 (mid-month join).
+ * Pre-year joiners treated as January joiners.
+ *
+ * Table (2026 policy):
+ *   Jan-Feb=7, Mar-Apr=6, May-Jun=5, Jul-Aug=4, Sep-Oct=3, Nov-Dec=2
+ *
+ * Formula: 7 - floor((effectiveMonth - 1) / 2)
+ * Edge case: mid-month Dec joiner rolls to Jan of next year → 0 CL.
+ */
+function computeClEntitlement(dateOfJoining, year) {
+  if (!dateOfJoining) return 7;
+  const doj = new Date(dateOfJoining);
+  if (isNaN(doj)) return 7;
+  const dojYear = doj.getUTCFullYear();
+  if (dojYear < year) return 7;
+  if (dojYear > year) return 0;
+  const dojMonth = doj.getUTCMonth() + 1;
+  const dojDay = doj.getUTCDate();
+  const effectiveMonth = dojDay === 1 ? dojMonth : dojMonth + 1;
+  if (effectiveMonth > 12) return 0;
+  return Math.max(0, 7 - Math.floor((effectiveMonth - 1) / 2));
+}
 
 function _prevMonth(month, year) {
   if (month === 1) return { month: 12, year: year - 1 };
@@ -58,13 +76,16 @@ function runLeaveAccrual(db, month, year) {
   const elRate = _getPolicyNumber(db, 'el_accrual_rate', 1);
   const elEligibilityDays = _getPolicyNumber(db, 'el_eligibility_days', 180);
 
-  // Active permanent employees only — contractors get no accrual.
+  // Leave-eligible employees only (see LEAVE_ELIGIBLE_TYPES). Contractors
+  // inside these types are still filtered via isContractorForPayroll below.
+  const eligiblePlaceholders = LEAVE_ELIGIBLE_TYPES.map(() => '?').join(',');
   const employees = db.prepare(`
     SELECT id, code, date_of_joining, employment_type, is_contractor,
            category, department, company
     FROM employees
     WHERE status = 'Active'
-  `).all();
+      AND employment_type IN (${eligiblePlaceholders})
+  `).all(...LEAVE_ELIGIBLE_TYPES);
 
   const upsertLedger = db.prepare(`
     INSERT INTO leave_accrual_ledger
@@ -85,6 +106,13 @@ function runLeaveAccrual(db, month, year) {
   const upsertBalance = db.prepare(`
     INSERT INTO leave_balances (employee_id, year, leave_type, opening, accrued, used, balance)
     VALUES (?, ?, ?, 0, 0, 0, 0)
+    ON CONFLICT(employee_id, year, leave_type) DO NOTHING
+  `);
+  // CL is a one-time DOJ-based seed per year. ON CONFLICT DO NOTHING ensures
+  // subsequent runs don't overwrite an opening that may have been edited.
+  const seedClBalance = db.prepare(`
+    INSERT INTO leave_balances (employee_id, year, leave_type, opening, accrued, used, balance)
+    VALUES (?, ?, 'CL', ?, 0, 0, ?)
     ON CONFLICT(employee_id, year, leave_type) DO NOTHING
   `);
   const updateBalance = db.prepare(`
@@ -190,6 +218,12 @@ function runLeaveAccrual(db, month, year) {
         updateBalance.run(elYear.acc || 0, elYear.usd || 0, elBalance, emp.id, year, 'EL');
 
         // ── CL ledger (no accrual here — just mirror usage) ────────
+        // First-time-this-year seed of the CL opening via DOJ-based pro-ration.
+        // ON CONFLICT DO NOTHING — subsequent months/runs are no-ops, so the
+        // opening stays stable (and any manual edit via /adjust is preserved).
+        const clEntitlement = computeClEntitlement(emp.date_of_joining, year);
+        seedClBalance.run(emp.id, year, clEntitlement, clEntitlement);
+
         const prevClRow = db.prepare(`
           SELECT closing_balance FROM leave_accrual_ledger
           WHERE employee_code = ? AND year = ? AND month = ? AND leave_type = 'CL'
@@ -285,22 +319,28 @@ function initCLOpening(db, year, deploymentMonth = 1) {
       try {
         if (isContractorForPayroll(emp)) { results.skipped++; continue; }
 
-        let effectiveMonth;
+        // Ledger month = where the grant is booked; keep existing semantics
+        // (DOJ month when joining in target year, else deploymentMonth).
+        let ledgerMonth;
         if (emp.date_of_joining) {
           const doj = new Date(emp.date_of_joining);
           if (!isNaN(doj) && doj.getUTCFullYear() === year) {
-            effectiveMonth = doj.getUTCMonth() + 1;
+            ledgerMonth = doj.getUTCMonth() + 1;
           } else {
-            effectiveMonth = depMonth;
+            ledgerMonth = depMonth;
           }
         } else {
-          effectiveMonth = depMonth;
+          ledgerMonth = depMonth;
         }
 
-        const opening = CL_PRORATA_BY_MONTH[effectiveMonth] || 7;
+        // Entitlement value uses DOJ-based pro-ration (mid-month rolls forward).
+        // Pre-year joiners get the full `depMonth` grant as before.
+        const opening = emp.date_of_joining && new Date(emp.date_of_joining).getUTCFullYear() === year
+          ? computeClEntitlement(emp.date_of_joining, year)
+          : Math.max(0, 7 - Math.floor((depMonth - 1) / 2));
         upsertBalance.run(emp.id, year, opening, opening);
         upsertLedger.run(
-          emp.code, emp.id, year, effectiveMonth,
+          emp.code, emp.id, year, ledgerMonth,
           opening, opening, emp.company || null
         );
         results.seeded++;
@@ -580,6 +620,20 @@ function computeAttritionRisk(db, month, year) {
 
   return results.sort((a, b) => b.riskScore - a.riskScore);
 }
+
+// TEMP TEST BLOCK — remove after verification
+// console.log('CL entitlement tests (year=2026):');
+// console.log('  Pre-2026 (2024-05-10):', computeClEntitlement('2024-05-10', 2026), '→ expected 7');
+// console.log('  Jan 1 2026:', computeClEntitlement('2026-01-01', 2026), '→ expected 7');
+// console.log('  Jan 15 2026:', computeClEntitlement('2026-01-15', 2026), '→ expected 7 (Feb start)');
+// console.log('  Feb 1 2026:', computeClEntitlement('2026-02-01', 2026), '→ expected 7');
+// console.log('  Mar 1 2026:', computeClEntitlement('2026-03-01', 2026), '→ expected 6');
+// console.log('  Mar 25 2026:', computeClEntitlement('2026-03-25', 2026), '→ expected 6 (Apr start)');
+// console.log('  Jul 1 2026:', computeClEntitlement('2026-07-01', 2026), '→ expected 4');
+// console.log('  Dec 1 2026:', computeClEntitlement('2026-12-01', 2026), '→ expected 2');
+// console.log('  Dec 15 2026:', computeClEntitlement('2026-12-15', 2026), '→ expected 0 (rolls to Jan 2027)');
+// console.log('  Null DOJ:', computeClEntitlement(null, 2026), '→ expected 7 (treated as pre-year)');
+// console.log('  2027 DOJ:', computeClEntitlement('2027-03-01', 2026), '→ expected 0');
 
 module.exports = {
   runLeaveAccrual,
