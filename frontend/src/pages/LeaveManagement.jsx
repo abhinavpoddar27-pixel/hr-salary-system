@@ -22,7 +22,6 @@ const STATUS_COLORS = {
 const LEAVE_TYPES = [
   { value: 'CL', label: 'Casual Leave' },
   { value: 'EL', label: 'Earned Leave' },
-  { value: 'SL', label: 'Sick Leave' },
   { value: 'LWP', label: 'Leave Without Pay' },
   { value: 'Comp Off', label: 'Compensatory Off' }
 ]
@@ -53,7 +52,7 @@ function ApplyLeaveModal({ show, onClose, employees }) {
     queryFn: () => getEmployeeLeaveBalance(form.employee_code),
     enabled: !!form.employee_code
   })
-  const balances = balanceRes?.data?.data || { CL: 0, EL: 0, SL: 0 }
+  const balances = balanceRes?.data?.data || { CL: 0, EL: 0 }
   const currentBal = balances[form.leave_type] ?? 0
 
   // Auto-calc days
@@ -72,8 +71,8 @@ function ApplyLeaveModal({ show, onClose, employees }) {
     setForm(updated)
   }
 
-  // Hard-block: CL / EL / SL require sufficient balance. LWP and Comp Off are exempt.
-  const isBalanceTracked = ['CL', 'EL', 'SL'].includes(form.leave_type)
+  // Hard-block: CL / EL require sufficient balance. LWP and Comp Off are exempt.
+  const isBalanceTracked = ['CL', 'EL'].includes(form.leave_type)
   const insufficient = isBalanceTracked && form.employee_code && form.days > currentBal
   const hrRemarkMissing = !String(form.hr_remark || '').trim()
 
@@ -92,8 +91,8 @@ function ApplyLeaveModal({ show, onClose, employees }) {
 
         {/* Balance summary for selected employee */}
         {form.employee_code && (
-          <div className="grid grid-cols-3 gap-2">
-            {['CL', 'EL', 'SL'].map(lt => (
+          <div className="grid grid-cols-2 gap-2">
+            {['CL', 'EL'].map(lt => (
               <div
                 key={lt}
                 className={clsx('p-2 rounded-md border text-center', {
@@ -529,15 +528,14 @@ export default function LeaveManagement() {
                     <th>Company</th>
                     <th className="text-center">CL</th>
                     <th className="text-center">EL</th>
-                    <th className="text-center">SL</th>
                     <th className="text-center">Total</th>
                   </tr>
                 </thead>
                 <tbody>
                   {balLoading ? (
-                    <tr><td colSpan={8} className="text-center py-8 text-slate-400">Loading...</td></tr>
+                    <tr><td colSpan={7} className="text-center py-8 text-slate-400">Loading...</td></tr>
                   ) : balances.length === 0 ? (
-                    <tr><td colSpan={8} className="text-center py-8 text-slate-400">No leave balances found</td></tr>
+                    <tr><td colSpan={7} className="text-center py-8 text-slate-400">No leave balances found</td></tr>
                   ) : (
                     balances.map(b => (
                       <tr key={b.employee_code}>
@@ -547,8 +545,7 @@ export default function LeaveManagement() {
                         <td className="text-sm text-slate-600">{b.company || '-'}</td>
                         <td className="text-center font-medium">{b.CL ?? b.cl ?? 0}</td>
                         <td className="text-center font-medium">{b.EL ?? b.el ?? 0}</td>
-                        <td className="text-center font-medium">{b.SL ?? b.sl ?? 0}</td>
-                        <td className="text-center font-bold text-slate-800">{(b.CL ?? b.cl ?? 0) + (b.EL ?? b.el ?? 0) + (b.SL ?? b.sl ?? 0)}</td>
+                        <td className="text-center font-bold text-slate-800">{(b.CL ?? b.cl ?? 0) + (b.EL ?? b.el ?? 0)}</td>
                       </tr>
                     ))
                   )}
@@ -629,7 +626,6 @@ export default function LeaveManagement() {
                 <select className="input w-full text-sm" value={adjForm.leave_type} onChange={e => setAdjForm(f => ({ ...f, leave_type: e.target.value }))}>
                   <option value="CL">Casual Leave</option>
                   <option value="EL">Earned Leave</option>
-                  <option value="SL">Sick Leave</option>
                 </select>
               </div>
               <div>

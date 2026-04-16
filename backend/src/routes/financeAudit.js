@@ -559,9 +559,9 @@ router.post('/corrections/apply-leave', (req, res) => {
       return res.status(400).json({ success: false, error: 'Missing required fields: employee_code, date, leave_type, month, year, reason' });
     }
 
-    const validLeaveTypes = ['CL', 'EL', 'SL'];
+    const validLeaveTypes = ['CL', 'EL'];
     if (!validLeaveTypes.includes(leave_type)) {
-      return res.status(400).json({ success: false, error: 'Invalid leave_type. Must be CL, EL, or SL' });
+      return res.status(400).json({ success: false, error: 'Invalid leave_type. Must be CL or EL. SL is no longer supported.' });
     }
 
     const m = parseInt(month);

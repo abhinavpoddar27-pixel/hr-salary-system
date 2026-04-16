@@ -71,7 +71,7 @@ router.post('/', (req, res) => {
   }
 
   // Hard block: CL and EL cannot go negative on submission.
-  // (SL and LWP are not balance-backed; OD is its own table.)
+  // (LWP is not balance-backed; OD is its own table.)
   if (['CL', 'EL'].includes(leaveType)) {
     const year = new Date(startDate).getFullYear();
     const bal = db.prepare(`
@@ -134,8 +134,7 @@ router.put('/:id/approve', (req, res) => {
 
   const emp = db.prepare('SELECT id FROM employees WHERE code = ?').get(leave.employee_code);
 
-  // Hard-block CL / EL when balance is insufficient. SL has no balance model
-  // so it passes through (historic behaviour preserved).
+  // Hard-block CL / EL when balance is insufficient.
   if (emp && ['CL', 'EL'].includes(leave.leave_type)) {
     const year = new Date(leave.start_date).getFullYear();
     const bal = db.prepare(`
@@ -156,7 +155,7 @@ router.put('/:id/approve', (req, res) => {
       WHERE id = ?
     `).run(approvedBy, req.params.id);
 
-    if (emp && ['CL', 'EL', 'SL'].includes(leave.leave_type)) {
+    if (emp && ['CL', 'EL'].includes(leave.leave_type)) {
       const year = new Date(leave.start_date).getFullYear();
       db.prepare(`
         UPDATE leave_balances SET used = used + ?, balance = balance - ?
@@ -214,7 +213,7 @@ router.delete('/:id', (req, res) => {
     `).run(cancelledBy, id);
 
     // Credit balance back only if the leave was Approved and was balance-backed
-    if (leave.status === 'Approved' && emp && ['CL', 'EL', 'SL'].includes(leave.leave_type)) {
+    if (leave.status === 'Approved' && emp && ['CL', 'EL'].includes(leave.leave_type)) {
       db.prepare(`
         UPDATE leave_balances
         SET used = MAX(0, used - ?), balance = balance + ?
@@ -294,8 +293,7 @@ router.get('/balances', (req, res) => {
   let query = `
     SELECT e.code as employee_code, e.name, e.department, e.company,
            MAX(CASE WHEN lb.leave_type = 'CL' THEN lb.balance ELSE 0 END) as CL,
-           MAX(CASE WHEN lb.leave_type = 'EL' THEN lb.balance ELSE 0 END) as EL,
-           MAX(CASE WHEN lb.leave_type = 'SL' THEN lb.balance ELSE 0 END) as SL
+           MAX(CASE WHEN lb.leave_type = 'EL' THEN lb.balance ELSE 0 END) as EL
     FROM employees e
     LEFT JOIN leave_balances lb ON lb.employee_id = e.id AND lb.year = ?
     WHERE e.status = 'Active'
@@ -330,7 +328,7 @@ router.get('/balances/:code', (req, res) => {
     WHERE e.code = ? AND lb.year = ?
   `).all(req.params.code, currentYear);
 
-  const balances = { CL: 0, EL: 0, SL: 0 };
+  const balances = { CL: 0, EL: 0 };
   for (const r of rows) {
     balances[r.leave_type] = r.balance;
   }
@@ -348,6 +346,13 @@ router.post('/adjust', (req, res) => {
 
   if (!employee_code || !leave_type || days == null || !transaction_type) {
     return res.status(400).json({ success: false, error: 'Missing required fields' });
+  }
+
+  if (!['CL', 'EL'].includes(leave_type)) {
+    return res.status(400).json({
+      success: false,
+      error: `Invalid leave_type. Must be CL or EL. SL is no longer supported.`
+    });
   }
 
   const validTypes = ['Credit', 'Debit', 'Manual Adjustment', 'Opening Balance', 'Carry Forward'];
@@ -467,6 +472,11 @@ router.post('/bulk-adjust', (req, res) => {
 
         if (!employee_code || !leave_type || days == null || !transaction_type) {
           errors.push({ employee_code, error: 'Missing required fields' });
+          continue;
+        }
+
+        if (!['CL', 'EL'].includes(leave_type)) {
+          errors.push({ employee_code, error: 'Invalid leave_type. Must be CL or EL. SL is no longer supported.' });
           continue;
         }
 

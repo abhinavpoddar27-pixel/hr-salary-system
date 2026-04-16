@@ -296,9 +296,9 @@ router.post('/', (req, res) => {
     db.prepare(`INSERT INTO salary_structures (employee_id, effective_from, basic, da, hra, conveyance, other_allowances) VALUES (?, date('now'), ?, ?, ?, ?, ?)`).run(empId, basic || 0, da || 0, hra || 0, conveyance || 0, otherAllowances || 0);
   }
 
-  // Initialize leave balances for current year
+  // Initialize leave balances for current year (CL + EL only — SL abolished Apr 2026)
   const year = new Date().getFullYear();
-  for (const type of ['CL', 'EL', 'SL']) {
+  for (const type of ['CL', 'EL']) {
     db.prepare('INSERT OR IGNORE INTO leave_balances (employee_id, year, leave_type, opening, balance) VALUES (?, ?, ?, ?, ?)').run(empId, year, type, type === 'CL' ? 12 : 0, type === 'CL' ? 12 : 0);
   }
 
@@ -941,7 +941,6 @@ router.post('/bulk-import', (req, res) => {
         for (const year of [2025, 2026]) {
           insertLeave.run(empRow.id, year, 'CL', 12, 12);
           insertLeave.run(empRow.id, year, 'EL', 0, 0);
-          insertLeave.run(empRow.id, year, 'SL', 0, 0);
         }
       } catch (err) {
         errors++;
