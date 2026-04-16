@@ -607,12 +607,12 @@ export default function SalaryComputation() {
                     <th>Loan</th>
                     <th className="cursor-pointer select-none" onClick={() => toggleSort('late_coming_deduction')} title="Finance-approved late coming deduction">Late{sortIndicator('late_coming_deduction')}</th>
                     <th className="cursor-pointer select-none" onClick={() => toggleSort('early_exit_deduction')} title="Finance-approved early exit deduction">Early Exit{sortIndicator('early_exit_deduction')}</th>
-                    <th className="cursor-pointer select-none text-amber-700 text-center" onClick={() => toggleSort('cl_days')} title="Casual Leave days consumed this month">CL{sortIndicator('cl_days')}</th>
-                    <th className="cursor-pointer select-none text-green-700 text-center" onClick={() => toggleSort('el_days')} title="Earned Leave days consumed this month">EL{sortIndicator('el_days')}</th>
-                    <th className="cursor-pointer select-none text-orange-700 text-center" onClick={() => toggleSort('lwp_days')} title="Leave Without Pay days">LWP{sortIndicator('lwp_days')}</th>
-                    <th className="cursor-pointer select-none text-blue-700 text-center" onClick={() => toggleSort('od_days')} title="On-Duty / Comp-Off days (finance approved)">OD{sortIndicator('od_days')}</th>
-                    <th className="cursor-pointer select-none text-slate-600 text-center" onClick={() => toggleSort('short_leave_days')} title="Short Leave (gate pass) days-equivalent">SL{sortIndicator('short_leave_days')}</th>
-                    <th className="cursor-pointer select-none text-red-700 text-center" onClick={() => toggleSort('uninformed_absent_days')} title="Uninformed Absent days">UA{sortIndicator('uninformed_absent_days')}</th>
+                    <th className="cursor-pointer select-none !text-amber-700 text-center" onClick={() => toggleSort('cl_days')} title="Casual Leave days consumed this month">CL{sortIndicator('cl_days')}</th>
+                    <th className="cursor-pointer select-none !text-green-700 text-center" onClick={() => toggleSort('el_days')} title="Earned Leave days consumed this month">EL{sortIndicator('el_days')}</th>
+                    <th className="cursor-pointer select-none !text-orange-700 text-center" onClick={() => toggleSort('lwp_days')} title="Leave Without Pay days">LWP{sortIndicator('lwp_days')}</th>
+                    <th className="cursor-pointer select-none !text-blue-700 text-center" onClick={() => toggleSort('od_days')} title="On-Duty / Comp-Off days (finance approved)">OD{sortIndicator('od_days')}</th>
+                    <th className="cursor-pointer select-none !text-slate-600 text-center" onClick={() => toggleSort('short_leave_days')} title="Short Leave (gate pass) days-equivalent">SL{sortIndicator('short_leave_days')}</th>
+                    <th className="cursor-pointer select-none !text-red-700 text-center" onClick={() => toggleSort('uninformed_absent_days')} title="Uninformed Absent days">UA{sortIndicator('uninformed_absent_days')}</th>
                     <th className="cursor-pointer select-none" onClick={() => toggleSort('total_deductions')}>Ded{sortIndicator('total_deductions')}</th>
                     <th className="cursor-pointer select-none bg-slate-50 text-slate-600" onClick={() => toggleSort('net_salary')} title="Net = Gross Earned − Deductions (base only, no OT)">Net{sortIndicator('net_salary')}</th>
                     <th className="cursor-pointer select-none bg-emerald-50 text-emerald-700" onClick={() => toggleSort('take_home')} title="Take Home = Net + OT + Holiday Duty + ED (actual amount paid)">Take Home{sortIndicator('take_home')}</th>
