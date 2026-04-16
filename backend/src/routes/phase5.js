@@ -44,9 +44,10 @@ router.post('/accrue-leaves', (req, res) => {
 });
 
 // ── Init CL Opening Balances ─────────────────────────────
-// One-time-per-year seed of Casual Leave opening balances. Pro-rata by DOJ
-// month (Jan/Feb=7 … Nov/Dec=2). Safe to re-run — UPSERTs the opening on
-// leave_balances and the anchor row on leave_accrual_ledger.
+// Idempotent via policy_config guard (key: cl_seed_<year>_v1). First call
+// seeds all eligible permanent employees; subsequent calls for the same
+// year are no-ops and return { alreadyCompleted: true }. To force a
+// re-seed, manually delete the guard row from policy_config.
 router.post('/init-cl-opening', requireHrOrAdmin, (req, res) => {
   try {
     const db = getDb();
@@ -58,7 +59,9 @@ router.post('/init-cl-opening', requireHrOrAdmin, (req, res) => {
     res.json({
       success: true,
       ...result,
-      message: `CL opening seeded for ${result.seeded} employees (deploymentMonth=${dm})`
+      message: result.alreadyCompleted
+        ? `CL opening for year ${y} was already seeded at ${result.completedAt}. No action taken.`
+        : `Seeded ${result.seeded} employees for year ${y}, skipped ${result.skipped} non-eligible, ${result.errors.length} errors.`
     });
   } catch (err) {
     console.error('Init CL opening error:', err.message);

@@ -289,6 +289,23 @@ function initCLOpening(db, year, deploymentMonth = 1) {
   const results = { seeded: 0, skipped: 0, errors: [] };
   const depMonth = Math.max(1, Math.min(12, parseInt(deploymentMonth) || 1));
 
+  // Once-per-year guard — prevents accidental re-runs from wiping audit state.
+  // Pattern matches the existing `migration_contractor_flags_v1` guard in schema.js.
+  const guardKey = `cl_seed_${year}_v1`;
+  const alreadySeeded = db.prepare(
+    "SELECT value FROM policy_config WHERE key = ?"
+  ).get(guardKey);
+  if (alreadySeeded) {
+    return {
+      seeded: 0,
+      skipped: 0,
+      errors: [],
+      alreadyCompleted: true,
+      guardKey,
+      completedAt: alreadySeeded.value
+    };
+  }
+
   const employees = db.prepare(`
     SELECT id, code, date_of_joining, employment_type, is_contractor,
            category, department, company
@@ -296,22 +313,21 @@ function initCLOpening(db, year, deploymentMonth = 1) {
     WHERE status = 'Active'
   `).all();
 
-  const upsertBalance = db.prepare(`
+  // ON CONFLICT DO NOTHING — preserves any manual adjustments made via /adjust
+  // or subsequent accrual between two calls of /init-cl-opening. A re-run is
+  // safe: it's a no-op for rows that already exist.
+  const seedBalance = db.prepare(`
     INSERT INTO leave_balances (employee_id, year, leave_type, opening, accrued, used, balance)
     VALUES (?, ?, 'CL', ?, 0, 0, ?)
-    ON CONFLICT(employee_id, year, leave_type) DO UPDATE SET
-      opening = excluded.opening,
-      balance = excluded.balance
+    ON CONFLICT(employee_id, year, leave_type) DO NOTHING
   `);
-  const upsertLedger = db.prepare(`
+  const seedLedger = db.prepare(`
     INSERT INTO leave_accrual_ledger
       (employee_code, employee_id, year, month, leave_type,
        opening_balance, accrued, used, lapsed, closing_balance,
        paid_days_this_month, paid_days_ytd, el_earned_ytd, company)
     VALUES (?, ?, ?, ?, 'CL', ?, 0, 0, 0, ?, 0, 0, 0, ?)
-    ON CONFLICT(employee_code, year, month, leave_type) DO UPDATE SET
-      opening_balance = excluded.opening_balance,
-      closing_balance = excluded.closing_balance
+    ON CONFLICT(employee_code, year, month, leave_type) DO NOTHING
   `);
 
   const txn = db.transaction(() => {
@@ -338,8 +354,8 @@ function initCLOpening(db, year, deploymentMonth = 1) {
         const opening = emp.date_of_joining && new Date(emp.date_of_joining).getUTCFullYear() === year
           ? computeClEntitlement(emp.date_of_joining, year)
           : Math.max(0, 7 - Math.floor((depMonth - 1) / 2));
-        upsertBalance.run(emp.id, year, opening, opening);
-        upsertLedger.run(
+        seedBalance.run(emp.id, year, opening, opening);
+        seedLedger.run(
           emp.code, emp.id, year, ledgerMonth,
           opening, opening, emp.company || null
         );
@@ -350,6 +366,22 @@ function initCLOpening(db, year, deploymentMonth = 1) {
     }
   });
   txn();
+
+  // Mark seed complete so /init-cl-opening becomes a no-op on re-runs.
+  // Admins can force a re-seed by deleting this row from policy_config.
+  // Gated on error-free run only — write happens even when seeded=0 (i.e.
+  // rows already existed from a pre-guard deploy) so the UX is clean.
+  if (results.errors.length === 0) {
+    db.prepare(`
+      INSERT OR REPLACE INTO policy_config (key, value, description)
+      VALUES (?, ?, ?)
+    `).run(
+      guardKey,
+      new Date().toISOString(),
+      `CL opening seed for year ${year} (completed ${results.seeded} employees)`
+    );
+    results.guardKey = guardKey;
+  }
 
   return results;
 }
