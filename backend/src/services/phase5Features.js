@@ -672,5 +672,6 @@ module.exports = {
   initCLOpening,
   yearEndLapse,
   generateComplianceAlerts,
-  computeAttritionRisk
+  computeAttritionRisk,
+  computeClEntitlement
 };
