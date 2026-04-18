@@ -649,7 +649,8 @@ router.get('/entries', (req, res) => {
       SUM(CASE WHEN status = 'approved' THEN 1 ELSE 0 END) as approved,
       SUM(CASE WHEN status = 'needs_correction' THEN 1 ELSE 0 END) as needs_correction,
       SUM(CASE WHEN status = 'paid' THEN 1 ELSE 0 END) as paid,
-      SUM(CASE WHEN status = 'flagged' THEN 1 ELSE 0 END) as flagged
+      SUM(CASE WHEN status = 'flagged' THEN 1 ELSE 0 END) as flagged,
+      SUM(CASE WHEN status = 'rejected' THEN 1 ELSE 0 END) as rejected
     FROM dw_entries
   `).get();
 
