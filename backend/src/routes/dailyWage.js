@@ -360,11 +360,12 @@ function validateEntryRow(db, row, rowIndex) {
     errors.push({ row: rowIndex, field: 'gate_entry_reference', error: `${prefix}gate_entry_reference is required` });
   }
 
-  // 10. duplicate check
+  // 10. duplicate check — exclude terminal 'rejected' so HR can re-enter after rejection
   if (row.entry_date && row.in_time && row.out_time && row._contractor) {
     const dup = db.prepare(`
       SELECT id, entry_date, in_time, out_time FROM dw_entries
       WHERE contractor_id = ? AND entry_date = ?
+        AND status != 'rejected'
         AND NOT (out_time <= ? OR in_time >= ?)
     `).get(row._contractor.id, row.entry_date, row.in_time, row.out_time);
     if (dup) {
