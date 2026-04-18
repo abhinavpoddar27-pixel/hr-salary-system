@@ -171,16 +171,10 @@ export default function DailyWageEntry() {
     createMut.mutate(body)
   }
 
-  const confirmSave = () => {
+  const goToExisting = () => {
+    const id = dupInfo?.id
     setShowDupConfirm(false)
-    const body = {
-      contractor_id: selectedContractor.id, entry_date: entryDate, in_time: inTime, out_time: outTime,
-      total_worker_count: totalWC,
-      department_allocations: allocations.map(a => ({ department: a.department.trim(), worker_count: Number(a.worker_count) || 0 })).filter(a => a.department),
-      gate_entry_reference: gateRef.trim(), notes: notes.trim() || undefined,
-      company: selectedCompany || ''
-    }
-    createMut.mutate(body)
+    if (id) navigate(`/daily-wage/new?edit=${id}`)
   }
 
   // ═══════════════════════════════════════════════════════════
@@ -353,10 +347,10 @@ export default function DailyWageEntry() {
               <p>Time: {dupInfo?.in_time} — {dupInfo?.out_time}</p>
               <p>Workers: {dupInfo?.total_worker_count} | Status: {dupInfo?.status}</p>
             </div>
-            <p className="text-sm text-slate-600 mb-4">Do you still want to create this entry?</p>
+            <p className="text-sm text-slate-600 mb-4">A live entry already covers this slot. Open the existing entry to edit it, or cancel and adjust your time window.</p>
             <div className="flex justify-end gap-2">
               <button onClick={() => setShowDupConfirm(false)} className="px-4 py-2 text-sm rounded-lg border border-slate-300 text-slate-600 hover:bg-slate-50">Cancel</button>
-              <button onClick={confirmSave} className="px-4 py-2 text-sm rounded-lg bg-amber-600 text-white hover:bg-amber-700">Create Anyway</button>
+              <button onClick={goToExisting} disabled={!dupInfo?.id} className="px-4 py-2 text-sm rounded-lg bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-50">Go to existing entry</button>
             </div>
           </div>
         </div>
