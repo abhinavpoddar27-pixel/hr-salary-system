@@ -15,11 +15,12 @@ const STATUS_STYLES = {
   needs_correction: 'bg-red-100 text-red-700',
   approved: 'bg-green-100 text-green-700',
   flagged: 'bg-orange-100 text-orange-700',
-  paid: 'bg-blue-100 text-blue-800'
+  paid: 'bg-blue-100 text-blue-800',
+  rejected: 'bg-rose-100 text-rose-700'
 }
 const STATUS_LABELS = {
   hr_entered: 'Draft', pending_finance: 'Pending Finance', needs_correction: 'Needs Correction',
-  approved: 'Approved', flagged: 'Flagged', paid: 'Paid'
+  approved: 'Approved', flagged: 'Flagged', paid: 'Paid', rejected: 'Rejected'
 }
 
 function StatusBadge({ status }) {
@@ -112,12 +113,13 @@ export default function DailyWageRecords() {
       </div>
 
       {/* KPI Cards */}
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+      <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
         {[
           { label: 'Total', value: summary.total || 0, color: 'slate', filter: '' },
           { label: 'Pending Finance', value: summary.pending_finance || 0, color: 'amber', filter: 'pending_finance' },
           { label: 'Approved', value: summary.approved || 0, color: 'green', filter: 'approved' },
-          { label: 'Paid', value: summary.paid || 0, color: 'blue', filter: 'paid' }
+          { label: 'Paid', value: summary.paid || 0, color: 'blue', filter: 'paid' },
+          { label: 'Rejected', value: summary.rejected || 0, color: 'rose', filter: 'rejected' }
         ].map(kpi => (
           <button key={kpi.label} onClick={() => setKPIFilter(kpi.filter)}
             className={clsx('bg-white rounded-lg border p-3 text-left transition-colors hover:border-blue-300',
