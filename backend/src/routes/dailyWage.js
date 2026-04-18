@@ -892,10 +892,10 @@ router.put('/entries/:id/reject', requireFinanceOrAdmin, (req, res) => {
     return res.status(400).json({ success: false, error: `Cannot reject entry with status "${entry.status}". Must be pending_finance.` });
   }
 
-  db.prepare("UPDATE dw_entries SET status = 'hr_entered', updated_at = datetime('now') WHERE id = ?").run(req.params.id);
+  db.prepare("UPDATE dw_entries SET status = 'rejected', updated_at = datetime('now') WHERE id = ?").run(req.params.id);
   db.prepare("INSERT INTO dw_approvals (entry_id, action, remarks, acted_by) VALUES (?, 'rejected', ?, ?)").run(req.params.id, remarks.trim(), user);
-  dwAudit(db, 'entry', Number(req.params.id), 'reject', { status: 'pending_finance' }, { status: 'hr_entered', remarks: remarks.trim() }, user);
-  res.json({ success: true, message: 'Entry rejected and returned to HR' });
+  dwAudit(db, 'entry', Number(req.params.id), 'reject', { status: 'pending_finance' }, { status: 'rejected', remarks: remarks.trim() }, user);
+  res.json({ success: true, message: 'Entry rejected (terminal). HR must create a fresh entry to resubmit.' });
 });
 
 // PUT /entries/:id/needs-correction — Finance marks entry for correction
