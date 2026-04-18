@@ -449,6 +449,7 @@ router.post('/entries/check-duplicates', (req, res) => {
     FROM dw_entries e
     JOIN dw_contractors c ON c.id = e.contractor_id
     WHERE e.contractor_id = ? AND e.entry_date = ?
+      AND e.status != 'rejected'
       AND NOT (e.out_time <= ? OR e.in_time >= ?)
     ORDER BY e.in_time
   `).all(contractor_id, entry_date, in_time, out_time);
