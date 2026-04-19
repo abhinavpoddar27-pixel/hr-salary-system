@@ -1,3 +1,5 @@
+const crypto = require('crypto');
+
 function initSchema(db) {
   db.exec(`
     -- ─────────────────────────────────────────────────────────
@@ -1928,6 +1930,217 @@ function initSchema(db) {
   safeCreateIndex('CREATE INDEX IF NOT EXISTS idx_hold_releases_month    ON salary_hold_releases(month, year)');
   safeCreateIndex('CREATE INDEX IF NOT EXISTS idx_hold_releases_employee ON salary_hold_releases(employee_code)');
   safeCreateIndex('CREATE INDEX IF NOT EXISTS idx_hold_releases_date     ON salary_hold_releases(released_at)');
+
+  // ── April 2026: Bug Reporter feature ────────────────────────────
+
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS bug_reports (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+
+      -- Reporter
+      reporter_username TEXT NOT NULL,
+      reporter_role TEXT NOT NULL,
+
+      -- Page context at time of report
+      page_url TEXT,
+      page_name TEXT,
+      selected_month INTEGER,
+      selected_year INTEGER,
+      selected_company TEXT,
+
+      -- Screenshot (REQUIRED) — disk-stored
+      screenshot_path TEXT NOT NULL,
+      screenshot_mime TEXT NOT NULL,
+      screenshot_size_bytes INTEGER NOT NULL,
+
+      -- Audio (OPTIONAL) — disk-stored
+      audio_path TEXT,
+      audio_mime TEXT,
+      audio_duration_sec REAL,
+      audio_size_bytes INTEGER,
+      audio_source TEXT CHECK (audio_source IN ('recorded','uploaded') OR audio_source IS NULL),
+
+      -- Sarvam transcription (single call, translate mode)
+      transcript_english TEXT,
+      transcript_detected_language TEXT,
+      transcription_status TEXT CHECK (transcription_status IN
+        ('pending','rest_sync','batch_queued','batch_polling','success','failed','skipped')
+        OR transcription_status IS NULL),
+      transcription_error TEXT,
+      transcription_model TEXT,
+      transcription_path TEXT,
+      transcription_cost_cents REAL,
+
+      -- Sarvam batch job tracking (only used when audio > 30s)
+      sarvam_job_id TEXT,
+      sarvam_job_status TEXT CHECK (sarvam_job_status IN
+        ('none','created','in_progress','completed','failed','expired')
+        OR sarvam_job_status IS NULL),
+      sarvam_job_created_at TEXT,
+      sarvam_job_completed_at TEXT,
+      sarvam_webhook_received_at TEXT,
+      sarvam_poll_fallback_used INTEGER DEFAULT 0,
+
+      -- Typed fallback (when no audio)
+      user_typed_comment TEXT,
+
+      -- Input method
+      input_method TEXT NOT NULL CHECK (input_method IN ('recorded','uploaded','typed')),
+
+      -- Auto-context (snapshotted when modal opened)
+      auto_context_json TEXT,
+
+      -- Claude extraction (no translation — Sarvam already did that)
+      claude_extraction_json TEXT,
+      claude_summary_confidence TEXT CHECK (claude_summary_confidence IN ('high','medium','low')
+        OR claude_summary_confidence IS NULL),
+      claude_run_status TEXT CHECK (claude_run_status IN ('pending','success','failed','skipped')
+        OR claude_run_status IS NULL),
+      claude_error TEXT,
+      claude_cost_cents REAL,
+      claude_prompt_version TEXT,
+
+      -- Admin workflow
+      admin_status TEXT NOT NULL DEFAULT 'new'
+        CHECK (admin_status IN ('new','triaged','in_progress','resolved','wont_fix','duplicate')),
+      admin_notes TEXT,
+      resolved_at TEXT,
+      resolved_by TEXT,
+
+      -- Prompt iteration feedback
+      admin_extraction_quality TEXT
+        CHECK (admin_extraction_quality IN ('good','acceptable','bad')
+          OR admin_extraction_quality IS NULL),
+      admin_feedback_on_extraction TEXT,
+
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+
+      -- COMPOUND CONSISTENCY CHECK
+      CHECK (
+        (input_method = 'recorded' AND audio_path IS NOT NULL AND audio_source = 'recorded') OR
+        (input_method = 'uploaded' AND audio_path IS NOT NULL AND audio_source = 'uploaded') OR
+        (input_method = 'typed'    AND user_typed_comment IS NOT NULL)
+      )
+    )
+  `);
+
+  safeCreateIndex('CREATE INDEX IF NOT EXISTS idx_bug_reports_status       ON bug_reports(admin_status)');
+  safeCreateIndex('CREATE INDEX IF NOT EXISTS idx_bug_reports_created      ON bug_reports(created_at DESC)');
+  safeCreateIndex('CREATE INDEX IF NOT EXISTS idx_bug_reports_reporter     ON bug_reports(reporter_username)');
+  safeCreateIndex('CREATE INDEX IF NOT EXISTS idx_bug_reports_admin_status ON bug_reports(admin_status, created_at DESC)');
+  safeCreateIndex('CREATE INDEX IF NOT EXISTS idx_bug_reports_sarvam_job   ON bug_reports(sarvam_job_id) WHERE sarvam_job_id IS NOT NULL');
+
+  // policy_config seeds for Bug Reporter — parameterized to handle multi-paragraph prompt safely
+  const BUG_REPORT_EXTRACTION_PROMPT = `You are a bug-report intake assistant for an internal HR/payroll system. You will receive:
+1. A screenshot (the user took it at the moment they decided to report a bug)
+2. An English description of what is wrong — this is either a typed comment from the user OR an English translation of an audio recording the user made
+3. Auto-captured context: the page the user was on, month/year/company selected, their role, and a summary of the last 5 API calls the page made
+
+Your job is to produce a STRUCTURED INTAKE. You MUST NOT:
+- Speculate about root causes
+- Suggest which code module is broken
+- Suggest fixes
+- Diagnose the bug
+- Re-translate the description (it is already English)
+
+You MUST:
+- Describe what is visible in the screenshot factually
+- Identify which page of the system the screenshot is from, using the "Known pages" list
+- Extract specific values (employee codes, names, amounts, dates) visible in the screenshot
+- Flag what the screenshot does NOT show that the developer would need to investigate
+
+EXAMPLE OF WHAT NOT TO DO:
+Bad structured_summary: "The user is reporting that Rakesh's salary is wrong. This looks like it could be a stale-shift-assignment issue from the recent pipeline change."
+Good structured_summary: "The user reports that Rakesh (22970) shows a net salary of ₹8,400 for April 2026 on the Salary Computation page and says this is lower than expected. The user did not state what value was expected."
+
+KNOWN PAGES OF THE SYSTEM:
+{{KNOWN_PAGES}}
+
+CONFIDENCE RUBRIC for \`summary_confidence\`:
+- For audio-origin English descriptions: evaluate whether the English description is specific and coherent, and whether it clearly relates to what is shown in the screenshot. (The user said it in another language and it has been auto-translated; if the English reads as vague or generic in ways that don't match a specific screenshot, the translation may have flattened detail.)
+- For typed English descriptions: evaluate screenshot legibility and coherence between description and screenshot.
+- "high":   description is specific and clearly references what is visible; screenshot is readable.
+- "medium": description is partially specific; some ambiguity about what part of the screenshot is being referenced.
+- "low":    description is vague or generic, screenshot is unreadable for specifics, or description and screenshot appear unrelated.
+
+OUTPUT — strict JSON only, no markdown fences, no preamble, no trailing prose:
+
+{
+  "page_identified": "<one of Known pages, or 'Other / Cannot identify'>",
+  "page_confidence": "high" | "medium" | "low",
+  "user_description": "<the English description verbatim as received>",
+  "structured_summary": "<2-3 sentences in clear English, grounded in BOTH the screenshot and the description. No speculation.>",
+  "summary_confidence": "high" | "medium" | "low",
+  "visible_data": {
+    "employees_mentioned": ["<NAME (CODE) or just NAME if no code visible>"],
+    "amounts_visible": ["<₹12,345 etc. — specific monetary values>"],
+    "dates_visible": ["<2026-04-15 etc.>"],
+    "key_values": [
+      { "label": "<field label as shown>", "value": "<value as shown>" }
+    ]
+  },
+  "open_questions": [
+    "<specific question a developer would want answered>"
+  ]
+}
+
+If description and screenshot are incoherent or unrelated, set summary_confidence='low' and put an honest observation in structured_summary (e.g., "User uploaded a Settings screenshot but the description is about payslips. Unclear which is the actual concern.").`;
+
+  const BUG_REPORT_KNOWN_PAGES_JSON = JSON.stringify([
+    "Salary Computation (Stage 7 results, list of employees with net/gross/deductions)",
+    "Day Calculation (Stage 6, per-employee day-by-day attendance)",
+    "Attendance Register (raw attendance, calendar grid view)",
+    "Miss Punch Resolution (Stage 2, list of incomplete punches)",
+    "Finance Audit Dashboard (3-tab view: audit / employee review / red flags)",
+    "Finance Verification (miss-punch and extra-duty review queues)",
+    "Payslip Viewer / PDF preview",
+    "Late Coming Management (Analytics → Punctuality)",
+    "Employee Master (employee list, edit modal)",
+    "Salary Advance / Loan Recovery",
+    "Settings → Shifts (shift master)",
+    "Daily MIS (today's attendance summary)",
+    "Held Salaries Register",
+    "Extra Duty Grants",
+    "OT & ED Payable Register",
+    "Reports / Exports (PF ECR, ESI, Bank NEFT)",
+    "Query Tool (admin SQL workbench)",
+    "Session Analytics (admin)",
+    "Other / Cannot identify"
+  ]);
+
+  const insertBugReportPolicy = db.prepare(
+    "INSERT OR IGNORE INTO policy_config (key, value, description) VALUES (?, ?, ?)"
+  );
+  insertBugReportPolicy.run(
+    'bug_report_extraction_prompt',
+    BUG_REPORT_EXTRACTION_PROMPT,
+    'Hot-swappable extraction prompt. Edit via Query Tool to iterate without deploy.'
+  );
+  insertBugReportPolicy.run(
+    'bug_report_extraction_prompt_version',
+    'v3-2026-04-19',
+    'Manual version tag. Update when prompt changes.'
+  );
+  insertBugReportPolicy.run(
+    'bug_report_known_pages_json',
+    BUG_REPORT_KNOWN_PAGES_JSON,
+    'Known pages list injected into extraction prompt at runtime.'
+  );
+
+  // Webhook secret — generated at first boot only, idempotent on restart
+  const existingWebhookSecret = db.prepare(
+    "SELECT value FROM policy_config WHERE key = 'bug_report_sarvam_webhook_secret'"
+  ).get();
+  if (!existingWebhookSecret) {
+    const secret = crypto.randomBytes(32).toString('hex');
+    db.prepare(
+      "INSERT INTO policy_config (key, value, description) VALUES (?, ?, ?)"
+    ).run(
+      'bug_report_sarvam_webhook_secret',
+      secret,
+      'Shared secret for verifying Sarvam webhook signatures. Rotate quarterly.'
+    );
+  }
 
   // ── March 2026 Reconciliation: Set contractor flags ──────────
   // ONE-TIME migration. Previously ran on every app boot, which re-stamped
