@@ -216,6 +216,14 @@ app.use('/api/early-exit-deductions', requireAuth, require('./src/routes/early-e
 app.use('/api/query-tool',       requireAuth, require('./src/routes/queryTool'));
 app.use('/api/ai',               requireAuth, require('./src/routes/ai'));
 
+// Bug Reporter — dual-router mount. webhookRouter MUST be mounted before the
+// authed router so that /webhook/sarvam bypasses requireAuth (HMAC verified
+// inside the handler in a later step). All other /api/bug-reports/* paths
+// fall through to authedRouter, which applies requireAuth internally.
+const { authedRouter: bugReportsAuthed, webhookRouter: bugReportsWebhook } = require('./src/routes/bugReports');
+app.use('/api/bug-reports', bugReportsWebhook);
+app.use('/api/bug-reports', bugReportsAuthed);
+
 // Health check (public)
 app.get('/api/health', (req, res) => {
   res.json({ success: true, message: 'HR Salary System API running', timestamp: new Date().toISOString() });
