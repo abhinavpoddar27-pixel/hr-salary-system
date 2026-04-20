@@ -497,4 +497,14 @@ export const markSalesEmployeeLeft = (code, company, data = {}) => api.put(`/sal
 export const getSalesEmployeeStructures = (code, company) => api.get(`/sales/employees/${encodeURIComponent(code)}/structures`, { params: { company } })
 export const createSalesEmployeeStructure = (code, company, data) => api.post(`/sales/employees/${encodeURIComponent(code)}/structures`, data, { params: { company } })
 
+// ── Sales Salary Module (Phase 2) ────────────────────────
+export const salesHolidaysList = (params) => api.get('/sales/holidays', { params })
+export const salesHolidayCreate = (data) => api.post('/sales/holidays', data)
+export const salesHolidayUpdate = (id, data) => api.put(`/sales/holidays/${id}`, data)
+export const salesHolidayDelete = (id) => api.delete(`/sales/holidays/${id}`)
+export const salesUploadFile = (formData) => api.post('/sales/upload', formData, { headers: { 'Content-Type': 'multipart/form-data' } })
+export const salesUploadPreview = (uploadId) => api.get(`/sales/upload/${uploadId}/preview`)
+export const salesUploadMatch = (uploadId, rowId, data) => api.put(`/sales/upload/${uploadId}/match/${rowId}`, data)
+export const salesUploadConfirm = (uploadId) => api.post(`/sales/upload/${uploadId}/confirm`)
+
 export default api

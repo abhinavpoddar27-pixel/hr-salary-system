@@ -79,6 +79,8 @@ const nav = [
     label: 'Sales', icon: '🛒', to: '/sales', salesAllowed: true,
     children: [
       { label: 'Sales Employees', to: '/sales/employees' },
+      { label: 'Sales Holidays', to: '/sales/holidays' },
+      { label: 'Upload Sheet', to: '/sales/upload' },
     ]
   },
   { label: 'Employee Profile', icon: '🔬', to: '/employee-profile' },

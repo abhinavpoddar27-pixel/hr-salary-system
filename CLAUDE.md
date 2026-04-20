@@ -1,5 +1,60 @@
 ## Section 0: Last Session
 - **Date:** 2026-04-20
+- **Branch:** `claude/session-start-hook-jv0KJ` (pushed; not yet merged to `origin/main`)
+- **Task:** Sales Salary Module Phase 1 + Phase 2.
+- **Phase 1 commit:** `78df719` feat(sales): Phase 1 — schema + employee master + sidebar entry
+- **Phase 2 commit:** (this session, pending at report time)
+- **Phase 1 delivered:**
+  - Tables: `sales_employees`, `sales_salary_structures` (per-company `UNIQUE(code, company)` per §4A Q2; manual `status` transitions only per §4A Q3; no `auto_inactive`/`inactive_since`).
+  - 7 CRUD endpoints on new `backend/src/routes/sales.js` — employees list/get/create/update/mark-left + structures history/create. Router-level `requireHrOrAdmin`; every `:code` endpoint demands `?company=X` (400 if missing).
+  - `frontend/src/pages/Sales/SalesEmployeeMaster.jsx` — list/filter/create/edit/mark-left. Bank fields required at form level. Bulk import placeholder disabled ("coming in Phase 2" tooltip — now superseded by Phase 2's real upload page but left as-is; trivial Phase-3 cleanup).
+  - `permissions.js` — `'sales-employees'` appended to `hr`.
+  - 2 bugs caught and fixed during build: `POST /employees` and `POST /.../structures` were passing explicit `null` for fields the caller omitted, which clobbered SQLite `DEFAULT` values (`status='Active'`, `pf/esi/pt_applicable=0`). Fixed by building INSERT column lists from only the supplied fields.
+  - **Phase 1 frontend visual smoke was NOT executed** (sandbox couldn't open browser). `SalesEmployeeMaster.jsx` should be exercised manually on Railway preview — covered incidentally during Phase 2's upload smoke where an employee was seeded via the page's underlying endpoints.
+- **Phase 2 delivered:**
+  - Tables: `sales_holidays` (UNIQUE(holiday_date, company)), `sales_uploads` (UNIQUE(month, year, company, file_hash); status enum `uploaded/matched/computed/finalized/superseded`), `sales_monthly_input` (FK → sales_uploads; match_confidence enum `exact/high/medium/low/unmatched/manual`). **Q4 applied** — NO `sheet_working_days_ai`, NO `sheet_working_days_manual` columns. Only `sheet_days_given` captured (authoritative).
+  - Indexes: `idx_sales_holidays_company_year`, `idx_sales_uploads_my_company`, `idx_sales_monthly_input_upload`, `idx_sales_monthly_input_match`.
+  - New service `backend/src/services/salesCoordinatorParser.js`: SheetJS-based, dynamic header detection (scans rows 0–10 for cells containing both "Sales Person Name" AND "Day's Given"), NO hardcoded row numbers. Exports `parseSalesCoordinatorFile(filePath)` + three pure normalizers (`normalizeName`, `normalizeManager`, `normalizeCity`) — reused by the upload route matcher, so the employee master and the sheet row see the same canonical form. `CITY_TYPO_MAP` at top of file seeded with `GHAZIYABAD→GHAZIABAD` and `MUZAFARNAGAR→MUZAFFARNAGAR`; one-line additions as HR flags more. Classifier explicitly drops "Working Days as Per AI" and "Working Days Manual" even when present in the sheet (Q4).
+  - 8 new endpoints on `sales.js` (all inherit Phase 1's `requireHrOrAdmin`): 4 holiday CRUD (`GET/POST/PUT/DELETE /sales/holidays[/:id]`) + 4 upload/matching (`POST /sales/upload`, `GET /:uploadId/preview`, `PUT /:uploadId/match/:rowId`, `POST /:uploadId/confirm`). Multer instance dedicated to sales uploads at `backend/uploads/sales/`, 10MB limit, .xls/.xlsx only. SHA-256 file hash for dedup → 409 with `existingUploadId` payload if same (month, year, company, hash) re-uploaded; no re-parse of the collision.
+  - **Matching algorithm** (runs inside `POST /sales/upload`, not in the parser): tiered, **same-company only** per §4A Q2.
+    - Tier 1 Exact: `punch_no` equality when both sheet + master have a non-empty value → confidence `'exact'`, method `'punch_no'`.
+    - Tier 2 High: `normalizeName + normalizeManager + normalizeCity` equality (requires sheet manager AND sheet city both present) → `'high'` / `'name+manager+city'`.
+    - Tier 3 Medium: `normalizeName + normalizeCity` equality (requires sheet city) → `'medium'` / `'name+city'`.
+    - Tier 4 Low: `normalizeName` match with ≥2 candidates (ambiguous) → `'low'`, `employee_code=NULL`, HR resolves on preview. Single-name-match that didn't line up on manager+city is also surfaced as low with method `'name_only_one_candidate'`.
+    - Tier 5 Unmatched: no name match → `'unmatched'`, `employee_code=NULL`.
+    - HR manual link via `PUT /match/:rowId` → confidence `'manual'`, method `'hr_manual'`. Cross-company manual matches are rejected with 400 (row.company must equal body.company).
+  - Confirm endpoint (`POST /:uploadId/confirm`) validates all rows have `employee_code IS NOT NULL` — 400 with `unmatchedCount` if any NULL. On success flips `sales_uploads.status='matched'`.
+  - `permissions.js` — appended `'sales-holidays'` and `'sales-upload'` to `hr` array.
+  - `frontend/src/pages/Sales/SalesHolidayMaster.jsx` — list/create/edit/delete; states multi-select chips (empty list = "All"); year dropdown (prev/current/next2); company-required guard renders an amber info banner when no company selected.
+  - `frontend/src/pages/Sales/SalesUpload.jsx` — two views (UploadView / PreviewView) swapped via local state. UploadView: native drag-drop + click-to-browse, 10MB client guard, 409 collision UI with "Open existing upload" button. PreviewView: 3 tabs (Matched / Low / Unmatched) with counts, inline `EmployeePicker` (react-query-backed, 2-char minimum) on low/unmatched rows, "Confirm Matches" disabled until low+unmatched both empty, status badge, and a locked read-only mode when status ≠ 'uploaded'.
+  - `App.jsx` — 2 lazy imports + 2 routes (`/sales/holidays`, `/sales/upload`).
+  - `Sidebar.jsx` — 2 children added under existing "Sales" section (`salesAllowed: true` gate from Phase 1 covers them): "Sales Holidays", "Upload Sheet".
+  - `api.js` — 8 helpers: `salesHolidaysList/Create/Update/Delete`, `salesUploadFile/Preview/Match/Confirm`.
+- **What was verified (Phase 2):**
+  - Schema: 5 sales_ tables, Q4 columns absent from `sales_monthly_input`, 7 sales indexes (3 Phase 1 + 4 Phase 2).
+  - Holiday API: create, list-filtered-by-year, missing-company-400, duplicate-409, cross-company same-date-201, PUT update (name + states + gazetted), DELETE, 404 on non-existent, list-after-delete=0.
+  - Parser unit test (fixture `/tmp/phase2_fixture.xlsx` built in-memory via SheetJS `aoa_to_sheet`): 4 data rows → 3 kept (empty-name row dropped, TOTAL subtotal dropped). No Q4 keys in output. All 3 normalizers verified (manager prefix strip, name UPPER+collapse, city typo lookup).
+  - Upload flow: parse → match → preview. RAVI auto-matched via Tier 2 high (name+manager+city). PRIYA and AYUSH tier-5 unmatched (not in master). 409 on identical file re-upload. Seeded PRIYA+AYUSH via Phase 1 endpoint, manually linked via PUT match → confidence='manual'. Cross-company manual match correctly rejected (400). Confirm-with-unmatched-present correctly 400's. Confirm after all matched → status='matched', `matched_rows=3`.
+  - Permission gate: finance role → 403 on both `/sales/holidays` and `/sales/upload`.
+  - Plant regression: employees/salary_structures/salary_computations/day_calculations/attendance_processed/monthly_imports/holidays counts unchanged (0, 0, 0, 0, 0, 0, 20).
+  - Frontend build: clean, 3 Sales chunks emitted (SalesEmployeeMaster, SalesHolidayMaster, SalesUpload).
+- **What's fragile (Phase 2):**
+  - `CITY_TYPO_MAP` is a static object in `salesCoordinatorParser.js`. HR edits require a code change + redeploy — no admin UI. Keep it small; when it grows past ~10 entries, move to a `policy_config`-backed lookup.
+  - Matching is **same-company only** per §4A Q2. A sales rep who works for both companies has two codes and two sheet rows — no cross-company dedup. If HR later ratifies global uniqueness, the matcher is one-line stricter, no data migration needed (but frontend picker would need to drop the company filter).
+  - `sales_uploads.filename` stores the original upload filename (design §6.3). The multer-generated disk path under `backend/uploads/sales/` is NOT stored. Phase 3 compute doesn't need the file (it reads `sales_monthly_input`), but any future "download original sheet" feature requires adding a `disk_path` column and backfilling from the multer filenames.
+  - Parser month/year extraction tries filename regex first, then scans the first 5 rows of the detected sheet. If both fail and the caller doesn't pass `month`/`year` in the multipart body, the upload returns 400 — there's no "guess from today". This is intentional (a wrong month silently reused on compute would be worse than a loud 400).
+  - Confirmed uploads are LOCKED: `PUT /match/:rowId` does NOT check status, but the frontend PreviewView hides the picker once `status !== 'uploaded'`. If a future admin CLI or re-open flow lets HR revise a confirmed upload, add a status guard on the match endpoint.
+- **Pre-existing quirk (not fixed this session):** `SalesEmployeeMaster.jsx` still has a "Bulk Import" placeholder button saying "coming in Phase 2". Phase 2 shipped the upload under a different page (`/sales/upload`), not a button on the master page. Low-priority Phase 3 cleanup: delete the button, or change the tooltip to "use Sales → Upload Sheet" and link it.
+- **Sandbox notes:** `better-sqlite3@9.6.0` native build required pre-caching Node headers at `$HOME/.cache/node-gyp/22.22.2/` (nodejs.org headers returned 503 on first attempt; explicit curl to retry worked). No `bcrypt` module available to Python, so the viewer-403 test from the prompt spec was substituted with the finance-403 test (same gate, proves non-hr/admin blocked).
+- **Questions for Abhinav (surfaced during build):**
+  1. **Holiday delete irreversibility** — Phase 2 does a hard `DELETE`. If Phase 3 compute has already read a holiday and produced a salary row, is it OK to remove the holiday retroactively (affecting future recomputes only), or should we soft-delete (`deleted_at`) and exclude from compute queries? Decision deferred to Phase 3.
+  2. **`sales_uploads.filename` collision on different hashes** — current scheme allows "salary_feb_2026.xlsx" to be uploaded twice in the same month if the bytes differ (e.g. HR fixed a typo). That's probably desired (supersedes workflow), but the design doc has `status='superseded'` for exactly this — should the second upload auto-supersede the first, or should HR explicitly choose? Current behaviour: both persist, latest wins by uploaded_at, no auto-supersede. Revisit in Phase 3/4.
+- **Next session (Phase 3) should:** (a) build `sundayRule.js` shared module + `salesSalaryComputation.js` engine. (b) add `sales_salary_computations` + `sales_diwali_ledger` tables with the `incentive_amount` reservation per §4A Q6. (c) surface the compute action on `SalesUpload.jsx` status='matched' uploads. (d) capture the plant March 2026 `day_calculations` snapshot to disk (Phase 5 prerequisite per §11). (e) resolve the 2 Phase 2 questions above before any compute runs.
+
+---
+
+## Section 0: Previous Session
+- **Date:** 2026-04-20
 - **Branch:** `claude/session-start-y317N` (pushed to `origin/main`)
 - **Last commit:** `bdf1790` fix(daily-wage): replace time-overlap duplicate check with gate-ref uniqueness
 - **Task:** Daily wage multiple-entries-per-day bug. HR could not create a second entry for the same contractor on the same date when time windows overlapped. Duplicate rule changed from time-window overlap → `(contractor_id, entry_date, LOWER(TRIM(gate_entry_reference)))`.
@@ -439,6 +494,18 @@ frontend/
 ```
 
 ## Section 3: Pipeline Stage Dependency Map
+
+## Sales Pipeline Stage 1: Holiday master + Coordinator sheet upload (Phase 2)
+- Route: `backend/src/routes/sales.js` → `GET/POST/PUT/DELETE /sales/holidays`, `POST /sales/upload`, `GET /sales/upload/:uploadId/preview`, `PUT /sales/upload/:uploadId/match/:rowId`, `POST /sales/upload/:uploadId/confirm`
+- Service: `backend/src/services/salesCoordinatorParser.js` → `parseSalesCoordinatorFile()`, `normalizeName()`, `normalizeManager()`, `normalizeCity()`, `CITY_TYPO_MAP`
+- Tables read: `sales_employees` (tier matcher), `sales_uploads` (dedup via file_hash)
+- Tables written: `sales_uploads` (one row per file; status='uploaded' → 'matched'), `sales_monthly_input` (one row per parsed sheet row, with `employee_code` NULL on low/unmatched and `match_confidence` + `match_method` on every row), `sales_holidays` (CRUD)
+- Input contract: multipart upload at `POST /sales/upload` — single .xls/.xlsx file ≤10MB, field name `file`, optional `company`/`month`/`year` body (used only if parser can't detect them). Holiday master: `{holiday_date, holiday_name, company, applicable_states?, is_gazetted?}`.
+- Output contract: upload returns `{uploadId, totalRows, matchedRows, unmatchedRows, month, year, company, filename}`. Preview returns `{upload, matched[], low[], unmatched[]}` with each row enriched by `resolved_employee` when linked. Confirm transitions `status='matched'` — required before Phase 3 compute.
+- Downstream consumers: **Phase 3** salary compute reads confirmed `sales_monthly_input` rows joined with `sales_employees` + latest `sales_salary_structures`. `sales_holidays` feeds Step 3 (gazetted holiday credit) of the Phase 3 compute.
+- Business rules (matcher): see Phase 2 entry in Section 0 for the 5-tier algorithm. Same-company only per §4A Q2. HR manual link sets `match_confidence='manual'`, `match_method='hr_manual'`.
+- Business rules (parser): Dynamic header detection (rows 0–10); NO hardcoded row numbers. Q4 columns ("Working Days as Per AI", "Working Days Manual") explicitly dropped even when present in the sheet — only `sheet_days_given` is authoritative. Subtotal rows (name starts with "TOTAL" or "SUBTOTAL") skipped. Non-numeric `Day's Given` skipped.
+- Edge cases: file_hash collision → 409 with `existingUploadId` (no re-parse); parser detects month/year from filename regex OR first-5-rows scan — falls back to multipart body; cross-company manual match rejected; confirm with any NULL `employee_code` rejected.
 
 ## Stage 1: Import (EESL biometric upload)
 - Route: `backend/src/routes/import.js` → `POST /upload`, `GET /history`, `GET /summary/:month/:year`, `POST /reconciliation/*`

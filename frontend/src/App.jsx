@@ -53,6 +53,8 @@ const QueryTool = React.lazy(() => import('./pages/QueryTool'))
 const DeptAnalytics = React.lazy(() => import('./pages/DeptAnalytics'))
 const EmployeeProfile = React.lazy(() => import('./pages/EmployeeProfile'))
 const SalesEmployeeMaster = React.lazy(() => import('./pages/Sales/SalesEmployeeMaster'))
+const SalesHolidayMaster = React.lazy(() => import('./pages/Sales/SalesHolidayMaster'))
+const SalesUpload = React.lazy(() => import('./pages/Sales/SalesUpload'))
 
 function PageLoader() {
   return (
@@ -193,6 +195,8 @@ export default function App() {
           <Route path="/employee-profile" element={<RequireAuth><Layout title="Employee Intelligence Profile"><EmployeeProfile /></Layout></RequireAuth>} />
           <Route path="/employees" element={<RequireAuth><Layout title="Employee Master"><Employees /></Layout></RequireAuth>} />
           <Route path="/sales/employees" element={<RequireAuth><Layout title="Sales Employees"><SalesEmployeeMaster /></Layout></RequireAuth>} />
+          <Route path="/sales/holidays" element={<RequireAuth><Layout title="Sales Holidays"><SalesHolidayMaster /></Layout></RequireAuth>} />
+          <Route path="/sales/upload" element={<RequireAuth><Layout title="Upload Coordinator Sheet"><SalesUpload /></Layout></RequireAuth>} />
           <Route path="/alerts" element={<RequireAuth><Layout title="Alerts"><Alerts /></Layout></RequireAuth>} />
           <Route path="/settings/*" element={<RequireAuth><Layout title="Settings"><Settings /></Layout></RequireAuth>} />
           <Route path="*" element={<Navigate to="/" replace />} />

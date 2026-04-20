@@ -2049,6 +2049,77 @@ function initSchema(db) {
   safeCreateIndex('CREATE INDEX IF NOT EXISTS idx_sales_employees_status ON sales_employees(status)');
   safeCreateIndex('CREATE INDEX IF NOT EXISTS idx_sales_salary_structures_emp ON sales_salary_structures(employee_id, effective_from)');
 
+  // ── Sales Salary Module — Phase 2 (holidays + upload + monthly input) ─
+  // sales_holidays is separate from plant `holidays` so sales can have a
+  // different calendar per state (applicable_states JSON). sales_uploads
+  // + sales_monthly_input track the coordinator's monthly XLS ingestion.
+  // Q4: NO sheet_working_days_ai / sheet_working_days_manual columns —
+  // only Day's Given is authoritative for compute (see design §4A Q4).
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS sales_holidays (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      holiday_date TEXT NOT NULL,
+      holiday_name TEXT NOT NULL,
+      company TEXT NOT NULL,
+      applicable_states TEXT,
+      is_gazetted INTEGER DEFAULT 1,
+      created_at TEXT DEFAULT (datetime('now')),
+      UNIQUE(holiday_date, company)
+    );
+
+    CREATE TABLE IF NOT EXISTS sales_uploads (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      month INTEGER NOT NULL,
+      year INTEGER NOT NULL,
+      company TEXT NOT NULL,
+      filename TEXT NOT NULL,
+      file_hash TEXT,
+      total_rows INTEGER,
+      matched_rows INTEGER,
+      unmatched_rows INTEGER,
+      status TEXT DEFAULT 'uploaded'
+        CHECK(status IN ('uploaded','matched','computed','finalized','superseded')),
+      uploaded_by TEXT NOT NULL,
+      uploaded_at TEXT DEFAULT (datetime('now')),
+      notes TEXT,
+      UNIQUE(month, year, company, file_hash)
+    );
+
+    CREATE TABLE IF NOT EXISTS sales_monthly_input (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      month INTEGER NOT NULL,
+      year INTEGER NOT NULL,
+      company TEXT NOT NULL,
+      upload_id INTEGER NOT NULL,
+
+      sheet_row_number INTEGER,
+      sheet_state TEXT,
+      sheet_reporting_manager TEXT,
+      sheet_employee_name TEXT NOT NULL,
+      sheet_designation TEXT,
+      sheet_city TEXT,
+      sheet_punch_no TEXT,
+      sheet_doj TEXT,
+      sheet_dol TEXT,
+      sheet_days_given REAL NOT NULL,
+      sheet_remarks TEXT,
+
+      employee_code TEXT,
+      match_confidence TEXT
+        CHECK(match_confidence IN
+              ('exact','high','medium','low','unmatched','manual')),
+      match_method TEXT,
+
+      created_at TEXT DEFAULT (datetime('now')),
+      created_by TEXT,
+      FOREIGN KEY (upload_id) REFERENCES sales_uploads(id)
+    );
+  `);
+  safeCreateIndex('CREATE INDEX IF NOT EXISTS idx_sales_holidays_company_year ON sales_holidays(company, holiday_date)');
+  safeCreateIndex('CREATE INDEX IF NOT EXISTS idx_sales_uploads_my_company ON sales_uploads(month, year, company)');
+  safeCreateIndex('CREATE INDEX IF NOT EXISTS idx_sales_monthly_input_upload ON sales_monthly_input(upload_id)');
+  safeCreateIndex('CREATE INDEX IF NOT EXISTS idx_sales_monthly_input_match ON sales_monthly_input(employee_code, month, year, company)');
+
   console.log('✅ Database schema initialized');
 }
 
