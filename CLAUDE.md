@@ -1,5 +1,56 @@
 ## Section 0: Last Session
 - **Date:** 2026-04-20
+- **Branch:** `claude/bug-reporter-steps-1-3-JR97x` (pushed to `origin/main` at `6f5114f`)
+- **Last commit:** `6f5114f` feat(bug-reporter): frontend — modal, components, admin inbox (step 12/13)
+- **Task:** Bug Reporter end-to-end — voice/screenshot/typed bug capture for HR, Sarvam audio→English pipeline, Claude extraction, admin inbox. Steps 1–12 of a 13-step plan (steps 4–13 executed this session, with steps 1–3 pre-existing on the branch). Step 13 = CLAUDE.md + /ship documentation (this entry).
+- **Files created (backend):**
+  - `backend/src/routes/bugReports.js` — 8 handlers: rate-limited POST (10/user/hour in-memory Map), admin-gated GET list, GET /count, GET /:id, PUT /:id (dynamic UPDATE w/ auto resolved_at/resolved_by stamping), POST /:id/reanalyze, GET /:id/screenshot, GET /:id/audio
+  - `backend/src/middleware/uploadBugReport.js` — multer memoryStorage, 25MB ceiling, per-field mime filter (screenshot: png/jpg/webp/gif; audio: webm/ogg/mp3/mp4/m4a/wav/opus)
+  - `backend/src/services/bugReportStorage.js` — writes to `uploads/bug-reports/:id/{screenshot,audio}.{ext}`, ext picker per mime
+  - `backend/src/services/sarvamWebhookVerify.js` — 3-layer verify (signature HMAC, timestamp drift, nonce replay)
+  - `backend/src/services/sarvamBatchPoller.js` — 120s poll, recovers webhooks lost in transit, max_age=30min
+  - `backend/src/services/bugReportAnalyzer.js` — orchestrator: uploads audio → Sarvam translate+transcribe → Claude extraction (structured summary, confidence, visible_data, open_questions) → persists to bug_reports
+  - `backend/src/services/bugReportResurrect.js` — boot-time scan for stuck `analysis_pending`/`analysis_failed` rows, re-enqueues them
+- **Files created (frontend):**
+  - `frontend/src/utils/apiContextBuffer.js` — ring buffer (MAX=5), EXCLUDE_PATTERNS (/auth/login, /auth/change-password, /bug-reports, /ai/explain-salary), `redactUrl()` strips query values, `installContextBufferInterceptors(axiosInstance)` hooks request/response, `buildAutoContext()` returns `{viewport, user_agent, page_url, path, recent_api_calls}`
+  - `frontend/src/utils/copyTicketSummary.js` — `buildTicketSummary(report)` formats ticket (header/reporter-said/visible_data/open_questions/context/API calls), `copyToClipboard()` with navigator.clipboard + textarea fallback
+  - `frontend/src/hooks/useNewBugReportCount.js` — admin-only 60s poll, visibilitychange pauses polling when tab hidden, returns 0 for non-admins
+  - `frontend/src/api/bugReports.js` — 8 API helpers (submit/list/count/get/update/reanalyze/screenshotUrl/audioUrl)
+  - `frontend/src/components/BugReporter/ScreenshotInput.jsx` — 10MB cap, Ctrl+V paste via document paste listener, thumbnail preview
+  - `frontend/src/components/BugReporter/AudioUploader.jsx` — 25MB cap, preview player, accepts audio/*,.m4a,.mp3,.wav,.webm,.ogg,.opus
+  - `frontend/src/components/BugReporter/VoiceRecorder.jsx` — MediaRecorder w/ MIME_CHAIN fallback (webm-opus → mp4 → mpeg), 120s cap, onstop builds File blob, cleans up stream + interval on unmount
+  - `frontend/src/components/BugReporter/AutoContextPreview.jsx` — collapsible preview of path/viewport/recent-API-calls with status color coding + privacy note
+  - `frontend/src/components/BugReporter/BugReportButton.jsx` — global floating button (fixed bottom-left, amber), admin badge count, opens modal via `openBugReportModal` store action
+  - `frontend/src/components/BugReporter/BugReportModal.jsx` — Modal w/ ScreenshotInput + three-tab chooser (recorded/uploaded/typed) + AutoContextPreview. `inferPageName()` maps pathnames to policy_config canonical names. Auto-context snapshotted on modal OPEN (not on submit) so ring buffer captures state at report-decision time. Validates before submit; 429 shows inline rate-limit toast
+  - `frontend/src/pages/admin/BugReportsInbox.jsx` — status filter tabs (new/triaged/in_progress/resolved/wont_fix/duplicate), paginated table (limit=25), status color chips, row→detail navigation
+  - `frontend/src/pages/admin/BugReportDetail.jsx` — full detail: back link, status dropdown, Listen button, Reanalyze, Copy ticket summary, summary card w/ confidence pill (high/med/low), screenshot w/ click-to-expand lightbox, transcript labeled "English transcript (auto-translated)", visible_data, open_questions, auto-context (collapsed), admin notes + extraction quality + feedback textarea, footer showing resolved_by/resolved_at
+- **Files modified:**
+  - `backend/server.js` — mount `/api/bug-reports` route, initialize `sarvamBatchPoller` and `bugReportResurrect` on boot
+  - `backend/src/database/schema.js` — 3 new tables: `bug_reports`, `bug_report_actions`, `bug_report_analysis_runs` (all `CREATE TABLE IF NOT EXISTS`). UNIQUE constraints: `bug_reports.id` PK; `bug_report_actions (report_id, action_type, created_at)` is not unique. Added `policy_config` seeds for `bug_report_claude_prompt` and `bug_report_known_pages_json`
+  - `frontend/src/store/appStore.js` — added `bugReportModalOpen` state + `openBugReportModal`/`closeBugReportModal`/`toggleBugReportModal` actions (mirrors the SalaryExplainer pattern)
+  - `frontend/src/utils/api.js` — call `installContextBufferInterceptors(api)` immediately after axios.create so the buffer captures completions even for requests that will 4xx
+  - `frontend/src/components/layout/Sidebar.jsx` — added admin-only "Bug Reports" 🐞 nav entry pointing to `/admin/bug-reports`
+  - `frontend/src/App.jsx` — lazy imports for BugReportsInbox + BugReportDetail; routes `/admin/bug-reports` and `/admin/bug-reports/:id`; mounted `<BugReportButton />` and `<BugReportModal />` inside Layout alongside AbbreviationLegend + SalaryExplainer (so they show on every authenticated page but not /login)
+  - `frontend/dist/*` — rebuilt via `npm run build` (clean, 11.5s, no errors)
+- **What was built:** HR can press the floating 🐞 button on any authenticated page, attach a screenshot (file/Ctrl+V paste), describe the issue via voice/upload/typed, and submit. Backend rate-limits to 10 reports/user/hour. Sarvam transcribes+translates audio → English; Claude generates structured_summary/confidence/visible_data/open_questions. Admins see a badge-counted inbox at `/admin/bug-reports` with status filters, paginated list, and full detail page (screenshot, audio replay, transcript, Claude extraction, copy-to-clipboard ticket summary, status workflow). Auto-context (path + viewport + last 5 API calls with redacted query values) rides along with every report for triage.
+- **Verified end-to-end via curl:** HR POST with screenshot + typed comment → 201 `{success, id}`. Admin GET list → row present. Admin GET /:id → full detail. Admin HEAD /:id/screenshot → 200 image/png (cookie auth works for same-origin `<img src>`/`<audio src>`). Cleanup: test row deleted, uploads removed.
+- **What's fragile:**
+  - Rate limiter is **in-memory `Map`** keyed by user id. Fine for single-instance Railway deploy, but a multi-instance deploy or a server restart wipes the window — a user could theoretically submit 10+10 reports around a deploy. If Railway ever scales out, swap for a DB-backed counter or Redis.
+  - `bugReportResurrect` scans `analysis_pending` / `analysis_failed` rows on boot and re-enqueues. If Sarvam returns 5xx persistently, rows could loop. Current guard: max 3 analysis attempts tracked in `bug_report_analysis_runs`.
+  - Auto-context snapshots on modal OPEN, not on submit. Deliberate — captures state at the "something looked wrong" moment, not post-composition. If the user leaves the modal open for many minutes and then submits, the context is stale-by-design (not a bug).
+  - The `EXCLUDE_PATTERNS` list in `apiContextBuffer.js` hardcodes `/auth/login`, `/auth/change-password`, `/bug-reports`, `/ai/explain-salary`. Any new endpoint carrying secrets in its URL path must be added here or it'll leak into the ring buffer.
+  - `VoiceRecorder.jsx` MIME fallback chain (webm-opus → mp4 → mpeg) relies on `MediaRecorder.isTypeSupported()`. iOS Safari picks `audio/mp4`; if a future Safari version drops support the component crashes without a visible error — add an alert branch before shipping to iPad-heavy deployments.
+  - Cookie auth for `<img>`/`<audio>` retrieval works because `requireAuth` middleware accepts `req.cookies.hr_token` as fallback (backend/src/middleware/auth.js:12). If that middleware ever switches to strict Bearer-only, screenshot/audio inline playback breaks silently — the page would just show broken-image icons.
+- **Coupling audit (per /ship Phase E):** Bug Reporter is purely additive. Zero pipeline stages touched, zero salary columns read/written, zero finance audit queries modified, zero payslip fields changed, zero CSV/Excel exports affected. No UNIQUE constraints risk, no cascade. All bug_report references confined to `backend/src/routes/bugReports.js` + `backend/src/services/bugReport*.js` + `backend/src/services/sarvam*.js` + frontend `components/BugReporter/` + frontend `pages/admin/BugReport*.jsx`.
+- **New env vars (already on Railway per user):** `SARVAM_API_KEY`, `SARVAM_WEBHOOK_SECRET`, `ANTHROPIC_API_KEY` (already in use for Salary Explainer).
+- **Sandbox notes:** dev backend on port 3001. Admin default password is `Admin@123` (not `admin123`); HR is `Indriyan@2025` (reset on every boot). Upload dir: `backend/uploads/bug-reports/:id/`.
+- **Step 13 checklist items (for future /ship runs that touch bug-reporter):** Before modifying `salaryComputation.js`, `dayCalculation.js`, any pipeline stage, or any export: no impact on Bug Reporter. Before modifying `attendance_processed` or `salary_computations` schemas: no impact. Before changing `requireAuth` middleware: verify screenshot/audio retrieval still works with whatever new auth model you introduce. Before changing axios client structure: verify `installContextBufferInterceptors` still runs at module init. Before changing Zustand `appStore` shape: verify `bugReportModalOpen` block preserved.
+- **Next session should:** (a) Verify on Railway that Sarvam webhooks arrive (`POST /api/bug-reports/sarvam-webhook`), batch poller recovers any missed ones, and Claude extraction runs end-to-end with real audio. (b) Monitor for analysis_failed rows in the first week — if >1%, tune the Sarvam polling timeout or Claude prompt. (c) If HR hits the 10/hr limit during an incident, consider bumping to 20 or making the limit per-IP rather than per-user. (d) Consider adding an admin "Export all as JSON" button for analytics / ticket handoff to external systems.
+
+---
+
+## Section 0: Previous Session
+- **Date:** 2026-04-20
 - **Branch:** `claude/session-start-y317N` (pushed to `origin/main`)
 - **Last commit:** `bdf1790` fix(daily-wage): replace time-overlap duplicate check with gate-ref uniqueness
 - **Task:** Daily wage multiple-entries-per-day bug. HR could not create a second entry for the same contractor on the same date when time windows overlapped. Duplicate rule changed from time-window overlap → `(contractor_id, entry_date, LOWER(TRIM(gate_entry_reference)))`.
