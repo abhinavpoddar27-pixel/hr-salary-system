@@ -1,4 +1,26 @@
 ## Section 0: Last Session
+- **Date:** 2026-04-20
+- **Branch:** `claude/session-start-y317N` (pushed to `origin/main`)
+- **Last commit:** `205cf65` fix(daily-wage): replace time-overlap duplicate check with gate-ref uniqueness
+- **Task:** Daily wage multiple-entries-per-day bug. HR could not create a second entry for the same contractor on the same date when time windows overlapped. Duplicate rule changed from time-window overlap → `(contractor_id, entry_date, LOWER(TRIM(gate_entry_reference)))`.
+- **Files modified:**
+  - `backend/src/routes/dailyWage.js` — `validateEntryRow()` duplicate SELECT (lines 364–381) and `POST /entries/check-duplicates` (lines 447–463) both rewritten to key on normalised gate_entry_reference (TRIM + LOWER, comparison-only — stored value stays raw). Check-duplicates endpoint now requires `gate_entry_reference` (400 if missing) and wraps results in `{ success, data: { duplicates } }`. Note: the previous `status != 'rejected'` filter was dropped; rejected rows now also block re-use of their gate ref.
+  - `backend/src/database/schema.js` — added defensive expression UNIQUE index `idx_dw_entries_unique_gate` on `(contractor_id, entry_date, LOWER(TRIM(gate_entry_reference)))` wrapped in try/catch so legacy collisions log-but-don't-crash server boot.
+  - `frontend/src/pages/DailyWageEntry.jsx` — pre-save duplicate-check payload updated (drops in/out times, adds gate_entry_reference); response path adjusted for new wrapped shape (`dupRes?.data?.data?.duplicates`); dialog copy at lines 345 & 350 reworded to reference Gate Entry Reference. Line 347 (`Time: X — Y`) preserved for useful context.
+  - `frontend/dist/*` — rebuilt via `npm run build`.
+- **What was fixed:** HR can now create multiple daily wage entries for the same contractor on the same date as long as each has a distinct gate_entry_reference. Same gate ref (even with different time windows, even with whitespace/case variants) is now rejected by both app-level validation AND a DB-level UNIQUE expression index — defense-in-depth. Verified via 9 curl tests (happy path, the bug fix scenario, true duplicates, normalisation, 400-on-missing, edit-flow regression, index presence, direct-INSERT bypass).
+- **Breaking change:** `POST /dailyWage/entries/check-duplicates` request contract changed — now requires `gate_entry_reference` instead of `in_time`/`out_time`. Any external caller (none found in repo) must adapt.
+- **What's fragile:**
+  - `idx_dw_entries_unique_gate` is an EXPRESSION index using `LOWER(TRIM(...))`. Any future migration that rebuilds `dw_entries` (e.g. ALTER-via-copy) MUST recreate this index with the identical expression, or app-level validation (TRIM+LOWER) and DB-level enforcement will disagree — dropping silently to app-only checks.
+  - The `status != 'rejected'` exemption was removed. If HR workflow relied on re-entering after rejection with the same gate ref, they'll now have to delete the rejected row first or use a different ref.
+- **Pre-existing quirk (not touched, logged for future pass):** `backend/server.js` logs `DATA_DIR` as `backend/data/` but `backend/src/database/db.js` resolves the actual DB to repo-root `data/hr_system.db` (via `__dirname + '../../../data'`). Both paths have stale `.db` files. Sandbox testing confirmed the real DB path is the repo-root one.
+- **Sandbox notes:** dev backend binds to port 3001 (not 3000); `sqlite3` CLI not installed — used Python `sqlite3` module for ad-hoc queries.
+- **Known follow-up:** No soft warning yet for "3rd+ entry same contractor same day" — hold until HR reports confusion, then decide between a confirmation-dialog-only path or a configurable per-contractor daily cap.
+- **Next session should:** Verify on Railway that (a) existing prod rows don't collide with the new UNIQUE index on first deploy — if they do, the boot log will print `[SCHEMA] Could not create UNIQUE index idx_dw_entries_unique_gate …`, and a manual dedup via the admin Query Tool is needed before restart; (b) HR can now enter two entries with identical times and different gate refs without hitting the 409.
+
+---
+
+## Section 0: Previous Session
 - **Date:** 2026-04-15
 - **Branch:** `claude/session-start-FyzhO` (pushed to `origin/main` at `18fc12a`)
 - **Last commit:** `18fc12a` refactor: extract shared shift metric utility with variant-aware night timings
