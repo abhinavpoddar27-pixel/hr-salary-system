@@ -488,4 +488,13 @@ export const rejectEarlyExitDeduction = (id, data) => api.put(`/early-exit-deduc
 export const searchEmployeesForAI = (q) => api.get('/ai/employee-search', { params: { q } })
 export const explainSalary = (data) => api.post('/ai/explain-salary', data)
 
+// ── Sales Salary Module (Phase 1) ────────────────────────
+export const getSalesEmployees = (params) => api.get('/sales/employees', { params })
+export const getSalesEmployee = (code, company) => api.get(`/sales/employees/${encodeURIComponent(code)}`, { params: { company } })
+export const createSalesEmployee = (data) => api.post('/sales/employees', data)
+export const updateSalesEmployee = (code, company, data) => api.put(`/sales/employees/${encodeURIComponent(code)}`, data, { params: { company } })
+export const markSalesEmployeeLeft = (code, company, data = {}) => api.put(`/sales/employees/${encodeURIComponent(code)}/mark-left`, data, { params: { company } })
+export const getSalesEmployeeStructures = (code, company) => api.get(`/sales/employees/${encodeURIComponent(code)}/structures`, { params: { company } })
+export const createSalesEmployeeStructure = (code, company, data) => api.post(`/sales/employees/${encodeURIComponent(code)}/structures`, data, { params: { company } })
+
 export default api

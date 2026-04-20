@@ -75,6 +75,12 @@ const nav = [
       { label: 'Audit Log', to: '/daily-wage/audit', financeOnly: true },
     ]
   },
+  {
+    label: 'Sales', icon: '🛒', to: '/sales', salesAllowed: true,
+    children: [
+      { label: 'Sales Employees', to: '/sales/employees' },
+    ]
+  },
   { label: 'Employee Profile', icon: '🔬', to: '/employee-profile' },
   { label: 'Dept Analytics', icon: '🏢', to: '/dept-analytics' },
   { label: 'Salary Explainer', icon: '🤖', action: 'salaryExplainer', hrFinanceOrAdmin: true },
@@ -105,6 +111,8 @@ function NavItem({ item, collapsed, depth = 0, userRole, onNavigate, onAction })
   if (item.financeOnly && userRole !== 'finance' && userRole !== 'admin') return null
   // Hide HR/Finance/Admin-only items from other roles (Salary Explainer)
   if (item.hrFinanceOrAdmin && !['hr', 'finance', 'admin'].includes(userRole)) return null
+  // Hide Sales section from roles without 'sales-employees' permission (hr + admin)
+  if (item.salesAllowed && !['hr', 'admin'].includes(userRole)) return null
 
   // Auto-open active parent
   React.useEffect(() => {

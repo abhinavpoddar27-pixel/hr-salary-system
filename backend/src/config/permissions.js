@@ -4,7 +4,8 @@ const PERMISSIONS = {
        'corrections', 'day-calc', 'salary', 'employees', 'leaves', 'advances', 'loans',
        'reports', 'payslips', 'notifications', 'leave-management', 'salary-input', 'salary-advance',
        'workforce', 'analytics', 'compliance', 'finance-audit', 'alerts', 'held-salaries-register',
-       'late-coming', 'daily-wage', 'early-exit', 'dept-analytics', 'employee-profile', 'comp-off'],
+       'late-coming', 'daily-wage', 'early-exit', 'dept-analytics', 'employee-profile', 'comp-off',
+       'sales-employees'],
   // Finance role (April 2026): added `salary-input` so finance can navigate to
   // the gross-salary change approval queue, `miss-punch` so finance can reach
   // the Miss Punch Review tab, and `held-salaries-register` for the new

@@ -1969,6 +1969,86 @@ function initSchema(db) {
     console.log('[MIGRATION] Contractor flag migration complete — will not re-run.');
   }
 
+  // ── Sales Salary Module (Phase 1: master + structures only) ──────────
+  // Parallel pipeline to plant; strictly additive. Codes are scoped per
+  // company (UNIQUE(code, company) — see design doc §4A Q2), so Asian
+  // Lakto's S001 and Indriyan's S001 are independent rows. Status
+  // transitions are manual only (no auto-inactive job — §4A Q3).
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS sales_employees (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      code TEXT NOT NULL,
+      name TEXT NOT NULL,
+
+      aadhaar TEXT,
+      pan TEXT,
+      dob TEXT,
+      doj TEXT,
+      dol TEXT,
+      contact TEXT,
+      personal_contact TEXT,
+
+      state TEXT,
+      headquarters TEXT,
+      city_of_operation TEXT,
+      reporting_manager TEXT,
+      designation TEXT,
+      punch_no TEXT,
+      working_hours TEXT,
+
+      gross_salary REAL DEFAULT 0,
+      pf_applicable INTEGER DEFAULT 0,
+      esi_applicable INTEGER DEFAULT 0,
+      pt_applicable INTEGER DEFAULT 0,
+
+      bank_name TEXT,
+      account_no TEXT,
+      ifsc TEXT,
+
+      company TEXT NOT NULL,
+
+      status TEXT DEFAULT 'Active'
+        CHECK(status IN ('Active','Inactive','Left','Exited')),
+
+      predecessor_type TEXT
+        CHECK(predecessor_type IN ('plant','sales','none')
+              OR predecessor_type IS NULL),
+      predecessor_id INTEGER,
+      predecessor_code TEXT,
+
+      created_at TEXT DEFAULT (datetime('now')),
+      created_by TEXT,
+      updated_at TEXT DEFAULT (datetime('now')),
+      updated_by TEXT,
+
+      UNIQUE(code, company)
+    );
+
+    CREATE TABLE IF NOT EXISTS sales_salary_structures (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      employee_id INTEGER NOT NULL,
+      effective_from TEXT NOT NULL,
+      effective_to TEXT,
+      basic REAL DEFAULT 0,
+      hra REAL DEFAULT 0,
+      cca REAL DEFAULT 0,
+      conveyance REAL DEFAULT 0,
+      gross_salary REAL DEFAULT 0,
+      pf_applicable INTEGER DEFAULT 0,
+      esi_applicable INTEGER DEFAULT 0,
+      pt_applicable INTEGER DEFAULT 0,
+      pf_wage_ceiling_override REAL,
+      notes TEXT,
+      created_at TEXT DEFAULT (datetime('now')),
+      created_by TEXT,
+      FOREIGN KEY (employee_id) REFERENCES sales_employees(id),
+      UNIQUE(employee_id, effective_from)
+    );
+  `);
+  safeCreateIndex('CREATE INDEX IF NOT EXISTS idx_sales_employees_company ON sales_employees(company)');
+  safeCreateIndex('CREATE INDEX IF NOT EXISTS idx_sales_employees_status ON sales_employees(status)');
+  safeCreateIndex('CREATE INDEX IF NOT EXISTS idx_sales_salary_structures_emp ON sales_salary_structures(employee_id, effective_from)');
+
   console.log('✅ Database schema initialized');
 }
 
