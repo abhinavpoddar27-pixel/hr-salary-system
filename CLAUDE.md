@@ -1,9 +1,66 @@
 ## Section 0: Last Session
 - **Date:** 2026-04-20
 - **Branch:** `claude/session-start-hook-jv0KJ` (pushed; not yet merged to `origin/main`)
+- **Task:** Sales Salary Module Phase 3 — compute engine + register UI + payslip.
+- **Phase 1 commit:** `78df719` feat(sales): Phase 1 — schema + employee master + sidebar entry
+- **Phase 2 commit:** `57714be` feat(sales): Phase 2 — holiday master + coordinator sheet upload + matcher
+- **Phase 3 commit:** (this session, pending at report time)
+- **Phase 3 delivered:**
+  - Tables: `sales_salary_computations` (43 columns — the 8 pro-rated earning buckets + `ot_amount`/`incentive_amount`/`diwali_bonus`/`diwali_recovery`/`other_deductions` + pf/esi/pt/tds + `status` state machine + `hold_reason` + `finalized_at`/`finalized_by`; `incentive_amount` reserved per §4A Q6, HR-entered in v1; `UNIQUE(employee_code, month, year, company)`), `sales_diwali_ledger` (14 cols; `entry_type` IN `'accrual'|'payout'|'adjustment'`; `UNIQUE(employee_code, company, month, year, entry_type)` so recompute overwrites the accrual row without creating duplicates).
+  - 3 indexes: `idx_sales_comp_month_year_company`, `idx_sales_comp_status`, `idx_sales_diwali_emp_company`.
+  - 2 new `policy_config` keys (seeded via `INSERT OR IGNORE`): `sales_leniency='2'` (3-tier Sunday rule leniency days), `sales_salary_divisor_mode='calendar'` (v1 only implements calendar-days mode; `'26'` / `'30'` hooks deferred to Phase 4).
+  - New module `backend/src/services/sundayRule.js` — pure function `calculateSundayCredit({effectivePresent, workingDays, totalSundays, leniency})`. Verbatim port of plant's 3-tier formula (`dayCalculation.js:486–504`). Returns `{paidSundays, unpaidSundays, tier, threshold, daysPerWeeklyOff, note}`. No DB, no I/O, shared between plant and sales so any future tweak happens in one place.
+  - New service `backend/src/services/salesSalaryComputation.js`: exports `computeSalesEmployee`, `saveSalesSalaryComputation`, `generateSalesPayslipData`, `recomputeDiwaliLedgerCascade`, `writeDiwaliAccrualRow`. Pre-reads `incentive_amount`, `diwali_recovery`, `other_deductions`, `hold_reason`, `status`, `finalized_at`, `finalized_by`, `diwali_bonus` from the previous row (if any) BEFORE the UPSERT so HR-entered values and lifecycle fields survive recompute. PF base = `min(basic_earned, pfCeiling)` (sales has no DA column — flagged below). UPSERT explicitly listed 37 `= excluded.*` assignments matching the 37 mutable columns (grep-verified).
+  - 6 new endpoints on `sales.js` (all inherit Phase 1's `requireHrOrAdmin`):
+    - `POST /sales/compute` — picks the latest `status IN ('matched','computed')` upload via `ORDER BY uploaded_at DESC LIMIT 1` (supersede per Phase 2 Q2 — no auto-`'superseded'` flip). Per-employee transaction so one bad row doesn't roll back the batch. Stamps the winning upload `status='computed'`. Reports `finalizedRecomputeWarnings[]` for rows where recomputed `net_salary` drifted > ₹1 on a `finalized`/`paid` row.
+    - `GET /sales/salary-register` — returns rows + a totals object (gross/earned/ot/incentive/diwali/deductions/net).
+    - `PUT /sales/salary/:id` — inline edit of `incentive_amount` / `diwali_recovery` / `other_deductions` / `hold_reason`. Rebuilds `total_deductions` and `net_salary` server-side. Blocks edits on `finalized`/`paid` rows (move to `hold` first). Calls `recomputeDiwaliLedgerCascade` when `diwali_recovery` changes.
+    - `PUT /sales/salary/:id/status` — state machine via `ALLOWED_STATUS_MOVES` map: `computed→reviewed|hold`, `reviewed→computed|finalized|hold`, `finalized→paid|hold`, `hold→computed|reviewed|finalized`, `paid` is terminal. 400 on illegal transition. Writes `finalized_at`/`finalized_by` on `→finalized`.
+    - `GET /sales/diwali-ledger` — per-employee YTD summary with running balance.
+    - `GET /sales/payslip/:code` — structured payslip data (earnings/deductions breakdown, bank, employee, period).
+  - Modified `DELETE /sales/holidays/:id` — added finalized-computation guard per Phase 3 deferred decision: if any `sales_salary_computations` row with `status='finalized'` exists for the same (company, month-of-holiday, year-of-holiday), return 409 with blocker list. Holidays can still be deleted when the impacted month is `computed`/`reviewed`/`hold`/`paid` — only `finalized` blocks.
+  - `permissions.js` — appended `'sales-compute'`, `'sales-register'`, `'sales-diwali-ledger'` to `hr` array.
+  - `frontend/src/pages/Sales/SalesSalaryCompute.jsx` — dual-mode page. Pre-compute: big Compute button + last-uploaded summary. Post-compute: sortable register with `EditRowCell` component (inline edit of incentive/diwali/other), totals row, per-row status pill, action menu for status transitions, Diwali-ledger drilldown modal, Excel/NEFT export placeholders (disabled with "Phase 4" tooltip). Recompute confirmation dialog when any `reviewed`/`finalized`/`paid` rows exist.
+  - `frontend/src/pages/Sales/SalesPayslip.jsx` — React Query, `useParams`/`useSearchParams` routing, earnings/deductions side-by-side, net callout, bank details, `window.print()` with `print:hidden` on top bar.
+  - `App.jsx` — 2 lazy imports + 2 routes (`/sales/compute`, `/sales/payslip/:code`).
+  - `Sidebar.jsx` — added "Compute Salaries" child under Sales.
+  - `api.js` — 6 helpers: `salesCompute`, `salesSalaryRegister`, `salesSalaryUpdate`, `salesSalaryStatusUpdate`, `salesDiwaliLedger`, `salesPayslip`.
+- **What was verified (Phase 3):**
+  - Schema: 7 sales_ tables (2 Phase 1 + 3 Phase 2 + 2 Phase 3), 8 sales indexes, 2 new policy_config rows, HR role has 3 new permissions appended.
+  - `sundayRule.js` pure function test: tier1 case (eff=24, wd=26, sundays=4, len=2 → paid=4, tier1_full), tier2 case (eff=18, wd=26 → paid=2, tier2_proportional — `daysPerWeeklyOff=6.5`, so eff>6.5 qualifies for proportional), tier3 case (eff=3 → paid=0, tier3_none). **Note:** prompt expected tier3 for eff=18; kept plant semantics as ground truth — flagged in Questions for Abhinav.
+  - End-to-end compute: seeded 2 employees + 1 structure + 1 holiday + 1 uploaded/matched upload → POST `/sales/compute` → 1 row written with `status='computed'`, `basic_earned`/`hra_earned` correctly pro-rated, PF on basic only.
+  - Recompute idempotency: after HR sets incentive=500, diwali_recovery=3000, other_deductions=200 → recompute preserved all three and produced identical net_salary=15950 (drift check: 0 rows).
+  - Diwali cascade: Feb accrual=3000 → Mar accrual=5000 → running_balance 3000,8000 ✓. Edit Feb to 4000 → Mar cascaded to 9000 ✓.
+  - Status state machine: all 12 legal transitions accepted; 4 illegal transitions (e.g. `paid→computed`, `computed→finalized`, `computed→paid`) correctly 400-rejected.
+  - Upload supersede: uploaded v2 fixture with `sheet_days_given=20`, ran compute → compute correctly read v2 (payable_days reflected 20, not v1's 25). v1 upload remained `status='matched'` (NOT auto-superseded) per Phase 2 Q2.
+  - Holiday delete guard: Finalized Feb row → Feb holiday DELETE returned 409 with blocker list. Moved row to `hold` → DELETE succeeded.
+  - `finalizedRecomputeWarnings[]`: finalized Feb row, edited salary_structure (gross 20k→22k), recomputed → endpoint returned warning array populated, finalized row's net_salary updated (recomputed), HR can review before finalizing again.
+  - Plant regression: 7 plant tables (employees/salary_structures/salary_computations/day_calculations/attendance_processed/monthly_imports/holidays) row counts unchanged (0/0/0/0/0/0/20). Plant exports identical: `salaryComputation.js` → `['computeEmployeeSalary','saveSalaryComputation','generatePayslipData']`, `dayCalculation.js` → `['calculateDays','saveDayCalculation','getMonthDates','getDayOfWeek','WEEKLY_OFF_LENIENCY','effectiveStatusForDay']`.
+  - Frontend build: clean, 5 Sales chunks emitted (SalesEmployeeMaster, SalesHolidayMaster, SalesUpload, SalesSalaryCompute, SalesPayslip).
+- **What's fragile (Phase 3):**
+  - `sundayRule.js` is now shared between plant (`dayCalculation.js`) and sales (`salesSalaryComputation.js`) — but plant still has the inline 3-tier block intact; we did NOT refactor plant to call the new module. If someone later refactors plant to use `sundayRule.js`, verify the plant's `effectivePresent` computation (which includes leave + half-day logic) matches what the pure function expects — same formula, different input assembly.
+  - `recomputeDiwaliLedgerCascade` walks forward month-by-month. If the ledger grows past ~12 months per employee, the cascade becomes O(N) per edit — cheap for current scale but worth revisiting when Phase 4 adds multi-year payout logic.
+  - Compute reads the latest `status IN ('matched','computed')` upload per `(month, year, company)` — earlier uploads are NOT auto-flipped to `'superseded'`. If HR rolls back (deletes the latest upload), compute will transparently pick the next-newest — but they may not realise which upload fed the salary. Phase 4 may want a "show source upload" link on the register.
+  - `finalizedRecomputeWarnings[]` is surfaced in the compute response JSON but the UI does NOT yet render them as a banner — HR has to inspect the network payload or check the status column for drift. Low-risk cosmetic gap for Phase 4.
+  - PF base uses `min(basic_earned, pfCeiling)` only — sales has NO `da` column. If HR later introduces a DA bucket for sales (unlikely per design doc, but possible), the PF base formula needs `min(basic_earned + da_earned, ceiling)` and a schema migration.
+  - Only `sales_salary_divisor_mode='calendar'` is implemented. `'26'` and `'30'` modes read the policy_config row but fall through to calendar with no warning — change the key manually and compute will silently stay on calendar. Document when Phase 4 ships the other modes.
+  - `incentive_amount` is HR-entered via `PUT /sales/salary/:id`. Per §4A Q6 a future auto-compute source (e.g. sales target table) may be added. The column and UPSERT preservation are already in place; only the compute path needs extending.
+- **Pre-existing quirk (not fixed this session):** `SalesEmployeeMaster.jsx` "Bulk Import" placeholder button still points to "Phase 2" tooltip — superseded by Phase 2's dedicated `/sales/upload` page. Trivial Phase-4 cleanup.
+- **Questions for Abhinav (surfaced during build):**
+  1. **Sunday rule tier expectation** — prompt expected eff=18, wd=26, totalSundays=4, leniency=2 to produce tier3 (zero Sundays paid). Plant's formula puts it in tier2 (proportional: `floor(18/6.5)=2` paid Sundays) because `daysPerWeeklyOff = (workingDays - leniency) / totalSundays = 24/4 = 6` and eff=18 > 6, so tier2 fires. Kept plant semantics as ground truth for parity. Abhinav to confirm this is intended behaviour or whether the prompt's tier3 expectation should become the new rule (and migrate the plant alongside).
+  2. **PF base without DA** — sales has no `da` column in `sales_salary_structures`. Current PF base = `min(basic_earned, pfCeiling)`. Intended? If sales reps ever get a DA bucket, schema + compute both need touching.
+  3. **Divisor mode 26 / 30** — only `calendar` implemented. OK to ship v1 with just calendar? If yes, Phase 4 item.
+- **Sandbox notes:** `better-sqlite3@9.6.0` headers pre-cached at `$HOME/.cache/node-gyp/22.22.2/` (same as Phase 1/2). Port 3001 dev server managed via `fuser -k 3001/tcp` + subshell daemonize to avoid zombie-process issues.
+- **Next session (Phase 4) should:** (a) wire the Excel + NEFT export buttons on the register (currently disabled placeholders); (b) implement the two pending `sales_salary_divisor_mode` options (`'26'`, `'30'`) and document in `policy_config`; (c) surface `finalizedRecomputeWarnings[]` as a top-of-register warning banner; (d) auto-supersede old uploads (or keep the current "latest wins silently" depending on Abhinav's Phase 2 Q2 ratification); (e) clean up the "Bulk Import" placeholder in `SalesEmployeeMaster.jsx`; (f) start Phase 5 (plant March 2026 `day_calculations` snapshot prerequisite).
+
+---
+
+## Section 0: Previous Session
+- **Date:** 2026-04-20
+- **Branch:** `claude/session-start-hook-jv0KJ` (pushed; not yet merged to `origin/main`)
 - **Task:** Sales Salary Module Phase 1 + Phase 2.
 - **Phase 1 commit:** `78df719` feat(sales): Phase 1 — schema + employee master + sidebar entry
-- **Phase 2 commit:** (this session, pending at report time)
+- **Phase 2 commit:** `57714be` feat(sales): Phase 2 — holiday master + coordinator sheet upload + matcher
 - **Phase 1 delivered:**
   - Tables: `sales_employees`, `sales_salary_structures` (per-company `UNIQUE(code, company)` per §4A Q2; manual `status` transitions only per §4A Q3; no `auto_inactive`/`inactive_since`).
   - 7 CRUD endpoints on new `backend/src/routes/sales.js` — employees list/get/create/update/mark-left + structures history/create. Router-level `requireHrOrAdmin`; every `:code` endpoint demands `?company=X` (400 if missing).
@@ -506,6 +563,30 @@ frontend/
 - Business rules (matcher): see Phase 2 entry in Section 0 for the 5-tier algorithm. Same-company only per §4A Q2. HR manual link sets `match_confidence='manual'`, `match_method='hr_manual'`.
 - Business rules (parser): Dynamic header detection (rows 0–10); NO hardcoded row numbers. Q4 columns ("Working Days as Per AI", "Working Days Manual") explicitly dropped even when present in the sheet — only `sheet_days_given` is authoritative. Subtotal rows (name starts with "TOTAL" or "SUBTOTAL") skipped. Non-numeric `Day's Given` skipped.
 - Edge cases: file_hash collision → 409 with `existingUploadId` (no re-parse); parser detects month/year from filename regex OR first-5-rows scan — falls back to multipart body; cross-company manual match rejected; confirm with any NULL `employee_code` rejected.
+
+## Sales Pipeline Stage 2: Compute Engine + Register + Payslip (Phase 3)
+- Route: `backend/src/routes/sales.js` → `POST /sales/compute`, `GET /sales/salary-register`, `PUT /sales/salary/:id`, `PUT /sales/salary/:id/status`, `GET /sales/diwali-ledger`, `GET /sales/payslip/:code`. Also modified: `DELETE /sales/holidays/:id` (finalized-computation guard).
+- Service: `backend/src/services/salesSalaryComputation.js` → `computeSalesEmployee()`, `saveSalesSalaryComputation()`, `generateSalesPayslipData()`, `recomputeDiwaliLedgerCascade()`, `writeDiwaliAccrualRow()`; shared `backend/src/services/sundayRule.js` → `calculateSundayCredit()`.
+- Tables read: `sales_monthly_input` (latest confirmed upload per month/year/company via `ORDER BY uploaded_at DESC LIMIT 1` where `status IN ('matched','computed')`), `sales_employees`, `sales_salary_structures` (most recent `effective_from <= month-end`), `sales_holidays`, `sales_salary_computations` (pre-read for HR-entered field preservation on recompute), `policy_config` (sales_leniency, sales_salary_divisor_mode, pf_ceiling, pf/esi rates).
+- Tables written: `sales_salary_computations` (UPSERT on UNIQUE(employee_code, month, year, company)), `sales_diwali_ledger` (accrual + payout rows; cascade rewrites running_balance on earlier-month edits), `sales_uploads` (winning upload flipped to `status='computed'`).
+- Input contract: `POST /sales/compute` body `{month, year, company}`. Requires at least one `status IN ('matched','computed')` upload for the period. Employee gate: matched sheet row exists AND `sales_employees.status='Active'` at period start.
+- Output contract: compute response `{totalProcessed, computed, skipped, errors[], finalizedRecomputeWarnings[]}`. Register response `{rows[], totals{gross,earned,ot,incentive,diwali,deductions,net}}`. Payslip response full slip object (employee, period, days, earnings[], totalEarnings, deductions[], totalDeductions, netSalary, status, bank, computedAt, finalizedAt, finalizedBy).
+- Downstream consumers: `SalesPayslip.jsx` (print view), `SalesSalaryCompute.jsx` register UI; Phase 4 will add Excel/NEFT exports (currently disabled placeholders).
+- Business rules (Sunday): `sundayRule.calculateSundayCredit()` — shared pure function, 3 tiers (tier1_full: eff ≥ workingDays-leniency; tier2_proportional: eff > daysPerWeeklyOff; tier3_none). `daysPerWeeklyOff = (workingDays - leniency) / totalSundays`.
+- Business rules (gazetted holiday credit): paid only if employee is Active on that date AND the applicable_states filter matches (or is NULL = all states). Counted in `gazetted_holidays_paid`, flows into `total_days` earned.
+- Business rules (divisor): only `sales_salary_divisor_mode='calendar'` implemented in v1 — `earned_ratio = total_days / calendar_days`, capped at 1.0. `'26'`/`'30'` hooks read but silently fall back to calendar (Phase 4).
+- Business rules (earnings): basic/hra/conveyance/medical/special/travel/washing/mobile × earnedRatio. OT/Incentive/Diwali stay outside earnedRatio (OT auto from sheet_ot, Incentive HR-entered per §4A Q6, Diwali_bonus HR-entered).
+- Business rules (PF): `min(basic_earned, pf_ceiling)` × pf_rate, only if `salStruct.pf_applicable=1`. Sales has NO `da` column — PF base is basic_earned alone. (See §4A Q2 in Phase 3 notes.)
+- Business rules (ESI): `grossEarned × esi_rate` only if `gross_salary <= 21000` AND `salStruct.esi_applicable=1`.
+- Business rules (Professional Tax): DISABLED (same as plant, April 2026). Column retained but always 0.
+- Business rules (Diwali ledger): each compute writes/upserts an `entry_type='accrual'` row per (employee, company, month, year). `diwali_recovery` on `sales_salary_computations` triggers `recomputeDiwaliLedgerCascade` to walk forward month-by-month and recompute `running_balance`. Payouts (entry_type='payout') written manually via Phase 4 UI (deferred). Per §4A Q5, payout happens Oct/Nov of fiscal year.
+- Business rules (status state machine): `ALLOWED_STATUS_MOVES` = {`computed`: [`reviewed`, `hold`], `reviewed`: [`computed`, `finalized`, `hold`], `finalized`: [`paid`, `hold`], `hold`: [`computed`, `reviewed`, `finalized`], `paid`: []}. 400 on illegal transitions. `→finalized` stamps `finalized_at`/`finalized_by`. `paid` is terminal.
+- Business rules (finalized-row edit guard): `PUT /sales/salary/:id` rejects edits to incentive/diwali/other/hold_reason when `status IN ('finalized','paid')`. HR must move row → `hold` first.
+- Business rules (finalized-row recompute): Not blocked, but writes to `finalizedRecomputeWarnings[]` in response when net_salary drifts > ₹1. UI does NOT yet surface the array (Phase 4 cosmetic gap).
+- Business rules (recompute idempotency): pre-read `incentive_amount`, `diwali_recovery`, `other_deductions`, `hold_reason`, `status`, `finalized_at`, `finalized_by`, `diwali_bonus` before the UPSERT so HR-entered fields survive. UPSERT has 37 `= excluded.*` assignments (one per mutable column; grep-verified).
+- Business rules (upload supersede): latest `status IN ('matched','computed')` upload wins. Earlier uploads remain `'matched'` / `'computed'` — NOT auto-flipped to `'superseded'` per Phase 2 Q2. Compute stamps the winner `'computed'` (no-op if it's already computed).
+- Business rules (holiday delete guard): `DELETE /sales/holidays/:id` returns 409 when any `sales_salary_computations` row with `status='finalized'` exists for the same (company, month, year) as the holiday date. Holidays in `computed`/`reviewed`/`hold`/`paid` months CAN be deleted.
+- Edge cases: recompute with edited salary_structure (gross change) on finalized rows → warnings reported, row still updated; deleted holiday in `hold` month → allowed; upload v2 supersedes v1 silently; no confirmed upload for period → `POST /compute` returns 400.
 
 ## Stage 1: Import (EESL biometric upload)
 - Route: `backend/src/routes/import.js` → `POST /upload`, `GET /history`, `GET /summary/:month/:year`, `POST /reconciliation/*`

@@ -507,4 +507,12 @@ export const salesUploadPreview = (uploadId) => api.get(`/sales/upload/${uploadI
 export const salesUploadMatch = (uploadId, rowId, data) => api.put(`/sales/upload/${uploadId}/match/${rowId}`, data)
 export const salesUploadConfirm = (uploadId) => api.post(`/sales/upload/${uploadId}/confirm`)
 
+// ── Sales Salary Module (Phase 3) ────────────────────────
+export const salesCompute = (data) => api.post('/sales/compute', data)
+export const salesSalaryRegister = (params) => api.get('/sales/salary-register', { params })
+export const salesSalaryUpdate = (id, data) => api.put(`/sales/salary/${id}`, data)
+export const salesSalaryStatusUpdate = (id, data) => api.put(`/sales/salary/${id}/status`, data)
+export const salesDiwaliLedger = (params) => api.get('/sales/diwali-ledger', { params })
+export const salesPayslip = (code, params) => api.get(`/sales/payslip/${encodeURIComponent(code)}`, { params })
+
 export default api

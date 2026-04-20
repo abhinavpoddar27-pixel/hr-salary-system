@@ -456,6 +456,25 @@ router.delete('/holidays/:id', (req, res) => {
   const existing = db.prepare('SELECT * FROM sales_holidays WHERE id = ?').get(id);
   if (!existing) return res.status(404).json({ success: false, error: 'Sales holiday not found' });
 
+  // Phase 3 guard: block hard-delete if a finalized sales salary
+  // computation exists for the same (company, year, month) the holiday
+  // falls in. Soft-delete is not implemented in Phase 2/3 — HR must
+  // explicitly un-finalize the computation first (via PUT /salary/:id/status).
+  const blockers = db.prepare(`
+    SELECT DISTINCT month, year FROM sales_salary_computations
+     WHERE company = ? AND status = 'finalized'
+       AND month = CAST(strftime('%m', ?) AS INTEGER)
+       AND year  = CAST(strftime('%Y', ?) AS INTEGER)
+  `).all(existing.company, existing.holiday_date, existing.holiday_date);
+  if (blockers.length > 0) {
+    const monthsDesc = blockers.map(b => `${b.month}/${b.year}`).join(', ');
+    return res.status(409).json({
+      success: false,
+      error: `Cannot delete holiday: referenced by finalized salary computation(s) for month(s) ${monthsDesc}`,
+      data: { blockingMonths: blockers },
+    });
+  }
+
   db.prepare('DELETE FROM sales_holidays WHERE id = ?').run(id);
 
   writeAuditP2(db, 'sales_holidays', {
@@ -800,6 +819,411 @@ router.post('/upload/:uploadId/confirm', (req, res) => {
 
   const updated = db.prepare('SELECT * FROM sales_uploads WHERE id = ?').get(uploadId);
   res.json({ success: true, data: updated, message: 'Matches confirmed; ready for Phase 3 compute.' });
+});
+
+// ════════════════════════════════════════════════════════════════════
+// Phase 3 — Compute engine + salary register + Diwali ledger + payslip
+// ════════════════════════════════════════════════════════════════════
+
+const {
+  computeSalesEmployee,
+  saveSalesSalaryComputation,
+  generateSalesPayslipData,
+  recomputeDiwaliLedgerCascade,
+  writeDiwaliAccrualRow,
+} = require('../services/salesSalaryComputation');
+
+const VALID_COMP_STATUSES = ['computed', 'reviewed', 'finalized', 'paid', 'hold'];
+
+// Allowed status transitions. Phase 3 is permissive but blocks regressions
+// from finalized/paid back to computed (those should require admin).
+const ALLOWED_STATUS_MOVES = {
+  computed:  ['reviewed', 'hold'],
+  reviewed:  ['computed', 'finalized', 'hold'],
+  finalized: ['paid', 'hold'],
+  paid:      [],              // terminal
+  hold:      ['computed', 'reviewed'],
+};
+
+// ── POST /api/sales/compute ─────────────────────────────────────────
+router.post('/compute', (req, res) => {
+  const db = getDb();
+  const user = req.user?.username || 'unknown';
+  const body = req.body || {};
+  const month = parseInt(body.month, 10);
+  const year  = parseInt(body.year, 10);
+  const company = (body.company || '').trim();
+
+  if (!month || !year || !company) {
+    return res.status(400).json({ success: false, error: 'month, year, and company are required in the body' });
+  }
+
+  // Supersede semantics: latest matched upload per (month, year, company) wins.
+  const upload = db.prepare(`
+    SELECT * FROM sales_uploads
+     WHERE month = ? AND year = ? AND company = ? AND status IN ('matched', 'computed')
+  ORDER BY uploaded_at DESC, id DESC
+     LIMIT 1
+  `).get(month, year, company);
+  if (!upload) {
+    return res.status(400).json({
+      success: false, reason: 'no_confirmed_upload',
+      error: `No confirmed sales upload for ${month}/${year} ${company}. Upload + confirm first.`,
+    });
+  }
+
+  const rows = db.prepare(`
+    SELECT i.*, e.id AS sales_employee_id
+      FROM sales_monthly_input i
+ LEFT JOIN sales_employees e ON e.code = i.employee_code AND e.company = i.company
+     WHERE i.upload_id = ? AND i.employee_code IS NOT NULL
+  `).all(upload.id);
+
+  const results = [];
+  const excluded = [];
+  const errors = [];
+  const finalizedRecomputeWarnings = [];
+
+  for (const row of rows) {
+    if (!row.sales_employee_id) {
+      excluded.push({ employee_code: row.employee_code, reason: 'employee_not_found' });
+      continue;
+    }
+    const salesEmployee = db.prepare('SELECT * FROM sales_employees WHERE id = ?').get(row.sales_employee_id);
+
+    try {
+      // Per-employee transaction so one bad row doesn't roll back all.
+      const perTxn = db.transaction(() => {
+        // Capture previous net_salary for finalized-recompute-warning logic.
+        const prev = db.prepare(`
+          SELECT net_salary, status FROM sales_salary_computations
+           WHERE employee_code=? AND month=? AND year=? AND company=?
+        `).get(row.employee_code, month, year, company);
+
+        const comp = computeSalesEmployee(db, {
+          salesEmployee, monthlyInputRow: row, month, year, company,
+          requestId: req.requestId, user,
+        });
+        if (!comp.success) {
+          if (comp.excluded) excluded.push({ employee_code: row.employee_code, reason: comp.reason });
+          else errors.push({ employee_code: row.employee_code, error: comp.error });
+          return;
+        }
+        const compId = saveSalesSalaryComputation(db, comp);
+
+        // Flag recomputes that silently change money on a locked row.
+        if (prev && ['finalized', 'paid'].includes(prev.status) &&
+            Math.abs((prev.net_salary || 0) - comp.net_salary) > 1) {
+          finalizedRecomputeWarnings.push({
+            employee_code: row.employee_code,
+            prev_status: prev.status,
+            prev_net_salary: prev.net_salary,
+            new_net_salary: comp.net_salary,
+            delta: Math.round((comp.net_salary - prev.net_salary) * 100) / 100,
+          });
+        }
+
+        // Diwali ledger — write this month's accrual (if any) + cascade forward.
+        if ((comp.diwali_recovery || 0) > 0) {
+          writeDiwaliAccrualRow(db, {
+            employeeCode: comp.employee_code, company: comp.company,
+            month, year, accrualAmount: comp.diwali_recovery,
+            sourceComputationId: compId, user,
+          });
+        } else {
+          // Remove stale accrual row if this month's diwali_recovery has been zeroed out.
+          db.prepare(`
+            DELETE FROM sales_diwali_ledger
+             WHERE employee_code=? AND company=? AND year=? AND month=? AND entry_type='accrual'
+          `).run(comp.employee_code, comp.company, year, month);
+        }
+        // Cascade forward so Mar/Apr/May balances refresh after a Feb edit.
+        recomputeDiwaliLedgerCascade(db, comp.employee_code, comp.company, year, month + 1, user);
+
+        results.push({
+          employee_code: comp.employee_code,
+          net_salary: comp.net_salary,
+          earned_ratio: comp.earned_ratio,
+          status: comp.status,
+        });
+      });
+      perTxn();
+    } catch (perErr) {
+      console.error(`[sales-compute] ${row.employee_code} ${month}/${year}: ${perErr.message}`);
+      if (perErr.stack) console.error(perErr.stack.split('\n').slice(0, 5).join('\n'));
+      errors.push({ employee_code: row.employee_code, error: perErr.message });
+    }
+  }
+
+  // Stamp the winning upload as 'computed' so the UI knows Phase 3 has run.
+  db.prepare("UPDATE sales_uploads SET status = 'computed' WHERE id = ?").run(upload.id);
+
+  writeAuditP2(db, 'sales_salary_computations', {
+    recordId: upload.id, field: 'compute_run', oldVal: '', newVal: `${results.length} computed`,
+    user, actionType: 'compute',
+    remark: `Sales compute: upload #${upload.id}, ${results.length} OK, ${excluded.length} excluded, ${errors.length} errors`,
+  });
+
+  res.json({
+    success: true,
+    data: {
+      uploadId: upload.id,
+      month, year, company,
+      computed: results.length,
+      excluded,
+      errors,
+      finalizedRecomputeWarnings,
+    },
+  });
+});
+
+// ── GET /api/sales/salary-register ───────────────────────────────────
+router.get('/salary-register', (req, res) => {
+  const db = getDb();
+  const month = parseInt(req.query.month, 10);
+  const year  = parseInt(req.query.year, 10);
+  const company = (req.query.company || '').trim();
+  if (!month || !year || !company) {
+    return res.status(400).json({ success: false, error: 'month, year, and company query params are required' });
+  }
+
+  const rows = db.prepare(`
+    SELECT c.*,
+           e.name, e.headquarters, e.city_of_operation,
+           e.designation, e.bank_name, e.account_no, e.ifsc,
+           e.status AS employee_status
+      FROM sales_salary_computations c
+ LEFT JOIN sales_employees e ON e.code = c.employee_code AND e.company = c.company
+     WHERE c.month = ? AND c.year = ? AND c.company = ?
+  ORDER BY e.name ASC
+  `).all(month, year, company);
+
+  const totals = rows.reduce((acc, r) => ({
+    gross_earned: acc.gross_earned + (r.gross_earned || 0),
+    total_deductions: acc.total_deductions + (r.total_deductions || 0),
+    net_salary: acc.net_salary + (r.net_salary || 0),
+    incentive_amount: acc.incentive_amount + (r.incentive_amount || 0),
+    diwali_recovery: acc.diwali_recovery + (r.diwali_recovery || 0),
+  }), { gross_earned: 0, total_deductions: 0, net_salary: 0, incentive_amount: 0, diwali_recovery: 0 });
+
+  const round2 = (n) => Math.round(n * 100) / 100;
+  Object.keys(totals).forEach(k => totals[k] = round2(totals[k]));
+
+  res.json({ success: true, data: { rows, totals, count: rows.length } });
+});
+
+// ── PUT /api/sales/salary/:id — HR manual override ───────────────────
+router.put('/salary/:id', (req, res) => {
+  const db = getDb();
+  const user = req.user?.username || 'unknown';
+  const id = parseInt(req.params.id, 10);
+  if (!id) return res.status(400).json({ success: false, error: 'Invalid id' });
+  const body = req.body || {};
+
+  const existing = db.prepare('SELECT * FROM sales_salary_computations WHERE id = ?').get(id);
+  if (!existing) return res.status(404).json({ success: false, error: 'Sales salary row not found' });
+
+  // Locked-status guard — HR should un-finalize first via /status endpoint.
+  if (['finalized', 'paid'].includes(existing.status)) {
+    return res.status(409).json({
+      success: false,
+      error: `Cannot edit: row is ${existing.status}. Use PUT /salary/:id/status to move it back to 'reviewed' first.`,
+    });
+  }
+
+  const updates = {};
+  for (const k of ['incentive_amount', 'diwali_recovery', 'other_deductions']) {
+    if (body[k] !== undefined) {
+      const n = parseFloat(body[k]);
+      if (!Number.isFinite(n) || n < 0) {
+        return res.status(400).json({ success: false, error: `${k} must be a non-negative number` });
+      }
+      updates[k] = Math.round(n * 100) / 100;
+    }
+  }
+  if (body.hold_reason !== undefined) updates.hold_reason = body.hold_reason || null;
+
+  if (Object.keys(updates).length === 0) {
+    return res.json({ success: true, message: 'No updates', data: existing });
+  }
+
+  const incentive = updates.incentive_amount ?? existing.incentive_amount ?? 0;
+  const diwaliRec = updates.diwali_recovery ?? existing.diwali_recovery ?? 0;
+  const otherDed  = updates.other_deductions ?? existing.other_deductions ?? 0;
+
+  // Rebuild total_deductions from the non-editable components + the edited ones.
+  const fixedDeductions =
+    (existing.pf_employee || 0) + (existing.esi_employee || 0) +
+    (existing.professional_tax || 0) + (existing.tds || 0) +
+    (existing.advance_recovery || 0) + (existing.loan_recovery || 0);
+  const newTotalDed = Math.round((fixedDeductions + diwaliRec + otherDed) * 100) / 100;
+  const newNetSalary = Math.round(((existing.gross_earned || 0) + (existing.diwali_bonus || 0) + incentive - newTotalDed) * 100) / 100;
+
+  const perTxn = db.transaction(() => {
+    const sets = [];
+    const params = [];
+    for (const [k, v] of Object.entries(updates)) {
+      sets.push(`${k} = ?`);
+      params.push(v);
+    }
+    sets.push('total_deductions = ?'); params.push(newTotalDed);
+    sets.push('net_salary = ?');       params.push(newNetSalary);
+    params.push(id);
+
+    db.prepare(`UPDATE sales_salary_computations SET ${sets.join(', ')} WHERE id = ?`).run(...params);
+
+    // If diwali_recovery changed, refresh this month's ledger row + cascade forward.
+    if ('diwali_recovery' in updates) {
+      if (diwaliRec > 0) {
+        writeDiwaliAccrualRow(db, {
+          employeeCode: existing.employee_code, company: existing.company,
+          month: existing.month, year: existing.year,
+          accrualAmount: diwaliRec, sourceComputationId: id, user,
+        });
+      } else {
+        db.prepare(`
+          DELETE FROM sales_diwali_ledger
+           WHERE employee_code=? AND company=? AND year=? AND month=? AND entry_type='accrual'
+        `).run(existing.employee_code, existing.company, existing.year, existing.month);
+      }
+      recomputeDiwaliLedgerCascade(
+        db, existing.employee_code, existing.company, existing.year, existing.month + 1, user
+      );
+    }
+
+    writeAuditP2(db, 'sales_salary_computations', {
+      recordId: id, field: Object.keys(updates).join(','),
+      oldVal: JSON.stringify({
+        incentive_amount: existing.incentive_amount,
+        diwali_recovery: existing.diwali_recovery,
+        other_deductions: existing.other_deductions,
+        hold_reason: existing.hold_reason,
+      }),
+      newVal: JSON.stringify(updates),
+      user, actionType: 'manual_override', empCode: existing.employee_code,
+      remark: `HR override: net ${existing.net_salary} → ${newNetSalary}`,
+    });
+  });
+  perTxn();
+
+  const updated = db.prepare('SELECT * FROM sales_salary_computations WHERE id = ?').get(id);
+  res.json({ success: true, data: updated });
+});
+
+// ── PUT /api/sales/salary/:id/status ─────────────────────────────────
+router.put('/salary/:id/status', (req, res) => {
+  const db = getDb();
+  const user = req.user?.username || 'unknown';
+  const id = parseInt(req.params.id, 10);
+  if (!id) return res.status(400).json({ success: false, error: 'Invalid id' });
+
+  const body = req.body || {};
+  const next = (body.status || '').trim();
+  if (!VALID_COMP_STATUSES.includes(next)) {
+    return res.status(400).json({
+      success: false,
+      error: `status must be one of: ${VALID_COMP_STATUSES.join(', ')}`,
+    });
+  }
+
+  const existing = db.prepare('SELECT * FROM sales_salary_computations WHERE id = ?').get(id);
+  if (!existing) return res.status(404).json({ success: false, error: 'Sales salary row not found' });
+
+  const allowed = ALLOWED_STATUS_MOVES[existing.status] || [];
+  if (next !== existing.status && !allowed.includes(next)) {
+    return res.status(400).json({
+      success: false,
+      error: `Invalid transition: ${existing.status} → ${next}. Allowed from ${existing.status}: ${allowed.join(', ') || '(terminal)'}`,
+    });
+  }
+
+  const sets = ['status = ?'];
+  const params = [next];
+  if (next === 'finalized') {
+    sets.push("finalized_at = datetime('now')", 'finalized_by = ?');
+    params.push(user);
+  }
+  if (next === 'hold' && body.reason) {
+    sets.push('hold_reason = ?'); params.push(body.reason);
+  }
+  params.push(id);
+
+  db.prepare(`UPDATE sales_salary_computations SET ${sets.join(', ')} WHERE id = ?`).run(...params);
+
+  writeAuditP2(db, 'sales_salary_computations', {
+    recordId: id, field: 'status', oldVal: existing.status, newVal: next,
+    user, actionType: 'status_change', empCode: existing.employee_code,
+    remark: body.reason || `status ${existing.status} → ${next}`,
+  });
+
+  const updated = db.prepare('SELECT * FROM sales_salary_computations WHERE id = ?').get(id);
+  res.json({ success: true, data: updated });
+});
+
+// ── GET /api/sales/diwali-ledger?company=C&year=Y ────────────────────
+router.get('/diwali-ledger', (req, res) => {
+  const db = getDb();
+  const company = (req.query.company || '').trim();
+  const year = parseInt(req.query.year, 10);
+  if (!company || !year) {
+    return res.status(400).json({ success: false, error: 'company and year query params are required' });
+  }
+
+  // Per-employee summary: ytd accrual, total payouts, current running balance, last entry.
+  const rows = db.prepare(`
+    SELECT l.employee_code,
+           e.name AS employee_name,
+           SUM(l.accrual_amount)    AS ytd_accrual,
+           SUM(l.payout_amount)     AS total_payouts,
+           SUM(l.adjustment_amount) AS total_adjustments,
+           MAX(l.year * 100 + l.month) AS last_month_key,
+           MAX(l.created_at)        AS last_entry_date
+      FROM sales_diwali_ledger l
+ LEFT JOIN sales_employees e ON e.code = l.employee_code AND e.company = l.company
+     WHERE l.company = ? AND l.year = ?
+  GROUP BY l.employee_code
+  ORDER BY ytd_accrual DESC
+  `).all(company, year);
+
+  // running_balance for each employee = latest row's running_balance.
+  const out = rows.map(r => {
+    const latest = db.prepare(`
+      SELECT running_balance, month, year FROM sales_diwali_ledger
+       WHERE employee_code = ? AND company = ? AND year = ?
+    ORDER BY year DESC, month DESC, id DESC
+       LIMIT 1
+    `).get(r.employee_code, company, year);
+    return {
+      employee_code: r.employee_code,
+      employee_name: r.employee_name,
+      ytd_accrual: Math.round((r.ytd_accrual || 0) * 100) / 100,
+      total_payouts: Math.round((r.total_payouts || 0) * 100) / 100,
+      total_adjustments: Math.round((r.total_adjustments || 0) * 100) / 100,
+      running_balance: latest ? (Math.round((latest.running_balance || 0) * 100) / 100) : 0,
+      last_month: latest ? `${latest.month}/${latest.year}` : null,
+      last_entry_date: r.last_entry_date,
+    };
+  });
+
+  res.json({ success: true, data: out });
+});
+
+// ── GET /api/sales/payslip/:code?month=M&year=Y&company=C ────────────
+router.get('/payslip/:code', (req, res) => {
+  const db = getDb();
+  const code = req.params.code;
+  const month = parseInt(req.query.month, 10);
+  const year  = parseInt(req.query.year, 10);
+  const company = (req.query.company || '').trim();
+  if (!month || !year || !company) {
+    return res.status(400).json({ success: false, error: 'month, year, and company query params are required' });
+  }
+
+  const result = generateSalesPayslipData(db, code, month, year, company);
+  if (!result.success) {
+    return res.status(404).json(result);
+  }
+  res.json({ success: true, data: result });
 });
 
 module.exports = router;

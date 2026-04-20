@@ -2120,6 +2120,100 @@ function initSchema(db) {
   safeCreateIndex('CREATE INDEX IF NOT EXISTS idx_sales_monthly_input_upload ON sales_monthly_input(upload_id)');
   safeCreateIndex('CREATE INDEX IF NOT EXISTS idx_sales_monthly_input_match ON sales_monthly_input(employee_code, month, year, company)');
 
+  // ── Sales Salary Module — Phase 3 (compute engine + Diwali ledger) ────
+  // sales_salary_computations is the Phase 3 output. `incentive_amount`
+  // column is reserved for HR-entered variable pay (Q6). sales_diwali_ledger
+  // tracks the running balance of monthly Diwali deductions (Q5) — payout
+  // is Phase 4+ work.
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS sales_salary_computations (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      employee_code TEXT NOT NULL,
+      month INTEGER NOT NULL, year INTEGER NOT NULL,
+      company TEXT NOT NULL,
+
+      days_given REAL NOT NULL,
+      sundays_paid REAL DEFAULT 0,
+      gazetted_holidays_paid REAL DEFAULT 0,
+      earned_leave_days REAL DEFAULT 0,
+      total_days REAL NOT NULL,
+      calendar_days INTEGER NOT NULL,
+      earned_ratio REAL NOT NULL,
+
+      basic_monthly REAL DEFAULT 0,
+      hra_monthly REAL DEFAULT 0,
+      cca_monthly REAL DEFAULT 0,
+      conveyance_monthly REAL DEFAULT 0,
+      gross_monthly REAL DEFAULT 0,
+
+      basic_earned REAL DEFAULT 0,
+      hra_earned REAL DEFAULT 0,
+      cca_earned REAL DEFAULT 0,
+      conveyance_earned REAL DEFAULT 0,
+      gross_earned REAL DEFAULT 0,
+
+      pf_employee REAL DEFAULT 0,
+      pf_employer REAL DEFAULT 0,
+      esi_employee REAL DEFAULT 0,
+      esi_employer REAL DEFAULT 0,
+      professional_tax REAL DEFAULT 0,
+      tds REAL DEFAULT 0,
+      advance_recovery REAL DEFAULT 0,
+      loan_recovery REAL DEFAULT 0,
+      diwali_recovery REAL DEFAULT 0,
+      other_deductions REAL DEFAULT 0,
+      total_deductions REAL DEFAULT 0,
+
+      diwali_bonus REAL DEFAULT 0,
+      incentive_amount REAL DEFAULT 0,
+
+      net_salary REAL NOT NULL,
+
+      sunday_rule_trace TEXT,
+
+      status TEXT DEFAULT 'computed'
+        CHECK(status IN ('computed','reviewed','finalized','paid','hold')),
+      hold_reason TEXT,
+
+      computed_at TEXT DEFAULT (datetime('now')),
+      computed_by TEXT,
+      finalized_at TEXT, finalized_by TEXT,
+
+      UNIQUE(employee_code, month, year, company)
+    );
+
+    CREATE TABLE IF NOT EXISTS sales_diwali_ledger (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      employee_code TEXT NOT NULL,
+      company TEXT NOT NULL,
+      month INTEGER NOT NULL,
+      year INTEGER NOT NULL,
+      entry_type TEXT NOT NULL
+        CHECK(entry_type IN ('accrual','payout','adjustment')),
+      accrual_amount REAL DEFAULT 0,
+      payout_amount REAL DEFAULT 0,
+      adjustment_amount REAL DEFAULT 0,
+      running_balance REAL NOT NULL,
+      notes TEXT,
+      created_at TEXT DEFAULT (datetime('now')),
+      created_by TEXT NOT NULL,
+      source_computation_id INTEGER,
+      UNIQUE(employee_code, company, month, year, entry_type)
+    );
+  `);
+  safeCreateIndex('CREATE INDEX IF NOT EXISTS idx_sales_salary_comp_my_company ON sales_salary_computations(month, year, company)');
+  safeCreateIndex('CREATE INDEX IF NOT EXISTS idx_sales_salary_comp_status ON sales_salary_computations(status)');
+  safeCreateIndex('CREATE INDEX IF NOT EXISTS idx_sales_diwali_ledger_emp ON sales_diwali_ledger(employee_code, company, year)');
+
+  // policy_config seeds — tunable from SQL without a code deploy.
+  const seedSalesPolicy = db.prepare(
+    'INSERT OR IGNORE INTO policy_config (key, value, description) VALUES (?, ?, ?)'
+  );
+  seedSalesPolicy.run('sales_leniency', '2',
+    'Sales Sunday-rule leniency: absent working days allowed before Sundays start being lost');
+  seedSalesPolicy.run('sales_salary_divisor_mode', 'calendar',
+    'Sales salary divisor: calendar|fixed_28|hybrid (Phase 3 implements calendar only)');
+
   console.log('✅ Database schema initialized');
 }
 

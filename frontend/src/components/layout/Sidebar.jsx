@@ -81,6 +81,7 @@ const nav = [
       { label: 'Sales Employees', to: '/sales/employees' },
       { label: 'Sales Holidays', to: '/sales/holidays' },
       { label: 'Upload Sheet', to: '/sales/upload' },
+      { label: 'Compute Salaries', to: '/sales/compute' },
     ]
   },
   { label: 'Employee Profile', icon: '🔬', to: '/employee-profile' },
