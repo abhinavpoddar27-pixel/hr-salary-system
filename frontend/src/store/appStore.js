@@ -93,6 +93,12 @@ export const useAppStore = create(
       openSalaryExplainer: () => set({ salaryExplainerOpen: true }),
       closeSalaryExplainer: () => set({ salaryExplainerOpen: false }),
 
+      // ── Bug Report modal ────────────────────────────────────
+      bugReportModalOpen: false,
+      toggleBugReportModal: () => set(state => ({ bugReportModalOpen: !state.bugReportModalOpen })),
+      openBugReportModal: () => set({ bugReportModalOpen: true }),
+      closeBugReportModal: () => set({ bugReportModalOpen: false }),
+
       // ── Alert count ─────────────────────────────────────────
       alertCount: 0,
       setAlertCount: (count) => set({ alertCount: count }),

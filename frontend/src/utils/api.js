@@ -1,11 +1,17 @@
 import axios from 'axios'
 import toast from 'react-hot-toast'
+import { installContextBufferInterceptors } from './apiContextBuffer'
 
 const api = axios.create({
   baseURL: '/api',
   timeout: 60000,
   withCredentials: true
 })
+
+// Bug Reporter — ring buffer of the last 5 API calls (URL + status only,
+// query values redacted). Installed BEFORE the auth/error interceptors so
+// the buffer captures completions even for requests that will 4xx.
+installContextBufferInterceptors(api)
 
 // Attach JWT token from localStorage to every request
 api.interceptors.request.use(config => {

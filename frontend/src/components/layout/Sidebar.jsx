@@ -80,6 +80,7 @@ const nav = [
   { label: 'Salary Explainer', icon: '🤖', action: 'salaryExplainer', hrFinanceOrAdmin: true },
   { label: 'Session Analytics', icon: '📊', to: '/session-analytics', adminOnly: true },
   { label: 'Query Tool', icon: '🔎', to: '/admin/query-tool', adminOnly: true },
+  { label: 'Bug Reports', icon: '🐞', to: '/admin/bug-reports', adminOnly: true },
   {
     label: 'Settings', icon: '⚙️', to: '/settings', adminOnly: true,
     children: [
