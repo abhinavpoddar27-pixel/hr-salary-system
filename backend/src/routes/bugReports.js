@@ -2,17 +2,13 @@ const express = require('express');
 const { requireAuth } = require('../middleware/auth');
 const { verifyWebhook, SIGNATURE_HEADER_NAME } = require('../services/sarvamWebhookVerify');
 const { fetchJobResult } = require('../services/sarvamTranscription');
+const { runClaudeExtraction } = require('../services/bugReportAnalyzer');
 const { getDb } = require('../database/db');
 
 // Webhook router — no auth. HMAC signature + per-report token + idempotency
 // verification happens inside the handler. Mounted BEFORE the authed router
 // so requests bypass requireAuth.
 const webhookRouter = express.Router();
-
-// Placeholder for Claude extraction, replaced in Step 9.
-async function runClaudeExtractionStub(reportId) {
-  console.log(`[webhook] TODO step 9: run Claude extraction for report ${reportId}`);
-}
 
 // express.raw is scoped to THIS route only — we need unparsed bytes for the
 // HMAC check. Global express.json() continues to serve every other route.
@@ -108,7 +104,7 @@ webhookRouter.post(
       `).run(transcript, detectedLanguage, reportId);
 
       setImmediate(() => {
-        runClaudeExtractionStub(reportId).catch((err) => {
+        runClaudeExtraction(reportId).catch((err) => {
           console.error(`[webhook] claude kick failed for report ${reportId}:`, err.message);
         });
       });
