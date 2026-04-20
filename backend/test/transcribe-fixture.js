@@ -5,6 +5,10 @@
 // The dotenv require below is a harmless no-op when the package isn't
 // installed (this project doesn't add dotenv as a dep) — env loading is
 // handled by Node's native --env-file flag via the npm script.
+//
+// Note: this fixture is 22s, so it tests the REST sync path only. Batch
+// path (>28s) will be tested manually via a longer recording in the
+// step 11 smoke test.
 
 try { require('dotenv').config(); } catch (_) { /* optional */ }
 
