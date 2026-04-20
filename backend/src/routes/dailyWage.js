@@ -360,16 +360,24 @@ function validateEntryRow(db, row, rowIndex) {
     errors.push({ row: rowIndex, field: 'gate_entry_reference', error: `${prefix}gate_entry_reference is required` });
   }
 
-  // 10. duplicate check — exclude terminal 'rejected' so HR can re-enter after rejection
-  if (row.entry_date && row.in_time && row.out_time && row._contractor) {
+  // 10. duplicate check — (contractor, date, normalised gate ref) is unique
+  if (row.entry_date && row._contractor && row.gate_entry_reference) {
     const dup = db.prepare(`
-      SELECT id, entry_date, in_time, out_time FROM dw_entries
+      SELECT id, entry_date, in_time, out_time, gate_entry_reference FROM dw_entries
       WHERE contractor_id = ? AND entry_date = ?
-        AND status != 'rejected'
-        AND NOT (out_time <= ? OR in_time >= ?)
-    `).get(row._contractor.id, row.entry_date, row.in_time, row.out_time);
+        AND LOWER(TRIM(gate_entry_reference)) = LOWER(TRIM(?))
+    `).get(
+      row._contractor.id,
+      row.entry_date,
+      String(row.gate_entry_reference)
+    );
     if (dup) {
-      errors.push({ row: rowIndex, field: 'duplicate', error: `${prefix}Duplicate entry detected`, duplicate: dup });
+      errors.push({
+        row: rowIndex,
+        field: 'duplicate',
+        error: `${prefix}An entry already exists for this contractor on this date with Gate Entry "${dup.gate_entry_reference}". Use a different Gate Entry Reference.`,
+        duplicate: dup
+      });
     }
   }
 
@@ -440,20 +448,19 @@ router.get('/entries/template', (req, res) => {
 // POST /entries/check-duplicates — Pre-save duplicate check
 router.post('/entries/check-duplicates', (req, res) => {
   const db = getDb();
-  const { contractor_id, entry_date, in_time, out_time } = req.body;
-  if (!contractor_id || !entry_date || !in_time || !out_time) {
-    return res.status(400).json({ success: false, error: 'contractor_id, entry_date, in_time, out_time are required' });
+  const { contractor_id, entry_date, gate_entry_reference } = req.body;
+  if (!contractor_id || !entry_date || !gate_entry_reference) {
+    return res.status(400).json({ success: false, error: 'contractor_id, entry_date, gate_entry_reference are required' });
   }
   const duplicates = db.prepare(`
-    SELECT e.id, e.entry_date, e.in_time, e.out_time, e.total_worker_count, e.status, c.contractor_name
+    SELECT e.id, e.entry_date, e.in_time, e.out_time, e.total_worker_count, e.status,
+           e.gate_entry_reference, c.contractor_name
     FROM dw_entries e
     JOIN dw_contractors c ON c.id = e.contractor_id
     WHERE e.contractor_id = ? AND e.entry_date = ?
-      AND e.status != 'rejected'
-      AND NOT (e.out_time <= ? OR e.in_time >= ?)
-    ORDER BY e.in_time
-  `).all(contractor_id, entry_date, in_time, out_time);
-  res.json({ success: true, duplicates });
+      AND LOWER(TRIM(e.gate_entry_reference)) = LOWER(TRIM(?))
+  `).all(contractor_id, entry_date, String(gate_entry_reference));
+  res.json({ success: true, data: { duplicates } });
 });
 
 // POST /entries/batch-import — Batch import (HR/admin)

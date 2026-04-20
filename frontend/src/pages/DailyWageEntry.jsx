@@ -158,8 +158,8 @@ export default function DailyWageEntry() {
     // Duplicate check (skip for edit mode — we're updating the same entry)
     if (!isEditMode) {
       try {
-        const dupRes = await checkDWDuplicates({ contractor_id: selectedContractor.id, entry_date: entryDate, in_time: inTime, out_time: outTime })
-        const dups = dupRes?.data?.duplicates || []
+        const dupRes = await checkDWDuplicates({ contractor_id: selectedContractor.id, entry_date: entryDate, gate_entry_reference: gateRef.trim() })
+        const dups = dupRes?.data?.data?.duplicates || []
         if (dups.length > 0) {
           setDupInfo(dups[0])
           setShowDupConfirm(true)
@@ -342,12 +342,12 @@ export default function DailyWageEntry() {
           <div className="absolute inset-0 bg-black/40" onClick={() => setShowDupConfirm(false)} />
           <div className="relative bg-white rounded-lg shadow-xl p-6 w-full max-w-md">
             <h3 className="text-lg font-semibold text-amber-700 mb-2">Duplicate Detected</h3>
-            <p className="text-sm text-slate-600 mb-1">An overlapping entry already exists for this contractor on {dupInfo?.entry_date}:</p>
+            <p className="text-sm text-slate-600 mb-1">This contractor already has an entry for {dupInfo?.entry_date} with Gate Entry Reference "{dupInfo?.gate_entry_reference}":</p>
             <div className="bg-amber-50 rounded-lg p-3 text-sm mb-4">
               <p>Time: {dupInfo?.in_time} — {dupInfo?.out_time}</p>
               <p>Workers: {dupInfo?.total_worker_count} | Status: {dupInfo?.status}</p>
             </div>
-            <p className="text-sm text-slate-600 mb-4">A live entry already covers this slot. Open the existing entry to edit it, or cancel and adjust your time window.</p>
+            <p className="text-sm text-slate-600 mb-4">Open the existing entry to edit it, or cancel and use a different Gate Entry Reference.</p>
             <div className="flex justify-end gap-2">
               <button onClick={() => setShowDupConfirm(false)} className="px-4 py-2 text-sm rounded-lg border border-slate-300 text-slate-600 hover:bg-slate-50">Cancel</button>
               <button onClick={goToExisting} disabled={!dupInfo?.id} className="px-4 py-2 text-sm rounded-lg bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-50">Go to existing entry</button>

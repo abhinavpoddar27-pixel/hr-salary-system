@@ -1871,6 +1871,16 @@ function initSchema(db) {
 
   safeCreateIndex('CREATE INDEX IF NOT EXISTS idx_dw_rate_history_contractor ON dw_rate_history(contractor_id, effective_date)');
   safeCreateIndex('CREATE INDEX IF NOT EXISTS idx_dw_entries_contractor ON dw_entries(contractor_id, entry_date)');
+  // Defense-in-depth: enforce (contractor_id, entry_date, normalised gate_entry_reference)
+  // uniqueness at the DB level. Expression index — SQLite supported.
+  // Tolerant creation: if existing rows already collide, log loudly but do not
+  // crash server startup. App-level validation still catches new duplicates.
+  try {
+    db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_dw_entries_unique_gate
+      ON dw_entries(contractor_id, entry_date, LOWER(TRIM(gate_entry_reference)))`);
+  } catch (e) {
+    console.error('[SCHEMA] Could not create UNIQUE index idx_dw_entries_unique_gate — existing duplicate gate refs present. App-level validation will still reject new duplicates, but legacy rows need manual dedup. Error:', e.message);
+  }
   safeCreateIndex('CREATE INDEX IF NOT EXISTS idx_dw_entries_status ON dw_entries(status)');
   safeCreateIndex('CREATE INDEX IF NOT EXISTS idx_dw_dept_alloc_entry ON dw_department_allocations(entry_id)');
   safeCreateIndex('CREATE INDEX IF NOT EXISTS idx_dw_approvals_entry ON dw_approvals(entry_id)');
