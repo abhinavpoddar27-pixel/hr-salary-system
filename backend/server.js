@@ -324,6 +324,8 @@ app.listen(PORT, () => {
   try { require('./src/services/backupScheduler').initBackupScheduler(); } catch (e) { console.error('Backup scheduler init failed:', e.message); }
   // Start Sarvam batch-job safety-net poller (bug reporter — step 8)
   try { require('./src/services/sarvamBatchPoller').startPollerCron(); } catch (e) { console.error('Sarvam poller init failed:', e.message); }
+  // Rescue bug-report rows stuck in pending state across container restarts (step 10)
+  try { require('./src/services/bugReportResurrect').resurrectStuckRows(); } catch (e) { console.error('Bug report resurrect init failed:', e.message); }
 });
 
 module.exports = app;
