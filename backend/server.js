@@ -322,6 +322,8 @@ app.listen(PORT, () => {
   try { require('./src/services/monthEndScheduler').startScheduler(); } catch (e) { console.error('Scheduler init failed:', e.message); }
   // Start nightly DB backup scheduler
   try { require('./src/services/backupScheduler').initBackupScheduler(); } catch (e) { console.error('Backup scheduler init failed:', e.message); }
+  // Start Sarvam batch-job safety-net poller (bug reporter — step 8)
+  try { require('./src/services/sarvamBatchPoller').startPollerCron(); } catch (e) { console.error('Sarvam poller init failed:', e.message); }
 });
 
 module.exports = app;
