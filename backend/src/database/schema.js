@@ -1,5 +1,3 @@
-const crypto = require('crypto');
-
 function initSchema(db) {
   db.exec(`
     -- ─────────────────────────────────────────────────────────
@@ -2127,20 +2125,11 @@ If description and screenshot are incoherent or unrelated, set summary_confidenc
     'Known pages list injected into extraction prompt at runtime.'
   );
 
-  // Webhook secret — generated at first boot only, idempotent on restart
-  const existingWebhookSecret = db.prepare(
-    "SELECT value FROM policy_config WHERE key = 'bug_report_sarvam_webhook_secret'"
-  ).get();
-  if (!existingWebhookSecret) {
-    const secret = crypto.randomBytes(32).toString('hex');
-    db.prepare(
-      "INSERT INTO policy_config (key, value, description) VALUES (?, ?, ?)"
-    ).run(
-      'bug_report_sarvam_webhook_secret',
-      secret,
-      'Shared secret for verifying Sarvam webhook signatures. Rotate quarterly.'
-    );
-  }
+  // Sarvam webhook secret is read from process.env.SARVAM_WEBHOOK_SECRET
+  // (see sarvamWebhookVerify.js + sarvamTranscription.js). A prior revision
+  // of this file also seeded the secret into policy_config on first boot as
+  // a fallback — that seed was dead code (never read) AND a leak vector,
+  // because the nightly backup cron commits the SQLite DB to git. Removed.
 
   // ── March 2026 Reconciliation: Set contractor flags ──────────
   // ONE-TIME migration. Previously ran on every app boot, which re-stamped
