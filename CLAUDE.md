@@ -1,7 +1,7 @@
 ## Section 0: Last Session
 - **Date:** 2026-04-20
 - **Branch:** `claude/session-start-y317N` (pushed to `origin/main`)
-- **Last commit:** `205cf65` fix(daily-wage): replace time-overlap duplicate check with gate-ref uniqueness
+- **Last commit:** `bdf1790` fix(daily-wage): replace time-overlap duplicate check with gate-ref uniqueness
 - **Task:** Daily wage multiple-entries-per-day bug. HR could not create a second entry for the same contractor on the same date when time windows overlapped. Duplicate rule changed from time-window overlap → `(contractor_id, entry_date, LOWER(TRIM(gate_entry_reference)))`.
 - **Files modified:**
   - `backend/src/routes/dailyWage.js` — `validateEntryRow()` duplicate SELECT (lines 364–381) and `POST /entries/check-duplicates` (lines 447–463) both rewritten to key on normalised gate_entry_reference (TRIM + LOWER, comparison-only — stored value stays raw). Check-duplicates endpoint now requires `gate_entry_reference` (400 if missing) and wraps results in `{ success, data: { duplicates } }`. Note: the previous `status != 'rejected'` filter was dropped; rejected rows now also block re-use of their gate ref.
