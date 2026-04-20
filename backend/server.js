@@ -126,6 +126,14 @@ app.use(compression({
 }));
 
 app.use(cookieParser());
+
+// Bug Reporter Sarvam webhook — MUST be mounted before express.json() so that
+// express.raw() on the webhook route gets the unparsed bytes (required for
+// HMAC signature verification). All other bug-reports paths are auth-gated
+// and mounted below with the rest of the routes.
+const { authedRouter: bugReportsAuthed, webhookRouter: bugReportsWebhook } = require('./src/routes/bugReports');
+app.use('/api/bug-reports', bugReportsWebhook);
+
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 
@@ -216,12 +224,9 @@ app.use('/api/early-exit-deductions', requireAuth, require('./src/routes/early-e
 app.use('/api/query-tool',       requireAuth, require('./src/routes/queryTool'));
 app.use('/api/ai',               requireAuth, require('./src/routes/ai'));
 
-// Bug Reporter — dual-router mount. webhookRouter MUST be mounted before the
-// authed router so that /webhook/sarvam bypasses requireAuth (HMAC verified
-// inside the handler in a later step). All other /api/bug-reports/* paths
-// fall through to authedRouter, which applies requireAuth internally.
-const { authedRouter: bugReportsAuthed, webhookRouter: bugReportsWebhook } = require('./src/routes/bugReports');
-app.use('/api/bug-reports', bugReportsWebhook);
+// Bug Reporter authed routes. webhookRouter is mounted earlier (before
+// express.json) so the webhook handler can read raw bytes for HMAC
+// verification.
 app.use('/api/bug-reports', bugReportsAuthed);
 
 // Health check (public)
