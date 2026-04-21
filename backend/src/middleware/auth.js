@@ -1,7 +1,10 @@
 const jwt = require('jsonwebtoken');
 const { getDb } = require('../database/db');
 
-const JWT_SECRET = process.env.JWT_SECRET || 'hr-system-dev-secret-change-in-production';
+const JWT_SECRET = process.env.JWT_SECRET;
+if (!JWT_SECRET) {
+  throw new Error('[auth] JWT_SECRET env var is required and must not be empty');
+}
 
 function requireAuth(req, res, next) {
   try {
