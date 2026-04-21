@@ -512,7 +512,6 @@ export const salesCompute = (data) => api.post('/sales/compute', data)
 export const salesSalaryRegister = (params) => api.get('/sales/salary-register', { params })
 export const salesSalaryUpdate = (id, data) => api.put(`/sales/salary/${id}`, data)
 export const salesSalaryStatusUpdate = (id, data) => api.put(`/sales/salary/${id}/status`, data)
-export const salesDiwaliLedger = (params) => api.get('/sales/diwali-ledger', { params })
 export const salesPayslip = (code, params) => api.get(`/sales/payslip/${encodeURIComponent(code)}`, { params })
 
 export default api

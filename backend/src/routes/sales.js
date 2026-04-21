@@ -822,15 +822,14 @@ router.post('/upload/:uploadId/confirm', (req, res) => {
 });
 
 // ════════════════════════════════════════════════════════════════════
-// Phase 3 — Compute engine + salary register + Diwali ledger + payslip
+// Phase 3 — Compute engine + salary register + payslip
+// (Q5 reversal: Diwali ledger removed; diwali_bonus is the only Diwali term)
 // ════════════════════════════════════════════════════════════════════
 
 const {
   computeSalesEmployee,
   saveSalesSalaryComputation,
   generateSalesPayslipData,
-  recomputeDiwaliLedgerCascade,
-  writeDiwaliAccrualRow,
 } = require('../services/salesSalaryComputation');
 
 const VALID_COMP_STATUSES = ['computed', 'reviewed', 'finalized', 'paid', 'hold'];
@@ -909,7 +908,7 @@ router.post('/compute', (req, res) => {
           else errors.push({ employee_code: row.employee_code, error: comp.error });
           return;
         }
-        const compId = saveSalesSalaryComputation(db, comp);
+        saveSalesSalaryComputation(db, comp);
 
         // Flag recomputes that silently change money on a locked row.
         if (prev && ['finalized', 'paid'].includes(prev.status) &&
@@ -922,23 +921,6 @@ router.post('/compute', (req, res) => {
             delta: Math.round((comp.net_salary - prev.net_salary) * 100) / 100,
           });
         }
-
-        // Diwali ledger — write this month's accrual (if any) + cascade forward.
-        if ((comp.diwali_recovery || 0) > 0) {
-          writeDiwaliAccrualRow(db, {
-            employeeCode: comp.employee_code, company: comp.company,
-            month, year, accrualAmount: comp.diwali_recovery,
-            sourceComputationId: compId, user,
-          });
-        } else {
-          // Remove stale accrual row if this month's diwali_recovery has been zeroed out.
-          db.prepare(`
-            DELETE FROM sales_diwali_ledger
-             WHERE employee_code=? AND company=? AND year=? AND month=? AND entry_type='accrual'
-          `).run(comp.employee_code, comp.company, year, month);
-        }
-        // Cascade forward so Mar/Apr/May balances refresh after a Feb edit.
-        recomputeDiwaliLedgerCascade(db, comp.employee_code, comp.company, year, month + 1, user);
 
         results.push({
           employee_code: comp.employee_code,
@@ -1003,8 +985,8 @@ router.get('/salary-register', (req, res) => {
     total_deductions: acc.total_deductions + (r.total_deductions || 0),
     net_salary: acc.net_salary + (r.net_salary || 0),
     incentive_amount: acc.incentive_amount + (r.incentive_amount || 0),
-    diwali_recovery: acc.diwali_recovery + (r.diwali_recovery || 0),
-  }), { gross_earned: 0, total_deductions: 0, net_salary: 0, incentive_amount: 0, diwali_recovery: 0 });
+    diwali_bonus: acc.diwali_bonus + (r.diwali_bonus || 0),
+  }), { gross_earned: 0, total_deductions: 0, net_salary: 0, incentive_amount: 0, diwali_bonus: 0 });
 
   const round2 = (n) => Math.round(n * 100) / 100;
   Object.keys(totals).forEach(k => totals[k] = round2(totals[k]));
@@ -1032,7 +1014,9 @@ router.put('/salary/:id', (req, res) => {
   }
 
   const updates = {};
-  for (const k of ['incentive_amount', 'diwali_recovery', 'other_deductions']) {
+  // Q5 reversal: diwali_recovery dropped from allowlist (column kept dead);
+  // diwali_bonus added so HR can enter the Oct/Nov one-off bonus via this path.
+  for (const k of ['incentive_amount', 'diwali_bonus', 'other_deductions']) {
     if (body[k] !== undefined) {
       const n = parseFloat(body[k]);
       if (!Number.isFinite(n) || n < 0) {
@@ -1047,17 +1031,18 @@ router.put('/salary/:id', (req, res) => {
     return res.json({ success: true, message: 'No updates', data: existing });
   }
 
-  const incentive = updates.incentive_amount ?? existing.incentive_amount ?? 0;
-  const diwaliRec = updates.diwali_recovery ?? existing.diwali_recovery ?? 0;
-  const otherDed  = updates.other_deductions ?? existing.other_deductions ?? 0;
+  const incentive   = updates.incentive_amount ?? existing.incentive_amount ?? 0;
+  const diwaliBonus = updates.diwali_bonus     ?? existing.diwali_bonus     ?? 0;
+  const otherDed    = updates.other_deductions ?? existing.other_deductions ?? 0;
 
-  // Rebuild total_deductions from the non-editable components + the edited ones.
+  // Rebuild total_deductions from the non-editable components + other_deductions.
+  // (diwali_recovery is 0 per Q5 reversal — not in the sum.)
   const fixedDeductions =
     (existing.pf_employee || 0) + (existing.esi_employee || 0) +
     (existing.professional_tax || 0) + (existing.tds || 0) +
     (existing.advance_recovery || 0) + (existing.loan_recovery || 0);
-  const newTotalDed = Math.round((fixedDeductions + diwaliRec + otherDed) * 100) / 100;
-  const newNetSalary = Math.round(((existing.gross_earned || 0) + (existing.diwali_bonus || 0) + incentive - newTotalDed) * 100) / 100;
+  const newTotalDed = Math.round((fixedDeductions + otherDed) * 100) / 100;
+  const newNetSalary = Math.round(((existing.gross_earned || 0) + diwaliBonus + incentive - newTotalDed) * 100) / 100;
 
   const perTxn = db.transaction(() => {
     const sets = [];
@@ -1072,30 +1057,11 @@ router.put('/salary/:id', (req, res) => {
 
     db.prepare(`UPDATE sales_salary_computations SET ${sets.join(', ')} WHERE id = ?`).run(...params);
 
-    // If diwali_recovery changed, refresh this month's ledger row + cascade forward.
-    if ('diwali_recovery' in updates) {
-      if (diwaliRec > 0) {
-        writeDiwaliAccrualRow(db, {
-          employeeCode: existing.employee_code, company: existing.company,
-          month: existing.month, year: existing.year,
-          accrualAmount: diwaliRec, sourceComputationId: id, user,
-        });
-      } else {
-        db.prepare(`
-          DELETE FROM sales_diwali_ledger
-           WHERE employee_code=? AND company=? AND year=? AND month=? AND entry_type='accrual'
-        `).run(existing.employee_code, existing.company, existing.year, existing.month);
-      }
-      recomputeDiwaliLedgerCascade(
-        db, existing.employee_code, existing.company, existing.year, existing.month + 1, user
-      );
-    }
-
     writeAuditP2(db, 'sales_salary_computations', {
       recordId: id, field: Object.keys(updates).join(','),
       oldVal: JSON.stringify({
         incentive_amount: existing.incentive_amount,
-        diwali_recovery: existing.diwali_recovery,
+        diwali_bonus: existing.diwali_bonus,
         other_deductions: existing.other_deductions,
         hold_reason: existing.hold_reason,
       }),
@@ -1158,54 +1124,6 @@ router.put('/salary/:id/status', (req, res) => {
 
   const updated = db.prepare('SELECT * FROM sales_salary_computations WHERE id = ?').get(id);
   res.json({ success: true, data: updated });
-});
-
-// ── GET /api/sales/diwali-ledger?company=C&year=Y ────────────────────
-router.get('/diwali-ledger', (req, res) => {
-  const db = getDb();
-  const company = (req.query.company || '').trim();
-  const year = parseInt(req.query.year, 10);
-  if (!company || !year) {
-    return res.status(400).json({ success: false, error: 'company and year query params are required' });
-  }
-
-  // Per-employee summary: ytd accrual, total payouts, current running balance, last entry.
-  const rows = db.prepare(`
-    SELECT l.employee_code,
-           e.name AS employee_name,
-           SUM(l.accrual_amount)    AS ytd_accrual,
-           SUM(l.payout_amount)     AS total_payouts,
-           SUM(l.adjustment_amount) AS total_adjustments,
-           MAX(l.year * 100 + l.month) AS last_month_key,
-           MAX(l.created_at)        AS last_entry_date
-      FROM sales_diwali_ledger l
- LEFT JOIN sales_employees e ON e.code = l.employee_code AND e.company = l.company
-     WHERE l.company = ? AND l.year = ?
-  GROUP BY l.employee_code
-  ORDER BY ytd_accrual DESC
-  `).all(company, year);
-
-  // running_balance for each employee = latest row's running_balance.
-  const out = rows.map(r => {
-    const latest = db.prepare(`
-      SELECT running_balance, month, year FROM sales_diwali_ledger
-       WHERE employee_code = ? AND company = ? AND year = ?
-    ORDER BY year DESC, month DESC, id DESC
-       LIMIT 1
-    `).get(r.employee_code, company, year);
-    return {
-      employee_code: r.employee_code,
-      employee_name: r.employee_name,
-      ytd_accrual: Math.round((r.ytd_accrual || 0) * 100) / 100,
-      total_payouts: Math.round((r.total_payouts || 0) * 100) / 100,
-      total_adjustments: Math.round((r.total_adjustments || 0) * 100) / 100,
-      running_balance: latest ? (Math.round((latest.running_balance || 0) * 100) / 100) : 0,
-      last_month: latest ? `${latest.month}/${latest.year}` : null,
-      last_entry_date: r.last_entry_date,
-    };
-  });
-
-  res.json({ success: true, data: out });
 });
 
 // ── GET /api/sales/payslip/:code?month=M&year=Y&company=C ────────────

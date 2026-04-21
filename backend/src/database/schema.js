@@ -2120,11 +2120,13 @@ function initSchema(db) {
   safeCreateIndex('CREATE INDEX IF NOT EXISTS idx_sales_monthly_input_upload ON sales_monthly_input(upload_id)');
   safeCreateIndex('CREATE INDEX IF NOT EXISTS idx_sales_monthly_input_match ON sales_monthly_input(employee_code, month, year, company)');
 
-  // ── Sales Salary Module — Phase 3 (compute engine + Diwali ledger) ────
+  // ── Sales Salary Module — Phase 3 (compute engine) ───────────────────
   // sales_salary_computations is the Phase 3 output. `incentive_amount`
-  // column is reserved for HR-entered variable pay (Q6). sales_diwali_ledger
-  // tracks the running balance of monthly Diwali deductions (Q5) — payout
-  // is Phase 4+ work.
+  // column is reserved for HR-entered variable pay (Q6). `diwali_recovery`
+  // column is kept but dead after the Q5 reversal hotfix (April 2026) —
+  // Diwali is a one-off Oct/Nov bonus paid via diwali_bonus, NOT a monthly
+  // deduction. No ledger table. The old sales_diwali_ledger is dropped by
+  // the idempotent migration below.
   db.exec(`
     CREATE TABLE IF NOT EXISTS sales_salary_computations (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -2181,29 +2183,9 @@ function initSchema(db) {
 
       UNIQUE(employee_code, month, year, company)
     );
-
-    CREATE TABLE IF NOT EXISTS sales_diwali_ledger (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      employee_code TEXT NOT NULL,
-      company TEXT NOT NULL,
-      month INTEGER NOT NULL,
-      year INTEGER NOT NULL,
-      entry_type TEXT NOT NULL
-        CHECK(entry_type IN ('accrual','payout','adjustment')),
-      accrual_amount REAL DEFAULT 0,
-      payout_amount REAL DEFAULT 0,
-      adjustment_amount REAL DEFAULT 0,
-      running_balance REAL NOT NULL,
-      notes TEXT,
-      created_at TEXT DEFAULT (datetime('now')),
-      created_by TEXT NOT NULL,
-      source_computation_id INTEGER,
-      UNIQUE(employee_code, company, month, year, entry_type)
-    );
   `);
   safeCreateIndex('CREATE INDEX IF NOT EXISTS idx_sales_salary_comp_my_company ON sales_salary_computations(month, year, company)');
   safeCreateIndex('CREATE INDEX IF NOT EXISTS idx_sales_salary_comp_status ON sales_salary_computations(status)');
-  safeCreateIndex('CREATE INDEX IF NOT EXISTS idx_sales_diwali_ledger_emp ON sales_diwali_ledger(employee_code, company, year)');
 
   // policy_config seeds — tunable from SQL without a code deploy.
   const seedSalesPolicy = db.prepare(
@@ -2213,6 +2195,26 @@ function initSchema(db) {
     'Sales Sunday-rule leniency: absent working days allowed before Sundays start being lost');
   seedSalesPolicy.run('sales_salary_divisor_mode', 'calendar',
     'Sales salary divisor: calendar|fixed_28|hybrid (Phase 3 implements calendar only)');
+
+  // ── One-time migration: drop sales_diwali_ledger (Q5 reversal, April 2026)
+  // Phase 3 originally created this table under the wrong Diwali policy model.
+  // HR clarified Diwali is a one-off Oct/Nov bonus (via diwali_bonus column on
+  // sales_salary_computations), not a monthly accrual. The ledger is dropped.
+  // Idempotent: the policy_config flag ensures the DROP fires exactly once.
+  const diwaliLedgerDropDone = db.prepare(
+    "SELECT value FROM policy_config WHERE key = 'migration_drop_sales_diwali_ledger_v1'"
+  ).get();
+  if (!diwaliLedgerDropDone) {
+    try {
+      db.exec('DROP TABLE IF EXISTS sales_diwali_ledger');
+      console.log('[MIGRATION] Dropped sales_diwali_ledger table (Diwali policy reversal)');
+      db.prepare(
+        "INSERT OR REPLACE INTO policy_config (key, value, description) VALUES ('migration_drop_sales_diwali_ledger_v1', '1', 'One-time April 2026 Diwali ledger drop — policy reversed to one-off bonus only')"
+      ).run();
+    } catch (e) {
+      console.warn('[MIGRATION] Diwali ledger drop failed:', e.message);
+    }
+  }
 
   console.log('✅ Database schema initialized');
 }

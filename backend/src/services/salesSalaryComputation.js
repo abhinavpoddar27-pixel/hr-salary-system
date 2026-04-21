@@ -1,13 +1,14 @@
 /**
- * Sales Salary Computation Service — Phase 3
+ * Sales Salary Computation Service — Phase 3 (+ Q5 reversal hotfix)
  *
  * Parallel to plant's backend/src/services/salaryComputation.js but tuned
  * for sales:
  *   - 4 components (basic, hra, cca, conveyance) — no DA
  *   - Day's Given from coordinator sheet is authoritative (Q1)
  *   - Sunday rule via shared sundayRule.js, leniency from policy_config
- *   - Diwali recovery is a monthly deduction that accrues into
- *     sales_diwali_ledger (Q5) for an annual Oct/Nov payout event
+ *   - Diwali is a one-off Oct/Nov bonus via diwali_bonus (Q5, post-reversal).
+ *     NO monthly deduction, NO ledger. The diwali_recovery column on
+ *     sales_salary_computations is kept dead for UPSERT completeness only.
  *   - incentive_amount is HR-entered (Q6) and preserved across recomputes
  *
  * Plant tables reused (no sales-specific tables for these yet):
@@ -19,9 +20,11 @@
  * UPSERT completeness (load-bearing — see CLAUDE.md):
  *   Every mutable column on sales_salary_computations MUST appear as
  *   `<col> = excluded.<col>` in the ON CONFLICT UPDATE. HR-entered fields
- *   (incentive_amount, diwali_recovery, other_deductions, hold_reason,
+ *   (incentive_amount, diwali_bonus, other_deductions, hold_reason,
  *   status, finalized_at, finalized_by) are PRE-READ from the existing
  *   row and carried forward so a recompute never silently wipes them.
+ *   `diwali_recovery` stays in the UPSERT column list but is always
+ *   written as 0 (Q5 reversal — column is dead, writes preserve shape).
  */
 
 const { calculateSundayCredit } = require('./sundayRule');
@@ -177,14 +180,15 @@ function computeSalesEmployee(db, { salesEmployee, monthlyInputRow, month, year,
 
   // ── Pre-read existing row so HR-entered values survive recompute ──
   const prev = db.prepare(`
-    SELECT incentive_amount, diwali_recovery, other_deductions, hold_reason,
+    SELECT incentive_amount, other_deductions, hold_reason,
            status, finalized_at, finalized_by, diwali_bonus
       FROM sales_salary_computations
      WHERE employee_code = ? AND month = ? AND year = ? AND company = ?
   `).get(salesEmployee.code, month, year, company);
 
   const incentiveAmount = prev?.incentive_amount ?? 0;
-  const diwaliRecovery = prev?.diwali_recovery ?? 0;
+  // Q5 reversal: diwali_recovery column is kept dead. Always 0, never read.
+  const diwaliRecovery = 0;
   const otherDeductions = prev?.other_deductions ?? 0;
   const holdReason = prev?.hold_reason ?? null;
   const diwaliBonus = prev?.diwali_bonus ?? 0;
@@ -252,9 +256,11 @@ function computeSalesEmployee(db, { salesEmployee, monthlyInputRow, month, year,
   const advanceRecovery = getAdvanceRecovery(db, salesEmployee.code, month, year);
   const loanRecovery = getLoanRecovery(db, salesEmployee.code, month, year);
 
+  // Q5 reversal: total_deductions = PF_e + ESI_e + PT + TDS + advance + loan + other
+  // (diwali_recovery term removed — Diwali is now only a bonus in Step 7).
   const totalDeductions = Math.round((
     pfEmployee + esiEmployee + professionalTax + tds +
-    advanceRecovery + loanRecovery + diwaliRecovery + otherDeductions
+    advanceRecovery + loanRecovery + otherDeductions
   ) * 100) / 100;
 
   // ── Step 7 — Net salary ──
@@ -276,7 +282,7 @@ function computeSalesEmployee(db, { salesEmployee, monthlyInputRow, month, year,
     `days=${daysGiven} sun=${sundaysPaid} hol=${gazettedHolidaysPaid} ` +
     `ratio=${earnedRatio.toFixed(3)} grossEarned=${grossEarned} ` +
     `PF=${pfEmployee} ESI=${esiEmployee} TDS=${tds} adv=${advanceRecovery} loan=${loanRecovery} ` +
-    `diwali=${diwaliRecovery} other=${otherDeductions} incentive=${incentiveAmount} → net=${netSalary}`);
+    `other=${otherDeductions} incentive=${incentiveAmount} bonus=${diwaliBonus} → net=${netSalary}`);
 
   return {
     success: true,
@@ -415,80 +421,6 @@ function saveSalesSalaryComputation(db, comp) {
 }
 
 // ══════════════════════════════════════════════════════════════════════
-// Diwali ledger — accrual write + forward cascade
-// ══════════════════════════════════════════════════════════════════════
-
-// Upsert a single ledger row at the given (employee, company, month, year).
-// `accrualAmount` is the delta this row represents; running_balance is
-// computed as (prior_running_balance + accrualAmount).
-// Invariant: running_balance = sum of all prior accruals - prior payouts +
-//            prior adjustments, for this employee up to AND INCLUDING this row.
-function writeDiwaliAccrualRow(db, { employeeCode, company, month, year, accrualAmount, sourceComputationId, user }) {
-  // Prior running balance = max running_balance for this employee+company strictly BEFORE (year, month).
-  // "Before" = (y < year) OR (y == year AND m < month).
-  const prior = db.prepare(`
-    SELECT running_balance FROM sales_diwali_ledger
-     WHERE employee_code = ? AND company = ?
-       AND ((year < ?) OR (year = ? AND month < ?))
-  ORDER BY year DESC, month DESC, id DESC
-     LIMIT 1
-  `).get(employeeCode, company, year, year, month);
-
-  const priorBal = prior ? (prior.running_balance || 0) : 0;
-  const newBal = Math.round((priorBal + (accrualAmount || 0)) * 100) / 100;
-
-  db.prepare(`
-    INSERT INTO sales_diwali_ledger
-      (employee_code, company, month, year, entry_type,
-       accrual_amount, payout_amount, adjustment_amount, running_balance,
-       notes, created_by, source_computation_id)
-    VALUES (?, ?, ?, ?, 'accrual', ?, 0, 0, ?, ?, ?, ?)
-    ON CONFLICT(employee_code, company, month, year, entry_type) DO UPDATE SET
-      accrual_amount = excluded.accrual_amount,
-      running_balance = excluded.running_balance,
-      notes = excluded.notes,
-      created_by = excluded.created_by,
-      source_computation_id = excluded.source_computation_id,
-      created_at = datetime('now')
-  `).run(
-    employeeCode, company, month, year,
-    accrualAmount || 0, newBal,
-    `Accrued from salary compute`, user || 'system', sourceComputationId || null
-  );
-}
-
-// Recompute ledger running_balance for this employee starting at fromMonth
-// and cascading forward through the current calendar year. Called after any
-// write that shifts an earlier month's accrual (so Mar, Apr, … pick up the
-// new Feb figure automatically).
-function recomputeDiwaliLedgerCascade(db, employeeCode, company, year, fromMonth, user) {
-  const nowMonth = new Date().getMonth() + 1;
-  const endMonth = (year === new Date().getFullYear()) ? nowMonth : 12;
-  for (let m = fromMonth; m <= endMonth; m++) {
-    // Look up the computation for (employee, company, year, m). If absent,
-    // skip; if present, upsert the ledger row with its diwali_recovery.
-    const comp = db.prepare(`
-      SELECT id, diwali_recovery FROM sales_salary_computations
-       WHERE employee_code = ? AND company = ? AND year = ? AND month = ?
-    `).get(employeeCode, company, year, m);
-    if (!comp) continue;
-    const accrualAmount = comp.diwali_recovery || 0;
-    if (accrualAmount > 0) {
-      writeDiwaliAccrualRow(db, {
-        employeeCode, company, month: m, year,
-        accrualAmount, sourceComputationId: comp.id, user,
-      });
-    } else {
-      // accrual is now zero → remove any stale accrual row for this month
-      db.prepare(`
-        DELETE FROM sales_diwali_ledger
-         WHERE employee_code = ? AND company = ? AND year = ? AND month = ? AND entry_type = 'accrual'
-      `).run(employeeCode, company, year, m);
-    }
-  }
-}
-
-// ══════════════════════════════════════════════════════════════════════
 // generateSalesPayslipData
 // ══════════════════════════════════════════════════════════════════════
 function generateSalesPayslipData(db, employeeCode, month, year, company) {
@@ -525,7 +457,6 @@ function generateSalesPayslipData(db, employeeCode, month, year, company) {
     { label: 'TDS', amount: comp.tds },
     { label: 'Advance Recovery', amount: comp.advance_recovery },
     { label: 'Loan EMI', amount: comp.loan_recovery },
-    { label: 'Diwali Recovery', amount: comp.diwali_recovery },
     { label: 'Other Deductions', amount: comp.other_deductions },
   ].filter(d => d.amount && d.amount > 0);
 
@@ -567,6 +498,4 @@ module.exports = {
   computeSalesEmployee,
   saveSalesSalaryComputation,
   generateSalesPayslipData,
-  recomputeDiwaliLedgerCascade,
-  writeDiwaliAccrualRow,
 };

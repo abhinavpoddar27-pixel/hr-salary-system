@@ -1,10 +1,54 @@
 ## Section 0: Last Session
+- **Date:** 2026-04-21
+- **Branch:** `claude/session-start-hook-jv0KJ` (pushed; not yet merged to `origin/main`)
+- **Task:** Phase 3 Hotfix — Diwali policy reversal (Q5 reversed).
+- **Hotfix commit:** (this session, pending at report time)
+- **Why:** After Phase 3 shipped, HR clarified the actual Diwali policy. The prior model (rolling monthly deduction → ledger → Oct/Nov payout) was incorrect. Real policy: Diwali is a one-off bonus paid in Oct/Nov via the regular salary run. NO monthly deduction, NO ledger, NO accrual. Q5 in the design doc is reversed.
+- **What changed:**
+  - **Schema:** `sales_diwali_ledger` table + `idx_sales_diwali_ledger_emp` index deleted from the `CREATE` block. Idempotent one-time migration added (gated on `policy_config` key `migration_drop_sales_diwali_ledger_v1`): runs `DROP TABLE IF EXISTS sales_diwali_ledger` once, writes the flag, silent on subsequent boots. `diwali_recovery` column on `sales_salary_computations` is **kept dead** (for UPSERT completeness) — never read, always written as 0.
+  - **`salesSalaryComputation.js`:** removed `diwali_recovery` from the pre-read SELECT. `diwaliRecovery` is now a hard-coded `0`. Step 6 `total_deductions` formula now excludes the diwali term: `PF_e + ESI_e + PT + TDS + advance + loan + other`. Step 7 unchanged in shape: `net_salary = gross_earned + diwali_bonus + incentive_amount − total_deductions`. Deleted `writeDiwaliAccrualRow` + `recomputeDiwaliLedgerCascade` helpers. Dropped `'Diwali Recovery'` from payslip deductions array. Module exports slimmed 5 → 3 (`computeSalesEmployee`, `saveSalesSalaryComputation`, `generateSalesPayslipData`).
+  - **`sales.js`:** removed `writeDiwaliAccrualRow`/`recomputeDiwaliLedgerCascade` imports. Deleted the ledger-write block inside `POST /compute` (both branches + unconditional cascade call) and the parallel block inside `PUT /salary/:id`. `GET /sales/diwali-ledger` endpoint deleted entirely. `PUT /salary/:id` allowlist swapped: `diwali_recovery` removed, `diwali_bonus` added (HR now enters the Oct/Nov bonus via this path — this was a gap in Phase 3: the allowlist didn't include it). Register totals reducer swapped `diwali_recovery` → `diwali_bonus`. `total_deductions` rebuild drops the diwali term.
+  - **`permissions.js`:** `'sales-diwali-ledger'` removed from hr array.
+  - **`api.js`:** `salesDiwaliLedger` helper deleted.
+  - **`SalesSalaryCompute.jsx`:** `DiwaliLedgerModal` component, "Diwali Accrual Report" button, `showDiwali` state, modal render block all deleted. The editable register column previously labelled "Diwali Ded" (pointing at `diwali_recovery`) is now "Diwali Bonus" (pointing at `diwali_bonus`). Footer total uses `totals.diwali_bonus`. Recompute confirm dialog text updated ("diwali" → "diwali bonus").
+  - **`CLAUDE.md`:** this entry (new). Previous Phase 3 entry preserved below with a one-line correction note prepended — history intact.
+- **What STAYS (untouched):**
+  - `diwali_bonus` column on `sales_salary_computations` — the surviving Diwali path, HR-entered in Oct/Nov, preserved across recompute via existing pre-read pattern.
+  - `+ diwali_bonus` term in Step 7 net_salary formula — preserved.
+  - `diwali_recovery` column — left dead in schema, UPSERT still writes 0 to it (column kept for UPSERT completeness; SQLite can't cleanly drop columns without a table rebuild and the risk is higher than the reward). Can be dropped in a future cleanup phase.
+  - All Phase 1 + Phase 2 code: employees, structures, holidays, uploads, parser, matcher.
+  - All plant code: no touches.
+  - Phase 3 non-Diwali code: `sundayRule.js`, `incentive_amount` plumbing, status state machine, upload supersede, holiday-delete finalized-guard, `finalizedRecomputeWarnings[]`.
+- **What was verified (hotfix):**
+  - Pre-condition row counts: `sales_diwali_ledger=0`, computations with `diwali_recovery>0`: 0 rows (dev DB was clean; no data thrown away).
+  - Schema: 6 sales tables post-migration (was 7), `sales_diwali_ledger` absent, both `diwali_bonus` + `diwali_recovery` columns still on `sales_salary_computations`, `idx_sales_diwali_ledger_emp` absent from indexes, `migration_drop_sales_diwali_ledger_v1='1'` set in `policy_config`.
+  - Idempotent re-deploy: second restart silent (no `[MIGRATION] Dropped …` log), table not recreated, flag unchanged.
+  - Compute regression: seeded 1 employee + 1 structure + 1 `matched` upload + 1 monthly_input row (days=25, gross=20000). `POST /compute` → row written with `diwali_recovery=0`, `diwali_bonus=0`, `total_deductions=0` (no PF/ESI/TDS/adv/loan/other), `net_salary=20000` (= gross). Math reproduces by hand. No diwali_recovery term anywhere in the sum.
+  - Diwali bonus path: `PUT /salary/1 {"diwali_bonus": 5000}` → net_salary 20000 → 25000 (delta = exactly 5000). Re-running `POST /compute` preserved the 5000 bonus and re-emitted `net_salary=25000` — HR-entered carry-forward for `diwali_bonus` intact.
+  - Dead allowlist: `PUT /salary/1 {"diwali_recovery": 999}` → response `{"message":"No updates"}`, `diwali_recovery` stayed 0, `net_salary` unchanged. Allowlist validator cleanly rejects the key.
+  - Removed endpoint: `GET /sales/diwali-ledger` → 404.
+  - Dead-ref sweep: `grep` for `sales_diwali_ledger|salesDiwaliLedger|diwali-ledger|recomputeDiwaliLedgerCascade|writeDiwaliAccrualRow|sales-diwali-ledger` across `backend/src frontend/src` returns 6 hits, all inside the schema.js migration block + its comments. Zero dead code.
+  - Plant regression: employees/salary_structures/salary_computations/day_calculations/attendance_processed/monthly_imports/holidays = 0/0/0/0/0/0/20, unchanged from Phase 3 baseline. Plant exports identical (`salaryComputation.js → [computeEmployeeSalary, saveSalaryComputation, generatePayslipData]`, `dayCalculation.js → [calculateDays, saveDayCalculation, getMonthDates, getDayOfWeek, WEEKLY_OFF_LENIENCY, effectiveStatusForDay]`).
+  - Permission gate: finance → `POST /sales/compute` returns 403 (still gated on `'sales-compute'` permission; the removed `'sales-diwali-ledger'` was never checked by any route, so no regression).
+  - Frontend build: clean, 5 Sales chunks emitted (SalesEmployeeMaster, SalesHolidayMaster, SalesUpload, SalesSalaryCompute, SalesPayslip).
+- **Frontend visual smoke:** NOT executed (sandbox can't open browser). Manual on Railway: confirm "Diwali Accrual Report" button is gone, "Diwali Ded" column is gone, "Diwali Bonus" column appears in the same slot, editing it in October bumps the row's net.
+- **What's fragile (hotfix):**
+  - Design doc `sales_salary_module_design.md` is NOT in the repo (it was uncommitted in a prior session and got cleaned up before Phase 3's commit). The prompt asked for §4A/§6.5/§6.7/§9/§13/§14 rewrites but there's nothing to patch. **Deferred:** when the doc is re-committed, the Q5-reversal rewrite must be applied before anyone reads the doc as spec.
+  - `diwali_recovery` is dead-alive. Any future dev who sees a `DEFAULT 0` column and decides to "use" it will break the Q5 reversal. The column is flagged in the service module header and CLAUDE.md, but a schema-level comment would be safer when someone has time for a table rebuild migration.
+  - The register swap "Diwali Ded → Diwali Bonus" reuses the same cell slot (same amber background, same width). If HR's muscle memory from a week of Phase 3 has them typing a deduction amount there, they'll accidentally create a bonus. Low risk given the short window, but mention it when rolling out.
+  - `PUT /salary/:id` quietly drops unknown body keys with a "No updates" response. That's good protective behaviour here but means that if someone writes a typo like `diwalibonus`, there's no feedback. Consider a strict-mode validator in a future pass.
+- **Next session (Phase 4) should:** (a) resume Phase 4 exports (Excel + NEFT buttons on register), now that the foundation is clean; (b) commit the design doc at repo root with Q5 reversal applied + other pending spec rewrites; (c) consider a SQLite table-rebuild migration to truly drop `diwali_recovery` once Abhinav signs off it's never coming back; (d) implement `sales_salary_divisor_mode='26'` / `'30'` options; (e) surface `finalizedRecomputeWarnings[]` as a register banner; (f) clean up the "Bulk Import" placeholder in `SalesEmployeeMaster.jsx`.
+
+---
+
+## Section 0: Previous Session
+- **CORRECTION:** the `sales_diwali_ledger` feature shipped in this Phase 3 entry was REVERSED in a same-week hotfix on 2026-04-21; see the Phase 3 Hotfix entry above. The original entry below is preserved for history.
 - **Date:** 2026-04-20
 - **Branch:** `claude/session-start-hook-jv0KJ` (pushed; not yet merged to `origin/main`)
 - **Task:** Sales Salary Module Phase 3 — compute engine + register UI + payslip.
 - **Phase 1 commit:** `78df719` feat(sales): Phase 1 — schema + employee master + sidebar entry
 - **Phase 2 commit:** `57714be` feat(sales): Phase 2 — holiday master + coordinator sheet upload + matcher
-- **Phase 3 commit:** (this session, pending at report time)
+- **Phase 3 commit:** `310237b` feat(sales): Phase 3 — compute engine + register UI + payslip
 - **Phase 3 delivered:**
   - Tables: `sales_salary_computations` (43 columns — the 8 pro-rated earning buckets + `ot_amount`/`incentive_amount`/`diwali_bonus`/`diwali_recovery`/`other_deductions` + pf/esi/pt/tds + `status` state machine + `hold_reason` + `finalized_at`/`finalized_by`; `incentive_amount` reserved per §4A Q6, HR-entered in v1; `UNIQUE(employee_code, month, year, company)`), `sales_diwali_ledger` (14 cols; `entry_type` IN `'accrual'|'payout'|'adjustment'`; `UNIQUE(employee_code, company, month, year, entry_type)` so recompute overwrites the accrual row without creating duplicates).
   - 3 indexes: `idx_sales_comp_month_year_company`, `idx_sales_comp_status`, `idx_sales_diwali_emp_company`.
@@ -564,11 +608,11 @@ frontend/
 - Business rules (parser): Dynamic header detection (rows 0–10); NO hardcoded row numbers. Q4 columns ("Working Days as Per AI", "Working Days Manual") explicitly dropped even when present in the sheet — only `sheet_days_given` is authoritative. Subtotal rows (name starts with "TOTAL" or "SUBTOTAL") skipped. Non-numeric `Day's Given` skipped.
 - Edge cases: file_hash collision → 409 with `existingUploadId` (no re-parse); parser detects month/year from filename regex OR first-5-rows scan — falls back to multipart body; cross-company manual match rejected; confirm with any NULL `employee_code` rejected.
 
-## Sales Pipeline Stage 2: Compute Engine + Register + Payslip (Phase 3)
-- Route: `backend/src/routes/sales.js` → `POST /sales/compute`, `GET /sales/salary-register`, `PUT /sales/salary/:id`, `PUT /sales/salary/:id/status`, `GET /sales/diwali-ledger`, `GET /sales/payslip/:code`. Also modified: `DELETE /sales/holidays/:id` (finalized-computation guard).
-- Service: `backend/src/services/salesSalaryComputation.js` → `computeSalesEmployee()`, `saveSalesSalaryComputation()`, `generateSalesPayslipData()`, `recomputeDiwaliLedgerCascade()`, `writeDiwaliAccrualRow()`; shared `backend/src/services/sundayRule.js` → `calculateSundayCredit()`.
+## Sales Pipeline Stage 2: Compute Engine + Register + Payslip (Phase 3 + Q5 reversal hotfix)
+- Route: `backend/src/routes/sales.js` → `POST /sales/compute`, `GET /sales/salary-register`, `PUT /sales/salary/:id`, `PUT /sales/salary/:id/status`, `GET /sales/payslip/:code`. Also modified: `DELETE /sales/holidays/:id` (finalized-computation guard). `GET /sales/diwali-ledger` was removed in the Q5 reversal hotfix (2026-04-21).
+- Service: `backend/src/services/salesSalaryComputation.js` → `computeSalesEmployee()`, `saveSalesSalaryComputation()`, `generateSalesPayslipData()`; shared `backend/src/services/sundayRule.js` → `calculateSundayCredit()`. (Ledger helpers `recomputeDiwaliLedgerCascade` / `writeDiwaliAccrualRow` deleted in the hotfix.)
 - Tables read: `sales_monthly_input` (latest confirmed upload per month/year/company via `ORDER BY uploaded_at DESC LIMIT 1` where `status IN ('matched','computed')`), `sales_employees`, `sales_salary_structures` (most recent `effective_from <= month-end`), `sales_holidays`, `sales_salary_computations` (pre-read for HR-entered field preservation on recompute), `policy_config` (sales_leniency, sales_salary_divisor_mode, pf_ceiling, pf/esi rates).
-- Tables written: `sales_salary_computations` (UPSERT on UNIQUE(employee_code, month, year, company)), `sales_diwali_ledger` (accrual + payout rows; cascade rewrites running_balance on earlier-month edits), `sales_uploads` (winning upload flipped to `status='computed'`).
+- Tables written: `sales_salary_computations` (UPSERT on UNIQUE(employee_code, month, year, company)), `sales_uploads` (winning upload flipped to `status='computed'`). `sales_diwali_ledger` no longer exists post-hotfix — dropped by idempotent migration gated on `policy_config` key `migration_drop_sales_diwali_ledger_v1`.
 - Input contract: `POST /sales/compute` body `{month, year, company}`. Requires at least one `status IN ('matched','computed')` upload for the period. Employee gate: matched sheet row exists AND `sales_employees.status='Active'` at period start.
 - Output contract: compute response `{totalProcessed, computed, skipped, errors[], finalizedRecomputeWarnings[]}`. Register response `{rows[], totals{gross,earned,ot,incentive,diwali,deductions,net}}`. Payslip response full slip object (employee, period, days, earnings[], totalEarnings, deductions[], totalDeductions, netSalary, status, bank, computedAt, finalizedAt, finalizedBy).
 - Downstream consumers: `SalesPayslip.jsx` (print view), `SalesSalaryCompute.jsx` register UI; Phase 4 will add Excel/NEFT exports (currently disabled placeholders).
@@ -579,7 +623,7 @@ frontend/
 - Business rules (PF): `min(basic_earned, pf_ceiling)` × pf_rate, only if `salStruct.pf_applicable=1`. Sales has NO `da` column — PF base is basic_earned alone. (See §4A Q2 in Phase 3 notes.)
 - Business rules (ESI): `grossEarned × esi_rate` only if `gross_salary <= 21000` AND `salStruct.esi_applicable=1`.
 - Business rules (Professional Tax): DISABLED (same as plant, April 2026). Column retained but always 0.
-- Business rules (Diwali ledger): each compute writes/upserts an `entry_type='accrual'` row per (employee, company, month, year). `diwali_recovery` on `sales_salary_computations` triggers `recomputeDiwaliLedgerCascade` to walk forward month-by-month and recompute `running_balance`. Payouts (entry_type='payout') written manually via Phase 4 UI (deferred). Per §4A Q5, payout happens Oct/Nov of fiscal year.
+- Business rules (Diwali — post-hotfix Q5 reversal): one-off bonus paid via `diwali_bonus` column in Oct/Nov through the regular salary run. HR enters the amount on the register (`PUT /salary/:id {"diwali_bonus": N}`); Step 7 adds it directly into `net_salary`. NO monthly deduction, NO ledger, NO accrual cascade. `diwali_recovery` column kept dead for UPSERT completeness — always written as 0, never read.
 - Business rules (status state machine): `ALLOWED_STATUS_MOVES` = {`computed`: [`reviewed`, `hold`], `reviewed`: [`computed`, `finalized`, `hold`], `finalized`: [`paid`, `hold`], `hold`: [`computed`, `reviewed`, `finalized`], `paid`: []}. 400 on illegal transitions. `→finalized` stamps `finalized_at`/`finalized_by`. `paid` is terminal.
 - Business rules (finalized-row edit guard): `PUT /sales/salary/:id` rejects edits to incentive/diwali/other/hold_reason when `status IN ('finalized','paid')`. HR must move row → `hold` first.
 - Business rules (finalized-row recompute): Not blocked, but writes to `finalizedRecomputeWarnings[]` in response when net_salary drifts > ₹1. UI does NOT yet surface the array (Phase 4 cosmetic gap).

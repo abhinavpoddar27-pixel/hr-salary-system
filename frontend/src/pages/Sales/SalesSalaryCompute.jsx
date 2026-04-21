@@ -8,11 +8,9 @@ import {
   salesSalaryRegister,
   salesSalaryUpdate,
   salesSalaryStatusUpdate,
-  salesDiwaliLedger,
 } from '../../utils/api'
 import { useAppStore } from '../../store/appStore'
 import CompanyFilter from '../../components/shared/CompanyFilter'
-import Modal from '../../components/ui/Modal'
 import ConfirmDialog from '../../components/ui/ConfirmDialog'
 
 const MONTHS = ['', 'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
@@ -77,62 +75,11 @@ function EditRowCell({ value, onSave, disabled, suffix = '' }) {
   )
 }
 
-function DiwaliLedgerModal({ company, year, onClose }) {
-  const { data: res, isLoading } = useQuery({
-    queryKey: ['sales-diwali-ledger', company, year],
-    queryFn: () => salesDiwaliLedger({ company, year }),
-    enabled: !!company && !!year,
-  })
-  const rows = res?.data?.data || []
-
-  return (
-    <Modal open onClose={onClose} title={`Diwali Accrual Report — ${company} (${year})`} size="lg">
-      {isLoading ? (
-        <p className="text-sm text-slate-500">Loading…</p>
-      ) : rows.length === 0 ? (
-        <p className="text-sm text-slate-500">No Diwali accruals for {year} yet.</p>
-      ) : (
-        <div className="overflow-x-auto">
-          <table className="min-w-full text-sm">
-            <thead className="bg-slate-50 text-xs uppercase text-slate-600">
-              <tr>
-                <th className="px-2 py-2 text-left">Code</th>
-                <th className="px-2 py-2 text-left">Name</th>
-                <th className="px-2 py-2 text-right">YTD Accrued</th>
-                <th className="px-2 py-2 text-right">Paid Out</th>
-                <th className="px-2 py-2 text-right">Balance</th>
-                <th className="px-2 py-2 text-left">Last Month</th>
-              </tr>
-            </thead>
-            <tbody>
-              {rows.map(r => (
-                <tr key={r.employee_code} className="border-t border-slate-100">
-                  <td className="px-2 py-1.5 font-mono text-xs">{r.employee_code}</td>
-                  <td className="px-2 py-1.5">{r.employee_name || '—'}</td>
-                  <td className="px-2 py-1.5 text-right font-mono">{fmtINR(r.ytd_accrual)}</td>
-                  <td className="px-2 py-1.5 text-right font-mono">{fmtINR(r.total_payouts)}</td>
-                  <td className="px-2 py-1.5 text-right font-mono font-semibold text-purple-700">{fmtINR(r.running_balance)}</td>
-                  <td className="px-2 py-1.5 text-xs">{r.last_month || '—'}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-          <p className="mt-3 text-xs text-slate-500">
-            Payouts are disbursed manually by Finance in Oct/Nov. Phase 3 shows read-only running balances;
-            payout actions arrive in Phase 4.
-          </p>
-        </div>
-      )}
-    </Modal>
-  )
-}
-
 export default function SalesSalaryCompute() {
   const qc = useQueryClient()
   const navigate = useNavigate()
   const { selectedCompany, selectedMonth, selectedYear } = useAppStore()
 
-  const [showDiwali, setShowDiwali] = useState(false)
   const [confirmStatusChange, setConfirmStatusChange] = useState(null)
   const [confirmRecompute, setConfirmRecompute] = useState(false)
 
@@ -242,12 +189,6 @@ export default function SalesSalaryCompute() {
         </div>
         <div className="flex items-center gap-2 flex-wrap">
           <CompanyFilter />
-          <button
-            onClick={() => setShowDiwali(true)}
-            className="px-3 py-1.5 text-sm rounded-lg bg-purple-100 hover:bg-purple-200 text-purple-800"
-          >
-            Diwali Accrual Report
-          </button>
           <button disabled title="Coming in Phase 4"
             className="px-3 py-1.5 text-sm rounded-lg bg-slate-200 text-slate-400 cursor-not-allowed">
             Export Excel
@@ -287,7 +228,7 @@ export default function SalesSalaryCompute() {
                 <th className="px-2 py-2 text-right">ESI</th>
                 <th className="px-2 py-2 text-right">TDS</th>
                 <th className="px-2 py-2 text-right bg-amber-50">Incentive</th>
-                <th className="px-2 py-2 text-right bg-amber-50">Diwali Ded</th>
+                <th className="px-2 py-2 text-right bg-amber-50">Diwali Bonus</th>
                 <th className="px-2 py-2 text-right bg-amber-50">Other Ded</th>
                 <th className="px-2 py-2 text-right">Net ₹</th>
                 <th className="px-2 py-2 text-left">Status</th>
@@ -321,9 +262,9 @@ export default function SalesSalaryCompute() {
                     </td>
                     <td className="px-2 py-1.5 text-right bg-amber-50">
                       <EditRowCell
-                        value={r.diwali_recovery}
+                        value={r.diwali_bonus}
                         disabled={locked}
-                        onSave={(n) => salaryMut.mutate({ id: r.id, data: { diwali_recovery: n } })}
+                        onSave={(n) => salaryMut.mutate({ id: r.id, data: { diwali_bonus: n } })}
                       />
                     </td>
                     <td className="px-2 py-1.5 text-right bg-amber-50">
@@ -367,7 +308,7 @@ export default function SalesSalaryCompute() {
                 <td className="px-2 py-2 text-right font-mono">{fmtINR(totals.gross_earned)}</td>
                 <td colSpan={3}></td>
                 <td className="px-2 py-2 text-right font-mono">{fmtINR(totals.incentive_amount)}</td>
-                <td className="px-2 py-2 text-right font-mono">{fmtINR(totals.diwali_recovery)}</td>
+                <td className="px-2 py-2 text-right font-mono">{fmtINR(totals.diwali_bonus)}</td>
                 <td></td>
                 <td className="px-2 py-2 text-right font-mono text-green-700">{fmtINR(totals.net_salary)}</td>
                 <td colSpan={2}></td>
@@ -381,10 +322,6 @@ export default function SalesSalaryCompute() {
         <div className="bg-amber-50 border border-amber-200 rounded-lg p-4 text-sm text-amber-800">
           Please select a company, month, and year to view or compute the sales salary register.
         </div>
-      )}
-
-      {showDiwali && (
-        <DiwaliLedgerModal company={selectedCompany} year={selectedYear} onClose={() => setShowDiwali(false)} />
       )}
 
       {confirmStatusChange && (
@@ -404,7 +341,7 @@ export default function SalesSalaryCompute() {
       {confirmRecompute && (
         <ConfirmDialog
           title="Recompute will touch reviewed/finalized rows"
-          message="Some rows are reviewed, finalized, or paid. Recompute re-runs base math (gross, PF, ESI, TDS) but preserves HR-entered fields (incentive, diwali, other deductions, status). If any finalized row's net_salary drifts by more than ₹1, you'll see a warning in the response. Continue?"
+          message="Some rows are reviewed, finalized, or paid. Recompute re-runs base math (gross, PF, ESI, TDS) but preserves HR-entered fields (incentive, diwali bonus, other deductions, status). If any finalized row's net_salary drifts by more than ₹1, you'll see a warning in the response. Continue?"
           confirmText="Recompute"
           cancelText="Cancel"
           variant="warning"
