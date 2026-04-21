@@ -2127,21 +2127,6 @@ If description and screenshot are incoherent or unrelated, set summary_confidenc
     'Known pages list injected into extraction prompt at runtime.'
   );
 
-  // Webhook secret — generated at first boot only, idempotent on restart
-  const existingWebhookSecret = db.prepare(
-    "SELECT value FROM policy_config WHERE key = 'bug_report_sarvam_webhook_secret'"
-  ).get();
-  if (!existingWebhookSecret) {
-    const secret = crypto.randomBytes(32).toString('hex');
-    db.prepare(
-      "INSERT INTO policy_config (key, value, description) VALUES (?, ?, ?)"
-    ).run(
-      'bug_report_sarvam_webhook_secret',
-      secret,
-      'Shared secret for verifying Sarvam webhook signatures. Rotate quarterly.'
-    );
-  }
-
   // ── March 2026 Reconciliation: Set contractor flags ──────────
   // ONE-TIME migration. Previously ran on every app boot, which re-stamped
   // is_contractor=1 on employees whose employment_type was later corrected
