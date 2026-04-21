@@ -126,6 +126,14 @@ app.use(compression({
 }));
 
 app.use(cookieParser());
+
+// Bug Reporter Sarvam webhook — MUST be mounted before express.json() so that
+// express.raw() on the webhook route gets the unparsed bytes (required for
+// HMAC signature verification). All other bug-reports paths are auth-gated
+// and mounted below with the rest of the routes.
+const { authedRouter: bugReportsAuthed, webhookRouter: bugReportsWebhook } = require('./src/routes/bugReports');
+app.use('/api/bug-reports', bugReportsWebhook);
+
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 
@@ -216,6 +224,11 @@ app.use('/api/early-exit-deductions', requireAuth, require('./src/routes/early-e
 app.use('/api/sales',            requireAuth, require('./src/routes/sales'));
 app.use('/api/query-tool',       requireAuth, require('./src/routes/queryTool'));
 app.use('/api/ai',               requireAuth, require('./src/routes/ai'));
+
+// Bug Reporter authed routes. webhookRouter is mounted earlier (before
+// express.json) so the webhook handler can read raw bytes for HMAC
+// verification.
+app.use('/api/bug-reports', bugReportsAuthed);
 
 // Health check (public)
 app.get('/api/health', (req, res) => {
@@ -310,6 +323,10 @@ app.listen(PORT, () => {
   try { require('./src/services/monthEndScheduler').startScheduler(); } catch (e) { console.error('Scheduler init failed:', e.message); }
   // Start nightly DB backup scheduler
   try { require('./src/services/backupScheduler').initBackupScheduler(); } catch (e) { console.error('Backup scheduler init failed:', e.message); }
+  // Start Sarvam batch-job safety-net poller (bug reporter — step 8)
+  try { require('./src/services/sarvamBatchPoller').startPollerCron(); } catch (e) { console.error('Sarvam poller init failed:', e.message); }
+  // Rescue bug-report rows stuck in pending state across container restarts (step 10)
+  try { require('./src/services/bugReportResurrect').resurrectStuckRows(); } catch (e) { console.error('Bug report resurrect init failed:', e.message); }
 });
 
 module.exports = app;
