@@ -90,7 +90,8 @@ export default function VoiceRecorder({ value, onChange, disabled }) {
       const type = recorder.mimeType || mimeType || 'audio/webm'
       const blob = new Blob(chunksRef.current, { type })
       const file = new File([blob], `recording.${ext(type)}`, { type })
-      onChange(file)
+      const durationSec = Math.max(1, Math.floor((Date.now() - startRef.current) / 1000))
+      onChange(file, durationSec)
       try { streamRef.current?.getTracks().forEach(t => t.stop()) } catch (_e) { /* ignore */ }
       streamRef.current = null
       setRecording(false)

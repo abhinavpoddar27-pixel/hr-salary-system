@@ -49,6 +49,7 @@ export default function BugReportModal() {
   const [screenshot,  setScreenshot]  = useState(null)
   const [audio,       setAudio]       = useState(null)
   const [audioSource, setAudioSource] = useState(null)
+  const [audioDurationSec, setAudioDurationSec] = useState(null)
   const [typedComment, setTypedComment] = useState('')
   const [submitting,   setSubmitting]   = useState(false)
   const [autoContext,  setAutoContext]  = useState(null)
@@ -69,6 +70,7 @@ export default function BugReportModal() {
     setScreenshot(null)
     setAudio(null)
     setAudioSource(null)
+    setAudioDurationSec(null)
     setTypedComment('')
     setSubmitting(false)
     setAutoContext(null)
@@ -81,6 +83,7 @@ export default function BugReportModal() {
     // Keep screenshot across method switches — only audio/typed are path-specific.
     setAudio(null)
     setAudioSource(m === 'recorded' ? 'recorded' : m === 'uploaded' ? 'uploaded' : null)
+    setAudioDurationSec(null)
     if (m !== 'typed') setTypedComment('')
   }
 
@@ -103,6 +106,7 @@ export default function BugReportModal() {
       const payload = {
         input_method: inputMethod,
         audio_source: inputMethod === 'typed' ? null : (audioSource || inputMethod),
+        audio_duration_sec: inputMethod === 'typed' ? null : audioDurationSec,
         user_typed_comment: inputMethod === 'typed' ? typedComment.trim() : null,
         page_url: window.location.href,
         page_name: pageName,
@@ -169,10 +173,26 @@ export default function BugReportModal() {
           </div>
 
           {inputMethod === 'recorded' && (
-            <VoiceRecorder value={audio} onChange={(f) => { setAudio(f); setAudioSource('recorded') }} disabled={submitting} />
+            <VoiceRecorder
+              value={audio}
+              onChange={(f, durationSec) => {
+                setAudio(f)
+                setAudioSource('recorded')
+                setAudioDurationSec(f ? (durationSec ?? null) : null)
+              }}
+              disabled={submitting}
+            />
           )}
           {inputMethod === 'uploaded' && (
-            <AudioUploader value={audio} onChange={(f) => { setAudio(f); setAudioSource('uploaded') }} disabled={submitting} />
+            <AudioUploader
+              value={audio}
+              onChange={(f, durationSec) => {
+                setAudio(f)
+                setAudioSource('uploaded')
+                setAudioDurationSec(f ? (durationSec ?? null) : null)
+              }}
+              disabled={submitting}
+            />
           )}
           {inputMethod === 'typed' && (
             <textarea

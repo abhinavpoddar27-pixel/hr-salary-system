@@ -1,12 +1,37 @@
 import React, { useState, useEffect } from 'react'
+import toast from 'react-hot-toast'
 
 const MAX_BYTES = 25 * 1024 * 1024 // mirrors backend AUDIO_MAX_BYTES
 const ACCEPT = 'audio/*,.m4a,.mp3,.wav,.webm,.ogg,.opus'
 
+function probeAudioDuration(objectUrl) {
+  return new Promise((resolve, reject) => {
+    const audio = new Audio()
+    audio.preload = 'metadata'
+    const cleanup = () => {
+      audio.onloadedmetadata = null
+      audio.onerror = null
+    }
+    audio.onloadedmetadata = () => {
+      cleanup()
+      const d = audio.duration
+      if (!Number.isFinite(d) || d <= 0) {
+        reject(new Error('duration not finite or <= 0'))
+      } else {
+        resolve(d)
+      }
+    }
+    audio.onerror = () => {
+      cleanup()
+      reject(new Error('audio element error'))
+    }
+    audio.src = objectUrl
+  })
+}
+
 // File picker for pre-recorded audio (WhatsApp voice note, phone recording,
-// etc.). No duration probe — browsers report duration inconsistently and
-// Sarvam will happily chunk anything under 25MB; we just warn if the file
-// hints at > 4 minutes (~ 4MB at typical voice-note bitrates) per plan §4.5.
+// etc.). Duration probed via HTML5 Audio metadata. If the probe fails the
+// file is rejected client-side (backend requires audio_duration_sec > 0).
 export default function AudioUploader({ value, onChange, disabled }) {
   const [error, setError] = useState(null)
   const [url, setUrl] = useState(null)
@@ -18,7 +43,7 @@ export default function AudioUploader({ value, onChange, disabled }) {
     return () => URL.revokeObjectURL(u)
   }, [value])
 
-  function handleFile(e) {
+  async function handleFile(e) {
     const file = e.target.files?.[0]
     if (!file) return
     if (!file.type?.startsWith('audio/') && !/\.(m4a|mp3|wav|webm|ogg|opus)$/i.test(file.name)) {
@@ -30,7 +55,19 @@ export default function AudioUploader({ value, onChange, disabled }) {
       return
     }
     setError(null)
-    onChange(file)
+
+    const probeUrl = URL.createObjectURL(file)
+    try {
+      const durationSec = await probeAudioDuration(probeUrl)
+      onChange(file, Math.max(1, Math.round(durationSec)))
+    } catch (err) {
+      console.warn('[AudioUploader] duration probe failed:', err.message)
+      toast.error('Could not read audio duration. Try a different file format.')
+      e.target.value = ''
+      return
+    } finally {
+      URL.revokeObjectURL(probeUrl)
+    }
   }
 
   function clear() { onChange(null); setError(null) }
