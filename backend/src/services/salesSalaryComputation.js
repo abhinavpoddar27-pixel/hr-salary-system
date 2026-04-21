@@ -179,9 +179,13 @@ function computeSalesEmployee(db, { salesEmployee, monthlyInputRow, month, year,
   const conveyanceMonthly = Math.round((structure.conveyance || 0) * 100) / 100;
 
   // ── Pre-read existing row so HR-entered values survive recompute ──
+  // Phase 4: neft_exported_at + payslip_generated_at also pre-read so a
+  // recompute never wipes audit stamps written by the export / payslip
+  // side-effect endpoints.
   const prev = db.prepare(`
     SELECT incentive_amount, other_deductions, hold_reason,
-           status, finalized_at, finalized_by, diwali_bonus
+           status, finalized_at, finalized_by, diwali_bonus,
+           neft_exported_at, payslip_generated_at
       FROM sales_salary_computations
      WHERE employee_code = ? AND month = ? AND year = ? AND company = ?
   `).get(salesEmployee.code, month, year, company);
@@ -197,6 +201,9 @@ function computeSalesEmployee(db, { salesEmployee, monthlyInputRow, month, year,
     ? prev.status : 'computed';
   const preservedFinalizedAt = prev?.finalized_at || null;
   const preservedFinalizedBy = prev?.finalized_by || null;
+  // Phase 4 audit stamps — carry forward; compute never mints new values.
+  const preservedNeftExportedAt = prev?.neft_exported_at || null;
+  const preservedPayslipGeneratedAt = prev?.payslip_generated_at || null;
 
   // ── Step 1 — Days aggregation ──
   const daysGiven = parseFloat(monthlyInputRow.sheet_days_given);
@@ -325,6 +332,8 @@ function computeSalesEmployee(db, { salesEmployee, monthlyInputRow, month, year,
     computed_by: user || null,
     finalized_at: preservedFinalizedAt,
     finalized_by: preservedFinalizedBy,
+    neft_exported_at: preservedNeftExportedAt,
+    payslip_generated_at: preservedPayslipGeneratedAt,
     // Carry forward the previous netSalary for the frontend "finalized recompute warning"
     _prevNetSalary: prev ? undefined : null, // set after the fact if you want to detect drift
   };
@@ -346,7 +355,8 @@ function saveSalesSalaryComputation(db, comp) {
       other_deductions, total_deductions,
       diwali_bonus, incentive_amount, net_salary,
       sunday_rule_trace, status, hold_reason,
-      computed_by, finalized_at, finalized_by
+      computed_by, finalized_at, finalized_by,
+      neft_exported_at, payslip_generated_at
     ) VALUES (
       ?, ?, ?, ?,
       ?, ?, ?, ?,
@@ -358,7 +368,8 @@ function saveSalesSalaryComputation(db, comp) {
       ?, ?,
       ?, ?, ?,
       ?, ?, ?,
-      ?, ?, ?
+      ?, ?, ?,
+      ?, ?
     )
     ON CONFLICT(employee_code, month, year, company) DO UPDATE SET
       days_given = excluded.days_given,
@@ -398,6 +409,8 @@ function saveSalesSalaryComputation(db, comp) {
       computed_by = excluded.computed_by,
       finalized_at = excluded.finalized_at,
       finalized_by = excluded.finalized_by,
+      neft_exported_at = excluded.neft_exported_at,
+      payslip_generated_at = excluded.payslip_generated_at,
       computed_at = datetime('now')
   `).run(
     comp.employee_code, comp.month, comp.year, comp.company,
@@ -410,7 +423,8 @@ function saveSalesSalaryComputation(db, comp) {
     comp.other_deductions, comp.total_deductions,
     comp.diwali_bonus, comp.incentive_amount, comp.net_salary,
     comp.sunday_rule_trace, comp.status, comp.hold_reason,
-    comp.computed_by, comp.finalized_at, comp.finalized_by
+    comp.computed_by, comp.finalized_at, comp.finalized_by,
+    comp.neft_exported_at, comp.payslip_generated_at
   );
 
   // Return the row id (on update, need to SELECT since lastInsertRowid=0)

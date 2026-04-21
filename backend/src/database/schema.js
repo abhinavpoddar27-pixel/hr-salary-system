@@ -2385,6 +2385,12 @@ If description and screenshot are incoherent or unrelated, set summary_confidenc
   safeCreateIndex('CREATE INDEX IF NOT EXISTS idx_sales_salary_comp_my_company ON sales_salary_computations(month, year, company)');
   safeCreateIndex('CREATE INDEX IF NOT EXISTS idx_sales_salary_comp_status ON sales_salary_computations(status)');
 
+  // Phase 4: export + payslip audit stamps. Written only by the respective
+  // side-effect endpoints (NEFT export, payslip GET); never overwritten by
+  // compute (pre-read + carry forward in saveSalesSalaryComputation).
+  safeAddColumn('sales_salary_computations', 'neft_exported_at', 'TEXT');
+  safeAddColumn('sales_salary_computations', 'payslip_generated_at', 'TEXT');
+
   // policy_config seeds — tunable from SQL without a code deploy.
   const seedSalesPolicy = db.prepare(
     'INSERT OR IGNORE INTO policy_config (key, value, description) VALUES (?, ?, ?)'

@@ -520,4 +520,18 @@ export const salesSalaryUpdate = (id, data) => api.put(`/sales/salary/${id}`, da
 export const salesSalaryStatusUpdate = (id, data) => api.put(`/sales/salary/${id}/status`, data)
 export const salesPayslip = (code, params) => api.get(`/sales/payslip/${encodeURIComponent(code)}`, { params })
 
+// ── Sales Salary Module (Phase 4) — exports ──────────────
+export const salesExportExcel = (params, download = false) =>
+  api.get('/sales/export/salary-register',
+    download
+      ? { params: { ...params, download: 'true' }, responseType: 'blob' }
+      : { params }
+  )
+export const salesExportNEFT = (params, download = false) =>
+  api.get('/sales/export/bank-neft',
+    download
+      ? { params: { ...params, download: 'true' }, responseType: 'blob' }
+      : { params }
+  )
+
 export default api

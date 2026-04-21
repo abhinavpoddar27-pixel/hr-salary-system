@@ -1,8 +1,10 @@
-import React from 'react'
+import React, { useState } from 'react'
 import { useParams, useSearchParams, useNavigate } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
+import toast from 'react-hot-toast'
 import clsx from 'clsx'
 import { salesPayslip } from '../../utils/api'
+import { downloadSalesPayslipPDF } from '../../utils/salesPayslipPdf'
 
 const MONTHS = ['', 'January', 'February', 'March', 'April', 'May', 'June',
                 'July', 'August', 'September', 'October', 'November', 'December']
@@ -25,6 +27,8 @@ export default function SalesPayslip() {
     enabled: !!code && !!month && !!year && !!company,
     retry: 0,
   })
+
+  const [pdfBusy, setPdfBusy] = useState(false)
 
   if (!code || !month || !year || !company) {
     return (
@@ -51,6 +55,20 @@ export default function SalesPayslip() {
 
   const d = res.data.data
   const { employee, period, days, earnings, totalEarnings, deductions, totalDeductions, netSalary, status, bank, computedAt, finalizedAt, finalizedBy } = d
+  const isDraft = !['finalized', 'paid'].includes(status)
+
+  const handleDownload = async () => {
+    if (pdfBusy) return
+    setPdfBusy(true)
+    try {
+      await downloadSalesPayslipPDF(d)
+      toast.success('PDF downloaded')
+    } catch (err) {
+      toast.error('Failed to render PDF: ' + (err?.message || 'unknown error'))
+    } finally {
+      setPdfBusy(false)
+    }
+  }
 
   return (
     <div className="p-4 md:p-6 space-y-4 print:p-0">
@@ -63,13 +81,31 @@ export default function SalesPayslip() {
             status === 'finalized' || status === 'paid' ? 'bg-green-100 text-green-700' : 'bg-blue-100 text-blue-700')}>
             {status}
           </span>
-          <button onClick={() => window.print()}
-            className="px-3 py-1.5 text-sm rounded-lg bg-blue-600 hover:bg-blue-700 text-white">Print / Save PDF</button>
+          {isDraft && (
+            <span className="text-xs px-2 py-0.5 rounded font-medium bg-rose-100 text-rose-700">
+              DRAFT — not valid
+            </span>
+          )}
+          <button
+            onClick={handleDownload}
+            disabled={pdfBusy}
+            className="px-3 py-1.5 text-sm rounded-lg bg-blue-600 hover:bg-blue-700 disabled:bg-slate-400 text-white">
+            {pdfBusy ? 'Rendering PDF…' : 'Download PDF'}
+          </button>
         </div>
       </div>
 
       {/* Payslip */}
-      <div className="bg-white border border-slate-300 rounded-lg p-6 max-w-3xl mx-auto print:border-0 print:rounded-none print:shadow-none">
+      <div className="bg-white border border-slate-300 rounded-lg p-6 max-w-3xl mx-auto print:border-0 print:rounded-none print:shadow-none relative">
+        {isDraft && (
+          <div className="absolute inset-0 flex items-center justify-center pointer-events-none z-10">
+            <span
+              className="font-black text-rose-600/15 tracking-widest select-none"
+              style={{ transform: 'rotate(-30deg)', fontSize: '5rem', letterSpacing: '0.5rem' }}>
+              NOT VALID · DRAFT
+            </span>
+          </div>
+        )}
         <div className="border-b border-slate-200 pb-4 mb-4">
           <h1 className="text-xl font-bold text-slate-800">Sales Salary Slip</h1>
           <p className="text-sm text-slate-600">{employee.company}</p>

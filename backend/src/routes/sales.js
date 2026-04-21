@@ -832,6 +832,11 @@ const {
   generateSalesPayslipData,
 } = require('../services/salesSalaryComputation');
 
+const {
+  generateSalesExcel,
+  generateSalesNEFT,
+} = require('../services/salesExportFormats');
+
 const VALID_COMP_STATUSES = ['computed', 'reviewed', 'finalized', 'paid', 'hold'];
 
 // Allowed status transitions. Phase 3 is permissive but blocks regressions
@@ -1103,6 +1108,16 @@ router.put('/salary/:id/status', (req, res) => {
     });
   }
 
+  // Phase 4 guardrail: cannot flip to paid until the NEFT file has been
+  // exported for this row. Prevents marking rows paid that never actually
+  // made it into a bank upload batch.
+  if (next === 'paid' && !existing.neft_exported_at) {
+    return res.status(400).json({
+      success: false,
+      error: 'Cannot mark paid: NEFT file has not been exported for this employee yet. Export Bank NEFT first.',
+    });
+  }
+
   const sets = ['status = ?'];
   const params = [next];
   if (next === 'finalized') {
@@ -1141,7 +1156,122 @@ router.get('/payslip/:code', (req, res) => {
   if (!result.success) {
     return res.status(404).json(result);
   }
+
+  // Phase 4: stamp payslip_generated_at as an audit trail for "last time
+  // this payslip was viewed / downloaded". Carried across recompute by the
+  // UPSERT pre-read in saveSalesSalaryComputation.
+  try {
+    db.prepare(`
+      UPDATE sales_salary_computations
+         SET payslip_generated_at = datetime('now')
+       WHERE employee_code = ? AND month = ? AND year = ? AND company = ?
+    `).run(code, month, year, company);
+  } catch (e) { /* audit must not break payslip delivery */ }
+
   res.json({ success: true, data: result });
+});
+
+// ════════════════════════════════════════════════════════════════════
+// Phase 4 — Exports (Excel register, Bank NEFT CSV)
+// ════════════════════════════════════════════════════════════════════
+
+// GET /api/sales/export/salary-register?month&year&company[&download=true]
+router.get('/export/salary-register', (req, res) => {
+  const db = getDb();
+  const month = parseInt(req.query.month, 10);
+  const year = parseInt(req.query.year, 10);
+  const company = (req.query.company || '').trim();
+  const download = req.query.download === 'true';
+
+  if (!month || !year || !company) {
+    return res.status(400).json({ success: false, error: 'month, year, and company query params are required' });
+  }
+
+  let result;
+  try {
+    result = generateSalesExcel(db, month, year, company);
+  } catch (e) {
+    return res.status(500).json({ success: false, error: `Excel generation failed: ${e.message}` });
+  }
+
+  if (download) {
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.setHeader('Content-Disposition', `attachment; filename="${result.filename}"`);
+    return res.end(result.content);
+  }
+
+  // JSON preview — strip buffer, return rows + totals.
+  res.json({
+    success: true,
+    data: {
+      filename: result.filename,
+      rowCount: result.count,
+      totals: result.totals,
+      employees: result.employees,
+    },
+  });
+});
+
+// GET /api/sales/export/bank-neft?month&year&company[&download=true]
+// Side-effect on download=true: stamps neft_exported_at on every row
+// included in the file, transactionally with file generation. The paid-
+// transition guardrail reads this column.
+router.get('/export/bank-neft', (req, res) => {
+  const db = getDb();
+  const user = req.user?.username || 'unknown';
+  const month = parseInt(req.query.month, 10);
+  const year = parseInt(req.query.year, 10);
+  const company = (req.query.company || '').trim();
+  const download = req.query.download === 'true';
+
+  if (!month || !year || !company) {
+    return res.status(400).json({ success: false, error: 'month, year, and company query params are required' });
+  }
+
+  let result;
+  try {
+    if (download) {
+      // Generate + stamp in one txn so partial failure doesn't half-write
+      // the audit flag. If stamping throws, the file isn't returned either.
+      const txn = db.transaction(() => {
+        const r = generateSalesNEFT(db, month, year, company);
+        if (r.eligibleIds.length > 0) {
+          const stamp = db.prepare(
+            "UPDATE sales_salary_computations SET neft_exported_at = datetime('now') WHERE id = ?"
+          );
+          for (const id of r.eligibleIds) stamp.run(id);
+        }
+        writeAuditP2(db, 'sales_salary_computations', {
+          recordId: 0, field: 'neft_exported', oldVal: '', newVal: `${r.eligibleIds.length} rows`,
+          user, actionType: 'neft_export',
+          remark: `NEFT export ${month}/${year} ${company} — ${r.eligibleIds.length} rows, ${r.missing.length} missing bank details`,
+        });
+        return r;
+      });
+      result = txn();
+    } else {
+      result = generateSalesNEFT(db, month, year, company);
+    }
+  } catch (e) {
+    return res.status(500).json({ success: false, error: `NEFT generation failed: ${e.message}` });
+  }
+
+  if (download) {
+    res.setHeader('Content-Type', 'text/csv');
+    res.setHeader('Content-Disposition', `attachment; filename="${result.filename}"`);
+    return res.send(result.content);
+  }
+
+  // JSON preview — surface `missing[]` so the frontend can prompt HR.
+  res.json({
+    success: true,
+    data: {
+      filename: result.filename,
+      employees: result.employees,
+      missing: result.missing,
+      totals: result.totals,
+    },
+  });
 });
 
 module.exports = router;

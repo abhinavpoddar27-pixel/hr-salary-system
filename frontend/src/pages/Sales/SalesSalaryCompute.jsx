@@ -8,10 +8,23 @@ import {
   salesSalaryRegister,
   salesSalaryUpdate,
   salesSalaryStatusUpdate,
+  salesExportExcel,
+  salesExportNEFT,
 } from '../../utils/api'
 import { useAppStore } from '../../store/appStore'
 import CompanyFilter from '../../components/shared/CompanyFilter'
 import ConfirmDialog from '../../components/ui/ConfirmDialog'
+
+function triggerBlobDownload(blob, filename) {
+  const url = URL.createObjectURL(blob)
+  const link = document.createElement('a')
+  link.href = url
+  link.download = filename
+  document.body.appendChild(link)
+  link.click()
+  document.body.removeChild(link)
+  setTimeout(() => URL.revokeObjectURL(url), 1000)
+}
 
 const MONTHS = ['', 'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
 
@@ -82,6 +95,8 @@ export default function SalesSalaryCompute() {
 
   const [confirmStatusChange, setConfirmStatusChange] = useState(null)
   const [confirmRecompute, setConfirmRecompute] = useState(false)
+  const [neftPreview, setNeftPreview] = useState(null)   // { missing, totals, filename } before download
+  const [exportBusy, setExportBusy] = useState(false)
 
   const monthYearReady = !!selectedCompany && !!selectedMonth && !!selectedYear
 
@@ -142,6 +157,71 @@ export default function SalesSalaryCompute() {
     }
   }
 
+  const filenameFromHeaders = (resp, fallback) => {
+    const cd = resp?.headers?.['content-disposition'] || resp?.headers?.get?.('content-disposition') || ''
+    const m = /filename="?([^";]+)"?/.exec(cd)
+    return m ? m[1] : fallback
+  }
+
+  const handleExportExcel = async () => {
+    if (exportBusy) return
+    setExportBusy(true)
+    try {
+      const resp = await salesExportExcel({
+        month: selectedMonth, year: selectedYear, company: selectedCompany,
+      }, true)
+      triggerBlobDownload(resp.data, filenameFromHeaders(resp, 'Sales_Salary_Register.xlsx'))
+      toast.success('Excel downloaded')
+    } catch (err) {
+      toast.error(err?.response?.data?.error || 'Excel export failed')
+    } finally {
+      setExportBusy(false)
+    }
+  }
+
+  const handleExportNEFTPreview = async () => {
+    if (exportBusy) return
+    setExportBusy(true)
+    try {
+      const resp = await salesExportNEFT({
+        month: selectedMonth, year: selectedYear, company: selectedCompany,
+      }, false)
+      const d = resp?.data?.data
+      if (!d || d.totals?.count === 0) {
+        toast(`Nothing to export — no eligible rows (net > 0 and not hold)`, { icon: 'ℹ' })
+        setExportBusy(false)
+        return
+      }
+      if (d.missing && d.missing.length > 0) {
+        setNeftPreview(d)   // open confirmation modal
+        setExportBusy(false)
+        return
+      }
+      // No missing rows — go straight to download.
+      await downloadNEFT()
+    } catch (err) {
+      toast.error(err?.response?.data?.error || 'NEFT preview failed')
+      setExportBusy(false)
+    }
+  }
+
+  const downloadNEFT = async () => {
+    setExportBusy(true)
+    try {
+      const resp = await salesExportNEFT({
+        month: selectedMonth, year: selectedYear, company: selectedCompany,
+      }, true)
+      triggerBlobDownload(resp.data, filenameFromHeaders(resp, 'Sales_Bank_Salary.csv'))
+      toast.success('NEFT file downloaded — rows marked as NEFT-exported')
+      setNeftPreview(null)
+      qc.invalidateQueries({ queryKey: ['sales-salary-register'] })
+    } catch (err) {
+      toast.error(err?.response?.data?.error || 'NEFT download failed')
+    } finally {
+      setExportBusy(false)
+    }
+  }
+
   // ── Pre-compute mode ─────────────────────────────────
   if (monthYearReady && !regLoading && !hasRows) {
     return (
@@ -189,13 +269,19 @@ export default function SalesSalaryCompute() {
         </div>
         <div className="flex items-center gap-2 flex-wrap">
           <CompanyFilter />
-          <button disabled title="Coming in Phase 4"
-            className="px-3 py-1.5 text-sm rounded-lg bg-slate-200 text-slate-400 cursor-not-allowed">
-            Export Excel
+          <button
+            onClick={handleExportExcel}
+            disabled={exportBusy || !hasRows}
+            title="Download salary register as .xlsx"
+            className="px-3 py-1.5 text-sm rounded-lg bg-emerald-600 hover:bg-emerald-700 disabled:bg-slate-300 disabled:text-slate-500 disabled:cursor-not-allowed text-white">
+            {exportBusy ? 'Exporting…' : 'Export Excel'}
           </button>
-          <button disabled title="Coming in Phase 4"
-            className="px-3 py-1.5 text-sm rounded-lg bg-slate-200 text-slate-400 cursor-not-allowed">
-            Export Bank NEFT
+          <button
+            onClick={handleExportNEFTPreview}
+            disabled={exportBusy || !hasRows}
+            title="Generate bank NEFT CSV and stamp rows as NEFT-exported"
+            className="px-3 py-1.5 text-sm rounded-lg bg-indigo-600 hover:bg-indigo-700 disabled:bg-slate-300 disabled:text-slate-500 disabled:cursor-not-allowed text-white">
+            {exportBusy ? 'Exporting…' : 'Export Bank NEFT'}
           </button>
           <button
             onClick={handleCompute}
@@ -284,17 +370,31 @@ export default function SalesSalaryCompute() {
                           Payslip
                         </button>
                         {allowedNext.length > 0 && (
-                          <select
-                            value=""
-                            onChange={e => {
-                              if (!e.target.value) return
-                              setConfirmStatusChange({ id: r.id, from: r.status, to: e.target.value, code: r.employee_code })
-                            }}
-                            className="border border-slate-200 rounded px-1 py-0.5 text-xs"
-                          >
-                            <option value="">Change status…</option>
-                            {allowedNext.map(s => <option key={s} value={s}>→ {s}</option>)}
-                          </select>
+                          <>
+                            <select
+                              value=""
+                              onChange={e => {
+                                if (!e.target.value) return
+                                setConfirmStatusChange({ id: r.id, from: r.status, to: e.target.value, code: r.employee_code })
+                              }}
+                              className="border border-slate-200 rounded px-1 py-0.5 text-xs"
+                            >
+                              <option value="">Change status…</option>
+                              {allowedNext.map(s => {
+                                const paidBlocked = s === 'paid' && !r.neft_exported_at
+                                return (
+                                  <option key={s} value={s} disabled={paidBlocked}>
+                                    → {s}{paidBlocked ? ' (export NEFT first)' : ''}
+                                  </option>
+                                )
+                              })}
+                            </select>
+                            {r.neft_exported_at && (
+                              <span className="text-[10px] text-indigo-600" title={`NEFT exported: ${r.neft_exported_at}`}>
+                                ✓ NEFT sent
+                              </span>
+                            )}
+                          </>
                         )}
                       </div>
                     </td>
@@ -348,6 +448,69 @@ export default function SalesSalaryCompute() {
           onCancel={() => setConfirmRecompute(false)}
           onConfirm={() => computeMut.mutate()}
         />
+      )}
+
+      {neftPreview && (
+        <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-lg max-w-2xl w-full max-h-[90vh] overflow-y-auto shadow-xl">
+            <div className="px-5 py-3 border-b border-slate-200">
+              <h3 className="text-lg font-bold text-slate-800">NEFT Export — Missing Bank Details</h3>
+              <p className="text-xs text-slate-500 mt-1">
+                {neftPreview.totals?.count || 0} employee(s) will be exported · {neftPreview.missing?.length || 0} will be skipped
+              </p>
+            </div>
+            <div className="px-5 py-3 space-y-3">
+              <div className="text-sm text-amber-800 bg-amber-50 border border-amber-200 rounded p-3">
+                The following employees have a positive net salary but no bank account or IFSC on file.
+                They will <strong>not</strong> be included in the NEFT file. Fix them in Employee Master
+                and re-export, or proceed to download the file for the remaining {neftPreview.totals?.count || 0} employee(s).
+              </div>
+              <div className="overflow-x-auto">
+                <table className="w-full text-xs">
+                  <thead className="bg-slate-50 text-slate-600">
+                    <tr>
+                      <th className="px-2 py-1 text-left">Code</th>
+                      <th className="px-2 py-1 text-left">Name</th>
+                      <th className="px-2 py-1 text-right">Net ₹</th>
+                      <th className="px-2 py-1 text-left">Missing</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {(neftPreview.missing || []).map((m, i) => (
+                      <tr key={i} className="border-t border-slate-100">
+                        <td className="px-2 py-1 font-mono">{m.employee_code}</td>
+                        <td className="px-2 py-1">{m.employee_name}</td>
+                        <td className="px-2 py-1 text-right font-mono">{fmtINR(m.net_salary)}</td>
+                        <td className="px-2 py-1 text-xs text-rose-700">
+                          {m.missing_account ? 'A/C no.' : ''}
+                          {m.missing_account && m.missing_ifsc ? ' + ' : ''}
+                          {m.missing_ifsc ? 'IFSC' : ''}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+              <div className="text-sm bg-slate-50 border border-slate-200 rounded p-3">
+                <div><strong>File:</strong> <span className="font-mono text-xs">{neftPreview.filename}</span></div>
+                <div><strong>Total to export:</strong> ₹{fmtINR(neftPreview.totals?.totalAmount)}</div>
+              </div>
+            </div>
+            <div className="px-5 py-3 border-t border-slate-200 flex items-center justify-end gap-2">
+              <button
+                onClick={() => setNeftPreview(null)}
+                className="px-3 py-1.5 text-sm rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700">
+                Cancel
+              </button>
+              <button
+                onClick={downloadNEFT}
+                disabled={exportBusy || (neftPreview.totals?.count || 0) === 0}
+                className="px-3 py-1.5 text-sm rounded-lg bg-indigo-600 hover:bg-indigo-700 disabled:bg-slate-300 text-white">
+                {exportBusy ? 'Downloading…' : `Download NEFT (${neftPreview.totals?.count || 0} rows)`}
+              </button>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   )
