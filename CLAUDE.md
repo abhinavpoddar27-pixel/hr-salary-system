@@ -1012,3 +1012,4 @@ frontend/
 - Run lint before marking any task complete.
 - Update this CLAUDE.md file after completing any major feature or pipeline change.
 - **Use curl for all API/endpoint diagnostic and verification queries** — never build a UI/HTML page for tests that can be done with curl. Start the backend server, run curl commands, check headers and response bodies directly. This applies to this project and any other project where curl can reach the server.
+- **Every /ship report's table/file/column claims must come from grep/find/sqlite3 queries executed in the current session, not from plan memory.** Quote the exact command that produced each claim. A /ship report that names tables, columns, or status values without citing the command that verified their existence is invalid. Precedent: 2026-04-20 Bug Reporter /ship report claimed 3 tables (reality: 1) and an invented retry subsystem; corrected 2026-04-21 after audit.
