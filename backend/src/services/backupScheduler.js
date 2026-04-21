@@ -92,6 +92,11 @@ function runBackup() {
 }
 
 function initBackupScheduler() {
+  const BACKUP_ENABLED = process.env.BACKUP_CRON_ENABLED === 'true';
+  if (!BACKUP_ENABLED) {
+    console.log('[Backup] cron disabled via BACKUP_CRON_ENABLED=false');
+    return;
+  }
   // 11:30 PM daily
   cron.schedule('30 23 * * *', () => {
     runBackup();
