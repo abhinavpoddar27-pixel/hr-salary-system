@@ -1,5 +1,36 @@
 ## Section 0: Last Session
 - **Date:** 2026-04-21
+- **Branch:** `claude/fix-bug-reporter-data-exposure-9XFJl` (pushed to `origin/main` at `3e222b5`)
+- **Last commit:** `3e222b5` security(auth): remove hardcoded JWT_SECRET fallback
+- **Task:** Incident response — Bug Reporter data exposure containment (6 commits) + JWT_SECRET hardening (1 commit). Repo was public 2026-04-12 through 2026-04-21 (~9 days) with production SQLite DB + backup committed.
+- **Files changed this session:**
+  - `backend/src/services/backupScheduler.js` — gated cron behind `BACKUP_CRON_ENABLED` env var (default disabled). Was auto-committing SQLite DB to GitHub nightly.
+  - `backend/.env.example` — documented new `BACKUP_CRON_ENABLED=false` var.
+  - `.gitignore` — added `backend/data/*` rules (existing `data/*` rules didn't match the real DB path).
+  - `backend/data/hr-salary.db` / `hr_salary.db` / `hr_system.db` / `hr_system.db-shm` / `hr_system.db-wal` — untracked via `git rm --cached` (files preserved on disk, hr_system.db remains 1.13MB production DB).
+  - `backups/hr_salary_2026-04-11_17-42.db` — untracked via `git rm --cached` (file preserved on disk).
+  - `backend/src/database/schema.js` — deleted dead `bug_report_sarvam_webhook_secret` seed block (real source is `process.env.SARVAM_WEBHOOK_SECRET`). Unused `const crypto = require('crypto')` left as-is for minimal diff.
+  - `backend/src/middleware/auth.js` — removed hardcoded JWT_SECRET fallback string. Now throws at module load if env var is unset.
+  - `CLAUDE.md` — corrected Bug Reporter Section 0 after audit found fabricated tables (claimed 3, reality: 1) + invented retry counter. Added Section 8 rule requiring /ship report claims to cite verifying commands.
+- **What was fixed/built:** Technical containment of a 9-day PII exposure. Cron no longer auto-commits the DB; new DB files are properly ignored; previously tracked DB files untracked (still on disk for production use); dead webhook secret seed removed; JWT_SECRET fallback removed so misconfigured deploys fail fast. CLAUDE.md corrected to match actual shipped Bug Reporter schema, and a new Section 8 rule prevents the fabrication pattern that caused the prior mis-documentation.
+- **What's fragile:**
+  - `backend/src/database/schema.js` line 1 still has `const crypto = require('crypto')` — now unused after seed removal. Harmless but will lint-warn if a linter runs. Leave alone unless doing a broader cleanup pass.
+  - Git history (before `cecc87b`) still contains the leaked SQLite DB blobs + the old `hr-system-dev-secret-change-in-production` JWT fallback. This session did NOT rewrite history (BFG is a separate task with its own maintenance window). Anyone who cloned/forked during the public window has the data.
+  - `BACKUP_CRON_ENABLED` default is `false` — Railway must set this to `true` if/when the backup destination is moved off public GitHub. Re-enabling without moving the destination re-introduces the PII leak.
+  - The sandbox DB at `backend/data/hr_system.db` had NO `bug_report_sarvam_webhook_secret` row to delete — production may still have that row. Must run `DELETE FROM policy_config WHERE key='bug_report_sarvam_webhook_secret';` on production DB out of band.
+  - Any dev env that silently relied on the JWT fallback string will now refuse to boot. Confirm every environment has `JWT_SECRET` set before redeploying.
+- **Unfinished work:** The auth commit (`d1ceed8`, locally) was rebased onto an updated `origin/main` and landed as `3e222b5`. No unpushed work remains. Design doc `sales_salary_module_design.md` is now committed (came in via merge) — the deferred Q5-reversal rewrites from the prior session still need to be applied to it (task belongs to the Sales/Phase 4 track, not this session).
+- **Known issues remaining (requires out-of-session human action):**
+  - Rotate all potentially exposed credentials: `ANTHROPIC_API_KEY`, `SARVAM_API_KEY`, `SARVAM_WEBHOOK_SECRET`, `JWT_SECRET`, admin/hr/finance/viewer passwords.
+  - Decide on git history rewrite (BFG Repo-Cleaner) to scrub the leaked DB blobs and old JWT fallback string from history — separate maintenance window.
+  - Disclosure to company leadership.
+  - Run the `DELETE FROM policy_config WHERE key='bug_report_sarvam_webhook_secret';` on production DB.
+- **Next session should:** (a) verify on Railway that `JWT_SECRET` is set and the app boots after this deploy — the fallback is GONE, so a missing env var now crashes at module load with `[auth] JWT_SECRET env var is required and must not be empty`. (b) verify `BACKUP_CRON_ENABLED` is unset or explicitly `false` (it should be — don't re-enable until the backup destination is non-public). (c) confirm the production DB had the `bug_report_sarvam_webhook_secret` row deleted out of band. (d) when Abhinav is ready, plan the BFG history rewrite as a separate task with a rollback plan.
+
+---
+
+## Section 0: Previous Session
+- **Date:** 2026-04-21
 - **Branch:** `claude/session-start-hook-jv0KJ` (pushed; not yet merged to `origin/main`)
 - **Task:** Phase 3 Hotfix — Diwali policy reversal (Q5 reversed).
 - **Hotfix commit:** (this session, pending at report time)
