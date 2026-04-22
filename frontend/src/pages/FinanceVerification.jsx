@@ -340,6 +340,14 @@ export default function FinanceVerification() {
                     </div>
                     {canAct && (
                       <div className="flex gap-1 shrink-0 ml-2" onClick={e => e.stopPropagation()}>
+                        {f.type === 'unverified_miss_punches' && (
+                          <button onClick={() => {
+                            setActiveTab('misspunch');
+                            setTimeout(() => {
+                              document.getElementById(`miss-punch-emp-${f.employeeCode}`)?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                            }, 100);
+                          }} className="text-blue-600 hover:bg-blue-50 px-2 py-1 rounded text-xs">Review</button>
+                        )}
                         <button onClick={() => verifyMut.mutate({ employeeCode: f.employeeCode, month, year, status: 'verified' })} className="text-green-600 hover:bg-green-50 px-2 py-1 rounded text-xs">Verify</button>
                         <button onClick={() => verifyMut.mutate({ employeeCode: f.employeeCode, month, year, status: 'flagged', flagReason: f.description, flagCategory: f.type })} className="text-amber-600 hover:bg-amber-50 px-2 py-1 rounded text-xs">Flag</button>
                       </div>
@@ -421,7 +429,7 @@ export default function FinanceVerification() {
               </thead>
               <tbody>
                 {missPunches.map(m => (
-                  <tr key={m.id}>
+                  <tr key={m.id} id={`miss-punch-emp-${m.employee_code}`}>
                     {canAct && (
                       <td>
                         <input type="checkbox"
