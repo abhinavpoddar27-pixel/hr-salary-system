@@ -162,13 +162,13 @@ router.post('/pba', requireHrOrAdmin, (req, res) => {
            status_original, status_final,
            in_time_final, out_time_final,
            correction_source, correction_remark,
-           is_miss_punch, stage_5_done,
+           is_miss_punch, is_night_out_only, stage_5_done,
            month, year, company)
         VALUES (?, ?, ?,
                 'A', ?,
                 NULL, NULL,
                 'pba_grant', 'PBA grant pending finance approval',
-                0, 1,
+                0, 0, 1,
                 ?, ?, ?)
       `).run(employee_code, emp.id, grant_date, statusFinal, parseInt(month), parseInt(year), company);
       attendanceId = apResult.lastInsertRowid;
