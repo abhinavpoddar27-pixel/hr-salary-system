@@ -1,4 +1,33 @@
 ## Section 0: Last Session
+- **Date:** 2026-04-23
+- **Branch:** `claude/fix-verify-button-punches-O1DPi` (pushed; fast-forwarded to `origin/main` at `aed502f`)
+- **Last commit:** `aed502f` feat(stage-5): Pre-Biometric Activation ED grants for new joiners
+- **Files changed this session:**
+  - `backend/src/routes/extraDutyGrants.js` — new `POST /pba` endpoint (atomic placeholder+grant insert, validates DOJ/first-punch window, remarks≥10, duty_days∈{0.5,1.0}); extended `POST /:id/finance-reject` to revert PBA placeholder `attendance_processed` back to `status_final='A'` when a `PRE_BIOMETRIC_ACTIVATION` grant is rejected (wrapped in txn with the grant update).
+  - `backend/src/routes/attendance.js` — `GET /register` now returns top-level `pba_window: { doj, first_punch_date, company }` when `employeeCode` is supplied; omitted otherwise.
+  - `backend/src/routes/payroll.js` — both `approvedGrants` SELECTs (inside the protected 138–190 block) filter `grant_type != 'PRE_BIOMETRIC_ACTIVATION'` so PBA days flow through `daysPresent` via the placeholder, not through `manualExtraDutyDays`/`financeEDDays` (Option B, authorized).
+  - `frontend/src/pages/AttendanceRegister.jsx` — new `PBAGrantModal` component (date readonly, duty_days radio 1/0.5, remarks textarea w/ 10-char counter); grid cells that are empty AND inside the PBA window render indigo w/ "+ ED" label and are clickable; new `pbaMutation` invalidates the per-employee register query on success.
+  - `frontend/src/pages/FinanceVerification.jsx` — added "Review" button (before existing Verify/Flag) on `unverified_miss_punches` red-flag cards; switches tab to `misspunch` + `scrollIntoView` on `#miss-punch-emp-${employee_code}`; added that `id` anchor to the Miss Punch Review `<tr>`. Other red-flag types and all other buttons unchanged.
+  - `frontend/src/utils/api.js` — new `createPBAGrant(data)` helper.
+  - `frontend/dist/*` — rebuilt via `npm run build`.
+- **What was fixed/built:** Two bugs shipped. (1) Finance Verification → Red Flags: the Verify button on `unverified_miss_punches` cards wrote to `finance_audit_status` but the detector queries `attendance_processed.miss_punch_finance_status`, so cards reappeared on refresh. Added a Review button that jumps to the correct Miss Punch Review tab. (2) Stage 5 Corrections: new-joiner days between DOJ and first biometric punch had no `attendance_processed` rows → cells unclickable. Added `PRE_BIOMETRIC_ACTIVATION` grant type that atomically creates a placeholder P/½P row + a PENDING grant, routed through the existing HR→Finance dual-approval flow. Finance rejection reverts the placeholder to 'A'.
+- **What's fragile:**
+  - The PBA revert block in `extraDutyGrants.js POST /:id/finance-reject` only fires when BOTH `grant_type='PRE_BIOMETRIC_ACTIVATION'` AND `linked_attendance_id IS NOT NULL`. Any future code path that creates a PBA grant without stamping `linked_attendance_id` will leak a phantom P-day that never reverts on rejection. The new POST /pba always stamps it — but it's a correctness coupling to remember.
+  - `payroll.js:153-160` and `payroll.js:185-192` both gained `AND grant_type != 'PRE_BIOMETRIC_ACTIVATION'`. If a future grant_type is added that ALSO flows through a placeholder `attendance_processed` row, the same exclusion must be applied — otherwise `financeEDDays` will double-count. This is inside the "DO NOT MODIFY" lines 138-190 range per the original task spec; touched only because the Phase 3 expected output required it (Option B was explicitly approved).
+  - PBA modal uses `pbaWindow.company` from the register response; falls back to `selectedCompany` from Zustand. If both are null (employee has no company on record AND global filter is "All"), the backend returns 400 "Missing required fields". Rare but possible for brand-new employees not fully onboarded.
+  - Scroll-to-row on the Finance Verification Review button uses `setTimeout(100ms)` before `scrollIntoView` — because the Miss Punch Review query is `enabled: activeTab === 'misspunch'` so it only fires after the tab switch. 100ms may be tight on slow networks; the `?.` chain makes it a no-op if the row isn't mounted (user has to scroll manually). Acceptable for v1.
+  - The `#miss-punch-emp-${employee_code}` anchor lands on the FIRST `<tr>` for that employee when they have multiple miss punches in the same month. Harmless — `getElementById` returns first match — but worth knowing if someone wants to scroll to a SPECIFIC punch later.
+- **Unfinished work:** Phase 3 + Phase 4 validation SQL (sanity queries on `attendance_processed` + `day_calculations` + `salary_computations` drift) is printed in the task spec but was NOT run — requires a real new-joiner test case on Railway. Must be executed post-deploy before declaring Stage-5 PBA workflow production-ready.
+- **Known issues remaining:**
+  - Pre-existing: `SalesSalaryCompute.jsx:28` `ALLOWED_MOVES` drift vs backend `ALLOWED_STATUS_MOVES` in `sales.js:842` (missing `hold → finalized`). Sales Phase 5 cleanup.
+  - Pre-existing: `sales_diwali_ledger` reversal design doc still not committed; Q5-reversal rewrite pending.
+  - Pre-existing: bulk payslip download (`GET /payroll/payslips/bulk`) returns 403 by policy — disabled intentionally.
+  - Pre-existing: 10 npm audit vulnerabilities (5 moderate, 4 high, 1 critical) in frontend deps — surfaced by `npm install` this session.
+- **Next session should:** (a) run the Phase 3 + Phase 4 validation SQL on Railway with a real pre-biometric-activation new joiner (seed PBA grant → HR approve → Finance approve → calculate-days → verify `days_present` includes the PBA date, `finance_ed_days` does NOT, drift=0 on `salary_computations`); (b) test the Finance Verification Review button UX — verify `unverified_miss_punches` cards show three buttons, Review switches tab + scrolls, `returning_employee` cards still show only 2 buttons; (c) HR demo: click a frozen April 1-12 cell for ROHIT TARIYAL (23738) and confirm the PBA modal opens with the date pre-filled; (d) if HR reports "+ ED" cells aren't appearing, check `employees.date_of_joining` is set for that employee — the PBA window is null when DOJ is missing.
+
+---
+
+## Section 0: Previous Session
 - **Date:** 2026-04-21
 - **Branch:** `claude/sales-module-phase-4-w4Spu` (pushed; not yet merged to `origin/main`)
 - **Task:** Sales Salary Module Phase 4 — Excel + NEFT exports, payslip PDF, paid-status guardrail.
