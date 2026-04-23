@@ -430,7 +430,26 @@ router.get('/register', (req, res) => {
     ORDER BY ap.employee_code, ap.date
   `).all(...[month, year, employeeCode, company].filter(Boolean));
 
-  res.json({ success: true, data: records });
+  // PBA window (Pre-Biometric Activation) — surfaced only on single-employee
+  // queries so the Stage 5 grid can decide which empty cells are clickable
+  // for a new-joiner ED grant without a second round-trip. null fields mean
+  // either the employee has no DOJ on file or no attendance yet this month.
+  // `company` is included so the PBA POST uses the employee's authoritative
+  // company even when the UI's global filter is "All Companies".
+  const response = { success: true, data: records };
+  if (employeeCode) {
+    const emp = db.prepare('SELECT date_of_joining, company FROM employees WHERE code = ?').get(employeeCode);
+    const firstPunch = db.prepare(
+      'SELECT MIN(date) AS first_date FROM attendance_processed WHERE employee_code = ? AND month = ? AND year = ?'
+    ).get(employeeCode, month, year);
+    response.pba_window = {
+      doj: emp?.date_of_joining || null,
+      first_punch_date: firstPunch?.first_date || null,
+      company: emp?.company || null
+    };
+  }
+
+  res.json(response);
 });
 
 /**

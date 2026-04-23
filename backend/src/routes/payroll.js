@@ -150,10 +150,14 @@ router.post('/calculate-days', (req, res) => {
                 })
                 .map(r => r.date)
             );
+            // PBA (PRE_BIOMETRIC_ACTIVATION) grants are excluded: their days
+            // already flow through daysPresent via the placeholder
+            // attendance_processed row, so counting them here would double-pay.
             const approvedGrants = db.prepare(`
               SELECT grant_date, duty_days FROM extra_duty_grants
               WHERE employee_code = ? AND month = ? AND year = ?
                 AND status = 'APPROVED' AND finance_status = 'FINANCE_APPROVED'
+                AND grant_type != 'PRE_BIOMETRIC_ACTIVATION'
             `).all(empCode, month, year);
             manualExtraDutyDays = approvedGrants
               .filter(g => !wopDates.has(g.grant_date))
@@ -178,10 +182,14 @@ router.post('/calculate-days', (req, res) => {
                 })
                 .map(r => r.date)
             );
+            // PBA (PRE_BIOMETRIC_ACTIVATION) grants are excluded: their days
+            // already flow through daysPresent via the placeholder
+            // attendance_processed row, so counting them here would double-pay.
             const approvedGrants = db.prepare(`
               SELECT grant_date, duty_days FROM extra_duty_grants
               WHERE employee_code = ? AND month = ? AND year = ?
                 AND status = 'APPROVED' AND finance_status = 'FINANCE_APPROVED'
+                AND grant_type != 'PRE_BIOMETRIC_ACTIVATION'
             `).all(empCode, month, year);
             financeEDDays = approvedGrants
               .filter(g => !wopDates.has(g.grant_date))

@@ -309,6 +309,7 @@ export const getFinanceSignoffStatus = (month, year) => api.get('/finance-verify
 export const getExtraDutyGrants = (month, year, params) => api.get('/extra-duty-grants', { params: { month, year, ...params } })
 export const getExtraDutyGrantsSummary = (month, year) => api.get('/extra-duty-grants/summary', { params: { month, year } })
 export const createExtraDutyGrant = (data) => api.post('/extra-duty-grants', data)
+export const createPBAGrant = (data) => api.post('/extra-duty-grants/pba', data)
 export const approveExtraDutyGrant = (id) => api.post(`/extra-duty-grants/${id}/approve`)
 export const rejectExtraDutyGrant = (id, reason) => api.post(`/extra-duty-grants/${id}/reject`, { rejection_reason: reason })
 export const financeApproveGrant = (id) => api.post(`/extra-duty-grants/${id}/finance-approve`)

@@ -88,6 +88,116 @@ router.post('/', requireHrOrAdmin, (req, res) => {
   res.json({ success: true, id: result.lastInsertRowid });
 });
 
+// POST /pba — Pre-Biometric Activation grant (HR/admin)
+// Creates a placeholder attendance_processed row (status_final P or ½P)
+// and a linked extra_duty_grants row in ONE transaction. Used when a new
+// joiner was physically present between their DOJ and the first biometric
+// punch — those days have no attendance_processed rows, so Stage 5 has
+// nothing to click on. The placeholder closes that gap while the linked
+// grant routes the day through the same HR→Finance dual-approval pipeline
+// as any other extra-duty claim. Rejection reverts the placeholder (see
+// POST /:id/finance-reject below).
+router.post('/pba', requireHrOrAdmin, (req, res) => {
+  const db = getDb();
+  const { employee_code, grant_date, month, year, company, duty_days, remarks } = req.body;
+
+  if (!employee_code || !grant_date || !month || !year || !company) {
+    return res.status(400).json({ success: false, error: 'Missing required fields' });
+  }
+  if (duty_days !== 0.5 && duty_days !== 1.0 && duty_days !== 1) {
+    return res.status(400).json({ success: false, error: 'duty_days must be 0.5 or 1.0' });
+  }
+  const remarkTrim = String(remarks || '').trim();
+  if (remarkTrim.length < 10) {
+    return res.status(400).json({ success: false, error: 'remarks must be at least 10 characters' });
+  }
+
+  const emp = db.prepare('SELECT id, date_of_joining FROM employees WHERE code = ?').get(employee_code);
+  if (!emp) return res.status(404).json({ success: false, error: 'Employee not found' });
+  if (!emp.date_of_joining) {
+    return res.status(400).json({ success: false, error: 'Employee has no date_of_joining on record' });
+  }
+  if (grant_date < emp.date_of_joining) {
+    return res.status(400).json({ success: false, error: `grant_date must be on or after DOJ (${emp.date_of_joining})` });
+  }
+  // Must fall inside the claimed month
+  const mm = String(month).padStart(2, '0');
+  const lastDay = new Date(year, month, 0).getDate();
+  const monthStart = `${year}-${mm}-01`;
+  const monthEnd = `${year}-${mm}-${String(lastDay).padStart(2, '0')}`;
+  if (grant_date < monthStart || grant_date > monthEnd) {
+    return res.status(400).json({ success: false, error: 'grant_date is outside the specified month/year' });
+  }
+
+  // PBA window: grant_date must be strictly before the earliest existing
+  // attendance row for this employee in this month. If no rows exist yet,
+  // any date on/after DOJ within the month is valid.
+  const firstPunch = db.prepare(
+    'SELECT MIN(date) AS first_date FROM attendance_processed WHERE employee_code = ? AND month = ? AND year = ?'
+  ).get(employee_code, parseInt(month), parseInt(year));
+  if (firstPunch?.first_date && grant_date >= firstPunch.first_date) {
+    return res.status(400).json({
+      success: false,
+      error: `grant_date must be before first biometric punch (${firstPunch.first_date})`
+    });
+  }
+
+  // Pre-check 409: UNIQUE(employee_code, grant_date, month, year) on extra_duty_grants.
+  const existing = db.prepare(
+    'SELECT id FROM extra_duty_grants WHERE employee_code = ? AND grant_date = ? AND month = ? AND year = ?'
+  ).get(employee_code, grant_date, parseInt(month), parseInt(year));
+  if (existing) {
+    return res.status(409).json({ success: false, error: 'A grant already exists for this date', grant_id: existing.id });
+  }
+
+  const statusFinal = duty_days === 0.5 ? '½P' : 'P';
+  const user = req.user?.username || 'hr';
+
+  try {
+    let grantId, attendanceId;
+    const txn = db.transaction(() => {
+      const apResult = db.prepare(`
+        INSERT INTO attendance_processed
+          (employee_code, employee_id, date,
+           status_original, status_final,
+           in_time_final, out_time_final,
+           correction_source, correction_remark,
+           is_miss_punch, stage_5_done,
+           month, year, company)
+        VALUES (?, ?, ?,
+                'A', ?,
+                NULL, NULL,
+                'pba_grant', 'PBA grant pending finance approval',
+                0, 1,
+                ?, ?, ?)
+      `).run(employee_code, emp.id, grant_date, statusFinal, parseInt(month), parseInt(year), company);
+      attendanceId = apResult.lastInsertRowid;
+
+      const grantResult = db.prepare(`
+        INSERT INTO extra_duty_grants
+          (employee_code, employee_id, grant_date, month, year, company,
+           grant_type, duty_days, verification_source, remarks,
+           linked_attendance_id, status, finance_status, requested_by)
+        VALUES (?, ?, ?, ?, ?, ?,
+                'PRE_BIOMETRIC_ACTIVATION', ?, 'HR_NEW_JOINER', ?,
+                ?, 'PENDING', 'UNREVIEWED', ?)
+      `).run(
+        employee_code, emp.id, grant_date, parseInt(month), parseInt(year), company,
+        duty_days, remarkTrim, attendanceId, user
+      );
+      grantId = grantResult.lastInsertRowid;
+    });
+    txn();
+
+    logAudit('extra_duty_grants', grantId, 'status', '', 'PENDING', 'PBA_CREATE',
+      `${employee_code} ${grant_date}: ${duty_days} day(s) (pre-biometric activation)`);
+
+    res.json({ success: true, grant_id: grantId, attendance_id: attendanceId });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
 // POST /:id/approve — HR approve
 // Per-grant salary impact is NOT stamped any more — it's computed live in
 // salaryComputation.js (ed_pay) using the current month's gross / calendarDays,
@@ -223,8 +333,29 @@ router.post('/:id/finance-reject', requireFinanceOrAdmin, (req, res) => {
   if (!grant) return res.status(404).json({ success: false, error: 'Grant not found' });
 
   const user = req.user?.username || 'finance';
-  db.prepare("UPDATE extra_duty_grants SET finance_status = 'FINANCE_REJECTED', finance_flag_reason = ?, finance_reviewed_by = ?, finance_reviewed_at = datetime('now') WHERE id = ?")
-    .run(finance_flag_reason, user, req.params.id);
+  // Wrap in a transaction so the PBA placeholder revert never drifts
+  // from the grant status flip — either both land or neither does.
+  const txn = db.transaction(() => {
+    db.prepare("UPDATE extra_duty_grants SET finance_status = 'FINANCE_REJECTED', finance_flag_reason = ?, finance_reviewed_by = ?, finance_reviewed_at = datetime('now') WHERE id = ?")
+      .run(finance_flag_reason, user, req.params.id);
+
+    // PBA revert: the grant created a placeholder attendance_processed row
+    // (status_final P/½P) on the linked date. Rejection must roll it back
+    // to an absence so salary computation doesn't pay for a day Finance
+    // declined. The row is kept — only the corrected-status fields are
+    // cleared so the original 'A' re-surfaces.
+    if (grant.grant_type === 'PRE_BIOMETRIC_ACTIVATION' && grant.linked_attendance_id) {
+      db.prepare(`
+        UPDATE attendance_processed
+        SET status_final = 'A',
+            correction_source = NULL,
+            correction_remark = NULL,
+            stage_5_done = 0
+        WHERE id = ?
+      `).run(grant.linked_attendance_id);
+    }
+  });
+  txn();
 
   archiveRejection(db, 'EXTRA_DUTY_FINANCE', 'extra_duty_grants', grant, finance_flag_reason, user);
   logAudit('extra_duty_grants', req.params.id, 'finance_status', grant.finance_status || 'UNREVIEWED',

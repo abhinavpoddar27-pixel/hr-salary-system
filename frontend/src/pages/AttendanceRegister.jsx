@@ -1,7 +1,7 @@
 import React, { useState, useMemo } from 'react'
-import { useQuery, useMutation } from '@tanstack/react-query'
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import toast from 'react-hot-toast'
-import { getAttendanceRegister, updateAttendanceRecord, getMonthlyAttendanceSummary, recalculateMetrics } from '../utils/api'
+import { getAttendanceRegister, updateAttendanceRecord, getMonthlyAttendanceSummary, recalculateMetrics, createPBAGrant } from '../utils/api'
 import { useAppStore } from '../store/appStore'
 import DateSelector from '../components/common/DateSelector'
 import useDateSelector from '../hooks/useDateSelector'
@@ -57,9 +57,73 @@ function CellEditor({ record, onSave, onClose }) {
   )
 }
 
+/* ── PBAGrantModal: Grant Pre-Biometric Activation ED ─────────────
+   Raised from Stage 5 when HR clicks an empty cell that falls inside
+   the PBA window — between the employee's date_of_joining and the first
+   biometric punch of the month. Creates a placeholder attendance_processed
+   row (status P / ½P) and a linked PENDING grant that then walks the
+   same HR → Finance dual-approval flow as any other ED grant. */
+
+function PBAGrantModal({ employee, date, month, year, company, onSave, onClose, pending }) {
+  const [dutyDays, setDutyDays] = useState(1)
+  const [remarks, setRemarks] = useState('')
+  const canSave = remarks.trim().length >= 10
+
+  return (
+    <div className="fixed inset-0 bg-black/40 backdrop-blur-sm flex items-center justify-center z-50 animate-fade-in" onClick={onClose}>
+      <div className="bg-white rounded-2xl p-5 w-96 shadow-glass-xl animate-scale-in" onClick={e => e.stopPropagation()}>
+        <h3 className="font-bold text-slate-800 mb-1 text-sm">Grant Pre-Biometric Activation ED</h3>
+        <p className="text-xs text-slate-500 mb-3">
+          {employee.employee_name} ({employee.employee_code})
+        </p>
+        <div className="space-y-3">
+          <div>
+            <label className="label">Date</label>
+            <input type="text" value={date} readOnly className="input bg-slate-50 text-slate-600 cursor-not-allowed" />
+          </div>
+          <div>
+            <label className="label">Duty Days</label>
+            <div className="flex gap-4 mt-1">
+              <label className="flex items-center gap-2 text-sm cursor-pointer">
+                <input type="radio" name="duty_days" checked={dutyDays === 1} onChange={() => setDutyDays(1)} />
+                Full Day (1.0)
+              </label>
+              <label className="flex items-center gap-2 text-sm cursor-pointer">
+                <input type="radio" name="duty_days" checked={dutyDays === 0.5} onChange={() => setDutyDays(0.5)} />
+                Half Day (0.5)
+              </label>
+            </div>
+          </div>
+          <div>
+            <label className="label">Remarks <span className="text-slate-400">(min 10 chars)</span></label>
+            <textarea
+              value={remarks}
+              onChange={e => setRemarks(e.target.value)}
+              rows={3}
+              placeholder="Why was the biometric not yet active on this day?"
+              className="input"
+            />
+            <div className="text-[10px] text-slate-400 mt-1">{remarks.trim().length} / 10</div>
+          </div>
+        </div>
+        <div className="flex gap-2 mt-4">
+          <button
+            onClick={() => onSave({ duty_days: dutyDays, remarks: remarks.trim(), grant_date: date, employee_code: employee.employee_code, month, year, company })}
+            disabled={!canSave || pending}
+            className="btn-primary flex-1"
+          >
+            {pending ? 'Saving...' : 'Save'}
+          </button>
+          <button onClick={onClose} className="btn-secondary">Cancel</button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 /* ── Expanded row: daily attendance detail for one employee ──────── */
 
-function ExpandedEmployeeDetail({ emp, month, year, onEditRecord }) {
+function ExpandedEmployeeDetail({ emp, month, year, onEditRecord, onOpenPBA }) {
   const [showCalendar, setShowCalendar] = useState(false)
 
   const { data: res, isLoading } = useQuery({
@@ -69,6 +133,7 @@ function ExpandedEmployeeDetail({ emp, month, year, onEditRecord }) {
   })
 
   const records = res?.data?.data || []
+  const pbaWindow = res?.data?.pba_window || null
   const daysInMonth = new Date(year, month, 0).getDate()
   const days = Array.from({ length: daysInMonth }, (_, i) => i + 1)
 
@@ -76,6 +141,17 @@ function ExpandedEmployeeDetail({ emp, month, year, onEditRecord }) {
   for (const r of records) {
     const day = parseInt(r.date.split('-')[2])
     recordByDay[day] = r
+  }
+
+  // An empty cell is a PBA candidate when it lies inside
+  // [date_of_joining, first_biometric_record_date). When there's no first
+  // punch yet, any date on/after DOJ up to month-end qualifies.
+  function isPBACandidate(d) {
+    if (!pbaWindow || !pbaWindow.doj) return false
+    const iso = `${year}-${String(month).padStart(2, '0')}-${String(d).padStart(2, '0')}`
+    if (iso < pbaWindow.doj) return false
+    if (pbaWindow.first_punch_date && iso >= pbaWindow.first_punch_date) return false
+    return true
   }
 
   function cellClass(rec) {
@@ -159,19 +235,29 @@ function ExpandedEmployeeDetail({ emp, month, year, onEditRecord }) {
                   const dow = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'][new Date(`${year}-${String(month).padStart(2,'0')}-${String(d).padStart(2,'0')}`).getDay()]
                   const status = rec ? (rec.status_final || rec.status_original) : '?'
                   const isSun = dow === 'Sun'
+                  const pbaEligible = !rec && !isSun && isPBACandidate(d)
+                  const iso = `${year}-${String(month).padStart(2,'0')}-${String(d).padStart(2,'0')}`
 
                   return (
                     <div
                       key={d}
-                      onClick={() => rec && onEditRecord(rec)}
+                      onClick={() => {
+                        if (rec) onEditRecord(rec)
+                        else if (pbaEligible) onOpenPBA(iso, pbaWindow?.company || null)
+                      }}
                       className={clsx(
-                        'rounded-lg p-1.5 text-center text-xs cursor-pointer hover:ring-2 hover:ring-blue-400 transition-all min-h-[60px] flex flex-col',
-                        isSun ? 'bg-slate-100 text-slate-400' : cellClass(rec)
+                        'rounded-lg p-1.5 text-center text-xs transition-all min-h-[60px] flex flex-col',
+                        (rec || pbaEligible) && 'cursor-pointer hover:ring-2 hover:ring-blue-400',
+                        isSun
+                          ? 'bg-slate-100 text-slate-400'
+                          : pbaEligible
+                            ? 'bg-indigo-50 text-indigo-700 ring-1 ring-indigo-300'
+                            : cellClass(rec)
                       )}
                     >
                       <div className="font-bold">{d}</div>
                       <div className="text-xs opacity-70">{dow}</div>
-                      <div className="font-semibold mt-0.5">{status}</div>
+                      <div className="font-semibold mt-0.5">{pbaEligible ? '+ ED' : status}</div>
                       {rec?.in_time_final && <div className="text-xs opacity-70">{rec.in_time_final}</div>}
                       {rec?.out_time_final && <div className="text-xs opacity-70">{rec.out_time_final}</div>}
                     </div>
@@ -195,9 +281,11 @@ export default function AttendanceRegister() {
   const { month, year, dateProps } = useDateSelector({ mode: 'month', syncToStore: true })
   const { selectedCompany } = useAppStore()
   const { toggle, isExpanded } = useExpandableRows()
+  const qc = useQueryClient()
   const [filterDept, setFilterDept] = useState('')
   const [searchTerm, setSearchTerm] = useState('')
   const [editRecord, setEditRecord] = useState(null)
+  const [pbaTarget, setPbaTarget] = useState(null) // { emp, date }
   const [sortKey, setSortKey] = useState('department')
   const [sortDir, setSortDir] = useState('asc')
 
@@ -227,6 +315,19 @@ export default function AttendanceRegister() {
       toast.success(`Recalculated metrics for ${r.data.updated} records`)
       refetchSummary()
     },
+  })
+
+  const pbaMutation = useMutation({
+    mutationFn: createPBAGrant,
+    onSuccess: () => {
+      toast.success('Pre-biometric ED grant submitted for finance approval')
+      if (pbaTarget?.emp?.employee_code) {
+        qc.invalidateQueries({ queryKey: ['attendance-register', month, year, pbaTarget.emp.employee_code] })
+      }
+      refetchSummary()
+      setPbaTarget(null)
+    },
+    onError: (e) => toast.error(e?.response?.data?.error || 'Failed to grant PBA ED'),
   })
 
   /* ── Filters ── */
@@ -502,6 +603,7 @@ export default function AttendanceRegister() {
                             month={month}
                             year={year}
                             onEditRecord={setEditRecord}
+                            onOpenPBA={(date, company) => setPbaTarget({ emp, date, company })}
                           />
                         </DrillDownRow>
                       )}
@@ -522,6 +624,20 @@ export default function AttendanceRegister() {
           record={editRecord}
           onSave={(data) => updateMutation.mutate({ id: editRecord.id, data })}
           onClose={() => setEditRecord(null)}
+        />
+      )}
+
+      {/* ── PBA modal ── */}
+      {pbaTarget && (
+        <PBAGrantModal
+          employee={pbaTarget.emp}
+          date={pbaTarget.date}
+          month={month}
+          year={year}
+          company={pbaTarget.company || selectedCompany || ''}
+          pending={pbaMutation.isPending}
+          onSave={(data) => pbaMutation.mutate(data)}
+          onClose={() => setPbaTarget(null)}
         />
       )}
     </div>
