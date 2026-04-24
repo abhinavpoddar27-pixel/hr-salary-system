@@ -2525,6 +2525,175 @@ If description and screenshot are incoherent or unrelated, set summary_confidenc
   safeCreateIndex('CREATE INDEX IF NOT EXISTS idx_tada_inputs_cycle ON sales_ta_da_monthly_inputs(month, year)');
   safeCreateIndex('CREATE INDEX IF NOT EXISTS idx_tada_comp_cycle ON sales_ta_da_computations(month, year, status)');
 
+  // ── One-time migration (Phase 1b): rebuild TA/DA tables to align with
+  // sales_consolidated_design.md §2.4/§2.5/§2.6. Phase 1 shipped proposed
+  // schemas that drift from the design spec (renamed columns, different
+  // status enums, missing snapshot columns). Idempotent — gated on
+  // policy_config.migration_tada_schema_v2_done. Safety check refuses to
+  // drop if any of the 3 tables has rows; leaves the flag unset so the
+  // next boot retries.
+  const tadaSchemaV2Done = db.prepare(
+    "SELECT value FROM policy_config WHERE key = 'migration_tada_schema_v2_done'"
+  ).get();
+
+  if (!tadaSchemaV2Done) {
+    const tadaTables = ['sales_ta_da_change_requests', 'sales_ta_da_monthly_inputs', 'sales_ta_da_computations'];
+    let allEmpty = true;
+    const nonEmpty = [];
+    for (const t of tadaTables) {
+      try {
+        const r = db.prepare(`SELECT COUNT(*) AS n FROM ${t}`).get();
+        if (r.n > 0) { allEmpty = false; nonEmpty.push(`${t} (${r.n} rows)`); }
+      } catch (e) {
+        // Table doesn't exist — fine; create path will handle it.
+      }
+    }
+
+    if (!allEmpty) {
+      console.error('[MIGRATION] tada_schema_v2: REFUSING TO DROP — tables have data:', nonEmpty.join(', '));
+      console.error('[MIGRATION] Manual intervention required. Flag will NOT be set; migration will retry on next boot.');
+    } else {
+      console.log('[MIGRATION] tada_schema_v2: all 3 TA/DA tables are empty; proceeding with DROP + CREATE');
+      db.pragma('foreign_keys = OFF');
+      try {
+        db.exec('DROP TABLE IF EXISTS sales_ta_da_change_requests');
+        db.exec('DROP TABLE IF EXISTS sales_ta_da_monthly_inputs');
+        db.exec('DROP TABLE IF EXISTS sales_ta_da_computations');
+
+        db.exec(`
+          CREATE TABLE IF NOT EXISTS sales_ta_da_change_requests (
+              id INTEGER PRIMARY KEY AUTOINCREMENT,
+              employee_id INTEGER NOT NULL,
+              employee_code TEXT NOT NULL,
+              status TEXT NOT NULL DEFAULT 'pending'
+                  CHECK (status IN ('pending','approved','rejected','cancelled','superseded')),
+
+              new_ta_da_class INTEGER,
+              new_da_rate REAL,
+              new_da_outstation_rate REAL,
+              new_ta_rate_primary REAL,
+              new_ta_rate_secondary REAL,
+              new_ta_da_notes TEXT,
+
+              old_ta_da_class INTEGER,
+              old_da_rate REAL,
+              old_da_outstation_rate REAL,
+              old_ta_rate_primary REAL,
+              old_ta_rate_secondary REAL,
+              old_ta_da_notes TEXT,
+
+              reason TEXT,
+              requested_by TEXT NOT NULL,
+              requested_at TEXT NOT NULL DEFAULT (datetime('now')),
+              resolved_by TEXT,
+              resolved_at TEXT,
+              rejection_reason TEXT,
+              superseded_by_request_id INTEGER,
+              applied_at TEXT,
+
+              FOREIGN KEY (employee_id) REFERENCES sales_employees(id),
+              FOREIGN KEY (superseded_by_request_id) REFERENCES sales_ta_da_change_requests(id)
+          );
+        `);
+        db.exec(`CREATE INDEX IF NOT EXISTS idx_tadar_employee ON sales_ta_da_change_requests(employee_id, status)`);
+        db.exec(`CREATE INDEX IF NOT EXISTS idx_tadar_status ON sales_ta_da_change_requests(status, requested_at)`);
+
+        db.exec(`
+          CREATE TABLE IF NOT EXISTS sales_ta_da_monthly_inputs (
+              id INTEGER PRIMARY KEY AUTOINCREMENT,
+              employee_id INTEGER NOT NULL,
+              employee_code TEXT NOT NULL,
+              month INTEGER NOT NULL,
+              year INTEGER NOT NULL,
+              company TEXT NOT NULL,
+              cycle_start_date TEXT NOT NULL,
+              cycle_end_date TEXT NOT NULL,
+
+              days_worked INTEGER NOT NULL,
+              in_city_days INTEGER,
+              outstation_days INTEGER,
+              total_km REAL,
+              bike_km REAL,
+              car_km REAL,
+
+              source TEXT NOT NULL DEFAULT 'manual'
+                  CHECK (source IN ('attendance_auto','upload','manual')),
+              source_detail TEXT,
+              upload_id INTEGER,
+              notes TEXT,
+
+              created_at TEXT DEFAULT (datetime('now')),
+              created_by TEXT,
+              updated_at TEXT DEFAULT (datetime('now')),
+              updated_by TEXT,
+
+              FOREIGN KEY (employee_id) REFERENCES sales_employees(id),
+              UNIQUE(employee_id, month, year, company)
+          );
+        `);
+        db.exec(`CREATE INDEX IF NOT EXISTS idx_tada_inputs_cycle ON sales_ta_da_monthly_inputs(month, year)`);
+        db.exec(`CREATE INDEX IF NOT EXISTS idx_tada_inputs_employee ON sales_ta_da_monthly_inputs(employee_id, month, year)`);
+
+        db.exec(`
+          CREATE TABLE IF NOT EXISTS sales_ta_da_computations (
+              id INTEGER PRIMARY KEY AUTOINCREMENT,
+              employee_id INTEGER NOT NULL,
+              employee_code TEXT NOT NULL,
+              month INTEGER NOT NULL,
+              year INTEGER NOT NULL,
+              company TEXT NOT NULL,
+              cycle_start_date TEXT NOT NULL,
+              cycle_end_date TEXT NOT NULL,
+
+              ta_da_class_at_compute INTEGER NOT NULL,
+              da_rate_at_compute REAL,
+              da_outstation_rate_at_compute REAL,
+              ta_rate_primary_at_compute REAL,
+              ta_rate_secondary_at_compute REAL,
+
+              days_worked_at_compute INTEGER,
+              in_city_days_at_compute INTEGER,
+              outstation_days_at_compute INTEGER,
+              total_km_at_compute REAL,
+              bike_km_at_compute REAL,
+              car_km_at_compute REAL,
+
+              da_local_amount REAL NOT NULL DEFAULT 0,
+              da_outstation_amount REAL NOT NULL DEFAULT 0,
+              ta_primary_amount REAL NOT NULL DEFAULT 0,
+              ta_secondary_amount REAL NOT NULL DEFAULT 0,
+              total_da REAL NOT NULL DEFAULT 0,
+              total_ta REAL NOT NULL DEFAULT 0,
+              total_payable REAL NOT NULL DEFAULT 0,
+
+              status TEXT NOT NULL DEFAULT 'computed'
+                  CHECK (status IN ('computed','partial','flag_for_review','paid')),
+
+              computation_notes TEXT,
+
+              computed_at TEXT DEFAULT (datetime('now')),
+              computed_by TEXT,
+              neft_exported_at TEXT,
+              neft_exported_by TEXT,
+              paid_at TEXT,
+
+              FOREIGN KEY (employee_id) REFERENCES sales_employees(id),
+              UNIQUE(employee_id, month, year, company)
+          );
+        `);
+        db.exec(`CREATE INDEX IF NOT EXISTS idx_tada_comp_cycle ON sales_ta_da_computations(month, year, status)`);
+        db.exec(`CREATE INDEX IF NOT EXISTS idx_tada_comp_employee ON sales_ta_da_computations(employee_id, month, year)`);
+
+        db.prepare(
+          "INSERT OR REPLACE INTO policy_config (key, value, description) VALUES ('migration_tada_schema_v2_done', '1', 'Rebuilt TA/DA tables to align with sales_consolidated_design.md')"
+        ).run();
+        console.log('[MIGRATION] tada_schema_v2: complete');
+      } finally {
+        db.pragma('foreign_keys = ON');
+      }
+    }
+  }
+
   // ── One-time migration: backfill cycle_start_date / cycle_end_date
   // on existing sales_salary_computations rows. Idempotent — gated on
   // policy_config.migration_sales_cycle_backfill_v1.
