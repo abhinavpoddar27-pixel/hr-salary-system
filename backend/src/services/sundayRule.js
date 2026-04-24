@@ -72,4 +72,45 @@ function calculateSundayCredit({ effectivePresent, workingDays, totalSundays, le
   };
 }
 
-module.exports = { calculateSundayCredit };
+/**
+ * Cycle-aware convenience wrapper for sales salary (Phase 1, April 2026).
+ *
+ * Delegates to `calculateSundayCredit` after deriving `totalSundays` and
+ * `workingDays` from the cycle date range and the caller-supplied list of
+ * gazetted holiday dates. The tier logic in `calculateSundayCredit` is
+ * untouched — this is purely a wiring helper so sales code doesn't have
+ * to duplicate date arithmetic.
+ *
+ * `workingDays = cycleLengthDays − totalSundays − nonSundayGazettedHolidays`.
+ * Gazetted holidays that fall on a Sunday are ignored in the working-day
+ * reduction (same semantics the existing sales compute already enforces —
+ * see countGazettedHolidays in salesSalaryComputation.js).
+ *
+ * @param {Object} args
+ * @param {string} args.cycleStart 'YYYY-MM-DD'
+ * @param {string} args.cycleEnd   'YYYY-MM-DD'
+ * @param {number} args.effectivePresent
+ * @param {number} args.leniency
+ * @param {string[]} [args.gazettedHolidayDates]  ISO dates inside the cycle
+ */
+function calculateSundayCreditFromCycle({
+  cycleStart, cycleEnd, effectivePresent, leniency, gazettedHolidayDates = [],
+}) {
+  const { cycleLengthDays, countSundaysInCycle, dateInCycle } = require('./cycleUtil');
+  const calendarDays = cycleLengthDays(cycleStart, cycleEnd);
+  const totalSundays = countSundaysInCycle(cycleStart, cycleEnd);
+
+  const nonSundayHolidaysInCycle = gazettedHolidayDates.filter(d => {
+    if (!dateInCycle(d, cycleStart, cycleEnd)) return false;
+    const [y, m, day] = d.split('-').map(Number);
+    return new Date(Date.UTC(y, m - 1, day)).getUTCDay() !== 0;
+  }).length;
+
+  const workingDays = calendarDays - totalSundays - nonSundayHolidaysInCycle;
+
+  return calculateSundayCredit({
+    effectivePresent, workingDays, totalSundays, leniency,
+  });
+}
+
+module.exports = { calculateSundayCredit, calculateSundayCreditFromCycle };
