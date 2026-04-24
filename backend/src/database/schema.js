@@ -2391,6 +2391,171 @@ If description and screenshot are incoherent or unrelated, set summary_confidenc
   safeAddColumn('sales_salary_computations', 'neft_exported_at', 'TEXT');
   safeAddColumn('sales_salary_computations', 'payslip_generated_at', 'TEXT');
 
+  // ── Sales Salary Module — Phase 1 Cycle Refactor (April 2026) ────────
+  // Salary cycle ends on the 25th of each month: (M-1)-26 … M-25.
+  // cycle_start_date and cycle_end_date are the authoritative bounds
+  // that drive compute. The (month, year) columns continue to identify
+  // WHICH cycle the row represents (cycle-ending month). Backfill below.
+  safeAddColumn('sales_salary_computations', 'cycle_start_date', 'TEXT');
+  safeAddColumn('sales_salary_computations', 'cycle_end_date', 'TEXT');
+
+  // ── Sales TA/DA Module — Phase 1 Schema (April 2026) ─────────────────
+  // TA/DA (Travel/Dearness Allowance) is a parallel payable stream for
+  // sales reps, separate from salary. Phase 1 lays down the schema only;
+  // population, compute, and UI ship in Phase 2 and Phase 3.
+  //
+  // ta_da_class semantics (enforced at application layer, not DB CHECK —
+  // ADD COLUMN on an existing table cannot carry a CHECK constraint):
+  //   0 = flag_for_review, 1 = Fixed TA/DA package, 2 = Tiered DA no TA,
+  //   3 = Flat DA + per-km TA, 4 = Tiered DA + per-km TA,
+  //   5 = Tiered DA + dual-vehicle TA
+  safeAddColumn('sales_employees', 'legacy_code', 'TEXT');
+  safeAddColumn('sales_employees', 'ta_da_class', 'INTEGER');
+  safeAddColumn('sales_employees', 'da_rate', 'REAL');
+  safeAddColumn('sales_employees', 'da_outstation_rate', 'REAL');
+  safeAddColumn('sales_employees', 'ta_rate_primary', 'REAL');
+  safeAddColumn('sales_employees', 'ta_rate_secondary', 'REAL');
+  safeAddColumn('sales_employees', 'ta_da_notes', 'TEXT');
+  safeAddColumn('sales_employees', 'ta_da_updated_at', 'TEXT');
+  safeAddColumn('sales_employees', 'ta_da_updated_by', 'TEXT');
+  safeCreateIndex('CREATE INDEX IF NOT EXISTS idx_sales_employees_legacy_code ON sales_employees(legacy_code)');
+
+  // Finance-approval queue for employee-level TA/DA rate changes.
+  // Stores both the new proposed values and the pre-change snapshot so
+  // rejections can revert without re-reading a stale row.
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS sales_ta_da_change_requests (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      employee_id INTEGER NOT NULL,
+      requested_ta_da_class INTEGER,
+      requested_da_rate REAL,
+      requested_da_outstation_rate REAL,
+      requested_ta_rate_primary REAL,
+      requested_ta_rate_secondary REAL,
+      requested_notes TEXT,
+
+      prev_ta_da_class INTEGER,
+      prev_da_rate REAL,
+      prev_da_outstation_rate REAL,
+      prev_ta_rate_primary REAL,
+      prev_ta_rate_secondary REAL,
+      prev_notes TEXT,
+
+      status TEXT NOT NULL DEFAULT 'pending'
+        CHECK(status IN ('pending','approved','rejected','cancelled')),
+      requested_by TEXT NOT NULL,
+      requested_at TEXT DEFAULT (datetime('now')),
+      reviewed_by TEXT,
+      reviewed_at TEXT,
+      review_remark TEXT,
+      applied_at TEXT,
+
+      FOREIGN KEY (employee_id) REFERENCES sales_employees(id)
+    );
+
+    CREATE TABLE IF NOT EXISTS sales_ta_da_monthly_inputs (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      employee_id INTEGER NOT NULL,
+      employee_code TEXT NOT NULL,
+      month INTEGER NOT NULL,
+      year INTEGER NOT NULL,
+      company TEXT NOT NULL,
+      cycle_start_date TEXT,
+      cycle_end_date TEXT,
+
+      days_local REAL DEFAULT 0,
+      days_outstation REAL DEFAULT 0,
+      km_primary REAL DEFAULT 0,
+      km_secondary REAL DEFAULT 0,
+
+      upload_id INTEGER,
+      entered_by TEXT,
+      entered_at TEXT DEFAULT (datetime('now')),
+      remarks TEXT,
+
+      FOREIGN KEY (employee_id) REFERENCES sales_employees(id),
+      UNIQUE(employee_id, month, year, company)
+    );
+
+    CREATE TABLE IF NOT EXISTS sales_ta_da_computations (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      employee_id INTEGER NOT NULL,
+      employee_code TEXT NOT NULL,
+      month INTEGER NOT NULL,
+      year INTEGER NOT NULL,
+      company TEXT NOT NULL,
+      cycle_start_date TEXT NOT NULL,
+      cycle_end_date TEXT NOT NULL,
+
+      ta_da_class INTEGER,
+      da_rate REAL,
+      da_outstation_rate REAL,
+      ta_rate_primary REAL,
+      ta_rate_secondary REAL,
+
+      days_local REAL DEFAULT 0,
+      days_outstation REAL DEFAULT 0,
+      km_primary REAL DEFAULT 0,
+      km_secondary REAL DEFAULT 0,
+
+      da_local_amount REAL DEFAULT 0,
+      da_outstation_amount REAL DEFAULT 0,
+      ta_primary_amount REAL DEFAULT 0,
+      ta_secondary_amount REAL DEFAULT 0,
+      total_da REAL DEFAULT 0,
+      total_ta REAL DEFAULT 0,
+      total_payable REAL NOT NULL,
+
+      status TEXT NOT NULL DEFAULT 'computed'
+        CHECK(status IN ('computed','reviewed','approved','rejected','paid')),
+      computed_at TEXT DEFAULT (datetime('now')),
+      computed_by TEXT,
+      reviewed_at TEXT,
+      reviewed_by TEXT,
+      approved_at TEXT,
+      approved_by TEXT,
+      remarks TEXT,
+
+      FOREIGN KEY (employee_id) REFERENCES sales_employees(id),
+      UNIQUE(employee_id, month, year, company)
+    );
+  `);
+  safeCreateIndex('CREATE INDEX IF NOT EXISTS idx_tadar_employee ON sales_ta_da_change_requests(employee_id, status)');
+  safeCreateIndex('CREATE INDEX IF NOT EXISTS idx_tadar_status ON sales_ta_da_change_requests(status, requested_at)');
+  safeCreateIndex('CREATE INDEX IF NOT EXISTS idx_tada_inputs_cycle ON sales_ta_da_monthly_inputs(month, year)');
+  safeCreateIndex('CREATE INDEX IF NOT EXISTS idx_tada_comp_cycle ON sales_ta_da_computations(month, year, status)');
+
+  // ── One-time migration: backfill cycle_start_date / cycle_end_date
+  // on existing sales_salary_computations rows. Idempotent — gated on
+  // policy_config.migration_sales_cycle_backfill_v1.
+  const cycleBackfillDone = db.prepare(
+    "SELECT value FROM policy_config WHERE key = 'migration_sales_cycle_backfill_v1'"
+  ).get();
+  if (!cycleBackfillDone) {
+    try {
+      const { deriveCycle } = require('../services/cycleUtil');
+      const unbackfilled = db.prepare(
+        'SELECT id, month, year FROM sales_salary_computations WHERE cycle_start_date IS NULL OR cycle_end_date IS NULL'
+      ).all();
+      const upd = db.prepare(
+        'UPDATE sales_salary_computations SET cycle_start_date = ?, cycle_end_date = ? WHERE id = ?'
+      );
+      const txn = db.transaction(() => {
+        for (const r of unbackfilled) {
+          const { start, end } = deriveCycle(r.month, r.year);
+          upd.run(start, end, r.id);
+        }
+      });
+      txn();
+      console.log(`[MIGRATION] Backfilled cycle dates on ${unbackfilled.length} sales_salary_computations row(s)`);
+      db.prepare(
+        "INSERT OR REPLACE INTO policy_config (key, value, description) VALUES ('migration_sales_cycle_backfill_v1', '1', 'Backfilled cycle_start_date/cycle_end_date on sales_salary_computations using deriveCycle(month, year)')"
+      ).run();
+    } catch (e) {
+      console.warn('[MIGRATION] sales cycle backfill failed:', e.message);
+    }
+  }
+
   // policy_config seeds — tunable from SQL without a code deploy.
   const seedSalesPolicy = db.prepare(
     'INSERT OR IGNORE INTO policy_config (key, value, description) VALUES (?, ?, ?)'
