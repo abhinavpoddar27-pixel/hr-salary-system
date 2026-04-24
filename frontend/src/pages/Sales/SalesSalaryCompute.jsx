@@ -28,6 +28,21 @@ function triggerBlobDownload(blob, filename) {
 
 const MONTHS = ['', 'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
 
+// Sales salary cycle: (M-1)-26 … M-25. Kept in sync with
+// backend/src/services/cycleUtil.js deriveCycle(). If the backend rule
+// changes, update both in lockstep.
+function cycleSubtitle(month, year) {
+  if (!month || !year) return ''
+  const prevMonth = month === 1 ? 12 : month - 1
+  const prevYear  = month === 1 ? year - 1 : year
+  const startMs = Date.UTC(prevYear, prevMonth - 1, 26)
+  const endMs   = Date.UTC(year, month - 1, 25)
+  const lengthDays = Math.round((endMs - startMs) / 86400000) + 1
+  const startLabel = `${MONTHS[prevMonth]} 26, ${prevYear}`
+  const endLabel   = `${MONTHS[month]} 25, ${year}`
+  return `Cycle: ${startLabel} – ${endLabel} (${lengthDays} days)`
+}
+
 const STATUS_COLOURS = {
   computed:  'bg-slate-100 text-slate-700',
   reviewed:  'bg-blue-100 text-blue-700',
@@ -232,6 +247,9 @@ export default function SalesSalaryCompute() {
             <p className="text-xs text-slate-500">
               {MONTHS[selectedMonth]} {selectedYear} · {selectedCompany}
             </p>
+            <p className="text-[11px] text-indigo-600 font-medium mt-0.5">
+              {cycleSubtitle(selectedMonth, selectedYear)}
+            </p>
           </div>
           <CompanyFilter />
         </div>
@@ -265,6 +283,9 @@ export default function SalesSalaryCompute() {
           <h1 className="text-xl font-bold text-slate-800">Sales Salary Register</h1>
           <p className="text-xs text-slate-500">
             {MONTHS[selectedMonth]} {selectedYear} · {selectedCompany} · {rows.length} row(s)
+          </p>
+          <p className="text-[11px] text-indigo-600 font-medium mt-0.5">
+            {cycleSubtitle(selectedMonth, selectedYear)}
           </p>
         </div>
         <div className="flex items-center gap-2 flex-wrap">

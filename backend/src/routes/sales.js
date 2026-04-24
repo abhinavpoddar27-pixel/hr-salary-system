@@ -831,6 +831,7 @@ const {
   saveSalesSalaryComputation,
   generateSalesPayslipData,
 } = require('../services/salesSalaryComputation');
+const { deriveCycle } = require('../services/cycleUtil');
 
 const {
   generateSalesExcel,
@@ -860,6 +861,15 @@ router.post('/compute', (req, res) => {
 
   if (!month || !year || !company) {
     return res.status(400).json({ success: false, error: 'month, year, and company are required in the body' });
+  }
+
+  // Phase 1 cycle refactor: derive canonical cycle bounds (M-1)-26 … M-25.
+  let cycleStart, cycleEnd;
+  try {
+    const cyc = deriveCycle(month, year);
+    cycleStart = cyc.start; cycleEnd = cyc.end;
+  } catch (e) {
+    return res.status(400).json({ success: false, error: `Invalid cycle for ${month}/${year}: ${e.message}` });
   }
 
   // Supersede semantics: latest matched upload per (month, year, company) wins.
@@ -905,7 +915,8 @@ router.post('/compute', (req, res) => {
         `).get(row.employee_code, month, year, company);
 
         const comp = computeSalesEmployee(db, {
-          salesEmployee, monthlyInputRow: row, month, year, company,
+          salesEmployee, monthlyInputRow: row,
+          cycleStart, cycleEnd, month, year, company,
           requestId: req.requestId, user,
         });
         if (!comp.success) {
