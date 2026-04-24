@@ -28,6 +28,7 @@
  */
 
 const { calculateSundayCredit } = require('./sundayRule');
+const { cycleLengthDays, countSundaysInCycle, dateInCycle } = require('./cycleUtil');
 
 const DIVISOR_MODE_SUPPORTED = new Set(['calendar']);
 
@@ -119,29 +120,34 @@ function getLatestStructure(db, employeeId, month, year) {
   `).get(employeeId, effectiveAsOf);
 }
 
-// ── Gazetted holiday count for (month, year, company) ────────────────
-function countGazettedHolidays(db, month, year, company) {
-  const start = monthStartISO(month, year);
-  const end = monthEndISO(month, year);
+// ── Gazetted holiday count inside a cycle date range ────────────────
+// Phase 1 cycle refactor: filter by [cycleStart, cycleEnd] rather than
+// calendar-month bounds. Sunday-falling holidays are still excluded
+// from the working-day reduction to avoid double-counting.
+function countGazettedHolidaysInCycle(db, cycleStart, cycleEnd, company) {
   const rows = db.prepare(`
     SELECT holiday_date FROM sales_holidays
      WHERE company = ? AND is_gazetted = 1
        AND holiday_date BETWEEN ? AND ?
-  `).all(company, start, end);
-  // Per design §9 Step 1: holidays that fall on a Sunday are NOT double
-  // counted in the working-day reduction. Exclude Sundays from the
-  // gazetted count for the workingDays math.
+  `).all(company, cycleStart, cycleEnd);
   const nonSundayHolidays = rows.filter(h => {
-    const d = new Date(h.holiday_date + 'T00:00:00');
-    return d.getDay() !== 0;
+    const [y, m, d] = h.holiday_date.split('-').map(Number);
+    return new Date(Date.UTC(y, m - 1, d)).getUTCDay() !== 0;
   });
   return { totalHolidays: rows.length, workingDayHolidays: nonSundayHolidays.length };
 }
 
 // ══════════════════════════════════════════════════════════════════════
 // MAIN ENTRY POINT — computeSalesEmployee
+//
+// NOTE: Sales salary uses a 26-to-25 cycle. cycleStart and cycleEnd are
+// authoritative — they drive calendarDays, Sunday count, and holiday
+// filtering. `month` and `year` are stored on the output row but DO NOT
+// drive the compute. They indicate which cycle-ending-month this row
+// represents (e.g., month=2, year=2026 means the cycle ending
+// Feb 25, 2026, i.e. Jan 26, 2026 – Feb 25, 2026).
 // ══════════════════════════════════════════════════════════════════════
-function computeSalesEmployee(db, { salesEmployee, monthlyInputRow, month, year, company, requestId, user }) {
+function computeSalesEmployee(db, { salesEmployee, monthlyInputRow, cycleStart, cycleEnd, month, year, company, requestId, user }) {
   const RID = requestId ? `[${requestId}]` : '[sales]';
 
   if (!salesEmployee || !salesEmployee.id) {
@@ -149,6 +155,9 @@ function computeSalesEmployee(db, { salesEmployee, monthlyInputRow, month, year,
   }
   if (!monthlyInputRow || monthlyInputRow.sheet_days_given === null || monthlyInputRow.sheet_days_given === undefined) {
     return { success: false, excluded: true, reason: 'no_days_given' };
+  }
+  if (!cycleStart || !cycleEnd) {
+    return { success: false, error: 'cycleStart and cycleEnd are required (Phase 1 cycle refactor)' };
   }
 
   const divisorMode = getPolicyValue(db, 'sales_salary_divisor_mode', 'calendar');
@@ -205,14 +214,14 @@ function computeSalesEmployee(db, { salesEmployee, monthlyInputRow, month, year,
   const preservedNeftExportedAt = prev?.neft_exported_at || null;
   const preservedPayslipGeneratedAt = prev?.payslip_generated_at || null;
 
-  // ── Step 1 — Days aggregation ──
+  // ── Step 1 — Days aggregation (cycle-scoped) ──
   const daysGiven = parseFloat(monthlyInputRow.sheet_days_given);
   if (!Number.isFinite(daysGiven) || daysGiven < 0) {
     return { success: false, excluded: true, reason: 'invalid_days_given' };
   }
-  const calendarDays = daysInMonth(month, year);
-  const totalSundays = countSundaysInMonth(month, year);
-  const { totalHolidays, workingDayHolidays } = countGazettedHolidays(db, month, year, company);
+  const calendarDays = cycleLengthDays(cycleStart, cycleEnd);
+  const totalSundays = countSundaysInCycle(cycleStart, cycleEnd);
+  const { totalHolidays, workingDayHolidays } = countGazettedHolidaysInCycle(db, cycleStart, cycleEnd, company);
   const workingDays = calendarDays - totalSundays - workingDayHolidays;
 
   // ── Step 2 — Sunday rule (shared pure function) ──
@@ -285,7 +294,7 @@ function computeSalesEmployee(db, { salesEmployee, monthlyInputRow, month, year,
     computedAt: new Date().toISOString(),
   });
 
-  console.log(`${RID} ${salesEmployee.code} ${month}/${year} ${company}: ` +
+  console.log(`${RID} ${salesEmployee.code} ${month}/${year} ${company} [${cycleStart}..${cycleEnd}]: ` +
     `days=${daysGiven} sun=${sundaysPaid} hol=${gazettedHolidaysPaid} ` +
     `ratio=${earnedRatio.toFixed(3)} grossEarned=${grossEarned} ` +
     `PF=${pfEmployee} ESI=${esiEmployee} TDS=${tds} adv=${advanceRecovery} loan=${loanRecovery} ` +
@@ -295,6 +304,8 @@ function computeSalesEmployee(db, { salesEmployee, monthlyInputRow, month, year,
     success: true,
     employee_code: salesEmployee.code,
     month, year, company,
+    cycle_start_date: cycleStart,
+    cycle_end_date: cycleEnd,
     days_given: daysGiven,
     sundays_paid: sundaysPaid,
     gazetted_holidays_paid: gazettedHolidaysPaid,
@@ -346,6 +357,7 @@ function saveSalesSalaryComputation(db, comp) {
   const info = db.prepare(`
     INSERT INTO sales_salary_computations (
       employee_code, month, year, company,
+      cycle_start_date, cycle_end_date,
       days_given, sundays_paid, gazetted_holidays_paid, earned_leave_days,
       total_days, calendar_days, earned_ratio,
       basic_monthly, hra_monthly, cca_monthly, conveyance_monthly, gross_monthly,
@@ -359,6 +371,7 @@ function saveSalesSalaryComputation(db, comp) {
       neft_exported_at, payslip_generated_at
     ) VALUES (
       ?, ?, ?, ?,
+      ?, ?,
       ?, ?, ?, ?,
       ?, ?, ?,
       ?, ?, ?, ?, ?,
@@ -372,6 +385,8 @@ function saveSalesSalaryComputation(db, comp) {
       ?, ?
     )
     ON CONFLICT(employee_code, month, year, company) DO UPDATE SET
+      cycle_start_date = excluded.cycle_start_date,
+      cycle_end_date = excluded.cycle_end_date,
       days_given = excluded.days_given,
       sundays_paid = excluded.sundays_paid,
       gazetted_holidays_paid = excluded.gazetted_holidays_paid,
@@ -414,6 +429,7 @@ function saveSalesSalaryComputation(db, comp) {
       computed_at = datetime('now')
   `).run(
     comp.employee_code, comp.month, comp.year, comp.company,
+    comp.cycle_start_date, comp.cycle_end_date,
     comp.days_given, comp.sundays_paid, comp.gazetted_holidays_paid, comp.earned_leave_days,
     comp.total_days, comp.calendar_days, comp.earned_ratio,
     comp.basic_monthly, comp.hra_monthly, comp.cca_monthly, comp.conveyance_monthly, comp.gross_monthly,
