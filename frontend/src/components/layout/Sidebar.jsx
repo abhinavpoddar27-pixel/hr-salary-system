@@ -1,8 +1,31 @@
 import React from 'react'
 import { NavLink, useLocation } from 'react-router-dom'
+import { useQuery } from '@tanstack/react-query'
 import { useAppStore } from '../../store/appStore'
 import { normalizeRole } from '../../utils/role'
+import { salesTaDaRequestsPendingCount } from '../../utils/api'
 import clsx from 'clsx'
+
+// Pending TA/DA approval count — polls every 60s. Only mounted on the
+// child item that opts in via `tadaPendingBadge: true`, and the parent
+// component only mounts that child when the user has approve permission,
+// so this query never fires for HR-only users.
+function TaDaPendingBadge() {
+  const { data } = useQuery({
+    queryKey: ['ta-da-pending-count'],
+    queryFn: () => salesTaDaRequestsPendingCount(),
+    refetchInterval: 60 * 1000,
+    refetchOnWindowFocus: true,
+    retry: 0,
+  })
+  const count = data?.data?.count || 0
+  if (!count) return null
+  return (
+    <span className="ml-auto inline-flex items-center justify-center min-w-[18px] h-[18px] px-1 rounded-full bg-red-500 text-white text-[10px] font-semibold leading-none">
+      {count}
+    </span>
+  )
+}
 
 const nav = [
   { label: 'Dashboard', icon: '🏠', to: '/' },
@@ -76,12 +99,17 @@ const nav = [
     ]
   },
   {
-    label: 'Sales', icon: '🛒', to: '/sales', salesAllowed: true,
+    // Phase 2: parent widened from salesAllowed (hr+admin) to
+    // hrFinanceOrAdmin so finance can see the new TA/DA Approvals child.
+    // Existing 4 HR-facing children carry their own salesAllowed gate so
+    // finance only sees TA/DA Approvals under this section.
+    label: 'Sales', icon: '🛒', to: '/sales', hrFinanceOrAdmin: true,
     children: [
-      { label: 'Sales Employees', to: '/sales/employees' },
-      { label: 'Sales Holidays', to: '/sales/holidays' },
-      { label: 'Upload Sheet', to: '/sales/upload' },
-      { label: 'Compute Salaries', to: '/sales/compute' },
+      { label: 'Sales Employees', to: '/sales/employees', salesAllowed: true },
+      { label: 'Sales Holidays', to: '/sales/holidays', salesAllowed: true },
+      { label: 'Upload Sheet', to: '/sales/upload', salesAllowed: true },
+      { label: 'Compute Salaries', to: '/sales/compute', salesAllowed: true },
+      { label: 'TA/DA Approvals', to: '/sales/ta-da-approvals', tadaApprover: true, tadaPendingBadge: true },
     ]
   },
   { label: 'Employee Profile', icon: '🔬', to: '/employee-profile' },
@@ -117,6 +145,10 @@ function NavItem({ item, collapsed, depth = 0, userRole, onNavigate, onAction })
   if (item.hrFinanceOrAdmin && !['hr', 'finance', 'admin'].includes(userRole)) return null
   // Hide Sales section from roles without 'sales-employees' permission (hr + admin)
   if (item.salesAllowed && !['hr', 'admin'].includes(userRole)) return null
+  // Phase 2: TA/DA Approvals — finance and admin see it (HR can request via
+  // employee master, but cannot approve, so the approval queue is hidden
+  // from HR to avoid clutter).
+  if (item.tadaApprover && !['finance', 'admin'].includes(userRole)) return null
 
   // Auto-open active parent
   React.useEffect(() => {
@@ -146,6 +178,8 @@ function NavItem({ item, collapsed, depth = 0, userRole, onNavigate, onAction })
     const visibleChildren = item.children.filter(c => {
       if (c.adminOnly && userRole !== 'admin') return false
       if (c.financeOnly && userRole !== 'finance' && userRole !== 'admin') return false
+      if (c.salesAllowed && !['hr', 'admin'].includes(userRole)) return false
+      if (c.tadaApprover && !['finance', 'admin'].includes(userRole)) return false
       return true
     })
     return (
@@ -187,6 +221,7 @@ function NavItem({ item, collapsed, depth = 0, userRole, onNavigate, onAction })
       >
         {item.icon && <span className="text-base shrink-0">{item.icon}</span>}
         {!collapsed && <span>{item.label}</span>}
+        {!collapsed && item.tadaPendingBadge && <TaDaPendingBadge />}
       </NavLink>
     </li>
   )

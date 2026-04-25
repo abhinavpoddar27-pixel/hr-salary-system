@@ -59,6 +59,7 @@ const SalesHolidayMaster = React.lazy(() => import('./pages/Sales/SalesHolidayMa
 const SalesUpload = React.lazy(() => import('./pages/Sales/SalesUpload'))
 const SalesSalaryCompute = React.lazy(() => import('./pages/Sales/SalesSalaryCompute'))
 const SalesPayslip = React.lazy(() => import('./pages/Sales/SalesPayslip'))
+const SalesTaDaApprovals = React.lazy(() => import('./pages/Sales/SalesTaDaApprovals'))
 const BugReportsInbox = React.lazy(() => import('./pages/admin/BugReportsInbox'))
 const BugReportDetail = React.lazy(() => import('./pages/admin/BugReportDetail'))
 
@@ -209,6 +210,7 @@ export default function App() {
           <Route path="/sales/upload" element={<RequireAuth><Layout title="Upload Coordinator Sheet"><SalesUpload /></Layout></RequireAuth>} />
           <Route path="/sales/compute" element={<RequireAuth><Layout title="Sales Salary Compute"><SalesSalaryCompute /></Layout></RequireAuth>} />
           <Route path="/sales/payslip/:code" element={<RequireAuth><Layout title="Sales Payslip"><SalesPayslip /></Layout></RequireAuth>} />
+          <Route path="/sales/ta-da-approvals" element={<RequireAuth><Layout title="TA/DA Approvals"><SalesTaDaApprovals /></Layout></RequireAuth>} />
           <Route path="/alerts" element={<RequireAuth><Layout title="Alerts"><Alerts /></Layout></RequireAuth>} />
           <Route path="/settings/*" element={<RequireAuth><Layout title="Settings"><Settings /></Layout></RequireAuth>} />
           <Route path="*" element={<Navigate to="/" replace />} />
