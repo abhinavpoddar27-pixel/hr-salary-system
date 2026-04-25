@@ -2754,6 +2754,49 @@ If description and screenshot are incoherent or unrelated, set summary_confidenc
     }
   }
 
+  // ── Sales master-data bootstrap (Phase 2 — April 2026) ───────────────
+  // Loads sales_master_import.sql from the repo root if present. Each
+  // INSERT in that file is INSERT OR IGNORE on `code` so re-running is
+  // safe; rows imported here are stamped with
+  //   ta_da_updated_by = 'master_import_2026-04-24'
+  // as a sentinel so we can recognise the bootstrap batch later.
+  // Idempotent — gated on policy_config.migration_sales_master_import_v1.
+  // If the SQL file is missing, the migration logs a warning and skips
+  // without setting the flag, so a subsequent boot retries.
+  const salesMasterImported = db.prepare(
+    "SELECT value FROM policy_config WHERE key = 'migration_sales_master_import_v1'"
+  ).get();
+
+  if (!salesMasterImported) {
+    const fs = require('fs');
+    const path = require('path');
+    // backend/src/database/ → ../../../ = repo root
+    const sqlPath = path.join(__dirname, '..', '..', '..', 'sales_master_import.sql');
+
+    if (!fs.existsSync(sqlPath)) {
+      console.warn('[MIGRATION] sales_master_import_v1: SQL file not found at', sqlPath);
+      console.warn('[MIGRATION] Skipping. Will retry on next boot if file appears.');
+    } else {
+      try {
+        console.log('[MIGRATION] sales_master_import_v1: loading master data from', sqlPath);
+        const sql = fs.readFileSync(sqlPath, 'utf8');
+        db.exec(sql);
+
+        const count = db.prepare(
+          "SELECT COUNT(*) AS n FROM sales_employees WHERE ta_da_updated_by = 'master_import_2026-04-24'"
+        ).get().n;
+        console.log(`[MIGRATION] sales_master_import_v1: inserted/verified ${count} employees`);
+
+        db.prepare(
+          "INSERT OR REPLACE INTO policy_config (key, value, description) VALUES ('migration_sales_master_import_v1', '1', 'Sales master data bootstrap import complete')"
+        ).run();
+      } catch (e) {
+        console.error('[MIGRATION] sales_master_import_v1: FAILED —', e.message);
+        // Flag NOT set → migration retries on next boot.
+      }
+    }
+  }
+
   console.log('✅ Database schema initialized');
 }
 
