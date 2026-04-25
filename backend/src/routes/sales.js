@@ -12,13 +12,114 @@ const fs = require('fs');
 const crypto = require('crypto');
 const multer = require('multer');
 const { getDb } = require('../database/db');
-const { requireHrOrAdmin } = require('../middleware/roles');
+const { requireHrOrAdmin, requirePermission } = require('../middleware/roles');
 const {
   parseSalesCoordinatorFile,
   normalizeName,
   normalizeManager,
   normalizeCity,
 } = require('../services/salesCoordinatorParser');
+const taDa = require('../services/taDaChangeRequest');
+
+// ══════════════════════════════════════════════════════════════════════
+// Phase 2 — TA/DA change-request workflow.
+// Registered BEFORE router.use(requireHrOrAdmin) so finance can reach
+// the approve/reject endpoints. Each route carries its own
+// requirePermission(...) gate. HR endpoints require 'sales-tada-request',
+// finance endpoints require 'sales-tada-approve'; admin inherits via '*'.
+// ══════════════════════════════════════════════════════════════════════
+
+function sendTaDaError(res, e, fallbackMsg) {
+  const status = e?.statusCode || 500;
+  const body = { success: false, error: e?.message || fallbackMsg || 'internal error' };
+  if (e?.actualStatus) body.actual_status = e.actualStatus;
+  if (status >= 500) console.error('[ta-da]', e?.stack || e);
+  return res.status(status).json(body);
+}
+
+// GET /api/sales/ta-da-requests?status=&employee_code=
+router.get('/ta-da-requests',
+  requirePermission('sales-tada-approve', 'sales-tada-request'),
+  (req, res) => {
+    try {
+      const rows = taDa.listRequests(getDb(), {
+        status: req.query.status ? String(req.query.status) : null,
+        employee_code: req.query.employee_code ? String(req.query.employee_code) : null,
+      });
+      res.json({ success: true, data: rows });
+    } catch (e) { sendTaDaError(res, e, 'list failed'); }
+  });
+
+// GET /api/sales/ta-da-requests/pending-count — navbar badge source
+router.get('/ta-da-requests/pending-count',
+  requirePermission('sales-tada-approve', 'sales-tada-request'),
+  (req, res) => {
+    try {
+      const count = taDa.countPending(getDb());
+      res.json({ success: true, count });
+    } catch (e) { sendTaDaError(res, e, 'count failed'); }
+  });
+
+// GET /api/sales/ta-da-requests/employee/:code
+router.get('/ta-da-requests/employee/:code',
+  requirePermission('sales-tada-approve', 'sales-tada-request'),
+  (req, res) => {
+    try {
+      const rows = taDa.getRequestsByEmployee(getDb(), req.params.code);
+      res.json({ success: true, data: rows });
+    } catch (e) { sendTaDaError(res, e, 'history failed'); }
+  });
+
+// GET /api/sales/ta-da-requests/:id
+router.get('/ta-da-requests/:id',
+  requirePermission('sales-tada-approve', 'sales-tada-request'),
+  (req, res) => {
+    try {
+      const row = taDa.getRequestById(getDb(), parseInt(req.params.id, 10));
+      if (!row) return res.status(404).json({ success: false, error: 'request not found' });
+      res.json({ success: true, data: row });
+    } catch (e) { sendTaDaError(res, e, 'fetch failed'); }
+  });
+
+// POST /api/sales/ta-da-requests — HR creates
+router.post('/ta-da-requests',
+  requirePermission('sales-tada-request'),
+  (req, res) => {
+    try {
+      const result = taDa.createRequest(getDb(), req.body || {}, req.user?.username);
+      res.status(201).json({ success: true, data: result.request, supersededId: result.supersededId });
+    } catch (e) { sendTaDaError(res, e, 'create failed'); }
+  });
+
+// POST /api/sales/ta-da-requests/:id/approve — Finance approves
+router.post('/ta-da-requests/:id/approve',
+  requirePermission('sales-tada-approve'),
+  (req, res) => {
+    try {
+      const row = taDa.approveRequest(getDb(), parseInt(req.params.id, 10), req.user?.username);
+      res.json({ success: true, data: row });
+    } catch (e) { sendTaDaError(res, e, 'approve failed'); }
+  });
+
+// POST /api/sales/ta-da-requests/:id/reject — Finance rejects with required reason
+router.post('/ta-da-requests/:id/reject',
+  requirePermission('sales-tada-approve'),
+  (req, res) => {
+    try {
+      const row = taDa.rejectRequest(getDb(), parseInt(req.params.id, 10), req.body || {}, req.user?.username);
+      res.json({ success: true, data: row });
+    } catch (e) { sendTaDaError(res, e, 'reject failed'); }
+  });
+
+// POST /api/sales/ta-da-requests/:id/cancel — HR cancels their own pending request
+router.post('/ta-da-requests/:id/cancel',
+  requirePermission('sales-tada-request'),
+  (req, res) => {
+    try {
+      const row = taDa.cancelRequest(getDb(), parseInt(req.params.id, 10), req.user?.username);
+      res.json({ success: true, data: row });
+    } catch (e) { sendTaDaError(res, e, 'cancel failed'); }
+  });
 
 router.use(requireHrOrAdmin);
 
