@@ -598,6 +598,431 @@ router.patch('/ta-da/inputs/:code',
     }
   });
 
+// ══════════════════════════════════════════════════════════════════════
+// Phase 3 — TA/DA upload + exports + payslip.
+// All gated via per-route requirePermission(...). Local multer instance
+// uses memoryStorage so the parser receives a Buffer directly (no disk
+// round-trip; avoids TDZ collision with `salesUpload` declared lower in
+// the file).
+// ══════════════════════════════════════════════════════════════════════
+
+const { parseTaDaUpload } = require('../services/salesTaDaUploadParser');
+const {
+  generateSalesTaDaExcel,
+  generateSalesTaDaNEFT,
+} = require('../services/salesExportFormats');
+
+const taDaUpload = multer({
+  storage: multer.memoryStorage(),
+  fileFilter: (req, file, cb) => {
+    const n = (file.originalname || '').toLowerCase();
+    if (n.endsWith('.xls') || n.endsWith('.xlsx')) cb(null, true);
+    else cb(new Error('Only .xls and .xlsx files are accepted'));
+  },
+  limits: { fileSize: 10 * 1024 * 1024 },
+});
+
+const TADA_CLASS_LABELS = {
+  0: 'Class 0 — flag for review',
+  1: 'Class 1 — flat DA only',
+  2: 'Class 2 — split DA',
+  3: 'Class 3 — flat DA + flat TA',
+  4: 'Class 4 — split DA + flat TA',
+  5: 'Class 5 — split DA + tiered TA (bike + car)',
+};
+
+const MONTHS_SHORT_LOCAL = ['', 'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+
+// 5. POST /api/sales/ta-da/upload/:class — class-template upload.
+router.post('/ta-da/upload/:class',
+  requirePermission('sales-tada-compute'),
+  taDaUpload.single('file'),
+  (req, res) => {
+    try {
+      const classNum = parseInt(req.params.class, 10);
+      if (![2, 3, 4, 5].includes(classNum)) {
+        return res.status(400).json({ success: false, error: 'class must be 2, 3, 4, or 5' });
+      }
+      if (!req.file || !req.file.buffer) {
+        return res.status(400).json({ success: false, error: 'file upload required' });
+      }
+      const { month, year, company } = validateTaDaCycleParams(req.body || {});
+      const cycle = deriveCycleTopLevel(month, year);
+      const user = req.user?.username || 'unknown';
+      const filename = req.file.originalname || 'upload.xlsx';
+      const db = getDb();
+
+      // Build sales_employees_lookup for this company.
+      // days_worked_for_cycle resolution order:
+      //   1. existing sales_ta_da_monthly_inputs.days_worked
+      //   2. latest matched/computed sales_monthly_input.sheet_days_given
+      //   3. 0
+      const empRows = db.prepare(`
+        SELECT e.id, e.code, e.ta_da_class
+        FROM sales_employees e
+        WHERE e.company = ?
+      `).all(company);
+
+      const lookup = new Map();
+      const inputRowStmt = db.prepare(`
+        SELECT days_worked FROM sales_ta_da_monthly_inputs
+        WHERE employee_id = ? AND month = ? AND year = ? AND company = ?
+      `);
+      const sheetRowStmt = db.prepare(`
+        SELECT smi.sheet_days_given AS d
+        FROM sales_monthly_input smi
+        JOIN sales_uploads su ON su.id = smi.upload_id
+        WHERE smi.employee_code = ? AND smi.month = ? AND smi.year = ? AND smi.company = ?
+          AND su.status IN ('matched','computed')
+        ORDER BY su.uploaded_at DESC LIMIT 1
+      `);
+      for (const e of empRows) {
+        let days = 0;
+        const inp = inputRowStmt.get(e.id, month, year, company);
+        if (inp && inp.days_worked !== null && inp.days_worked !== undefined) {
+          days = Number(inp.days_worked) || 0;
+        } else {
+          const sh = sheetRowStmt.get(e.code, month, year, company);
+          days = sh && sh.d !== null ? (Number(sh.d) || 0) : 0;
+        }
+        lookup.set(e.code, { ta_da_class: e.ta_da_class, days_worked_for_cycle: days });
+      }
+
+      const { rows, errors } = parseTaDaUpload(req.file.buffer, classNum, lookup);
+
+      if (errors.length > 0) {
+        return res.status(400).json({
+          success: false,
+          parsed: rows.length + errors.length,
+          valid: rows.length,
+          errors,
+        });
+      }
+
+      // All rows valid: per-row UPSERT + auto-recompute. Track succeeded/failed.
+      const succeeded = [];
+      const failed = [];
+
+      const upsertManual = db.prepare(`
+        INSERT INTO sales_ta_da_monthly_inputs (
+          employee_id, employee_code, month, year, company,
+          cycle_start_date, cycle_end_date,
+          days_worked, in_city_days, outstation_days,
+          total_km, bike_km, car_km,
+          source, source_detail, notes,
+          created_at, created_by, updated_at, updated_by
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+                  'upload', ?, NULL,
+                  datetime('now'), ?, datetime('now'), ?)
+        ON CONFLICT(employee_id, month, year, company) DO UPDATE SET
+          in_city_days   = excluded.in_city_days,
+          outstation_days = excluded.outstation_days,
+          total_km       = excluded.total_km,
+          bike_km        = excluded.bike_km,
+          car_km         = excluded.car_km,
+          days_worked    = excluded.days_worked,
+          source         = 'upload',
+          source_detail  = excluded.source_detail,
+          cycle_start_date = excluded.cycle_start_date,
+          cycle_end_date   = excluded.cycle_end_date,
+          updated_at     = datetime('now'),
+          updated_by     = excluded.updated_by
+      `);
+
+      const empIdByCode = new Map(empRows.map(e => [e.code, e.id]));
+      const sourceDetail = `upload:class${classNum}:${filename}`;
+
+      for (const row of rows) {
+        const empId = empIdByCode.get(row.employee_code);
+        try {
+          const txn = db.transaction(() => {
+            upsertManual.run(
+              empId, row.employee_code, month, year, company,
+              cycle.start, cycle.end,
+              row.days_worked || 0,
+              row.in_city_days !== undefined ? row.in_city_days : null,
+              row.outstation_days !== undefined ? row.outstation_days : null,
+              row.total_km !== undefined ? row.total_km : null,
+              row.bike_km !== undefined ? row.bike_km : null,
+              row.car_km !== undefined ? row.car_km : null,
+              sourceDetail, user, user
+            );
+          });
+          txn();
+
+          const summary = taDaCompute.recomputeCycle(db, {
+            month, year, company,
+            cycleStart: cycle.start, cycleEnd: cycle.end,
+            computedBy: user,
+            requestId: req.requestId || null,
+            triggerSource: 'manual:upload',
+            employeeCode: row.employee_code,
+          });
+          const errMatch = summary.errors.find(x => x.employeeCode === row.employee_code);
+          if (errMatch) {
+            failed.push({ employee_code: row.employee_code, error: errMatch.error });
+          } else {
+            succeeded.push(row.employee_code);
+          }
+        } catch (perRowErr) {
+          failed.push({
+            employee_code: row.employee_code,
+            error: perRowErr.message || String(perRowErr),
+          });
+        }
+      }
+
+      tadaWriteAudit(db, {
+        actionType: 'tada_template_upload',
+        empCode: null,
+        user,
+        metadata: {
+          classNum, filename,
+          parsed: rows.length, valid: rows.length,
+          succeeded_count: succeeded.length,
+          failed_count: failed.length,
+        },
+      });
+
+      if (failed.length > 0) {
+        return res.status(207).json({
+          success: false,
+          partial: true,
+          data: {
+            parsed: rows.length, valid: rows.length, invalid: 0,
+            errors: [],
+          },
+          succeeded,
+          failed,
+          note: 'Some rows committed before error. Re-upload only the failed rows after fixing.',
+        });
+      }
+
+      return res.json({
+        success: true,
+        data: {
+          parsed: rows.length,
+          valid: rows.length,
+          invalid: 0,
+          updated: succeeded.length,
+          errors: [],
+        },
+      });
+    } catch (e) {
+      const status = e.statusCode || 500;
+      if (status >= 500) console.error('[ta-da/upload]', e?.stack || e);
+      res.status(status).json({ success: false, error: e.message || 'upload failed' });
+    }
+  });
+
+// 6. GET /api/sales/ta-da/export/excel — JSON preview or .xlsx download.
+router.get('/ta-da/export/excel',
+  requirePermission('sales-tada-payable-export'),
+  (req, res) => {
+    try {
+      const { month, year, company } = validateTaDaCycleParams(req.query);
+      const status = req.query.status ? String(req.query.status).trim() : null;
+      if (status && !TADA_COMP_STATUSES.has(status)) {
+        return res.status(400).json({ success: false, error: 'invalid status filter' });
+      }
+      const download = String(req.query.download || '').toLowerCase() === 'true';
+      const db = getDb();
+
+      const params = [month, year, company];
+      let statusFilter = '';
+      if (status) { statusFilter = ' AND c.status = ?'; params.push(status); }
+
+      const rows = db.prepare(`
+        SELECT
+          e.code, e.name, e.designation, e.headquarters AS hq, e.city_of_operation,
+          e.reporting_manager,
+          c.ta_da_class_at_compute, c.status,
+          c.days_worked_at_compute,
+          c.in_city_days_at_compute, c.outstation_days_at_compute,
+          c.total_km_at_compute, c.bike_km_at_compute, c.car_km_at_compute,
+          c.da_local_amount, c.da_outstation_amount, c.total_da,
+          c.ta_primary_amount, c.ta_secondary_amount, c.total_ta,
+          c.total_payable
+        FROM sales_ta_da_computations c
+        JOIN sales_employees e ON e.id = c.employee_id
+        WHERE c.month = ? AND c.year = ? AND c.company = ?
+        ${statusFilter}
+        ORDER BY e.code ASC
+      `).all(...params);
+
+      if (!download) {
+        return res.json({ success: true, data: { rows, count: rows.length } });
+      }
+
+      const out = generateSalesTaDaExcel(rows, { month, year, company });
+      res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+      res.setHeader('Content-Disposition', `attachment; filename="${out.filename}"`);
+      return res.end(out.content);
+    } catch (e) {
+      const code = e.statusCode || 500;
+      if (code >= 500) console.error('[ta-da/export/excel]', e?.stack || e);
+      res.status(code).json({ success: false, error: e.message || 'excel export failed' });
+    }
+  });
+
+// 7. GET /api/sales/ta-da/export/neft — JSON preview or CSV download + audit stamp.
+router.get('/ta-da/export/neft',
+  requirePermission('sales-tada-payable-export'),
+  (req, res) => {
+    try {
+      const { month, year, company } = validateTaDaCycleParams(req.query);
+      const mode = String(req.query.mode || 'computed_only').trim();
+      if (!['computed_only', 'all'].includes(mode)) {
+        return res.status(400).json({ success: false, error: "mode must be 'computed_only' or 'all'" });
+      }
+      const download = String(req.query.download || '').toLowerCase() === 'true';
+      const user = req.user?.username || 'unknown';
+      const db = getDb();
+
+      const statusClause = mode === 'all'
+        ? "AND c.status IN ('computed','partial')"
+        : "AND c.status = 'computed'";
+
+      const rows = db.prepare(`
+        SELECT
+          c.id AS computation_id, c.employee_id,
+          e.code, e.name, e.doj, e.bank_name, e.account_no, e.ifsc,
+          c.total_payable, c.status
+        FROM sales_ta_da_computations c
+        JOIN sales_employees e ON e.id = c.employee_id
+        WHERE c.month = ? AND c.year = ? AND c.company = ?
+          AND c.total_payable > 0
+          ${statusClause}
+        ORDER BY e.name ASC, e.code ASC
+      `).all(month, year, company);
+
+      const built = generateSalesTaDaNEFT(rows, { month, year, company });
+      res.setHeader('X-Missing-Bank-Details', built.missing.join(','));
+
+      if (!download) {
+        return res.json({
+          success: true,
+          data: {
+            count: built.totals.count,
+            totalAmount: built.totals.totalAmount,
+            missing: built.missing,
+            mode,
+          },
+        });
+      }
+
+      // Stamp neft_exported_at + audit row in a single txn.
+      const stamp = db.prepare(`
+        UPDATE sales_ta_da_computations
+        SET neft_exported_at = datetime('now'),
+            neft_exported_by = ?
+        WHERE id = ?
+      `);
+      const txn = db.transaction(() => {
+        for (const r of built.eligible) stamp.run(user, r.computation_id);
+      });
+      txn();
+
+      tadaWriteAudit(db, {
+        actionType: 'tada_neft_export',
+        empCode: null,
+        user,
+        metadata: {
+          month, year, company, mode,
+          count: built.totals.count,
+          missing_count: built.totals.missingCount,
+        },
+      });
+
+      res.setHeader('Content-Type', 'text/csv');
+      res.setHeader('Content-Disposition', `attachment; filename="${built.filename}"`);
+      return res.end(built.csv);
+    } catch (e) {
+      const code = e.statusCode || 500;
+      if (code >= 500) console.error('[ta-da/export/neft]', e?.stack || e);
+      res.status(code).json({ success: false, error: e.message || 'neft export failed' });
+    }
+  });
+
+// 8. GET /api/sales/ta-da/export/payslip/:code — structured JSON for a single payslip.
+router.get('/ta-da/export/payslip/:code',
+  requirePermission('sales-tada-payable-export'),
+  (req, res) => {
+    try {
+      const { month, year, company } = validateTaDaCycleParams(req.query);
+      const code = String(req.params.code || '').trim();
+      if (!code) return res.status(400).json({ success: false, error: 'employee code required' });
+
+      const db = getDb();
+      const cycle = deriveCycleTopLevel(month, year);
+
+      const employee = db.prepare(`
+        SELECT * FROM sales_employees WHERE code = ? AND company = ?
+      `).get(code, company);
+      if (!employee) {
+        return res.status(404).json({ success: false, error: 'employee not found' });
+      }
+
+      const computation = db.prepare(`
+        SELECT * FROM sales_ta_da_computations
+        WHERE employee_id = ? AND month = ? AND year = ? AND company = ?
+      `).get(employee.id, month, year, company);
+      if (!computation) {
+        return res.status(404).json({ success: false, error: 'no computation for this cycle' });
+      }
+
+      const monthly_input = db.prepare(`
+        SELECT * FROM sales_ta_da_monthly_inputs
+        WHERE employee_id = ? AND month = ? AND year = ? AND company = ?
+      `).get(employee.id, month, year, company) || null;
+
+      const cls = Number(employee.ta_da_class);
+      const isDraft = !['computed', 'paid'].includes(computation.status);
+
+      res.json({
+        success: true,
+        data: {
+          company: { name: company },
+          cycle: { start: cycle.start, end: cycle.end, length_days: cycle.lengthDays },
+          period: { month, year, label: `${MONTHS_SHORT_LOCAL[month]} ${year}` },
+          employee: {
+            code: employee.code,
+            name: employee.name,
+            designation: employee.designation,
+            hq: employee.headquarters,
+            city_of_operation: employee.city_of_operation,
+            reporting_manager: employee.reporting_manager,
+            doj: employee.doj,
+            ta_da_class: cls,
+            class_label: TADA_CLASS_LABELS[cls] || `Class ${cls}`,
+            bank: {
+              bank_name: employee.bank_name,
+              account_no: employee.account_no,
+              ifsc: employee.ifsc,
+            },
+          },
+          computation,
+          monthly_input,
+          rates: {
+            da_rate: employee.da_rate,
+            da_outstation_rate: employee.da_outstation_rate,
+            ta_rate_primary: employee.ta_rate_primary,
+            ta_rate_secondary: employee.ta_rate_secondary,
+          },
+          status: {
+            value: computation.status,
+            label: computation.status,
+            is_draft: isDraft,
+          },
+        },
+      });
+    } catch (e) {
+      const code = e.statusCode || 500;
+      if (code >= 500) console.error('[ta-da/export/payslip]', e?.stack || e);
+      res.status(code).json({ success: false, error: e.message || 'payslip fetch failed' });
+    }
+  });
+
 router.use(requireHrOrAdmin);
 
 const IMMUTABLE_FIELDS = new Set(['id', 'code', 'company', 'created_at', 'created_by']);

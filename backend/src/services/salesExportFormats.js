@@ -216,4 +216,130 @@ function generateSalesNEFT(db, month, year, company) {
   };
 }
 
-module.exports = { generateSalesExcel, generateSalesNEFT };
+module.exports = {
+  generateSalesExcel,
+  generateSalesNEFT,
+  generateSalesTaDaExcel,
+  generateSalesTaDaNEFT,
+};
+
+// ══════════════════════════════════════════════════════════════════════
+// generateSalesTaDaExcel — Phase 3 TA/DA Payable register
+// ══════════════════════════════════════════════════════════════════════
+function generateSalesTaDaExcel(rows, meta) {
+  const month = meta.month;
+  const year = meta.year;
+  const company = meta.company;
+
+  const header = [
+    'Code', 'Name', 'HQ', 'City of Operation', 'Designation', 'Reporting Manager',
+    'Class', 'Status',
+    'Days Worked', 'In-City Days', 'Outstation Days',
+    'Total KM', 'Bike KM', 'Car KM',
+    'DA Local', 'DA Outstation', 'Total DA',
+    'TA Primary', 'TA Secondary', 'Total TA',
+    'Total Payable',
+  ];
+
+  const round2 = (n) => Math.round((n || 0) * 100) / 100;
+  const data = [header];
+
+  for (const r of rows) {
+    data.push([
+      r.code || r.employee_code || '',
+      r.name || '',
+      r.hq || r.headquarters || '',
+      r.city_of_operation || '',
+      r.designation || '',
+      r.reporting_manager || '',
+      r.ta_da_class_at_compute,
+      r.status || '',
+      r.days_worked_at_compute,
+      r.in_city_days_at_compute,
+      r.outstation_days_at_compute,
+      r.total_km_at_compute,
+      r.bike_km_at_compute,
+      r.car_km_at_compute,
+      round2(r.da_local_amount),
+      round2(r.da_outstation_amount),
+      round2(r.total_da),
+      round2(r.ta_primary_amount),
+      round2(r.ta_secondary_amount),
+      round2(r.total_ta),
+      round2(r.total_payable),
+    ]);
+  }
+
+  const sheet = XLSX.utils.aoa_to_sheet(data);
+  sheet['!freeze'] = { xSplit: 0, ySplit: 1 };
+  sheet['!views'] = [{ state: 'frozen', ySplit: 1 }];
+  sheet['!cols'] = [
+    { wch: 10 }, { wch: 22 }, { wch: 14 }, { wch: 16 }, { wch: 16 }, { wch: 18 },
+    { wch: 6 }, { wch: 16 },
+    { wch: 12 }, { wch: 12 }, { wch: 14 },
+    { wch: 10 }, { wch: 10 }, { wch: 10 },
+    { wch: 12 }, { wch: 14 }, { wch: 12 },
+    { wch: 12 }, { wch: 12 }, { wch: 12 },
+    { wch: 14 },
+  ];
+
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, sheet, 'TA-DA Payable');
+
+  const buf = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' });
+
+  return {
+    content: buf,
+    filename: `Sales_TADA_Payable_${MONTHS_SHORT[month]}_${year}_${underscoreCompany(company)}.xlsx`,
+    count: rows.length,
+  };
+}
+
+// ══════════════════════════════════════════════════════════════════════
+// generateSalesTaDaNEFT — Phase 3 TA/DA Bank CSV
+// Header byte-identical to plant generateBankFile + generateSalesNEFT.
+// Names are NOT uppercased — matches plant convention; commas/quotes scrubbed.
+// ══════════════════════════════════════════════════════════════════════
+function generateSalesTaDaNEFT(rows, meta) {
+  const month = meta.month;
+  const year = meta.year;
+  const company = meta.company;
+
+  const narration = `TADA ${MONTHS_SHORT[month].toUpperCase()} ${year}`;
+  const csvLines = ['Sr No,Beneficiary Name,Account Number,IFSC Code,Date of Joining,Amount,Narration'];
+
+  const missing = [];
+  const eligible = [];
+  let sr = 0;
+
+  for (const r of rows) {
+    const code = r.code || r.employee_code || '';
+    const accountOk = !!r.account_no;
+    const ifscOk = !!r.ifsc;
+    const bankOk = !!r.bank_name;
+    if (!accountOk || !ifscOk || !bankOk) {
+      missing.push(code);
+      continue;
+    }
+    sr++;
+    const name = (r.name || '').replace(/,/g, ' ').replace(/"/g, '');
+    const amount = Math.round((r.total_payable || 0) * 100) / 100;
+    const doj = fmtDOJ(r.doj);
+    csvLines.push(`${sr},"${name}",${r.account_no},${r.ifsc},${doj},${amount},"${narration}"`);
+    eligible.push(r);
+  }
+
+  const totalAmount = eligible.reduce((s, r) => s + (Number(r.total_payable) || 0), 0);
+
+  return {
+    csv: csvLines.join('\n'),
+    filename: `Sales_TADA_NEFT_${MONTHS_SHORT[month]}_${year}_${underscoreCompany(company)}.csv`,
+    missing,
+    eligible,
+    totals: {
+      count: eligible.length,
+      totalAmount: Math.round(totalAmount * 100) / 100,
+      missingCount: missing.length,
+    },
+  };
+}
