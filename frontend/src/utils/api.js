@@ -535,4 +535,14 @@ export const salesExportNEFT = (params, download = false) =>
       : { params }
   )
 
+// ── Sales TA/DA Change Requests (Phase 2) ────────────────
+export const salesTaDaRequestsList        = (params = {}) => api.get('/sales/ta-da-requests', { params })
+export const salesTaDaRequestsPendingCount = ()           => api.get('/sales/ta-da-requests/pending-count')
+export const salesTaDaRequestsByEmployee  = (code)       => api.get(`/sales/ta-da-requests/employee/${encodeURIComponent(code)}`)
+export const salesTaDaRequestGet          = (id)         => api.get(`/sales/ta-da-requests/${id}`)
+export const salesTaDaRequestCreate       = (data)       => api.post('/sales/ta-da-requests', data)
+export const salesTaDaRequestApprove      = (id)         => api.post(`/sales/ta-da-requests/${id}/approve`)
+export const salesTaDaRequestReject       = (id, data)   => api.post(`/sales/ta-da-requests/${id}/reject`, data)
+export const salesTaDaRequestCancel       = (id)         => api.post(`/sales/ta-da-requests/${id}/cancel`)
+
 export default api

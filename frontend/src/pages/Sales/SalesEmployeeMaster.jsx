@@ -6,12 +6,24 @@ import {
   getSalesEmployees,
   createSalesEmployee,
   updateSalesEmployee,
-  markSalesEmployeeLeft
+  markSalesEmployeeLeft,
+  salesTaDaRequestsList,
+  salesTaDaRequestsByEmployee,
+  salesTaDaRequestCreate,
+  salesTaDaRequestCancel,
 } from '../../utils/api'
 import { useAppStore } from '../../store/appStore'
 import Modal from '../../components/ui/Modal'
 import ConfirmDialog from '../../components/ui/ConfirmDialog'
 import CompanyFilter from '../../components/shared/CompanyFilter'
+import {
+  TA_DA_CLASS_LABELS,
+  classLabel,
+  ratesForClass,
+  RATE_FIELD_LABELS,
+  STATUS_BADGE,
+  relativeTime,
+} from '../../utils/taDaClassLabels'
 
 const STATUS_OPTIONS = ['Active', 'Inactive', 'Left', 'Exited']
 const DESIGNATION_OPTIONS = ['SO', 'SSO', 'ASE', 'ASM', 'TSI', 'SR ASM', 'RSM', 'PSR', 'Other']
@@ -193,14 +205,291 @@ function EmployeeForm({ initial, isEdit, onSubmit, onCancel, submitting }) {
   )
 }
 
+// ──────────────────────────────────────────────────────────────────────
+// TA/DA Request Modal (Phase 2)
+//
+// HR opens this from the per-employee row "Request TA/DA Change" action.
+// Saving here does NOT update the employee directly — it creates a row
+// in sales_ta_da_change_requests with status='pending', awaiting finance
+// approval. If a pending request already exists for this employee, the
+// backend supersedes it atomically (single txn).
+// ──────────────────────────────────────────────────────────────────────
+function TaDaRequestModal({ employee, onClose, onSubmitted }) {
+  const [cls, setCls] = useState(employee.ta_da_class ?? 0)
+  const [da, setDa] = useState(employee.da_rate ?? '')
+  const [daOut, setDaOut] = useState(employee.da_outstation_rate ?? '')
+  const [taPri, setTaPri] = useState(employee.ta_rate_primary ?? '')
+  const [taSec, setTaSec] = useState(employee.ta_rate_secondary ?? '')
+  const [notes, setNotes] = useState(employee.ta_da_notes ?? '')
+  const [reason, setReason] = useState('')
+  const [errors, setErrors] = useState({})
+
+  const visibleRates = ratesForClass(cls)
+  const showRate = (k) => visibleRates.includes(k)
+
+  const mutation = useMutation({
+    mutationFn: (data) => salesTaDaRequestCreate(data),
+    onSuccess: (res) => {
+      const supersededId = res?.data?.supersededId
+      toast.success(supersededId
+        ? `Request submitted (superseded #${supersededId})`
+        : 'Request submitted for finance approval')
+      onSubmitted && onSubmitted()
+      onClose()
+    },
+    onError: (err) => toast.error(err?.response?.data?.error || 'Submit failed'),
+  })
+
+  const numOrNull = (v) => {
+    if (v === '' || v === null || v === undefined) return null
+    const n = Number(v)
+    return Number.isFinite(n) ? n : null
+  }
+
+  const handleSubmit = (e) => {
+    e.preventDefault()
+    const errs = {}
+    if (!reason.trim()) errs.reason = 'Reason is required'
+    for (const k of visibleRates) {
+      const map = { da_rate: da, da_outstation_rate: daOut, ta_rate_primary: taPri, ta_rate_secondary: taSec }
+      const v = map[k]
+      if (v !== '' && v !== null && (Number.isNaN(Number(v)) || Number(v) < 0)) {
+        errs[k] = 'Must be a non-negative number'
+      }
+    }
+    setErrors(errs)
+    if (Object.keys(errs).length) {
+      toast.error('Please fix highlighted fields')
+      return
+    }
+
+    mutation.mutate({
+      employee_code: employee.code,
+      new_ta_da_class: Number(cls),
+      new_da_rate: showRate('da_rate') ? numOrNull(da) : null,
+      new_da_outstation_rate: showRate('da_outstation_rate') ? numOrNull(daOut) : null,
+      new_ta_rate_primary: showRate('ta_rate_primary') ? numOrNull(taPri) : null,
+      new_ta_rate_secondary: showRate('ta_rate_secondary') ? numOrNull(taSec) : null,
+      new_ta_da_notes: notes || null,
+      reason: reason.trim(),
+    })
+  }
+
+  const lbl = (s) => <span className="block text-xs font-medium text-slate-600 mb-1">{s}</span>
+
+  const renderRateInput = (k, value, setter) => (
+    <div key={k}>
+      {lbl(RATE_FIELD_LABELS[k])}
+      <input
+        type="number" step="0.01" min="0"
+        value={value ?? ''}
+        onChange={e => setter(e.target.value)}
+        className={clsx('w-full border rounded-lg px-2 py-1.5 text-sm',
+          errors[k] ? 'border-red-400' : 'border-slate-300')}
+      />
+      {errors[k] && <p className="text-xs text-red-600 mt-1">{errors[k]}</p>}
+    </div>
+  )
+
+  return (
+    <Modal open onClose={onClose} title={`Request TA/DA Change — ${employee.code} ${employee.name}`} size="md">
+      <form onSubmit={handleSubmit} className="space-y-4">
+        <div className="bg-slate-50 border border-slate-200 rounded-lg p-3">
+          <p className="text-xs text-slate-600 mb-1">Current</p>
+          <p className="text-sm font-medium text-slate-800">{classLabel(employee.ta_da_class)}</p>
+          <p className="text-xs text-slate-500 mt-0.5">
+            DA: {employee.da_rate ?? '—'} · DA-out: {employee.da_outstation_rate ?? '—'} ·
+            TA-pri: {employee.ta_rate_primary ?? '—'} · TA-sec: {employee.ta_rate_secondary ?? '—'}
+          </p>
+        </div>
+
+        <div>
+          {lbl('TA/DA Class *')}
+          <select value={cls} onChange={e => setCls(Number(e.target.value))}
+            className="w-full border border-slate-300 rounded-lg px-2 py-1.5 text-sm bg-white">
+            {Object.entries(TA_DA_CLASS_LABELS).map(([n, lab]) => (
+              <option key={n} value={n}>Class {n}: {lab}</option>
+            ))}
+          </select>
+        </div>
+
+        {visibleRates.length === 0 && (
+          <div className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded p-2">
+            Class {cls} carries no rate fields — submit with a reason and finance will resolve.
+          </div>
+        )}
+        {visibleRates.length > 0 && (
+          <div className="grid grid-cols-2 gap-3">
+            {visibleRates.includes('da_rate') && renderRateInput('da_rate', da, setDa)}
+            {visibleRates.includes('da_outstation_rate') && renderRateInput('da_outstation_rate', daOut, setDaOut)}
+            {visibleRates.includes('ta_rate_primary') && renderRateInput('ta_rate_primary', taPri, setTaPri)}
+            {visibleRates.includes('ta_rate_secondary') && renderRateInput('ta_rate_secondary', taSec, setTaSec)}
+          </div>
+        )}
+
+        <div>
+          {lbl('Notes')}
+          <textarea rows={2} value={notes} onChange={e => setNotes(e.target.value)}
+            placeholder="Internal notes (optional)"
+            className="w-full border border-slate-300 rounded-lg px-2 py-1.5 text-sm" />
+        </div>
+
+        <div>
+          {lbl('Reason for change *')}
+          <textarea rows={3} value={reason} onChange={e => setReason(e.target.value)}
+            placeholder="Why is this change needed? Finance will see this when reviewing."
+            className={clsx('w-full border rounded-lg px-2 py-1.5 text-sm',
+              errors.reason ? 'border-red-400' : 'border-slate-300')} />
+          {errors.reason && <p className="text-xs text-red-600 mt-1">{errors.reason}</p>}
+        </div>
+
+        <div className="flex justify-end gap-2 pt-2 border-t">
+          <button type="button" onClick={onClose}
+            className="px-3 py-1.5 text-sm rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700">
+            Cancel
+          </button>
+          <button type="submit" disabled={mutation.isPending}
+            className="px-4 py-1.5 text-sm rounded-lg bg-blue-600 hover:bg-blue-700 text-white disabled:bg-slate-400">
+            {mutation.isPending ? 'Submitting…' : 'Submit for approval'}
+          </button>
+        </div>
+      </form>
+    </Modal>
+  )
+}
+
+// ──────────────────────────────────────────────────────────────────────
+// TA/DA History Modal (Phase 2)
+// Shows all change requests for one employee, chronological. Highlights
+// pending request with diff + reason. Owner can cancel from here.
+// ──────────────────────────────────────────────────────────────────────
+function TaDaHistoryModal({ employee, currentUsername, onClose }) {
+  const qc = useQueryClient()
+  const { data: res, isLoading } = useQuery({
+    queryKey: ['ta-da-history', employee.code],
+    queryFn: () => salesTaDaRequestsByEmployee(employee.code),
+    retry: 0,
+  })
+  const requests = res?.data?.data || []
+
+  const cancelMut = useMutation({
+    mutationFn: (id) => salesTaDaRequestCancel(id),
+    onSuccess: () => {
+      toast.success('Request cancelled')
+      qc.invalidateQueries({ queryKey: ['ta-da-history', employee.code] })
+      qc.invalidateQueries({ queryKey: ['ta-da-pending-list'] })
+    },
+    onError: (err) => toast.error(err?.response?.data?.error || 'Cancel failed'),
+  })
+
+  const renderDiff = (r) => {
+    const fields = [
+      ['Class',     'old_ta_da_class',         'new_ta_da_class'],
+      ['DA',        'old_da_rate',             'new_da_rate'],
+      ['DA-out',    'old_da_outstation_rate',  'new_da_outstation_rate'],
+      ['TA-pri',    'old_ta_rate_primary',     'new_ta_rate_primary'],
+      ['TA-sec',    'old_ta_rate_secondary',   'new_ta_rate_secondary'],
+      ['Notes',     'old_ta_da_notes',         'new_ta_da_notes'],
+    ]
+    return (
+      <table className="w-full text-xs mt-2">
+        <tbody>
+          {fields.map(([lab, ok, nk]) => {
+            const ov = r[ok], nv = r[nk]
+            const changed = String(ov ?? '') !== String(nv ?? '')
+            if (!changed && ov === null && nv === null) return null
+            return (
+              <tr key={lab} className={clsx(changed && 'bg-amber-50')}>
+                <td className="py-0.5 px-2 text-slate-500 w-16">{lab}</td>
+                <td className="py-0.5 px-2 text-slate-600 font-mono">{ov ?? '—'}</td>
+                <td className="py-0.5 px-2 text-slate-400">→</td>
+                <td className="py-0.5 px-2 text-slate-800 font-mono font-medium">{nv ?? '—'}</td>
+              </tr>
+            )
+          })}
+        </tbody>
+      </table>
+    )
+  }
+
+  return (
+    <Modal open onClose={onClose} title={`TA/DA History — ${employee.code} ${employee.name}`} size="lg">
+      <div className="space-y-3">
+        {isLoading && <p className="text-xs text-slate-400 text-center py-6">Loading…</p>}
+        {!isLoading && requests.length === 0 && (
+          <p className="text-sm text-slate-500 text-center py-6">No TA/DA change requests yet for this employee.</p>
+        )}
+        {requests.map(r => {
+          const badge = STATUS_BADGE[r.status] || { label: r.status, classes: 'bg-slate-100 text-slate-700' }
+          const isOwner = r.requested_by === currentUsername
+          return (
+            <div key={r.id} className="border border-slate-200 rounded-lg p-3 bg-white">
+              <div className="flex items-center justify-between gap-2">
+                <div className="flex items-center gap-2 flex-wrap">
+                  <span className="font-mono text-xs text-slate-500">#{r.id}</span>
+                  <span className={clsx('inline-block px-2 py-0.5 rounded-full text-xs font-medium border', badge.classes)}>
+                    {badge.label}
+                  </span>
+                  <span className="text-xs text-slate-500">
+                    by <strong className="text-slate-700">{r.requested_by}</strong> {relativeTime(r.requested_at)}
+                  </span>
+                </div>
+                {r.status === 'pending' && isOwner && (
+                  <button onClick={() => cancelMut.mutate(r.id)} disabled={cancelMut.isPending}
+                    className="text-xs text-red-600 hover:text-red-800 disabled:text-slate-400">
+                    Cancel my request
+                  </button>
+                )}
+              </div>
+              {renderDiff(r)}
+              {r.reason && (
+                <p className="text-xs text-slate-600 mt-2"><strong>Reason:</strong> {r.reason}</p>
+              )}
+              {r.rejection_reason && (
+                <p className="text-xs text-red-700 mt-1"><strong>Rejection reason:</strong> {r.rejection_reason}</p>
+              )}
+              {r.resolved_by && (
+                <p className="text-xs text-slate-500 mt-1">
+                  Resolved by <strong className="text-slate-700">{r.resolved_by}</strong> {relativeTime(r.resolved_at)}
+                </p>
+              )}
+              {r.superseded_by_request_id && (
+                <p className="text-xs text-slate-500 mt-1">Superseded by #{r.superseded_by_request_id}</p>
+              )}
+            </div>
+          )
+        })}
+      </div>
+    </Modal>
+  )
+}
+
 export default function SalesEmployeeMaster() {
   const qc = useQueryClient()
-  const { selectedCompany } = useAppStore()
+  const { selectedCompany, user } = useAppStore()
+  const currentUsername = user?.username || ''
 
   const [filters, setFilters] = useState({ status: '', state: '', manager: '', hq: '' })
   const [modalMode, setModalMode] = useState(null) // 'create' | 'edit'
   const [editing, setEditing] = useState(null)
   const [confirmLeft, setConfirmLeft] = useState(null)
+  const [taDaRequestFor, setTaDaRequestFor] = useState(null)  // employee or null
+  const [taDaHistoryFor, setTaDaHistoryFor] = useState(null)  // employee or null
+
+  // Pull all pending TA/DA requests so we can mark employees with a "Pending" pill.
+  const { data: pendingRes } = useQuery({
+    queryKey: ['ta-da-pending-list'],
+    queryFn: () => salesTaDaRequestsList({ status: 'pending' }),
+    retry: 0,
+    staleTime: 30 * 1000,
+  })
+  const pendingByCode = useMemo(() => {
+    const map = {}
+    for (const r of (pendingRes?.data?.data || [])) {
+      map[r.employee_code] = r
+    }
+    return map
+  }, [pendingRes])
 
   const queryParams = useMemo(() => {
     const p = {}
@@ -304,7 +593,7 @@ export default function SalesEmployeeMaster() {
       </div>
 
       <div className="bg-white rounded-lg border border-slate-200 overflow-x-auto">
-        <table className="min-w-[900px] w-full text-sm">
+        <table className="min-w-[1100px] w-full text-sm">
           <thead className="bg-slate-50 text-slate-600 text-xs uppercase">
             <tr>
               <th className="px-3 py-2 text-left">Code</th>
@@ -313,18 +602,21 @@ export default function SalesEmployeeMaster() {
               <th className="px-3 py-2 text-left">HQ</th>
               <th className="px-3 py-2 text-left">City</th>
               <th className="px-3 py-2 text-left">Manager</th>
+              <th className="px-3 py-2 text-left">TA/DA</th>
               <th className="px-3 py-2 text-left">Status</th>
               <th className="px-3 py-2 text-left">Actions</th>
             </tr>
           </thead>
           <tbody>
             {isLoading && (
-              <tr><td colSpan={8} className="px-3 py-4 text-center text-slate-400 text-xs">Loading…</td></tr>
+              <tr><td colSpan={9} className="px-3 py-4 text-center text-slate-400 text-xs">Loading…</td></tr>
             )}
             {!isLoading && rows.length === 0 && (
-              <tr><td colSpan={8} className="px-3 py-8 text-center text-slate-400 text-sm">No sales employees match the current filters.</td></tr>
+              <tr><td colSpan={9} className="px-3 py-8 text-center text-slate-400 text-sm">No sales employees match the current filters.</td></tr>
             )}
-            {rows.map(r => (
+            {rows.map(r => {
+              const pending = pendingByCode[r.code]
+              return (
               <tr key={r.id} className="border-t border-slate-100 hover:bg-slate-50">
                 <td className="px-3 py-2 font-mono text-xs">{r.code}</td>
                 <td className="px-3 py-2 font-medium text-slate-800">{r.name}</td>
@@ -332,17 +624,35 @@ export default function SalesEmployeeMaster() {
                 <td className="px-3 py-2 text-slate-600">{r.headquarters || '—'}</td>
                 <td className="px-3 py-2 text-slate-600">{r.city_of_operation || '—'}</td>
                 <td className="px-3 py-2 text-slate-600">{r.reporting_manager || '—'}</td>
+                <td className="px-3 py-2 text-xs">
+                  <div className="flex items-center gap-1.5 flex-wrap">
+                    <span className="text-slate-700">{r.ta_da_class !== null && r.ta_da_class !== undefined ? `Class ${r.ta_da_class}` : '—'}</span>
+                    {pending && (
+                      <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full bg-amber-100 text-amber-800 border border-amber-300 text-[10px] font-medium"
+                        title={`Pending request by ${pending.requested_by}`}>
+                        <span className="w-1.5 h-1.5 rounded-full bg-amber-500"></span>
+                        Pending
+                      </span>
+                    )}
+                  </div>
+                </td>
                 <td className="px-3 py-2">{statusBadge(r.status)}</td>
                 <td className="px-3 py-2">
-                  <div className="flex gap-2 text-xs">
+                  <div className="flex gap-2 text-xs flex-wrap">
                     <button onClick={() => openEdit(r)} className="text-blue-600 hover:text-blue-800">Edit</button>
+                    <button onClick={() => setTaDaRequestFor(r)} className="text-indigo-600 hover:text-indigo-800">
+                      Request TA/DA
+                    </button>
+                    <button onClick={() => setTaDaHistoryFor(r)} className="text-slate-600 hover:text-slate-800">
+                      History
+                    </button>
                     {r.status !== 'Left' && r.status !== 'Exited' && (
                       <button onClick={() => setConfirmLeft(r)} className="text-red-600 hover:text-red-800">Mark Left</button>
                     )}
                   </div>
                 </td>
               </tr>
-            ))}
+            )})}
           </tbody>
         </table>
       </div>
@@ -369,6 +679,25 @@ export default function SalesEmployeeMaster() {
           cancelText="Cancel"
           onCancel={() => setConfirmLeft(null)}
           onConfirm={() => markLeftMut.mutate({ code: confirmLeft.code, company: confirmLeft.company })}
+        />
+      )}
+
+      {taDaRequestFor && (
+        <TaDaRequestModal
+          employee={taDaRequestFor}
+          onClose={() => setTaDaRequestFor(null)}
+          onSubmitted={() => {
+            qc.invalidateQueries({ queryKey: ['ta-da-pending-list'] })
+            qc.invalidateQueries({ queryKey: ['ta-da-history', taDaRequestFor.code] })
+          }}
+        />
+      )}
+
+      {taDaHistoryFor && (
+        <TaDaHistoryModal
+          employee={taDaHistoryFor}
+          currentUsername={currentUsername}
+          onClose={() => setTaDaHistoryFor(null)}
         />
       )}
     </div>
