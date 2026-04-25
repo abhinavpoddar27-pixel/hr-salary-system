@@ -1957,6 +1957,23 @@ router.post('/compute', (req, res) => {
     remark: `Sales compute: upload #${upload.id}, ${results.length} OK, ${excluded.length} excluded, ${errors.length} errors`,
   });
 
+  // Phase α auto-trigger — runs OUTSIDE the per-employee salary txn loop.
+  // Failure here logs but never fails the salary response.
+  let taDaSummary = null;
+  try {
+    taDaSummary = taDaCompute.recomputeCycle(db, {
+      month, year, company,
+      cycleStart, cycleEnd,
+      computedBy: user,
+      requestId: req.requestId,
+      triggerSource: 'auto:salary_compute',
+    });
+  } catch (taDaErr) {
+    console.error(`[sales-tada-auto] ${month}/${year} ${company}: ${taDaErr.message}`);
+    if (taDaErr.stack) console.error(taDaErr.stack.split('\n').slice(0, 5).join('\n'));
+    taDaSummary = { error: taDaErr.message };
+  }
+
   res.json({
     success: true,
     data: {
@@ -1967,6 +1984,7 @@ router.post('/compute', (req, res) => {
       errors,
       finalizedRecomputeWarnings,
     },
+    taDaSummary,
   });
 });
 
