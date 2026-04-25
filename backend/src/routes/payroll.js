@@ -1813,7 +1813,7 @@ router.get('/payable-ot', (req, res) => {
       AND sc.month = dc.month AND sc.year = dc.year
     WHERE sc.month = ? AND sc.year = ?
     ${company ? 'AND sc.company = ?' : ''}
-    AND (e.status IS NULL OR e.status != 'Left')
+    AND (e.status IS NULL OR e.status NOT IN ('Exited'))
     ORDER BY sc.ed_pay DESC, sc.ot_pay DESC, e.department, e.name
   `).all(...(company ? [m, y, company] : [m, y]));
 
