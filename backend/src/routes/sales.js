@@ -20,6 +20,7 @@ const {
   normalizeCity,
 } = require('../services/salesCoordinatorParser');
 const taDa = require('../services/taDaChangeRequest');
+const taDaCompute = require('../services/salesTaDaComputation');
 
 // ══════════════════════════════════════════════════════════════════════
 // Phase 2 — TA/DA change-request workflow.
@@ -119,6 +120,438 @@ router.post('/ta-da-requests/:id/cancel',
       const row = taDa.cancelRequest(getDb(), parseInt(req.params.id, 10), req.user?.username);
       res.json({ success: true, data: row });
     } catch (e) { sendTaDaError(res, e, 'cancel failed'); }
+  });
+
+// ══════════════════════════════════════════════════════════════════════
+// Phase 3 — TA/DA compute + register + per-employee detail + inputs PATCH.
+// Registered BEFORE router.use(requireHrOrAdmin) so the explicit
+// requirePermission('sales-tada-compute') gate is the only access check.
+// HR has 'sales-tada-compute'; admin inherits via '*'. Finance does NOT
+// have this permission (compute is HR-initiated; finance reviews via the
+// existing sales-tada-approve flow).
+// ══════════════════════════════════════════════════════════════════════
+
+// POST /api/sales/ta-da/compute — manual recompute of a cycle (or single employee)
+router.post('/ta-da/compute',
+  requirePermission('sales-tada-compute'),
+  (req, res) => {
+    try {
+      const body = req.body || {};
+      const month = parseInt(body.month, 10);
+      const year  = parseInt(body.year, 10);
+      const company = (body.company || '').trim();
+      const employeeCode = body.employeeCode ? String(body.employeeCode).trim() : null;
+
+      if (!month || !year || !company) {
+        return res.status(400).json({ success: false, error: 'month, year, and company are required' });
+      }
+
+      let cycle;
+      try {
+        cycle = deriveCycle(month, year);
+      } catch (e) {
+        return res.status(400).json({ success: false, error: `Invalid cycle for ${month}/${year}: ${e.message}` });
+      }
+
+      const db = getDb();
+      const user = req.user?.username || 'unknown';
+
+      const summary = taDaCompute.recomputeCycle(db, {
+        month, year, company,
+        cycleStart: cycle.start, cycleEnd: cycle.end,
+        computedBy: user,
+        requestId: req.requestId || null,
+        triggerSource: 'manual:compute_endpoint',
+        employeeCode,
+      });
+
+      writeAuditP2(db, 'sales_ta_da_computations', {
+        recordId: 0,
+        field: 'recompute',
+        oldVal: '',
+        newVal: JSON.stringify({ month, year, company, employeeCode, summary }),
+        user,
+        actionType: 'tada_compute_manual',
+        remark: `Manual TA/DA recompute ${month}/${year}/${company}${employeeCode ? ` (single: ${employeeCode})` : ''}`,
+        empCode: employeeCode || '',
+      });
+
+      res.json({
+        success: true,
+        data: {
+          month, year, company,
+          computed: summary.computed,
+          partial: summary.partial,
+          flagged: summary.flagged,
+          errors: summary.errors,
+        },
+      });
+    } catch (e) {
+      console.error('[ta-da/compute]', e?.stack || e);
+      res.status(500).json({ success: false, error: e?.message || 'compute failed' });
+    }
+  });
+
+// GET /api/sales/ta-da/register — paginated list with totals + status counts
+router.get('/ta-da/register',
+  requirePermission('sales-tada-compute'),
+  (req, res) => {
+    try {
+      const month = parseInt(req.query.month, 10);
+      const year  = parseInt(req.query.year, 10);
+      const company = (req.query.company || '').trim();
+      const status = req.query.status ? String(req.query.status).trim() : null;
+      const taDaClassRaw = req.query.ta_da_class;
+      const taDaClass = (taDaClassRaw !== undefined && taDaClassRaw !== '')
+        ? parseInt(taDaClassRaw, 10) : null;
+      const page = Math.max(1, parseInt(req.query.page, 10) || 1);
+      const pageSize = Math.min(1000, Math.max(1, parseInt(req.query.pageSize, 10) || 200));
+
+      if (!month || !year || !company) {
+        return res.status(400).json({ success: false, error: 'month, year, and company are required' });
+      }
+
+      const db = getDb();
+
+      const where = ['c.month = ?', 'c.year = ?', 'c.company = ?'];
+      const params = [month, year, company];
+      if (status) { where.push('c.status = ?'); params.push(status); }
+      if (taDaClass !== null && Number.isInteger(taDaClass)) {
+        where.push('c.ta_da_class_at_compute = ?');
+        params.push(taDaClass);
+      }
+      const whereSql = where.join(' AND ');
+
+      const offset = (page - 1) * pageSize;
+      const rows = db.prepare(`
+        SELECT
+          c.*,
+          e.name AS employee_name,
+          e.headquarters,
+          e.state,
+          e.designation,
+          e.reporting_manager,
+          e.ta_da_class AS current_ta_da_class,
+          mi.in_city_days,
+          mi.outstation_days,
+          mi.total_km,
+          mi.bike_km,
+          mi.car_km,
+          mi.notes  AS input_notes,
+          mi.source AS input_source,
+          mi.source_detail AS input_source_detail
+        FROM sales_ta_da_computations c
+        JOIN sales_employees e ON e.id = c.employee_id
+        LEFT JOIN sales_ta_da_monthly_inputs mi
+          ON mi.employee_id = c.employee_id
+         AND mi.month = c.month AND mi.year = c.year AND mi.company = c.company
+        WHERE ${whereSql}
+        ORDER BY e.code ASC
+        LIMIT ? OFFSET ?
+      `).all(...params, pageSize, offset);
+
+      const totalsRow = db.prepare(`
+        SELECT
+          COALESCE(SUM(c.total_da), 0)      AS total_da,
+          COALESCE(SUM(c.total_ta), 0)      AS total_ta,
+          COALESCE(SUM(c.total_payable), 0) AS total_payable,
+          COUNT(*)                           AS count
+        FROM sales_ta_da_computations c
+        JOIN sales_employees e ON e.id = c.employee_id
+        WHERE ${whereSql}
+      `).get(...params);
+
+      const statusCountsRow = db.prepare(`
+        SELECT
+          SUM(CASE WHEN c.status = 'computed'        THEN 1 ELSE 0 END) AS computed,
+          SUM(CASE WHEN c.status = 'partial'         THEN 1 ELSE 0 END) AS partial,
+          SUM(CASE WHEN c.status = 'flag_for_review' THEN 1 ELSE 0 END) AS flag_for_review,
+          SUM(CASE WHEN c.status = 'paid'            THEN 1 ELSE 0 END) AS paid
+        FROM sales_ta_da_computations c
+        WHERE c.month = ? AND c.year = ? AND c.company = ?
+      `).get(month, year, company);
+
+      res.json({
+        success: true,
+        data: {
+          rows,
+          totals: {
+            total_da:      totalsRow.total_da      || 0,
+            total_ta:      totalsRow.total_ta      || 0,
+            total_payable: totalsRow.total_payable || 0,
+            count:         totalsRow.count         || 0,
+          },
+          statusCounts: {
+            computed:        statusCountsRow.computed        || 0,
+            partial:         statusCountsRow.partial         || 0,
+            flag_for_review: statusCountsRow.flag_for_review || 0,
+            paid:            statusCountsRow.paid            || 0,
+          },
+          page,
+          pageSize,
+        },
+      });
+    } catch (e) {
+      console.error('[ta-da/register]', e?.stack || e);
+      res.status(500).json({ success: false, error: e?.message || 'register failed' });
+    }
+  });
+
+// GET /api/sales/ta-da/employee/:code — detail modal payload
+router.get('/ta-da/employee/:code',
+  requirePermission('sales-tada-compute'),
+  (req, res) => {
+    try {
+      const code = req.params.code;
+      const month = parseInt(req.query.month, 10);
+      const year  = parseInt(req.query.year, 10);
+      const company = (req.query.company || '').trim();
+
+      if (!month || !year || !company) {
+        return res.status(400).json({ success: false, error: 'month, year, and company are required' });
+      }
+
+      const db = getDb();
+      const employee = db.prepare(`
+        SELECT * FROM sales_employees WHERE code = ? AND company = ?
+      `).get(code, company);
+      if (!employee) {
+        return res.status(404).json({ success: false, error: 'employee not found' });
+      }
+
+      let cycle;
+      try {
+        cycle = deriveCycle(month, year);
+      } catch (e) {
+        return res.status(400).json({ success: false, error: `Invalid cycle: ${e.message}` });
+      }
+
+      const { computation, monthlyInput } = taDaCompute.getComputation(db, {
+        employeeCode: code, month, year, company,
+      });
+
+      res.json({
+        success: true,
+        data: {
+          employee,
+          computation,
+          monthly_input: monthlyInput,
+          cycle: {
+            start: cycle.start,
+            end: cycle.end,
+            length_days: cycle.lengthDays,
+          },
+        },
+      });
+    } catch (e) {
+      console.error('[ta-da/employee]', e?.stack || e);
+      res.status(500).json({ success: false, error: e?.message || 'fetch failed' });
+    }
+  });
+
+// PATCH /api/sales/ta-da/inputs/:code — HR/finance enters split + km, triggers Phase β
+router.patch('/ta-da/inputs/:code',
+  requirePermission('sales-tada-compute'),
+  (req, res) => {
+    try {
+      const code = req.params.code;
+      const month = parseInt(req.query.month, 10);
+      const year  = parseInt(req.query.year, 10);
+      const company = (req.query.company || '').trim();
+
+      if (!month || !year || !company) {
+        return res.status(400).json({ success: false, error: 'month, year, and company are required' });
+      }
+
+      const ALLOWED = ['in_city_days', 'outstation_days', 'total_km', 'bike_km', 'car_km', 'notes'];
+      const NUMERIC = new Set(['in_city_days', 'outstation_days', 'total_km', 'bike_km', 'car_km']);
+
+      const body = req.body || {};
+      const patch = {};
+      for (const key of ALLOWED) {
+        if (Object.prototype.hasOwnProperty.call(body, key)) patch[key] = body[key];
+      }
+      if (Object.keys(patch).length === 0) {
+        return res.status(400).json({ success: false, error: 'no valid fields to update' });
+      }
+
+      // Numeric fields must be >= 0 (null is allowed — clears the field).
+      for (const key of Object.keys(patch)) {
+        if (!NUMERIC.has(key)) continue;
+        if (patch[key] === null || patch[key] === undefined || patch[key] === '') {
+          patch[key] = null;
+          continue;
+        }
+        const n = typeof patch[key] === 'number' ? patch[key] : parseFloat(patch[key]);
+        if (!Number.isFinite(n) || n < 0) {
+          return res.status(400).json({ success: false, error: `${key} must be a non-negative number` });
+        }
+        patch[key] = n;
+      }
+
+      const db = getDb();
+      const employee = db.prepare(`
+        SELECT * FROM sales_employees WHERE code = ? AND company = ?
+      `).get(code, company);
+      if (!employee) {
+        return res.status(404).json({ success: false, error: 'employee not found' });
+      }
+
+      let cycle;
+      try {
+        cycle = deriveCycle(month, year);
+      } catch (e) {
+        return res.status(400).json({ success: false, error: `Invalid cycle: ${e.message}` });
+      }
+
+      const existing = db.prepare(`
+        SELECT * FROM sales_ta_da_monthly_inputs
+         WHERE employee_id = ? AND month = ? AND year = ? AND company = ?
+      `).get(employee.id, month, year, company);
+
+      // Resolve days_worked for cross-field validation.
+      // Existing row → use its days_worked; otherwise look up attendance
+      // (sales_monthly_input.sheet_days_given) so a brand-new employee can
+      // PATCH without first running the cycle compute.
+      let daysWorked;
+      if (existing) {
+        daysWorked = existing.days_worked;
+      } else {
+        const attRow = db.prepare(`
+          SELECT smi.sheet_days_given
+            FROM sales_monthly_input smi
+            JOIN sales_uploads su ON su.id = smi.upload_id
+           WHERE smi.employee_code = ? AND smi.month = ? AND smi.year = ? AND smi.company = ?
+             AND su.status IN ('matched', 'computed')
+           ORDER BY su.uploaded_at DESC
+           LIMIT 1
+        `).get(code, month, year, company);
+        daysWorked = attRow ? Math.round(parseFloat(attRow.sheet_days_given) || 0) : 0;
+      }
+
+      // Merge patch over existing (or defaults) — used for cross-field validation
+      // AND as the row body for INSERT-on-no-existing-row.
+      const merged = {
+        in_city_days:    existing ? existing.in_city_days    : null,
+        outstation_days: existing ? existing.outstation_days : null,
+        total_km:        existing ? existing.total_km        : null,
+        bike_km:         existing ? existing.bike_km         : null,
+        car_km:          existing ? existing.car_km          : null,
+        notes:           existing ? existing.notes           : null,
+      };
+      for (const key of ALLOWED) {
+        if (Object.prototype.hasOwnProperty.call(patch, key)) merged[key] = patch[key];
+      }
+
+      // Cross-field: in_city + outstation must not exceed days_worked.
+      const ic = merged.in_city_days;
+      const os = merged.outstation_days;
+      if (ic !== null && os !== null && Number.isFinite(ic) && Number.isFinite(os)) {
+        const sum = ic + os;
+        if (sum > daysWorked) {
+          return res.status(400).json({
+            success: false,
+            error: `split exceeds days_worked (${ic} + ${os} > ${daysWorked})`,
+          });
+        }
+      }
+
+      const user = req.user?.username || 'unknown';
+      const sourceDetail = `PATCH by ${user}`;
+
+      db.transaction(() => {
+        if (existing) {
+          db.prepare(`
+            UPDATE sales_ta_da_monthly_inputs
+               SET in_city_days     = ?,
+                   outstation_days  = ?,
+                   total_km         = ?,
+                   bike_km          = ?,
+                   car_km           = ?,
+                   notes            = ?,
+                   source           = 'manual',
+                   source_detail    = ?,
+                   cycle_start_date = ?,
+                   cycle_end_date   = ?,
+                   updated_at       = datetime('now'),
+                   updated_by       = ?
+             WHERE id = ?
+          `).run(
+            merged.in_city_days, merged.outstation_days,
+            merged.total_km, merged.bike_km, merged.car_km,
+            merged.notes,
+            sourceDetail,
+            cycle.start, cycle.end,
+            user,
+            existing.id
+          );
+        } else {
+          db.prepare(`
+            INSERT INTO sales_ta_da_monthly_inputs
+              (employee_id, employee_code, month, year, company,
+               cycle_start_date, cycle_end_date,
+               days_worked, in_city_days, outstation_days,
+               total_km, bike_km, car_km,
+               source, source_detail, notes,
+               created_at, created_by, updated_at, updated_by)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+                    'manual', ?, ?,
+                    datetime('now'), ?, datetime('now'), ?)
+          `).run(
+            employee.id, code, month, year, company,
+            cycle.start, cycle.end,
+            daysWorked,
+            merged.in_city_days, merged.outstation_days,
+            merged.total_km, merged.bike_km, merged.car_km,
+            sourceDetail, merged.notes,
+            user, user
+          );
+        }
+      })();
+
+      writeAuditP2(db, 'sales_ta_da_monthly_inputs', {
+        recordId: existing ? existing.id : 0,
+        field: 'inputs_patch',
+        oldVal: existing ? JSON.stringify({
+          in_city_days:    existing.in_city_days,
+          outstation_days: existing.outstation_days,
+          total_km:        existing.total_km,
+          bike_km:         existing.bike_km,
+          car_km:          existing.car_km,
+          notes:           existing.notes,
+        }) : '',
+        newVal: JSON.stringify(merged),
+        user,
+        actionType: 'tada_inputs_patch',
+        remark: `PATCH inputs ${code} ${month}/${year}/${company}`,
+        empCode: code,
+      });
+
+      // Trigger Phase β recompute for this single employee.
+      const summary = taDaCompute.recomputeCycle(db, {
+        month, year, company,
+        cycleStart: cycle.start, cycleEnd: cycle.end,
+        computedBy: user,
+        requestId: req.requestId || null,
+        triggerSource: 'manual:inputs_patch',
+        employeeCode: code,
+      });
+      if (summary.errors && summary.errors.length > 0) {
+        return res.status(500).json({
+          success: false,
+          error: `recompute failed: ${summary.errors[0].error}`,
+        });
+      }
+
+      const { computation } = taDaCompute.getComputation(db, {
+        employeeCode: code, month, year, company,
+      });
+
+      res.json({ success: true, data: { computation } });
+    } catch (e) {
+      console.error('[ta-da/inputs]', e?.stack || e);
+      res.status(500).json({ success: false, error: e?.message || 'patch failed' });
+    }
   });
 
 router.use(requireHrOrAdmin);
