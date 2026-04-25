@@ -770,7 +770,7 @@ router.post('/ta-da/upload/:class',
       // Mid-loop failure ⇒ some rows committed before the error.
       // Surface partial-failure shape so HR can re-upload only the failed rows.
       if (computeErrors.length > 0) {
-        return res.status(207).json({
+        return res.status(200).json({
           success: false,
           data: {
             parsed: rows.length,
