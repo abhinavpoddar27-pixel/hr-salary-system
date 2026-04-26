@@ -545,4 +545,22 @@ export const salesTaDaRequestApprove      = (id)         => api.post(`/sales/ta-
 export const salesTaDaRequestReject       = (id, data)   => api.post(`/sales/ta-da-requests/${id}/reject`, data)
 export const salesTaDaRequestCancel       = (id)         => api.post(`/sales/ta-da-requests/${id}/cancel`)
 
+// ── Sales TA/DA Compute + Register + Exports (Phase 3) ──
+export const salesTaDaCompute        = (data)                  => api.post('/sales/ta-da/compute', data)
+export const salesTaDaRegister       = (params = {})           => api.get('/sales/ta-da/register', { params })
+export const salesTaDaEmployeeDetail = (code, params = {})     => api.get(`/sales/ta-da/employee/${encodeURIComponent(code)}`, { params })
+export const salesTaDaInputsPatch    = (code, params, body)    => api.patch(`/sales/ta-da/inputs/${encodeURIComponent(code)}`, body, { params })
+
+const buildQuery = (params = {}) => {
+  const qs = new URLSearchParams()
+  Object.entries(params).forEach(([k, v]) => {
+    if (v !== undefined && v !== null && v !== '') qs.append(k, v)
+  })
+  return qs.toString()
+}
+export const salesTaDaExcelDownloadUrl = ({ month, year, company, status } = {}) =>
+  `/api/sales/ta-da/export/excel?${buildQuery({ month, year, company, status, download: 'true' })}`
+export const salesTaDaNeftDownloadUrl = ({ month, year, company, mode } = {}) =>
+  `/api/sales/ta-da/export/neft?${buildQuery({ month, year, company, mode, download: 'true' })}`
+
 export default api
