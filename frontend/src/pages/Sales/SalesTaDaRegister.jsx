@@ -5,6 +5,7 @@ import clsx from 'clsx'
 import {
   salesTaDaRegister,
   salesTaDaCompute,
+  salesTaDaInputsPatch,
   salesTaDaExcelDownloadUrl,
   salesTaDaNeftDownloadUrl,
   salesTaDaNeftPreview,
@@ -198,6 +199,231 @@ function NeftConfirmModal({ mode, month, year, company, onCancel }) {
   )
 }
 
+// Which input fields are editable per TA/DA class. Distinct from
+// `ratesForClass()` in taDaClassLabels.js which lists the *rate* fields
+// (da_rate, ta_rate_primary, etc.) — those live on the employee master,
+// not on the monthly input. Inputs are HR/finance-entered each cycle.
+function inputFieldsForClass(c) {
+  switch (Number(c)) {
+    case 2: return ['in_city_days', 'outstation_days']
+    case 3: return ['total_km']
+    case 4: return ['in_city_days', 'outstation_days', 'total_km']
+    case 5: return ['in_city_days', 'outstation_days', 'bike_km', 'car_km']
+    default: return []   // class 0 / 1 / unknown → notes-only
+  }
+}
+
+const INPUT_LABELS = {
+  in_city_days:    'In-city days',
+  outstation_days: 'Outstation days',
+  total_km:        'Total km',
+  bike_km:         'Bike km',
+  car_km:          'Car km',
+}
+
+function EditInputsModal({ target, month, year, company, onClose }) {
+  const qc = useQueryClient()
+
+  // Initialize form state from the register row's monthly-input fields.
+  // Empty string means "no value, will be sent as null on PATCH" — keeps
+  // controlled inputs working without React warnings.
+  const initial = useMemo(() => ({
+    in_city_days:    target.in_city_days    ?? '',
+    outstation_days: target.outstation_days ?? '',
+    total_km:        target.total_km        ?? '',
+    bike_km:         target.bike_km         ?? '',
+    car_km:          target.car_km          ?? '',
+    notes:           target.input_notes     ?? '',
+  }), [target])
+
+  const [form, setForm] = useState(initial)
+  const [serverError, setServerError] = useState('')
+
+  const taDaClass = target.ta_da_class_at_compute
+  const daysWorked = Number(target.days_worked_at_compute || 0)
+  const visibleFields = inputFieldsForClass(taDaClass)
+  const isClass0 = Number(taDaClass) === 0
+  const isClass1 = Number(taDaClass) === 1
+
+  // ── Validation ──
+  const errors = useMemo(() => {
+    const e = {}
+    for (const k of ['in_city_days', 'outstation_days', 'total_km', 'bike_km', 'car_km']) {
+      const v = form[k]
+      if (v === '' || v === null || v === undefined) continue
+      const n = typeof v === 'number' ? v : parseFloat(v)
+      if (!Number.isFinite(n) || n < 0) {
+        e[k] = 'Must be a non-negative number'
+      }
+    }
+    // Cross-field: in_city + outstation ≤ days_worked
+    const ic = form.in_city_days === '' ? null : parseFloat(form.in_city_days)
+    const os = form.outstation_days === '' ? null : parseFloat(form.outstation_days)
+    if (ic !== null && os !== null && Number.isFinite(ic) && Number.isFinite(os)) {
+      const sum = ic + os
+      if (sum > daysWorked) {
+        const msg = `Split exceeds days worked: ${sum} > ${daysWorked}`
+        e.in_city_days = e.in_city_days || msg
+        e.outstation_days = e.outstation_days || msg
+      }
+    }
+    return e
+  }, [form, daysWorked])
+
+  const hasErrors = Object.keys(errors).length > 0
+  const isDirty = (
+    form.notes !== initial.notes ||
+    form.in_city_days !== initial.in_city_days ||
+    form.outstation_days !== initial.outstation_days ||
+    form.total_km !== initial.total_km ||
+    form.bike_km !== initial.bike_km ||
+    form.car_km !== initial.car_km
+  )
+
+  const handleChange = (key, value) => {
+    setForm(prev => ({ ...prev, [key]: value }))
+    setServerError('')
+  }
+
+  const buildPatchBody = () => {
+    const body = {}
+    const numericKeys = ['in_city_days', 'outstation_days', 'total_km', 'bike_km', 'car_km']
+    for (const k of numericKeys) {
+      if (form[k] !== initial[k]) {
+        body[k] = form[k] === '' ? null : Number(form[k])
+      }
+    }
+    if (form.notes !== initial.notes) body.notes = form.notes === '' ? null : form.notes
+    return body
+  }
+
+  const saveMut = useMutation({
+    mutationFn: (body) => salesTaDaInputsPatch(target.employee_code, { month, year, company }, body),
+    onSuccess: (r) => {
+      const computation = r?.data?.data?.computation
+      const newStatus = computation?.status || 'updated'
+      toast.success(`Updated. Status: ${newStatus}`)
+      qc.invalidateQueries({ queryKey: ['sales-ta-da-register'] })
+      onClose()
+    },
+    onError: (err) => {
+      const status = err?.response?.status
+      const msg = err?.response?.data?.error || err?.message || 'Update failed'
+      // 400 → keep modal open so HR can correct; 500/network → show inline
+      // server error and let HR retry or cancel.
+      if (status === 400 || status === 500) {
+        setServerError(msg)
+      } else {
+        toast.error(msg)
+      }
+    },
+  })
+
+  const handleSave = () => {
+    if (hasErrors) return
+    const body = buildPatchBody()
+    if (Object.keys(body).length === 0) {
+      toast.error('No changes to save')
+      return
+    }
+    setServerError('')
+    saveMut.mutate(body)
+  }
+
+  const NumberInput = ({ field }) => (
+    <div>
+      <label className="block text-xs font-medium text-slate-600 mb-1">
+        {INPUT_LABELS[field]}
+      </label>
+      <input
+        type="number"
+        step="0.5"
+        min="0"
+        value={form[field]}
+        onChange={e => handleChange(field, e.target.value)}
+        className={clsx(
+          'w-full border rounded px-2 py-1.5 text-sm',
+          errors[field] ? 'border-red-400' : 'border-slate-300'
+        )}
+      />
+      {errors[field] && (
+        <p className="text-xs text-red-600 mt-0.5">{errors[field]}</p>
+      )}
+    </div>
+  )
+
+  return (
+    <Modal
+      open
+      onClose={() => !saveMut.isPending && onClose()}
+      title={`Edit TA/DA Inputs — ${target.employee_code} ${target.employee_name || ''}`.trim()}
+      size="lg"
+    >
+      <div className="space-y-4">
+        <div className="text-xs text-slate-500">
+          Class: <strong className="text-slate-700">{classLabel(taDaClass)}</strong>
+          {' · '}Days worked: <strong className="text-slate-700">{daysWorked}</strong>
+        </div>
+
+        {isClass0 && (
+          <div className="text-sm text-amber-800 bg-amber-50 border border-amber-200 rounded p-2">
+            Class 0: HR review required. No edits allowed.
+          </div>
+        )}
+        {isClass1 && (
+          <div className="text-sm text-blue-800 bg-blue-50 border border-blue-200 rounded p-2">
+            Class 1: auto-computed from days worked. No inputs needed.
+          </div>
+        )}
+
+        {visibleFields.length > 0 && (
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            {visibleFields.map(f => <NumberInput key={f} field={f} />)}
+          </div>
+        )}
+
+        <div>
+          <label className="block text-xs font-medium text-slate-600 mb-1">
+            Notes
+          </label>
+          <textarea
+            rows={3}
+            value={form.notes}
+            onChange={e => handleChange('notes', e.target.value)}
+            placeholder="Optional remark — context for finance/audit"
+            className="w-full border border-slate-300 rounded px-2 py-1.5 text-sm"
+          />
+        </div>
+
+        {serverError && (
+          <div className="text-xs text-red-700 bg-red-50 border border-red-200 rounded p-2">
+            <strong>Error:</strong> {serverError}
+          </div>
+        )}
+
+        <div className="flex justify-end gap-2 pt-2 border-t">
+          <button
+            type="button"
+            onClick={onClose}
+            disabled={saveMut.isPending}
+            className="px-3 py-1.5 text-sm rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700 disabled:opacity-50"
+          >
+            Cancel
+          </button>
+          <button
+            type="button"
+            onClick={handleSave}
+            disabled={hasErrors || !isDirty || saveMut.isPending}
+            className="px-4 py-1.5 text-sm rounded-lg bg-blue-600 hover:bg-blue-700 disabled:bg-slate-300 disabled:cursor-not-allowed text-white font-medium"
+          >
+            {saveMut.isPending ? 'Saving…' : 'Save'}
+          </button>
+        </div>
+      </div>
+    </Modal>
+  )
+}
+
 export default function SalesTaDaRegister() {
   const qc = useQueryClient()
   const {
@@ -212,6 +438,8 @@ export default function SalesTaDaRegister() {
   const [showRecomputeConfirm, setShowRecomputeConfirm] = useState(false)
   // null | 'computed_only' | 'all'
   const [showNeftConfirm, setShowNeftConfirm] = useState(null)
+  // null | row object
+  const [editTarget, setEditTarget] = useState(null)
 
   const ready = !!selectedCompany && !!selectedMonth && !!selectedYear
 
@@ -283,8 +511,7 @@ export default function SalesTaDaRegister() {
   }
 
   const handleEdit = (row) => {
-    // TODO 5c-iv: open EditModal
-    console.log('TODO: edit', row)
+    setEditTarget(row)
   }
 
   const handleDetails = (row) => {
@@ -530,6 +757,17 @@ export default function SalesTaDaRegister() {
           year={selectedYear}
           company={selectedCompany}
           onCancel={() => setShowNeftConfirm(null)}
+        />
+      )}
+
+      {/* Edit Inputs modal */}
+      {editTarget && (
+        <EditInputsModal
+          target={editTarget}
+          month={selectedMonth}
+          year={selectedYear}
+          company={selectedCompany}
+          onClose={() => setEditTarget(null)}
         />
       )}
     </div>
