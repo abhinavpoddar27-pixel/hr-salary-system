@@ -562,5 +562,10 @@ export const salesTaDaExcelDownloadUrl = ({ month, year, company, status } = {})
   `/api/sales/ta-da/export/excel?${buildQuery({ month, year, company, status, download: 'true' })}`
 export const salesTaDaNeftDownloadUrl = ({ month, year, company, mode } = {}) =>
   `/api/sales/ta-da/export/neft?${buildQuery({ month, year, company, mode, download: 'true' })}`
+// Preview (download=false): returns JSON {rows, missing, totals, mode} without
+// stamping neft_exported_at. Used by the register page to show HR a confirm
+// modal with the include/exclude counts before kicking off the actual download.
+export const salesTaDaNeftPreview = ({ month, year, company, mode } = {}) =>
+  api.get('/sales/ta-da/export/neft', { params: { month, year, company, mode } })
 
 export default api

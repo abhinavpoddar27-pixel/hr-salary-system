@@ -1,12 +1,17 @@
 import React, { useState, useMemo } from 'react'
-import { useQuery } from '@tanstack/react-query'
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
+import toast from 'react-hot-toast'
 import clsx from 'clsx'
 import {
   salesTaDaRegister,
+  salesTaDaCompute,
   salesTaDaExcelDownloadUrl,
+  salesTaDaNeftDownloadUrl,
+  salesTaDaNeftPreview,
 } from '../../utils/api'
 import { useAppStore } from '../../store/appStore'
 import CompanyFilter from '../../components/shared/CompanyFilter'
+import Modal from '../../components/ui/Modal'
 import {
   classLabel,
   computationStatusLabel,
@@ -117,7 +122,84 @@ function TACell({ row }) {
   return <span className="font-mono text-sm">₹{fmtINR(total)}</span>
 }
 
+const NEFT_MODE_LABELS = {
+  computed_only: 'Computed only',
+  all:           'All eligible (Computed + Partial)',
+}
+
+function NeftConfirmModal({ mode, month, year, company, onCancel }) {
+  const { data, isLoading, isError, error } = useQuery({
+    queryKey: ['sales-ta-da-neft-preview', month, year, company, mode],
+    queryFn: () => salesTaDaNeftPreview({ month, year, company, mode }),
+    enabled: !!month && !!year && !!company && !!mode,
+    retry: 0,
+  })
+  const preview = data?.data?.data || {}
+  const totals = preview.totals || { count: 0, totalAmount: 0 }
+  const missing = Array.isArray(preview.missing) ? preview.missing : []
+
+  const handleDownload = () => {
+    const url = salesTaDaNeftDownloadUrl({ month, year, company, mode })
+    window.open(url, '_blank')
+    onCancel()
+  }
+
+  return (
+    <Modal open onClose={onCancel} title={`Download NEFT — ${NEFT_MODE_LABELS[mode] || mode}`} size="md">
+      <div className="space-y-4">
+        {isLoading && (
+          <p className="text-sm text-slate-500">Loading preview…</p>
+        )}
+        {isError && (
+          <p className="text-sm text-red-600">
+            Preview failed: {error?.response?.data?.error || error?.message || 'unknown error'}
+          </p>
+        )}
+        {!isLoading && !isError && (
+          <>
+            <p className="text-sm text-slate-700">
+              Ready: <strong>{totals.count}</strong> employee(s) included.
+              {missing.length > 0 ? (
+                <>
+                  {' '}<strong>{missing.length}</strong> excluded due to missing bank details
+                  <span className="block mt-1 text-xs text-slate-500 font-mono">
+                    {missing.map(m => m.employee_code || m).join(', ')}
+                  </span>
+                </>
+              ) : (
+                <> No employees excluded.</>
+              )}
+            </p>
+            <p className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded p-2">
+              On download, <code>neft_exported_at</code> will be stamped on every included row.
+              Continue?
+            </p>
+          </>
+        )}
+        <div className="flex justify-end gap-2 pt-2 border-t">
+          <button
+            type="button"
+            onClick={onCancel}
+            className="px-3 py-1.5 text-sm rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700"
+          >
+            Cancel
+          </button>
+          <button
+            type="button"
+            onClick={handleDownload}
+            disabled={isLoading || isError || totals.count === 0}
+            className="px-4 py-1.5 text-sm rounded-lg bg-indigo-600 hover:bg-indigo-700 disabled:bg-slate-300 disabled:cursor-not-allowed text-white font-medium"
+          >
+            Download
+          </button>
+        </div>
+      </div>
+    </Modal>
+  )
+}
+
 export default function SalesTaDaRegister() {
+  const qc = useQueryClient()
   const {
     selectedCompany,
     selectedMonth,
@@ -127,6 +209,9 @@ export default function SalesTaDaRegister() {
 
   const [statusFilter, setStatusFilter] = useState('')
   const [classFilter, setClassFilter] = useState('')
+  const [showRecomputeConfirm, setShowRecomputeConfirm] = useState(false)
+  // null | 'computed_only' | 'all'
+  const [showNeftConfirm, setShowNeftConfirm] = useState(null)
 
   const ready = !!selectedCompany && !!selectedMonth && !!selectedYear
 
@@ -151,6 +236,26 @@ export default function SalesTaDaRegister() {
   const rows   = res?.data?.data?.rows   || []
   const totals = res?.data?.data?.totals || { total_da: 0, total_ta: 0, total_payable: 0, count: 0 }
 
+  const recomputeMut = useMutation({
+    mutationFn: () => salesTaDaCompute({
+      month: selectedMonth,
+      year: selectedYear,
+      company: selectedCompany,
+    }),
+    onSuccess: (r) => {
+      const d = r?.data?.data || {}
+      const errCount = Array.isArray(d.errors) ? d.errors.length : 0
+      const errSuffix = errCount > 0 ? `, ${errCount} error(s)` : ''
+      toast.success(`Recomputed: ${d.computed || 0} computed, ${d.partial || 0} partial, ${d.flagged || 0} flagged${errSuffix}`)
+      qc.invalidateQueries({ queryKey: ['sales-ta-da-register'] })
+      setShowRecomputeConfirm(false)
+    },
+    onError: (err) => {
+      toast.error(err?.response?.data?.error || 'Recompute failed')
+      setShowRecomputeConfirm(false)
+    },
+  })
+
   const handleExportExcel = () => {
     if (!ready) return
     const url = salesTaDaExcelDownloadUrl({
@@ -163,18 +268,18 @@ export default function SalesTaDaRegister() {
   }
 
   const handleRecompute = () => {
-    // TODO 5c-ii: open RecomputeConfirm modal → salesTaDaCompute mutation
-    console.log('TODO: recompute', { month: selectedMonth, year: selectedYear, company: selectedCompany })
+    if (!ready) return
+    setShowRecomputeConfirm(true)
   }
 
   const handleNeftComputed = () => {
-    // TODO 5c-iii: open NEFT confirm modal (mode=computed_only)
-    console.log('TODO: NEFT (Computed)', queryParams)
+    if (!ready) return
+    setShowNeftConfirm('computed_only')
   }
 
   const handleNeftAll = () => {
-    // TODO 5c-iii: open NEFT confirm modal (mode=all)
-    console.log('TODO: NEFT (All)', queryParams)
+    if (!ready) return
+    setShowNeftConfirm('all')
   }
 
   const handleEdit = (row) => {
@@ -376,6 +481,56 @@ export default function SalesTaDaRegister() {
             </span>
           </div>
         </div>
+      )}
+
+      {/* Recompute confirmation modal */}
+      {showRecomputeConfirm && (
+        <Modal
+          open
+          onClose={() => !recomputeMut.isPending && setShowRecomputeConfirm(false)}
+          title="Recompute TA/DA Cycle"
+          size="md"
+        >
+          <div className="space-y-4">
+            <p className="text-sm text-slate-700">
+              This will recompute TA/DA for all employees in{' '}
+              <strong>{MONTHS[selectedMonth]} {selectedYear}</strong> · {selectedCompany}.
+              Manual edits to inputs will be preserved; outputs will be regenerated. Continue?
+            </p>
+            <p className="text-xs text-slate-500">
+              {cycleSubtitle(selectedMonth, selectedYear)}
+            </p>
+            <div className="flex justify-end gap-2 pt-2 border-t">
+              <button
+                type="button"
+                onClick={() => setShowRecomputeConfirm(false)}
+                disabled={recomputeMut.isPending}
+                className="px-3 py-1.5 text-sm rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700 disabled:opacity-50"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={() => recomputeMut.mutate()}
+                disabled={recomputeMut.isPending}
+                className="px-4 py-1.5 text-sm rounded-lg bg-blue-600 hover:bg-blue-700 disabled:bg-slate-300 disabled:cursor-not-allowed text-white font-medium"
+              >
+                {recomputeMut.isPending ? 'Recomputing…' : 'Recompute'}
+              </button>
+            </div>
+          </div>
+        </Modal>
+      )}
+
+      {/* NEFT confirmation modal (computed_only or all) */}
+      {showNeftConfirm && ready && (
+        <NeftConfirmModal
+          mode={showNeftConfirm}
+          month={selectedMonth}
+          year={selectedYear}
+          company={selectedCompany}
+          onCancel={() => setShowNeftConfirm(null)}
+        />
       )}
     </div>
   )
