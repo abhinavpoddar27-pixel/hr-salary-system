@@ -1,3 +1,36 @@
+## Section 0: Last Session
+- **Date:** 2026-04-27
+- **Branch:** `main` (Phase 3 feature branch `claude/sales-phase3-tada-compute-nqe1h` retained as recovery point — NOT deleted)
+- **Last commit:** `1d79d99` docs: Phase 3 session handoff (TA/DA compute + register + upload shipped)
+- **Files changed this session:**
+  - `frontend/src/pages/Sales/SalesTaDaRegister.jsx` — NEW (970 lines). Built across 4 split commits (5c-i skeleton → 5c-ii recompute+NEFT modals → 5c-iii Edit Inputs modal → 5c-iv Detail modal + per-employee recompute). Split was deliberate to dodge stream-timeout crashes that killed earlier attempts.
+  - `frontend/src/pages/Sales/SalesTaDaUpload.jsx` — NEW (554 lines). 4 class tabs, client-side template generation via SheetJS, drag-drop, client-side parser preview, three-branch result handling (success / partial / parser_error).
+  - `frontend/src/utils/cycleUtil.js` — NEW. Single source of truth for `cycleSubtitle()` — extracted from 3 inline duplicates in SalesSalaryCompute.jsx, SalesTaDaRegister.jsx, SalesTaDaUpload.jsx.
+  - `frontend/src/utils/api.js` — added 6 helpers: `salesTaDaCompute`, `salesTaDaRegister`, `salesTaDaEmployeeDetail`, `salesTaDaInputsPatch`, `salesTaDaNeftPreview`, `salesTaDaUpload` (multipart). Excel/NEFT URL builders pre-existed from 5a.
+  - `frontend/src/pages/Sales/SalesSalaryCompute.jsx` — replaced inline `cycleSubtitle` with import from cycleUtil.
+  - `frontend/src/App.jsx` — 2 lazy imports + 2 routes for `/sales/ta-da-register` and `/sales/ta-da-upload`.
+  - `frontend/src/components/layout/Sidebar.jsx` — 2 entries added to Sales section, gated `salesAllowed: true` (HR + admin only).
+  - `frontend/dist/*` — rebuilt 4 times (separate commits, one per source-commit batch).
+  - `CLAUDE.md` — Phase 3 narrative block prepended (commit `1d79d99`); this canonical Section 0 prepended on top of that.
+- **What was fixed/built:** Completed Phase 3 frontend (Register page + Upload page + sidebar wiring + cycleUtil extract). Then merged feature branch into main via non-ff merge commit `75c1324` after a `git merge-tree` pre-check confirmed zero conflicts vs the one main-tip commit (`a978613` — unrelated OT-payable fix). Origin/main now at `1d79d99`.
+- **What's fragile:**
+  - **Phase 3 pages are unrouted at HR-test-time only on the feature branch's history**: the 12 Phase 3 commits in linear order have the routes wired only at step 7 (`c0bac2e`). If anyone bisects this range to debug a different bug, commits before `c0bac2e` will not surface the new pages even though the source files exist. Not a runtime issue — just a bisect gotcha.
+  - **NEFT preview-then-download race**: `NeftConfirmModal` calls `salesTaDaNeftPreview` (download=false), then on Confirm opens `salesTaDaNeftDownloadUrl(...)` in a new tab via `window.open`. Backend stamps `neft_exported_at` synchronously when the URL is hit; if the user closes the tab before the download finishes, the stamp is still set. Same fragility as plant NEFT — not a regression, but document if HR reports "marked exported but I don't have the file".
+  - **`cycleSubtitle` is now in 4 places' awareness**: cycleUtil.js (canonical), and 3 page files that import it. Backend has its own `deriveCycle` in `backend/src/services/cycleUtil.js`. If the (M-1)-26 → M-25 rule ever changes, BOTH frontend cycleUtil.js AND backend cycleUtil.js must update in lockstep. There's no automated cross-check.
+  - **Edit Inputs modal cross-field validation** (in_city + outstation ≤ days_worked) reads `target.days_worked_at_compute` from the register row. If the register row is stale (e.g. someone PATCHed inputs in another tab and the register hasn't refetched), the validation could permit a sum that the server then rejects. The server is source-of-truth so the worst case is a 400 toast — but HR may be confused.
+  - **Sidebar gate for new pages is `salesAllowed: true`** (HR + admin). Finance does NOT see Register or Upload — by design. If finance ever needs to view the register, the gate has to widen to `hrFinanceOrAdmin` AND the backend `requirePermission('sales-tada-compute')` has to widen too (or add a read-only `sales-tada-view` permission). Currently a deliberate restriction.
+  - **The non-ff merge `75c1324` puts `a978613` (OT-payable fix) inside the Phase 3 commit range when viewed via `git log --oneline`**. It's correct topologically (second-parent ancestor) but visually surprising — looks like a Phase 3 commit at first glance.
+- **Unfinished work:** None for Phase 3. All 7 steps shipped, merged, and pushed.
+- **Known issues remaining:**
+  - Production smoke test on Railway not yet performed (login → navigate to Register → click around).
+  - No real Feb 2026 PAYABLE sheet from HR yet — without it, no ground-truth E2E validation of compute correctness.
+  - Most master employees have NULL `ifsc` → NEFT export excludes them with `X-Missing-Bank-Details` warning header. HR must fill IFSC via Sales Employee Master before NEFT can include them. By-design behavior, not a bug.
+  - `MONTHS` constant is now triplicated across `SalesTaDaRegister.jsx`, `SalesTaDaUpload.jsx`, `SalesSalaryCompute.jsx` (separate from the cycleUtil's own MONTHS). Low-priority follow-up extract.
+  - Phase 3 feature branch `claude/sales-phase3-tada-compute-nqe1h` retained on origin as recovery point — delete only after production smoke test passes cleanly.
+- **Next session should:** Run a production smoke test on Railway against `1d79d99`: (a) login as HR, navigate to Sales → TA/DA Register, verify cycle subtitle reads correctly for the current month/year, verify table renders even if empty, click Recompute → confirm → verify it doesn't 500; (b) Sales → TA/DA Upload, click each of the 4 class tabs, download the empty template for each, verify filename format `TADA_Class{N}_Template_{MMM}_{YYYY}.xlsx`; (c) NEFT preview button — verify the missing-bank-details list surfaces. If smoke passes, delete the feature branch and start Phase 4 planning (real Feb 2026 PAYABLE sheet validation + Master IFSC fill-in workflow).
+
+---
+
 ## Last session: 2026-04-27 — Phase 3 (TA/DA Compute + Register + Upload) shipped
 
 **Status:** Phase 3 complete. Merged to main. Production deploy on Railway in progress (or live, depending on Railway lag).
