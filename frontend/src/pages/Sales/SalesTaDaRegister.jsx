@@ -5,6 +5,7 @@ import clsx from 'clsx'
 import {
   salesTaDaRegister,
   salesTaDaCompute,
+  salesTaDaEmployeeDetail,
   salesTaDaInputsPatch,
   salesTaDaExcelDownloadUrl,
   salesTaDaNeftDownloadUrl,
@@ -424,6 +425,188 @@ function EditInputsModal({ target, month, year, company, onClose }) {
   )
 }
 
+// Read-only key/value row used inside DetailViewModal sections.
+function DetailRow({ label, value, mono = false, highlight = false }) {
+  const display = (value === null || value === undefined || value === '') ? '—' : value
+  return (
+    <div className="flex justify-between items-baseline gap-3 py-1 border-b border-slate-100 last:border-b-0">
+      <span className="text-xs text-slate-500">{label}</span>
+      <span
+        className={clsx(
+          'text-sm text-right',
+          mono && 'font-mono',
+          highlight ? 'font-semibold text-slate-900' : 'text-slate-700'
+        )}
+      >
+        {display}
+      </span>
+    </div>
+  )
+}
+
+function DetailSection({ title, children }) {
+  return (
+    <div>
+      <h3 className="text-xs font-semibold uppercase text-slate-500 tracking-wide mb-1">
+        {title}
+      </h3>
+      <div className="bg-slate-50 border border-slate-200 rounded p-2">
+        {children}
+      </div>
+    </div>
+  )
+}
+
+function fmtRupees(n) {
+  if (n === null || n === undefined) return '—'
+  return `₹${fmtINR(n)}`
+}
+
+function DetailViewModal({ target, month, year, company, onClose }) {
+  const qc = useQueryClient()
+
+  const { data: res, isLoading, isError, error, refetch } = useQuery({
+    queryKey: ['sales-ta-da-employee-detail', target.code, month, year, company],
+    queryFn: () => salesTaDaEmployeeDetail(target.code, { month, year, company }),
+    enabled: !!target.code && !!month && !!year && !!company,
+    retry: 0,
+  })
+
+  const data       = res?.data?.data || {}
+  const employee   = data.employee   || {}
+  const cycle      = data.cycle      || {}
+  const computation = data.computation || null
+
+  const recomputeMut = useMutation({
+    mutationFn: () => salesTaDaCompute({
+      month, year, company, employeeCode: target.code,
+    }),
+    onSuccess: (r) => {
+      const d = r?.data?.data || {}
+      const errCount = Array.isArray(d.errors) ? d.errors.length : 0
+      const errSuffix = errCount > 0 ? `, ${errCount} error(s)` : ''
+      toast.success(`Recomputed ${target.code}: ${d.computed || 0} computed, ${d.partial || 0} partial, ${d.flagged || 0} flagged${errSuffix}`)
+      qc.invalidateQueries({ queryKey: ['sales-ta-da-register'] })
+      qc.invalidateQueries({ queryKey: ['sales-ta-da-employee-detail', target.code] })
+      refetch()
+    },
+    onError: (err) => {
+      toast.error(err?.response?.data?.error || 'Recompute failed')
+    },
+  })
+
+  return (
+    <Modal
+      open
+      onClose={() => !recomputeMut.isPending && onClose()}
+      title={`TA/DA Detail — ${target.code}${target.name ? ' ' + target.name : ''}`}
+      size="lg"
+    >
+      {isLoading && (
+        <p className="text-sm text-slate-500">Loading…</p>
+      )}
+      {isError && (
+        <p className="text-sm text-red-600">
+          Failed to load: {error?.response?.data?.error || error?.message || 'unknown error'}
+        </p>
+      )}
+      {!isLoading && !isError && (
+        <div className="space-y-4 max-h-[70vh] overflow-y-auto pr-1">
+          <DetailSection title="Identity">
+            <DetailRow label="Code"             value={employee.code} mono />
+            <DetailRow label="Name"             value={employee.name} />
+            <DetailRow label="Designation"      value={employee.designation} />
+            <DetailRow label="HQ"               value={employee.headquarters} />
+            <DetailRow label="City of Operation" value={employee.city_of_operation} />
+          </DetailSection>
+
+          <DetailSection title="Cycle">
+            <DetailRow label="Start"       value={cycle.start} mono />
+            <DetailRow label="End"         value={cycle.end} mono />
+            <DetailRow label="Length (days)" value={cycle.length_days} mono />
+          </DetailSection>
+
+          {!computation ? (
+            <div className="text-sm text-slate-500 bg-slate-50 border border-slate-200 rounded p-3">
+              No TA/DA computation exists for this employee in this cycle.
+              Click <strong>Recompute this employee</strong> to generate one.
+            </div>
+          ) : (
+            <>
+              <DetailSection title="Inputs at Compute">
+                <DetailRow label="Class"          value={classLabel(computation.ta_da_class_at_compute)} />
+                <DetailRow label="Days worked"    value={computation.days_worked_at_compute} mono />
+                <DetailRow label="In-city days"   value={computation.in_city_days_at_compute} mono />
+                <DetailRow label="Outstation days" value={computation.outstation_days_at_compute} mono />
+                <DetailRow label="Total km"       value={computation.total_km_at_compute} mono />
+                <DetailRow label="Bike km"        value={computation.bike_km_at_compute} mono />
+                <DetailRow label="Car km"         value={computation.car_km_at_compute} mono />
+              </DetailSection>
+
+              <DetailSection title="Rates at Compute">
+                <DetailRow label="DA rate (in-city)"     value={fmtRupees(computation.da_rate_at_compute)} mono />
+                <DetailRow label="DA rate (outstation)"  value={fmtRupees(computation.da_outstation_rate_at_compute)} mono />
+                <DetailRow label="TA rate (primary)"     value={fmtRupees(computation.ta_rate_primary_at_compute)} mono />
+                <DetailRow label="TA rate (secondary)"   value={fmtRupees(computation.ta_rate_secondary_at_compute)} mono />
+              </DetailSection>
+
+              <DetailSection title="Outputs">
+                <DetailRow label="DA (in-city)"     value={fmtRupees(computation.da_local_amount)} mono />
+                <DetailRow label="DA (outstation)"  value={fmtRupees(computation.da_outstation_amount)} mono />
+                <DetailRow label="Total DA"         value={fmtRupees(computation.total_da)} mono highlight />
+                <DetailRow label="TA (primary)"     value={fmtRupees(computation.ta_primary_amount)} mono />
+                <DetailRow label="TA (secondary)"   value={fmtRupees(computation.ta_secondary_amount)} mono />
+                <DetailRow label="Total TA"         value={fmtRupees(computation.total_ta)} mono highlight />
+                <DetailRow label="Total Payable"    value={fmtRupees(computation.total_payable)} mono highlight />
+              </DetailSection>
+
+              <DetailSection title="Status">
+                <div className="flex justify-between items-center py-1 border-b border-slate-100">
+                  <span className="text-xs text-slate-500">Status</span>
+                  <span className={clsx(
+                    'inline-block px-2 py-0.5 rounded-full text-xs font-medium border',
+                    computationStatusBadgeClass(computation.status)
+                  )}>
+                    {computationStatusLabel(computation.status)}
+                  </span>
+                </div>
+                <DetailRow label="Computation notes" value={computation.computation_notes} />
+              </DetailSection>
+
+              <DetailSection title="Audit">
+                <DetailRow label="Computed at"      value={computation.computed_at} mono />
+                <DetailRow label="Computed by"      value={computation.computed_by} />
+                <DetailRow label="NEFT exported at" value={computation.neft_exported_at} mono />
+                <DetailRow label="NEFT exported by" value={computation.neft_exported_by} />
+                <DetailRow label="Paid at"          value={computation.paid_at} mono />
+              </DetailSection>
+            </>
+          )}
+        </div>
+      )}
+
+      <div className="flex justify-between items-center gap-2 pt-3 mt-3 border-t">
+        <button
+          type="button"
+          onClick={() => recomputeMut.mutate()}
+          disabled={recomputeMut.isPending || isLoading || isError}
+          className="px-3 py-1.5 text-sm rounded-lg bg-blue-600 hover:bg-blue-700 disabled:bg-slate-300 disabled:cursor-not-allowed text-white font-medium"
+        >
+          {recomputeMut.isPending ? 'Recomputing…' : 'Recompute this employee'}
+        </button>
+        <button
+          type="button"
+          onClick={onClose}
+          disabled={recomputeMut.isPending}
+          className="px-3 py-1.5 text-sm rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700 disabled:opacity-50"
+        >
+          Close
+        </button>
+      </div>
+    </Modal>
+  )
+}
+
 export default function SalesTaDaRegister() {
   const qc = useQueryClient()
   const {
@@ -440,6 +623,8 @@ export default function SalesTaDaRegister() {
   const [showNeftConfirm, setShowNeftConfirm] = useState(null)
   // null | row object
   const [editTarget, setEditTarget] = useState(null)
+  // null | { code, name }
+  const [detailTarget, setDetailTarget] = useState(null)
 
   const ready = !!selectedCompany && !!selectedMonth && !!selectedYear
 
@@ -515,8 +700,7 @@ export default function SalesTaDaRegister() {
   }
 
   const handleDetails = (row) => {
-    // TODO 5c-iv: open DetailModal
-    console.log('TODO: detail', row)
+    setDetailTarget({ code: row.employee_code, name: row.employee_name })
   }
 
   return (
@@ -768,6 +952,17 @@ export default function SalesTaDaRegister() {
           year={selectedYear}
           company={selectedCompany}
           onClose={() => setEditTarget(null)}
+        />
+      )}
+
+      {/* Detail (read-only) modal */}
+      {detailTarget && (
+        <DetailViewModal
+          target={detailTarget}
+          month={selectedMonth}
+          year={selectedYear}
+          company={selectedCompany}
+          onClose={() => setDetailTarget(null)}
         />
       )}
     </div>
