@@ -545,4 +545,42 @@ export const salesTaDaRequestApprove      = (id)         => api.post(`/sales/ta-
 export const salesTaDaRequestReject       = (id, data)   => api.post(`/sales/ta-da-requests/${id}/reject`, data)
 export const salesTaDaRequestCancel       = (id)         => api.post(`/sales/ta-da-requests/${id}/cancel`)
 
+// ── Sales TA/DA Compute + Register + Exports (Phase 3) ──
+export const salesTaDaCompute        = (data)                  => api.post('/sales/ta-da/compute', data)
+export const salesTaDaRegister       = (params = {})           => api.get('/sales/ta-da/register', { params })
+export const salesTaDaEmployeeDetail = (code, params = {})     => api.get(`/sales/ta-da/employee/${encodeURIComponent(code)}`, { params })
+export const salesTaDaInputsPatch    = (code, params, body)    => api.patch(`/sales/ta-da/inputs/${encodeURIComponent(code)}`, body, { params })
+// Phase β bulk upload for classes 2/3/4/5. Sends a multipart form with the
+// .xlsx + month/year/company. Backend response shapes:
+//   200 success      → { success: true,  data: { parsed, valid, invalid, updated, errors } }
+//   200 partial      → { success: false, partial: true, data, succeeded:[], failed:[], note }
+//   400 parser error → { success: false, parsed, valid, invalid, errors:[{row, employee_code, error}] }
+export const salesTaDaUpload = (classNum, file, { month, year, company } = {}) => {
+  const fd = new FormData()
+  fd.append('file', file)
+  if (month !== undefined && month !== null) fd.append('month',   month)
+  if (year  !== undefined && year  !== null) fd.append('year',    year)
+  if (company)                                fd.append('company', company)
+  return api.post(`/sales/ta-da/upload/${classNum}`, fd, {
+    headers: { 'Content-Type': 'multipart/form-data' },
+  })
+}
+
+const buildQuery = (params = {}) => {
+  const qs = new URLSearchParams()
+  Object.entries(params).forEach(([k, v]) => {
+    if (v !== undefined && v !== null && v !== '') qs.append(k, v)
+  })
+  return qs.toString()
+}
+export const salesTaDaExcelDownloadUrl = ({ month, year, company, status } = {}) =>
+  `/api/sales/ta-da/export/excel?${buildQuery({ month, year, company, status, download: 'true' })}`
+export const salesTaDaNeftDownloadUrl = ({ month, year, company, mode } = {}) =>
+  `/api/sales/ta-da/export/neft?${buildQuery({ month, year, company, mode, download: 'true' })}`
+// Preview (download=false): returns JSON {rows, missing, totals, mode} without
+// stamping neft_exported_at. Used by the register page to show HR a confirm
+// modal with the include/exclude counts before kicking off the actual download.
+export const salesTaDaNeftPreview = ({ month, year, company, mode } = {}) =>
+  api.get('/sales/ta-da/export/neft', { params: { month, year, company, mode } })
+
 export default api

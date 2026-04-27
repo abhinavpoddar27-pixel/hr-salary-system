@@ -1,0 +1,1 @@
+const n=["","Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];function M(t,c){if(!t||!c)return"";const e=t===1?12:t-1,s=t===1?c-1:c,a=Date.UTC(s,e-1,26),r=Date.UTC(c,t-1,25),o=Math.round((r-a)/864e5)+1,u=`${n[e]} 26, ${s}`,l=`${n[t]} 25, ${c}`;return`Cycle: ${u} – ${l} (${o} days)`}export{M as c};

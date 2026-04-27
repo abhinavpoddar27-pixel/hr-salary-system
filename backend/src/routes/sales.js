@@ -20,6 +20,8 @@ const {
   normalizeCity,
 } = require('../services/salesCoordinatorParser');
 const taDa = require('../services/taDaChangeRequest');
+const taDaCompute = require('../services/salesTaDaComputation');
+const { parseTaDaUpload } = require('../services/salesTaDaUploadParser');
 
 // ══════════════════════════════════════════════════════════════════════
 // Phase 2 — TA/DA change-request workflow.
@@ -119,6 +121,898 @@ router.post('/ta-da-requests/:id/cancel',
       const row = taDa.cancelRequest(getDb(), parseInt(req.params.id, 10), req.user?.username);
       res.json({ success: true, data: row });
     } catch (e) { sendTaDaError(res, e, 'cancel failed'); }
+  });
+
+// ══════════════════════════════════════════════════════════════════════
+// Phase 3 — TA/DA compute + register + per-employee detail + inputs PATCH.
+// Registered BEFORE router.use(requireHrOrAdmin) so the explicit
+// requirePermission('sales-tada-compute') gate is the only access check.
+// HR has 'sales-tada-compute'; admin inherits via '*'. Finance does NOT
+// have this permission (compute is HR-initiated; finance reviews via the
+// existing sales-tada-approve flow).
+// ══════════════════════════════════════════════════════════════════════
+
+// POST /api/sales/ta-da/compute — manual recompute of a cycle (or single employee)
+router.post('/ta-da/compute',
+  requirePermission('sales-tada-compute'),
+  (req, res) => {
+    try {
+      const body = req.body || {};
+      const month = parseInt(body.month, 10);
+      const year  = parseInt(body.year, 10);
+      const company = (body.company || '').trim();
+      const employeeCode = body.employeeCode ? String(body.employeeCode).trim() : null;
+
+      if (!month || !year || !company) {
+        return res.status(400).json({ success: false, error: 'month, year, and company are required' });
+      }
+
+      let cycle;
+      try {
+        cycle = deriveCycle(month, year);
+      } catch (e) {
+        return res.status(400).json({ success: false, error: `Invalid cycle for ${month}/${year}: ${e.message}` });
+      }
+
+      const db = getDb();
+      const user = req.user?.username || 'unknown';
+
+      const summary = taDaCompute.recomputeCycle(db, {
+        month, year, company,
+        cycleStart: cycle.start, cycleEnd: cycle.end,
+        computedBy: user,
+        requestId: req.requestId || null,
+        triggerSource: 'manual:compute_endpoint',
+        employeeCode,
+      });
+
+      writeAuditP2(db, 'sales_ta_da_computations', {
+        recordId: 0,
+        field: 'recompute',
+        oldVal: '',
+        newVal: JSON.stringify({ month, year, company, employeeCode, summary }),
+        user,
+        actionType: 'tada_compute_manual',
+        remark: `Manual TA/DA recompute ${month}/${year}/${company}${employeeCode ? ` (single: ${employeeCode})` : ''}`,
+        empCode: employeeCode || '',
+      });
+
+      res.json({
+        success: true,
+        data: {
+          month, year, company,
+          computed: summary.computed,
+          partial: summary.partial,
+          flagged: summary.flagged,
+          errors: summary.errors,
+        },
+      });
+    } catch (e) {
+      console.error('[ta-da/compute]', e?.stack || e);
+      res.status(500).json({ success: false, error: e?.message || 'compute failed' });
+    }
+  });
+
+// GET /api/sales/ta-da/register — paginated list with totals + status counts
+router.get('/ta-da/register',
+  requirePermission('sales-tada-compute'),
+  (req, res) => {
+    try {
+      const month = parseInt(req.query.month, 10);
+      const year  = parseInt(req.query.year, 10);
+      const company = (req.query.company || '').trim();
+      const status = req.query.status ? String(req.query.status).trim() : null;
+      const taDaClassRaw = req.query.ta_da_class;
+      const taDaClass = (taDaClassRaw !== undefined && taDaClassRaw !== '')
+        ? parseInt(taDaClassRaw, 10) : null;
+      const page = Math.max(1, parseInt(req.query.page, 10) || 1);
+      const pageSize = Math.min(1000, Math.max(1, parseInt(req.query.pageSize, 10) || 200));
+
+      if (!month || !year || !company) {
+        return res.status(400).json({ success: false, error: 'month, year, and company are required' });
+      }
+
+      const db = getDb();
+
+      const where = ['c.month = ?', 'c.year = ?', 'c.company = ?'];
+      const params = [month, year, company];
+      if (status) { where.push('c.status = ?'); params.push(status); }
+      if (taDaClass !== null && Number.isInteger(taDaClass)) {
+        where.push('c.ta_da_class_at_compute = ?');
+        params.push(taDaClass);
+      }
+      const whereSql = where.join(' AND ');
+
+      const offset = (page - 1) * pageSize;
+      const rows = db.prepare(`
+        SELECT
+          c.*,
+          e.name AS employee_name,
+          e.headquarters,
+          e.state,
+          e.designation,
+          e.reporting_manager,
+          e.ta_da_class AS current_ta_da_class,
+          mi.in_city_days,
+          mi.outstation_days,
+          mi.total_km,
+          mi.bike_km,
+          mi.car_km,
+          mi.notes  AS input_notes,
+          mi.source AS input_source,
+          mi.source_detail AS input_source_detail
+        FROM sales_ta_da_computations c
+        JOIN sales_employees e ON e.id = c.employee_id
+        LEFT JOIN sales_ta_da_monthly_inputs mi
+          ON mi.employee_id = c.employee_id
+         AND mi.month = c.month AND mi.year = c.year AND mi.company = c.company
+        WHERE ${whereSql}
+        ORDER BY e.code ASC
+        LIMIT ? OFFSET ?
+      `).all(...params, pageSize, offset);
+
+      const totalsRow = db.prepare(`
+        SELECT
+          COALESCE(SUM(c.total_da), 0)      AS total_da,
+          COALESCE(SUM(c.total_ta), 0)      AS total_ta,
+          COALESCE(SUM(c.total_payable), 0) AS total_payable,
+          COUNT(*)                           AS count
+        FROM sales_ta_da_computations c
+        JOIN sales_employees e ON e.id = c.employee_id
+        WHERE ${whereSql}
+      `).get(...params);
+
+      const statusCountsRow = db.prepare(`
+        SELECT
+          SUM(CASE WHEN c.status = 'computed'        THEN 1 ELSE 0 END) AS computed,
+          SUM(CASE WHEN c.status = 'partial'         THEN 1 ELSE 0 END) AS partial,
+          SUM(CASE WHEN c.status = 'flag_for_review' THEN 1 ELSE 0 END) AS flag_for_review,
+          SUM(CASE WHEN c.status = 'paid'            THEN 1 ELSE 0 END) AS paid
+        FROM sales_ta_da_computations c
+        WHERE c.month = ? AND c.year = ? AND c.company = ?
+      `).get(month, year, company);
+
+      res.json({
+        success: true,
+        data: {
+          rows,
+          totals: {
+            total_da:      totalsRow.total_da      || 0,
+            total_ta:      totalsRow.total_ta      || 0,
+            total_payable: totalsRow.total_payable || 0,
+            count:         totalsRow.count         || 0,
+          },
+          statusCounts: {
+            computed:        statusCountsRow.computed        || 0,
+            partial:         statusCountsRow.partial         || 0,
+            flag_for_review: statusCountsRow.flag_for_review || 0,
+            paid:            statusCountsRow.paid            || 0,
+          },
+          page,
+          pageSize,
+        },
+      });
+    } catch (e) {
+      console.error('[ta-da/register]', e?.stack || e);
+      res.status(500).json({ success: false, error: e?.message || 'register failed' });
+    }
+  });
+
+// GET /api/sales/ta-da/employee/:code — detail modal payload
+router.get('/ta-da/employee/:code',
+  requirePermission('sales-tada-compute'),
+  (req, res) => {
+    try {
+      const code = req.params.code;
+      const month = parseInt(req.query.month, 10);
+      const year  = parseInt(req.query.year, 10);
+      const company = (req.query.company || '').trim();
+
+      if (!month || !year || !company) {
+        return res.status(400).json({ success: false, error: 'month, year, and company are required' });
+      }
+
+      const db = getDb();
+      const employee = db.prepare(`
+        SELECT * FROM sales_employees WHERE code = ? AND company = ?
+      `).get(code, company);
+      if (!employee) {
+        return res.status(404).json({ success: false, error: 'employee not found' });
+      }
+
+      let cycle;
+      try {
+        cycle = deriveCycle(month, year);
+      } catch (e) {
+        return res.status(400).json({ success: false, error: `Invalid cycle: ${e.message}` });
+      }
+
+      const { computation, monthlyInput } = taDaCompute.getComputation(db, {
+        employeeCode: code, month, year, company,
+      });
+
+      res.json({
+        success: true,
+        data: {
+          employee,
+          computation,
+          monthly_input: monthlyInput,
+          cycle: {
+            start: cycle.start,
+            end: cycle.end,
+            length_days: cycle.lengthDays,
+          },
+        },
+      });
+    } catch (e) {
+      console.error('[ta-da/employee]', e?.stack || e);
+      res.status(500).json({ success: false, error: e?.message || 'fetch failed' });
+    }
+  });
+
+// PATCH /api/sales/ta-da/inputs/:code — HR/finance enters split + km, triggers Phase β
+router.patch('/ta-da/inputs/:code',
+  requirePermission('sales-tada-compute'),
+  (req, res) => {
+    try {
+      const code = req.params.code;
+      const month = parseInt(req.query.month, 10);
+      const year  = parseInt(req.query.year, 10);
+      const company = (req.query.company || '').trim();
+
+      if (!month || !year || !company) {
+        return res.status(400).json({ success: false, error: 'month, year, and company are required' });
+      }
+
+      const ALLOWED = ['in_city_days', 'outstation_days', 'total_km', 'bike_km', 'car_km', 'notes'];
+      const NUMERIC = new Set(['in_city_days', 'outstation_days', 'total_km', 'bike_km', 'car_km']);
+
+      const body = req.body || {};
+      const patch = {};
+      for (const key of ALLOWED) {
+        if (Object.prototype.hasOwnProperty.call(body, key)) patch[key] = body[key];
+      }
+      if (Object.keys(patch).length === 0) {
+        return res.status(400).json({ success: false, error: 'no valid fields to update' });
+      }
+
+      // Numeric fields must be >= 0 (null is allowed — clears the field).
+      for (const key of Object.keys(patch)) {
+        if (!NUMERIC.has(key)) continue;
+        if (patch[key] === null || patch[key] === undefined || patch[key] === '') {
+          patch[key] = null;
+          continue;
+        }
+        const n = typeof patch[key] === 'number' ? patch[key] : parseFloat(patch[key]);
+        if (!Number.isFinite(n) || n < 0) {
+          return res.status(400).json({ success: false, error: `${key} must be a non-negative number` });
+        }
+        patch[key] = n;
+      }
+
+      const db = getDb();
+      const employee = db.prepare(`
+        SELECT * FROM sales_employees WHERE code = ? AND company = ?
+      `).get(code, company);
+      if (!employee) {
+        return res.status(404).json({ success: false, error: 'employee not found' });
+      }
+
+      let cycle;
+      try {
+        cycle = deriveCycle(month, year);
+      } catch (e) {
+        return res.status(400).json({ success: false, error: `Invalid cycle: ${e.message}` });
+      }
+
+      const existing = db.prepare(`
+        SELECT * FROM sales_ta_da_monthly_inputs
+         WHERE employee_id = ? AND month = ? AND year = ? AND company = ?
+      `).get(employee.id, month, year, company);
+
+      // Resolve days_worked for cross-field validation.
+      // Existing row → use its days_worked; otherwise look up attendance
+      // (sales_monthly_input.sheet_days_given) so a brand-new employee can
+      // PATCH without first running the cycle compute.
+      let daysWorked;
+      if (existing) {
+        daysWorked = existing.days_worked;
+      } else {
+        const attRow = db.prepare(`
+          SELECT smi.sheet_days_given
+            FROM sales_monthly_input smi
+            JOIN sales_uploads su ON su.id = smi.upload_id
+           WHERE smi.employee_code = ? AND smi.month = ? AND smi.year = ? AND smi.company = ?
+             AND su.status IN ('matched', 'computed')
+           ORDER BY su.uploaded_at DESC
+           LIMIT 1
+        `).get(code, month, year, company);
+        daysWorked = attRow ? Math.round(parseFloat(attRow.sheet_days_given) || 0) : 0;
+      }
+
+      // Merge patch over existing (or defaults) — used for cross-field validation
+      // AND as the row body for INSERT-on-no-existing-row.
+      const merged = {
+        in_city_days:    existing ? existing.in_city_days    : null,
+        outstation_days: existing ? existing.outstation_days : null,
+        total_km:        existing ? existing.total_km        : null,
+        bike_km:         existing ? existing.bike_km         : null,
+        car_km:          existing ? existing.car_km          : null,
+        notes:           existing ? existing.notes           : null,
+      };
+      for (const key of ALLOWED) {
+        if (Object.prototype.hasOwnProperty.call(patch, key)) merged[key] = patch[key];
+      }
+
+      // Cross-field: in_city + outstation must not exceed days_worked.
+      const ic = merged.in_city_days;
+      const os = merged.outstation_days;
+      if (ic !== null && os !== null && Number.isFinite(ic) && Number.isFinite(os)) {
+        const sum = ic + os;
+        if (sum > daysWorked) {
+          return res.status(400).json({
+            success: false,
+            error: `split exceeds days_worked (${ic} + ${os} > ${daysWorked})`,
+          });
+        }
+      }
+
+      const user = req.user?.username || 'unknown';
+      const sourceDetail = `PATCH by ${user}`;
+
+      db.transaction(() => {
+        if (existing) {
+          db.prepare(`
+            UPDATE sales_ta_da_monthly_inputs
+               SET in_city_days     = ?,
+                   outstation_days  = ?,
+                   total_km         = ?,
+                   bike_km          = ?,
+                   car_km           = ?,
+                   notes            = ?,
+                   source           = 'manual',
+                   source_detail    = ?,
+                   cycle_start_date = ?,
+                   cycle_end_date   = ?,
+                   updated_at       = datetime('now'),
+                   updated_by       = ?
+             WHERE id = ?
+          `).run(
+            merged.in_city_days, merged.outstation_days,
+            merged.total_km, merged.bike_km, merged.car_km,
+            merged.notes,
+            sourceDetail,
+            cycle.start, cycle.end,
+            user,
+            existing.id
+          );
+        } else {
+          db.prepare(`
+            INSERT INTO sales_ta_da_monthly_inputs
+              (employee_id, employee_code, month, year, company,
+               cycle_start_date, cycle_end_date,
+               days_worked, in_city_days, outstation_days,
+               total_km, bike_km, car_km,
+               source, source_detail, notes,
+               created_at, created_by, updated_at, updated_by)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+                    'manual', ?, ?,
+                    datetime('now'), ?, datetime('now'), ?)
+          `).run(
+            employee.id, code, month, year, company,
+            cycle.start, cycle.end,
+            daysWorked,
+            merged.in_city_days, merged.outstation_days,
+            merged.total_km, merged.bike_km, merged.car_km,
+            sourceDetail, merged.notes,
+            user, user
+          );
+        }
+      })();
+
+      writeAuditP2(db, 'sales_ta_da_monthly_inputs', {
+        recordId: existing ? existing.id : 0,
+        field: 'inputs_patch',
+        oldVal: existing ? JSON.stringify({
+          in_city_days:    existing.in_city_days,
+          outstation_days: existing.outstation_days,
+          total_km:        existing.total_km,
+          bike_km:         existing.bike_km,
+          car_km:          existing.car_km,
+          notes:           existing.notes,
+        }) : '',
+        newVal: JSON.stringify(merged),
+        user,
+        actionType: 'tada_inputs_patch',
+        remark: `PATCH inputs ${code} ${month}/${year}/${company}`,
+        empCode: code,
+      });
+
+      // Trigger Phase β recompute for this single employee.
+      const summary = taDaCompute.recomputeCycle(db, {
+        month, year, company,
+        cycleStart: cycle.start, cycleEnd: cycle.end,
+        computedBy: user,
+        requestId: req.requestId || null,
+        triggerSource: 'manual:inputs_patch',
+        employeeCode: code,
+      });
+      if (summary.errors && summary.errors.length > 0) {
+        return res.status(500).json({
+          success: false,
+          error: `recompute failed: ${summary.errors[0].error}`,
+        });
+      }
+
+      const { computation } = taDaCompute.getComputation(db, {
+        employeeCode: code, month, year, company,
+      });
+
+      res.json({ success: true, data: { computation } });
+    } catch (e) {
+      console.error('[ta-da/inputs]', e?.stack || e);
+      res.status(500).json({ success: false, error: e?.message || 'patch failed' });
+    }
+  });
+
+// ──────────────────────────────────────────────────────────────────────
+// TA/DA upload (Phase β template) + payable exports + payslip JSON.
+// A separate multer instance is declared here (same config as the
+// coordinator-sheet `salesUpload` further down the file) so the upload
+// route can be registered before that const exists in module scope.
+// ──────────────────────────────────────────────────────────────────────
+const taDaUploadDir = path.join(__dirname, '../../../uploads/sales');
+try { fs.mkdirSync(taDaUploadDir, { recursive: true }); } catch (e) { /* ignore */ }
+const taDaUpload = multer({
+  dest: taDaUploadDir,
+  fileFilter: (req, file, cb) => {
+    const n = (file.originalname || '').toLowerCase();
+    if (n.endsWith('.xls') || n.endsWith('.xlsx')) cb(null, true);
+    else cb(new Error('Only .xls and .xlsx files are accepted'));
+  },
+  limits: { fileSize: 10 * 1024 * 1024 },
+});
+
+const TA_DA_TEMPLATE_CLASSES = new Set([2, 3, 4, 5]);
+const MONTHS_SHORT_TADA = ['', 'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+
+// POST /api/sales/ta-da/upload/:class — Phase β bulk upload
+router.post('/ta-da/upload/:class',
+  requirePermission('sales-tada-compute'),
+  taDaUpload.single('file'),
+  (req, res) => {
+    const filePath = req.file ? req.file.path : null;
+    try {
+      const classNum = parseInt(req.params.class, 10);
+      if (!TA_DA_TEMPLATE_CLASSES.has(classNum)) {
+        if (filePath) { try { fs.unlinkSync(filePath); } catch (e) { /* ignore */ } }
+        return res.status(400).json({ success: false, error: `class must be 2, 3, 4, or 5 (got ${req.params.class})` });
+      }
+
+      if (!req.file) {
+        return res.status(400).json({ success: false, error: 'file is required (multipart field name: file)' });
+      }
+
+      const body = req.body || {};
+      const month = parseInt(body.month, 10);
+      const year  = parseInt(body.year, 10);
+      const company = (body.company || '').trim();
+      if (!month || !year || !company) {
+        try { fs.unlinkSync(filePath); } catch (e) { /* ignore */ }
+        return res.status(400).json({ success: false, error: 'month, year, and company are required' });
+      }
+
+      let cycle;
+      try {
+        cycle = deriveCycle(month, year);
+      } catch (e) {
+        try { fs.unlinkSync(filePath); } catch (er) { /* ignore */ }
+        return res.status(400).json({ success: false, error: `Invalid cycle: ${e.message}` });
+      }
+
+      const db = getDb();
+      const user = req.user?.username || 'unknown';
+
+      // Build sales_employees_lookup for the company.
+      // days_worked_for_cycle: prefer existing TA/DA monthly_inputs row
+      // (which carries upload/manual edits), else fall back to attendance
+      // (sales_monthly_input.sheet_days_given), else 0.
+      const empRows = db.prepare(`
+        SELECT e.code, e.ta_da_class,
+               mi.days_worked       AS mi_days,
+               smi.sheet_days_given AS att_days
+          FROM sales_employees e
+          LEFT JOIN sales_ta_da_monthly_inputs mi
+            ON mi.employee_id = e.id AND mi.month = ? AND mi.year = ? AND mi.company = ?
+          LEFT JOIN sales_monthly_input smi
+            ON smi.employee_code = e.code AND smi.month = ? AND smi.year = ? AND smi.company = ?
+         WHERE e.company = ? AND e.status = 'Active'
+      `).all(month, year, company, month, year, company, company);
+
+      const lookup = new Map();
+      for (const r of empRows) {
+        const days = r.mi_days != null
+          ? parseFloat(r.mi_days) || 0
+          : (r.att_days != null ? Math.round(parseFloat(r.att_days) || 0) : 0);
+        lookup.set(r.code, {
+          ta_da_class: r.ta_da_class,
+          days_worked_for_cycle: days,
+        });
+      }
+
+      const buf = fs.readFileSync(filePath);
+      const { rows, errors } = parseTaDaUpload(buf, classNum, lookup);
+
+      // Cleanup the uploaded temp file regardless of outcome (we don't
+      // archive Phase β templates — the data lives in monthly_inputs).
+      try { fs.unlinkSync(filePath); } catch (e) { /* ignore */ }
+
+      if (errors.length > 0) {
+        return res.status(400).json({
+          success: false,
+          parsed: errors.length,
+          valid: 0,
+          invalid: errors.length,
+          errors,
+        });
+      }
+
+      const filename = req.file.originalname || 'tada-upload.xlsx';
+      const sourceDetail = `upload:class${classNum}:${filename}`;
+
+      const updated = [];
+      const computeErrors = [];
+
+      // Per-row UPSERT with source='upload' + per-row recompute.
+      for (const row of rows) {
+        try {
+          const employee = db.prepare(`
+            SELECT * FROM sales_employees WHERE code = ? AND company = ?
+          `).get(row.employee_code, company);
+          if (!employee) {
+            computeErrors.push({ employee_code: row.employee_code, error: 'employee disappeared mid-upload' });
+            continue;
+          }
+
+          const existing = db.prepare(`
+            SELECT * FROM sales_ta_da_monthly_inputs
+             WHERE employee_id = ? AND month = ? AND year = ? AND company = ?
+          `).get(employee.id, month, year, company);
+
+          const merged = {
+            in_city_days:    row.in_city_days    !== undefined ? row.in_city_days    : (existing ? existing.in_city_days    : null),
+            outstation_days: row.outstation_days !== undefined ? row.outstation_days : (existing ? existing.outstation_days : null),
+            total_km:        row.total_km        !== undefined ? row.total_km        : (existing ? existing.total_km        : null),
+            bike_km:         row.bike_km         !== undefined ? row.bike_km         : (existing ? existing.bike_km         : null),
+            car_km:          row.car_km          !== undefined ? row.car_km          : (existing ? existing.car_km          : null),
+          };
+
+          const daysWorked = existing ? existing.days_worked
+            : ((lookup.get(row.employee_code) || {}).days_worked_for_cycle || 0);
+
+          db.transaction(() => {
+            if (existing) {
+              db.prepare(`
+                UPDATE sales_ta_da_monthly_inputs
+                   SET in_city_days     = ?,
+                       outstation_days  = ?,
+                       total_km         = ?,
+                       bike_km          = ?,
+                       car_km           = ?,
+                       source           = 'upload',
+                       source_detail    = ?,
+                       cycle_start_date = ?,
+                       cycle_end_date   = ?,
+                       updated_at       = datetime('now'),
+                       updated_by       = ?
+                 WHERE id = ?
+              `).run(
+                merged.in_city_days, merged.outstation_days,
+                merged.total_km, merged.bike_km, merged.car_km,
+                sourceDetail,
+                cycle.start, cycle.end,
+                user,
+                existing.id
+              );
+            } else {
+              db.prepare(`
+                INSERT INTO sales_ta_da_monthly_inputs
+                  (employee_id, employee_code, month, year, company,
+                   cycle_start_date, cycle_end_date,
+                   days_worked, in_city_days, outstation_days,
+                   total_km, bike_km, car_km,
+                   source, source_detail, notes,
+                   created_at, created_by, updated_at, updated_by)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+                        'upload', ?, NULL,
+                        datetime('now'), ?, datetime('now'), ?)
+              `).run(
+                employee.id, row.employee_code, month, year, company,
+                cycle.start, cycle.end,
+                daysWorked,
+                merged.in_city_days, merged.outstation_days,
+                merged.total_km, merged.bike_km, merged.car_km,
+                sourceDetail,
+                user, user
+              );
+            }
+          })();
+
+          const summary = taDaCompute.recomputeCycle(db, {
+            month, year, company,
+            cycleStart: cycle.start, cycleEnd: cycle.end,
+            computedBy: user,
+            requestId: req.requestId || null,
+            triggerSource: 'manual:tada_upload',
+            employeeCode: row.employee_code,
+          });
+          if (summary.errors && summary.errors.length > 0) {
+            computeErrors.push({ employee_code: row.employee_code, error: summary.errors[0].error });
+            continue;
+          }
+          updated.push(row.employee_code);
+        } catch (rowErr) {
+          computeErrors.push({ employee_code: row.employee_code, error: rowErr.message });
+        }
+      }
+
+      writeAuditP2(db, 'sales_ta_da_monthly_inputs', {
+        recordId: 0,
+        field: 'template_upload',
+        oldVal: '',
+        newVal: JSON.stringify({ classNum, filename, count: rows.length, updated: updated.length }),
+        user,
+        actionType: 'tada_template_upload',
+        remark: `Class ${classNum} TA/DA template uploaded: ${filename} (${rows.length} rows)`,
+        empCode: '',
+      });
+
+      // Mid-loop failure ⇒ some rows committed before the error.
+      // Surface partial-failure shape so HR can re-upload only the failed rows.
+      if (computeErrors.length > 0) {
+        return res.status(200).json({
+          success: false,
+          data: {
+            parsed: rows.length,
+            valid: rows.length - computeErrors.length,
+            invalid: computeErrors.length,
+            errors: [],
+          },
+          partial: true,
+          succeeded: updated,
+          failed: computeErrors,
+          note: 'Some rows committed before error. Re-upload only the failed rows after fixing.',
+        });
+      }
+
+      res.json({
+        success: true,
+        data: {
+          parsed: rows.length,
+          valid: rows.length,
+          invalid: 0,
+          updated: updated.length,
+          errors: [],
+        },
+      });
+    } catch (e) {
+      if (filePath) { try { fs.unlinkSync(filePath); } catch (er) { /* ignore */ } }
+      console.error('[ta-da/upload]', e?.stack || e);
+      res.status(500).json({ success: false, error: e?.message || 'upload failed' });
+    }
+  });
+
+// GET /api/sales/ta-da/export/excel — preview JSON or .xlsx download
+router.get('/ta-da/export/excel',
+  requirePermission('sales-tada-payable-export'),
+  (req, res) => {
+    try {
+      const month = parseInt(req.query.month, 10);
+      const year  = parseInt(req.query.year, 10);
+      const company = (req.query.company || '').trim();
+      const status = req.query.status ? String(req.query.status).trim() : null;
+      const download = String(req.query.download || '').toLowerCase() === 'true';
+
+      if (!month || !year || !company) {
+        return res.status(400).json({ success: false, error: 'month, year, and company are required' });
+      }
+
+      const db = getDb();
+      const { generateSalesTaDaExcel } = require('../services/salesExportFormats');
+      const result = generateSalesTaDaExcel(db, month, year, company, status);
+
+      if (!download) {
+        return res.json({
+          success: true,
+          data: { rows: result.rows, count: result.count },
+        });
+      }
+
+      res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+      res.setHeader('Content-Disposition', `attachment; filename="${result.filename}"`);
+      res.setHeader('Content-Length', result.content.length);
+      res.send(result.content);
+    } catch (e) {
+      console.error('[ta-da/export/excel]', e?.stack || e);
+      res.status(500).json({ success: false, error: e?.message || 'excel export failed' });
+    }
+  });
+
+// GET /api/sales/ta-da/export/neft — preview JSON or .csv download (stamps neft_exported_at on download)
+router.get('/ta-da/export/neft',
+  requirePermission('sales-tada-payable-export'),
+  (req, res) => {
+    try {
+      const month = parseInt(req.query.month, 10);
+      const year  = parseInt(req.query.year, 10);
+      const company = (req.query.company || '').trim();
+      const modeRaw = (req.query.mode || 'computed_only').toLowerCase();
+      const mode = (modeRaw === 'all') ? 'all' : 'computed_only';
+      const download = String(req.query.download || '').toLowerCase() === 'true';
+
+      if (!month || !year || !company) {
+        return res.status(400).json({ success: false, error: 'month, year, and company are required' });
+      }
+
+      const db = getDb();
+      const user = req.user?.username || 'unknown';
+      const { generateSalesTaDaNEFT } = require('../services/salesExportFormats');
+      const result = generateSalesTaDaNEFT(db, month, year, company, mode);
+
+      if (result.missing.length > 0) {
+        const codes = result.missing.map(m => m.employee_code).join(',');
+        res.setHeader('X-Missing-Bank-Details', codes);
+      }
+
+      if (!download) {
+        return res.json({
+          success: true,
+          data: {
+            rows: result.rows,
+            missing: result.missing,
+            totals: result.totals,
+            mode,
+          },
+        });
+      }
+
+      // download=true → stamp neft_exported_at + audit, then send CSV.
+      const stamp = db.prepare(`
+        UPDATE sales_ta_da_computations
+           SET neft_exported_at = datetime('now'),
+               neft_exported_by = ?
+         WHERE id = ?
+      `);
+      db.transaction(() => {
+        for (const id of result.eligibleIds) stamp.run(user, id);
+      })();
+
+      writeAuditP2(db, 'sales_ta_da_computations', {
+        recordId: 0,
+        field: 'neft_export',
+        oldVal: '',
+        newVal: JSON.stringify({
+          month, year, company, mode,
+          count: result.totals.count,
+          totalAmount: result.totals.totalAmount,
+        }),
+        user,
+        actionType: 'tada_neft_export',
+        remark: `TA/DA NEFT export ${month}/${year}/${company} (${mode}, ${result.totals.count} rows)`,
+        empCode: '',
+      });
+
+      res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+      res.setHeader('Content-Disposition', `attachment; filename="${result.filename}"`);
+      res.send(result.content);
+    } catch (e) {
+      console.error('[ta-da/export/neft]', e?.stack || e);
+      res.status(500).json({ success: false, error: e?.message || 'neft export failed' });
+    }
+  });
+
+// GET /api/sales/ta-da/export/payslip/:code — structured JSON for client-side PDF render
+router.get('/ta-da/export/payslip/:code',
+  requirePermission('sales-tada-payable-export'),
+  (req, res) => {
+    try {
+      const code = req.params.code;
+      const month = parseInt(req.query.month, 10);
+      const year  = parseInt(req.query.year, 10);
+      const company = (req.query.company || '').trim();
+
+      if (!month || !year || !company) {
+        return res.status(400).json({ success: false, error: 'month, year, and company are required' });
+      }
+
+      const db = getDb();
+      const employee = db.prepare(`
+        SELECT * FROM sales_employees WHERE code = ? AND company = ?
+      `).get(code, company);
+      if (!employee) {
+        return res.status(404).json({ success: false, error: 'employee not found' });
+      }
+
+      const { computation, monthlyInput } = taDaCompute.getComputation(db, {
+        employeeCode: code, month, year, company,
+      });
+      if (!computation) {
+        return res.status(404).json({ success: false, error: 'no TA/DA computation for this cycle' });
+      }
+
+      let cycle;
+      try {
+        cycle = deriveCycle(month, year);
+      } catch (e) {
+        return res.status(400).json({ success: false, error: `Invalid cycle: ${e.message}` });
+      }
+
+      const CLASS_LABELS = {
+        0: 'Class 0 — Review required',
+        1: 'Class 1 — Fixed DA package',
+        2: 'Class 2 — Tiered DA, no TA',
+        3: 'Class 3 — Flat DA + per-km TA',
+        4: 'Class 4 — Tiered DA + per-km TA',
+        5: 'Class 5 — Tiered DA + dual-vehicle TA',
+      };
+      const STATUS_LABELS = {
+        computed: 'Computed',
+        partial: 'Partial — awaiting Phase β inputs',
+        flag_for_review: 'Flagged for HR review',
+        paid: 'Paid',
+      };
+
+      const companyInfo = (() => {
+        try {
+          const cc = db.prepare(`SELECT * FROM company_config WHERE name = ? LIMIT 1`).get(company);
+          return cc || { name: company };
+        } catch (e) { return { name: company }; }
+      })();
+
+      res.json({
+        success: true,
+        data: {
+          company: companyInfo,
+          cycle: {
+            start: cycle.start,
+            end: cycle.end,
+            length_days: cycle.lengthDays,
+          },
+          employee: {
+            code: employee.code,
+            name: employee.name,
+            designation: employee.designation,
+            hq: employee.headquarters,
+            city_of_operation: employee.city_of_operation,
+            reporting_manager: employee.reporting_manager,
+            doj: employee.doj,
+            class: employee.ta_da_class,
+            class_label: CLASS_LABELS[employee.ta_da_class] || `Class ${employee.ta_da_class}`,
+            bank: {
+              bank_name: employee.bank_name,
+              account_no: employee.account_no,
+              ifsc: employee.ifsc,
+            },
+          },
+          computation,
+          inputs: monthlyInput,
+          rates: {
+            da_rate: employee.da_rate,
+            da_outstation_rate: employee.da_outstation_rate,
+            ta_rate_primary: employee.ta_rate_primary,
+            ta_rate_secondary: employee.ta_rate_secondary,
+          },
+          status: {
+            value: computation.status,
+            label: STATUS_LABELS[computation.status] || computation.status,
+            is_draft: !['computed', 'paid'].includes(computation.status),
+          },
+        },
+      });
+    } catch (e) {
+      console.error('[ta-da/export/payslip]', e?.stack || e);
+      res.status(500).json({ success: false, error: e?.message || 'payslip fetch failed' });
+    }
   });
 
 router.use(requireHrOrAdmin);
@@ -1063,6 +1957,23 @@ router.post('/compute', (req, res) => {
     remark: `Sales compute: upload #${upload.id}, ${results.length} OK, ${excluded.length} excluded, ${errors.length} errors`,
   });
 
+  // Phase α auto-trigger — runs OUTSIDE the per-employee salary txn loop.
+  // Failure here logs but never fails the salary response.
+  let taDaSummary = null;
+  try {
+    taDaSummary = taDaCompute.recomputeCycle(db, {
+      month, year, company,
+      cycleStart, cycleEnd,
+      computedBy: user,
+      requestId: req.requestId,
+      triggerSource: 'auto:salary_compute',
+    });
+  } catch (taDaErr) {
+    console.error(`[sales-tada-auto] ${month}/${year} ${company}: ${taDaErr.message}`);
+    if (taDaErr.stack) console.error(taDaErr.stack.split('\n').slice(0, 5).join('\n'));
+    taDaSummary = { error: taDaErr.message };
+  }
+
   res.json({
     success: true,
     data: {
@@ -1073,6 +1984,7 @@ router.post('/compute', (req, res) => {
       errors,
       finalizedRecomputeWarnings,
     },
+    taDaSummary,
   });
 });
 

@@ -55,6 +55,26 @@ export const STATUS_BADGE = {
   cancelled:  { label: 'Cancelled',  classes: 'bg-slate-100 text-slate-500 border-slate-300' },
 }
 
+// Computation status (Phase 3) — used on the TA/DA register and employee
+// detail to show where a row sits in the compute → review → paid lifecycle.
+// Kept in lockstep with backend status enum on sales_ta_da_computations:
+// 'computed' | 'partial' | 'flag_for_review' | 'paid'. Color tokens match
+// STATUS_BADGE above so HR sees the same visual language as Phase 2.
+export const COMPUTATION_STATUS_BADGE = {
+  computed:        { label: 'Computed',        classes: 'bg-green-100 text-green-800 border-green-300' },
+  partial:         { label: 'Partial',         classes: 'bg-amber-100 text-amber-800 border-amber-300' },
+  flag_for_review: { label: 'Flag for Review', classes: 'bg-red-100 text-red-800 border-red-300' },
+  paid:            { label: 'Paid',            classes: 'bg-slate-100 text-slate-600 border-slate-300' },
+}
+
+export function computationStatusLabel(status) {
+  return COMPUTATION_STATUS_BADGE[status]?.label ?? 'Unknown'
+}
+
+export function computationStatusBadgeClass(status) {
+  return COMPUTATION_STATUS_BADGE[status]?.classes ?? 'bg-slate-100 text-slate-500 border-slate-300'
+}
+
 export function relativeTime(isoOrNull) {
   if (!isoOrNull) return '—'
   const then = new Date(isoOrNull)

@@ -109,6 +109,8 @@ const nav = [
       { label: 'Sales Holidays', to: '/sales/holidays', salesAllowed: true },
       { label: 'Upload Sheet', to: '/sales/upload', salesAllowed: true },
       { label: 'Compute Salaries', to: '/sales/compute', salesAllowed: true },
+      { label: 'TA/DA Register', to: '/sales/ta-da-register', salesAllowed: true },
+      { label: 'TA/DA Upload', to: '/sales/ta-da-upload', salesAllowed: true },
       { label: 'TA/DA Approvals', to: '/sales/ta-da-approvals', tadaApprover: true, tadaPendingBadge: true },
     ]
   },

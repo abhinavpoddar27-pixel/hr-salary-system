@@ -216,4 +216,167 @@ function generateSalesNEFT(db, month, year, company) {
   };
 }
 
-module.exports = { generateSalesExcel, generateSalesNEFT };
+// ══════════════════════════════════════════════════════════════════════
+// generateSalesTaDaExcel — TA/DA Payable Register XLSX
+// 20 columns. Same SheetJS-community treatment as generateSalesExcel
+// (frozen header + column widths; no cell-level styling).
+// ══════════════════════════════════════════════════════════════════════
+function generateSalesTaDaExcel(db, month, year, company, statusFilter) {
+  const where = ['c.month = ?', 'c.year = ?', 'c.company = ?'];
+  const params = [month, year, company];
+  if (statusFilter) {
+    where.push('c.status = ?');
+    params.push(statusFilter);
+  }
+
+  const rows = db.prepare(`
+    SELECT c.*,
+           e.name, e.headquarters, e.city_of_operation, e.designation,
+           e.reporting_manager
+      FROM sales_ta_da_computations c
+ LEFT JOIN sales_employees e
+        ON e.id = c.employee_id
+     WHERE ${where.join(' AND ')}
+  ORDER BY e.code ASC, c.employee_code ASC
+  `).all(...params);
+
+  const header = [
+    'Code', 'Name', 'HQ', 'City of Operation', 'Designation', 'Reporting Manager',
+    'Class', 'Status', 'Days Worked',
+    'In-City Days', 'Outstation Days',
+    'Total KM', 'Bike KM', 'Car KM',
+    'DA Local', 'DA Outstation', 'Total DA',
+    'TA Primary', 'TA Secondary', 'Total TA',
+    'Total Payable',
+  ];
+
+  const round2 = (n) => Math.round((n || 0) * 100) / 100;
+  const data = [header];
+
+  for (const r of rows) {
+    data.push([
+      r.employee_code,
+      r.name || '',
+      r.headquarters || '',
+      r.city_of_operation || '',
+      r.designation || '',
+      r.reporting_manager || '',
+      r.ta_da_class_at_compute,
+      r.status || '',
+      r.days_worked_at_compute || 0,
+      r.in_city_days_at_compute,
+      r.outstation_days_at_compute,
+      r.total_km_at_compute,
+      r.bike_km_at_compute,
+      r.car_km_at_compute,
+      round2(r.da_local_amount),
+      round2(r.da_outstation_amount),
+      round2(r.total_da),
+      round2(r.ta_primary_amount),
+      round2(r.ta_secondary_amount),
+      round2(r.total_ta),
+      round2(r.total_payable),
+    ]);
+  }
+
+  const sheet = XLSX.utils.aoa_to_sheet(data);
+  sheet['!freeze'] = { xSplit: 0, ySplit: 1 };
+  sheet['!views'] = [{ state: 'frozen', ySplit: 1 }];
+  sheet['!cols'] = [
+    { wch: 10 }, { wch: 22 }, { wch: 14 }, { wch: 16 }, { wch: 16 }, { wch: 18 },
+    { wch: 7 }, { wch: 14 }, { wch: 12 },
+    { wch: 12 }, { wch: 14 },
+    { wch: 10 }, { wch: 10 }, { wch: 10 },
+    { wch: 12 }, { wch: 14 }, { wch: 12 },
+    { wch: 12 }, { wch: 14 }, { wch: 12 },
+    { wch: 14 },
+  ];
+
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, sheet, 'TA-DA Payable');
+  const buf = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' });
+
+  return {
+    content: buf,
+    filename: `Sales_TADA_Payable_${MONTHS_SHORT[month]}_${year}_${underscoreCompany(company)}.xlsx`,
+    rows,
+    count: rows.length,
+  };
+}
+
+// ══════════════════════════════════════════════════════════════════════
+// generateSalesTaDaNEFT — TA/DA Bank Upload CSV
+// Header is byte-identical to plant generateBankFile so the bank's upload
+// pipeline accepts both salary and TA/DA files interchangeably.
+// `mode` controls which statuses are eligible:
+//   'computed_only' → status='computed'
+//   'all'           → status IN ('computed','partial')
+// ══════════════════════════════════════════════════════════════════════
+function generateSalesTaDaNEFT(db, month, year, company, mode) {
+  const allowedStatuses = mode === 'all'
+    ? ['computed', 'partial']
+    : ['computed'];
+
+  const placeholders = allowedStatuses.map(() => '?').join(',');
+  const rows = db.prepare(`
+    SELECT c.id AS computation_id, c.employee_code, c.total_payable, c.status,
+           e.name, e.account_no, e.ifsc, e.bank_name, e.doj
+      FROM sales_ta_da_computations c
+ LEFT JOIN sales_employees e
+        ON e.id = c.employee_id
+     WHERE c.month = ? AND c.year = ? AND c.company = ?
+       AND c.total_payable > 0
+       AND c.status IN (${placeholders})
+  ORDER BY e.name ASC, c.employee_code ASC
+  `).all(month, year, company, ...allowedStatuses);
+
+  const narration = `TADA ${MONTHS_SHORT[month].toUpperCase()} ${year}`;
+  const csvLines = ['Sr No,Beneficiary Name,Account Number,IFSC Code,Date of Joining,Amount,Narration'];
+  const missing = [];
+  const eligibleIds = [];
+
+  let sr = 0;
+  for (const r of rows) {
+    if (!r.bank_name || !r.account_no || !r.ifsc) {
+      missing.push({
+        employee_code: r.employee_code,
+        employee_name: r.name || '',
+        total_payable: r.total_payable,
+        missing_bank_name: !r.bank_name,
+        missing_account: !r.account_no,
+        missing_ifsc: !r.ifsc,
+      });
+      continue;
+    }
+
+    sr++;
+    const name = (r.name || '').replace(/[,"]/g, ' ');
+    const amount = Math.round((r.total_payable || 0) * 100) / 100;
+    const doj = fmtDOJ(r.doj);
+    csvLines.push(`${sr},"${name}",${r.account_no},${r.ifsc},${doj},${amount},"${narration}"`);
+    eligibleIds.push(r.computation_id);
+  }
+
+  const validRows = rows.filter(r => r.bank_name && r.account_no && r.ifsc);
+  const totalAmount = validRows.reduce((s, r) => s + (r.total_payable || 0), 0);
+
+  return {
+    content: csvLines.join('\n'),
+    filename: `Sales_TADA_NEFT_${MONTHS_SHORT[month]}_${year}_${underscoreCompany(company)}.csv`,
+    rows: validRows,
+    missing,
+    eligibleIds,
+    totals: {
+      count: validRows.length,
+      totalAmount: Math.round(totalAmount * 100) / 100,
+      missingCount: missing.length,
+    },
+  };
+}
+
+module.exports = {
+  generateSalesExcel,
+  generateSalesNEFT,
+  generateSalesTaDaExcel,
+  generateSalesTaDaNEFT,
+};
