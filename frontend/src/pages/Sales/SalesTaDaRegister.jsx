@@ -12,6 +12,7 @@ import {
   salesTaDaNeftPreview,
 } from '../../utils/api'
 import { useAppStore } from '../../store/appStore'
+import { cycleSubtitle } from '../../utils/cycleUtil'
 import CompanyFilter from '../../components/shared/CompanyFilter'
 import Modal from '../../components/ui/Modal'
 import {
@@ -21,23 +22,6 @@ import {
 } from '../../utils/taDaClassLabels'
 
 const MONTHS = ['', 'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
-
-// Sales salary cycle: (M-1)-26 … M-25. Kept in sync with
-// backend/src/services/cycleUtil.js deriveCycle(). If the backend rule
-// changes, update both in lockstep. Inlined here to avoid coupling to
-// the helper in SalesSalaryCompute.jsx; consider extracting both copies
-// to a shared frontend util in a follow-up task.
-function cycleSubtitle(month, year) {
-  if (!month || !year) return ''
-  const prevMonth = month === 1 ? 12 : month - 1
-  const prevYear  = month === 1 ? year - 1 : year
-  const startMs = Date.UTC(prevYear, prevMonth - 1, 26)
-  const endMs   = Date.UTC(year, month - 1, 25)
-  const lengthDays = Math.round((endMs - startMs) / 86400000) + 1
-  const startLabel = `${MONTHS[prevMonth]} 26, ${prevYear}`
-  const endLabel   = `${MONTHS[month]} 25, ${year}`
-  return `Cycle: ${startLabel} – ${endLabel} (${lengthDays} days)`
-}
 
 const STATUS_OPTIONS = [
   { value: '',                label: 'All Statuses' },

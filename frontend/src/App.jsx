@@ -60,6 +60,8 @@ const SalesUpload = React.lazy(() => import('./pages/Sales/SalesUpload'))
 const SalesSalaryCompute = React.lazy(() => import('./pages/Sales/SalesSalaryCompute'))
 const SalesPayslip = React.lazy(() => import('./pages/Sales/SalesPayslip'))
 const SalesTaDaApprovals = React.lazy(() => import('./pages/Sales/SalesTaDaApprovals'))
+const SalesTaDaRegister = React.lazy(() => import('./pages/Sales/SalesTaDaRegister'))
+const SalesTaDaUpload = React.lazy(() => import('./pages/Sales/SalesTaDaUpload'))
 const BugReportsInbox = React.lazy(() => import('./pages/admin/BugReportsInbox'))
 const BugReportDetail = React.lazy(() => import('./pages/admin/BugReportDetail'))
 
@@ -211,6 +213,8 @@ export default function App() {
           <Route path="/sales/compute" element={<RequireAuth><Layout title="Sales Salary Compute"><SalesSalaryCompute /></Layout></RequireAuth>} />
           <Route path="/sales/payslip/:code" element={<RequireAuth><Layout title="Sales Payslip"><SalesPayslip /></Layout></RequireAuth>} />
           <Route path="/sales/ta-da-approvals" element={<RequireAuth><Layout title="TA/DA Approvals"><SalesTaDaApprovals /></Layout></RequireAuth>} />
+          <Route path="/sales/ta-da-register" element={<RequireAuth><Layout title="TA/DA Register"><SalesTaDaRegister /></Layout></RequireAuth>} />
+          <Route path="/sales/ta-da-upload" element={<RequireAuth><Layout title="TA/DA Upload"><SalesTaDaUpload /></Layout></RequireAuth>} />
           <Route path="/alerts" element={<RequireAuth><Layout title="Alerts"><Alerts /></Layout></RequireAuth>} />
           <Route path="/settings/*" element={<RequireAuth><Layout title="Settings"><Settings /></Layout></RequireAuth>} />
           <Route path="*" element={<Navigate to="/" replace />} />
