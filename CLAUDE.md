@@ -1,4 +1,55 @@
-## Section 0: Last Session
+## Last session: 2026-04-27 — Phase 3 (TA/DA Compute + Register + Upload) shipped
+
+**Status:** Phase 3 complete. Merged to main. Production deploy on Railway in progress (or live, depending on Railway lag).
+
+**What was built:**
+- TA/DA compute engine (backend/src/services/salesTaDaComputation.js) — 5 class formulas, α/β phase logic, idempotent recompute, careful preservation rules
+- 8 API endpoints under /api/sales/ta-da/* — compute, register (paginated + filters + totals), employee detail, inputs PATCH, class-template upload, Excel/NEFT/payslip exports
+- Phase α auto-trigger inside POST /api/sales/compute — TA/DA recomputes after salary compute, isolated in try/catch so TA/DA failure never blocks salary
+- Upload parser (backend/src/services/salesTaDaUploadParser.js) — class-aware header detection, all-or-nothing semantics, per-row validation
+- Register page (frontend/src/pages/Sales/SalesTaDaRegister.jsx, 970 lines) — table, filters, exports, 4 modals (Recompute, NEFT confirm, Edit Inputs, Detail)
+- Upload page (frontend/src/pages/Sales/SalesTaDaUpload.jsx, 554 lines) — 4 class tabs, client-side template generation, drag-drop, parser preview, three-branch result handling
+- Routes wired in App.jsx, sidebar entries gated by salesAllowed (HR + admin only)
+- Shared util frontend/src/utils/cycleUtil.js — extracted cycleSubtitle from 3 inline duplicates
+
+**Critical preservation rules (do not widen):**
+- Phase α re-run preserves ONLY input fields (in_city_days, outstation_days, total_km, bike_km, car_km, notes, source, source_detail) when existing source IN ('upload', 'manual'). Outputs in sales_ta_da_computations are ALWAYS fully recomputed — every snapshot column re-read fresh, every amount re-computed using current class formulas and rates.
+- Only audit-trail metadata (neft_exported_at, neft_exported_by, paid_at) carries forward across recomputes.
+- Class change between α and β: re-snapshot at compute time. Old amounts overwritten with new class's formula. computation_notes records the change.
+
+**Decisions locked during build:**
+- All-or-nothing template uploads (reject entire upload if any row errors)
+- POST /sales/ta-da/compute supports ?employeeCode=X for per-row recompute
+- NEFT mixed-case names (no .toUpperCase) — matches plant generateBankFile convention
+- Partial-failure HTTP status: 200 with success:false (NOT 207) — frontend-friendly
+- Holidays NOT added for TA/DA (different from salary semantics — design doc §11)
+- Sidebar gate for new pages: salesAllowed (HR + admin only). Finance reaches exports via direct URL or via TA/DA Approvals page.
+
+**Known caveats for HR:**
+- Most master employees have NULL ifsc → NEFT export excludes them with X-Missing-Bank-Details warning header. HR must fill IFSC for affected employees via Sales Employee Master before NEFT can include them. This is by-design behavior, not a bug.
+- "Recompute Cycle" button is intentionally protected by a confirmation modal because it overwrites all computation rows in the cycle (preserving input fields for source IN upload/manual, but recomputing all outputs).
+- Phase α status outcomes per class: Class 0 → flag_for_review; Class 1 → computed (auto, no inputs needed); Classes 2/3/4/5 → partial (until Phase β inputs received via PATCH or upload).
+
+**Files for reference / authoritative spec:**
+- docs/sales_consolidated_design.md (in repo) — full spec for cycle rule + 5-class TA/DA model + workflow
+- frontend/src/utils/taDaClassLabels.js — class labels + status badge classes (single source of truth for UI labels)
+- frontend/src/utils/cycleUtil.js — cycleSubtitle helper (shared)
+
+**Operational lessons from this build:**
+1. Push verification after every commit is non-negotiable. We had two phantom-commit losses (commits committed locally but never pushed despite the session reporting otherwise). Fix: enforce git push origin <branch> + git rev-parse origin/<branch> + SHA match before proceeding to next step.
+2. Stream-timeout crashes happened repeatedly on file-creation operations of large files (compute engine, register page, parser file). Workaround: split large files into smaller per-turn commits. Register page was split into 5c-i (skeleton) → 5c-ii (modals) → 5c-iii (Edit modal) → 5c-iv (Detail modal). Each turn smaller = lower timeout risk.
+3. Model selector vigilance: Claude Code occasionally drops to <synthetic> or 1M variants mid-session, both of which had higher crash rates today. Always check the bottom-right model picker and confirm "Opus 4.7" before sending file-creation prompts.
+4. Per-step HARD VERIFICATION RULE saved Phase 3 from joining its lost predecessor. Apply it to every multi-commit phase going forward.
+
+**Remaining for Phase 4:**
+- E2E test against the real Feb 2026 PAYABLE sheet (HR has not yet uploaded this — without it, no ground truth for compute correctness validation against expected payable amounts)
+- Bug triage from production smoke test (login, navigate to Register, click around)
+- Master IFSC fill-in workflow (touchpoint: HR opens Sales Employee Master → edit individual employee → bank details fields → save → re-verify NEFT export)
+- Optional: extract MONTHS constant to shared util (currently triplicated, low priority)
+
+---
+
+## Section 0: Previous Session
 - **Date:** 2026-04-25
 - **Branch:** `main` (fast-forwarded to `141200a` via `claude/sales-cycle-ta-da-migration-WSdAZ` → main → `claude/sales-phase2` → main; both feature branches merged)
 - **Last commit:** `141200a` Add files via upload (corrected `sales_master_import.sql` — schema-aligned)
