@@ -1628,10 +1628,25 @@ router.post('/upload', salesUpload.single('file'), (req, res) => {
     return res.status(400).json({ success: false, error: parseResult.error });
   }
 
-  // Month / year / company resolution — parser result → request body → error
-  const month = parseResult.month || parseInt(req.body.month, 10) || null;
-  const year  = parseResult.year  || parseInt(req.body.year, 10)  || null;
-  const company = parseResult.company || (req.body.company || '').trim() || null;
+  // Month / year / company resolution (Phase 4 fix D):
+  //   request body (HR explicit picker) → parser auto-detect → error
+  // Body wins so HR can override the parser's guess for retroactive uploads
+  // or edge cases around the 25/26 cycle boundary. Falls back to parser-
+  // detected values when the body is missing/invalid (preserves backward
+  // compat for non-UI consumers).
+  const bodyMonth = parseInt(req.body.month, 10);
+  const bodyYear  = parseInt(req.body.year, 10);
+  const bodyCompany = (req.body.company || '').trim();
+  const month = (Number.isInteger(bodyMonth) && bodyMonth >= 1 && bodyMonth <= 12)
+    ? bodyMonth
+    : (parseResult.month || null);
+  const year = (Number.isInteger(bodyYear) && bodyYear >= 2024 && bodyYear <= 2030)
+    ? bodyYear
+    : (parseResult.year || null);
+  const company = bodyCompany || parseResult.company || null;
+  if (!Number.isInteger(bodyMonth) || !Number.isInteger(bodyYear) || !bodyCompany) {
+    console.warn(`[sales-upload] body cycle missing/invalid; falling back to parser-detected ${month}/${year} for ${company || '(unknown company)'}`);
+  }
 
   if (!month || !year || !company) {
     try { fs.unlinkSync(file.path); } catch {}

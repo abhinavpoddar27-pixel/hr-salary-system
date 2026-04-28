@@ -10,6 +10,9 @@ import {
   getSalesEmployees,
 } from '../../utils/api'
 import { useAppStore } from '../../store/appStore'
+import CompanyFilter from '../../components/shared/CompanyFilter'
+import DateSelector from '../../components/common/DateSelector'
+import useDateSelector from '../../hooks/useDateSelector'
 
 const MONTHS = ['', 'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
 const CONFIDENCE_COLOURS = {
@@ -85,6 +88,12 @@ function EmployeePicker({ company, initialQuery = '', onPick, disabled }) {
 // ══════════ Upload view ══════════
 function UploadView({ onUploaded }) {
   const { selectedCompany, selectedMonth, selectedYear } = useAppStore()
+  // Phase 4 fix D: explicit cycle picker. Mirrors the Salary Register
+  // pattern — useDateSelector with syncToStore writes back to useAppStore
+  // so HR's cycle context is shared across sales pages. Picker values
+  // are sent in the multipart form data and the backend now uses them
+  // as primary, falling back to parser auto-detection only if absent.
+  const { dateProps } = useDateSelector({ mode: 'month', syncToStore: true })
   const fileInputRef = useRef(null)
   const [dragOver, setDragOver] = useState(false)
   const [collision, setCollision] = useState(null)
@@ -127,13 +136,21 @@ function UploadView({ onUploaded }) {
 
   return (
     <div className="p-4 md:p-6 space-y-4">
-      <div>
-        <h1 className="text-xl font-bold text-slate-800">Upload Coordinator Sheet</h1>
-        <p className="text-xs text-slate-500">
-          Upload the monthly Excel from the sales coordinator. Parser detects month/year/company
-          automatically; the picker values (company: <span className="font-medium">{selectedCompany || '—'}</span>,
-          {' '}{MONTHS[selectedMonth] || '—'} {selectedYear || ''}) are used as fallback.
-        </p>
+      <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3">
+        <div>
+          <h1 className="text-xl font-bold text-slate-800">Upload Coordinator Sheet</h1>
+          <p className="text-xs text-slate-500">
+            Upload the monthly Excel from the sales coordinator. The picker values below
+            (<span className="font-medium">{selectedCompany || '—'}</span>,
+            {' '}{MONTHS[selectedMonth] || '—'} {selectedYear || ''}) define the cycle the
+            sheet attaches to; if you leave them blank, the backend falls back to whatever
+            month/year/company the parser detects from the file.
+          </p>
+        </div>
+        <div className="flex items-center gap-2 flex-wrap">
+          <CompanyFilter />
+          <DateSelector {...dateProps} />
+        </div>
       </div>
 
       <div
