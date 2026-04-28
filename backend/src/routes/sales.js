@@ -12,7 +12,7 @@ const fs = require('fs');
 const crypto = require('crypto');
 const multer = require('multer');
 const { getDb } = require('../database/db');
-const { requireHrOrAdmin, requirePermission } = require('../middleware/roles');
+const { requireHrOrAdmin, requirePermission, requireAdmin } = require('../middleware/roles');
 const {
   parseSalesCoordinatorFile,
   normalizeName,
@@ -1392,8 +1392,9 @@ router.get('/holidays', (req, res) => {
   res.json({ success: true, data: rows });
 });
 
-// POST /api/sales/holidays
-router.post('/holidays', (req, res) => {
+// POST /api/sales/holidays — admin-only (Phase 4 fix A): writes affect total_days
+// for every active sales employee in the cycle, so HR is locked out per design.
+router.post('/holidays', requireAdmin, (req, res) => {
   const db = getDb();
   const user = req.user?.username || 'unknown';
   const body = req.body || {};
@@ -1439,8 +1440,9 @@ router.post('/holidays', (req, res) => {
   }
 });
 
-// PUT /api/sales/holidays/:id — update holiday_name / applicable_states / is_gazetted only
-router.put('/holidays/:id', (req, res) => {
+// PUT /api/sales/holidays/:id — admin-only (Phase 4 fix A).
+// Updates holiday_name / applicable_states / is_gazetted only.
+router.put('/holidays/:id', requireAdmin, (req, res) => {
   const db = getDb();
   const user = req.user?.username || 'unknown';
   const body = req.body || {};
@@ -1478,8 +1480,10 @@ router.put('/holidays/:id', (req, res) => {
   res.json({ success: true, data: row });
 });
 
-// DELETE /api/sales/holidays/:id — hard delete (Phase 2; no Stage 3 refs yet)
-router.delete('/holidays/:id', (req, res) => {
+// DELETE /api/sales/holidays/:id — admin-only (Phase 4 fix A).
+// Hard delete (Phase 2; no Stage 3 refs yet). Blocked if a finalized
+// salary computation already references this holiday's month.
+router.delete('/holidays/:id', requireAdmin, (req, res) => {
   const db = getDb();
   const user = req.user?.username || 'unknown';
   const id = parseInt(req.params.id, 10);

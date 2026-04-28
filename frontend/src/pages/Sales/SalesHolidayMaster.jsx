@@ -9,6 +9,7 @@ import {
   salesHolidayDelete,
 } from '../../utils/api'
 import { useAppStore } from '../../store/appStore'
+import { isAdmin } from '../../utils/role'
 import Modal from '../../components/ui/Modal'
 import ConfirmDialog from '../../components/ui/ConfirmDialog'
 import CompanyFilter from '../../components/shared/CompanyFilter'
@@ -155,7 +156,11 @@ function HolidayForm({ initial, isEdit, company, onSubmit, onCancel, submitting 
 
 export default function SalesHolidayMaster() {
   const qc = useQueryClient()
-  const { selectedCompany } = useAppStore()
+  const { selectedCompany, user } = useAppStore()
+  // Phase 4 fix A: holiday writes are admin-only — adding/editing/deleting
+  // a holiday changes total_days for every active sales employee in the
+  // affected cycle, so HR can read but not write.
+  const admin = isAdmin(user)
 
   const [year, setYear] = useState(new Date().getFullYear())
   const [modalMode, setModalMode] = useState(null) // 'create' | 'edit'
@@ -239,12 +244,20 @@ export default function SalesHolidayMaster() {
             className="border border-slate-300 rounded-lg px-2 py-1.5 text-sm bg-white">
             {yearOpts.map(y => <option key={y} value={y}>{y}</option>)}
           </select>
-          <button onClick={openCreate}
-            className="px-3 py-1.5 text-sm rounded-lg bg-blue-600 hover:bg-blue-700 text-white">
-            + Add Holiday
-          </button>
+          {admin && (
+            <button onClick={openCreate}
+              className="px-3 py-1.5 text-sm rounded-lg bg-blue-600 hover:bg-blue-700 text-white">
+              + Add Holiday
+            </button>
+          )}
         </div>
       </div>
+
+      {!admin && (
+        <div className="bg-amber-50 border border-amber-200 rounded-lg px-3 py-2 text-xs text-amber-800">
+          Holiday changes are admin-only. Contact admin to add, edit, or delete sales holidays.
+        </div>
+      )}
 
       <div className="bg-white rounded-lg border border-slate-200 overflow-x-auto">
         <table className="min-w-[700px] w-full text-sm">
@@ -284,10 +297,14 @@ export default function SalesHolidayMaster() {
                   </span>
                 </td>
                 <td className="px-3 py-2">
-                  <div className="flex gap-2 text-xs">
-                    <button onClick={() => openEdit(r)} className="text-blue-600 hover:text-blue-800">Edit</button>
-                    <button onClick={() => setConfirmDel(r)} className="text-red-600 hover:text-red-800">Delete</button>
-                  </div>
+                  {admin ? (
+                    <div className="flex gap-2 text-xs">
+                      <button onClick={() => openEdit(r)} className="text-blue-600 hover:text-blue-800">Edit</button>
+                      <button onClick={() => setConfirmDel(r)} className="text-red-600 hover:text-red-800">Delete</button>
+                    </div>
+                  ) : (
+                    <span className="text-xs text-slate-400">—</span>
+                  )}
                 </td>
               </tr>
             ))}
