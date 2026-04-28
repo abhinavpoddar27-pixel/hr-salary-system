@@ -1,4 +1,42 @@
 ## Section 0: Last Session
+- **Date:** 2026-04-28
+- **Branch:** `main` at `e7496e7` (Phase 4 fixes A–D shipped; feature branch `claude/apply-hard-verification-rule-X0Tc3` retained on origin as recovery point)
+- **Last commit:** `e7496e7` build(frontend): rebuild dist after sales upload cycle picker (Phase 4 fix D)
+- **Files changed this session:**
+  - `backend/src/routes/sales.js` — applied `requireAdmin` to POST/PUT/DELETE `/holidays` (fix A); flipped `/upload` cycle precedence to body-wins with parser-fallback + `console.warn` on fallback (fix D)
+  - `frontend/src/pages/Sales/SalesEmployeeMaster.jsx` — auto-assign code on create: removed Code field on New form, kept read-only on Edit, success toast surfaces assigned `S###` (Bug Fix #1, pre-Phase-4)
+  - `frontend/src/pages/Sales/SalesHolidayMaster.jsx` — gated Add/Edit/Delete buttons behind `isAdmin(user)`, added amber non-admin info banner (fix A)
+  - `frontend/src/pages/Sales/SalesSalaryCompute.jsx` — split single "Gross ₹" column into "Gross ₹" (stated, `r.gross_monthly`) + "Earned ₹" (`r.gross_earned`); added `useDateSelector`+`<DateSelector>` cycle picker in both pre/post-compute branches (fixes B + C)
+  - `frontend/src/pages/Sales/SalesUpload.jsx` — added `<CompanyFilter>`+`<DateSelector>` to UploadView header; subtitle rewritten to reflect picker-primary precedence (fix D)
+  - `frontend/src/utils/api.js` — `salesTaDaNeftPreview` (Phase 3 step 5c-ii); `salesTaDaUpload` multipart helper (Phase 3 step 6); `salesTaDaEmployeeDetail`+`salesTaDaInputsPatch` already in but used widely this session
+  - `frontend/src/utils/taDaClassLabels.js` — fixed `ratesForClass(1)` → `[da_rate]`; fixed `ratesForClass(5)` → all 4 fields; added new `labelForRate(key, classNum)` helper for class-aware labels (Bug Fix #2)
+  - `frontend/dist/*` — rebuilt 7 times (one per source-commit batch + the merge-commits)
+  - `CLAUDE.md` — this canonical Section 0 prepended on top of the 2026-04-27 entry
+- **What was fixed/built:** Six independent fixes shipped to main, each with its own ff-merge commit and HARD VERIFICATION (commit SHA + origin SHA confirmed match before declaring done). Two bug fixes from earlier in the day (Sales employee code auto-assign at `160dab2`, TA/DA Request modal class-aware rate fields at `cfe7b4d`); then four Phase 4 fixes: A `7b90509` Sales Holiday Master locked to admin-only writes; B `7a474a6` salary register Gross/Earned split into two columns; C `2a538f4` salary register cycle picker (allows HR to navigate past cycles); D `0a76c4c` upload page cycle picker + backend body-wins precedence override.
+- **What's fragile:**
+  - **Backend `/sales/upload` cycle precedence flipped 2026-04-28.** `req.body.month/year/company` now wins over parser-detected. Range validation is hardcoded `month ∈ [1,12]`, `year ∈ [2024,2030]`. If a curl-style consumer passes invalid body values, handler silently falls back to parser — observable only via `[sales-upload]` console.warn in server log. If anyone refactors and accidentally restores parser-first, HR's explicit picker is silently ignored again.
+  - **Cross-page cycle context is shared via `useAppStore.selectedMonth/selectedYear`.** Salary Register, Upload, and any future sales page using `useDateSelector({syncToStore:true})` write to the same global slot. Plant pages (Stage 7 SalaryComputation, etc.) ALSO sync to this slot — picking Mar 2026 on a sales page leaves plant pages on Mar 2026 too. Documented but easy to forget.
+  - **Default cycle is "calendar month from store"** (current calendar default if first load). Smart "most recent cycle with computed data" default was deferred — needs a new backend endpoint (`GET /api/sales/most-recent-cycle?company=X`) and an auto-init effect.
+  - **`SalesHolidayMaster.jsx` admin gate is UI-only safety net** — backend `requireAdmin` is the real enforcement. If frontend gate is bypassed (e.g., a future refactor accidentally drops the conditional), the backend still 403s with "Admin access required". Audit trail via `writeAuditP2()` (existing convention) writes `actionType: 'create'/'update'/'delete'` — NOT prompt-spec `'holiday_change'/'holiday_delete'` (kept consistent with rest of sales codebase).
+  - **`gross_monthly` totals on register are computed client-side** via `rows.reduce(...)` inline — not in the backend `totals` object. If row paging is ever introduced, this will under-count. Today register endpoint returns all rows with no pagination, so it's correct.
+  - **Audit trail for Sales Holiday writes is via `writeAuditP2`** — existing helper that uses `actionType: 'create'/'update'/'delete'`. Diverges from the prompt's illustrative `'holiday_change'/'holiday_delete'` strings; preserved existing convention. Filter audit_log by `table_name='sales_holidays'` to find holiday changes.
+  - **Auto-assign code SQL** (`SUBSTR(code, 2)` + `CAST(... AS INTEGER)`) assumes single-letter prefix and integer body. Format is `'S' + n.padStart(3,'0')` for n<1000, then unpadded. Past 999 the format widens silently. If a future code format breaks the prefix assumption (e.g., 'SLS-001' with hyphens), the SQL silently re-issues from S001 — would crash on UNIQUE collision but with confusing error. Document the format invariant in CLAUDE.md.
+  - **TA/DA Request modal `ratesForClass(1)` is now `['da_rate']` only.** Existing Class 1 employees with non-NULL values in `da_outstation_rate`/`ta_rate_primary`/`ta_rate_secondary` (legacy data from before fix shipped) will only be cleaned when HR submits a fresh change request that gets approved. No data migration was performed.
+- **Unfinished work:**
+  - **Phase 4 fix E** (block excess `days_given` validation) — final fix in the 5-fix Phase 4 sequence, prompt not yet sent. Each Phase 4 fix shipped independently per design.
+  - **CLAUDE.md Section 0** for the 2 pre-Phase-4 bug fixes (Sales employee code auto-assign at `160dab2`, TA/DA conditional rate fields at `cfe7b4d`) was promised but never appended. The 2026-04-27 handoff entry covers Phase 3 only — these 2 fixes from earlier today are documented in this entry retroactively.
+- **Known issues remaining:**
+  - Phase 4 fix E (excess days validation) pending — separate ticket.
+  - "Most-recent-cycle-with-data" default for the cycle picker — needs new backend endpoint, deferred follow-up.
+  - URL persistence for cycle picker (e.g. `?month=3&year=2026` on Sales pages) — not implemented; matches plant convention. Refresh resets to global-store value.
+  - `RATE_FIELD_LABELS` is still imported in `SalesTaDaApprovals.jsx:15` but unused (dead import). Trivial cleanup, low priority.
+  - Phase 3 feature branch `claude/sales-phase3-tada-compute-nqe1h` still on origin awaiting production smoke test — delete after smoke passes.
+  - Most master employees still have NULL `ifsc` → NEFT export excludes them with `X-Missing-Bank-Details` warning. By-design behavior.
+- **Next session should:** (a) Production smoke test of fixes A through D on Railway: confirm HR can no longer see Add/Edit/Delete on Sales Holidays, admin can; verify Salary Register shows Gross + Earned columns with cycle picker; verify Upload page picker is visible and writes month/year to multipart form; verify cross-page cycle context syncs. (b) If smoke passes cleanly, ship Phase 4 fix E (block excess `days_given` validation) — final fix in the sequence. (c) Optional: append a one-line entry per fix to CLAUDE.md if you want individual-fix-level granularity in the doc rather than this rolled-up entry. (d) Optional: smart "most recent cycle with data" default endpoint for the picker.
+
+---
+
+## Section 0: Previous Session
 - **Date:** 2026-04-27
 - **Branch:** `main` (Phase 3 feature branch `claude/sales-phase3-tada-compute-nqe1h` retained as recovery point — NOT deleted)
 - **Last commit:** `1d79d99` docs: Phase 3 session handoff (TA/DA compute + register + upload shipped)
