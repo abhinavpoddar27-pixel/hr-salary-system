@@ -1092,7 +1092,10 @@ router.post('/employees', (req, res) => {
   const body = req.body || {};
   const user = req.user?.username || 'unknown';
 
-  const required = ['code', 'name', 'company', 'bank_name', 'account_no', 'ifsc'];
+  // `code` is auto-assigned server-side when omitted (S### per company,
+  // race-safe via transaction below). HR-supplied codes are accepted for
+  // scripted/migration use cases but flagged in audit.
+  const required = ['name', 'company', 'bank_name', 'account_no', 'ifsc'];
   const missing = required.filter(f => !body[f] || String(body[f]).trim() === '');
   if (missing.length) {
     return res.status(400).json({ success: false, error: `Missing required field(s): ${missing.join(', ')}` });
@@ -1102,44 +1105,78 @@ router.post('/employees', (req, res) => {
     return res.status(400).json({ success: false, error: `Invalid status. Must be one of: ${VALID_STATUSES.join(', ')}` });
   }
 
-  const existing = db.prepare('SELECT id FROM sales_employees WHERE code = ? AND company = ?')
-                     .get(body.code, body.company);
-  if (existing) {
-    return res.status(409).json({ success: false, error: `Sales employee ${body.code} already exists in ${body.company}` });
-  }
+  const explicitCode = body.code && String(body.code).trim() !== ''
+    ? String(body.code).trim()
+    : null;
 
-  // Only include columns the caller actually supplied — keeps SQLite DEFAULT
-  // values (e.g. status='Active', pf_applicable=0) in effect for omitted fields.
-  const cols = ['code', 'name', 'company', 'created_by', 'updated_by'];
-  const values = [body.code, body.name, body.company, user, user];
+  // Build the column/value set excluding `code` — code is added inside the
+  // transaction once it's resolved (auto-assigned or validated explicit).
+  const cols = ['name', 'company', 'created_by', 'updated_by'];
+  const values = [body.name, body.company, user, user];
   for (const f of UPDATABLE_FIELDS) {
-    if (['code', 'company'].includes(f)) continue; // already added
+    if (['code', 'company'].includes(f)) continue; // company already added; code handled below
     if (f === 'name') continue;                    // already added
     if (body[f] === undefined) continue;
     cols.push(f);
     values.push(body[f]);
   }
-  const placeholders = cols.map(() => '?').join(', ');
 
   try {
-    const info = db.prepare(
-      `INSERT INTO sales_employees (${cols.join(', ')}) VALUES (${placeholders})`
-    ).run(...values);
+    // SELECT-MAX + INSERT in a single transaction so simultaneous creates
+    // can't collide on the auto-assigned code. Explicit-code path is also
+    // wrapped — uniqueness check + insert run as one unit.
+    const result = db.transaction(() => {
+      let assignedCode;
+      let codeWasExplicit = false;
 
-    writeAudit(db, {
-      recordId: info.lastInsertRowid,
-      empCode: body.code,
-      field: 'created',
-      oldVal: '',
-      newVal: body.name,
-      user,
-      actionType: 'create',
-      remark: `Sales employee created in ${body.company}`
-    });
+      if (explicitCode) {
+        codeWasExplicit = true;
+        const dup = db.prepare('SELECT id FROM sales_employees WHERE code = ? AND company = ?')
+                      .get(explicitCode, body.company);
+        if (dup) {
+          // Throw to abort the transaction; caught below and surfaced as 409.
+          const err = new Error(`Sales employee ${explicitCode} already exists in ${body.company}`);
+          err.statusCode = 409;
+          throw err;
+        }
+        assignedCode = explicitCode;
+      } else {
+        const nextN = db.prepare(
+          'SELECT COALESCE(MAX(CAST(SUBSTR(code, 2) AS INTEGER)), 0) + 1 AS next FROM sales_employees WHERE company = ?'
+        ).get(body.company).next;
+        // Pad to 3 digits while < 1000; widens naturally past S999.
+        assignedCode = 'S' + (nextN < 1000 ? String(nextN).padStart(3, '0') : String(nextN));
+      }
 
-    const row = db.prepare('SELECT * FROM sales_employees WHERE id = ?').get(info.lastInsertRowid);
-    res.status(201).json({ success: true, data: row });
+      const insertCols = ['code', ...cols];
+      const insertVals = [assignedCode, ...values];
+      const placeholders = insertCols.map(() => '?').join(', ');
+      const info = db.prepare(
+        `INSERT INTO sales_employees (${insertCols.join(', ')}) VALUES (${placeholders})`
+      ).run(...insertVals);
+
+      writeAudit(db, {
+        recordId: info.lastInsertRowid,
+        empCode: assignedCode,
+        field: 'created',
+        oldVal: '',
+        newVal: body.name,
+        user,
+        actionType: codeWasExplicit ? 'create_with_explicit_code' : 'create',
+        remark: codeWasExplicit
+          ? `Sales employee created in ${body.company} with HR-supplied code (auto-assign bypassed)`
+          : `Sales employee created in ${body.company} (code auto-assigned)`,
+      });
+
+      const row = db.prepare('SELECT * FROM sales_employees WHERE id = ?').get(info.lastInsertRowid);
+      return row;
+    })();
+
+    res.status(201).json({ success: true, data: result });
   } catch (e) {
+    if (e && e.statusCode === 409) {
+      return res.status(409).json({ success: false, error: e.message });
+    }
     return res.status(500).json({ success: false, error: e.message });
   }
 });

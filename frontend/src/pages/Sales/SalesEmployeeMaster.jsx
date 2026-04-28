@@ -42,7 +42,9 @@ function statusBadge(status) {
 
 function emptyForm(defaultCompany = '') {
   return {
-    code: '', name: '', company: defaultCompany,
+    // `code` is omitted on create — backend auto-assigns S### per company.
+    // Edit form pre-fills `code` from the existing row via { ...initial }.
+    name: '', company: defaultCompany,
     state: '', headquarters: '', city_of_operation: '',
     reporting_manager: '', designation: '', punch_no: '',
     working_hours: '',
@@ -64,7 +66,7 @@ function EmployeeForm({ initial, isEdit, onSubmit, onCancel, submitting }) {
   const validate = () => {
     const errs = {}
     if (!isEdit) {
-      if (!form.code?.trim()) errs.code = 'Required'
+      // `code` is auto-assigned server-side on create — no client validation.
       if (!form.company?.trim()) errs.company = 'Required'
     }
     if (!form.name?.trim()) errs.name = 'Required'
@@ -102,12 +104,13 @@ function EmployeeForm({ initial, isEdit, onSubmit, onCancel, submitting }) {
       <section>
         <h4 className="text-sm font-semibold text-slate-800 mb-2">Identity</h4>
         <div className="grid grid-cols-2 gap-3">
-          <div>
-            {lbl('Code *')}
-            <input disabled={isEdit} value={form.code} onChange={e => set('code', e.target.value)}
-              className={clsx('w-full border rounded-lg px-2 py-1.5 text-sm', errors.code ? 'border-red-400' : 'border-slate-300', isEdit && 'bg-slate-100')} />
-            {errLine('code')}
-          </div>
+          {isEdit && (
+            <div>
+              {lbl('Code')}
+              <input disabled value={form.code || ''} readOnly
+                className="w-full border rounded-lg px-2 py-1.5 text-sm border-slate-300 bg-slate-100" />
+            </div>
+          )}
           <div>
             {lbl('Company *')}
             <select disabled={isEdit} value={form.company} onChange={e => set('company', e.target.value)}
@@ -516,8 +519,9 @@ export default function SalesEmployeeMaster() {
 
   const createMut = useMutation({
     mutationFn: (data) => createSalesEmployee(data),
-    onSuccess: () => {
-      toast.success('Sales employee created')
+    onSuccess: (resp) => {
+      const assigned = resp?.data?.data?.code
+      toast.success(assigned ? `Created employee ${assigned}` : 'Sales employee created')
       qc.invalidateQueries({ queryKey: ['sales-employees'] })
       setModalMode(null); setEditing(null)
     },
