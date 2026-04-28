@@ -20,7 +20,7 @@ import {
   TA_DA_CLASS_LABELS,
   classLabel,
   ratesForClass,
-  RATE_FIELD_LABELS,
+  labelForRate,
   STATUS_BADGE,
   relativeTime,
 } from '../../utils/taDaClassLabels'
@@ -282,7 +282,7 @@ function TaDaRequestModal({ employee, onClose, onSubmitted }) {
 
   const renderRateInput = (k, value, setter) => (
     <div key={k}>
-      {lbl(RATE_FIELD_LABELS[k])}
+      {lbl(labelForRate(k, cls))}
       <input
         type="number" step="0.01" min="0"
         value={value ?? ''}
@@ -318,7 +318,9 @@ function TaDaRequestModal({ employee, onClose, onSubmitted }) {
 
         {visibleRates.length === 0 && (
           <div className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded p-2">
-            Class {cls} carries no rate fields — submit with a reason and finance will resolve.
+            {Number(cls) === 0
+              ? 'Flag for Review — no rates apply.'
+              : `Class ${cls} carries no rate fields — submit with a reason and finance will resolve.`}
           </div>
         )}
         {visibleRates.length > 0 && (
