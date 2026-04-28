@@ -14,6 +14,8 @@ import {
 import { useAppStore } from '../../store/appStore'
 import { cycleSubtitle } from '../../utils/cycleUtil'
 import CompanyFilter from '../../components/shared/CompanyFilter'
+import DateSelector from '../../components/common/DateSelector'
+import useDateSelector from '../../hooks/useDateSelector'
 import ConfirmDialog from '../../components/ui/ConfirmDialog'
 
 function triggerBlobDownload(blob, filename) {
@@ -93,6 +95,12 @@ export default function SalesSalaryCompute() {
   const qc = useQueryClient()
   const navigate = useNavigate()
   const { selectedCompany, selectedMonth, selectedYear } = useAppStore()
+  // Phase 4 fix C: month/year picker so HR can navigate to past cycles.
+  // Picker writes back to the global store via syncToStore — the page
+  // reads selectedMonth/selectedYear from the store directly, so all
+  // downstream actions (register query, recompute, Excel + NEFT exports,
+  // cycle subtitle) automatically pick up the new selection.
+  const { dateProps } = useDateSelector({ mode: 'month', syncToStore: true })
 
   const [confirmStatusChange, setConfirmStatusChange] = useState(null)
   const [confirmRecompute, setConfirmRecompute] = useState(false)
@@ -237,7 +245,10 @@ export default function SalesSalaryCompute() {
               {cycleSubtitle(selectedMonth, selectedYear)}
             </p>
           </div>
-          <CompanyFilter />
+          <div className="flex items-center gap-2 flex-wrap">
+            <CompanyFilter />
+            <DateSelector {...dateProps} />
+          </div>
         </div>
 
         <div className="bg-white rounded-lg border border-slate-200 p-8 text-center">
@@ -276,6 +287,7 @@ export default function SalesSalaryCompute() {
         </div>
         <div className="flex items-center gap-2 flex-wrap">
           <CompanyFilter />
+          <DateSelector {...dateProps} />
           <button
             onClick={handleExportExcel}
             disabled={exportBusy || !hasRows}
