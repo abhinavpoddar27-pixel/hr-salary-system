@@ -15,18 +15,18 @@ import DateSelector from '../../components/common/DateSelector'
 import useDateSelector from '../../hooks/useDateSelector'
 
 const MONTHS = ['', 'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
-const CONFIDENCE_COLOURS = {
-  exact:     'bg-green-100 text-green-800',
-  high:      'bg-green-100 text-green-700',
-  medium:    'bg-blue-100 text-blue-700',
-  low:       'bg-amber-100 text-amber-800',
-  unmatched: 'bg-red-100 text-red-700',
-  manual:    'bg-purple-100 text-purple-700',
+const CONFIDENCE_BADGE = {
+  exact:     'badge-green',
+  high:      'badge-green',
+  medium:    'badge-blue',
+  low:       'badge-yellow',
+  unmatched: 'badge-red',
+  manual:    'badge-purple',
 }
 
 function ConfidenceBadge({ v }) {
   return (
-    <span className={clsx('text-xs px-2 py-0.5 rounded font-medium', CONFIDENCE_COLOURS[v] || 'bg-slate-100 text-slate-600')}>
+    <span className={clsx(CONFIDENCE_BADGE[v] || 'badge-gray', 'text-[10px]')}>
       {v || '—'}
     </span>
   )
@@ -135,11 +135,11 @@ function UploadView({ onUploaded }) {
   }
 
   return (
-    <div className="p-4 md:p-6 space-y-4">
+    <div className="p-4 md:p-6 space-y-5 animate-fade-in">
       <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3">
         <div>
-          <h1 className="text-xl font-bold text-slate-800">Upload Coordinator Sheet</h1>
-          <p className="text-xs text-slate-500">
+          <h1 className="section-title">Upload Coordinator Sheet</h1>
+          <p className="section-subtitle mt-1">
             Upload the monthly Excel from the sales coordinator. The picker values below
             (<span className="font-medium">{selectedCompany || '—'}</span>,
             {' '}{MONTHS[selectedMonth] || '—'} {selectedYear || ''}) define the cycle the
@@ -153,39 +153,47 @@ function UploadView({ onUploaded }) {
         </div>
       </div>
 
-      <div
-        onDragOver={(e) => { e.preventDefault(); setDragOver(true) }}
-        onDragLeave={() => setDragOver(false)}
-        onDrop={onDrop}
-        onClick={() => !uploadMut.isPending && fileInputRef.current?.click()}
-        className={clsx(
-          'border-2 border-dashed rounded-xl p-8 text-center cursor-pointer transition',
-          dragOver ? 'border-blue-500 bg-blue-50' : 'border-slate-300 bg-white hover:border-blue-400',
-          uploadMut.isPending && 'opacity-60 cursor-wait'
-        )}
-      >
-        <input ref={fileInputRef} type="file" accept=".xls,.xlsx" className="hidden"
-          onChange={e => handleFile(e.target.files?.[0])} />
-        <div className="text-4xl mb-2">📄</div>
-        {uploadMut.isPending ? (
-          <p className="text-sm text-slate-600">Parsing sheet and running auto-match…</p>
-        ) : (
-          <>
-            <p className="text-sm font-medium text-slate-700">Drop XLS/XLSX here, or click to browse</p>
-            <p className="text-xs text-slate-500 mt-1">Max 10MB · one file per upload</p>
-          </>
-        )}
+      <div className="card">
+        <div className="card-body">
+          <div
+            onDragOver={(e) => { e.preventDefault(); setDragOver(true) }}
+            onDragLeave={() => setDragOver(false)}
+            onDrop={onDrop}
+            onClick={() => !uploadMut.isPending && fileInputRef.current?.click()}
+            className={clsx(
+              'border-2 border-dashed rounded-xl p-10 text-center cursor-pointer transition-colors',
+              dragOver ? 'border-blue-400 bg-blue-50' : 'border-slate-200 hover:border-blue-300 hover:bg-slate-50',
+              uploadMut.isPending && 'opacity-60 cursor-wait'
+            )}
+          >
+            <input ref={fileInputRef} type="file" accept=".xls,.xlsx" className="hidden"
+              onChange={e => handleFile(e.target.files?.[0])} />
+            <div className="text-4xl mb-3">📄</div>
+            {uploadMut.isPending ? (
+              <p className="text-slate-600 font-medium">Parsing sheet and running auto-match…</p>
+            ) : (
+              <>
+                <p className="text-slate-600 font-medium">Drop XLS/XLSX here, or click to browse</p>
+                <p className="text-slate-400 text-sm mt-1">Max 10MB · one file per upload</p>
+              </>
+            )}
+          </div>
+        </div>
       </div>
 
       {collision && (
-        <div className="bg-amber-50 border border-amber-300 rounded-lg p-3 text-sm text-amber-900">
-          <div className="font-medium">Duplicate file</div>
-          <div className="text-xs mt-1">{collision.error}</div>
-          <button
-            onClick={() => onUploaded({ uploadId: collision.data.existingUploadId })}
-            className="mt-2 px-3 py-1 text-xs bg-amber-600 hover:bg-amber-700 text-white rounded">
-            Open existing upload #{collision.data.existingUploadId}
-          </button>
+        <div className="card border-amber-200">
+          <div className="card-body">
+            <div className="text-sm text-amber-900">
+              <div className="font-semibold">Duplicate file</div>
+              <div className="text-xs mt-1">{collision.error}</div>
+              <button
+                onClick={() => onUploaded({ uploadId: collision.data.existingUploadId })}
+                className="mt-3 btn-primary btn-sm">
+                Open existing upload #{collision.data.existingUploadId}
+              </button>
+            </div>
+          </div>
         </div>
       )}
     </div>
@@ -202,9 +210,14 @@ const ROW_BG = {
 function ExcessTable({ rows, workingDays, state, isLocked, setState }) {
   const setRow = (id, patch) => setState(s => ({ ...s, [id]: { ...(s[id] || { action: 'pending' }), ...patch } }))
   return (
-    <div className="bg-white rounded-lg border border-slate-200 overflow-x-auto">
+    <div className="card overflow-hidden">
+      <div className="card-header">
+        <span className="font-semibold text-slate-700">Excess days — review</span>
+        <span className="badge-yellow text-[10px]">{rows.length}</span>
+      </div>
+      <div className="overflow-x-auto">
       <table className="min-w-[900px] w-full text-sm">
-        <thead className="bg-slate-50 text-slate-600 text-xs uppercase">
+        <thead className="bg-slate-50 text-[11px] font-bold text-slate-400 uppercase tracking-wider">
           <tr>
             <th className="px-3 py-2 text-left">Sheet Name</th>
             <th className="px-3 py-2 text-left">Code</th>
@@ -254,6 +267,7 @@ function ExcessTable({ rows, workingDays, state, isLocked, setState }) {
           })}
         </tbody>
       </table>
+      </div>
     </div>
   )
 }
@@ -331,48 +345,53 @@ function PreviewView({ uploadId, onBack }) {
     : excess
 
   if (isLoading) {
-    return <div className="p-4 md:p-6 text-sm text-slate-400">Loading upload #{uploadId}…</div>
+    return (
+      <div className="p-4 md:p-6 animate-fade-in">
+        <div className="card p-6 text-sm text-slate-400">Loading upload #{uploadId}…</div>
+      </div>
+    )
   }
   if (!data) {
-    return <div className="p-4 md:p-6 text-sm text-red-600">Could not load upload #{uploadId}.</div>
+    return (
+      <div className="p-4 md:p-6 animate-fade-in">
+        <div className="card p-6 text-sm text-red-600">Could not load upload #{uploadId}.</div>
+      </div>
+    )
   }
 
   return (
-    <div className="p-4 md:p-6 space-y-4">
+    <div className="p-4 md:p-6 space-y-5 animate-fade-in">
       <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3">
         <div>
-          <h1 className="text-xl font-bold text-slate-800">Upload #{upload.id} — Preview</h1>
-          <p className="text-xs text-slate-500">
+          <h1 className="section-title">Upload #{upload.id} — Preview</h1>
+          <p className="section-subtitle mt-1">
             {upload.filename} · {MONTHS[upload.month]} {upload.year} · {upload.company} · {upload.total_rows} rows
           </p>
-          <p className="text-xs mt-1">
-            Status: <span className={clsx('inline-block px-2 py-0.5 rounded font-medium',
-              upload.status === 'matched' ? 'bg-green-100 text-green-700' : 'bg-blue-100 text-blue-700')}>
+          <div className="flex flex-wrap items-center gap-2 mt-2 text-xs">
+            <span>Status:</span>
+            <span className={clsx(upload.status === 'matched' ? 'badge-green' : 'badge-blue', 'text-[10px]')}>
               {upload.status}
             </span>
-            {isLocked && <span className="ml-2 text-amber-700">(locked — matches already confirmed)</span>}
+            {isLocked && <span className="text-amber-700">(locked — matches already confirmed)</span>}
             {workingDays != null && (
-              <span className="ml-2 text-slate-500">· Working days: {workingDays}</span>
+              <span className="text-slate-500">· Working days: {workingDays}</span>
             )}
             {excess.length > 0 && (
-              <span className={clsx('ml-2 inline-block px-2 py-0.5 rounded font-medium',
-                excessAllResolved ? 'bg-green-100 text-green-700' : 'bg-amber-100 text-amber-800')}>
+              <span className={clsx(excessAllResolved ? 'badge-green' : 'badge-yellow', 'text-[10px]')}>
                 {excess.length} row{excess.length === 1 ? '' : 's'} with excess days
                 {excessAllResolved ? ' · all resolved' : ' · needs review'}
               </span>
             )}
-          </p>
+          </div>
         </div>
         <div className="flex items-center gap-2">
-          <button onClick={onBack}
-            className="px-3 py-1.5 text-sm rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700">
+          <button onClick={onBack} className="btn-secondary btn-sm">
             ← Upload another
           </button>
           <button
             onClick={() => confirmMut.mutate()}
             disabled={!canConfirm || confirmMut.isPending}
-            className={clsx('px-4 py-1.5 text-sm rounded-lg font-medium',
-              canConfirm ? 'bg-blue-600 hover:bg-blue-700 text-white' : 'bg-slate-200 text-slate-400 cursor-not-allowed')}>
+            className="btn-primary btn-sm">
             {confirmMut.isPending ? 'Confirming…' : 'Confirm Matches'}
           </button>
         </div>
@@ -396,8 +415,10 @@ function PreviewView({ uploadId, onBack }) {
       </div>
 
       {rowsForTab.length === 0 ? (
-        <div className="bg-white rounded-lg border border-slate-200 p-8 text-center text-sm text-slate-400">
-          No rows in this tab.
+        <div className="card p-8 text-center">
+          <div className="text-3xl mb-2">📭</div>
+          <h3 className="font-semibold text-slate-700 mb-1">No rows in this tab</h3>
+          <p className="text-sm text-slate-500">Switch tabs above to view matched, low-confidence, unmatched, or excess rows.</p>
         </div>
       ) : tab === 'excess' ? (
         <ExcessTable
@@ -408,52 +429,60 @@ function PreviewView({ uploadId, onBack }) {
           setState={setExcessActions}
         />
       ) : (
-        <div className="bg-white rounded-lg border border-slate-200 overflow-x-auto">
-          <table className="min-w-[900px] w-full text-sm">
-            <thead className="bg-slate-50 text-slate-600 text-xs uppercase">
-              <tr>
-                <th className="px-3 py-2 text-left">Sheet #</th>
-                <th className="px-3 py-2 text-left">Sheet Name</th>
-                <th className="px-3 py-2 text-left">City</th>
-                <th className="px-3 py-2 text-left">Manager</th>
-                <th className="px-3 py-2 text-left">Days</th>
-                <th className="px-3 py-2 text-left">Confidence</th>
-                <th className="px-3 py-2 text-left">Resolved</th>
-              </tr>
-            </thead>
-            <tbody>
-              {rowsForTab.map(r => (
-                <tr key={r.id} className="border-t border-slate-100">
-                  <td className="px-3 py-2 text-xs text-slate-500">{r.sheet_row_number}</td>
-                  <td className="px-3 py-2 font-medium text-slate-800">{r.sheet_employee_name}</td>
-                  <td className="px-3 py-2 text-slate-600">{r.sheet_city || '—'}</td>
-                  <td className="px-3 py-2 text-slate-600">{r.sheet_reporting_manager || '—'}</td>
-                  <td className="px-3 py-2 font-mono text-sm">{r.sheet_days_given}</td>
-                  <td className="px-3 py-2">
-                    <ConfidenceBadge v={r.match_confidence} />
-                    <div className="text-[10px] text-slate-400 mt-0.5">{r.match_method}</div>
-                  </td>
-                  <td className="px-3 py-2">
-                    {r.resolved_employee ? (
-                      <div>
-                        <span className="font-mono text-xs text-slate-500">{r.resolved_employee.code}</span>
-                        <span className="ml-2 text-slate-800">{r.resolved_employee.name}</span>
-                      </div>
-                    ) : (
-                      isLocked ? <span className="text-xs text-slate-400">—</span> : (
-                        <EmployeePicker
-                          company={upload.company}
-                          initialQuery={r.sheet_employee_name || ''}
-                          onPick={(emp) => matchMut.mutate({ rowId: r.id, employee_code: emp.code, company: upload.company })}
-                          disabled={matchMut.isPending}
-                        />
-                      )
-                    )}
-                  </td>
+        <div className="card overflow-hidden">
+          <div className="card-header">
+            <span className="font-semibold text-slate-700">
+              {tab === 'matched' ? 'Matched' : tab === 'low' ? 'Low confidence' : 'Unmatched'} rows
+            </span>
+            <span className="badge-gray text-[10px]">{rowsForTab.length}</span>
+          </div>
+          <div className="overflow-x-auto">
+            <table className="w-full min-w-[900px] table-compact text-sm">
+              <thead>
+                <tr>
+                  <th>Sheet #</th>
+                  <th>Sheet Name</th>
+                  <th>City</th>
+                  <th>Manager</th>
+                  <th>Days</th>
+                  <th>Confidence</th>
+                  <th>Resolved</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
+              </thead>
+              <tbody>
+                {rowsForTab.map(r => (
+                  <tr key={r.id}>
+                    <td className="text-xs text-slate-500">{r.sheet_row_number}</td>
+                    <td className="font-medium text-slate-800">{r.sheet_employee_name}</td>
+                    <td className="text-slate-600">{r.sheet_city || '—'}</td>
+                    <td className="text-slate-600">{r.sheet_reporting_manager || '—'}</td>
+                    <td className="font-mono text-sm">{r.sheet_days_given}</td>
+                    <td>
+                      <ConfidenceBadge v={r.match_confidence} />
+                      <div className="text-[10px] text-slate-400 mt-0.5">{r.match_method}</div>
+                    </td>
+                    <td>
+                      {r.resolved_employee ? (
+                        <div>
+                          <span className="font-mono text-xs text-slate-500">{r.resolved_employee.code}</span>
+                          <span className="ml-2 text-slate-800">{r.resolved_employee.name}</span>
+                        </div>
+                      ) : (
+                        isLocked ? <span className="text-xs text-slate-400">—</span> : (
+                          <EmployeePicker
+                            company={upload.company}
+                            initialQuery={r.sheet_employee_name || ''}
+                            onPick={(emp) => matchMut.mutate({ rowId: r.id, employee_code: emp.code, company: upload.company })}
+                            disabled={matchMut.isPending}
+                          />
+                        )
+                      )}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
         </div>
       )}
     </div>

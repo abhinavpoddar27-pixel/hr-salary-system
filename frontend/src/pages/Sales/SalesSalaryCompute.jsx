@@ -31,12 +31,12 @@ function triggerBlobDownload(blob, filename) {
 
 const MONTHS = ['', 'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
 
-const STATUS_COLOURS = {
-  computed:  'bg-slate-100 text-slate-700',
-  reviewed:  'bg-blue-100 text-blue-700',
-  finalized: 'bg-green-100 text-green-800',
-  paid:      'bg-purple-100 text-purple-700',
-  hold:      'bg-amber-100 text-amber-800',
+const STATUS_BADGE = {
+  computed:  'badge-gray',
+  reviewed:  'badge-blue',
+  finalized: 'badge-green',
+  paid:      'badge-purple',
+  hold:      'badge-yellow',
 }
 
 const ALLOWED_MOVES = {
@@ -48,7 +48,7 @@ const ALLOWED_MOVES = {
 }
 
 function StatusBadge({ s }) {
-  return <span className={clsx('px-2 py-0.5 rounded text-xs font-medium', STATUS_COLOURS[s] || 'bg-slate-100')}>{s || '—'}</span>
+  return <span className={clsx(STATUS_BADGE[s] || 'badge-gray', 'text-[10px]')}>{s || '—'}</span>
 }
 
 function fmtINR(n) {
@@ -234,11 +234,11 @@ export default function SalesSalaryCompute() {
   // ── Pre-compute mode ─────────────────────────────────
   if (monthYearReady && !regLoading && !hasRows) {
     return (
-      <div className="p-4 md:p-6 space-y-4">
+      <div className="p-4 md:p-6 space-y-5 animate-fade-in">
         <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3">
           <div>
-            <h1 className="text-xl font-bold text-slate-800">Sales Salary Compute</h1>
-            <p className="text-xs text-slate-500">
+            <h1 className="section-title">Sales Salary Compute</h1>
+            <p className="section-subtitle mt-1">
               {MONTHS[selectedMonth]} {selectedYear} · {selectedCompany}
             </p>
             <p className="text-[11px] text-indigo-600 font-medium mt-0.5">
@@ -251,11 +251,13 @@ export default function SalesSalaryCompute() {
           </div>
         </div>
 
-        <div className="bg-white rounded-lg border border-slate-200 p-8 text-center">
-          <p className="text-sm text-slate-600 mb-3">
-            No salary computation exists for {MONTHS[selectedMonth]} {selectedYear} · {selectedCompany}.
+        <div className="card p-8 text-center">
+          <div className="text-4xl mb-3">₹</div>
+          <h3 className="font-semibold text-slate-700 mb-2">No salary computation yet</h3>
+          <p className="text-sm text-slate-500 mb-2">
+            Nothing computed for {MONTHS[selectedMonth]} {selectedYear} · {selectedCompany}.
           </p>
-          <p className="text-xs text-slate-500 mb-6">
+          <p className="text-xs text-slate-500 max-w-xl mx-auto mb-6">
             Compute will pull the latest confirmed upload for this period, match each row to its sales
             employee master, and run the 8-step salary computation per design §9. Idempotent —
             re-runnable without data loss.
@@ -263,7 +265,7 @@ export default function SalesSalaryCompute() {
           <button
             onClick={() => computeMut.mutate()}
             disabled={computeMut.isPending}
-            className="px-5 py-2 rounded-lg bg-blue-600 hover:bg-blue-700 disabled:bg-slate-400 text-white font-medium"
+            className="btn-primary"
           >
             {computeMut.isPending ? 'Computing…' : 'Compute Salaries'}
           </button>
@@ -274,11 +276,11 @@ export default function SalesSalaryCompute() {
 
   // ── Post-compute mode (register) ─────────────────────
   return (
-    <div className="p-4 md:p-6 space-y-4">
+    <div className="p-4 md:p-6 space-y-5 animate-fade-in">
       <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3">
         <div>
-          <h1 className="text-xl font-bold text-slate-800">Sales Salary Register</h1>
-          <p className="text-xs text-slate-500">
+          <h1 className="section-title">Sales Salary Register</h1>
+          <p className="section-subtitle mt-1">
             {MONTHS[selectedMonth]} {selectedYear} · {selectedCompany} · {rows.length} row(s)
           </p>
           <p className="text-[11px] text-indigo-600 font-medium mt-0.5">
@@ -292,33 +294,41 @@ export default function SalesSalaryCompute() {
             onClick={handleExportExcel}
             disabled={exportBusy || !hasRows}
             title="Download salary register as .xlsx"
-            className="px-3 py-1.5 text-sm rounded-lg bg-emerald-600 hover:bg-emerald-700 disabled:bg-slate-300 disabled:text-slate-500 disabled:cursor-not-allowed text-white">
+            className="px-3 py-2 text-sm bg-green-100 text-green-700 rounded-lg hover:bg-green-200 transition-colors font-medium disabled:opacity-50 disabled:cursor-not-allowed">
             {exportBusy ? 'Exporting…' : 'Export Excel'}
           </button>
           <button
             onClick={handleExportNEFTPreview}
             disabled={exportBusy || !hasRows}
             title="Generate bank NEFT CSV and stamp rows as NEFT-exported"
-            className="px-3 py-1.5 text-sm rounded-lg bg-indigo-600 hover:bg-indigo-700 disabled:bg-slate-300 disabled:text-slate-500 disabled:cursor-not-allowed text-white">
+            className="px-3 py-2 text-sm bg-indigo-100 text-indigo-700 rounded-lg hover:bg-indigo-200 transition-colors font-medium disabled:opacity-50 disabled:cursor-not-allowed">
             {exportBusy ? 'Exporting…' : 'Export Bank NEFT'}
           </button>
           <button
             onClick={handleCompute}
             disabled={computeMut.isPending}
-            className="px-3 py-1.5 text-sm rounded-lg bg-blue-600 hover:bg-blue-700 disabled:bg-slate-400 text-white">
+            className="btn-primary btn-sm">
             {computeMut.isPending ? 'Recomputing…' : 'Recompute'}
           </button>
         </div>
       </div>
 
       {regLoading && (
-        <div className="bg-white rounded-lg border border-slate-200 p-4 text-sm text-slate-400">Loading…</div>
+        <div className="card p-6 text-sm text-slate-400">Loading…</div>
       )}
 
       {!regLoading && hasRows && (
-        <div className="bg-white rounded-lg border border-slate-200 overflow-x-auto">
+        <div className="card overflow-hidden">
+          <div className="card-header">
+            <span className="font-semibold text-slate-700">Salary Register — {rows.length} row(s)</span>
+            <div className="flex items-center gap-2">
+              <span className="badge-gray text-[10px]">{MONTHS[selectedMonth]} {selectedYear}</span>
+              {selectedCompany && <span className="badge-blue text-[10px]">{selectedCompany}</span>}
+            </div>
+          </div>
+          <div className="overflow-x-auto">
           <table className="min-w-[1400px] w-full text-sm">
-            <thead className="bg-slate-50 text-slate-600 text-xs uppercase">
+            <thead className="bg-slate-50 text-[11px] font-bold text-slate-400 uppercase tracking-wider">
               <tr>
                 <th className="px-2 py-2 text-left">Code</th>
                 <th className="px-2 py-2 text-left">Name</th>
@@ -423,7 +433,7 @@ export default function SalesSalaryCompute() {
                 )
               })}
             </tbody>
-            <tfoot className="bg-slate-100 font-semibold">
+            <tfoot className="bg-slate-50 font-bold text-xs">
               <tr>
                 <td colSpan={8} className="px-2 py-2 text-right">Totals:</td>
                 <td className="px-2 py-2 text-right font-mono">
@@ -439,6 +449,7 @@ export default function SalesSalaryCompute() {
               </tr>
             </tfoot>
           </table>
+          </div>
         </div>
       )}
 
