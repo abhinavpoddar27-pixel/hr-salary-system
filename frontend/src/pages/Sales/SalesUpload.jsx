@@ -192,10 +192,80 @@ function UploadView({ onUploaded }) {
   )
 }
 
+// ══════════ Excess Days table (Phase 4 fix E) ══════════
+const ROW_BG = {
+  pending: 'bg-amber-50',
+  accept:  'bg-green-50',
+  edit:    'bg-blue-50',
+  reject:  'bg-red-50',
+}
+function ExcessTable({ rows, workingDays, state, isLocked, setState }) {
+  const setRow = (id, patch) => setState(s => ({ ...s, [id]: { ...(s[id] || { action: 'pending' }), ...patch } }))
+  return (
+    <div className="bg-white rounded-lg border border-slate-200 overflow-x-auto">
+      <table className="min-w-[900px] w-full text-sm">
+        <thead className="bg-slate-50 text-slate-600 text-xs uppercase">
+          <tr>
+            <th className="px-3 py-2 text-left">Sheet Name</th>
+            <th className="px-3 py-2 text-left">Code</th>
+            <th className="px-3 py-2 text-left">Days Given</th>
+            <th className="px-3 py-2 text-left">Working</th>
+            <th className="px-3 py-2 text-left">Excess</th>
+            <th className="px-3 py-2 text-left">Action</th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map(r => {
+            const s = state[r.id] || { action: 'pending' }
+            return (
+              <tr key={r.id} className={clsx('border-t border-slate-100', ROW_BG[s.action])}>
+                <td className="px-3 py-2 font-medium text-slate-800">{r.sheet_employee_name || '—'}</td>
+                <td className="px-3 py-2 font-mono text-xs text-slate-500">{r.employee_code || <span className="text-red-600">unmatched</span>}</td>
+                <td className="px-3 py-2 font-mono">{r.sheet_days_given}</td>
+                <td className="px-3 py-2 font-mono text-slate-500">{workingDays}</td>
+                <td className="px-3 py-2 font-mono text-orange-700 font-bold">+{r.excess_days_value}</td>
+                <td className="px-3 py-2 space-x-1 whitespace-nowrap">
+                  {isLocked ? <span className="text-xs text-slate-400">locked</span> : (<>
+                    <button onClick={() => setRow(r.id, { action: 'accept' })}
+                      className={clsx('px-2 py-0.5 text-xs rounded', s.action === 'accept' ? 'bg-green-600 text-white' : 'bg-green-100 text-green-800 hover:bg-green-200')}>
+                      Accept as-is
+                    </button>
+                    <input type="number" min="0" step="0.5" value={s.edited ?? ''}
+                      placeholder={String(workingDays)}
+                      onChange={e => setRow(r.id, { edited: e.target.value })}
+                      onFocus={() => setRow(r.id, { action: 'edit' })}
+                      className="w-16 border rounded px-1 text-xs py-0.5" />
+                    <button
+                      disabled={!Number.isFinite(Number(s.edited)) || Number(s.edited) <= 0 || Number(s.edited) > workingDays}
+                      onClick={() => setRow(r.id, { action: 'edit' })}
+                      className={clsx('px-2 py-0.5 text-xs rounded',
+                        s.action === 'edit' ? 'bg-blue-600 text-white' : 'bg-blue-100 text-blue-800 hover:bg-blue-200',
+                        'disabled:opacity-40 disabled:cursor-not-allowed')}>
+                      Save edit
+                    </button>
+                    <button onClick={() => setRow(r.id, { action: 'reject' })}
+                      className={clsx('px-2 py-0.5 text-xs rounded', s.action === 'reject' ? 'bg-red-600 text-white' : 'bg-red-100 text-red-800 hover:bg-red-200')}>
+                      Reject
+                    </button>
+                  </>)}
+                </td>
+              </tr>
+            )
+          })}
+        </tbody>
+      </table>
+    </div>
+  )
+}
+
 // ══════════ Preview view ══════════
 function PreviewView({ uploadId, onBack }) {
   const qc = useQueryClient()
   const [tab, setTab] = useState('matched')
+  // Phase 4 fix E: per-row excess action state. Map { rowId → { action, edited } }.
+  // action ∈ 'pending' | 'accept' | 'edit' | 'reject'. New uploads start all
+  // excess rows as 'pending' — Confirm is blocked until none are pending.
+  const [excessActions, setExcessActions] = useState({})
 
   const { data: res, isLoading } = useQuery({
     queryKey: ['sales-upload-preview', uploadId],
@@ -206,6 +276,9 @@ function PreviewView({ uploadId, onBack }) {
   const matched = data?.matched || []
   const low = data?.low || []
   const unmatched = data?.unmatched || []
+  const excess = data?.excess || []
+  const summary = data?.summary || {}
+  const workingDays = summary.working_days_for_cycle ?? null
   const upload = data?.upload
 
   const matchMut = useMutation({
@@ -219,18 +292,43 @@ function PreviewView({ uploadId, onBack }) {
   })
 
   const confirmMut = useMutation({
-    mutationFn: () => salesUploadConfirm(uploadId),
-    onSuccess: () => {
-      toast.success('Matches confirmed — ready for Phase 3 compute')
+    mutationFn: () => {
+      const excess_days_actions = excess
+        .map(r => {
+          const s = excessActions[r.id]
+          if (!s || s.action === 'pending') return null
+          return {
+            rowId: r.id,
+            action: s.action,
+            edited_days_given: s.action === 'edit' ? Number(s.edited) : undefined,
+          }
+        })
+        .filter(Boolean)
+      return salesUploadConfirm(uploadId, { excess_days_actions })
+    },
+    onSuccess: (r) => {
+      const sum = r?.data?.excess_days_summary
+      toast.success(sum
+        ? `Confirmed — excess: ${sum.accepted} accepted, ${sum.edited} edited, ${sum.rejected} rejected`
+        : 'Matches confirmed — ready for Phase 3 compute')
       qc.invalidateQueries({ queryKey: ['sales-upload-preview', uploadId] })
     },
     onError: (err) => toast.error(err?.response?.data?.error || 'Confirm failed'),
   })
 
-  const canConfirm = low.length === 0 && unmatched.length === 0 && upload?.status === 'uploaded'
+  // Excess rows must all have a non-pending action before Confirm enables.
+  const excessAllResolved = excess.every(r => {
+    const s = excessActions[r.id]
+    return s && s.action !== 'pending'
+  })
+  const canConfirm = low.length === 0 && unmatched.length === 0
+    && excessAllResolved && upload?.status === 'uploaded'
   const isLocked = upload?.status !== 'uploaded'
 
-  const rowsForTab = tab === 'matched' ? matched : tab === 'low' ? low : unmatched
+  const rowsForTab = tab === 'matched' ? matched
+    : tab === 'low' ? low
+    : tab === 'unmatched' ? unmatched
+    : excess
 
   if (isLoading) {
     return <div className="p-4 md:p-6 text-sm text-slate-400">Loading upload #{uploadId}…</div>
@@ -253,6 +351,16 @@ function PreviewView({ uploadId, onBack }) {
               {upload.status}
             </span>
             {isLocked && <span className="ml-2 text-amber-700">(locked — matches already confirmed)</span>}
+            {workingDays != null && (
+              <span className="ml-2 text-slate-500">· Working days: {workingDays}</span>
+            )}
+            {excess.length > 0 && (
+              <span className={clsx('ml-2 inline-block px-2 py-0.5 rounded font-medium',
+                excessAllResolved ? 'bg-green-100 text-green-700' : 'bg-amber-100 text-amber-800')}>
+                {excess.length} row{excess.length === 1 ? '' : 's'} with excess days
+                {excessAllResolved ? ' · all resolved' : ' · needs review'}
+              </span>
+            )}
           </p>
         </div>
         <div className="flex items-center gap-2">
@@ -275,6 +383,7 @@ function PreviewView({ uploadId, onBack }) {
           { k: 'matched',   label: 'Matched',   count: matched.length,   colour: 'text-green-700' },
           { k: 'low',       label: 'Low',       count: low.length,       colour: 'text-amber-700' },
           { k: 'unmatched', label: 'Unmatched', count: unmatched.length, colour: 'text-red-700' },
+          { k: 'excess',    label: 'Excess Days', count: excess.length,  colour: 'text-orange-700' },
         ].map(t => (
           <button key={t.k} onClick={() => setTab(t.k)}
             className={clsx(
@@ -290,6 +399,14 @@ function PreviewView({ uploadId, onBack }) {
         <div className="bg-white rounded-lg border border-slate-200 p-8 text-center text-sm text-slate-400">
           No rows in this tab.
         </div>
+      ) : tab === 'excess' ? (
+        <ExcessTable
+          rows={excess}
+          workingDays={workingDays}
+          state={excessActions}
+          isLocked={isLocked}
+          setState={setExcessActions}
+        />
       ) : (
         <div className="bg-white rounded-lg border border-slate-200 overflow-x-auto">
           <table className="min-w-[900px] w-full text-sm">

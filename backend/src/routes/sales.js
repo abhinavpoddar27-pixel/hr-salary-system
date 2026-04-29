@@ -22,6 +22,12 @@ const {
 const taDa = require('../services/taDaChangeRequest');
 const taDaCompute = require('../services/salesTaDaComputation');
 const { parseTaDaUpload } = require('../services/salesTaDaUploadParser');
+// Phase 4 fix E: working-days for the cycle is needed at upload-preview
+// time to flag rows where coordinator-reported `sheet_days_given` exceeds
+// what the cycle physically allows. Reuse the same helpers Phase 3 compute
+// uses so the formula stays single-source-of-truth.
+const { deriveCycle: deriveCycleE, countSundaysInCycle: countSundaysE } = require('../services/cycleUtil');
+const { countGazettedHolidaysInCycle: countHolidaysE } = require('../services/salesSalaryComputation');
 
 // ══════════════════════════════════════════════════════════════════════
 // Phase 2 — TA/DA change-request workflow.
@@ -1754,6 +1760,14 @@ router.get('/upload/:uploadId/preview', (req, res) => {
   const upload = db.prepare('SELECT * FROM sales_uploads WHERE id = ?').get(uploadId);
   if (!upload) return res.status(404).json({ success: false, error: 'Upload not found' });
 
+  // Phase 4 fix E: working-days = calendarDays − Sundays − non-Sunday gazetted
+  // holidays. Same formula Phase 3 compute uses, so rows flagged here line
+  // up with what the compute engine would do downstream.
+  const cycle = deriveCycleE(upload.month, upload.year);
+  const sundays = countSundaysE(cycle.start, cycle.end);
+  const { workingDayHolidays } = countHolidaysE(db, cycle.start, cycle.end, upload.company);
+  const workingDaysForCycle = cycle.lengthDays - sundays - workingDayHolidays;
+
   const rows = db.prepare(`
     SELECT i.*,
            e.code AS resolved_code, e.name AS resolved_name,
@@ -1767,7 +1781,8 @@ router.get('/upload/:uploadId/preview', (req, res) => {
   ORDER BY i.sheet_row_number ASC
   `).all(uploadId);
 
-  const bucket = { matched: [], low: [], unmatched: [] };
+  const bucket = { matched: [], low: [], unmatched: [], excess: [] };
+  let excessCount = 0;
   for (const r of rows) {
     const resolved = r.employee_code ? {
       code: r.resolved_code, name: r.resolved_name,
@@ -1776,14 +1791,45 @@ router.get('/upload/:uploadId/preview', (req, res) => {
     } : null;
     // Strip the flattened resolved_* keys from the row
     const { resolved_code, resolved_name, resolved_designation, resolved_manager, resolved_city, ...rowOnly } = r;
-    const enriched = { ...rowOnly, resolved_employee: resolved };
+
+    // Excess-days flag is ORTHOGONAL to the matching tier — a Matched row
+    // can also appear in the Excess Days tab. Skip rows with no/zero/NaN
+    // days_given (validation only triggers on a positive integer).
+    const daysGiven = Number(r.sheet_days_given);
+    const hasExcessDays = Number.isFinite(daysGiven) && daysGiven > 0
+      && daysGiven > workingDaysForCycle;
+    const excessDaysValue = hasExcessDays ? Math.max(0, daysGiven - workingDaysForCycle) : 0;
+
+    const enriched = {
+      ...rowOnly,
+      resolved_employee: resolved,
+      working_days_for_cycle: workingDaysForCycle,
+      has_excess_days: hasExcessDays,
+      excess_days_value: excessDaysValue,
+    };
 
     if (r.match_confidence === 'low') bucket.low.push(enriched);
     else if (r.match_confidence === 'unmatched') bucket.unmatched.push(enriched);
     else bucket.matched.push(enriched); // exact / high / medium / manual
+
+    if (hasExcessDays) {
+      bucket.excess.push(enriched);
+      excessCount++;
+    }
   }
 
-  res.json({ success: true, data: { upload, ...bucket } });
+  const summary = {
+    total_rows: rows.length,
+    matched_count: bucket.matched.length,
+    low_confidence_count: bucket.low.length,
+    unmatched_count: bucket.unmatched.length,
+    excess_days_count: excessCount,
+    working_days_for_cycle: workingDaysForCycle,
+    cycle_start: cycle.start,
+    cycle_end: cycle.end,
+  };
+
+  res.json({ success: true, data: { upload, ...bucket, summary } });
 });
 
 // PUT /api/sales/upload/:uploadId/match/:rowId — manual HR link
@@ -1839,6 +1885,10 @@ router.put('/upload/:uploadId/match/:rowId', (req, res) => {
 });
 
 // POST /api/sales/upload/:uploadId/confirm — lock matches
+// Body (optional): { excess_days_actions: [{ rowId, action, edited_days_given? }, ...] }
+//   action ∈ 'accept' | 'edit' | 'reject'. Rows with has_excess_days=true that
+//   are NOT in this array default to 'reject' (safe default — explicit choice
+//   forced for over-payments). Phase 4 fix E.
 router.post('/upload/:uploadId/confirm', (req, res) => {
   const db = getDb();
   const user = req.user?.username || 'unknown';
@@ -1848,6 +1898,121 @@ router.post('/upload/:uploadId/confirm', (req, res) => {
   const upload = db.prepare('SELECT * FROM sales_uploads WHERE id = ?').get(uploadId);
   if (!upload) return res.status(404).json({ success: false, error: 'Upload not found' });
 
+  // ── Phase 4 fix E: excess-days actions are processed FIRST, BEFORE the
+  // unmatched-block guard, so HR can use 'reject' to drop doubly-broken
+  // rows (excess days AND unmatched) and still confirm the rest.
+  const cycle = deriveCycleE(upload.month, upload.year);
+  const sundays = countSundaysE(cycle.start, cycle.end);
+  const { workingDayHolidays } = countHolidaysE(db, cycle.start, cycle.end, upload.company);
+  const workingDaysForCycle = cycle.lengthDays - sundays - workingDayHolidays;
+
+  // Map of {rowId → action} from request body.
+  const reqActions = Array.isArray(req.body?.excess_days_actions) ? req.body.excess_days_actions : [];
+  const actionByRowId = new Map();
+  for (const a of reqActions) {
+    const rid = parseInt(a?.rowId, 10);
+    const act = String(a?.action || '').toLowerCase();
+    if (rid && ['accept', 'edit', 'reject'].includes(act)) {
+      actionByRowId.set(rid, { action: act, edited: a?.edited_days_given });
+    }
+  }
+
+  // All rows currently in this upload that have excess days. We re-derive
+  // here (not from request body) so the source of truth is always the DB.
+  const excessRows = db.prepare(`
+    SELECT id, employee_code, sheet_employee_name, sheet_city,
+           sheet_reporting_manager, sheet_days_given, match_confidence
+      FROM sales_monthly_input
+     WHERE upload_id = ?
+       AND sheet_days_given IS NOT NULL
+       AND CAST(sheet_days_given AS REAL) > ?
+  `).all(uploadId, workingDaysForCycle);
+
+  const excessSummary = { accepted: 0, edited: 0, rejected: 0, defaulted_rejects: 0 };
+
+  // Process excess actions inside a single transaction so partial failure
+  // doesn't half-mutate the upload.
+  const processExcess = db.transaction(() => {
+    for (const er of excessRows) {
+      const explicit = actionByRowId.get(er.id);
+      const action = explicit?.action || 'reject';
+      const source = explicit ? 'ui_explicit' : 'default_auto';
+
+      // Forensic snapshot — captures full row contents so the deletion is
+      // recoverable from audit_log alone (per fix E hard requirement).
+      const snapshot = JSON.stringify({
+        rowId: er.id,
+        sheet_employee_name: er.sheet_employee_name,
+        sheet_days_given: er.sheet_days_given,
+        sheet_city: er.sheet_city,
+        sheet_reporting_manager: er.sheet_reporting_manager,
+        match_confidence: er.match_confidence,
+        employee_code: er.employee_code,
+        working_days_for_cycle: workingDaysForCycle,
+      });
+
+      if (action === 'accept') {
+        excessSummary.accepted++;
+        const newVal = JSON.stringify({ action: 'accept', source, edited_days: null });
+        writeAuditP2(db, 'sales_monthly_input', {
+          recordId: er.id, field: 'excess_days_action',
+          oldVal: snapshot, newVal,
+          user, actionType: 'excess_days_accept',
+          remark: `[source: ${source}] Accepted excess days_given=${er.sheet_days_given} > working=${workingDaysForCycle} for ${er.sheet_employee_name || er.employee_code}`,
+          empCode: er.employee_code,
+        });
+      } else if (action === 'edit') {
+        const editedRaw = Number(explicit?.edited);
+        if (!Number.isFinite(editedRaw) || editedRaw <= 0 || editedRaw > workingDaysForCycle) {
+          throw new Error(`Row ${er.id}: edited_days_given must be a positive number ≤ working_days (${workingDaysForCycle}); got ${explicit?.edited}`);
+        }
+        const editedDays = Math.round(editedRaw * 100) / 100;
+        db.prepare('UPDATE sales_monthly_input SET sheet_days_given = ? WHERE id = ?')
+          .run(editedDays, er.id);
+        excessSummary.edited++;
+        const newVal = JSON.stringify({ action: 'edit', source, edited_days: editedDays });
+        writeAuditP2(db, 'sales_monthly_input', {
+          recordId: er.id, field: 'sheet_days_given',
+          oldVal: snapshot, newVal,
+          user, actionType: 'excess_days_edit',
+          remark: `[source: ${source}] Edited days_given ${er.sheet_days_given} → ${editedDays} (working=${workingDaysForCycle}) for ${er.sheet_employee_name || er.employee_code}`,
+          empCode: er.employee_code,
+        });
+      } else { // reject (explicit or defaulted)
+        db.prepare('DELETE FROM sales_monthly_input WHERE id = ?').run(er.id);
+        excessSummary.rejected++;
+        if (source === 'default_auto') excessSummary.defaulted_rejects++;
+        const newVal = JSON.stringify({ action: 'reject', source, edited_days: null });
+        writeAuditP2(db, 'sales_monthly_input', {
+          recordId: er.id, field: 'excess_days_action',
+          oldVal: snapshot, newVal,
+          user, actionType: 'excess_days_reject',
+          remark: `[source: ${source}] Rejected (DELETED) row days_given=${er.sheet_days_given} > working=${workingDaysForCycle} for ${er.sheet_employee_name || er.employee_code}; full row in old_value`,
+          empCode: er.employee_code,
+        });
+      }
+    }
+    // Refresh upload row counts to reflect reject-deletions.
+    const counts = db.prepare(`
+      SELECT
+        COUNT(*) AS total,
+        SUM(CASE WHEN employee_code IS NOT NULL THEN 1 ELSE 0 END) AS matched,
+        SUM(CASE WHEN employee_code IS NULL     THEN 1 ELSE 0 END) AS unmatched
+      FROM sales_monthly_input WHERE upload_id = ?
+    `).get(uploadId);
+    db.prepare(`
+      UPDATE sales_uploads
+         SET total_rows = ?, matched_rows = ?, unmatched_rows = ?
+       WHERE id = ?
+    `).run(counts.total || 0, counts.matched || 0, counts.unmatched || 0, uploadId);
+  });
+
+  try { processExcess(); }
+  catch (e) {
+    return res.status(400).json({ success: false, error: e.message });
+  }
+
+  // ── Existing unmatched-block guard runs AFTER excess processing ──
   const stillUnmatched = db.prepare(`
     SELECT COUNT(*) AS c FROM sales_monthly_input WHERE upload_id = ? AND employee_code IS NULL
   `).get(uploadId).c;
@@ -1856,7 +2021,7 @@ router.post('/upload/:uploadId/confirm', (req, res) => {
     return res.status(400).json({
       success: false,
       error: `Cannot confirm — ${stillUnmatched} row(s) are still unmatched. Resolve every Low / Unmatched row first.`,
-      data: { unmatchedCount: stillUnmatched },
+      data: { unmatchedCount: stillUnmatched, excessProcessed: excessSummary },
     });
   }
 
@@ -1865,11 +2030,16 @@ router.post('/upload/:uploadId/confirm', (req, res) => {
   writeAuditP2(db, 'sales_uploads', {
     recordId: uploadId, field: 'status', oldVal: upload.status, newVal: 'matched',
     user, actionType: 'confirm',
-    remark: `Sales upload #${uploadId} matches confirmed`,
+    remark: `Sales upload #${uploadId} matches confirmed; excess-days summary: ${JSON.stringify(excessSummary)}`,
   });
 
   const updated = db.prepare('SELECT * FROM sales_uploads WHERE id = ?').get(uploadId);
-  res.json({ success: true, data: updated, message: 'Matches confirmed; ready for Phase 3 compute.' });
+  res.json({
+    success: true,
+    data: updated,
+    excess_days_summary: excessSummary,
+    message: 'Matches confirmed; ready for Phase 3 compute.',
+  });
 });
 
 // ════════════════════════════════════════════════════════════════════

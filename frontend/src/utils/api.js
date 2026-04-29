@@ -512,7 +512,7 @@ export const salesHolidayDelete = (id) => api.delete(`/sales/holidays/${id}`)
 export const salesUploadFile = (formData) => api.post('/sales/upload', formData, { headers: { 'Content-Type': 'multipart/form-data' } })
 export const salesUploadPreview = (uploadId) => api.get(`/sales/upload/${uploadId}/preview`)
 export const salesUploadMatch = (uploadId, rowId, data) => api.put(`/sales/upload/${uploadId}/match/${rowId}`, data)
-export const salesUploadConfirm = (uploadId) => api.post(`/sales/upload/${uploadId}/confirm`)
+export const salesUploadConfirm = (uploadId, body) => api.post(`/sales/upload/${uploadId}/confirm`, body || {})
 
 // ── Sales Salary Module (Phase 3) ────────────────────────
 export const salesCompute = (data) => api.post('/sales/compute', data)

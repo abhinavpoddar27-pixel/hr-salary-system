@@ -528,4 +528,5 @@ module.exports = {
   computeSalesEmployee,
   saveSalesSalaryComputation,
   generateSalesPayslipData,
+  countGazettedHolidaysInCycle,
 };
