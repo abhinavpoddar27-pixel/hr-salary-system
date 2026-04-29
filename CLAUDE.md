@@ -1,7 +1,7 @@
 ## Section 0: Last Session
 - **Date:** 2026-04-29
 - **Branch:** `main` (Phase 4 closeout — Fix F source/dist/docs + earlier feature-branch commits fast-forwarded onto main from `claude/session-start-cpIEd`. Before this push origin/main had been at `8d253a2` since Apr 24, so the prior 2026-04-28 entry's claim that Fixes A–D had "shipped to main" was actually still feature-branch-only; the fast-forward this session brings A–F + the Mar 2026 data correction + the unrelated `be3162b` sidebar fix to origin/main for the first time.)
-- **Last commit:** `6e37cfd` docs: phase 4 closeout retrospective + fix E lesson
+- **Last commit:** `c5afc4e` docs: phase 4 closeout retrospective + fix E lesson
 - **Files changed this session:**
   - `CLAUDE.md` — replaced the prior Fix F-only 2026-04-29 entry with this consolidated Phase 4 closeout (Fixes A–F + Mar 2026 data correction + Fix E lesson) and appended a `## Phase 5 Backlog` section after Section 0.
   - Fix F files (touched earlier today, fast-forwarded as part of this push, not re-edited this session): `frontend/src/pages/Sales/SalesUpload.jsx`, `frontend/src/pages/Sales/SalesSalaryCompute.jsx`, `frontend/dist/*`. Earlier Fixes A–E files documented in their respective in-session notes (the 2026-04-28 entry below covers A–D; Fix E commit is `9529d67` touching `backend/src/routes/sales.js`, `backend/src/services/salesSalaryComputation.js`, `frontend/src/pages/Sales/SalesUpload.jsx`, `frontend/src/utils/api.js`); not re-listed here.
