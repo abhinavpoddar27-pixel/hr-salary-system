@@ -266,15 +266,27 @@ export default function Sidebar() {
         collapsed ? '-translate-x-full md:translate-x-0 w-0 md:w-14 overflow-hidden' : 'translate-x-0 w-64'
       )}>
         {/* Logo */}
-        <div className="flex items-center gap-3 px-4 py-4 border-b border-slate-100">
-          <div className="w-8 h-8 bg-blue-600 rounded-lg flex items-center justify-center text-white text-sm font-bold shrink-0">AL</div>
+        <div className={clsx(
+          'flex items-center border-b border-slate-100',
+          collapsed ? 'justify-center px-2 py-4' : 'gap-3 px-4 py-4'
+        )}>
           {!collapsed && (
-            <div className="min-w-0">
-              <div className="text-sm font-semibold text-slate-800 truncate">Asian Lakto</div>
-              <div className="text-xs text-slate-400">HR & Payroll System</div>
-            </div>
+            <>
+              <div className="w-8 h-8 bg-blue-600 rounded-lg flex items-center justify-center text-white text-sm font-bold shrink-0">AL</div>
+              <div className="min-w-0">
+                <div className="text-sm font-semibold text-slate-800 truncate">Asian Lakto</div>
+                <div className="text-xs text-slate-400">HR & Payroll System</div>
+              </div>
+            </>
           )}
-          <button onClick={toggleSidebar} className="ml-auto text-slate-400 hover:text-slate-600 shrink-0">
+          <button
+            onClick={toggleSidebar}
+            aria-label={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+            className={clsx(
+              'text-slate-400 hover:text-slate-600 shrink-0',
+              !collapsed && 'ml-auto'
+            )}
+          >
             <span className="text-xs">{collapsed ? '→' : '←'}</span>
           </button>
         </div>
