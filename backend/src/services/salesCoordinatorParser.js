@@ -300,6 +300,14 @@ function parseSalesCoordinatorFile(filePath) {
     const days = getCellNumber(ws, r, cols.sheet_days_given);
     if (days === null || !Number.isFinite(days)) continue; // non-numeric → skip
 
+    // Coerce -1 → 1 (HR-confirmed dominant clerical pattern: coordinator
+    // typed minus by mistake, intended value is 1). Deliberately narrow:
+    // -2, -3, -15, etc. are NOT coerced and continue to be rejected
+    // downstream at salesSalaryComputation.js:219 as 'invalid_days_given',
+    // surfacing in the Bug A excluded[] banner. Silent normalization by
+    // design — no audit log write per HR decision (2026-04-30).
+    if (days === -1) days = 1;
+
     // Assemble the row. Only include keys we actually capture — no
     // sheet_working_days_ai / sheet_working_days_manual in the output (Q4).
     const row = {
