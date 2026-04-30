@@ -10,6 +10,7 @@ import {
   salesSalaryStatusUpdate,
   salesExportExcel,
   salesExportNEFT,
+  getSalesReadiness,
 } from '../../utils/api'
 import { useAppStore } from '../../store/appStore'
 import { cycleSubtitle } from '../../utils/cycleUtil'
@@ -116,8 +117,23 @@ export default function SalesSalaryCompute() {
   const [neftPreview, setNeftPreview] = useState(null)   // { missing, totals, filename } before download
   const [exportBusy, setExportBusy] = useState(false)
   const [lastExcluded, setLastExcluded] = useState([])    // Phase 5 Bug A: surface excluded[] from compute response
+  const [readinessExpanded, setReadinessExpanded] = useState(false)
 
   const monthYearReady = !!selectedCompany && !!selectedMonth && !!selectedYear
+
+  // Pre-compute readiness banner — proactively surfaces master-data
+  // gaps that will block compute or be excluded from downstream exports.
+  // Compute is NOT gated by this; HR sees the banner and decides.
+  const readinessQ = useQuery({
+    queryKey: ['sales-readiness', selectedMonth, selectedYear, selectedCompany],
+    queryFn: () => getSalesReadiness({
+      month: selectedMonth, year: selectedYear, company: selectedCompany,
+    }),
+    enabled: monthYearReady,
+    staleTime: 30_000,
+    retry: 0,
+  })
+  const readiness = readinessQ.data?.data?.data
 
   const { data: regRes, isLoading: regLoading } = useQuery({
     queryKey: ['sales-salary-register', selectedCompany, selectedMonth, selectedYear],
@@ -141,6 +157,7 @@ export default function SalesSalaryCompute() {
       }
       setLastExcluded(d.excluded || [])
       qc.invalidateQueries({ queryKey: ['sales-salary-register'] })
+      qc.invalidateQueries({ queryKey: ['sales-readiness'] })
       setConfirmRecompute(false)
     },
     onError: (err) => {
@@ -326,6 +343,87 @@ export default function SalesSalaryCompute() {
 
       {regLoading && (
         <div className="card p-6 text-sm text-slate-400">Loading…</div>
+      )}
+
+      {readiness && (readiness.summary.blockers > 0 || readiness.summary.warnings > 0) && (
+        <div className={clsx(
+          'mb-3 rounded-lg border px-4 py-3',
+          readiness.summary.blockers > 0
+            ? 'bg-red-50 border-red-300 text-red-800'
+            : 'bg-amber-50 border-amber-300 text-amber-800'
+        )}>
+          <div className="flex items-center justify-between gap-3 flex-wrap">
+            <div className="flex items-center gap-3 text-sm flex-wrap">
+              <span className="font-semibold">
+                {readiness.summary.blockers > 0 ? '🔴' : '⚠️'}{' '}
+                {readiness.summary.blockers} blocker{readiness.summary.blockers === 1 ? '' : 's'}
+                {' · '}
+                {readiness.summary.warnings} warning{readiness.summary.warnings === 1 ? '' : 's'}
+                {' · '}
+                {readiness.summary.ok} ready
+              </span>
+              <span className="text-xs opacity-75">
+                {readiness.summary.blockers > 0
+                  ? `Compute will skip ${readiness.summary.blockers} entry/entries and produce incomplete output.`
+                  : 'Compute will run; downstream exports may exclude flagged employees.'}
+              </span>
+            </div>
+            <div className="flex items-center gap-2">
+              <button
+                onClick={() => setReadinessExpanded(v => !v)}
+                className="text-xs underline hover:no-underline"
+              >
+                {readinessExpanded ? 'Hide ▲' : 'View details ▼'}
+              </button>
+              <button
+                onClick={() => readinessQ.refetch()}
+                className="text-xs underline hover:no-underline disabled:opacity-50"
+                disabled={readinessQ.isFetching}
+              >
+                {readinessQ.isFetching ? 'Refreshing…' : 'Refresh ↻'}
+              </button>
+            </div>
+          </div>
+          {readinessExpanded && (
+            <div className="mt-3 max-h-64 overflow-y-auto text-xs">
+              {readiness.cycle_warnings?.length > 0 && (
+                <div className="mb-2 italic">
+                  {readiness.cycle_warnings.map((w, i) => (
+                    <div key={`cw${i}`}>• {w.reason_label}</div>
+                  ))}
+                </div>
+              )}
+              {readiness.summary.blockers > 0 && (
+                <div className="mb-2">
+                  <div className="font-semibold mb-1">BLOCKERS — compute will skip these</div>
+                  {readiness.issues.filter(i => i.severity === 'blocker').map((i, idx) => (
+                    <div key={`b${idx}`} className="font-mono">
+                      <span className="inline-block w-16">{i.code}</span>
+                      <span className="inline-block w-40 truncate">{i.name}</span>
+                      <span className="inline-block w-32 truncate opacity-75">{i.city || '—'}</span>
+                      <span className="inline-block w-16">Class {i.ta_da_class ?? '—'}</span>
+                      <span>{i.reason_label}</span>
+                    </div>
+                  ))}
+                </div>
+              )}
+              {readiness.issues.filter(i => i.severity === 'warning').length > 0 && (
+                <div>
+                  <div className="font-semibold mb-1">WARNINGS — compute will run, downstream may exclude</div>
+                  {readiness.issues.filter(i => i.severity === 'warning').map((i, idx) => (
+                    <div key={`w${idx}`} className="font-mono">
+                      <span className="inline-block w-16">{i.code}</span>
+                      <span className="inline-block w-40 truncate">{i.name}</span>
+                      <span className="inline-block w-32 truncate opacity-75">{i.city || '—'}</span>
+                      <span className="inline-block w-16">Class {i.ta_da_class ?? '—'}</span>
+                      <span>{i.reason_label}</span>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+        </div>
       )}
 
       {lastExcluded.length > 0 && (

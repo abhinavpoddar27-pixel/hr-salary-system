@@ -516,6 +516,10 @@ export const salesUploadConfirm = (uploadId, body) => api.post(`/sales/upload/${
 
 // ── Sales Salary Module (Phase 3) ────────────────────────
 export const salesCompute = (data) => api.post('/sales/compute', data)
+// GET /sales/compute/readiness — pre-compute master-data gap detector.
+// Returns { summary:{blockers,warnings,ok,total}, cycle_warnings:[], issues:[] }.
+export const getSalesReadiness = ({ month, year, company } = {}) =>
+  api.get('/sales/compute/readiness', { params: { month, year, company } })
 export const salesSalaryRegister = (params) => api.get('/sales/salary-register', { params })
 export const salesSalaryUpdate = (id, data) => api.put(`/sales/salary/${id}`, data)
 export const salesSalaryStatusUpdate = (id, data) => api.put(`/sales/salary/${id}/status`, data)
@@ -555,6 +559,11 @@ export const salesTaDaInputsPatch    = (code, params, body)    => api.patch(`/sa
 //   200 success      → { success: true,  data: { parsed, valid, invalid, updated, errors } }
 //   200 partial      → { success: false, partial: true, data, succeeded:[], failed:[], note }
 //   400 parser error → { success: false, parsed, valid, invalid, errors:[{row, employee_code, error}] }
+// GET /sales/ta-da/template-data/:class — roster for pre-filled XLSX template.
+// Returns { class, month, year, company, employees:[{code, name, city, days_worked}] }.
+export const getTaDaTemplateData = (classNum, { month, year, company } = {}) =>
+  api.get(`/sales/ta-da/template-data/${classNum}`, { params: { month, year, company } })
+
 export const salesTaDaUpload = (classNum, file, { month, year, company } = {}) => {
   const fd = new FormData()
   fd.append('file', file)

@@ -582,6 +582,68 @@ const taDaUpload = multer({
 const TA_DA_TEMPLATE_CLASSES = new Set([2, 3, 4, 5]);
 const MONTHS_SHORT_TADA = ['', 'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 
+// GET /api/sales/ta-da/template-data/:class?month=&year=&company=
+// Returns active sales employees of the given class with pre-fillable
+// fields (code, name, city, days_worked) for client-side template
+// generation. Read-only; no side effects.
+router.get('/ta-da/template-data/:class',
+  requirePermission('sales-tada-compute'),
+  (req, res) => {
+    try {
+      const classNum = parseInt(req.params.class, 10);
+      if (!TA_DA_TEMPLATE_CLASSES.has(classNum)) {
+        return res.status(400).json({
+          success: false,
+          error: `class must be 2, 3, 4, or 5 (got ${req.params.class})`,
+        });
+      }
+
+      const month = parseInt(req.query.month, 10);
+      const year = parseInt(req.query.year, 10);
+      const company = (req.query.company || '').trim();
+
+      if (!month || month < 1 || month > 12 ||
+          !year  || year  < 2020 || year  > 2100 ||
+          !company) {
+        return res.status(400).json({
+          success: false,
+          error: 'month, year, and company query params are required',
+        });
+      }
+
+      const db = getDb();
+      const employees = db.prepare(`
+        SELECT e.code,
+               e.name,
+               e.city_of_operation AS city,
+               COALESCE(mi.days_worked, smi.sheet_days_given) AS days_worked
+          FROM sales_employees e
+          LEFT JOIN sales_ta_da_monthly_inputs mi
+            ON mi.employee_id = e.id
+           AND mi.month = ?
+           AND mi.year = ?
+           AND mi.company = ?
+          LEFT JOIN sales_monthly_input smi
+            ON smi.employee_code = e.code
+           AND smi.month = ?
+           AND smi.year = ?
+           AND smi.company = ?
+         WHERE e.company = ?
+           AND e.status = 'Active'
+           AND e.ta_da_class = ?
+         ORDER BY e.name ASC
+      `).all(month, year, company, month, year, company, company, classNum);
+
+      res.json({
+        success: true,
+        data: { class: classNum, month, year, company, employees },
+      });
+    } catch (e) {
+      console.error('[ta-da/template-data]', e?.stack || e);
+      res.status(500).json({ success: false, error: e?.message || 'template-data failed' });
+    }
+  });
+
 // POST /api/sales/ta-da/upload/:class — Phase β bulk upload
 router.post('/ta-da/upload/:class',
   requirePermission('sales-tada-compute'),
@@ -2070,6 +2132,184 @@ const ALLOWED_STATUS_MOVES = {
   paid:      [],              // terminal
   hold:      ['computed', 'reviewed'],
 };
+
+// ── GET /api/sales/compute/readiness ────────────────────────────────
+// Pre-compute readiness check. Surfaces master-data gaps that will
+// cause compute to skip employees or downstream exports to exclude
+// them. Read-only; no side effects. Compute is NOT gated by this —
+// the banner is informational, HR's call to proceed.
+router.get('/compute/readiness', (req, res) => {
+  const month = parseInt(req.query.month, 10);
+  const year  = parseInt(req.query.year, 10);
+  const company = (req.query.company || '').trim();
+
+  if (!month || month < 1 || month > 12 ||
+      !year  || year  < 2020 || year > 2100 ||
+      !company) {
+    return res.status(400).json({
+      success: false,
+      error: 'month, year, and company query params are required',
+    });
+  }
+
+  try {
+    const db = getDb();
+
+    const employees = db.prepare(`
+      SELECT id, code, name, city_of_operation AS city,
+             gross_salary, ta_da_class,
+             da_rate, da_outstation_rate,
+             ta_rate_primary, ta_rate_secondary,
+             bank_name, account_no, ifsc,
+             pf_applicable, pt_applicable, state
+        FROM sales_employees
+       WHERE company = ? AND status = 'Active'
+       ORDER BY name ASC
+    `).all(company);
+
+    const uploadCount = db.prepare(`
+      SELECT COUNT(*) AS cnt FROM sales_monthly_input
+       WHERE month = ? AND year = ? AND company = ?
+    `).get(month, year, company).cnt;
+
+    const inUpload = new Set(db.prepare(`
+      SELECT DISTINCT employee_code FROM sales_monthly_input
+       WHERE month = ? AND year = ? AND company = ?
+    `).all(month, year, company).map(r => r.employee_code));
+
+    // Pending TA/DA changes — scoped to this company via JOIN
+    // (sales_ta_da_change_requests has no company column of its own).
+    const pendingTaDa = new Set(db.prepare(`
+      SELECT DISTINCT r.employee_code
+        FROM sales_ta_da_change_requests r
+        JOIN sales_employees e ON e.id = r.employee_id
+       WHERE r.status = 'pending' AND e.company = ?
+    `).all(company).map(r => r.employee_code));
+
+    const issues = [];
+    let okCount = 0;
+
+    for (const e of employees) {
+      const empIssues = [];
+
+      // BLOCKERS — compute will skip these or produce zero output
+      if (e.ta_da_class === null || e.ta_da_class === undefined) {
+        empIssues.push({
+          severity: 'blocker',
+          reason_code: 'NO_TADA_CLASS',
+          reason_label: 'No TA/DA class assigned in master',
+        });
+      } else if (e.ta_da_class === 0) {
+        empIssues.push({
+          severity: 'blocker',
+          reason_code: 'FLAG_FOR_REVIEW',
+          reason_label: 'TA/DA class is 0 (flag for review)',
+        });
+      } else {
+        const cls = e.ta_da_class;
+        const rateMissing =
+          (cls === 1 && !e.da_rate) ||
+          (cls === 2 && (!e.da_rate || !e.da_outstation_rate)) ||
+          (cls === 3 && (!e.da_rate || !e.ta_rate_primary)) ||
+          (cls === 4 && (!e.da_rate || !e.da_outstation_rate || !e.ta_rate_primary)) ||
+          (cls === 5 && (!e.da_rate || !e.da_outstation_rate || !e.ta_rate_primary || !e.ta_rate_secondary));
+        if (rateMissing) {
+          empIssues.push({
+            severity: 'blocker',
+            reason_code: 'RATES_MISSING',
+            reason_label: `Class ${cls} rates incomplete in master`,
+          });
+        }
+      }
+
+      if (!e.gross_salary || e.gross_salary === 0) {
+        empIssues.push({
+          severity: 'blocker',
+          reason_code: 'NO_SALARY',
+          reason_label: 'No gross salary set in master',
+        });
+      }
+
+      // WARNINGS — compute runs, but downstream may exclude / be incomplete
+      if (uploadCount > 0 && !inUpload.has(e.code)) {
+        empIssues.push({
+          severity: 'warning',
+          reason_code: 'EMPLOYEE_NOT_IN_UPLOAD',
+          reason_label: 'Not present in coordinator upload for this cycle',
+        });
+      }
+
+      if (!e.bank_name || !e.account_no || !e.ifsc) {
+        empIssues.push({
+          severity: 'warning',
+          reason_code: 'BANK_INCOMPLETE',
+          reason_label: 'Bank details incomplete — will be excluded from NEFT',
+        });
+      }
+
+      if (e.pt_applicable === 1 && (!e.state || String(e.state).trim() === '')) {
+        empIssues.push({
+          severity: 'warning',
+          reason_code: 'PT_NO_STATE',
+          reason_label: 'PT applicable but state is empty',
+        });
+      }
+
+      if (pendingTaDa.has(e.code)) {
+        empIssues.push({
+          severity: 'warning',
+          reason_code: 'PENDING_TADA_REQUEST',
+          reason_label: 'Has a pending TA/DA change request',
+        });
+      }
+
+      if (empIssues.length === 0) {
+        okCount++;
+      } else {
+        for (const issue of empIssues) {
+          issues.push({
+            code: e.code,
+            name: e.name,
+            city: e.city,
+            ta_da_class: e.ta_da_class,
+            ...issue,
+          });
+        }
+      }
+    }
+
+    const cycleWarnings = [];
+    if (uploadCount === 0 && employees.length > 0) {
+      cycleWarnings.push({
+        severity: 'warning',
+        reason_code: 'NO_ATTENDANCE_UPLOADED',
+        reason_label: 'No coordinator upload found for this cycle yet',
+      });
+    }
+
+    const blockerCount = issues.filter(i => i.severity === 'blocker').length;
+    const warningCount = issues.filter(i => i.severity === 'warning').length
+                       + cycleWarnings.length;
+
+    res.json({
+      success: true,
+      data: {
+        month, year, company,
+        summary: {
+          blockers: blockerCount,
+          warnings: warningCount,
+          ok: okCount,
+          total: employees.length,
+        },
+        cycle_warnings: cycleWarnings,
+        issues,
+      },
+    });
+  } catch (e) {
+    console.error('[sales/compute/readiness]', e?.stack || e);
+    res.status(500).json({ success: false, error: e?.message || 'readiness check failed' });
+  }
+});
 
 // ── POST /api/sales/compute ─────────────────────────────────────────
 router.post('/compute', (req, res) => {
