@@ -70,6 +70,13 @@ function ensureAuditTable() {
     CREATE INDEX IF NOT EXISTS idx_sql_audit_ts ON sql_console_audit(ts);
     CREATE INDEX IF NOT EXISTS idx_sql_audit_actor ON sql_console_audit(actor);
   `);
+  // Phase 2: forward-compat audit column (idempotent — pre-existing tables get
+  // the column added; freshly-created tables already have everything else).
+  try {
+    db.exec(`ALTER TABLE sql_console_audit ADD COLUMN restored_from_audit_id INTEGER`);
+  } catch (e) {
+    // Column already exists (SQLite throws "duplicate column name") — fine.
+  }
 }
 
 function logAuditRow({
@@ -82,16 +89,22 @@ function logAuditRow({
   ms,
   ip,
   userAgent,
-  mode = 'read'
+  mode = 'read',
+  txnId = null,
+  affectedRows = null,
+  remark = null,
+  restoredFromAuditId = null
 }) {
   try {
     const db = getDb();
     const truncatedSql = sql ? String(sql).slice(0, 4000) : null;
     const truncatedUa = userAgent ? String(userAgent).slice(0, 200) : null;
-    db.prepare(`
+    const truncatedRemark = remark ? String(remark).slice(0, 2000) : null;
+    const info = db.prepare(`
       INSERT INTO sql_console_audit
-        (actor, auth_method, sql, status, reject_reason, row_count, ms, ip, user_agent, mode)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        (actor, auth_method, sql, status, reject_reason, row_count, ms, ip, user_agent,
+         mode, txn_id, affected_rows, remark, restored_from_audit_id)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       actor || null,
       authMethod || null,
@@ -102,11 +115,17 @@ function logAuditRow({
       ms == null ? null : ms,
       ip || null,
       truncatedUa,
-      mode
+      mode,
+      txnId || null,
+      affectedRows == null ? null : affectedRows,
+      truncatedRemark,
+      restoredFromAuditId == null ? null : restoredFromAuditId
     );
+    return info && info.lastInsertRowid != null ? Number(info.lastInsertRowid) : null;
   } catch (e) {
     // Never let an audit failure break the response.
     console.error('[SQL_CONSOLE] audit log failed:', e.message);
+    return null;
   }
 }
 
@@ -314,6 +333,314 @@ const SNIPPETS = [
   }
 ];
 
+// ── Phase 2: Write Validator ──────────────────────────────────
+// Forbidden tokens: even though leading-keyword validation passes for write
+// ops, these tokens ANYWHERE in the stripped SQL are dangerous and rejected.
+const WRITE_FORBIDDEN_TOKENS = [
+  'ATTACH', 'DETACH', 'VACUUM', 'REINDEX', 'PRAGMA', 'TRIGGER', '.LOAD'
+];
+
+// Tables for which we capture rows_before/rows_after JSON snapshots and
+// (for the salary-cascade subset) run a post-write drift check.
+const PROTECTED_TABLES = new Set([
+  'salary_computations',
+  'day_calculations',
+  'attendance_processed',
+  'salary_structures',
+  'employees'
+]);
+const SALARY_CASCADE_TABLES = PROTECTED_TABLES; // identical set for now
+
+const SNAPSHOT_ROW_CAP = 500;       // refuse to snapshot more than this many rows
+const WRITE_AFFECTED_ROW_CAP = 1000; // hard cap on actual rows changed
+const TXN_TTL_MS = 60_000;          // 60s preview TTL
+
+function validateWriteSql(sql, opts = {}) {
+  if (typeof sql !== 'string') {
+    return { ok: false, code: 'SQL_INVALID_INPUT', reason: 'sql must be a string' };
+  }
+  const len = sql.length;
+  if (len < 1 || len > 10000) {
+    return { ok: false, code: 'SQL_INVALID_INPUT', reason: 'sql length out of range (1..10000)' };
+  }
+
+  const cleaned = stripCommentsAndStrings(sql).trim();
+  if (!cleaned) {
+    return { ok: false, code: 'SQL_INVALID_INPUT', reason: 'sql is empty after stripping comments' };
+  }
+
+  // Layer 2: leading keyword
+  const m = cleaned.match(/^([A-Za-z_]+)\b/);
+  if (!m) {
+    return { ok: false, code: 'STATEMENT_NOT_ALLOWED', reason: 'could not detect leading keyword' };
+  }
+  const lead = m[1].toUpperCase();
+  let op, isDdl;
+  if (lead === 'INSERT' || lead === 'UPDATE' || lead === 'DELETE') {
+    op = lead;
+    isDdl = false;
+  } else if (lead === 'CREATE' || lead === 'ALTER' || lead === 'DROP' || lead === 'REPLACE') {
+    op = 'DDL';
+    isDdl = true;
+  } else {
+    return {
+      ok: false,
+      code: 'STATEMENT_NOT_ALLOWED',
+      reason: `leading keyword ${lead} not allowed for write path`
+    };
+  }
+
+  // Layer 3: single-statement check. Strip a single trailing ';' and whitespace,
+  // then disallow any further ';' inside the cleaned body.
+  const trailingStripped = cleaned.replace(/;\s*$/, '');
+  if (trailingStripped.indexOf(';') !== -1) {
+    return {
+      ok: false,
+      code: 'MULTI_STATEMENT_NOT_ALLOWED',
+      reason: 'multiple statements detected'
+    };
+  }
+
+  // Layer 4: forbidden tokens (case-insensitive, word-boundary)
+  for (const tok of WRITE_FORBIDDEN_TOKENS) {
+    const escaped = tok.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const re = new RegExp(`\\b${escaped}\\b`, 'i');
+    if (re.test(cleaned)) {
+      return {
+        ok: false,
+        code: 'FORBIDDEN_TOKEN',
+        reason: `forbidden token: ${tok}`
+      };
+    }
+  }
+
+  // Layer 5: unscoped UPDATE/DELETE — require explicit confirmation.
+  if (op === 'UPDATE' || op === 'DELETE') {
+    if (!/\bWHERE\b/i.test(cleaned)) {
+      if (opts.acceptUnscopedWrite !== true) {
+        return {
+          ok: false,
+          code: 'UNSCOPED_WRITE_BLOCKED',
+          reason: `${op} without WHERE clause; pass acceptUnscopedWrite:true to proceed`
+        };
+      }
+    }
+  }
+
+  // Layer 6: multi-table writes (JOIN inside UPDATE/DELETE) — diff/snapshot
+  // logic gets ambiguous, so reject.
+  if ((op === 'UPDATE' || op === 'DELETE') && /\bJOIN\b/i.test(cleaned)) {
+    return {
+      ok: false,
+      code: 'MULTI_TABLE_WRITE_NOT_ALLOWED',
+      reason: `JOIN not allowed inside ${op}`
+    };
+  }
+
+  return { ok: true, op, isDdl };
+}
+
+function extractTableName(sql, op) {
+  const cleaned = stripCommentsAndStrings(sql);
+  let m;
+  if (op === 'UPDATE') {
+    m = cleaned.match(/\bUPDATE\s+(?:OR\s+\w+\s+)?["`]?([a-zA-Z_][a-zA-Z0-9_]*)["`]?/i);
+  } else if (op === 'DELETE') {
+    m = cleaned.match(/\bDELETE\s+FROM\s+["`]?([a-zA-Z_][a-zA-Z0-9_]*)["`]?/i);
+  } else if (op === 'INSERT') {
+    m = cleaned.match(/\bINSERT\s+(?:OR\s+\w+\s+)?INTO\s+["`]?([a-zA-Z_][a-zA-Z0-9_]*)["`]?/i);
+  } else if (op === 'DDL') {
+    m = cleaned.match(/\b(?:CREATE|ALTER|DROP|REPLACE)\s+(?:TABLE|INDEX|VIEW|TRIGGER)\s+(?:IF\s+(?:NOT\s+)?EXISTS\s+)?["`]?([a-zA-Z_][a-zA-Z0-9_]*)["`]?/i);
+  }
+  return m ? m[1] : null;
+}
+
+// Extract WHERE clause of an UPDATE/DELETE so we can capture matching rows
+// before the change. Returns the literal WHERE string (incl. the WHERE keyword)
+// or null if no WHERE is present.
+function extractWhereClause(sql) {
+  const cleaned = stripCommentsAndStrings(sql);
+  // We need to take the original sql so string literals are preserved when
+  // running SELECT * FROM <table> <WHERE>. Use index-based slicing aligned
+  // with the cleaned version.
+  const whereIdx = cleaned.search(/\bWHERE\b/i);
+  if (whereIdx === -1) return null;
+  // Everything from the WHERE in the ORIGINAL sql, stripped of trailing ';'.
+  // Map index back: stripCommentsAndStrings preserves length (it replaces
+  // contents with same-length placeholders). Verify.
+  if (cleaned.length !== sql.length) {
+    // Length mismatch — fall back to extracting from cleaned string only.
+    // (Phase 1's stripper only collapses content inside quotes, so length
+    // CAN drift. For our use-case we run the SELECT against the original
+    // sql's WHERE clause, so re-find it in the original.)
+    const m = sql.match(/\bWHERE\b[\s\S]*$/i);
+    return m ? m[0].replace(/;\s*$/, '').trim() : null;
+  }
+  return sql.slice(whereIdx).replace(/;\s*$/, '').trim();
+}
+
+// ── Phase 2: Manual Transaction Helpers ───────────────────────
+// SQLite WAL mode allows concurrent readers + a single writer. We use the
+// SAME main connection (from db.js) so writes land in the live DB. We
+// DON'T use db.transaction() because that auto-commits at function end —
+// we need control across HTTP requests.
+function beginManualTxn(db) {
+  db.exec('BEGIN IMMEDIATE');
+}
+function commitManualTxn(db) {
+  db.exec('COMMIT');
+}
+function rollbackManualTxn(db) {
+  try {
+    db.exec('ROLLBACK');
+  } catch (e) {
+    // Transaction may already be aborted by SQLite (e.g. statement-level error).
+  }
+}
+
+// ── Phase 2: In-Memory Transaction Registry ───────────────────
+// At-most-one entry. Single-writer per connection enforced by SQLite, so
+// /preview rejects with TXN_ALREADY_OPEN when this Map already has an entry.
+const txnRegistry = new Map();
+
+function txnRegistryHasOpen() {
+  return txnRegistry.size > 0;
+}
+
+function txnRegistryGet(txnId) {
+  return txnRegistry.get(txnId);
+}
+
+function txnRegistryDelete(txnId) {
+  txnRegistry.delete(txnId);
+}
+
+// Idempotently ensure the snapshot table exists. Called once at mount.
+function ensureWriteSnapshotsTable() {
+  const db = getDb();
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS sql_console_write_snapshots (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      audit_id INTEGER REFERENCES sql_console_audit(id),
+      table_name TEXT NOT NULL,
+      rows_before TEXT,
+      rows_after TEXT,
+      affected_count INTEGER,
+      ts TEXT DEFAULT (datetime('now'))
+    );
+    CREATE INDEX IF NOT EXISTS idx_snapshot_audit ON sql_console_write_snapshots(audit_id);
+    CREATE INDEX IF NOT EXISTS idx_snapshot_table ON sql_console_write_snapshots(table_name);
+  `);
+}
+
+// Run the salary drift check. Returns { ran, drift_count, warning } or
+// { ran: false } if salary_computations doesn't exist.
+function runDriftCheck(db) {
+  try {
+    const r = db.prepare(
+      'SELECT COUNT(*) AS drift_count FROM salary_computations WHERE ABS(net_salary - (gross_earned - total_deductions)) > 1'
+    ).get();
+    const drift_count = r ? r.drift_count : 0;
+    return { ran: true, drift_count, warning: drift_count > 0 };
+  } catch (e) {
+    return { ran: false, drift_count: 0, warning: false, error: e.message };
+  }
+}
+
+// Generate inverse SQL for a snapshot restore. Returns { sql, op } where op
+// is INSERT|UPDATE|DELETE matching the inverse of the original write.
+// IMPORTANT: rows_before/rows_after carry the original write's view of data:
+//   original INSERT  → rows_after has new rows; inverse = DELETE by PK
+//   original UPDATE  → rows_before has old values; inverse = UPDATE back
+//   original DELETE  → rows_before has deleted rows; inverse = INSERT back
+function generateInverseStatements(originalOp, tableName, rowsBefore, rowsAfter, pkCols) {
+  // Returns array of { sql, params } since UPDATE-back may produce multiple
+  // statements (one per row).
+  const stmts = [];
+  const quote = (col) => `"${col.replace(/"/g, '""')}"`;
+  const placeholdersFor = (vals) => vals.map(() => '?').join(', ');
+
+  if (originalOp === 'INSERT') {
+    // Inverse: DELETE the rows we inserted, identified by PK from rows_after.
+    for (const row of (rowsAfter || [])) {
+      const whereParts = [];
+      const params = [];
+      for (const pk of pkCols) {
+        whereParts.push(`${quote(pk)} = ?`);
+        params.push(row[pk]);
+      }
+      if (whereParts.length === 0) continue;
+      stmts.push({
+        sql: `DELETE FROM ${quote(tableName)} WHERE ${whereParts.join(' AND ')}`,
+        params
+      });
+    }
+  } else if (originalOp === 'DELETE') {
+    // Inverse: re-INSERT the rows that were deleted, from rows_before.
+    for (const row of (rowsBefore || [])) {
+      const cols = Object.keys(row);
+      const vals = cols.map(c => row[c]);
+      stmts.push({
+        sql: `INSERT INTO ${quote(tableName)} (${cols.map(quote).join(', ')}) VALUES (${placeholdersFor(vals)})`,
+        params: vals
+      });
+    }
+  } else if (originalOp === 'UPDATE') {
+    // Inverse: UPDATE rows back to rows_before values, matching by PK.
+    // We pair rows_before[i] with rows_after[i] (same order, same row).
+    const before = rowsBefore || [];
+    for (const row of before) {
+      const setParts = [];
+      const setParams = [];
+      const whereParts = [];
+      const whereParams = [];
+      for (const col of Object.keys(row)) {
+        if (pkCols.includes(col)) {
+          whereParts.push(`${quote(col)} = ?`);
+          whereParams.push(row[col]);
+        } else {
+          setParts.push(`${quote(col)} = ?`);
+          setParams.push(row[col]);
+        }
+      }
+      if (whereParts.length === 0 || setParts.length === 0) continue;
+      stmts.push({
+        sql: `UPDATE ${quote(tableName)} SET ${setParts.join(', ')} WHERE ${whereParts.join(' AND ')}`,
+        params: [...setParams, ...whereParams]
+      });
+    }
+  }
+  return stmts;
+}
+
+// Determine the primary-key column names for a table by reading PRAGMA
+// table_info. Returns ['id'] as a sensible fallback when the table has no
+// declared PK.
+function getPrimaryKeyColumns(db, tableName) {
+  const cols = db.prepare(`PRAGMA table_info("${tableName.replace(/"/g, '""')}")`).all();
+  const pks = cols
+    .filter(c => c.pk && c.pk > 0)
+    .sort((a, b) => a.pk - b.pk)
+    .map(c => c.name);
+  if (pks.length > 0) return pks;
+  // Fallback: try 'id' if it exists.
+  const hasId = cols.some(c => c.name === 'id');
+  if (hasId) return ['id'];
+  // Last resort: use all columns (unique-ish).
+  return cols.map(c => c.name);
+}
+
+// Compare current PRAGMA table_info column SET against keys present in a
+// captured row. Returns { ok, missing_columns, extra_columns }.
+function detectSchemaDrift(db, tableName, capturedRow) {
+  const cols = db.prepare(`PRAGMA table_info("${tableName.replace(/"/g, '""')}")`).all();
+  const currentSet = new Set(cols.map(c => c.name));
+  const capturedSet = new Set(Object.keys(capturedRow || {}));
+  const missing = [...capturedSet].filter(c => !currentSet.has(c)); // captured had col, table doesn't
+  const extra = [...currentSet].filter(c => !capturedSet.has(c));   // table has col, captured didn't
+  return { ok: missing.length === 0 && extra.length === 0, missing_columns: missing, extra_columns: extra };
+}
+
 // ── Mount ─────────────────────────────────────────────────────
 function mountSqlConsole(app) {
   if (process.env.SQL_CONSOLE_ENABLED !== 'true') {
@@ -330,6 +657,7 @@ function mountSqlConsole(app) {
   }
 
   ensureAuditTable();
+  ensureWriteSnapshotsTable();
 
   const router = express.Router();
   const auth = makeAuthMiddleware();
@@ -582,7 +910,19 @@ module.exports = {
   // exported for unit-style verification only
   __internals: {
     validateReadOnlySql,
+    validateWriteSql,
     stripCommentsAndStrings,
+    extractTableName,
+    extractWhereClause,
+    generateInverseStatements,
+    getPrimaryKeyColumns,
+    detectSchemaDrift,
+    txnRegistry,
+    PROTECTED_TABLES,
+    SALARY_CASCADE_TABLES,
+    SNAPSHOT_ROW_CAP,
+    WRITE_AFFECTED_ROW_CAP,
+    TXN_TTL_MS,
     SNIPPETS
   }
 };
