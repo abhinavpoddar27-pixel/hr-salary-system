@@ -516,6 +516,10 @@ export const salesUploadConfirm = (uploadId, body) => api.post(`/sales/upload/${
 
 // ── Sales Salary Module (Phase 3) ────────────────────────
 export const salesCompute = (data) => api.post('/sales/compute', data)
+// GET /sales/compute/readiness — pre-compute master-data gap detector.
+// Returns { summary:{blockers,warnings,ok,total}, cycle_warnings:[], issues:[] }.
+export const getSalesReadiness = ({ month, year, company } = {}) =>
+  api.get('/sales/compute/readiness', { params: { month, year, company } })
 export const salesSalaryRegister = (params) => api.get('/sales/salary-register', { params })
 export const salesSalaryUpdate = (id, data) => api.put(`/sales/salary/${id}`, data)
 export const salesSalaryStatusUpdate = (id, data) => api.put(`/sales/salary/${id}/status`, data)
