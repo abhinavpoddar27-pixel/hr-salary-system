@@ -19,3 +19,5 @@ uploads/
 .env
 *.env.local
 scripts/master-data-extracted.json
+# SQL Console Phase 2 local test scaffolding (sandbox-only, never deployed)
+backend/_p2_*
