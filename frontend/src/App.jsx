@@ -52,6 +52,7 @@ const DailyWageDashboard = React.lazy(() => import('./pages/DailyWageDashboard')
 const DailyWageReports = React.lazy(() => import('./pages/DailyWageReports'))
 const DailyWageAuditLog = React.lazy(() => import('./pages/DailyWageAuditLog'))
 const QueryTool = React.lazy(() => import('./pages/QueryTool'))
+const SqlConsole = React.lazy(() => import('./pages/SqlConsole'))
 const DeptAnalytics = React.lazy(() => import('./pages/DeptAnalytics'))
 const EmployeeProfile = React.lazy(() => import('./pages/EmployeeProfile'))
 const SalesEmployeeMaster = React.lazy(() => import('./pages/Sales/SalesEmployeeMaster'))
@@ -202,6 +203,7 @@ export default function App() {
           <Route path="/daily-wage" element={<RequireAuth><Layout title="Daily Wage Records"><DailyWageRecords /></Layout></RequireAuth>} />
           <Route path="/session-analytics" element={<RequireAuth><Layout title="Session Analytics"><SessionAnalytics /></Layout></RequireAuth>} />
           <Route path="/admin/query-tool" element={<RequireAuth><Layout title="Database Query Tool"><QueryTool /></Layout></RequireAuth>} />
+          <Route path="/admin/sql-console" element={<RequireAuth><Layout title="SQL Console (Read-Only)"><SqlConsole /></Layout></RequireAuth>} />
           <Route path="/admin/bug-reports" element={<RequireAuth><Layout title="Bug Reports"><BugReportsInbox /></Layout></RequireAuth>} />
           <Route path="/admin/bug-reports/:id" element={<RequireAuth><Layout title="Bug Report Detail"><BugReportDetail /></Layout></RequireAuth>} />
           <Route path="/dept-analytics" element={<RequireAuth><Layout title="Department & Org Analytics"><DeptAnalytics /></Layout></RequireAuth>} />
