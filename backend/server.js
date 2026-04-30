@@ -224,7 +224,6 @@ app.use('/api/early-exit-deductions', requireAuth, require('./src/routes/early-e
 app.use('/api/sales',            requireAuth, require('./src/routes/sales'));
 app.use('/api/query-tool',       requireAuth, require('./src/routes/queryTool'));
 app.use('/api/ai',               requireAuth, require('./src/routes/ai'));
-app.use('/api/admin',            requireAuth, require('./src/routes/adminLeniencyUpdate')); // TEMPORARY — remove in Commit 2
 
 // Bug Reporter authed routes. webhookRouter is mounted earlier (before
 // express.json) so the webhook handler can read raw bytes for HMAC
