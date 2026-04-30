@@ -230,6 +230,16 @@ app.use('/api/ai',               requireAuth, require('./src/routes/ai'));
 // verification.
 app.use('/api/bug-reports', bugReportsAuthed);
 
+// ── SQL Console (env-gated, admin-only, read-only) ──
+// Mounts /api/admin/sql/* only when SQL_CONSOLE_ENABLED=true. Handles its own
+// auth (admin JWT or X-SQL-Console-Key header) — must NOT be wrapped in the
+// global requireAuth middleware so the API-key path can reach it.
+try {
+  require('./src/routes/sqlConsole').mountSqlConsole(app);
+} catch (e) {
+  console.error('[SQL_CONSOLE] mount failed:', e.message);
+}
+
 // Health check (public)
 app.get('/api/health', (req, res) => {
   res.json({ success: true, message: 'HR Salary System API running', timestamp: new Date().toISOString() });
