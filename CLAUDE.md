@@ -1,4 +1,41 @@
 ## Section 0: Last Session
+- **Date:** 2026-04-30
+- **Branch:** `main` (3-commit Sales UI series shipped direct to `origin/main` per user choice B(ii) — no PR / no feature branch. Final tip: `fc7af42`.)
+- **Last commits (in series order):**
+  - Commit 1 — `0b7cb0a` (rebased from local `0ee78ea`) — `feat(sales): rate-aware TA/DA column + Salary column on employee master`. 1 file, +99/-11. Source-only.
+  - Commit 2 — `417ca2a` (rebased from local `b1decab` after parallel session 4f66535+e54430a landed) — `feat(sales): pre-filled TA/DA templates per class`. 3 files (backend route + api utility + SalesTaDaUpload page), +161/-14. Source-only.
+  - Commit 3 source — `da399bf` — `feat(sales): pre-compute readiness banner on Salary Compute page`. 3 files (backend route + api utility + SalesSalaryCompute page), +280/-0. Source-only.
+  - Commit 3 dist — `fc7af42` — `build(frontend): rebuild dist after sales UI enhancements (commits 1–3)`. 73 dist files refreshed.
+- **What was built:**
+  - **Commit 1 — Sales Master rate-aware column.** `SalesEmployeeMaster.jsx` now displays full TA/DA rates per class ("DA ₹X–Y/day · TA ₹Z/km") instead of just "Class N", a new Salary column with red "No salary set" badge when missing, Class 0 employees get a red "Flag for Review" badge, NULL rate fields render as red "?" markers. Designation+HQ hidden on `<lg`, Manager hidden on `<md`. Table widened to `min-w-[1300px]`. New helper `formatTaDaRate(emp)`.
+  - **Commit 2 — TA/DA pre-filled templates.** New backend `GET /api/sales/ta-da/template-data/:class` returns active employees of that class (code, name, city, days_worked) for client-side pre-fill. `SalesTaDaUpload.jsx`'s `downloadTemplate` is now async; fetches the roster, pre-fills code/name/city in the XLSX, leaves input columns blank. Pre-download status row shows count, button disabled until month/year/company picked + roster non-empty, label flips to "Download template (N rows)". `city` column placed BETWEEN `name` and inputs (parser is HEADER-NAME-BASED — verified — and silently drops unknown headers). SheetJS protection skipped (community 0.18.5 doesn't support cell.s reliably; logged via `console.info`). Filename pattern: `TADA_Class{N}_{count}emp_{Mon}_{YYYY}.xlsx`.
+  - **Commit 3 — Pre-compute readiness banner.** New backend `GET /api/sales/compute/readiness?month=&year=&company=` proactively checks active sales employees for master-data gaps. Returns `{summary:{blockers,warnings,ok,total}, cycle_warnings:[], issues:[]}`. 9 reason codes (5 blockers: NO_TADA_CLASS, FLAG_FOR_REVIEW, RATES_MISSING, NO_SALARY; 4 warnings: EMPLOYEE_NOT_IN_UPLOAD, BANK_INCOMPLETE, PT_NO_STATE, PENDING_TADA_REQUEST; plus cycle-level NO_ATTENDANCE_UPLOADED). Frontend banner sits ABOVE the post-compute exclusion banner (4f66535) in `SalesSalaryCompute.jsx`: red when blockers present, amber when warnings only, hidden when clean. Expandable per-employee detail with code/name/city/class. Refresh button. **Compute is NOT gated** — informational only.
+- **Reason-code label strategy (Commit 3):** Backend returns `reason_label` strings inline in each issue object. Frontend renders `i.reason_label` directly. The parallel session's `EXCLUSION_REASON_LABEL` constant (in lower_snake_case for POST-compute outcomes) is NOT touched — pre-compute (UPPER_SNAKE_CASE) and post-compute reason vocabularies are kept separate by design.
+- **What's fragile:**
+  - **Two banners stack on `SalesSalaryCompute.jsx`** — pre-compute readiness (Commit 3) above, post-compute exclusion (4f66535) below. They're independent; both can be visible simultaneously after a compute when master gaps remain. If a future PR consolidates them, preserve the proactive-vs-reactive distinction (different reason vocabularies, different fire timings).
+  - **`PENDING_TADA_REQUEST` warning relies on `sales_ta_da_change_requests.employee_code`** column (added in the Phase 1b rebuild migration — line 2567 of schema.js). Pre-rebuild deployments only have `employee_id`; the readiness query JOINs `sales_employees` to scope by company, so the column is read once. If `employee_code` ever drifts from `sales_employees.code` for an employee, the warning fires for the stale code.
+  - **`PT_NO_STATE` warning** assumes `pt_applicable=1` rows must have `state` set. CLAUDE.md notes Professional Tax was DISABLED for plant in April 2026 (always 0). Sales has its own `pt_applicable` flag; the warning fires regardless of plant policy. If sales also disables PT, the warning becomes noise — gate it on a future `policy_config.sales_pt_disabled` flag.
+  - **TEMPORARY add/remove pair on `backend/src/routes/adminLeniencyUpdate.js`** (`fad6cb9` add, `cc402c7` remove — net zero on main, both authored by prior "Claude" sessions) — origin unaccounted for. Investigate next session.
+  - **Master `gross_salary` is the readiness blocker source**, not `sales_salary_structures.gross_salary`. The two can differ (CLAUDE.md notes structures are sometimes scaled). Compute reads structures; readiness reads master. Mostly aligned via `syncSalaryStructureFromEmployee`-style logic, but a row with master `gross_salary > 0` and no salary_structure row will pass readiness and then fail compute with `no_structure`. The post-compute exclusion banner catches this.
+- **Workflow note:** All 3 commits pushed direct to `main` per user choice B(ii). NO PR review, NO feature branch retained. **PR-based workflow recommended for resumption next session** to give parallel sessions a clean integration surface (this series collided once with parallel session 4f66535 — handled via rebase, no force-push, but a PR review would have caught the absent `EXCLUSION_REASON_LABEL` reuse decision earlier).
+- **Mystery commits flagged for next session investigation:**
+  - `cc402c7` + `fad6cb9` (TEMPORARY add/remove pair on `backend/src/routes/adminLeniencyUpdate.js` — net code impact zero, but origin unaccounted for; both authored by `Claude <noreply@anthropic.com>` from a prior session)
+  - The 4 CLAUDE.md handoff commits dated 2026-04-29 (`88ae3d5`, `c5afc4e`, `a691a9a`, `9fc76ca`) — same author, doc-only, low risk.
+- **What was verified (Commits 1–3):**
+  - `node --check backend/src/routes/sales.js` → PASS for both new endpoints.
+  - `cd frontend && npm run build` → PASS, 16.91s, all chunks emitted (`SalesEmployeeMaster-QAdfwSv8.js`, `SalesTaDaUpload-D5KbkBKR.js`, `SalesSalaryCompute-sgUhrPDM.js`).
+  - 7 user-sim scenarios for Commit 3 readiness banner all PASS (clean / messy / no upload / Class 0 / Class 4 missing rate / both banners coexist / refetch).
+  - 6 user-sim scenarios for Commit 2 templates all PASS (happy path / empty class / missing date / 500 / count display / protection-skipped).
+  - 6 user-sim scenarios for Commit 1 master columns all PASS (happy path / Class 0 / partial NULL / full Class 5 / NULL legacy / responsive).
+- **Next session should:**
+  - (a) Smoke-test on Railway with real auth: HR navigates to `/sales/employees` and sees rate-aware columns; HR opens `/sales/upload` Class 3 tab and the count "77 active employee(s)" is shown before clicking download; HR opens `/sales/compute` and the readiness banner reflects production master gaps.
+  - (b) Investigate the mystery `adminLeniencyUpdate.js` TEMPORARY add/remove pair — was this a planned dev artifact or unintended?
+  - (c) Decide on `PT_NO_STATE` warning gate — is sales PT actually applicable, or follow plant April 2026 disable?
+  - (d) Plan whether to consolidate the two `SalesSalaryCompute.jsx` banners into a single unified state-of-cycle component (proactive + reactive in one place) or keep them separate.
+
+---
+
+## Section 0: Previous Session
 - **Date:** 2026-04-29
 - **Branch:** `main` (Phase 4 closeout — Fix F source/dist/docs + earlier feature-branch commits fast-forwarded onto main from `claude/session-start-cpIEd`. Before this push origin/main had been at `8d253a2` since Apr 24, so the prior 2026-04-28 entry's claim that Fixes A–D had "shipped to main" was actually still feature-branch-only; the fast-forward this session brings A–F + the Mar 2026 data correction + the unrelated `be3162b` sidebar fix to origin/main for the first time.)
 - **Last commit:** `c5afc4e` docs: phase 4 closeout retrospective + fix E lesson
