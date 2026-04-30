@@ -582,6 +582,68 @@ const taDaUpload = multer({
 const TA_DA_TEMPLATE_CLASSES = new Set([2, 3, 4, 5]);
 const MONTHS_SHORT_TADA = ['', 'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 
+// GET /api/sales/ta-da/template-data/:class?month=&year=&company=
+// Returns active sales employees of the given class with pre-fillable
+// fields (code, name, city, days_worked) for client-side template
+// generation. Read-only; no side effects.
+router.get('/ta-da/template-data/:class',
+  requirePermission('sales-tada-compute'),
+  (req, res) => {
+    try {
+      const classNum = parseInt(req.params.class, 10);
+      if (!TA_DA_TEMPLATE_CLASSES.has(classNum)) {
+        return res.status(400).json({
+          success: false,
+          error: `class must be 2, 3, 4, or 5 (got ${req.params.class})`,
+        });
+      }
+
+      const month = parseInt(req.query.month, 10);
+      const year = parseInt(req.query.year, 10);
+      const company = (req.query.company || '').trim();
+
+      if (!month || month < 1 || month > 12 ||
+          !year  || year  < 2020 || year  > 2100 ||
+          !company) {
+        return res.status(400).json({
+          success: false,
+          error: 'month, year, and company query params are required',
+        });
+      }
+
+      const db = getDb();
+      const employees = db.prepare(`
+        SELECT e.code,
+               e.name,
+               e.city_of_operation AS city,
+               COALESCE(mi.days_worked, smi.sheet_days_given) AS days_worked
+          FROM sales_employees e
+          LEFT JOIN sales_ta_da_monthly_inputs mi
+            ON mi.employee_id = e.id
+           AND mi.month = ?
+           AND mi.year = ?
+           AND mi.company = ?
+          LEFT JOIN sales_monthly_input smi
+            ON smi.employee_code = e.code
+           AND smi.month = ?
+           AND smi.year = ?
+           AND smi.company = ?
+         WHERE e.company = ?
+           AND e.status = 'Active'
+           AND e.ta_da_class = ?
+         ORDER BY e.name ASC
+      `).all(month, year, company, month, year, company, company, classNum);
+
+      res.json({
+        success: true,
+        data: { class: classNum, month, year, company, employees },
+      });
+    } catch (e) {
+      console.error('[ta-da/template-data]', e?.stack || e);
+      res.status(500).json({ success: false, error: e?.message || 'template-data failed' });
+    }
+  });
+
 // POST /api/sales/ta-da/upload/:class — Phase β bulk upload
 router.post('/ta-da/upload/:class',
   requirePermission('sales-tada-compute'),

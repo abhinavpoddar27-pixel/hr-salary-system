@@ -1,9 +1,9 @@
 import React, { useState, useMemo, useRef } from 'react'
-import { useMutation, useQueryClient } from '@tanstack/react-query'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import toast from 'react-hot-toast'
 import * as XLSX from 'xlsx'
 import clsx from 'clsx'
-import { salesTaDaUpload } from '../../utils/api'
+import { salesTaDaUpload, getTaDaTemplateData } from '../../utils/api'
 import { useAppStore } from '../../store/appStore'
 import { cycleSubtitle } from '../../utils/cycleUtil'
 import CompanyFilter from '../../components/shared/CompanyFilter'
@@ -12,27 +12,32 @@ const MONTHS = ['', 'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep
 
 // Class metadata. Headers are case-insensitive at parse time but emitted
 // lower_snake_case in the template so HR can copy/paste from the existing
-// backend parser convention.
+// backend parser convention. `city` sits between `name` and the input
+// columns; the parser ignores unknown headers, so adding `city` is safe.
 const CLASS_META = {
   2: {
     name: 'Tiered DA, No TA',
     description: 'Class 2 reps: in-city + outstation day counts. No km tracking.',
-    headers: ['employee_code', 'name', 'in_city_days', 'outstation_days'],
+    headers: ['employee_code', 'name', 'city', 'in_city_days', 'outstation_days'],
+    inputCols: ['in_city_days', 'outstation_days'],
   },
   3: {
     name: 'Per-km TA',
     description: 'Class 3 reps: total km driven for the cycle.',
-    headers: ['employee_code', 'name', 'total_km'],
+    headers: ['employee_code', 'name', 'city', 'total_km'],
+    inputCols: ['total_km'],
   },
   4: {
     name: 'Tiered DA + Per-km TA',
     description: 'Class 4 reps: in-city + outstation days plus total km.',
-    headers: ['employee_code', 'name', 'in_city_days', 'outstation_days', 'total_km'],
+    headers: ['employee_code', 'name', 'city', 'in_city_days', 'outstation_days', 'total_km'],
+    inputCols: ['in_city_days', 'outstation_days', 'total_km'],
   },
   5: {
     name: 'Tiered DA + Dual-Vehicle TA',
     description: 'Class 5 reps: in-city + outstation days plus per-vehicle km (bike + car).',
-    headers: ['employee_code', 'name', 'in_city_days', 'outstation_days', 'bike_km', 'car_km'],
+    headers: ['employee_code', 'name', 'city', 'in_city_days', 'outstation_days', 'bike_km', 'car_km'],
+    inputCols: ['in_city_days', 'outstation_days', 'bike_km', 'car_km'],
   },
 }
 const CLASS_NUMS = [2, 3, 4, 5]
@@ -64,14 +69,53 @@ function MonthYearPicker({ month, year, onChange }) {
 }
 
 // ── Template builder (client-side .xlsx generation) ─────────────────────
-function downloadTemplate(classNum, month, year) {
+// Pre-filled with the active roster for the given class. HR only fills in
+// the input columns (km / day-split). The parser ignores any extra columns
+// (`city`, etc.) so the layout is safe to extend.
+async function downloadTemplate(classNum, month, year, company) {
   const meta = CLASS_META[classNum]
   if (!meta) return
-  const ws = XLSX.utils.aoa_to_sheet([meta.headers])
+
+  let employees = []
+  try {
+    const res = await getTaDaTemplateData(classNum, { month, year, company })
+    employees = res?.data?.data?.employees || []
+  } catch (err) {
+    const msg = err?.response?.data?.error || err?.message || 'Failed to fetch roster'
+    toast.error(msg)
+    return
+  }
+
+  if (employees.length === 0) {
+    toast.error(`No active employees in Class ${classNum} for ${company}`)
+    return
+  }
+
+  // Build rows: header + one row per active employee, pre-filling code,
+  // name, city. Input columns left blank for HR to fill in.
+  const rows = [meta.headers]
+  for (const e of employees) {
+    const row = []
+    for (const h of meta.headers) {
+      if (h === 'employee_code') row.push(e.code || '')
+      else if (h === 'name')     row.push(e.name || '')
+      else if (h === 'city')     row.push(e.city || '')
+      else                       row.push('') // input columns blank
+    }
+    rows.push(row)
+  }
+
+  const ws = XLSX.utils.aoa_to_sheet(rows)
+
+  // Sheet protection: SheetJS community 0.18.5 does not write cell-level
+  // `protection.locked` reliably (same limitation as the Phase 4 Excel
+  // export). Skip protection — pre-fill is still useful without it.
+  console.info('[ta-da template] sheet protection skipped (SheetJS 0.18.5 community build)')
+
   const wb = XLSX.utils.book_new()
   XLSX.utils.book_append_sheet(wb, ws, `Class${classNum}`)
   const monthLabel = MONTHS[month] || ''
-  const filename = `TADA_Class${classNum}_Template_${monthLabel}_${year}.xlsx`
+  const filename = `TADA_Class${classNum}_${employees.length}emp_${monthLabel}_${year}.xlsx`
   XLSX.writeFile(wb, filename)
 }
 
@@ -233,6 +277,19 @@ function ClassTabBody({ classNum, month, year, company, ready }) {
   const meta = CLASS_META[classNum]
   const fileInputRef = useRef(null)
 
+  // Pre-flight count of active employees in this class for the chosen
+  // company. Drives the status row + button label so HR sees how many
+  // rows the template will contain BEFORE clicking download.
+  const rosterCountQ = useQuery({
+    queryKey: ['ta-da-template-data', classNum, month, year, company],
+    queryFn: () => getTaDaTemplateData(classNum, { month, year, company }),
+    enabled: !!ready,
+    retry: 0,
+    staleTime: 60 * 1000,
+  })
+  const rosterCount = rosterCountQ.data?.data?.data?.employees?.length ?? null
+  const [downloading, setDownloading] = useState(false)
+
   const [file, setFile] = useState(null)
   const [parsePreview, setParsePreview] = useState(null) // { headers, rows, error }
   const [parseBusy, setParseBusy] = useState(false)
@@ -333,18 +390,41 @@ function ClassTabBody({ classNum, month, year, company, ready }) {
       {/* Template download */}
       <div className="bg-white border border-slate-200 rounded p-3 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
         <div>
-          <div className="text-sm font-medium text-slate-700">Empty template</div>
+          <div className="text-sm font-medium text-slate-700">Pre-filled template</div>
           <p className="text-xs text-slate-500">
             Headers (case-insensitive): <span className="font-mono">{meta.headers.join(', ')}</span>
           </p>
+          {ready && (
+            <p className="text-xs text-slate-600 mt-1">
+              {rosterCountQ.isLoading
+                ? 'Loading roster…'
+                : rosterCountQ.isError
+                  ? <span className="text-red-600">Roster unavailable: {rosterCountQ.error?.response?.data?.error || rosterCountQ.error?.message || 'error'}</span>
+                  : rosterCount === 0
+                    ? <span className="text-amber-700">0 active employees in Class {classNum} for {company}</span>
+                    : <span><strong>{rosterCount}</strong> active employee(s) in Class {classNum} for {company}</span>}
+            </p>
+          )}
         </div>
         <button
           type="button"
-          onClick={() => downloadTemplate(classNum, month, year)}
-          disabled={!month || !year}
+          onClick={async () => {
+            if (downloading) return
+            setDownloading(true)
+            try {
+              await downloadTemplate(classNum, month, year, company)
+            } finally {
+              setDownloading(false)
+            }
+          }}
+          disabled={!ready || rosterCountQ.isLoading || rosterCount === 0 || downloading}
           className="px-3 py-1.5 text-xs rounded-lg bg-slate-100 hover:bg-slate-200 disabled:opacity-50 disabled:cursor-not-allowed text-slate-700 font-medium"
         >
-          Download template (.xlsx)
+          {downloading
+            ? 'Downloading…'
+            : rosterCount > 0
+              ? `Download template (${rosterCount} rows)`
+              : 'Download template (.xlsx)'}
         </button>
       </div>
 

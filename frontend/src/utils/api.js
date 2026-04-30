@@ -555,6 +555,11 @@ export const salesTaDaInputsPatch    = (code, params, body)    => api.patch(`/sa
 //   200 success      → { success: true,  data: { parsed, valid, invalid, updated, errors } }
 //   200 partial      → { success: false, partial: true, data, succeeded:[], failed:[], note }
 //   400 parser error → { success: false, parsed, valid, invalid, errors:[{row, employee_code, error}] }
+// GET /sales/ta-da/template-data/:class — roster for pre-filled XLSX template.
+// Returns { class, month, year, company, employees:[{code, name, city, days_worked}] }.
+export const getTaDaTemplateData = (classNum, { month, year, company } = {}) =>
+  api.get(`/sales/ta-da/template-data/${classNum}`, { params: { month, year, company } })
+
 export const salesTaDaUpload = (classNum, file, { month, year, company } = {}) => {
   const fd = new FormData()
   fd.append('file', file)
