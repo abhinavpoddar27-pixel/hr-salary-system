@@ -31,6 +31,84 @@ const DEFAULT_COMPANY_OPTIONS = ['Asian Lakto Ind Ltd', 'Indriyan Beverages Pvt 
 
 const BANK_FIELDS_REQUIRED = ['bank_name', 'account_no', 'ifsc']
 
+function formatTaDaRate(emp) {
+  const cls = emp.ta_da_class
+  if (cls === null || cls === undefined) {
+    return <span className="text-slate-400">—</span>
+  }
+  if (cls === 0) {
+    return (
+      <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full bg-red-100 text-red-800 border border-red-300 text-[10px] font-medium">
+        Class 0 · Flag for Review
+      </span>
+    )
+  }
+
+  const isMissing = (v) => v === null || v === undefined || v === 0
+  const fmt = (v) => isMissing(v)
+    ? <span className="text-red-600">?</span>
+    : v
+
+  const da = emp.da_rate
+  const daOut = emp.da_outstation_rate
+  const taPrim = emp.ta_rate_primary
+  const taSec = emp.ta_rate_secondary
+
+  const pieces = [<span key="cls">Class {cls}</span>]
+
+  if (cls === 1) {
+    const missing = isMissing(da)
+    pieces.push(
+      <span key="da" className={missing ? 'text-red-600' : ''}>DA ₹{fmt(da)}/day</span>
+    )
+  } else if (cls === 2) {
+    const missing = isMissing(da) || isMissing(daOut)
+    pieces.push(
+      <span key="da" className={missing ? 'text-red-600' : ''}>DA ₹{fmt(da)}–{fmt(daOut)}/day</span>
+    )
+  } else if (cls === 3) {
+    const daMissing = isMissing(da)
+    pieces.push(
+      <span key="da" className={daMissing ? 'text-red-600' : ''}>DA ₹{fmt(da)}/day</span>
+    )
+    const taMissing = isMissing(taPrim)
+    pieces.push(
+      <span key="ta" className={taMissing ? 'text-red-600' : ''}>TA ₹{fmt(taPrim)}/km</span>
+    )
+  } else if (cls === 4) {
+    const daMissing = isMissing(da) || isMissing(daOut)
+    pieces.push(
+      <span key="da" className={daMissing ? 'text-red-600' : ''}>DA ₹{fmt(da)}–{fmt(daOut)}/day</span>
+    )
+    const taMissing = isMissing(taPrim)
+    pieces.push(
+      <span key="ta" className={taMissing ? 'text-red-600' : ''}>TA ₹{fmt(taPrim)}/km</span>
+    )
+  } else if (cls === 5) {
+    const daMissing = isMissing(da) || isMissing(daOut)
+    pieces.push(
+      <span key="da" className={daMissing ? 'text-red-600' : ''}>DA ₹{fmt(da)}–{fmt(daOut)}/day</span>
+    )
+    const taMissing = isMissing(taPrim) || isMissing(taSec)
+    pieces.push(
+      <span key="ta" className={taMissing ? 'text-red-600' : ''}>TA ₹{fmt(taPrim)}+{fmt(taSec)}/km</span>
+    )
+  } else {
+    return <span className="text-slate-400">Class {cls}</span>
+  }
+
+  return (
+    <span className="text-slate-700">
+      {pieces.map((p, i) => (
+        <React.Fragment key={i}>
+          {i > 0 && ' · '}
+          {p}
+        </React.Fragment>
+      ))}
+    </span>
+  )
+}
+
 function statusBadge(status) {
   const colour = status === 'Active'
     ? 'bg-green-100 text-green-700'
@@ -599,26 +677,27 @@ export default function SalesEmployeeMaster() {
       </div>
 
       <div className="bg-white rounded-lg border border-slate-200 overflow-x-auto">
-        <table className="min-w-[1100px] w-full text-sm">
+        <table className="min-w-[1300px] w-full text-sm">
           <thead className="bg-slate-50 text-slate-600 text-xs uppercase">
             <tr>
               <th className="px-3 py-2 text-left">Code</th>
               <th className="px-3 py-2 text-left">Name</th>
-              <th className="px-3 py-2 text-left">Designation</th>
-              <th className="px-3 py-2 text-left">HQ</th>
+              <th className="px-3 py-2 text-left hidden lg:table-cell">Designation</th>
+              <th className="px-3 py-2 text-left hidden lg:table-cell">HQ</th>
               <th className="px-3 py-2 text-left">City</th>
-              <th className="px-3 py-2 text-left">Manager</th>
-              <th className="px-3 py-2 text-left">TA/DA</th>
+              <th className="px-3 py-2 text-left hidden md:table-cell">Manager</th>
+              <th className="px-3 py-2 text-left">TA/DA Rate</th>
+              <th className="px-3 py-2 text-left">Salary</th>
               <th className="px-3 py-2 text-left">Status</th>
               <th className="px-3 py-2 text-left">Actions</th>
             </tr>
           </thead>
           <tbody>
             {isLoading && (
-              <tr><td colSpan={9} className="px-3 py-4 text-center text-slate-400 text-xs">Loading…</td></tr>
+              <tr><td colSpan={10} className="px-3 py-4 text-center text-slate-400 text-xs">Loading…</td></tr>
             )}
             {!isLoading && rows.length === 0 && (
-              <tr><td colSpan={9} className="px-3 py-8 text-center text-slate-400 text-sm">No sales employees match the current filters.</td></tr>
+              <tr><td colSpan={10} className="px-3 py-8 text-center text-slate-400 text-sm">No sales employees match the current filters.</td></tr>
             )}
             {rows.map(r => {
               const pending = pendingByCode[r.code]
@@ -626,13 +705,13 @@ export default function SalesEmployeeMaster() {
               <tr key={r.id} className="border-t border-slate-100 hover:bg-slate-50">
                 <td className="px-3 py-2 font-mono text-xs">{r.code}</td>
                 <td className="px-3 py-2 font-medium text-slate-800">{r.name}</td>
-                <td className="px-3 py-2 text-slate-600">{r.designation || '—'}</td>
-                <td className="px-3 py-2 text-slate-600">{r.headquarters || '—'}</td>
+                <td className="px-3 py-2 text-slate-600 hidden lg:table-cell">{r.designation || '—'}</td>
+                <td className="px-3 py-2 text-slate-600 hidden lg:table-cell">{r.headquarters || '—'}</td>
                 <td className="px-3 py-2 text-slate-600">{r.city_of_operation || '—'}</td>
-                <td className="px-3 py-2 text-slate-600">{r.reporting_manager || '—'}</td>
+                <td className="px-3 py-2 text-slate-600 hidden md:table-cell">{r.reporting_manager || '—'}</td>
                 <td className="px-3 py-2 text-xs">
                   <div className="flex items-center gap-1.5 flex-wrap">
-                    <span className="text-slate-700">{r.ta_da_class !== null && r.ta_da_class !== undefined ? `Class ${r.ta_da_class}` : '—'}</span>
+                    {formatTaDaRate(r)}
                     {pending && (
                       <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full bg-amber-100 text-amber-800 border border-amber-300 text-[10px] font-medium"
                         title={`Pending request by ${pending.requested_by}`}>
@@ -642,6 +721,15 @@ export default function SalesEmployeeMaster() {
                     )}
                   </div>
                 </td>
+                {r.gross_salary > 0 ? (
+                  <td className="px-3 py-2 text-slate-700">
+                    ₹{Number(r.gross_salary).toLocaleString('en-IN')}
+                  </td>
+                ) : (
+                  <td className="px-3 py-2">
+                    <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full bg-red-100 text-red-800 border border-red-300 text-[10px] font-medium">No salary set</span>
+                  </td>
+                )}
                 <td className="px-3 py-2">{statusBadge(r.status)}</td>
                 <td className="px-3 py-2">
                   <div className="flex gap-2 text-xs flex-wrap">
