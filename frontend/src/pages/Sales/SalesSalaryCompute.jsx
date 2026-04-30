@@ -47,6 +47,15 @@ const ALLOWED_MOVES = {
   hold:      ['computed', 'reviewed'],
 }
 
+const EXCLUSION_REASON_LABEL = {
+  no_employee_record: 'No employee master record',
+  no_days_given: 'Sheet days_given is null',
+  no_structure: 'No salary structure (sales_salary_structures)',
+  zero_gross_in_structure: 'Salary structure has zero gross',
+  invalid_days_given: 'Sheet days_given is invalid (e.g., negative)',
+  employee_not_found: 'Master JOIN miss (code+company mismatch)',
+}
+
 function StatusBadge({ s }) {
   return <span className={clsx(STATUS_BADGE[s] || 'badge-gray', 'text-[10px]')}>{s || '—'}</span>
 }
@@ -106,6 +115,7 @@ export default function SalesSalaryCompute() {
   const [confirmRecompute, setConfirmRecompute] = useState(false)
   const [neftPreview, setNeftPreview] = useState(null)   // { missing, totals, filename } before download
   const [exportBusy, setExportBusy] = useState(false)
+  const [lastExcluded, setLastExcluded] = useState([])    // Phase 5 Bug A: surface excluded[] from compute response
 
   const monthYearReady = !!selectedCompany && !!selectedMonth && !!selectedYear
 
@@ -129,6 +139,7 @@ export default function SalesSalaryCompute() {
       if (d.finalizedRecomputeWarnings?.length) {
         toast(`⚠ ${d.finalizedRecomputeWarnings.length} finalized row(s) drifted — check drift log`, { icon: '⚠', duration: 6000 })
       }
+      setLastExcluded(d.excluded || [])
       qc.invalidateQueries({ queryKey: ['sales-salary-register'] })
       setConfirmRecompute(false)
     },
@@ -315,6 +326,23 @@ export default function SalesSalaryCompute() {
 
       {regLoading && (
         <div className="card p-6 text-sm text-slate-400">Loading…</div>
+      )}
+
+      {lastExcluded.length > 0 && (
+        <div className="bg-amber-50 border border-amber-200 rounded-lg p-4 text-sm text-amber-800">
+          <div className="font-semibold mb-2">
+            ⚠ {lastExcluded.length} employee(s) excluded from this compute
+          </div>
+          <ul className="space-y-1 font-mono text-xs">
+            {lastExcluded.map((e, i) => (
+              <li key={`${e.employee_code}-${i}`}>
+                <span className="font-bold">{e.employee_code}</span>
+                <span className="mx-2">·</span>
+                <span>{EXCLUSION_REASON_LABEL[e.reason] || e.reason}</span>
+              </li>
+            ))}
+          </ul>
+        </div>
       )}
 
       {!regLoading && hasRows && (
