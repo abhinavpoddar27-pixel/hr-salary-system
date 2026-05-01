@@ -8,6 +8,7 @@ const fs = require('fs');
 const crypto = require('crypto');
 const express = require('express');
 const rateLimit = require('express-rate-limit');
+const { ipKeyGenerator } = require('express-rate-limit');
 const jwt = require('jsonwebtoken');
 const Database = require('better-sqlite3');
 const { getDb } = require('../database/db');
@@ -46,6 +47,25 @@ function getReadonlyDb() {
   return readonlyDb;
 }
 
+// Phase 2: a writable connection (getDb()) and a separate readonly
+// connection (readonlyDb) both attached to the same DB file in WAL mode
+// don't always share visibility — better-sqlite3's readonly handle can
+// hold a stale read-snapshot across commits made on the writable handle.
+// After every successful write commit (in /commit or /restore commit),
+// we invalidate the cached readonly handle. The next /execute call
+// reopens a fresh one and sees the latest committed state. This is the
+// minimum-viable fix; alternative would be replaying all reads through
+// getDb() but that loses the Phase 1 readonly-file-handle defense in
+// depth (the validator's last backstop).
+function invalidateReadonlyDb() {
+  if (readonlyDb) {
+    try { readonlyDb.close(); } catch (e) { /* ignore */ }
+    readonlyDb = null;
+  }
+  schemaCache = null;
+  schemaCachedAt = 0;
+}
+
 // ── Audit ─────────────────────────────────────────────────────
 function ensureAuditTable() {
   const db = getDb();
@@ -70,6 +90,13 @@ function ensureAuditTable() {
     CREATE INDEX IF NOT EXISTS idx_sql_audit_ts ON sql_console_audit(ts);
     CREATE INDEX IF NOT EXISTS idx_sql_audit_actor ON sql_console_audit(actor);
   `);
+  // Phase 2: forward-compat audit column (idempotent — pre-existing tables get
+  // the column added; freshly-created tables already have everything else).
+  try {
+    db.exec(`ALTER TABLE sql_console_audit ADD COLUMN restored_from_audit_id INTEGER`);
+  } catch (e) {
+    // Column already exists (SQLite throws "duplicate column name") — fine.
+  }
 }
 
 function logAuditRow({
@@ -82,16 +109,22 @@ function logAuditRow({
   ms,
   ip,
   userAgent,
-  mode = 'read'
+  mode = 'read',
+  txnId = null,
+  affectedRows = null,
+  remark = null,
+  restoredFromAuditId = null
 }) {
   try {
     const db = getDb();
     const truncatedSql = sql ? String(sql).slice(0, 4000) : null;
     const truncatedUa = userAgent ? String(userAgent).slice(0, 200) : null;
-    db.prepare(`
+    const truncatedRemark = remark ? String(remark).slice(0, 2000) : null;
+    const info = db.prepare(`
       INSERT INTO sql_console_audit
-        (actor, auth_method, sql, status, reject_reason, row_count, ms, ip, user_agent, mode)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        (actor, auth_method, sql, status, reject_reason, row_count, ms, ip, user_agent,
+         mode, txn_id, affected_rows, remark, restored_from_audit_id)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       actor || null,
       authMethod || null,
@@ -102,11 +135,17 @@ function logAuditRow({
       ms == null ? null : ms,
       ip || null,
       truncatedUa,
-      mode
+      mode,
+      txnId || null,
+      affectedRows == null ? null : affectedRows,
+      truncatedRemark,
+      restoredFromAuditId == null ? null : restoredFromAuditId
     );
+    return info && info.lastInsertRowid != null ? Number(info.lastInsertRowid) : null;
   } catch (e) {
     // Never let an audit failure break the response.
     console.error('[SQL_CONSOLE] audit log failed:', e.message);
+    return null;
   }
 }
 
@@ -314,6 +353,376 @@ const SNIPPETS = [
   }
 ];
 
+// ── Phase 2: Write Validator ──────────────────────────────────
+// Forbidden tokens: even though leading-keyword validation passes for write
+// ops, these tokens ANYWHERE in the stripped SQL are dangerous and rejected.
+const WRITE_FORBIDDEN_TOKENS = [
+  'ATTACH', 'DETACH', 'VACUUM', 'REINDEX', 'PRAGMA', 'TRIGGER', '.LOAD'
+];
+
+// Tables for which we capture rows_before/rows_after JSON snapshots and
+// (for the salary-cascade subset) run a post-write drift check.
+const PROTECTED_TABLES = new Set([
+  'salary_computations',
+  'day_calculations',
+  'attendance_processed',
+  'salary_structures',
+  'employees'
+]);
+const SALARY_CASCADE_TABLES = PROTECTED_TABLES; // identical set for now
+
+const SNAPSHOT_ROW_CAP = 500;       // refuse to snapshot more than this many rows
+const WRITE_AFFECTED_ROW_CAP = 1000; // hard cap on actual rows changed
+const TXN_TTL_MS = 60_000;          // 60s preview TTL
+
+function validateWriteSql(sql, opts = {}) {
+  if (typeof sql !== 'string') {
+    return { ok: false, code: 'SQL_INVALID_INPUT', reason: 'sql must be a string' };
+  }
+  const len = sql.length;
+  if (len < 1 || len > 10000) {
+    return { ok: false, code: 'SQL_INVALID_INPUT', reason: 'sql length out of range (1..10000)' };
+  }
+
+  const cleaned = stripCommentsAndStrings(sql).trim();
+  if (!cleaned) {
+    return { ok: false, code: 'SQL_INVALID_INPUT', reason: 'sql is empty after stripping comments' };
+  }
+
+  // Layer 2: leading keyword
+  const m = cleaned.match(/^([A-Za-z_]+)\b/);
+  if (!m) {
+    return { ok: false, code: 'STATEMENT_NOT_ALLOWED', reason: 'could not detect leading keyword' };
+  }
+  const lead = m[1].toUpperCase();
+  let op, isDdl;
+  if (lead === 'INSERT' || lead === 'UPDATE' || lead === 'DELETE') {
+    op = lead;
+    isDdl = false;
+  } else if (lead === 'CREATE' || lead === 'ALTER' || lead === 'DROP' || lead === 'REPLACE') {
+    op = 'DDL';
+    isDdl = true;
+  } else {
+    return {
+      ok: false,
+      code: 'STATEMENT_NOT_ALLOWED',
+      reason: `leading keyword ${lead} not allowed for write path`
+    };
+  }
+
+  // Layer 3: single-statement check. Strip a single trailing ';' and whitespace,
+  // then disallow any further ';' inside the cleaned body.
+  const trailingStripped = cleaned.replace(/;\s*$/, '');
+  if (trailingStripped.indexOf(';') !== -1) {
+    return {
+      ok: false,
+      code: 'MULTI_STATEMENT_NOT_ALLOWED',
+      reason: 'multiple statements detected'
+    };
+  }
+
+  // Layer 4: forbidden tokens (case-insensitive, word-boundary)
+  for (const tok of WRITE_FORBIDDEN_TOKENS) {
+    const escaped = tok.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const re = new RegExp(`\\b${escaped}\\b`, 'i');
+    if (re.test(cleaned)) {
+      return {
+        ok: false,
+        code: 'FORBIDDEN_TOKEN',
+        reason: `forbidden token: ${tok}`
+      };
+    }
+  }
+
+  // Layer 5: unscoped UPDATE/DELETE — require explicit confirmation.
+  if (op === 'UPDATE' || op === 'DELETE') {
+    if (!/\bWHERE\b/i.test(cleaned)) {
+      if (opts.acceptUnscopedWrite !== true) {
+        return {
+          ok: false,
+          code: 'UNSCOPED_WRITE_BLOCKED',
+          reason: `${op} without WHERE clause; pass acceptUnscopedWrite:true to proceed`
+        };
+      }
+    }
+  }
+
+  // Layer 6: multi-table writes (JOIN inside UPDATE/DELETE) — diff/snapshot
+  // logic gets ambiguous, so reject.
+  if ((op === 'UPDATE' || op === 'DELETE') && /\bJOIN\b/i.test(cleaned)) {
+    return {
+      ok: false,
+      code: 'MULTI_TABLE_WRITE_NOT_ALLOWED',
+      reason: `JOIN not allowed inside ${op}`
+    };
+  }
+
+  return { ok: true, op, isDdl };
+}
+
+function extractTableName(sql, op) {
+  const cleaned = stripCommentsAndStrings(sql);
+  let m;
+  if (op === 'UPDATE') {
+    m = cleaned.match(/\bUPDATE\s+(?:OR\s+\w+\s+)?["`]?([a-zA-Z_][a-zA-Z0-9_]*)["`]?/i);
+  } else if (op === 'DELETE') {
+    m = cleaned.match(/\bDELETE\s+FROM\s+["`]?([a-zA-Z_][a-zA-Z0-9_]*)["`]?/i);
+  } else if (op === 'INSERT') {
+    m = cleaned.match(/\bINSERT\s+(?:OR\s+\w+\s+)?INTO\s+["`]?([a-zA-Z_][a-zA-Z0-9_]*)["`]?/i);
+  } else if (op === 'DDL') {
+    m = cleaned.match(/\b(?:CREATE|ALTER|DROP|REPLACE)\s+(?:TABLE|INDEX|VIEW|TRIGGER)\s+(?:IF\s+(?:NOT\s+)?EXISTS\s+)?["`]?([a-zA-Z_][a-zA-Z0-9_]*)["`]?/i);
+  }
+  return m ? m[1] : null;
+}
+
+// Extract WHERE clause of an UPDATE/DELETE so we can capture matching rows
+// before the change. Returns the literal WHERE string (incl. the WHERE keyword)
+// or null if no WHERE is present.
+function extractWhereClause(sql) {
+  const cleaned = stripCommentsAndStrings(sql);
+  // We need to take the original sql so string literals are preserved when
+  // running SELECT * FROM <table> <WHERE>. Use index-based slicing aligned
+  // with the cleaned version.
+  const whereIdx = cleaned.search(/\bWHERE\b/i);
+  if (whereIdx === -1) return null;
+  // Everything from the WHERE in the ORIGINAL sql, stripped of trailing ';'.
+  // Map index back: stripCommentsAndStrings preserves length (it replaces
+  // contents with same-length placeholders). Verify.
+  if (cleaned.length !== sql.length) {
+    // Length mismatch — fall back to extracting from cleaned string only.
+    // (Phase 1's stripper only collapses content inside quotes, so length
+    // CAN drift. For our use-case we run the SELECT against the original
+    // sql's WHERE clause, so re-find it in the original.)
+    const m = sql.match(/\bWHERE\b[\s\S]*$/i);
+    return m ? m[0].replace(/;\s*$/, '').trim() : null;
+  }
+  return sql.slice(whereIdx).replace(/;\s*$/, '').trim();
+}
+
+// ── Phase 2: Manual Transaction Helpers ───────────────────────
+// SQLite WAL mode allows concurrent readers + a single writer. We use the
+// SAME main connection (from db.js) so writes land in the live DB. We
+// DON'T use db.transaction() because that auto-commits at function end —
+// we need control across HTTP requests.
+function beginManualTxn(db) {
+  db.exec('BEGIN IMMEDIATE');
+}
+function commitManualTxn(db) {
+  db.exec('COMMIT');
+}
+function rollbackManualTxn(db) {
+  try {
+    db.exec('ROLLBACK');
+  } catch (e) {
+    // Transaction may already be aborted by SQLite (e.g. statement-level error).
+  }
+}
+
+// ── Phase 2: In-Memory Transaction Registry ───────────────────
+// At-most-one entry. Single-writer per connection enforced by SQLite, so
+// /preview rejects with TXN_ALREADY_OPEN when this Map already has an entry.
+const txnRegistry = new Map();
+
+function txnRegistryHasOpen() {
+  return txnRegistry.size > 0;
+}
+
+function txnRegistryGet(txnId) {
+  return txnRegistry.get(txnId);
+}
+
+function txnRegistryDelete(txnId) {
+  txnRegistry.delete(txnId);
+}
+
+// Idempotently ensure the snapshot table exists. Called once at mount.
+function ensureWriteSnapshotsTable() {
+  const db = getDb();
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS sql_console_write_snapshots (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      audit_id INTEGER REFERENCES sql_console_audit(id),
+      table_name TEXT NOT NULL,
+      rows_before TEXT,
+      rows_after TEXT,
+      affected_count INTEGER,
+      ts TEXT DEFAULT (datetime('now'))
+    );
+    CREATE INDEX IF NOT EXISTS idx_snapshot_audit ON sql_console_write_snapshots(audit_id);
+    CREATE INDEX IF NOT EXISTS idx_snapshot_table ON sql_console_write_snapshots(table_name);
+  `);
+}
+
+// Run the salary drift check. Returns { ran, drift_count, warning } or
+// { ran: false } if salary_computations doesn't exist.
+function runDriftCheck(db) {
+  try {
+    const r = db.prepare(
+      'SELECT COUNT(*) AS drift_count FROM salary_computations WHERE ABS(net_salary - (gross_earned - total_deductions)) > 1'
+    ).get();
+    const drift_count = r ? r.drift_count : 0;
+    return { ran: true, drift_count, warning: drift_count > 0 };
+  } catch (e) {
+    return { ran: false, drift_count: 0, warning: false, error: e.message };
+  }
+}
+
+// Generate inverse SQL for a snapshot restore. Returns { sql, op } where op
+// is INSERT|UPDATE|DELETE matching the inverse of the original write.
+// IMPORTANT: rows_before/rows_after carry the original write's view of data:
+//   original INSERT  → rows_after has new rows; inverse = DELETE by PK
+//   original UPDATE  → rows_before has old values; inverse = UPDATE back
+//   original DELETE  → rows_before has deleted rows; inverse = INSERT back
+function generateInverseStatements(originalOp, tableName, rowsBefore, rowsAfter, pkCols) {
+  // Returns array of { sql, params } since UPDATE-back may produce multiple
+  // statements (one per row).
+  const stmts = [];
+  const quote = (col) => `"${col.replace(/"/g, '""')}"`;
+  const placeholdersFor = (vals) => vals.map(() => '?').join(', ');
+
+  if (originalOp === 'INSERT') {
+    // Inverse: DELETE the rows we inserted, identified by PK from rows_after.
+    for (const row of (rowsAfter || [])) {
+      const whereParts = [];
+      const params = [];
+      for (const pk of pkCols) {
+        whereParts.push(`${quote(pk)} = ?`);
+        params.push(row[pk]);
+      }
+      if (whereParts.length === 0) continue;
+      stmts.push({
+        sql: `DELETE FROM ${quote(tableName)} WHERE ${whereParts.join(' AND ')}`,
+        params
+      });
+    }
+  } else if (originalOp === 'DELETE') {
+    // Inverse: re-INSERT the rows that were deleted, from rows_before.
+    for (const row of (rowsBefore || [])) {
+      const cols = Object.keys(row);
+      const vals = cols.map(c => row[c]);
+      stmts.push({
+        sql: `INSERT INTO ${quote(tableName)} (${cols.map(quote).join(', ')}) VALUES (${placeholdersFor(vals)})`,
+        params: vals
+      });
+    }
+  } else if (originalOp === 'UPDATE') {
+    // Inverse: UPDATE rows back to rows_before values, matching by PK.
+    // We pair rows_before[i] with rows_after[i] (same order, same row).
+    const before = rowsBefore || [];
+    for (const row of before) {
+      const setParts = [];
+      const setParams = [];
+      const whereParts = [];
+      const whereParams = [];
+      for (const col of Object.keys(row)) {
+        if (pkCols.includes(col)) {
+          whereParts.push(`${quote(col)} = ?`);
+          whereParams.push(row[col]);
+        } else {
+          setParts.push(`${quote(col)} = ?`);
+          setParams.push(row[col]);
+        }
+      }
+      if (whereParts.length === 0 || setParts.length === 0) continue;
+      stmts.push({
+        sql: `UPDATE ${quote(tableName)} SET ${setParts.join(', ')} WHERE ${whereParts.join(' AND ')}`,
+        params: [...setParams, ...whereParams]
+      });
+    }
+  }
+  return stmts;
+}
+
+// Determine the primary-key column names for a table by reading PRAGMA
+// table_info. Returns ['id'] as a sensible fallback when the table has no
+// declared PK.
+function getPrimaryKeyColumns(db, tableName) {
+  const cols = db.prepare(`PRAGMA table_info("${tableName.replace(/"/g, '""')}")`).all();
+  const pks = cols
+    .filter(c => c.pk && c.pk > 0)
+    .sort((a, b) => a.pk - b.pk)
+    .map(c => c.name);
+  if (pks.length > 0) return pks;
+  // Fallback: try 'id' if it exists.
+  const hasId = cols.some(c => c.name === 'id');
+  if (hasId) return ['id'];
+  // Last resort: use all columns (unique-ish).
+  return cols.map(c => c.name);
+}
+
+// Compare current PRAGMA table_info column SET against keys present in a
+// captured row. Returns { ok, missing_columns, extra_columns }.
+function detectSchemaDrift(db, tableName, capturedRow) {
+  const cols = db.prepare(`PRAGMA table_info("${tableName.replace(/"/g, '""')}")`).all();
+  const currentSet = new Set(cols.map(c => c.name));
+  const capturedSet = new Set(Object.keys(capturedRow || {}));
+  const missing = [...capturedSet].filter(c => !currentSet.has(c)); // captured had col, table doesn't
+  const extra = [...currentSet].filter(c => !capturedSet.has(c));   // table has col, captured didn't
+  return { ok: missing.length === 0 && extra.length === 0, missing_columns: missing, extra_columns: extra };
+}
+
+// JSON-safe sanitization for a row returned by better-sqlite3.
+// SQLite types map to JS as: TEXT→string, INTEGER→number/bigint, REAL→number,
+// NULL→null, BLOB→Buffer. Buffers don't round-trip through JSON cleanly, so
+// we drop BLOBs to null. (We don't restore BLOBs anyway.) BigInt is
+// stringified to preserve precision. Everything else passes through.
+function sanitizeRowForJson(row) {
+  const out = {};
+  for (const k of Object.keys(row)) {
+    const v = row[k];
+    if (v == null) out[k] = null;
+    else if (Buffer.isBuffer(v)) out[k] = null;
+    else if (typeof v === 'bigint') out[k] = String(v);
+    else out[k] = v;
+  }
+  return out;
+}
+
+// Build a SELECT against the user's UPDATE/DELETE WHERE clause to capture
+// the rows that will be touched. Returns an array of sanitized rows, or
+// null if the WHERE can't be extracted (we already validated against
+// unscoped writes upstream, so a null here means an INSERT path).
+function captureRowsBefore(db, tableName, sql) {
+  const where = extractWhereClause(sql);
+  if (!where) return null;
+  const rows = db.prepare(`SELECT * FROM "${tableName.replace(/"/g, '""')}" ${where}`).all();
+  return rows.map(sanitizeRowForJson);
+}
+
+// Capture rows AFTER an INSERT using the rowid range. Works for tables with
+// integer rowids (the SQLite default). For WITHOUT ROWID tables this
+// returns an empty array — acceptable because such tables are rare in this
+// codebase and rows_after is best-effort for snapshot purposes.
+function captureRowsAfterInsert(db, tableName, lastInsertRowid, changes) {
+  if (!lastInsertRowid || !changes || changes < 1) return [];
+  const startRowid = Number(lastInsertRowid) - changes + 1;
+  const endRowid = Number(lastInsertRowid);
+  try {
+    const rows = db.prepare(
+      `SELECT * FROM "${tableName.replace(/"/g, '""')}" WHERE rowid BETWEEN ? AND ?`
+    ).all(startRowid, endRowid);
+    return rows.map(sanitizeRowForJson);
+  } catch (e) {
+    return [];
+  }
+}
+
+// Capture rows AFTER an UPDATE: re-read by PK from the captured rows_before.
+// (The user's WHERE clause may no longer match — e.g. an UPDATE that
+// changes the WHERE column itself — so we anchor via PK.)
+function captureRowsAfterUpdateByPk(db, tableName, rowsBefore, pkCols) {
+  if (!rowsBefore || rowsBefore.length === 0 || !pkCols || pkCols.length === 0) return [];
+  const wherePks = pkCols.map(c => `"${c.replace(/"/g, '""')}" = ?`).join(' AND ');
+  const stmt = db.prepare(`SELECT * FROM "${tableName.replace(/"/g, '""')}" WHERE ${wherePks}`);
+  const out = [];
+  for (const r of rowsBefore) {
+    const params = pkCols.map(c => r[c]);
+    const after = stmt.get(...params);
+    if (after) out.push(sanitizeRowForJson(after));
+  }
+  return out;
+}
+
 // ── Mount ─────────────────────────────────────────────────────
 function mountSqlConsole(app) {
   if (process.env.SQL_CONSOLE_ENABLED !== 'true') {
@@ -329,7 +738,18 @@ function mountSqlConsole(app) {
     console.warn('[SQL_CONSOLE] SQL_CONSOLE_API_KEY not set — only JWT (admin) path will work');
   }
 
+  // Phase 2: validate DDL token length at boot. Parallel to the API-key
+  // check above. Token is constant-time compared per-request; a too-short
+  // token would silently fail every length-equality guard at runtime, so
+  // we surface the misconfiguration early.
+  const ddlToken = process.env.SQL_CONSOLE_DDL_TOKEN;
+  const hasDdlToken = !!(ddlToken && ddlToken.length >= 16);
+  if (ddlToken && !hasDdlToken) {
+    console.warn('[SQL_CONSOLE] SQL_CONSOLE_DDL_TOKEN is set but shorter than 16 chars — DDL writes will reject');
+  }
+
   ensureAuditTable();
+  ensureWriteSnapshotsTable();
 
   const router = express.Router();
   const auth = makeAuthMiddleware();
@@ -345,6 +765,23 @@ function mountSqlConsole(app) {
     message: { success: false, code: 'RATE_LIMITED', reason: '30 requests/minute on API key' }
   });
   router.use(apiKeyLimiter);
+
+  // Phase 2: write-path rate limit (10/hour per actor). Applied only to
+  // /preview and /snapshot/:audit_id/restore. /commit and /rollback are
+  // intentionally excluded (commits don't add new write attempts). API-key
+  // actors are skipped because the endpoint handlers reject them with 403
+  // WRITE_NOT_ALLOWED_FOR_AGENT before they reach this limiter; the skip
+  // simply avoids burning their unrelated request budget.
+  const writeRateLimiter = rateLimit({
+    windowMs: 60 * 60 * 1000,
+    max: 10,
+    keyGenerator: (req) => (req.sqlActor && req.sqlActor.username) || ipKeyGenerator(req.ip || ''),
+    skip: (req) => req.sqlActor && req.sqlActor.auth_method === 'api_key',
+    standardHeaders: true,
+    legacyHeaders: false,
+    validate: { xForwardedForHeader: false },
+    message: { success: false, code: 'WRITE_RATE_LIMITED', reason: '10 writes/hour per actor' }
+  });
 
   // POST /execute
   router.post('/execute', auth, (req, res) => {
@@ -573,8 +1010,838 @@ function mountSqlConsole(app) {
     });
   });
 
+  // ── Phase 2: POST /preview ───────────────────────────────────
+  // JWT-only (api_key actors are 403'd up front). Mandatory remark.
+  // Validates write SQL, opens a manual transaction, captures snapshot rows
+  // for protected tables, runs the user's SQL, registers a 60s TTL, and
+  // returns a preview payload. The caller must follow up with /commit/:txn_id
+  // or /rollback/:txn_id (or wait 60s for auto-rollback).
+  router.post('/preview', auth, writeRateLimiter, (req, res) => {
+    const ip = req.ip || req.connection?.remoteAddress || '';
+    const ua = req.headers['user-agent'] || '';
+    const actor = req.sqlActor.username;
+    const authMethod = req.sqlActor.auth_method;
+
+    // Hard rule: API-key actors (the agent path) cannot write.
+    if (authMethod === 'api_key') {
+      logAuditRow({
+        actor, authMethod, sql: null, status: 'rejected',
+        rejectReason: 'WRITE_NOT_ALLOWED_FOR_AGENT', ip, userAgent: ua,
+        mode: 'write_preview'
+      });
+      return res.status(403).json({
+        success: false,
+        code: 'WRITE_NOT_ALLOWED_FOR_AGENT',
+        reason: 'API-key authentication is read-only; writes require admin JWT'
+      });
+    }
+
+    const sql = req.body?.sql;
+    const remark = req.body?.remark;
+    const acceptUnscopedWrite = req.body?.acceptUnscopedWrite === true;
+
+    // 1. Remark validation
+    if (typeof remark !== 'string' || remark.trim().length < 10) {
+      logAuditRow({
+        actor, authMethod, sql: typeof sql === 'string' ? sql : null,
+        status: 'rejected', rejectReason: 'REMARK_REQUIRED',
+        ip, userAgent: ua, mode: 'write_preview'
+      });
+      return res.status(400).json({
+        success: false,
+        code: 'REMARK_REQUIRED',
+        reason: 'remark must be a string of at least 10 characters'
+      });
+    }
+    const remarkTrimmed = remark.trim();
+
+    // 2. SQL validation
+    const validation = validateWriteSql(sql, { acceptUnscopedWrite });
+    if (!validation.ok) {
+      const httpStatus =
+        validation.code === 'SQL_INVALID_INPUT' ? 400 :
+        validation.code === 'UNSCOPED_WRITE_BLOCKED' ? 403 :
+        403;
+      logAuditRow({
+        actor, authMethod, sql, status: 'rejected',
+        rejectReason: `${validation.code}: ${validation.reason}`,
+        ip, userAgent: ua, mode: 'write_preview', remark: remarkTrimmed
+      });
+      return res.status(httpStatus).json({
+        success: false,
+        code: validation.code,
+        reason: validation.reason
+      });
+    }
+    const { op, isDdl } = validation;
+
+    // 3. DDL token check
+    if (isDdl) {
+      const envToken = process.env.SQL_CONSOLE_DDL_TOKEN;
+      const headerToken = req.headers['x-sql-console-ddl-token'];
+      const ok = !!envToken && typeof headerToken === 'string' &&
+                 envToken.length === headerToken.length &&
+                 envToken.length >= 16 &&
+                 timingSafeEqualStr(envToken, headerToken);
+      if (!ok) {
+        logAuditRow({
+          actor, authMethod, sql, status: 'rejected',
+          rejectReason: 'DDL_TOKEN_REQUIRED',
+          ip, userAgent: ua, mode: 'write_preview', remark: remarkTrimmed
+        });
+        return res.status(403).json({
+          success: false,
+          code: 'DDL_TOKEN_REQUIRED',
+          reason: 'DDL writes require X-SQL-Console-DDL-Token header matching SQL_CONSOLE_DDL_TOKEN env var'
+        });
+      }
+    }
+
+    // 4. Single-txn check
+    if (txnRegistryHasOpen()) {
+      const existing = [...txnRegistry.keys()][0];
+      logAuditRow({
+        actor, authMethod, sql, status: 'rejected',
+        rejectReason: `TXN_ALREADY_OPEN existing=${existing}`,
+        ip, userAgent: ua, mode: 'write_preview', remark: remarkTrimmed
+      });
+      return res.status(409).json({
+        success: false,
+        code: 'TXN_ALREADY_OPEN',
+        reason: 'another write transaction is open; commit or rollback it first',
+        existing_txn_id: existing
+      });
+    }
+
+    // 5. Extract table_name
+    const tableName = extractTableName(sql, op);
+    if (!tableName) {
+      logAuditRow({
+        actor, authMethod, sql, status: 'rejected',
+        rejectReason: 'TABLE_EXTRACTION_FAILED',
+        ip, userAgent: ua, mode: 'write_preview', remark: remarkTrimmed
+      });
+      return res.status(400).json({
+        success: false,
+        code: 'TABLE_EXTRACTION_FAILED',
+        reason: 'could not parse target table name from SQL'
+      });
+    }
+    const isProtected = PROTECTED_TABLES.has(tableName);
+
+    // Reserve registry slot synchronously to block concurrent /preview races
+    // (Node is single-threaded; this set() runs before the next request can
+    // re-check txnRegistryHasOpen()).
+    const txnId = crypto.randomUUID();
+    txnRegistry.set(txnId, { _placeholder: true, actor, started_at: Date.now() });
+
+    const db = getDb();
+    let auditIdPartial = null;
+    let rowsBefore = null;
+    let rowsAfter = null;
+    let affectedRows = 0;
+    let pkCols = [];
+    const startedAt = Date.now();
+
+    // Phase 2 critical: write the audit row BEFORE beginManualTxn(). If we
+    // INSERT inside the txn, a subsequent ROLLBACK (manual /rollback or TTL
+    // auto-rollback) discards the audit row entirely — losing visibility
+    // into what was attempted. By writing pre-BEGIN, the row survives any
+    // rollback path. /commit, /rollback, and the TTL handler each UPDATE
+    // this row to its terminal state. affected_rows starts NULL and gets
+    // filled in by /commit on success; rolled-back rows leave it NULL.
+    auditIdPartial = logAuditRow({
+      actor, authMethod, sql, status: 'preview',
+      rowCount: null, ms: 0,
+      ip, userAgent: ua,
+      mode: 'write_preview', txnId, affectedRows: null, remark: remarkTrimmed
+    });
+
+    try {
+      // 6. BEGIN IMMEDIATE
+      beginManualTxn(db);
+    } catch (e) {
+      txnRegistry.delete(txnId);
+      try {
+        getDb().prepare(
+          "UPDATE sql_console_audit SET status='error', reject_reason=? WHERE id = ?"
+        ).run(`BEGIN_FAILED: ${e.message}`, auditIdPartial);
+      } catch (e2) { /* ignore */ }
+      return res.status(500).json({
+        success: false,
+        code: 'BEGIN_FAILED',
+        reason: e.message
+      });
+    }
+
+    try {
+      // 7. Pre-capture rows_before for UPDATE/DELETE on protected tables.
+      // Also capture for non-protected tables BUT cap & don't surface
+      // (we only need rows_before for snapshotting; non-protected tables
+      // skip the snapshot row so we skip the capture too).
+      if ((op === 'UPDATE' || op === 'DELETE') && isProtected) {
+        try {
+          rowsBefore = captureRowsBefore(db, tableName, sql);
+        } catch (e) {
+          rollbackManualTxn(db);
+          txnRegistry.delete(txnId);
+          try {
+            getDb().prepare(
+              "UPDATE sql_console_audit SET status='rejected', reject_reason=? WHERE id = ?"
+            ).run(`WHERE_CAPTURE_FAILED: ${e.message}`, auditIdPartial);
+          } catch (e2) { /* ignore */ }
+          return res.status(400).json({
+            success: false,
+            code: 'WHERE_CAPTURE_FAILED',
+            reason: `failed to read rows matching WHERE: ${e.message}`
+          });
+        }
+        if (rowsBefore && rowsBefore.length > SNAPSHOT_ROW_CAP) {
+          rollbackManualTxn(db);
+          txnRegistry.delete(txnId);
+          try {
+            getDb().prepare(
+              "UPDATE sql_console_audit SET status='rejected', reject_reason=? WHERE id = ?"
+            ).run(`WRITE_TOO_LARGE_TO_SNAPSHOT count=${rowsBefore.length}`, auditIdPartial);
+          } catch (e2) { /* ignore */ }
+          return res.status(403).json({
+            success: false,
+            code: 'WRITE_TOO_LARGE_TO_SNAPSHOT',
+            reason: `${rowsBefore.length} rows would be touched; snapshot cap is ${SNAPSHOT_ROW_CAP}`
+          });
+        }
+        try { pkCols = getPrimaryKeyColumns(db, tableName); } catch (e) { pkCols = []; }
+      }
+
+      // 9. Run the user's SQL.
+      const stmt = db.prepare(sql);
+      const result = stmt.run();
+      affectedRows = result.changes || 0;
+      const lastInsertRowid = result.lastInsertRowid;
+
+      // 12. Hard cap on affected_rows.
+      if (affectedRows > WRITE_AFFECTED_ROW_CAP) {
+        rollbackManualTxn(db);
+        txnRegistry.delete(txnId);
+        try {
+          getDb().prepare(
+            "UPDATE sql_console_audit SET status='rejected', reject_reason=?, affected_rows=? WHERE id = ?"
+          ).run(`WRITE_ROW_LIMIT_EXCEEDED count=${affectedRows}`, affectedRows, auditIdPartial);
+        } catch (e2) { /* ignore */ }
+        return res.status(403).json({
+          success: false,
+          code: 'WRITE_ROW_LIMIT_EXCEEDED',
+          reason: `${affectedRows} rows would be changed; hard cap is ${WRITE_AFFECTED_ROW_CAP}`,
+          affected_rows: affectedRows
+        });
+      }
+
+      // 10/11. Capture rows_after for protected tables.
+      if (isProtected) {
+        if (op === 'INSERT') {
+          rowsAfter = captureRowsAfterInsert(db, tableName, lastInsertRowid, affectedRows);
+        } else if (op === 'UPDATE') {
+          rowsAfter = captureRowsAfterUpdateByPk(db, tableName, rowsBefore || [], pkCols);
+        } else if (op === 'DELETE') {
+          rowsAfter = []; // rows are gone; rows_before holds the original data
+        }
+      }
+    } catch (e) {
+      rollbackManualTxn(db);
+      txnRegistry.delete(txnId);
+      try {
+        getDb().prepare(
+          "UPDATE sql_console_audit SET status='error', reject_reason=? WHERE id = ?"
+        ).run(`SQL_EXECUTION_ERROR: ${e.message}`, auditIdPartial);
+      } catch (e2) { /* ignore */ }
+      return res.status(400).json({
+        success: false,
+        code: 'SQL_EXECUTION_ERROR',
+        reason: e.message
+      });
+    }
+
+    // 13. Register the txn with TTL.
+    const expiresAt = startedAt + TXN_TTL_MS;
+    const ttlTimer = setTimeout(() => {
+      // Auto-rollback handler. Only fires if commit/rollback didn't clean up.
+      const t = txnRegistry.get(txnId);
+      if (!t) return;
+      try { rollbackManualTxn(getDb()); } catch (e) { /* ignore */ }
+      try {
+        getDb().prepare(
+          "UPDATE sql_console_audit SET status='auto_rolled_back', mode='rolled_back', reject_reason='TTL_EXPIRED' WHERE id = ?"
+        ).run(t.audit_id_partial);
+      } catch (e) { /* ignore */ }
+      txnRegistry.delete(txnId);
+      try {
+        const tail = (t.sql || '').slice(0, 80).replace(/\s+/g, ' ');
+        console.log(`[SQL_CONSOLE] TTL auto-rollback: txn_id=${txnId} actor=${t.actor} sql=${tail}`);
+      } catch (e) { /* ignore */ }
+    }, TXN_TTL_MS);
+    if (ttlTimer && typeof ttlTimer.unref === 'function') ttlTimer.unref();
+
+    // 14. Update the existing audit row (INSERTed pre-BEGIN) with the now-known
+    // affected_rows. This UPDATE happens INSIDE the active txn; if /commit
+    // fires it persists, if /rollback or TTL fires it's discarded BUT the
+    // base audit row from the pre-BEGIN INSERT survives (this is the
+    // critical visibility fix).
+    try {
+      getDb().prepare(
+        "UPDATE sql_console_audit SET affected_rows=?, ms=? WHERE id=?"
+      ).run(affectedRows, Date.now() - startedAt, auditIdPartial);
+    } catch (e) { /* ignore */ }
+
+    txnRegistry.set(txnId, {
+      sql,
+      remark: remarkTrimmed,
+      actor,
+      auth_method: authMethod,
+      op,
+      is_ddl: isDdl,
+      table_name: tableName,
+      is_protected_table: isProtected,
+      affected_rows: affectedRows,
+      rows_before: rowsBefore,
+      rows_after: rowsAfter,
+      pk_cols: pkCols,
+      started_at: startedAt,
+      expires_at: expiresAt,
+      ttl_timer: ttlTimer,
+      audit_id_partial: auditIdPartial,
+      restored_from_audit_id: null
+    });
+
+    // 15. Respond.
+    return res.json({
+      success: true,
+      txn_id: txnId,
+      sql,
+      remark: remarkTrimmed,
+      op,
+      table_name: tableName,
+      affected_rows: affectedRows,
+      is_protected_table: isProtected,
+      rows_before: isProtected ? rowsBefore : null,
+      rows_after: isProtected ? rowsAfter : null,
+      expires_at: new Date(expiresAt).toISOString()
+    });
+  });
+
+  // ── Phase 2: POST /commit/:txn_id ────────────────────────────
+  // JWT-only. Same actor as the one who created the txn. Optional
+  // confirmRemark exact-match guard. On success: COMMIT, write snapshot row
+  // for protected tables, run drift check for salary cascade tables, update
+  // the audit row to mode='write_committed' status='ok'.
+  router.post('/commit/:txn_id', auth, (req, res) => {
+    const ip = req.ip || req.connection?.remoteAddress || '';
+    const ua = req.headers['user-agent'] || '';
+    const actor = req.sqlActor.username;
+    const authMethod = req.sqlActor.auth_method;
+
+    if (authMethod === 'api_key') {
+      return res.status(403).json({
+        success: false,
+        code: 'WRITE_NOT_ALLOWED_FOR_AGENT',
+        reason: 'API-key authentication is read-only'
+      });
+    }
+
+    const txnId = req.params.txn_id;
+    const txn = txnRegistry.get(txnId);
+    if (!txn || txn._placeholder) {
+      return res.status(404).json({
+        success: false,
+        code: 'TXN_NOT_FOUND',
+        reason: 'transaction not found (committed, rolled back, or expired)'
+      });
+    }
+    if (txn.actor !== actor) {
+      return res.status(403).json({
+        success: false,
+        code: 'TXN_ACTOR_MISMATCH',
+        reason: 'only the actor who created this transaction can commit it'
+      });
+    }
+    const confirmRemark = req.body?.confirmRemark;
+    if (typeof confirmRemark === 'string' && confirmRemark !== txn.remark) {
+      return res.status(400).json({
+        success: false,
+        code: 'REMARK_MISMATCH',
+        reason: 'confirmRemark does not match the original remark'
+      });
+    }
+
+    if (txn.ttl_timer) clearTimeout(txn.ttl_timer);
+
+    const db = getDb();
+    try {
+      commitManualTxn(db);
+    } catch (e) {
+      // Best-effort rollback already done by SQLite when COMMIT fails on a
+      // bad txn; clean up regardless.
+      try { rollbackManualTxn(db); } catch (e2) { /* ignore */ }
+      txnRegistry.delete(txnId);
+      try {
+        db.prepare(
+          "UPDATE sql_console_audit SET status='error', mode='rolled_back', reject_reason=? WHERE id = ?"
+        ).run(`COMMIT_FAILED: ${e.message}`, txn.audit_id_partial);
+      } catch (e2) { /* ignore */ }
+      return res.status(500).json({
+        success: false,
+        code: 'COMMIT_FAILED',
+        reason: e.message
+      });
+    }
+
+    // Snapshot row for protected tables (post-commit so we don't accidentally
+    // hold the txn open longer than needed).
+    let snapshotId = null;
+    if (txn.is_protected_table) {
+      try {
+        const ins = db.prepare(`
+          INSERT INTO sql_console_write_snapshots
+            (audit_id, table_name, rows_before, rows_after, affected_count)
+          VALUES (?, ?, ?, ?, ?)
+        `).run(
+          txn.audit_id_partial,
+          txn.table_name,
+          JSON.stringify(txn.rows_before || []),
+          JSON.stringify(txn.rows_after || []),
+          txn.affected_rows
+        );
+        snapshotId = Number(ins.lastInsertRowid);
+      } catch (e) {
+        console.error('[SQL_CONSOLE] snapshot write failed:', e.message);
+      }
+    }
+
+    // Drift check for any of the salary-cascade tables (the protected set
+    // and the cascade set are the same in this build).
+    let driftCheck = null;
+    if (SALARY_CASCADE_TABLES.has(txn.table_name)) {
+      driftCheck = runDriftCheck(db);
+    }
+
+    // Update the audit row. Set the final mode based on whether this was a
+    // restore (mode='restore_committed') or a normal write (mode='write_committed').
+    // Always re-stamp affected_rows in case the in-txn UPDATE was lost (it
+    // shouldn't be — COMMIT just succeeded — but defensive).
+    const finalMode = txn.restored_from_audit_id != null
+      ? 'restore_committed'
+      : 'write_committed';
+    try {
+      db.prepare(
+        "UPDATE sql_console_audit SET status='ok', mode=?, affected_rows=? WHERE id = ?"
+      ).run(finalMode, txn.affected_rows, txn.audit_id_partial);
+    } catch (e) { /* ignore */ }
+
+    txnRegistry.delete(txnId);
+
+    // Phase 2: invalidate the readonly handle so subsequent /execute calls
+    // see the just-committed write. See invalidateReadonlyDb() rationale.
+    invalidateReadonlyDb();
+
+    return res.json({
+      success: true,
+      audit_id: txn.audit_id_partial,
+      table_name: txn.table_name,
+      affected_rows: txn.affected_rows,
+      snapshot_id: snapshotId,
+      drift_check: driftCheck
+    });
+  });
+
+  // ── Phase 2: POST /rollback/:txn_id ──────────────────────────
+  // JWT-only. Actor must match. On success: ROLLBACK, audit row updated to
+  // mode='rolled_back' status='rolled_back'.
+  router.post('/rollback/:txn_id', auth, (req, res) => {
+    const actor = req.sqlActor.username;
+    const authMethod = req.sqlActor.auth_method;
+
+    if (authMethod === 'api_key') {
+      return res.status(403).json({
+        success: false,
+        code: 'WRITE_NOT_ALLOWED_FOR_AGENT',
+        reason: 'API-key authentication is read-only'
+      });
+    }
+
+    const txnId = req.params.txn_id;
+    const txn = txnRegistry.get(txnId);
+    if (!txn || txn._placeholder) {
+      return res.status(404).json({
+        success: false,
+        code: 'TXN_NOT_FOUND',
+        reason: 'transaction not found (already committed, rolled back, or expired)'
+      });
+    }
+    if (txn.actor !== actor) {
+      return res.status(403).json({
+        success: false,
+        code: 'TXN_ACTOR_MISMATCH',
+        reason: 'only the actor who created this transaction can roll it back'
+      });
+    }
+
+    if (txn.ttl_timer) clearTimeout(txn.ttl_timer);
+    const db = getDb();
+    rollbackManualTxn(db);
+    try {
+      db.prepare(
+        "UPDATE sql_console_audit SET status='rolled_back', mode='rolled_back' WHERE id = ?"
+      ).run(txn.audit_id_partial);
+    } catch (e) { /* ignore */ }
+    txnRegistry.delete(txnId);
+
+    return res.json({
+      success: true,
+      txn_id: txnId,
+      status: 'rolled_back'
+    });
+  });
+
+  // ── Phase 2: POST /snapshot/:audit_id/restore ───────────────
+  // JWT-only, writeRateLimiter applied. Mandatory remark.
+  // Looks up the original committed write's snapshot, generates inverse SQL,
+  // executes it inside a fresh manual transaction, and registers a NEW txn
+  // that the caller commits via the standard /commit/:txn_id endpoint.
+  // The resulting audit row carries restored_from_audit_id pointing at the
+  // original write, forming a chain.
+  router.post('/snapshot/:audit_id/restore', auth, writeRateLimiter, (req, res) => {
+    const ip = req.ip || req.connection?.remoteAddress || '';
+    const ua = req.headers['user-agent'] || '';
+    const actor = req.sqlActor.username;
+    const authMethod = req.sqlActor.auth_method;
+
+    if (authMethod === 'api_key') {
+      logAuditRow({
+        actor, authMethod, sql: null, status: 'rejected',
+        rejectReason: 'WRITE_NOT_ALLOWED_FOR_AGENT', ip, userAgent: ua,
+        mode: 'restore_preview'
+      });
+      return res.status(403).json({
+        success: false,
+        code: 'WRITE_NOT_ALLOWED_FOR_AGENT',
+        reason: 'API-key authentication is read-only'
+      });
+    }
+
+    // 1. Validate remark
+    const remark = req.body?.remark;
+    if (typeof remark !== 'string' || remark.trim().length < 10) {
+      return res.status(400).json({
+        success: false,
+        code: 'REMARK_REQUIRED',
+        reason: 'remark must be a string of at least 10 characters'
+      });
+    }
+    const remarkTrimmed = remark.trim();
+
+    const auditId = parseInt(req.params.audit_id, 10);
+    if (!Number.isFinite(auditId) || auditId < 1) {
+      return res.status(400).json({
+        success: false,
+        code: 'INVALID_AUDIT_ID',
+        reason: 'audit_id must be a positive integer'
+      });
+    }
+
+    const db = getDb();
+
+    // 2. Look up snapshot
+    const snapshot = db.prepare(
+      'SELECT * FROM sql_console_write_snapshots WHERE audit_id = ?'
+    ).get(auditId);
+    if (!snapshot) {
+      return res.status(404).json({
+        success: false,
+        code: 'SNAPSHOT_NOT_FOUND',
+        reason: `no snapshot row for audit_id=${auditId}`
+      });
+    }
+
+    // 3. Look up original audit row. Spec: only successful writes ('ok') or
+    // auto_rolled_back rows are eligible. In practice snapshot rows only
+    // exist for committed writes, so this layer is defense-in-depth.
+    const auditRow = db.prepare(
+      'SELECT * FROM sql_console_audit WHERE id = ?'
+    ).get(auditId);
+    if (!auditRow) {
+      return res.status(404).json({
+        success: false,
+        code: 'AUDIT_ROW_NOT_FOUND',
+        reason: `no audit row for id=${auditId}`
+      });
+    }
+    if (auditRow.status !== 'ok' && auditRow.status !== 'auto_rolled_back') {
+      return res.status(400).json({
+        success: false,
+        code: 'CANNOT_RESTORE_NON_COMMITTED',
+        reason: `audit row ${auditId} has status='${auditRow.status}'; only 'ok' or 'auto_rolled_back' rows can be restored`
+      });
+    }
+
+    // 4. Determine original op from the original SQL.
+    const origValidation = validateWriteSql(auditRow.sql, { acceptUnscopedWrite: true });
+    if (!origValidation.ok) {
+      return res.status(400).json({
+        success: false,
+        code: 'ORIGINAL_SQL_UNPARSEABLE',
+        reason: `cannot determine op of original write: ${origValidation.code}`
+      });
+    }
+    const origOp = origValidation.op; // INSERT/UPDATE/DELETE/DDL
+    if (origOp === 'DDL') {
+      return res.status(400).json({
+        success: false,
+        code: 'DDL_RESTORE_NOT_SUPPORTED',
+        reason: 'DDL writes (CREATE/ALTER/DROP) cannot be auto-restored from a snapshot'
+      });
+    }
+
+    const tableName = snapshot.table_name;
+    let rowsBeforeOrig, rowsAfterOrig;
+    try {
+      rowsBeforeOrig = JSON.parse(snapshot.rows_before || '[]');
+      rowsAfterOrig = JSON.parse(snapshot.rows_after || '[]');
+    } catch (e) {
+      return res.status(500).json({
+        success: false,
+        code: 'SNAPSHOT_CORRUPT',
+        reason: `failed to parse snapshot JSON: ${e.message}`
+      });
+    }
+
+    // 5. Schema drift check — compare current table column SET against
+    // the keys of a captured row. We use the larger of rows_before /
+    // rows_after as the reference.
+    const sampleRow = (rowsBeforeOrig[0] || rowsAfterOrig[0] || null);
+    if (!sampleRow) {
+      return res.status(400).json({
+        success: false,
+        code: 'SNAPSHOT_EMPTY',
+        reason: 'snapshot has no captured rows; nothing to restore'
+      });
+    }
+    const drift = detectSchemaDrift(db, tableName, sampleRow);
+    if (!drift.ok) {
+      return res.status(409).json({
+        success: false,
+        code: 'SCHEMA_DRIFT_DETECTED',
+        reason: `current schema for ${tableName} differs from captured snapshot`,
+        missing_columns: drift.missing_columns,
+        extra_columns: drift.extra_columns
+      });
+    }
+
+    // 6. Single-txn check
+    if (txnRegistryHasOpen()) {
+      const existing = [...txnRegistry.keys()][0];
+      return res.status(409).json({
+        success: false,
+        code: 'TXN_ALREADY_OPEN',
+        reason: 'another write transaction is open; commit or rollback it first',
+        existing_txn_id: existing
+      });
+    }
+
+    let pkCols = [];
+    try { pkCols = getPrimaryKeyColumns(db, tableName); } catch (e) { pkCols = []; }
+    if (pkCols.length === 0) {
+      return res.status(400).json({
+        success: false,
+        code: 'NO_PRIMARY_KEY',
+        reason: `cannot identify primary key columns for ${tableName}; restore would be ambiguous`
+      });
+    }
+
+    // Generate inverse statements.
+    const inverseStmts = generateInverseStatements(
+      origOp, tableName, rowsBeforeOrig, rowsAfterOrig, pkCols
+    );
+    if (inverseStmts.length === 0) {
+      return res.status(400).json({
+        success: false,
+        code: 'NO_INVERSE_GENERATED',
+        reason: 'no inverse statements could be generated from this snapshot'
+      });
+    }
+
+    // Reserve registry slot synchronously
+    const txnId = crypto.randomUUID();
+    txnRegistry.set(txnId, { _placeholder: true, actor, started_at: Date.now() });
+
+    // Build the inverse SQL text for the audit row (newline-joined for
+    // readability, truncated by logAuditRow at 4000 chars).
+    const inverseSqlText = inverseStmts.map(s => s.sql).join(';\n');
+
+    // Phase 2 critical (same as /preview): write audit row pre-BEGIN so
+    // it survives any rollback path including TTL auto-rollback.
+    const startedAt = Date.now();
+    const auditIdPartial = logAuditRow({
+      actor, authMethod, sql: inverseSqlText, status: 'preview',
+      rowCount: null, ms: 0,
+      ip, userAgent: ua,
+      mode: 'restore_preview', txnId, affectedRows: null,
+      remark: remarkTrimmed,
+      restoredFromAuditId: auditId
+    });
+
+    try {
+      beginManualTxn(db);
+    } catch (e) {
+      txnRegistry.delete(txnId);
+      try {
+        getDb().prepare(
+          "UPDATE sql_console_audit SET status='error', reject_reason=? WHERE id = ?"
+        ).run(`BEGIN_FAILED: ${e.message}`, auditIdPartial);
+      } catch (e2) { /* ignore */ }
+      return res.status(500).json({
+        success: false,
+        code: 'BEGIN_FAILED',
+        reason: e.message
+      });
+    }
+
+    // 7. Execute inverse statements.
+    let totalChanges = 0;
+    try {
+      for (const s of inverseStmts) {
+        const stmt = db.prepare(s.sql);
+        const r = stmt.run(...s.params);
+        totalChanges += r.changes || 0;
+      }
+    } catch (e) {
+      rollbackManualTxn(db);
+      txnRegistry.delete(txnId);
+      try {
+        getDb().prepare(
+          "UPDATE sql_console_audit SET status='error', reject_reason=? WHERE id = ?"
+        ).run(`RESTORE_EXECUTION_ERROR: ${e.message}`, auditIdPartial);
+      } catch (e2) { /* ignore */ }
+      return res.status(400).json({
+        success: false,
+        code: 'RESTORE_EXECUTION_ERROR',
+        reason: e.message
+      });
+    }
+
+    if (totalChanges > WRITE_AFFECTED_ROW_CAP) {
+      rollbackManualTxn(db);
+      txnRegistry.delete(txnId);
+      try {
+        getDb().prepare(
+          "UPDATE sql_console_audit SET status='rejected', reject_reason=?, affected_rows=? WHERE id = ?"
+        ).run(`WRITE_ROW_LIMIT_EXCEEDED count=${totalChanges}`, totalChanges, auditIdPartial);
+      } catch (e2) { /* ignore */ }
+      return res.status(403).json({
+        success: false,
+        code: 'WRITE_ROW_LIMIT_EXCEEDED',
+        reason: `${totalChanges} rows would be changed; hard cap is ${WRITE_AFFECTED_ROW_CAP}`,
+        affected_rows: totalChanges
+      });
+    }
+
+    // For the restore preview, the new rows_before/rows_after follow the
+    // spec: new_before = orig.rows_after, new_after = orig.rows_before.
+    // (For each op type this gives the user the right "before vs after"
+    // diff to look at: "current state on the left, what it'll become on
+    // the right".)
+    const newRowsBefore = rowsAfterOrig;
+    const newRowsAfter = rowsBeforeOrig;
+
+    // Re-determine table protection (same set as captureRowsBefore used).
+    const isProtected = PROTECTED_TABLES.has(tableName);
+
+    // Register txn with 60s TTL. (startedAt was set pre-BEGIN above for the
+    // audit row.)
+    const expiresAt = startedAt + TXN_TTL_MS;
+    const ttlTimer = setTimeout(() => {
+      const t = txnRegistry.get(txnId);
+      if (!t) return;
+      try { rollbackManualTxn(getDb()); } catch (e) { /* ignore */ }
+      try {
+        getDb().prepare(
+          "UPDATE sql_console_audit SET status='auto_rolled_back', mode='rolled_back', reject_reason='TTL_EXPIRED' WHERE id = ?"
+        ).run(t.audit_id_partial);
+      } catch (e) { /* ignore */ }
+      txnRegistry.delete(txnId);
+      try {
+        const tail = (t.sql || '').slice(0, 80).replace(/\s+/g, ' ');
+        console.log(`[SQL_CONSOLE] TTL auto-rollback: txn_id=${txnId} actor=${t.actor} sql=${tail}`);
+      } catch (e) { /* ignore */ }
+    }, TXN_TTL_MS);
+    if (ttlTimer && typeof ttlTimer.unref === 'function') ttlTimer.unref();
+
+    // Update affected_rows on the audit row INSERTed pre-BEGIN. This UPDATE
+    // is inside the active txn — discarded on rollback, persisted on commit.
+    try {
+      getDb().prepare(
+        "UPDATE sql_console_audit SET affected_rows=?, ms=? WHERE id=?"
+      ).run(totalChanges, Date.now() - startedAt, auditIdPartial);
+    } catch (e) { /* ignore */ }
+
+    // Determine the inverse op string for the response. /commit will treat
+    // this exactly like a normal preview (single COMMIT call); the inverse
+    // op is informational.
+    let inverseOpLabel = 'RESTORE';
+    if (origOp === 'INSERT') inverseOpLabel = 'DELETE';
+    else if (origOp === 'DELETE') inverseOpLabel = 'INSERT';
+    else if (origOp === 'UPDATE') inverseOpLabel = 'UPDATE';
+
+    txnRegistry.set(txnId, {
+      sql: inverseSqlText,
+      remark: remarkTrimmed,
+      actor,
+      auth_method: authMethod,
+      op: inverseOpLabel,
+      is_ddl: false,
+      table_name: tableName,
+      is_protected_table: isProtected,
+      affected_rows: totalChanges,
+      rows_before: newRowsBefore,
+      rows_after: newRowsAfter,
+      pk_cols: pkCols,
+      started_at: startedAt,
+      expires_at: expiresAt,
+      ttl_timer: ttlTimer,
+      audit_id_partial: auditIdPartial,
+      restored_from_audit_id: auditId
+    });
+
+    return res.json({
+      success: true,
+      txn_id: txnId,
+      sql: inverseSqlText,
+      remark: remarkTrimmed,
+      op: 'RESTORE',
+      inverse_op: inverseOpLabel,
+      table_name: tableName,
+      affected_rows: totalChanges,
+      is_protected_table: isProtected,
+      rows_before: isProtected ? newRowsBefore : null,
+      rows_after: isProtected ? newRowsAfter : null,
+      restored_from_audit_id: auditId,
+      expires_at: new Date(expiresAt).toISOString()
+    });
+  });
+
   app.use('/api/admin/sql', router);
   console.log('[SQL_CONSOLE] enabled at /api/admin/sql/*');
+  // Phase 2 status. Single line so logs stay greppable. ddl=on means an
+  // operator-set token is present and DDL writes are reachable; ddl=off
+  // means CREATE/ALTER/DROP are permanently rejected with 403
+  // DDL_TOKEN_REQUIRED. Snapshot/protected-table list is hardcoded so we
+  // surface the count rather than the full list (still in PROTECTED_TABLES).
+  console.log(
+    `[SQL_CONSOLE] phase 2 writes: ddl=${hasDdlToken ? 'on' : 'off'}` +
+    ` ttl=${TXN_TTL_MS / 1000}s` +
+    ` row_cap=${WRITE_AFFECTED_ROW_CAP}` +
+    ` snapshot_cap=${SNAPSHOT_ROW_CAP}` +
+    ` rate_limit=10/h` +
+    ` protected_tables=${PROTECTED_TABLES.size}`
+  );
 }
 
 module.exports = {
@@ -582,7 +1849,19 @@ module.exports = {
   // exported for unit-style verification only
   __internals: {
     validateReadOnlySql,
+    validateWriteSql,
     stripCommentsAndStrings,
+    extractTableName,
+    extractWhereClause,
+    generateInverseStatements,
+    getPrimaryKeyColumns,
+    detectSchemaDrift,
+    txnRegistry,
+    PROTECTED_TABLES,
+    SALARY_CASCADE_TABLES,
+    SNAPSHOT_ROW_CAP,
+    WRITE_AFFECTED_ROW_CAP,
+    TXN_TTL_MS,
     SNIPPETS
   }
 };
