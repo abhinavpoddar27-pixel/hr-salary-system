@@ -1660,3 +1660,82 @@ frontend/
   - **`affected_rows=N` in /preview response counts what SQLite's `changes()` returns** for the user's SQL. For `INSERT … SELECT` this is the count of inserted rows. For UPDATE without WHERE, it's the rows that the SET actually modified (UPDATE that doesn't change a value still counts). Ends up close enough to "rows touched" for the cap to be meaningful.
 - **Phase H verification (33/33 tests pass):** see commit `7d3e847` for the audit-row-survives-rollback fix surfaced during testing. All write happy paths (Tests 1-7), all 11 rejection paths (Tests 8-18), TTL auto-rollback with verified audit row at status='auto_rolled_back' (Test 19), manual rollback (Test 20), kill-mid-txn DB integrity (Test 21), 10/hour rate limiter (Test 22, requests 11+12 hit 429), confirmRemark mismatch (Test 23), end-to-end snapshot restore (Tests 24-28), schema drift detection (Tests 29-30), env-gate disabled (Test 31), Phase 1 endpoints unchanged (Test 32), and audit table verbatim (Test 33) — all returned the expected HTTP code + body shape.
 - **What stays for Phase 3:** orphan-preview cleanup at boot, `affected_rows` accuracy via row-pre-count for UPDATE/DELETE (currently uses post-execute `.changes`), pluggable drift checks per table, a "snapshots browser" page distinct from the dropdown, and audit-export to CSV from the existing /history endpoint.
+
+## Section 9.2: SQL Diagnostic Workflow for Claude Code
+
+When Claude Code needs to query production data for diagnostics, planning,
+or verification, use the SQL Console API. Do not ask the user to paste 
+results manually.
+
+### Required environment variables
+
+Set via macOS launchctl so Claude Code Desktop subprocess inherits them:
+
+  launchctl setenv SQL_CONSOLE_URL "https://hr-app-production-681b.up.railway.app"
+  launchctl setenv SQL_CONSOLE_API_KEY "<from password manager>"
+
+After setting, restart Claude Code Desktop.
+
+Verify in any Claude Code session:
+  echo "URL: $SQL_CONSOLE_URL" && echo "Key length: ${#SQL_CONSOLE_API_KEY} chars"
+
+If "Key length: 0 chars" appears, the env did not propagate. Do not 
+hardcode the key into a prompt as a workaround. Re-run launchctl setenv 
+and restart Claude Code.
+
+### How to query
+
+Single read-only query:
+
+  curl -sS -X POST "$SQL_CONSOLE_URL/api/admin/sql/execute" \
+    -H "X-SQL-Console-Key: $SQL_CONSOLE_API_KEY" \
+    -H "Content-Type: application/json" \
+    -d '{"sql":"<query, JSON-escaped>"}'
+
+Response JSON:
+  - success: true  → { columns, rows, rowCount, ms, truncated }
+  - success: false → { code, reason }
+
+### Constraints
+
+- Read-only ONLY. Endpoint allows SELECT, WITH, EXPLAIN, PRAGMA.
+- INSERT/UPDATE/DELETE return 403 WRITE_NOT_ALLOWED_FOR_AGENT.
+- Writes go through the human UI flow at /admin/sql-console.
+  Claude Code never writes to production directly.
+- Rate limit: 30 req/min per key.
+- Row cap: 5000 per response. Use LIMIT in queries.
+- All queries audited in sql_console_audit (actor='agent', auth_method='api_key').
+
+### When to use SQL Console vs sqlite3 CLI
+
+Use SQL Console:
+  - Production data inspection
+  - Cross-table joins / complex SELECTs
+  - Anything where audit trail matters
+
+Use sqlite3 CLI:
+  - Local dev DB only
+  - Throwaway test DBs
+  - Schema migration verification on local files
+
+### Diagnostic prompt protocol
+
+When Claude.ai sends a Claude Code prompt for SQL diagnostics, the prompt 
+includes:
+  - Exact SQL to run
+  - Expected output format (markdown table by default)
+  - "Do NOT echo the API key"
+  - "Do NOT propose follow-up writes"
+
+Claude Code parses responses, reports parsed results back. Never echo 
+the API key in any output.
+
+### Known issues (Phase 2.5 backlog)
+
+- sql_console_audit table missing `table_name` column in production. 
+  Banner displays it correctly (parsed from SQL) but the column itself 
+  was never ALTERed in. Add via:
+    ALTER TABLE sql_console_audit ADD COLUMN table_name TEXT;
+- Snippet "Salary drift sanity check" still references `code` column 
+  instead of `employee_code` in salary_computations. Fix in snippet 
+  hardcoded list.
