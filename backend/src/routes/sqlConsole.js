@@ -47,6 +47,25 @@ function getReadonlyDb() {
   return readonlyDb;
 }
 
+// Phase 2: a writable connection (getDb()) and a separate readonly
+// connection (readonlyDb) both attached to the same DB file in WAL mode
+// don't always share visibility — better-sqlite3's readonly handle can
+// hold a stale read-snapshot across commits made on the writable handle.
+// After every successful write commit (in /commit or /restore commit),
+// we invalidate the cached readonly handle. The next /execute call
+// reopens a fresh one and sees the latest committed state. This is the
+// minimum-viable fix; alternative would be replaying all reads through
+// getDb() but that loses the Phase 1 readonly-file-handle defense in
+// depth (the validator's last backstop).
+function invalidateReadonlyDb() {
+  if (readonlyDb) {
+    try { readonlyDb.close(); } catch (e) { /* ignore */ }
+    readonlyDb = null;
+  }
+  schemaCache = null;
+  schemaCachedAt = 0;
+}
+
 // ── Audit ─────────────────────────────────────────────────────
 function ensureAuditTable() {
   const db = getDb();
@@ -1396,6 +1415,10 @@ function mountSqlConsole(app) {
     } catch (e) { /* ignore */ }
 
     txnRegistry.delete(txnId);
+
+    // Phase 2: invalidate the readonly handle so subsequent /execute calls
+    // see the just-committed write. See invalidateReadonlyDb() rationale.
+    invalidateReadonlyDb();
 
     return res.json({
       success: true,
