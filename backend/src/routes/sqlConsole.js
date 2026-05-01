@@ -1446,6 +1446,307 @@ function mountSqlConsole(app) {
     });
   });
 
+  // ── Phase 2: POST /snapshot/:audit_id/restore ───────────────
+  // JWT-only, writeRateLimiter applied. Mandatory remark.
+  // Looks up the original committed write's snapshot, generates inverse SQL,
+  // executes it inside a fresh manual transaction, and registers a NEW txn
+  // that the caller commits via the standard /commit/:txn_id endpoint.
+  // The resulting audit row carries restored_from_audit_id pointing at the
+  // original write, forming a chain.
+  router.post('/snapshot/:audit_id/restore', auth, writeRateLimiter, (req, res) => {
+    const ip = req.ip || req.connection?.remoteAddress || '';
+    const ua = req.headers['user-agent'] || '';
+    const actor = req.sqlActor.username;
+    const authMethod = req.sqlActor.auth_method;
+
+    if (authMethod === 'api_key') {
+      logAuditRow({
+        actor, authMethod, sql: null, status: 'rejected',
+        rejectReason: 'WRITE_NOT_ALLOWED_FOR_AGENT', ip, userAgent: ua,
+        mode: 'restore_preview'
+      });
+      return res.status(403).json({
+        success: false,
+        code: 'WRITE_NOT_ALLOWED_FOR_AGENT',
+        reason: 'API-key authentication is read-only'
+      });
+    }
+
+    // 1. Validate remark
+    const remark = req.body?.remark;
+    if (typeof remark !== 'string' || remark.trim().length < 10) {
+      return res.status(400).json({
+        success: false,
+        code: 'REMARK_REQUIRED',
+        reason: 'remark must be a string of at least 10 characters'
+      });
+    }
+    const remarkTrimmed = remark.trim();
+
+    const auditId = parseInt(req.params.audit_id, 10);
+    if (!Number.isFinite(auditId) || auditId < 1) {
+      return res.status(400).json({
+        success: false,
+        code: 'INVALID_AUDIT_ID',
+        reason: 'audit_id must be a positive integer'
+      });
+    }
+
+    const db = getDb();
+
+    // 2. Look up snapshot
+    const snapshot = db.prepare(
+      'SELECT * FROM sql_console_write_snapshots WHERE audit_id = ?'
+    ).get(auditId);
+    if (!snapshot) {
+      return res.status(404).json({
+        success: false,
+        code: 'SNAPSHOT_NOT_FOUND',
+        reason: `no snapshot row for audit_id=${auditId}`
+      });
+    }
+
+    // 3. Look up original audit row. Spec: only successful writes ('ok') or
+    // auto_rolled_back rows are eligible. In practice snapshot rows only
+    // exist for committed writes, so this layer is defense-in-depth.
+    const auditRow = db.prepare(
+      'SELECT * FROM sql_console_audit WHERE id = ?'
+    ).get(auditId);
+    if (!auditRow) {
+      return res.status(404).json({
+        success: false,
+        code: 'AUDIT_ROW_NOT_FOUND',
+        reason: `no audit row for id=${auditId}`
+      });
+    }
+    if (auditRow.status !== 'ok' && auditRow.status !== 'auto_rolled_back') {
+      return res.status(400).json({
+        success: false,
+        code: 'CANNOT_RESTORE_NON_COMMITTED',
+        reason: `audit row ${auditId} has status='${auditRow.status}'; only 'ok' or 'auto_rolled_back' rows can be restored`
+      });
+    }
+
+    // 4. Determine original op from the original SQL.
+    const origValidation = validateWriteSql(auditRow.sql, { acceptUnscopedWrite: true });
+    if (!origValidation.ok) {
+      return res.status(400).json({
+        success: false,
+        code: 'ORIGINAL_SQL_UNPARSEABLE',
+        reason: `cannot determine op of original write: ${origValidation.code}`
+      });
+    }
+    const origOp = origValidation.op; // INSERT/UPDATE/DELETE/DDL
+    if (origOp === 'DDL') {
+      return res.status(400).json({
+        success: false,
+        code: 'DDL_RESTORE_NOT_SUPPORTED',
+        reason: 'DDL writes (CREATE/ALTER/DROP) cannot be auto-restored from a snapshot'
+      });
+    }
+
+    const tableName = snapshot.table_name;
+    let rowsBeforeOrig, rowsAfterOrig;
+    try {
+      rowsBeforeOrig = JSON.parse(snapshot.rows_before || '[]');
+      rowsAfterOrig = JSON.parse(snapshot.rows_after || '[]');
+    } catch (e) {
+      return res.status(500).json({
+        success: false,
+        code: 'SNAPSHOT_CORRUPT',
+        reason: `failed to parse snapshot JSON: ${e.message}`
+      });
+    }
+
+    // 5. Schema drift check — compare current table column SET against
+    // the keys of a captured row. We use the larger of rows_before /
+    // rows_after as the reference.
+    const sampleRow = (rowsBeforeOrig[0] || rowsAfterOrig[0] || null);
+    if (!sampleRow) {
+      return res.status(400).json({
+        success: false,
+        code: 'SNAPSHOT_EMPTY',
+        reason: 'snapshot has no captured rows; nothing to restore'
+      });
+    }
+    const drift = detectSchemaDrift(db, tableName, sampleRow);
+    if (!drift.ok) {
+      return res.status(409).json({
+        success: false,
+        code: 'SCHEMA_DRIFT_DETECTED',
+        reason: `current schema for ${tableName} differs from captured snapshot`,
+        missing_columns: drift.missing_columns,
+        extra_columns: drift.extra_columns
+      });
+    }
+
+    // 6. Single-txn check
+    if (txnRegistryHasOpen()) {
+      const existing = [...txnRegistry.keys()][0];
+      return res.status(409).json({
+        success: false,
+        code: 'TXN_ALREADY_OPEN',
+        reason: 'another write transaction is open; commit or rollback it first',
+        existing_txn_id: existing
+      });
+    }
+
+    let pkCols = [];
+    try { pkCols = getPrimaryKeyColumns(db, tableName); } catch (e) { pkCols = []; }
+    if (pkCols.length === 0) {
+      return res.status(400).json({
+        success: false,
+        code: 'NO_PRIMARY_KEY',
+        reason: `cannot identify primary key columns for ${tableName}; restore would be ambiguous`
+      });
+    }
+
+    // Generate inverse statements.
+    const inverseStmts = generateInverseStatements(
+      origOp, tableName, rowsBeforeOrig, rowsAfterOrig, pkCols
+    );
+    if (inverseStmts.length === 0) {
+      return res.status(400).json({
+        success: false,
+        code: 'NO_INVERSE_GENERATED',
+        reason: 'no inverse statements could be generated from this snapshot'
+      });
+    }
+
+    // Reserve registry slot synchronously
+    const txnId = crypto.randomUUID();
+    txnRegistry.set(txnId, { _placeholder: true, actor, started_at: Date.now() });
+
+    try {
+      beginManualTxn(db);
+    } catch (e) {
+      txnRegistry.delete(txnId);
+      return res.status(500).json({
+        success: false,
+        code: 'BEGIN_FAILED',
+        reason: e.message
+      });
+    }
+
+    // 7. Execute inverse statements.
+    let totalChanges = 0;
+    try {
+      for (const s of inverseStmts) {
+        const stmt = db.prepare(s.sql);
+        const r = stmt.run(...s.params);
+        totalChanges += r.changes || 0;
+      }
+    } catch (e) {
+      rollbackManualTxn(db);
+      txnRegistry.delete(txnId);
+      return res.status(400).json({
+        success: false,
+        code: 'RESTORE_EXECUTION_ERROR',
+        reason: e.message
+      });
+    }
+
+    if (totalChanges > WRITE_AFFECTED_ROW_CAP) {
+      rollbackManualTxn(db);
+      txnRegistry.delete(txnId);
+      return res.status(403).json({
+        success: false,
+        code: 'WRITE_ROW_LIMIT_EXCEEDED',
+        reason: `${totalChanges} rows would be changed; hard cap is ${WRITE_AFFECTED_ROW_CAP}`,
+        affected_rows: totalChanges
+      });
+    }
+
+    // Build the inverse SQL text for the audit row (newline-joined for
+    // readability, truncated by logAuditRow at 4000 chars).
+    const inverseSqlText = inverseStmts.map(s => s.sql).join(';\n');
+
+    // For the restore preview, the new rows_before/rows_after follow the
+    // spec: new_before = orig.rows_after, new_after = orig.rows_before.
+    // (For each op type this gives the user the right "before vs after"
+    // diff to look at: "current state on the left, what it'll become on
+    // the right".)
+    const newRowsBefore = rowsAfterOrig;
+    const newRowsAfter = rowsBeforeOrig;
+
+    // Re-determine table protection (same set as captureRowsBefore used).
+    const isProtected = PROTECTED_TABLES.has(tableName);
+
+    // Register txn with 60s TTL.
+    const startedAt = Date.now();
+    const expiresAt = startedAt + TXN_TTL_MS;
+    const ttlTimer = setTimeout(() => {
+      const t = txnRegistry.get(txnId);
+      if (!t) return;
+      try { rollbackManualTxn(getDb()); } catch (e) { /* ignore */ }
+      try {
+        getDb().prepare(
+          "UPDATE sql_console_audit SET status='auto_rolled_back', mode='rolled_back', reject_reason='TTL_EXPIRED' WHERE id = ?"
+        ).run(t.audit_id_partial);
+      } catch (e) { /* ignore */ }
+      txnRegistry.delete(txnId);
+      try {
+        const tail = (t.sql || '').slice(0, 80).replace(/\s+/g, ' ');
+        console.log(`[SQL_CONSOLE] TTL auto-rollback: txn_id=${txnId} actor=${t.actor} sql=${tail}`);
+      } catch (e) { /* ignore */ }
+    }, TXN_TTL_MS);
+    if (ttlTimer && typeof ttlTimer.unref === 'function') ttlTimer.unref();
+
+    // Audit row for the restore preview.
+    const auditIdPartial = logAuditRow({
+      actor, authMethod, sql: inverseSqlText, status: 'preview',
+      rowCount: null, ms: Date.now() - startedAt,
+      ip, userAgent: ua,
+      mode: 'restore_preview', txnId, affectedRows: totalChanges,
+      remark: remarkTrimmed,
+      restoredFromAuditId: auditId
+    });
+
+    // Determine the inverse op string for the response. /commit will treat
+    // this exactly like a normal preview (single COMMIT call); the inverse
+    // op is informational.
+    let inverseOpLabel = 'RESTORE';
+    if (origOp === 'INSERT') inverseOpLabel = 'DELETE';
+    else if (origOp === 'DELETE') inverseOpLabel = 'INSERT';
+    else if (origOp === 'UPDATE') inverseOpLabel = 'UPDATE';
+
+    txnRegistry.set(txnId, {
+      sql: inverseSqlText,
+      remark: remarkTrimmed,
+      actor,
+      auth_method: authMethod,
+      op: inverseOpLabel,
+      is_ddl: false,
+      table_name: tableName,
+      is_protected_table: isProtected,
+      affected_rows: totalChanges,
+      rows_before: newRowsBefore,
+      rows_after: newRowsAfter,
+      pk_cols: pkCols,
+      started_at: startedAt,
+      expires_at: expiresAt,
+      ttl_timer: ttlTimer,
+      audit_id_partial: auditIdPartial,
+      restored_from_audit_id: auditId
+    });
+
+    return res.json({
+      success: true,
+      txn_id: txnId,
+      sql: inverseSqlText,
+      remark: remarkTrimmed,
+      op: 'RESTORE',
+      inverse_op: inverseOpLabel,
+      table_name: tableName,
+      affected_rows: totalChanges,
+      is_protected_table: isProtected,
+      rows_before: isProtected ? newRowsBefore : null,
+      rows_after: isProtected ? newRowsAfter : null,
+      restored_from_audit_id: auditId,
+      expires_at: new Date(expiresAt).toISOString()
+    });
+  });
+
   app.use('/api/admin/sql', router);
   console.log('[SQL_CONSOLE] enabled at /api/admin/sql/*');
 }
