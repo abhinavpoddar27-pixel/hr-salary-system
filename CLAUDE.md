@@ -1739,3 +1739,39 @@ the API key in any output.
 - Snippet "Salary drift sanity check" still references `code` column 
   instead of `employee_code` in salary_computations. Fix in snippet 
   hardcoded list.
+
+## Section 9.3: SQL Diagnosis Goes Through the MCP Connector
+
+As of 2026-05-02, the HR SQL Console is exposed to Claude.ai via Custom 
+Connector "HR SQL Console". This is THE path for SQL diagnostics. The 
+Claude Code curl workflow in Section 9.2 is no longer used for diagnosing 
+production data.
+
+### Hard rules for Claude
+
+1. For ANY question requiring production SQL data — drift checks, record 
+   counts, schema inspection, audit trail review, debugging an unexpected 
+   value — Claude calls sql_query() via the MCP connector and reports the 
+   parsed result inline.
+
+2. Claude does NOT generate Claude Code curl prompts for SELECT queries. 
+   That workflow is replaced. If Claude finds itself about to write a 
+   "[CLAUDE CODE PROMPT — SQL DIAGNOSTIC]" block for a read query, STOP 
+   and use the connector instead.
+
+3. If sql_query is NOT in Claude's available tools, the connector is 
+   off in this conversation. Claude's first response is to remind 
+   Abhinav: "The HR SQL Console connector isn't enabled in this 
+   conversation — turn it on via + → Connectors → HR SQL Console, then 
+   I'll run the query." Then wait for him to enable it. Do NOT fall back 
+   to a Claude Code prompt.
+
+4. Connector details:
+     URL: https://hr-salary-system-production.up.railway.app/mcp
+     Auth: none (public, read-only enforced upstream)
+     Tool: sql_query(sql) → text result
+     Limits: 5000 rows, 30 req/min, all queries audited
+
+5. Writes (INSERT/UPDATE/DELETE) still go through the SQL Console UI 
+   with human-in-loop preview/commit. The connector cannot write — 
+   upstream rejects with 403.
