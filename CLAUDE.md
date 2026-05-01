@@ -1,4 +1,37 @@
 ## Section 0: Last Session
+- **Date:** 2026-05-01
+- **Branch:** `main` at `520bc32` (3 merge commits this session integrated parallel-agent work; final tip is the merge of SQL Console Phase 1).
+- **Last commit:** `520bc32` Merge origin/main into Bug B — integrate SQL Console Phase 1 (b52d9db).
+- **Files changed this session:**
+  - `CLAUDE.md` — replaced 2026-04-29 entry with Phase 4 closeout retrospective + added `## Phase 5 Backlog` section (commits `c5afc4e`, `88ae3d5`). This session's handoff entry now prepended on top.
+  - `backend/src/routes/adminLeniencyUpdate.js` — TEMPORARY admin endpoint to UPDATE `policy_config.sales_leniency` `'2'` → `'3'`. Added in `fad6cb9`, deleted in `cc402c7` after one-shot execution. Net zero on main. Audit IDs 6949 (policy_read) + 6950 (policy_change).
+  - `backend/server.js` — temporary admin mount line, paired add+remove with the leniency endpoint. Net zero.
+  - `frontend/src/pages/Sales/SalesSalaryCompute.jsx` — Phase 5 Bug A: +28 LOC. Added `EXCLUSION_REASON_LABEL` map (lines 51-58), `lastExcluded` state (line 119), `setLastExcluded(d.excluded || [])` in compute `onSuccess`, and amber banner JSX above the register card listing `code · reason` for each excluded employee. Commit `4f66535`.
+  - `backend/src/services/salesCoordinatorParser.js` — Phase 5 Bug B: +8 LOC. `if (days === -1) days = 1;` after `getCellNumber` at line 309, with multi-line comment explaining why other negatives are NOT coerced. Commit `6d2b48b`.
+  - `frontend/dist/*` — rebuilt 3 times across merge commits (`e54430a`, `05202bd`, `520bc32`). Each rebuild absorbed fresh chunks from BOTH my source changes AND the parallel agent's source changes. Final dist includes Bug A excluded banner (`SalesSalaryCompute-D31QBODh.js`), Bug B is backend-only, SQL Console (`SqlConsole-vfrmg42X.js` 444 kB lazy chunk).
+- **What was fixed/built:**
+  - **Phase 4 docs closeout** — Fixes A–F + Mar 2026 data correction + Fix E "handoff describes interpretation, not original ask" lesson, consolidated under canonical template fields.
+  - **Sales Sunday-rule leniency raised from 2 to 3** in production via the one-shot temporary endpoint pattern (mirrors `6896b75` → `7e1d3d7` Mar 2026 cleanup pair). Plant unaffected — its `WEEKLY_OFF_LENIENCY = 2` is hardcoded at `dayCalculation.js:47` and does not read `policy_config.sales_leniency`. Verified via grep.
+  - **Phase 5 Bug A** — HR now sees a persistent amber banner above the salary register listing every excluded employee + human-readable reason whenever `POST /sales/compute` returns a non-empty `excluded[]`. The data was already in the response; the banner makes it visible. Live on origin/main.
+  - **Phase 5 Bug B** — sales coordinator sheet `-1` values are coerced to `1` at parse time (HR-confirmed clerical typo, dominant pattern). All other negatives (-2, -3, -15, etc.) still rejected as `'invalid_days_given'` downstream and surface in the Bug A banner. Live on origin/main.
+- **What's fragile:**
+  - **Three-way concurrency with another Claude session.** **Four push-races** happened this session — origin/main moved between my `git fetch` and my `git push HEAD:main` on every single attempt. The parallel agent's docs (commit `b52d9db`) explicitly say: *"PR-based workflow recommended for resumption next session"* and flagged my `cc402c7`/`fad6cb9` leniency pair as "mystery commits". Direct-to-main pushes from two agents will keep racing.
+  - **Bug B is silent normalization.** No audit log written at coercion. If HR/coordinator changes the typo pattern (e.g., starts using `-1` to mean `0` or `null` rather than `1`), the coerced `1` will silently overpay. Comment block at `salesCoordinatorParser.js:303-308` documents the deliberate scope.
+  - **Bug A banner uses POST-compute reason vocabulary** (lower_snake_case: `no_structure`, `invalid_days_given`, `employee_not_found`, etc., in `EXCLUSION_REASON_LABEL` at `SalesSalaryCompute.jsx:51-58`). The parallel agent's PRE-compute readiness banner (commit `da399bf`) uses a separate UPPER_SNAKE_CASE vocabulary (`NO_STRUCTURE`, `RATES_MISSING`, etc.) by design. Both banners can stack simultaneously above the register card. Don't consolidate them without preserving the proactive-vs-reactive distinction.
+  - **`EXCLUSION_REASON_LABEL` is inline in `SalesSalaryCompute.jsx`** — not exported. If a new exclusion reason is added to `salesSalaryComputation.js`'s return shape (e.g., a new `comp.reason` string), it'll render as the raw string until the map is updated.
+  - **Mystery-commits resolution**: the `cc402c7` + `fad6cb9` pair the parallel agent flagged is documented retroactively above. Net-zero leniency add/remove pair. The 4 doc commits the parallel agent also flagged (`88ae3d5`, `c5afc4e`, `a691a9a`, `9fc76ca`) are all my CLAUDE.md handoff commits from prior sessions on this branch. Low risk.
+- **Unfinished work:** None for the assigned tasks. Phase 5 Bug A + Bug B + leniency change all shipped to origin/main.
+- **Known issues remaining:**
+  - **PR-based workflow not yet adopted.** The parallel agent flagged this as a high-priority recommendation in its `b52d9db` handoff. Direct-to-main pattern continues until either agent's owner stops it.
+  - **SQL Console env vars NOT set on Railway** (carried from parallel agent's `b52d9db` handoff): `SQL_CONSOLE_ENABLED=true` and `SQL_CONSOLE_API_KEY=<48-char hex>` are required before the route is reachable. Until set, the route returns 404 (env-gated mount).
+  - **Pre-existing**: `_backup_2026_04_28_sales_*` tables retained 30 days; can be dropped after 2026-05-29.
+  - **Pre-existing**: master employees with NULL `ifsc` excluded from NEFT with `X-Missing-Bank-Details` warning header.
+  - **S168 Dilip Kumar Poddar** is now visible in Bug A banner with reason `no_structure`. To pay him, HR needs to add a `sales_salary_structures` row. This is a data fix, not a code fix.
+- **Next session should:** (a) **Adopt PR-based workflow** per the parallel agent's recommendation. Open feature branches, never push direct-to-main; merge via PR review. (b) Verify Phase 5 Bug A banner end-to-end on Railway: trigger a compute on Indriyan Feb 2026 (with `sales_leniency=3` now in effect) and confirm S168 appears in the amber banner with reason "No salary structure (sales_salary_structures)". (c) Verify Bug B coercion: re-upload Feb 2026 Indriyan coordinator sheet and confirm S087 PRADEEP SHARMA + S159 RAHUL SALGOTRA land with `sheet_days_given=1` (not -1) and appear in the salary register. (d) Decide whether to add a `sales_salary_structures` row for S168 so he gets paid going forward, or document the exclusion is intentional. (e) Set the SQL Console env vars on Railway per the parallel agent's instructions in `b52d9db`.
+
+---
+
+## Section 0: Previous Session
 - **Date:** 2026-04-30
 - **Branch:** `claude/sql-console-agent-integration-jDQNX` (merged into `main` at `86229e2` via merge commit; both refs at same SHA on origin)
 - **Last commit:** `86229e2` Merge remote-tracking branch 'origin/main' into claude/sql-console-agent-integration-jDQNX (parents: `39c9dd2` sql-console-Phase-F + `3a597ad` Sales UI series). 6 source commits before the merge: `64d720b` (Phase A backend route), `79493e5` (Phase B server.js mount), `fc38e84` (Phase C frontend page), `9787422` (Phase D App+Sidebar wiring), `7f7703a` (Phase E slash commands), `39c9dd2` (Phase F docs).
