@@ -1141,17 +1141,32 @@ function mountSqlConsole(app) {
     let rowsAfter = null;
     let affectedRows = 0;
     let pkCols = [];
+    const startedAt = Date.now();
+
+    // Phase 2 critical: write the audit row BEFORE beginManualTxn(). If we
+    // INSERT inside the txn, a subsequent ROLLBACK (manual /rollback or TTL
+    // auto-rollback) discards the audit row entirely — losing visibility
+    // into what was attempted. By writing pre-BEGIN, the row survives any
+    // rollback path. /commit, /rollback, and the TTL handler each UPDATE
+    // this row to its terminal state. affected_rows starts NULL and gets
+    // filled in by /commit on success; rolled-back rows leave it NULL.
+    auditIdPartial = logAuditRow({
+      actor, authMethod, sql, status: 'preview',
+      rowCount: null, ms: 0,
+      ip, userAgent: ua,
+      mode: 'write_preview', txnId, affectedRows: null, remark: remarkTrimmed
+    });
 
     try {
       // 6. BEGIN IMMEDIATE
       beginManualTxn(db);
     } catch (e) {
       txnRegistry.delete(txnId);
-      logAuditRow({
-        actor, authMethod, sql, status: 'error',
-        rejectReason: `BEGIN_FAILED: ${e.message}`,
-        ip, userAgent: ua, mode: 'write_preview', remark: remarkTrimmed
-      });
+      try {
+        getDb().prepare(
+          "UPDATE sql_console_audit SET status='error', reject_reason=? WHERE id = ?"
+        ).run(`BEGIN_FAILED: ${e.message}`, auditIdPartial);
+      } catch (e2) { /* ignore */ }
       return res.status(500).json({
         success: false,
         code: 'BEGIN_FAILED',
@@ -1170,11 +1185,11 @@ function mountSqlConsole(app) {
         } catch (e) {
           rollbackManualTxn(db);
           txnRegistry.delete(txnId);
-          logAuditRow({
-            actor, authMethod, sql, status: 'rejected',
-            rejectReason: `WHERE_CAPTURE_FAILED: ${e.message}`,
-            ip, userAgent: ua, mode: 'write_preview', remark: remarkTrimmed
-          });
+          try {
+            getDb().prepare(
+              "UPDATE sql_console_audit SET status='rejected', reject_reason=? WHERE id = ?"
+            ).run(`WHERE_CAPTURE_FAILED: ${e.message}`, auditIdPartial);
+          } catch (e2) { /* ignore */ }
           return res.status(400).json({
             success: false,
             code: 'WHERE_CAPTURE_FAILED',
@@ -1184,11 +1199,11 @@ function mountSqlConsole(app) {
         if (rowsBefore && rowsBefore.length > SNAPSHOT_ROW_CAP) {
           rollbackManualTxn(db);
           txnRegistry.delete(txnId);
-          logAuditRow({
-            actor, authMethod, sql, status: 'rejected',
-            rejectReason: `WRITE_TOO_LARGE_TO_SNAPSHOT count=${rowsBefore.length}`,
-            ip, userAgent: ua, mode: 'write_preview', remark: remarkTrimmed
-          });
+          try {
+            getDb().prepare(
+              "UPDATE sql_console_audit SET status='rejected', reject_reason=? WHERE id = ?"
+            ).run(`WRITE_TOO_LARGE_TO_SNAPSHOT count=${rowsBefore.length}`, auditIdPartial);
+          } catch (e2) { /* ignore */ }
           return res.status(403).json({
             success: false,
             code: 'WRITE_TOO_LARGE_TO_SNAPSHOT',
@@ -1208,12 +1223,11 @@ function mountSqlConsole(app) {
       if (affectedRows > WRITE_AFFECTED_ROW_CAP) {
         rollbackManualTxn(db);
         txnRegistry.delete(txnId);
-        logAuditRow({
-          actor, authMethod, sql, status: 'rejected',
-          rejectReason: `WRITE_ROW_LIMIT_EXCEEDED count=${affectedRows}`,
-          ip, userAgent: ua, mode: 'write_preview', remark: remarkTrimmed,
-          affectedRows
-        });
+        try {
+          getDb().prepare(
+            "UPDATE sql_console_audit SET status='rejected', reject_reason=?, affected_rows=? WHERE id = ?"
+          ).run(`WRITE_ROW_LIMIT_EXCEEDED count=${affectedRows}`, affectedRows, auditIdPartial);
+        } catch (e2) { /* ignore */ }
         return res.status(403).json({
           success: false,
           code: 'WRITE_ROW_LIMIT_EXCEEDED',
@@ -1235,11 +1249,11 @@ function mountSqlConsole(app) {
     } catch (e) {
       rollbackManualTxn(db);
       txnRegistry.delete(txnId);
-      logAuditRow({
-        actor, authMethod, sql, status: 'error',
-        rejectReason: `SQL_EXECUTION_ERROR: ${e.message}`,
-        ip, userAgent: ua, mode: 'write_preview', remark: remarkTrimmed
-      });
+      try {
+        getDb().prepare(
+          "UPDATE sql_console_audit SET status='error', reject_reason=? WHERE id = ?"
+        ).run(`SQL_EXECUTION_ERROR: ${e.message}`, auditIdPartial);
+      } catch (e2) { /* ignore */ }
       return res.status(400).json({
         success: false,
         code: 'SQL_EXECUTION_ERROR',
@@ -1248,7 +1262,6 @@ function mountSqlConsole(app) {
     }
 
     // 13. Register the txn with TTL.
-    const startedAt = Date.now();
     const expiresAt = startedAt + TXN_TTL_MS;
     const ttlTimer = setTimeout(() => {
       // Auto-rollback handler. Only fires if commit/rollback didn't clean up.
@@ -1268,13 +1281,16 @@ function mountSqlConsole(app) {
     }, TXN_TTL_MS);
     if (ttlTimer && typeof ttlTimer.unref === 'function') ttlTimer.unref();
 
-    // 14. Audit row (mode='write_preview', status='preview').
-    auditIdPartial = logAuditRow({
-      actor, authMethod, sql, status: 'preview',
-      rowCount: null, ms: Date.now() - startedAt,
-      ip, userAgent: ua,
-      mode: 'write_preview', txnId, affectedRows, remark: remarkTrimmed
-    });
+    // 14. Update the existing audit row (INSERTed pre-BEGIN) with the now-known
+    // affected_rows. This UPDATE happens INSIDE the active txn; if /commit
+    // fires it persists, if /rollback or TTL fires it's discarded BUT the
+    // base audit row from the pre-BEGIN INSERT survives (this is the
+    // critical visibility fix).
+    try {
+      getDb().prepare(
+        "UPDATE sql_console_audit SET affected_rows=?, ms=? WHERE id=?"
+      ).run(affectedRows, Date.now() - startedAt, auditIdPartial);
+    } catch (e) { /* ignore */ }
 
     txnRegistry.set(txnId, {
       sql,
@@ -1407,11 +1423,17 @@ function mountSqlConsole(app) {
       driftCheck = runDriftCheck(db);
     }
 
-    // Update the audit row.
+    // Update the audit row. Set the final mode based on whether this was a
+    // restore (mode='restore_committed') or a normal write (mode='write_committed').
+    // Always re-stamp affected_rows in case the in-txn UPDATE was lost (it
+    // shouldn't be — COMMIT just succeeded — but defensive).
+    const finalMode = txn.restored_from_audit_id != null
+      ? 'restore_committed'
+      : 'write_committed';
     try {
       db.prepare(
-        "UPDATE sql_console_audit SET status='ok', mode='write_committed' WHERE id = ?"
-      ).run(txn.audit_id_partial);
+        "UPDATE sql_console_audit SET status='ok', mode=?, affected_rows=? WHERE id = ?"
+      ).run(finalMode, txn.affected_rows, txn.audit_id_partial);
     } catch (e) { /* ignore */ }
 
     txnRegistry.delete(txnId);
@@ -1650,10 +1672,31 @@ function mountSqlConsole(app) {
     const txnId = crypto.randomUUID();
     txnRegistry.set(txnId, { _placeholder: true, actor, started_at: Date.now() });
 
+    // Build the inverse SQL text for the audit row (newline-joined for
+    // readability, truncated by logAuditRow at 4000 chars).
+    const inverseSqlText = inverseStmts.map(s => s.sql).join(';\n');
+
+    // Phase 2 critical (same as /preview): write audit row pre-BEGIN so
+    // it survives any rollback path including TTL auto-rollback.
+    const startedAt = Date.now();
+    const auditIdPartial = logAuditRow({
+      actor, authMethod, sql: inverseSqlText, status: 'preview',
+      rowCount: null, ms: 0,
+      ip, userAgent: ua,
+      mode: 'restore_preview', txnId, affectedRows: null,
+      remark: remarkTrimmed,
+      restoredFromAuditId: auditId
+    });
+
     try {
       beginManualTxn(db);
     } catch (e) {
       txnRegistry.delete(txnId);
+      try {
+        getDb().prepare(
+          "UPDATE sql_console_audit SET status='error', reject_reason=? WHERE id = ?"
+        ).run(`BEGIN_FAILED: ${e.message}`, auditIdPartial);
+      } catch (e2) { /* ignore */ }
       return res.status(500).json({
         success: false,
         code: 'BEGIN_FAILED',
@@ -1672,6 +1715,11 @@ function mountSqlConsole(app) {
     } catch (e) {
       rollbackManualTxn(db);
       txnRegistry.delete(txnId);
+      try {
+        getDb().prepare(
+          "UPDATE sql_console_audit SET status='error', reject_reason=? WHERE id = ?"
+        ).run(`RESTORE_EXECUTION_ERROR: ${e.message}`, auditIdPartial);
+      } catch (e2) { /* ignore */ }
       return res.status(400).json({
         success: false,
         code: 'RESTORE_EXECUTION_ERROR',
@@ -1682,6 +1730,11 @@ function mountSqlConsole(app) {
     if (totalChanges > WRITE_AFFECTED_ROW_CAP) {
       rollbackManualTxn(db);
       txnRegistry.delete(txnId);
+      try {
+        getDb().prepare(
+          "UPDATE sql_console_audit SET status='rejected', reject_reason=?, affected_rows=? WHERE id = ?"
+        ).run(`WRITE_ROW_LIMIT_EXCEEDED count=${totalChanges}`, totalChanges, auditIdPartial);
+      } catch (e2) { /* ignore */ }
       return res.status(403).json({
         success: false,
         code: 'WRITE_ROW_LIMIT_EXCEEDED',
@@ -1689,10 +1742,6 @@ function mountSqlConsole(app) {
         affected_rows: totalChanges
       });
     }
-
-    // Build the inverse SQL text for the audit row (newline-joined for
-    // readability, truncated by logAuditRow at 4000 chars).
-    const inverseSqlText = inverseStmts.map(s => s.sql).join(';\n');
 
     // For the restore preview, the new rows_before/rows_after follow the
     // spec: new_before = orig.rows_after, new_after = orig.rows_before.
@@ -1705,8 +1754,8 @@ function mountSqlConsole(app) {
     // Re-determine table protection (same set as captureRowsBefore used).
     const isProtected = PROTECTED_TABLES.has(tableName);
 
-    // Register txn with 60s TTL.
-    const startedAt = Date.now();
+    // Register txn with 60s TTL. (startedAt was set pre-BEGIN above for the
+    // audit row.)
     const expiresAt = startedAt + TXN_TTL_MS;
     const ttlTimer = setTimeout(() => {
       const t = txnRegistry.get(txnId);
@@ -1725,15 +1774,13 @@ function mountSqlConsole(app) {
     }, TXN_TTL_MS);
     if (ttlTimer && typeof ttlTimer.unref === 'function') ttlTimer.unref();
 
-    // Audit row for the restore preview.
-    const auditIdPartial = logAuditRow({
-      actor, authMethod, sql: inverseSqlText, status: 'preview',
-      rowCount: null, ms: Date.now() - startedAt,
-      ip, userAgent: ua,
-      mode: 'restore_preview', txnId, affectedRows: totalChanges,
-      remark: remarkTrimmed,
-      restoredFromAuditId: auditId
-    });
+    // Update affected_rows on the audit row INSERTed pre-BEGIN. This UPDATE
+    // is inside the active txn — discarded on rollback, persisted on commit.
+    try {
+      getDb().prepare(
+        "UPDATE sql_console_audit SET affected_rows=?, ms=? WHERE id=?"
+      ).run(totalChanges, Date.now() - startedAt, auditIdPartial);
+    } catch (e) { /* ignore */ }
 
     // Determine the inverse op string for the response. /commit will treat
     // this exactly like a normal preview (single COMMIT call); the inverse
