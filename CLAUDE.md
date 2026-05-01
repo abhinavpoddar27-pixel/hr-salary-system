@@ -1775,3 +1775,106 @@ production data.
 5. Writes (INSERT/UPDATE/DELETE) still go through the SQL Console UI 
    with human-in-loop preview/commit. The connector cannot write — 
    upstream rejects with 403.
+
+## Section 10: Postmortem — 2026-05-01 SQL Console + MCP Build Day
+
+8.5 hour session shipping three production features. Recording lessons 
+and open items so they aren't lost.
+
+### Shipped
+
+- Phase 1: Read-only SQL Console (UI + API + audit table)
+- Phase 2: Bounded writes with snapshot, diff, drift check, restore
+- Phase 3: MCP server bridge for Claude.ai connector access
+- CLAUDE.md Section 9.2: Claude Code SQL workflow
+- CLAUDE.md Section 9.3: MCP connector workflow (replaces 9.2 for SELECTs)
+
+### Real production findings caught by the new tooling
+
+- 1 row in `salary_computations` with net_salary != gross_earned - 
+  total_deductions (drift caught on first protected-table write — being 
+  investigated separately)
+- April 1 / May 1 attendance corruption (Bug #10 — diagnostic blocked by 
+  earlier Claude Code workflow, retry under MCP connector)
+
+### Schema/code corrections to docs
+
+- Real production table count is ~80+, NOT 44 as stated elsewhere in 
+  CLAUDE.md. Update wherever "44 tables" appears.
+- `salary_computations` primary employee column is `employee_code`, NOT 
+  `code`. The "Salary drift sanity check" snippet still uses `code` and 
+  fails — fix in snippet hardcoded list.
+- `sql_console_audit` is missing `table_name` column in production 
+  (Phase 1 BUILD COMPLETE claimed it was populated; ALTER never ran). 
+  Banner displays correctly because value is parsed from SQL, but column 
+  itself doesn't exist. Add via:
+    ALTER TABLE sql_console_audit ADD COLUMN table_name TEXT;
+
+### Phase 2.5 backlog (small fixes, batch when convenient)
+
+- `table_name` column ALTER (above)
+- "Salary drift sanity check" snippet `code` → `employee_code`
+- SQL Console UI title still says "(Read-Only)" despite Phase 2 writes
+- "Preview state forever" — server crash mid-transaction leaves audit 
+  row stuck at `mode='write_preview'`. Add startup sweep.
+- CodeMirror chunk weight (462kB / 150kB gzipped) — acceptable for 
+  admin-only
+
+### Security exposures (4 incidents, all explicitly accepted, all read-only blast radius)
+
+| Date/time | Secret | How exposed | Decision |
+| --- | --- | --- | --- |
+| 2026-04-30 | SQL_CONSOLE_API_KEY 70a8...d9eb | Pasted in chat | Accepted |
+| 2026-05-01 ~18:00 | Same key | Marker-redacted screenshot (ineffective) | Accepted |
+| 2026-05-01 ~23:55 | MCP_BEARER_TOKEN 138adc8e... | Curl output paste in chat | Accepted |
+| 2026-05-02 ~00:15 | MCP server bearer auth | Removed entirely (Claude.ai connector OAuth gap) | Accepted |
+
+After 00:15, the MCP server at hr-salary-system-production.up.railway.app/mcp 
+is publicly accessible. Read-only enforced upstream. Audit log cannot 
+distinguish legitimate connector queries from URL-discovery queries.
+
+### Workflow architecture lessons
+
+- Claude.ai chat cannot make outbound HTTP/curl calls with auth headers 
+  (sandbox network restrictions). Solution patterns:
+  1. Claude.ai sends Claude Code prompts → Abhinav pastes → Claude Code 
+     runs locally with launchctl-set env vars (Section 9.2)
+  2. Claude.ai uses the MCP connector → calls sql_query directly (Section 
+     9.3, current preferred path)
+- Claude Code Desktop subprocess inherits env vars set via 
+  `launchctl setenv VAR value`, not from `~/.zshrc`. Need to restart 
+  Claude Code Desktop after setenv.
+- Railway: when one repo has multiple services, each service needs its 
+  own `railway.json` inside its Root Directory. Otherwise the root-level 
+  config wins regardless of Root Directory setting. (Caught us tonight — 
+  fix was a one-file commit.)
+
+### Architecture decisions locked
+
+- Agent path is READ-ONLY FOREVER. No agent writes to production via 
+  any path.
+- Writes always require human-in-loop UI: PreviewModal → DiffView → 
+  ConfirmModal → success.
+- Phase 2 ≥1 week wait rule abandoned in favor of "real debugging session 
+  as confidence gate."
+- Build sequence: feature branch → PR via GitHub web UI → merge via 
+  web UI button. NO CLI merges to main. NO direct pushes to main.
+- One bug = one prompt = one commit = one deploy = verify = next.
+
+### Phase 4 backlog
+
+- OAuth 2.0 client credentials on MCP server (restore auth properly)
+- Distinguish connector traffic from URL-discovery traffic in audit log
+- Phase 5 sales module work — Sunday rule extraction
+- Resolve four deferred Phase 4 items from earlier work
+- Trace unknown-origin security commit `3e222b5`
+- Investigate 84 "drift" employees (employment_type mismatch)
+- Backfill NULL `date_of_joining` for 43 permanent employees
+- DMS storage decision (Railway ephemeral vs. persistent volume vs. R2)
+
+### Carryover bugs to resolve
+
+- Real production drift in salary_computations (handed to other chat)
+- Bug #10 April 1 / May 1 attendance corruption (re-run via MCP connector)
+- 1082 employees vs ~265-300 active expectation — confirm with active-only 
+  query (test case for new MCP connector)
