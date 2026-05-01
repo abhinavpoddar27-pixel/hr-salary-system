@@ -1,5 +1,4 @@
 import express from 'express';
-import crypto from 'crypto';
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import {
@@ -9,7 +8,6 @@ import {
 
 const SQL_CONSOLE_URL = process.env.SQL_CONSOLE_URL;
 const SQL_CONSOLE_API_KEY = process.env.SQL_CONSOLE_API_KEY;
-const MCP_BEARER_TOKEN = process.env.MCP_BEARER_TOKEN;
 const PORT = process.env.PORT || 7331;
 
 if (!SQL_CONSOLE_URL) {
@@ -19,20 +17,6 @@ if (!SQL_CONSOLE_URL) {
 if (!SQL_CONSOLE_API_KEY || SQL_CONSOLE_API_KEY.length < 32) {
   console.error('[MCP] FATAL: SQL_CONSOLE_API_KEY missing or <32 chars');
   process.exit(1);
-}
-if (!MCP_BEARER_TOKEN || MCP_BEARER_TOKEN.length < 32) {
-  console.error('[MCP] FATAL: MCP_BEARER_TOKEN missing or <32 chars');
-  process.exit(1);
-}
-
-function timingSafeBearerCheck(headerValue) {
-  if (!headerValue || typeof headerValue !== 'string') return false;
-  if (!headerValue.startsWith('Bearer ')) return false;
-  const provided = headerValue.slice(7);
-  const a = Buffer.from(provided);
-  const b = Buffer.from(MCP_BEARER_TOKEN);
-  if (a.length !== b.length) return false;
-  return crypto.timingSafeEqual(a, b);
 }
 
 async function callSqlConsole(sql) {
@@ -136,15 +120,12 @@ app.get('/health', (req, res) => {
     ok: true,
     service: 'hr-sql-console-mcp',
     upstream: SQL_CONSOLE_URL,
-    hasBearer: !!MCP_BEARER_TOKEN,
+    auth: 'none',
     hasApiKey: !!SQL_CONSOLE_API_KEY
   });
 });
 
 app.post('/mcp', async (req, res) => {
-  if (!timingSafeBearerCheck(req.headers.authorization)) {
-    return res.status(401).json({ error: 'Unauthorized' });
-  }
   const server = createMcpServer();
   const transport = new StreamableHTTPServerTransport({
     sessionIdGenerator: undefined
@@ -167,5 +148,5 @@ app.post('/mcp', async (req, res) => {
 app.listen(PORT, () => {
   console.log(`[MCP] hr-sql-console-mcp listening on :${PORT}`);
   console.log(`[MCP] upstream: ${SQL_CONSOLE_URL}`);
-  console.log(`[MCP] auth: bearer (${MCP_BEARER_TOKEN.length} chars)`);
+  console.log('[MCP] auth: NONE (publicly accessible — read-only enforced upstream)');
 });

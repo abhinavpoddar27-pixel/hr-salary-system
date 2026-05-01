@@ -7,7 +7,7 @@ production database via the existing SQL Console API.
 
 ```
 Claude.ai (Custom Connector)
-    │  HTTPS + Bearer token
+    │  HTTPS, no auth
     ▼
 mcp-server (this Railway service)
     │  HTTPS + X-SQL-Console-Key
@@ -18,10 +18,7 @@ HR backend SQL Console API  (/api/admin/sql/execute)
 SQLite (hr_system.db)
 ```
 
-Two auth layers, never combined into one secret:
-
-1. **Bearer token** between Claude.ai and this server (`MCP_BEARER_TOKEN`)
-2. **API key** between this server and the SQL Console (`SQL_CONSOLE_API_KEY`) — never sent over the wire to Claude.ai
+The `/mcp` endpoint is publicly accessible (see Security below). The upstream API key (`SQL_CONSOLE_API_KEY`) lives only in this process's env and is never sent over the wire to Claude.ai.
 
 ## Required env vars (Railway)
 
@@ -29,23 +26,16 @@ Two auth layers, never combined into one secret:
 | ---------------------- | ---------------------------------------------------------------- |
 | `SQL_CONSOLE_URL`      | Base URL of the HR backend (e.g. the production Railway URL)     |
 | `SQL_CONSOLE_API_KEY`  | Same key the backend service exposes to read agents (≥32 chars)  |
-| `MCP_BEARER_TOKEN`     | Generated fresh, ≥32 chars, used to auth Claude.ai → this server |
 | `PORT`                 | Set automatically by Railway                                     |
 
-Generate the bearer token:
-
-```bash
-node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
-```
-
-The server fails fast on boot if any of the three required vars are missing or shorter than 32 chars.
+The server fails fast on boot if either required var is missing or `SQL_CONSOLE_API_KEY` is shorter than 32 chars.
 
 ## Deploy (Railway)
 
 1. In your existing HR project on Railway → click **+ New** → **GitHub Repo** → select `abhinavpoddar27-pixel/hr-salary-system`.
 2. In the new service's **Settings**, set **Root Directory** to `mcp-server`.
 3. Railway auto-detects Node (Nixpacks) and runs `npm start`.
-4. Set the three env vars above on this service (do NOT touch the existing backend service's vars).
+4. Set the two env vars above on this service (do NOT touch the existing backend service's vars).
 5. Wait for the deploy to go green.
 6. Note the public URL Railway assigns (e.g. `https://hr-mcp-production-xxxx.up.railway.app`).
 7. Verify health:
@@ -60,9 +50,8 @@ The server fails fast on boot if any of the three required vars are missing or s
 1. Settings → **Connectors** → **Add custom connector**.
 2. Name: `HR SQL Console`.
 3. URL: `https://<your-mcp-url>/mcp`.
-4. Advanced settings → **OAuth Client Secret**: paste the value of `MCP_BEARER_TOKEN`.
-5. Save.
-6. In a new conversation, enable the connector via **+** → Connectors, then ask Claude to run a query like `SELECT COUNT(*) FROM employees`.
+4. Click Add. Both OAuth fields stay blank.
+5. In a new conversation, enable the connector via **+** → Connectors, then ask Claude to run a query like `SELECT COUNT(*) FROM employees`.
 7. Verify the audit log:
 
    ```sql
@@ -87,19 +76,27 @@ Anything else (`INSERT`/`UPDATE`/`DELETE`/`CREATE`/`ALTER`/`DROP`) is rejected b
 
 ## Endpoints
 
-| Method | Path     | Auth          | Purpose                                |
-| ------ | -------- | ------------- | -------------------------------------- |
-| `GET`  | `/health`| none          | Railway healthcheck + sanity probe     |
-| `POST` | `/mcp`   | Bearer token  | MCP JSON-RPC over Streamable HTTP      |
+| Method | Path     | Auth | Purpose                                |
+| ------ | -------- | ---- | -------------------------------------- |
+| `GET`  | `/health`| none | Railway healthcheck + sanity probe     |
+| `POST` | `/mcp`   | none | MCP JSON-RPC over Streamable HTTP      |
 
-`/mcp` runs the SDK's `StreamableHTTPServerTransport` in stateless mode (`sessionIdGenerator: undefined`), so each Claude.ai request gets a fresh transport. Bearer comparison uses `crypto.timingSafeEqual` with a length-equality guard.
+`/mcp` runs the SDK's `StreamableHTTPServerTransport` in stateless mode (`sessionIdGenerator: undefined`), so each Claude.ai request gets a fresh transport.
 
 ## Security
 
-- The bearer token is **never logged** — only its length appears in boot logs.
-- The SQL Console API key is **never** forwarded to Claude.ai. It lives only in this process's env and the request to the backend.
-- If `MCP_BEARER_TOKEN` leaks: rotate it via Railway env var update + reconnect Claude.ai. The `SQL_CONSOLE_API_KEY` is unaffected.
-- If `SQL_CONSOLE_API_KEY` leaks: rotate it on the backend service AND copy the new value to this MCP service.
+This server is **publicly accessible** with no authentication. Anyone with the URL can run read-only SQL queries against the production database. This is intentional, to be compatible with Claude.ai's Custom Connector beta which requires full OAuth (not yet implemented).
+
+Defense in depth (still enforced):
+
+- Read-only at the upstream SQL Console layer (writes rejected with 403)
+- 5000-row cap per query
+- Rate limit: 30 requests/min on upstream API key
+- All queries audited in `sql_console_audit`
+
+If `SQL_CONSOLE_API_KEY` leaks: rotate it on the backend service AND copy the new value to this MCP service.
+
+Future work: implement OAuth 2.0 client credentials flow so the connector can authenticate properly.
 
 ## Local development
 
@@ -109,7 +106,6 @@ npm install
 
 SQL_CONSOLE_URL=https://hr-app-production-681b.up.railway.app \
 SQL_CONSOLE_API_KEY=<read-agent key> \
-MCP_BEARER_TOKEN=$(node -e "console.log(require('crypto').randomBytes(32).toString('hex'))") \
 PORT=7331 \
 node index.js
 ```
@@ -121,7 +117,6 @@ curl http://localhost:7331/health
 
 curl http://localhost:7331/mcp \
   -X POST \
-  -H "Authorization: Bearer $MCP_BEARER_TOKEN" \
   -H "Content-Type: application/json" \
   -H "Accept: application/json, text/event-stream" \
   -d '{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}'
