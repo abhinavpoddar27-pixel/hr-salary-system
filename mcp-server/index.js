@@ -53,76 +53,80 @@ async function callSqlConsole(sql) {
   return { httpStatus: r.status, data };
 }
 
-const server = new Server(
-  { name: 'hr-sql-console', version: '1.0.0' },
-  { capabilities: { tools: {} } }
-);
+function createMcpServer() {
+  const server = new Server(
+    { name: 'hr-sql-console', version: '1.0.0' },
+    { capabilities: { tools: {} } }
+  );
 
-server.setRequestHandler(ListToolsRequestSchema, async () => ({
-  tools: [
-    {
-      name: 'sql_query',
-      description:
-        'Run a read-only SQL query (SELECT/WITH/EXPLAIN/PRAGMA) against the HR Salary System production database. Returns columns, rows, and row count. INSERT/UPDATE/DELETE/DDL are rejected by the upstream API. Use LIMIT in queries to keep responses bounded; max 5000 rows returned per call. All queries are audited.',
-      inputSchema: {
-        type: 'object',
-        properties: {
-          sql: {
-            type: 'string',
-            description: 'A single SQL statement. SELECT, WITH, EXPLAIN, or PRAGMA only.'
-          }
-        },
-        required: ['sql']
+  server.setRequestHandler(ListToolsRequestSchema, async () => ({
+    tools: [
+      {
+        name: 'sql_query',
+        description:
+          'Run a read-only SQL query (SELECT/WITH/EXPLAIN/PRAGMA) against the HR Salary System production database. Returns columns, rows, and row count. INSERT/UPDATE/DELETE/DDL are rejected by the upstream API. Use LIMIT in queries to keep responses bounded; max 5000 rows returned per call. All queries are audited.',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            sql: {
+              type: 'string',
+              description: 'A single SQL statement. SELECT, WITH, EXPLAIN, or PRAGMA only.'
+            }
+          },
+          required: ['sql']
+        }
       }
+    ]
+  }));
+
+  server.setRequestHandler(CallToolRequestSchema, async (request) => {
+    if (request.params.name !== 'sql_query') {
+      return {
+        content: [{ type: 'text', text: `Unknown tool: ${request.params.name}` }],
+        isError: true
+      };
     }
-  ]
-}));
+    const sql = request.params.arguments?.sql;
+    if (typeof sql !== 'string' || sql.length === 0) {
+      return {
+        content: [{ type: 'text', text: 'Invalid input: sql must be a non-empty string' }],
+        isError: true
+      };
+    }
 
-server.setRequestHandler(CallToolRequestSchema, async (request) => {
-  if (request.params.name !== 'sql_query') {
-    return {
-      content: [{ type: 'text', text: `Unknown tool: ${request.params.name}` }],
-      isError: true
-    };
-  }
-  const sql = request.params.arguments?.sql;
-  if (typeof sql !== 'string' || sql.length === 0) {
-    return {
-      content: [{ type: 'text', text: 'Invalid input: sql must be a non-empty string' }],
-      isError: true
-    };
-  }
+    const { httpStatus, data } = await callSqlConsole(sql);
 
-  const { httpStatus, data } = await callSqlConsole(sql);
+    if (httpStatus === 200 && data && data.success) {
+      const rows = Array.isArray(data.rows) ? data.rows : [];
+      const columns = Array.isArray(data.columns) ? data.columns : (rows[0] ? Object.keys(rows[0]) : []);
+      const rowCount = typeof data.rowCount === 'number' ? data.rowCount : rows.length;
+      const summary = `${rowCount} row(s) in ${data.ms ?? '?'}ms${data.truncated ? ' (truncated at 5000)' : ''}`;
+      const headerLine = columns.join(' | ');
+      const bodyLines = rows.slice(0, 100).map((row) =>
+        columns.map((c) => String(row[c] ?? 'NULL')).join(' | ')
+      ).join('\n');
+      const note = rows.length > 100 ? `\n\n(showing first 100 of ${rows.length} rows)` : '';
+      return {
+        content: [{
+          type: 'text',
+          text: `${summary}\n\n${headerLine}\n${bodyLines}${note}`
+        }]
+      };
+    }
 
-  if (httpStatus === 200 && data && data.success) {
-    const rows = Array.isArray(data.rows) ? data.rows : [];
-    const columns = Array.isArray(data.columns) ? data.columns : (rows[0] ? Object.keys(rows[0]) : []);
-    const rowCount = typeof data.rowCount === 'number' ? data.rowCount : rows.length;
-    const summary = `${rowCount} row(s) in ${data.ms ?? '?'}ms${data.truncated ? ' (truncated at 5000)' : ''}`;
-    const headerLine = columns.join(' | ');
-    const bodyLines = rows.slice(0, 100).map((row) =>
-      columns.map((c) => String(row[c] ?? 'NULL')).join(' | ')
-    ).join('\n');
-    const note = rows.length > 100 ? `\n\n(showing first 100 of ${rows.length} rows)` : '';
+    const code = (data && data.code) || 'UNKNOWN';
+    const reason = (data && (data.reason || data.message)) || JSON.stringify(data);
     return {
       content: [{
         type: 'text',
-        text: `${summary}\n\n${headerLine}\n${bodyLines}${note}`
-      }]
+        text: `SQL Console error (HTTP ${httpStatus}): code=${code} reason=${reason}`
+      }],
+      isError: true
     };
-  }
+  });
 
-  const code = (data && data.code) || 'UNKNOWN';
-  const reason = (data && (data.reason || data.message)) || JSON.stringify(data);
-  return {
-    content: [{
-      type: 'text',
-      text: `SQL Console error (HTTP ${httpStatus}): code=${code} reason=${reason}`
-    }],
-    isError: true
-  };
-});
+  return server;
+}
 
 const app = express();
 app.use(express.json({ limit: '100kb' }));
@@ -141,10 +145,14 @@ app.post('/mcp', async (req, res) => {
   if (!timingSafeBearerCheck(req.headers.authorization)) {
     return res.status(401).json({ error: 'Unauthorized' });
   }
+  const server = createMcpServer();
   const transport = new StreamableHTTPServerTransport({
     sessionIdGenerator: undefined
   });
-  res.on('close', () => transport.close());
+  res.on('close', () => {
+    transport.close();
+    server.close();
+  });
   try {
     await server.connect(transport);
     await transport.handleRequest(req, res, req.body);
