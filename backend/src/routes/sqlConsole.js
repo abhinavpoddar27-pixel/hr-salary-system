@@ -719,6 +719,16 @@ function mountSqlConsole(app) {
     console.warn('[SQL_CONSOLE] SQL_CONSOLE_API_KEY not set — only JWT (admin) path will work');
   }
 
+  // Phase 2: validate DDL token length at boot. Parallel to the API-key
+  // check above. Token is constant-time compared per-request; a too-short
+  // token would silently fail every length-equality guard at runtime, so
+  // we surface the misconfiguration early.
+  const ddlToken = process.env.SQL_CONSOLE_DDL_TOKEN;
+  const hasDdlToken = !!(ddlToken && ddlToken.length >= 16);
+  if (ddlToken && !hasDdlToken) {
+    console.warn('[SQL_CONSOLE] SQL_CONSOLE_DDL_TOKEN is set but shorter than 16 chars — DDL writes will reject');
+  }
+
   ensureAuditTable();
   ensureWriteSnapshotsTable();
 
@@ -1749,6 +1759,19 @@ function mountSqlConsole(app) {
 
   app.use('/api/admin/sql', router);
   console.log('[SQL_CONSOLE] enabled at /api/admin/sql/*');
+  // Phase 2 status. Single line so logs stay greppable. ddl=on means an
+  // operator-set token is present and DDL writes are reachable; ddl=off
+  // means CREATE/ALTER/DROP are permanently rejected with 403
+  // DDL_TOKEN_REQUIRED. Snapshot/protected-table list is hardcoded so we
+  // surface the count rather than the full list (still in PROTECTED_TABLES).
+  console.log(
+    `[SQL_CONSOLE] phase 2 writes: ddl=${hasDdlToken ? 'on' : 'off'}` +
+    ` ttl=${TXN_TTL_MS / 1000}s` +
+    ` row_cap=${WRITE_AFFECTED_ROW_CAP}` +
+    ` snapshot_cap=${SNAPSHOT_ROW_CAP}` +
+    ` rate_limit=10/h` +
+    ` protected_tables=${PROTECTED_TABLES.size}`
+  );
 }
 
 module.exports = {
