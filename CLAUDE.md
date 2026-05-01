@@ -1,4 +1,21 @@
 ## Section 0: Last Session
+- **Date:** 2026-05-01
+- **Branch:** `claude/append-claude-md-JML13` (pushed to remote AND fast-forwarded to `origin/main` at `85e5b8f`; both refs at same SHA on origin).
+- **Last commit:** `85e5b8f` docs: CLAUDE.md Section 9.2 — SQL diagnostic workflow for Claude Code
+- **Files changed this session:**
+  - `CLAUDE.md` — appended new `## Section 9.2: SQL Diagnostic Workflow for Claude Code` (+79 lines, append-only). Documents `launchctl setenv` for `SQL_CONSOLE_URL` + `SQL_CONSOLE_API_KEY`, the `POST /api/admin/sql/execute` curl shape, the read-only constraints (403 `WRITE_NOT_ALLOWED_FOR_AGENT` on writes, 30 req/min, 5000 row cap, audit_log entries with `actor='agent'`/`auth_method='api_key'`), when to prefer SQL Console vs `sqlite3` CLI, the diagnostic prompt protocol from Claude.ai, and 2 known issues for the Phase 2.5 backlog.
+- **What was fixed/built:** Documentation-only handoff. Codifies the SQL diagnostic workflow so future Claude Code sessions stop asking the user to paste query output manually — they now know to curl the read-only `/execute` endpoint with the API key. Single commit, fast-forward push to both feature branch + main.
+- **What's fragile:**
+  - **Two known prod-DB drift items documented as Phase 2.5 backlog inside the appended section** — (1) `sql_console_audit` is missing the `table_name` column in production (banner parses it from SQL but the column was never `ALTER`ed in); (2) the bundled "Salary drift sanity check" snippet still references `code` in `salary_computations` instead of `employee_code`. Both are noted in the file but NOT fixed this session — next agent that tries to filter audit rows by `table_name` or run that snippet will hit them.
+  - **Section was appended verbatim from the user's prompt — Markdown link auto-rendering** like `[CLAUDE.md](http://CLAUDE.md)` and `[Claude.ai](http://Claude.ai)` in the prompt's instruction body was filtered out before writing; the actual content block did not contain those, so the file is clean. If a future session re-runs an append from a similar auto-linked prompt, watch for it.
+  - **The "push to main" step was done as a separate fast-forward** (`git push origin claude/append-claude-md-JML13:main`) AFTER the user explicitly asked for it in a follow-up message. The original session-branch directive said push only to `claude/append-claude-md-JML13`; the user's second message ("Push to main") was treated as the explicit override required by the system rules. If a future agent inherits this branch, both refs are at `85e5b8f`.
+- **Unfinished work:** None. The append + commit + push (feature branch) + push (main) all completed. SHA verification passed at every step.
+- **Known issues remaining:** The 2 Phase 2.5 backlog items documented inside Section 9.2 (audit `table_name` column missing in prod, snippet `code` vs `employee_code`) — neither is touched this session. Pre-existing issues from prior sessions (miss-punch finance queue migration warning, html2pdf chunk size, npm audit vulnerabilities, `_backup_2026_04_28_sales_*` cleanup after 2026-05-29) all unchanged.
+- **Next session should:** Apply the 2 Phase 2.5 fixes documented in Section 9.2 — (a) `ALTER TABLE sql_console_audit ADD COLUMN table_name TEXT;` against production via the SQL Console Phase 2 write UI (not the agent path — agent is read-only), then backfill historical rows by parsing `sql` text with a one-shot UPDATE; (b) edit the hardcoded snippet list in `backend/src/routes/sqlConsole.js` to fix the salary drift snippet's column reference. Both are safe, low-blast-radius cleanups.
+
+---
+
+## Section 0: Previous Session
 - **Date:** 2026-04-30
 - **Branch:** `claude/sql-console-agent-integration-jDQNX` (merged into `main` at `86229e2` via merge commit; both refs at same SHA on origin)
 - **Last commit:** `86229e2` Merge remote-tracking branch 'origin/main' into claude/sql-console-agent-integration-jDQNX (parents: `39c9dd2` sql-console-Phase-F + `3a597ad` Sales UI series). 6 source commits before the merge: `64d720b` (Phase A backend route), `79493e5` (Phase B server.js mount), `fc38e84` (Phase C frontend page), `9787422` (Phase D App+Sidebar wiring), `7f7703a` (Phase E slash commands), `39c9dd2` (Phase F docs).
