@@ -159,3 +159,4 @@ Each week (Mon–Sat + Sunday):
 
 Built for the HR/Payroll team at Indriyan Beverages / Asian Lakto Ind. Ltd.
 Parser verified against 10 months of actual EESL biometric data (Apr 2025 – Jan 2026).
+Multi-month files are explicitly rejected at the route layer; reimports of an already-imported month auto-recompute `day_calculations` and `salary_computations` in-process so HR doesn't have to re-trigger Stages 6 and 7 manually.
