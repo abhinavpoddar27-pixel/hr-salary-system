@@ -23,10 +23,45 @@ const DAY_ABBREV_MAP = {
   'St': 'Saturday'
 };
 
+// Day abbreviation → JS weekday number (0=Sun..6=Sat). Used to cross-check
+// the day-header weekday against the date computed from the file's date range.
+// Without this check, a multi-month export (e.g. "Apr 30 To May 01") would
+// silently stamp BOTH columns under the start month and overwrite real data.
+const DAY_ABBREV_TO_WEEKDAY = {
+  'S': 0, 'M': 1, 'T': 2, 'W': 3, 'Th': 4, 'F': 5, 'St': 6
+};
+
+// Date math helpers — UTC-only to avoid timezone drift on the dev sandbox vs
+// production. We never need wall-clock semantics here, just calendar arithmetic.
+function weekdayName(date) {
+  return ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'][date.getUTCDay()];
+}
+function fmtDate(date) {
+  return date.getUTCFullYear() + '-' +
+         String(date.getUTCMonth() + 1).padStart(2, '0') + '-' +
+         String(date.getUTCDate()).padStart(2, '0');
+}
+function buildDateList(startDateStr, endDateStr) {
+  const dates = [];
+  const start = new Date(startDateStr + 'T00:00:00Z');
+  const end = new Date(endDateStr + 'T00:00:00Z');
+  if (isNaN(start.getTime()) || isNaN(end.getTime()) || end < start) return dates;
+  // Cap at 62 days as a safety belt — pathological ranges shouldn't loop forever
+  for (let i = 0, d = new Date(start); d <= end && i < 62; i++) {
+    dates.push(new Date(d));
+    d.setUTCDate(d.getUTCDate() + 1);
+  }
+  return dates;
+}
+
 /**
  * Parse a date range string like "Apr 01 2025  To  Apr 30 2025"
  * Also handles incomplete: "Mar 01 2026  To  Mar 22 " (missing end year)
- * Returns { month (1-12), year, startDate, endDate }
+ * Returns { month, year, endMonth, endYear, startDate, endDate }.
+ * `month`/`year` are the START month/year (preserved for backwards
+ * compatibility — `monthly_imports` files under that key). `endMonth`/`endYear`
+ * are added so callers (route layer + parser column mapper) can detect
+ * multi-month files.
  */
 function parseDateRange(dateRangeStr) {
   if (!dateRangeStr) return null;
@@ -48,6 +83,7 @@ function parseDateRange(dateRangeStr) {
     const endYear = parseInt(fullMatch[6]);
     return {
       month: startMonth, year: startYear,
+      endMonth, endYear,
       startDate: `${startYear}-${String(startMonth).padStart(2,'0')}-${String(startDay).padStart(2,'0')}`,
       endDate: `${endYear}-${String(endMonth).padStart(2,'0')}-${String(endDay).padStart(2,'0')}`
     };
@@ -65,6 +101,7 @@ function parseDateRange(dateRangeStr) {
     const endYear = startYear;
     return {
       month: startMonth, year: startYear,
+      endMonth, endYear,
       startDate: `${startYear}-${String(startMonth).padStart(2,'0')}-${String(startDay).padStart(2,'0')}`,
       endDate: `${endYear}-${String(endMonth).padStart(2,'0')}-${String(endDay).padStart(2,'0')}`
     };
@@ -130,27 +167,83 @@ function findLandmarks(ws) {
 /**
  * Build a map of column index → { dayNumber, dayOfWeek, dateStr }
  * by reading the day header row dynamically.
+ *
+ * Strategy: walk the date range start→end inclusive, consume one date per
+ * detected day-header column. Cross-check (a) the printed day number against
+ * the consumed date's day-of-month, and (b) the printed weekday abbreviation
+ * against the consumed date's actual weekday. Either mismatch THROWS — silent
+ * misalignment is exactly the bug class that corrupted April 1 attendance
+ * when a multi-month "Apr 30 To May 01" file had its May 1 column stamped as
+ * 2026-04-01.
+ *
+ * Day-headers that don't parse (blank cells, "Total", etc.) are skipped
+ * without consuming a date.
  */
-function buildColToDayMap(ws, dayHeaderRow, month, year) {
+function buildColToDayMap(ws, dayHeaderRow, dateInfo) {
   const range = XLSX.utils.decode_range(ws['!ref'] || 'A1:A1');
   const map = {};
 
+  const expectedDates = buildDateList(dateInfo.startDate, dateInfo.endDate);
+  if (expectedDates.length === 0) {
+    throw new Error(
+      `Parser: invalid date range — startDate=${dateInfo.startDate} endDate=${dateInfo.endDate}`
+    );
+  }
+
+  let dateIdx = 0;
   for (let c = 0; c <= range.e.c; c++) {
     const header = getCellValue(ws, dayHeaderRow, c);
     if (!header || header === 'Days') continue;
 
-    // Format: "1 S", "2 M", "14 M", "31 St"
-    const parts = header.split(' ');
+    // Format: "1 S", "2 M", "14 M", "31 St". Whitespace-tolerant.
+    const parts = String(header).trim().split(/\s+/);
     if (parts.length < 2) continue;
 
     const dayNum = parseInt(parts[0]);
     if (isNaN(dayNum) || dayNum < 1 || dayNum > 31) continue;
 
     const abbrev = parts[1];
-    const dayOfWeek = DAY_ABBREV_MAP[abbrev] || abbrev;
 
-    const dateStr = `${year}-${String(month).padStart(2,'0')}-${String(dayNum).padStart(2,'0')}`;
-    map[c] = { dayNumber: dayNum, dayOfWeek, dateStr };
+    if (dateIdx >= expectedDates.length) {
+      // More day-header columns than days in range — could be a stray column
+      // or an export quirk. Warn and skip rather than throwing; downstream
+      // pipeline tolerates fewer columns than expected.
+      console.warn(
+        `Parser: day-header column ${c} ("${header}") found after date range exhausted (${dateInfo.startDate}..${dateInfo.endDate}); skipping`
+      );
+      continue;
+    }
+
+    const expectedDate = expectedDates[dateIdx];
+
+    if (expectedDate.getUTCDate() !== dayNum) {
+      throw new Error(
+        `Parser day-number mismatch: column ${c} header "${header}" but expected day ${expectedDate.getUTCDate()} of date ${fmtDate(expectedDate)}`
+      );
+    }
+
+    const headerWeekday = DAY_ABBREV_TO_WEEKDAY[abbrev];
+    if (headerWeekday === undefined) {
+      // Unknown abbreviation — skip column rather than throw, but DO consume
+      // the date so subsequent columns stay aligned.
+      console.warn(
+        `Parser: unknown day-of-week abbreviation "${abbrev}" in column ${c} ("${header}"); skipping`
+      );
+      dateIdx++;
+      continue;
+    }
+    if (headerWeekday !== expectedDate.getUTCDay()) {
+      throw new Error(
+        `Parser weekday mismatch: column ${c} header "${header}" claims ${abbrev} but ${fmtDate(expectedDate)} is ${weekdayName(expectedDate)}`
+      );
+    }
+
+    map[c] = {
+      dayNumber: dayNum,
+      dayOfWeek: weekdayName(expectedDate),
+      dateStr: fmtDate(expectedDate)
+    };
+    dateIdx++;
   }
 
   return map;
@@ -278,7 +371,7 @@ function parseSheet(ws, sheetName) {
     return records;
   }
 
-  const colToDayMap = buildColToDayMap(ws, landmarks.dayHeaderRow, month, year);
+  const colToDayMap = buildColToDayMap(ws, landmarks.dayHeaderRow, dateInfo);
   const dayColumns = Object.keys(colToDayMap).map(Number);
 
   if (dayColumns.length === 0) {
