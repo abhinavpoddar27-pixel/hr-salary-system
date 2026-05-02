@@ -8,6 +8,9 @@ const { parseEESLFile, extractEmployees, getImportSummary } = require('../servic
 const { pairNightShifts, applyPairingToDb } = require('../services/nightShift');
 const { detectMissPunches, applyMissPunchFlags } = require('../services/missPunch');
 const { calcShiftMetrics } = require('../utils/shiftMetrics');
+const { calculateDays, saveDayCalculation } = require('../services/dayCalculation');
+const { computeEmployeeSalary, saveSalaryComputation } = require('../services/salaryComputation');
+const { isContractorForPayroll } = require('../utils/employeeClassification');
 
 function friendlyParseError(errorMsg) {
   if (!errorMsg) return 'Import failed due to an unexpected error. Please verify the file and try again.';
@@ -186,10 +189,11 @@ router.post('/upload', upload.array('files', 20), async (req, res) => {
         let importId;
         let upsertStats = { inserted: 0, updated: 0 };
         // Reimport-only counters; initialized so the per-file response can
-        // safely read them even on fresh imports (where they stay 0).
+        // safely read them even on fresh imports (where they stay 0/null).
         let correctionSnapshot = [];
         let replayedCount = 0;
         let skippedCount = 0;
+        let recomputeStats = null;
 
         if (isReimport) {
           // ── REIMPORT: Upsert strategy ──
@@ -495,6 +499,21 @@ router.post('/upload', upload.array('files', 20), async (req, res) => {
         });
         postTxn();
 
+        // ── REIMPORT SAFETY: auto-recompute downstream tables ──
+        // Day-calc and salary-compute that ran on the corrupted pre-reimport
+        // data are now stale. Run them now, synchronously, so HR doesn't have
+        // to click "Compute Days" + "Compute Salary" manually after a recovery
+        // reimport. Wrapped in a try/catch so a recompute failure surfaces in
+        // the response without 500'ing the entire upload.
+        if (isReimport) {
+          try {
+            recomputeStats = runReimportRecompute(db, month, year, company, req.requestId);
+          } catch (recomputeErr) {
+            console.error('[reimport] Auto-recompute failed:', recomputeErr.message);
+            recomputeStats = { error: recomputeErr.message };
+          }
+        }
+
         const summary = getImportSummary(parseResult);
 
         results.push({
@@ -513,6 +532,8 @@ router.post('/upload', upload.array('files', 20), async (req, res) => {
           manualCorrectionsSnapshot: correctionSnapshot.length,
           manualCorrectionsReplayed: replayedCount,
           manualCorrectionsSkipped: skippedCount,
+          recomputed: isReimport,
+          recomputeStats,
           summary
         });
       }
@@ -902,5 +923,231 @@ router.post('/reconciliation/add-to-master', (req, res) => {
 
   res.json({ success: true, added, message: `Added/updated ${added} employee(s) in master` });
 });
+
+// ── REIMPORT AUTO-RECOMPUTE HELPER ──
+// On reimport, day_calculations and salary_computations that ran on the
+// pre-reimport (corrupted) data are stale. This helper deletes them and
+// re-runs the day-calc + salary-compute orchestration so the user doesn't
+// have to click "Compute Days" + "Compute Salary" manually after a recovery
+// reimport.
+//
+// The orchestration logic below is COPIED verbatim from
+// backend/src/routes/payroll.js POST /calculate-days and POST /compute-salary.
+// It deliberately duplicates ~70 lines of loop body so this recovery flow
+// doesn't take a hard dependency on payroll.js refactor scheduling.
+//
+// TODO: extract to backend/src/services/recompute.js when payroll.js refactor
+// is in scope. Until then, both copies must stay in sync — change one, change
+// both.
+function runReimportRecompute(db, month, year, company, requestId) {
+  const startTime = Date.now();
+  console.log(`[reimport] Recompute started for ${month}/${year} ${company}`);
+
+  const stats = { dayCalcRows: 0, salaryRows: 0, dayCalcErrors: 0, salaryErrors: 0 };
+
+  // 1. Delete stale downstream rows for this cycle
+  const dayCalcDel = db.prepare(
+    'DELETE FROM day_calculations WHERE month = ? AND year = ? AND company = ?'
+  ).run(month, year, company);
+  const salaryDel = db.prepare(
+    'DELETE FROM salary_computations WHERE month = ? AND year = ? AND company = ?'
+  ).run(month, year, company);
+  console.log(
+    `[reimport] Cleared ${dayCalcDel.changes} day_calculations + ${salaryDel.changes} salary_computations rows for ${month}/${year} ${company}`
+  );
+
+  // 2. Day calculation — orchestration copied from payroll.js POST /calculate-days
+  // Ghost cleanup pass — normalises blank ghost rows to status 'A' so day-calc
+  // sees consistent data. Same query as payroll.js.
+  db.prepare(`
+    UPDATE attendance_processed
+    SET status_original = CASE
+          WHEN status_original IS NULL OR status_original = '' THEN 'A'
+          ELSE status_original
+        END,
+        status_final = 'A'
+    WHERE month = ? AND year = ? AND company = ?
+    AND (status_final IS NULL OR status_final = '')
+    AND (status_original IS NULL OR status_original = '')
+    AND (in_time_original IS NULL OR in_time_original = '')
+    AND (out_time_original IS NULL OR out_time_original = '')
+    AND is_night_out_only = 0
+  `).run(month, year, company);
+
+  const empCodes = db.prepare(`
+    SELECT DISTINCT ap.employee_code
+    FROM attendance_processed ap
+    LEFT JOIN employees e ON ap.employee_code = e.code
+    WHERE ap.month = ? AND ap.year = ? AND ap.company = ?
+    AND ap.is_night_out_only = 0
+    AND (e.status IS NULL OR e.status NOT IN ('Exited'))
+  `).all(month, year, company).map(r => r.employee_code);
+
+  if (empCodes.length > 0) {
+    db.prepare(`
+      UPDATE employees SET status = 'Active', was_left_returned = 1, updated_at = datetime('now')
+      WHERE code IN (${empCodes.map(() => '?').join(',')})
+      AND status = 'Left'
+    `).run(...empCodes);
+  }
+
+  const monthStr = String(month).padStart(2, '0');
+  const holidays = db.prepare(`
+    SELECT date, name, type, applicable_to
+    FROM holidays WHERE date LIKE ?
+  `).all(`${year}-${monthStr}-%`);
+
+  const dayCalcTxn = db.transaction(() => {
+    for (const empCode of empCodes) {
+      try {
+        const emp = db.prepare('SELECT id FROM employees WHERE code = ?').get(empCode);
+        const records = db.prepare(`
+          SELECT * FROM attendance_processed
+          WHERE employee_code = ? AND month = ? AND year = ? AND company = ?
+        `).all(empCode, month, year, company);
+
+        const leaveBalances = { CL: 0, EL: 0, SL: 0 };
+        if (emp) {
+          const lbs = db.prepare('SELECT * FROM leave_balances WHERE employee_id = ? AND year = ?').all(emp.id, year);
+          for (const lb of lbs) leaveBalances[lb.leave_type] = lb.balance || 0;
+        }
+
+        const empFull = db.prepare('SELECT * FROM employees WHERE code = ?').get(empCode);
+        const isContract = isContractorForPayroll(empFull);
+
+        // Auto-create PENDING extra_duty_grants from WOP/WO½P (idempotent via UQ)
+        if (!isContract) {
+          const wopInsert = db.prepare(`
+            INSERT OR IGNORE INTO extra_duty_grants
+              (employee_code, employee_id, grant_date, month, year, company,
+               grant_type, duty_days, verification_source, remarks,
+               linked_attendance_id, status, finance_status, requested_by)
+            VALUES (?, ?, ?, ?, ?, ?, 'OVERNIGHT_STAY', ?, 'BIOMETRIC_AUTO',
+                    'Auto-detected from attendance WOP status', ?, 'PENDING',
+                    'UNREVIEWED', 'system')
+          `);
+          for (const rec of records) {
+            const status = rec.status_final || rec.status_original || '';
+            if (status !== 'WOP' && status !== 'WO½P') continue;
+            const dutyDays = status === 'WO½P' ? 0.5 : 1.0;
+            wopInsert.run(
+              empCode, emp?.id, rec.date, parseInt(month), parseInt(year),
+              company || rec.company || '', dutyDays, rec.id
+            );
+          }
+        }
+
+        let manualExtraDutyDays = 0;
+        let financeEDDays = 0;
+        if (!isContract) {
+          try {
+            const wopDates = new Set(
+              records
+                .filter(r => {
+                  const s = r.status_final || r.status_original || '';
+                  return s === 'WOP' || s === 'WO½P';
+                })
+                .map(r => r.date)
+            );
+            const approvedGrants = db.prepare(`
+              SELECT grant_date, duty_days FROM extra_duty_grants
+              WHERE employee_code = ? AND month = ? AND year = ?
+                AND status = 'APPROVED' AND finance_status = 'FINANCE_APPROVED'
+                AND grant_type != 'PRE_BIOMETRIC_ACTIVATION'
+            `).all(empCode, month, year);
+            const filtered = approvedGrants.filter(g => !wopDates.has(g.grant_date));
+            manualExtraDutyDays = filtered.reduce((sum, g) => sum + (g.duty_days || 0), 0);
+            financeEDDays = manualExtraDutyDays;
+          } catch (_) {}
+        }
+
+        const lastDay = new Date(year, month, 0).getDate();
+        const monthStartDate = `${year}-${monthStr}-01`;
+        const monthEndDate = `${year}-${monthStr}-${String(lastDay).padStart(2, '0')}`;
+
+        const approvedLeaves = db.prepare(`
+          SELECT leave_type, start_date, end_date, days, status
+          FROM leave_applications
+          WHERE employee_code = ?
+            AND status = 'Approved'
+            AND start_date <= ?
+            AND end_date >= ?
+        `).all(empCode, monthEndDate, monthStartDate);
+
+        let approvedCompOff = [];
+        try {
+          approvedCompOff = db.prepare(`
+            SELECT start_date, end_date, duty_days, finance_status
+            FROM compensatory_off_requests
+            WHERE employee_code = ?
+              AND month = ? AND year = ?
+              AND finance_status = 'approved'
+          `).all(empCode, parseInt(month), parseInt(year));
+        } catch (_) {}
+
+        const calcResult = calculateDays(
+          empCode, parseInt(month), parseInt(year), company || '',
+          records, leaveBalances, holidays,
+          {
+            isContractor: isContract,
+            weeklyOffDay: empFull?.weekly_off_day ?? 0,
+            employmentType: empFull?.employment_type || 'Permanent',
+            manualExtraDutyDays,
+            financeEDDays,
+            dateOfJoining: empFull?.date_of_joining || null,
+            approvedLeaves,
+            approvedCompOff
+          },
+          requestId
+        );
+        calcResult.employeeId = emp?.id;
+        saveDayCalculation(db, calcResult);
+        stats.dayCalcRows++;
+      } catch (err) {
+        console.error(`[reimport] day-calc failed for ${empCode}: ${err.message}`);
+        stats.dayCalcErrors++;
+      }
+    }
+  });
+  dayCalcTxn();
+  db.prepare('UPDATE monthly_imports SET stage_6_done = 1 WHERE month = ? AND year = ? AND company = ?')
+    .run(month, year, company);
+
+  // 3. Salary computation — orchestration copied from payroll.js POST /compute-salary
+  const employees = db.prepare(`
+    SELECT DISTINCT e.*
+    FROM employees e
+    INNER JOIN day_calculations dc ON e.code = dc.employee_code
+    WHERE dc.month = ? AND dc.year = ? AND dc.company = ?
+    AND (e.status IS NULL OR e.status NOT IN ('Exited'))
+  `).all(month, year, company);
+
+  const salaryTxn = db.transaction(() => {
+    for (const emp of employees) {
+      try {
+        const comp = computeEmployeeSalary(db, emp, parseInt(month), parseInt(year), company || '', requestId);
+        if (comp.success) {
+          saveSalaryComputation(db, comp);
+          stats.salaryRows++;
+        } else if (!comp.excluded && !comp.silentSkip) {
+          stats.salaryErrors++;
+        }
+      } catch (err) {
+        console.error(`[reimport] salary-compute failed for ${emp.code}: ${err.message}`);
+        stats.salaryErrors++;
+      }
+    }
+  });
+  salaryTxn();
+  db.prepare('UPDATE monthly_imports SET stage_7_done = 1 WHERE month = ? AND year = ? AND company = ?')
+    .run(month, year, company);
+
+  const elapsedMs = Date.now() - startTime;
+  console.log(
+    `[reimport] Recompute completed in ${elapsedMs}ms — dayCalc=${stats.dayCalcRows} salary=${stats.salaryRows} ` +
+    `(dayCalcErrors=${stats.dayCalcErrors} salaryErrors=${stats.salaryErrors})`
+  );
+  return { ...stats, elapsedMs };
+}
 
 module.exports = router;
