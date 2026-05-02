@@ -54,6 +54,41 @@ router.post('/upload', upload.array('files', 20), async (req, res) => {
         continue;
       }
 
+      // ── Multi-month rejection (route-level guard) ──
+      // A file whose date range crosses a month boundary cannot be filed under
+      // a single monthly_imports row safely. Even with the parser's day-number/
+      // weekday cross-checks, multi-month uploads create ambiguous semantics
+      // for `attendance_processed.month/year` (records would be stamped under
+      // the start month even when their date is in the next month). This is
+      // the second line of defence that makes the 2026-05-02 corruption class
+      // impossible regardless of UI behaviour.
+      if (parseResult.endMonth !== parseResult.month || parseResult.endYear !== parseResult.year) {
+        results.push({
+          file: file.originalname,
+          success: false,
+          error: 'Multi-month file rejected',
+          userMessage: `This file spans ${parseResult.startDate} to ${parseResult.endDate}, which crosses a month boundary. Please re-export from EESL with a single-month range (1st to last day of one month) and try again.`
+        });
+        continue;
+      }
+
+      // ── UI/file month reconciliation ──
+      // If the frontend sends month+year in the upload body, confirm the file's
+      // detected month/year matches what HR selected on screen. This catches
+      // operator errors like "selected April but uploaded March file".
+      // No-op when frontend doesn't pass these fields.
+      const uiMonth = req.body.month ? parseInt(req.body.month) : null;
+      const uiYear = req.body.year ? parseInt(req.body.year) : null;
+      if (uiMonth && uiYear && (uiMonth !== parseResult.month || uiYear !== parseResult.year)) {
+        results.push({
+          file: file.originalname,
+          success: false,
+          error: 'UI/file month mismatch',
+          userMessage: `You selected ${uiMonth}/${uiYear} in the page but this file's date range is ${parseResult.startDate} to ${parseResult.endDate} (month ${parseResult.month}/${parseResult.year}). Please re-select the correct month and try again, or re-export from EESL for the month you selected.`
+        });
+        continue;
+      }
+
       const { month, year, allRecords, sheets } = parseResult;
 
       // Process each sheet independently
@@ -150,6 +185,11 @@ router.post('/upload', upload.array('files', 20), async (req, res) => {
 
         let importId;
         let upsertStats = { inserted: 0, updated: 0 };
+        // Reimport-only counters; initialized so the per-file response can
+        // safely read them even on fresh imports (where they stay 0).
+        let correctionSnapshot = [];
+        let replayedCount = 0;
+        let skippedCount = 0;
 
         if (isReimport) {
           // ── REIMPORT: Upsert strategy ──
@@ -172,6 +212,22 @@ router.post('/upload', upload.array('files', 20), async (req, res) => {
           // 3. Clear night shift pairs (will be re-detected)
           db.prepare('DELETE FROM night_shift_pairs WHERE month = ? AND year = ? AND company = ?')
             .run(month, year, company);
+
+          // ── REIMPORT SAFETY: snapshot manual corrections before overwriting ──
+          // The updateProcessed below zeroes miss_punch_resolved, correction_source,
+          // correction_remark, etc. We capture those rows first and replay them
+          // after the upsert so HR's resolution work survives a reimport.
+          correctionSnapshot = db.prepare(`
+            SELECT employee_code, date, status_final, in_time_final, out_time_final,
+                   miss_punch_resolved, correction_source, correction_remark,
+                   miss_punch_finance_status, miss_punch_finance_reviewed_by,
+                   miss_punch_finance_reviewed_at, miss_punch_finance_notes,
+                   actual_hours
+            FROM attendance_processed
+            WHERE month = ? AND year = ? AND company = ?
+              AND (miss_punch_resolved = 1 OR correction_source IS NOT NULL OR correction_remark IS NOT NULL)
+          `).all(month, year, company);
+          console.log(`[reimport] Snapshotted ${correctionSnapshot.length} manual corrections for ${month}/${year} ${company}`);
 
           // 4. Upsert attendance_processed with audit logging
           const getExisting = db.prepare(`
@@ -240,6 +296,53 @@ router.post('/upload', upload.array('files', 20), async (req, res) => {
             }
           });
           upsertTxn(records);
+
+          // ── REIMPORT SAFETY: replay snapshotted corrections ──
+          // Strategy: only replay if the new (clean) data still shows a miss-punch
+          // shape similar to what was originally resolved. If the new data is
+          // already complete (both IN+OUT present and status is P-class), the
+          // previous resolution is moot and we DO NOT replay — the new data
+          // supersedes the old correction. This avoids stamping stale 'HR_MANUAL'
+          // metadata onto rows that no longer need correcting.
+          const replayTxn = db.transaction(() => {
+            for (const snap of correctionSnapshot) {
+              const newRow = db.prepare(`
+                SELECT id, status_final, in_time_final, out_time_final, is_miss_punch
+                FROM attendance_processed
+                WHERE employee_code = ? AND date = ? AND company = ?
+              `).get(snap.employee_code, snap.date, company);
+              if (!newRow) { skippedCount++; continue; }
+
+              const newIsComplete = newRow.in_time_final && newRow.out_time_final &&
+                                    ['P', 'WOP', '½P', 'WO½P'].includes(newRow.status_final);
+              if (newIsComplete) { skippedCount++; continue; }
+
+              db.prepare(`
+                UPDATE attendance_processed SET
+                  status_final = ?, in_time_final = ?, out_time_final = ?,
+                  miss_punch_resolved = ?, correction_source = ?, correction_remark = ?,
+                  miss_punch_finance_status = ?, miss_punch_finance_reviewed_by = ?,
+                  miss_punch_finance_reviewed_at = ?, miss_punch_finance_notes = ?,
+                  actual_hours = ?, stage_2_done = 1
+                WHERE id = ?
+              `).run(
+                snap.status_final, snap.in_time_final, snap.out_time_final,
+                snap.miss_punch_resolved, snap.correction_source, snap.correction_remark,
+                snap.miss_punch_finance_status, snap.miss_punch_finance_reviewed_by,
+                snap.miss_punch_finance_reviewed_at, snap.miss_punch_finance_notes,
+                snap.actual_hours, newRow.id
+              );
+
+              logAudit('attendance_processed', newRow.id, 'reimport_replay',
+                JSON.stringify({ status: newRow.status_final, in: newRow.in_time_final, out: newRow.out_time_final }),
+                JSON.stringify({ status: snap.status_final, in: snap.in_time_final, out: snap.out_time_final }),
+                'reimport_replay', `Restored manual correction (source: ${snap.correction_source || 'unknown'})`
+              );
+              replayedCount++;
+            }
+          });
+          replayTxn();
+          console.log(`[reimport] Replayed ${replayedCount} corrections; skipped ${skippedCount} (data now complete or row missing)`);
 
         } else {
           // ── FRESH IMPORT: Standard insert ──
@@ -407,6 +510,9 @@ router.post('/upload', upload.array('files', 20), async (req, res) => {
           nightShiftPairs: pairs.length,
           missPunches: missPunches.length,
           boundaryFlags: boundaryFlags.length,
+          manualCorrectionsSnapshot: correctionSnapshot.length,
+          manualCorrectionsReplayed: replayedCount,
+          manualCorrectionsSkipped: skippedCount,
           summary
         });
       }
