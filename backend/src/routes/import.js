@@ -65,7 +65,11 @@ router.post('/upload', upload.array('files', 20), async (req, res) => {
       // the start month even when their date is in the next month). This is
       // the second line of defence that makes the 2026-05-02 corruption class
       // impossible regardless of UI behaviour.
-      if (parseResult.endMonth !== parseResult.month || parseResult.endYear !== parseResult.year) {
+      // Only fires when endMonth/endYear are populated — defensive against any
+      // legacy parse path that doesn't surface them (then the existing parser
+      // success path is trusted).
+      if (parseResult.endMonth != null && parseResult.endYear != null &&
+          (parseResult.endMonth !== parseResult.month || parseResult.endYear !== parseResult.year)) {
         results.push({
           file: file.originalname,
           success: false,

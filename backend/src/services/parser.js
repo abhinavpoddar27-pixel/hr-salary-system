@@ -326,7 +326,7 @@ function parseSheet(ws, sheetName) {
 
   if (landmarks.dateRangeRow < 0) {
     console.warn(`Sheet ${sheetName}: Could not find date range row`);
-    return records;
+    return { records, dateInfo: null, company: null };
   }
 
   // Extract date range — scan cols 0-5 for the "To" string
@@ -348,7 +348,7 @@ function parseSheet(ws, sheetName) {
   const dateInfo = parseDateRange(dateRangeStr);
   if (!dateInfo) {
     console.warn(`Sheet ${sheetName}: Could not parse date range from: ${dateRangeStr}`);
-    return records;
+    return { records, dateInfo: null, company: null };
   }
 
   // Company: scan the company row for a value
@@ -368,7 +368,7 @@ function parseSheet(ws, sheetName) {
   // Day header row
   if (landmarks.dayHeaderRow < 0) {
     console.warn(`Sheet ${sheetName}: Could not find day header row`);
-    return records;
+    return { records, dateInfo, company };
   }
 
   const colToDayMap = buildColToDayMap(ws, landmarks.dayHeaderRow, dateInfo);
@@ -376,7 +376,7 @@ function parseSheet(ws, sheetName) {
 
   if (dayColumns.length === 0) {
     console.warn(`Sheet ${sheetName}: No day columns found in row ${landmarks.dayHeaderRow}`);
-    return records;
+    return { records, dateInfo, company };
   }
 
   // Parse employee blocks — start scanning from after the day header row
@@ -465,7 +465,7 @@ function parseSheet(ws, sheetName) {
     }
   }
 
-  return records;
+  return { records, dateInfo, company };
 }
 
 /**
@@ -491,20 +491,41 @@ async function parseEESLFile(filePath) {
     const sheets = [];
     let globalMonth = null;
     let globalYear = null;
+    let globalEndMonth = null;
+    let globalEndYear = null;
+    let globalStartDate = null;
+    let globalEndDate = null;
 
     for (const sheetName of wb.SheetNames) {
       const ws = wb.Sheets[sheetName];
       if (!ws) continue;
 
-      const records = parseSheet(ws, sheetName);
+      const parsed = parseSheet(ws, sheetName);
+      const records = parsed.records;
 
       if (records.length > 0) {
-        const sample = records[0];
-        globalMonth = sample.month;
-        globalYear = sample.year;
+        // Prefer dateInfo from the sheet (authoritative — derived from the
+        // file's actual date range string) over sample-record month/year
+        // (which are start month/year only). dateInfo carries endMonth/endYear
+        // and startDate/endDate which the route layer needs to detect
+        // multi-month files.
+        if (parsed.dateInfo && globalMonth === null) {
+          globalMonth = parsed.dateInfo.month;
+          globalYear = parsed.dateInfo.year;
+          globalEndMonth = parsed.dateInfo.endMonth;
+          globalEndYear = parsed.dateInfo.endYear;
+          globalStartDate = parsed.dateInfo.startDate;
+          globalEndDate = parsed.dateInfo.endDate;
+        } else if (globalMonth === null) {
+          // Fallback if dateInfo somehow missing (shouldn't happen — parseSheet
+          // returns early with records=[] when dateInfo can't be parsed).
+          const sample = records[0];
+          globalMonth = sample.month;
+          globalYear = sample.year;
+        }
 
         const companies = [...new Set(records.map(r => r.company).filter(Boolean))];
-        const company = companies[0] || sheetName;
+        const company = companies[0] || parsed.company || sheetName;
 
         sheets.push({
           sheetName,
@@ -522,6 +543,10 @@ async function parseEESLFile(filePath) {
       success: true,
       month: globalMonth,
       year: globalYear,
+      endMonth: globalEndMonth,
+      endYear: globalEndYear,
+      startDate: globalStartDate,
+      endDate: globalEndDate,
       fileName: path.basename(filePath),
       sheets,
       allRecords,
