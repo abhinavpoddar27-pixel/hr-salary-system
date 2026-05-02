@@ -1,12 +1,13 @@
 ## Section 0: Last Session
 - **Date:** 2026-05-02 (later, after the MCP postmortem entry below)
-- **Branch:** `claude/parser-multimonth-smart-reimport-SrJOr` (3 source commits + 1 docs commit; pushed to origin, NOT yet merged into main; PR-ready). Branched from `main` tip `6b8291e`.
-- **Last commit:** Phase 4 docs commit (this entry).
+- **Branch:** `claude/parser-multimonth-smart-reimport-SrJOr` (5 commits — 3 source + 1 docs + 1 Phase-5-fix; pushed to origin, NOT yet merged into main; PR-ready). Branched from `main` tip `6b8291e`. Tip: `8c8d915`.
+- **Last commit:** `8c8d915` `fix(parser+import): surface endMonth/endYear/startDate/endDate at top level`
 - **Commit series:**
   - `036442e` — `feat(parser): cross-month support with day-of-week + day-number cross-checks`
   - `0207650` — `feat(import): reimport snapshots and replays manual corrections; rejects multi-month files`
   - `a9d55c0` — `feat(import): auto-recompute day_calculations and salary_computations on reimport`
-  - (this commit) — `docs: update CLAUDE.md and README for parser fix + smart reimport`
+  - `06d54ed` — `docs: update CLAUDE.md and README for parser fix + smart reimport`
+  - `8c8d915` — `fix(parser+import): surface endMonth/endYear/startDate/endDate at top level` (Phase 5 simulation caught a real defect — Phase 2's route guard was rejecting EVERY file as multi-month because parseEESLFile didn't expose endMonth/endYear at the top level)
 - **Files changed this session:**
   - `backend/src/services/parser.js` — `parseDateRange()` returns new `endMonth`/`endYear`; `buildColToDayMap(ws, dayHeaderRow, dateInfo)` rewritten as position-based date mapping with day-number + weekday cross-checks (throws `Parser day-number mismatch` / `Parser weekday mismatch` on either inconsistency); new UTC helpers `weekdayName`, `fmtDate`, `buildDateList` (62-day cap); `parseSheet()` threads `dateInfo` through; module exports unchanged. ~50 net lines added.
   - `backend/src/__tests__/parser.test.js` — NEW (~210 lines). 13 jest cases. Synthetic fixtures built in-memory via `XLSX.utils.aoa_to_sheet` + temp files in `os.tmpdir()` (no external `.xls` checked in). Covers multi-month happy path mirroring the 2026-05-02 incident screenshot (`Apr 30 2026 To May 01 2026`), single-month clean Apr 2026 with all 30 weekdays anchored, day-number mismatch throw path, and weekday mismatch throw path. **Test path is `backend/src/__tests__/parser.test.js` not `backend/tests/`** because `jest.config.js` has `roots: ['<rootDir>/src']` and `testMatch: ['**/__tests__/**/*.test.js']` — the prompt's literal `backend/tests/` path would not be discoverable by `npm test`.
@@ -34,7 +35,7 @@
   - **Module load smoke** (`node -e "require('./src/routes/import.js')"`) passes after every phase.
   - **Hard SHA verification on every push:** Phase 1 `036442e`, Phase 2 `0207650`, Phase 3 `a9d55c0` — local HEAD == origin tip after each push.
 - **Unfinished work:**
-  - **Phase 5 user simulation pass NOT executed.** The prompt asks for an end-to-end test with a seeded SQLite DB simulating a clean reimport, multi-month rejection, and UI/file mismatch. Sandbox doesn't have a populated `data/hr_system.db` to seed against without going off-spec, and the simulation requires HTTP-level testing. Pending — flagged for next session or local verification by Abhinav.
+  - **Phase 5 simulation IS executed via `backend/scripts/phase5-simulation.js`** (13/13 pass). Caught a real defect in Phase 2's route guard — see commit `8c8d915`. Full HTTP integration test (multipart upload through Express) is NOT executed because the sandbox doesn't have supertest available and the existing test suite has no precedent for HTTP-level testing. The script-based simulation exercises parseEESLFile + the route-guard logic + runReimportRecompute against a real schema-initialized SQLite DB, which covers the same correctness surface as an HTTP test.
   - **PR not opened** — branch is pushed and ready for Abhinav to open the PR via GitHub web UI.
 - **Known issues remaining:**
   - Pre-existing: `backend/src/__tests__/tdsCalculation.test.js` has 3 failing cases (out of scope; unrelated to this branch).
