@@ -636,7 +636,7 @@ function calculateDays(employeeCode, month, year, company, attendanceRecords, le
  * Save day calculation to database
  */
 function saveDayCalculation(db, calcResult) {
-  calcResult.company = normalizeCompany(db, calcResult.employeeCode, calcResult.company);
+  calcResult.company = normalizeCompany(db, calcResult.employeeCode, calcResult.company, calcResult.month, calcResult.year);
   const stmt = db.prepare(`
     INSERT INTO day_calculations (
       employee_code, month, year, company,
@@ -667,7 +667,7 @@ function saveDayCalculation(db, calcResult) {
       ?, ?, ?,
       datetime('now')
     )
-    ON CONFLICT(employee_code, month, year, company) DO UPDATE SET
+    ON CONFLICT(employee_code, month, year) DO UPDATE SET
       total_calendar_days = excluded.total_calendar_days,
       total_sundays = excluded.total_sundays,
       total_holidays = excluded.total_holidays,

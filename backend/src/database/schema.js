@@ -2797,6 +2797,110 @@ If description and screenshot are incoherent or unrelated, set summary_confidenc
     }
   }
 
+  // ── May 2026: drop `company` from UNIQUE on salary_computations + day_calculations ──
+  //
+  // Original constraint UNIQUE(employee_code, month, year, company) allowed the same
+  // employee to have multiple rows per month with different `company` tag values
+  // ('', 'null', 'Default', canonical name). Combined with inconsistent company
+  // values arriving at write time, this caused the April 2026 duplicate-row
+  // incident. The Phase 1 fix (normalizeCompany helper) made writes consistent at
+  // runtime; this migration eliminates the schema-level vulnerability by making
+  // (employee_code, month, year) the sole identity. company stays as metadata.
+  //
+  // Idempotent — gated on policy_config 'migration_drop_company_from_unique_v1'.
+  // Pre-flight aborts if duplicate (emp,month,year) groups exist; the new
+  // constraint creation would fail otherwise. Production cleanup must run first.
+  // Backup tables salary_computations_pre_unique_migration_<ts> and
+  // day_calculations_pre_unique_migration_<ts> retain pre-migration data — drop
+  // manually after stable run (no auto-drop).
+  const uniqueMigrationDone = db.prepare(
+    "SELECT value FROM policy_config WHERE key = 'migration_drop_company_from_unique_v1'"
+  ).get();
+
+  if (!uniqueMigrationDone) {
+    try {
+      // Pre-flight: confirm no duplicates exist (else CREATE with new UNIQUE fails).
+      const sc_dups = db.prepare(`
+        SELECT COUNT(*) AS cnt FROM (
+          SELECT employee_code, month, year FROM salary_computations
+          GROUP BY employee_code, month, year HAVING COUNT(*) > 1
+        )
+      `).get().cnt;
+
+      const dc_dups = db.prepare(`
+        SELECT COUNT(*) AS cnt FROM (
+          SELECT employee_code, month, year FROM day_calculations
+          GROUP BY employee_code, month, year HAVING COUNT(*) > 1
+        )
+      `).get().cnt;
+
+      if (sc_dups > 0 || dc_dups > 0) {
+        console.error(`[MIGRATION] drop_company_from_unique_v1: ABORTED — salary_computations has ${sc_dups} duplicate (emp,month,year) groups, day_calculations has ${dc_dups}. Run cleanup before deploying this migration. Flag NOT set; migration retries on next boot.`);
+      } else {
+        // Capture trigger SQL BEFORE rename so it still references the original
+        // 'salary_computations' name. SQLite auto-rewrites trigger SQL on RENAME
+        // to reference the new (backup) name; we want the original.
+        const triggerInfo = db.prepare(
+          "SELECT sql FROM sqlite_master WHERE type='trigger' AND name='invalidate_salary_ai_cache'"
+        ).get();
+        const triggerSql = triggerInfo ? triggerInfo.sql : null;
+
+        const ts = Date.now();
+        const sc_backup = `salary_computations_pre_unique_migration_${ts}`;
+        const dc_backup = `day_calculations_pre_unique_migration_${ts}`;
+
+        db.exec('BEGIN IMMEDIATE');
+        try {
+          // ── salary_computations ──
+          db.exec(`ALTER TABLE salary_computations RENAME TO ${sc_backup};`);
+          const sc_create_row = db.prepare(
+            `SELECT sql FROM sqlite_master WHERE type='table' AND name='${sc_backup}'`
+          ).get();
+          const sc_new_create = sc_create_row.sql
+            .replace(sc_backup, 'salary_computations')
+            .replace(/UNIQUE\s*\(\s*employee_code\s*,\s*month\s*,\s*year\s*,\s*company\s*\)/i,
+                     'UNIQUE(employee_code, month, year)');
+          db.exec(sc_new_create);
+          db.exec(`INSERT INTO salary_computations SELECT * FROM ${sc_backup};`);
+
+          // ── day_calculations ──
+          db.exec(`ALTER TABLE day_calculations RENAME TO ${dc_backup};`);
+          const dc_create_row = db.prepare(
+            `SELECT sql FROM sqlite_master WHERE type='table' AND name='${dc_backup}'`
+          ).get();
+          const dc_new_create = dc_create_row.sql
+            .replace(dc_backup, 'day_calculations')
+            .replace(/UNIQUE\s*\(\s*employee_code\s*,\s*month\s*,\s*year\s*,\s*company\s*\)/i,
+                     'UNIQUE(employee_code, month, year)');
+          db.exec(dc_new_create);
+          db.exec(`INSERT INTO day_calculations SELECT * FROM ${dc_backup};`);
+
+          // Recreate trigger on the new live table. The captured SQL references
+          // 'salary_computations' (original name); after RENAME, SQLite rewrote the
+          // backup trigger to reference the backup-table name, so DROP that one
+          // first to free the trigger name, then CREATE fresh on the new table.
+          if (triggerSql) {
+            db.exec('DROP TRIGGER IF EXISTS invalidate_salary_ai_cache;');
+            db.exec(triggerSql);
+          }
+
+          db.exec('COMMIT');
+        } catch (innerErr) {
+          db.exec('ROLLBACK');
+          throw innerErr;
+        }
+
+        db.prepare(
+          "INSERT OR REPLACE INTO policy_config (key, value, description) VALUES ('migration_drop_company_from_unique_v1', '1', 'Dropped company from UNIQUE on salary_computations + day_calculations; (employee_code, month, year) is now the sole identity')"
+        ).run();
+        console.log(`[MIGRATION] drop_company_from_unique_v1: ✓ complete. Backup tables: ${sc_backup}, ${dc_backup} (drop manually after stable run).`);
+      }
+    } catch (e) {
+      console.error('[MIGRATION] drop_company_from_unique_v1: FAILED —', e.message);
+      // Flag NOT set → migration retries on next boot. Server boot continues.
+    }
+  }
+
   console.log('✅ Database schema initialized');
 }
 
