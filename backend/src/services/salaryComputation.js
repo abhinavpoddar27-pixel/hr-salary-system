@@ -13,13 +13,27 @@
  * sheetName fallback), or the canonical company name. Each variant hits a
  * different conflict key, so re-runs INSERT duplicates instead of UPDATING.
  *
- * Resolution rule:
- *   1. If company is one of the canonical company names → return as-is
+ * Resolution rule (updated May 2026 — Phase 1.5 relaxation):
+ *   1. If company is one of the canonical company names → return as-is.
  *   2. If company is '', null, undefined, 'null', 'Default', 'default',
  *      or 'Sheet1', 'Sheet2', etc. → look up employees.company for this
- *      employee_code
- *   3. If still empty after lookup → THROW. We refuse to silently default.
- *      A loud error is far better than silent duplicates.
+ *      employee_code:
+ *        a. If master is canonical → return master's value.
+ *        b. If master is also non-canonical → look up an existing
+ *           salary_computations row for (employee_code, month, year).
+ *           If a row exists, return its company tag (preserves
+ *           cross-run consistency). Otherwise return '' — the schema's
+ *           UNIQUE(employee_code, month, year) is the identity, the
+ *           company column is metadata.
+ *   3. If input is non-canonical AND not a known bad tag → THROW (typo
+ *      protection: protects against drift to new bad tag values).
+ *
+ * Why relaxed: the original throw-on-master-data-debt rule locked out
+ * ~149 active employees whose master.company was non-canonical. With the
+ * May 2026 UNIQUE migration making (employee_code, month, year) the sole
+ * identity, the schema layer now prevents duplicate rows regardless of
+ * the company tag, so it is safe to default the tag to '' or reuse the
+ * prior run's tag.
  *
  * Canonical companies: 'Asian Lakto Ind Ltd', 'Indriyan Beverages Pvt Ltd'.
  * If a third real company is added later, extend CANONICAL_COMPANIES.
@@ -34,7 +48,7 @@ const KNOWN_BAD_TAGS = new Set([
   'Sheet1', 'Sheet2', 'Sheet3'
 ]);
 
-function normalizeCompany(db, employeeCode, rawCompany) {
+function normalizeCompany(db, employeeCode, rawCompany, month, year) {
   // Normalize input: handle null/undefined explicitly, trim strings
   const trimmed = (rawCompany === null || rawCompany === undefined)
     ? ''
@@ -43,7 +57,8 @@ function normalizeCompany(db, employeeCode, rawCompany) {
   // Canonical: pass through
   if (CANONICAL_COMPANIES.has(trimmed)) return trimmed;
 
-  // Known bad tag OR not in canonical set → look up master
+  // Known bad tag OR empty → resolve via master, then via existing row,
+  // then default to ''. Schema UNIQUE constraint deduplicates.
   if (KNOWN_BAD_TAGS.has(trimmed) || !trimmed) {
     const emp = db.prepare(
       'SELECT company FROM employees WHERE code = ?'
@@ -55,18 +70,37 @@ function normalizeCompany(db, employeeCode, rawCompany) {
       return masterCompany;
     }
 
-    // Master ALSO has a bad tag — this is the master-data issue Abhinav
-    // flagged (138 'Default'-master employees etc.). Fall through to throw.
+    // Master is non-canonical (the ~149 master-data-debt employees).
+    // Reuse the company tag of an existing salary_computations row for
+    // the same (employee_code, month, year) so the tag stays stable
+    // across reruns. With the May 2026 UNIQUE migration there is at
+    // most one such row, so the choice is deterministic.
+    if (month !== undefined && month !== null && year !== undefined && year !== null) {
+      const existing = db.prepare(
+        'SELECT company FROM salary_computations WHERE employee_code = ? AND month = ? AND year = ?'
+      ).get(employeeCode, month, year);
+      if (existing) {
+        return (existing.company === null || existing.company === undefined)
+          ? ''
+          : existing.company;
+      }
+    }
+
+    // No canonical master, no existing row. Input was a recognized bad
+    // tag (or empty/null/undefined) — return '' and let the schema's
+    // UNIQUE(employee_code, month, year) be the identity. Typo
+    // protection is preserved by the throw below for inputs that are
+    // neither canonical nor a known bad tag.
+    return '';
   }
 
   // Unknown company that isn't canonical and isn't a recognised bad tag.
-  // Could be a typo or a new real company. Refuse silently — throw loud.
+  // Typo protection: throw loud rather than coerce silently.
   throw new Error(
     `[normalizeCompany] Cannot resolve company for employee ${employeeCode}: ` +
     `received "${rawCompany}" (trimmed: "${trimmed}"), ` +
     `master.company is "${(arguments[1] && db.prepare('SELECT company FROM employees WHERE code = ?').get(employeeCode)?.company) || 'NULL'}". ` +
-    `This is a master-data issue: fix employees.company for ${employeeCode} ` +
-    `to one of: ${[...CANONICAL_COMPANIES].join(', ')}, or extend ` +
+    `This looks like a typo or a new real company. Fix the caller, or extend ` +
     `CANONICAL_COMPANIES in salaryComputation.js if a new company was added.`
   );
 }
@@ -793,7 +827,7 @@ function computeEmployeeSalary(db, employee, month, year, company, requestId = '
  * Save salary computation to database
  */
 function saveSalaryComputation(db, comp) {
-  comp.company = normalizeCompany(db, comp.employeeCode, comp.company);
+  comp.company = normalizeCompany(db, comp.employeeCode, comp.company, comp.month, comp.year);
   db.prepare(`
     INSERT INTO salary_computations (
       employee_code, month, year, company, gross_salary, payable_days, per_day_rate,

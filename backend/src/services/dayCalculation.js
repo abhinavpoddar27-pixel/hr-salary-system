@@ -636,7 +636,7 @@ function calculateDays(employeeCode, month, year, company, attendanceRecords, le
  * Save day calculation to database
  */
 function saveDayCalculation(db, calcResult) {
-  calcResult.company = normalizeCompany(db, calcResult.employeeCode, calcResult.company);
+  calcResult.company = normalizeCompany(db, calcResult.employeeCode, calcResult.company, calcResult.month, calcResult.year);
   const stmt = db.prepare(`
     INSERT INTO day_calculations (
       employee_code, month, year, company,
