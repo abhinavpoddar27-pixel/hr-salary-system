@@ -793,6 +793,7 @@ function computeEmployeeSalary(db, employee, month, year, company, requestId = '
  * Save salary computation to database
  */
 function saveSalaryComputation(db, comp) {
+  comp.company = normalizeCompany(db, comp.employeeCode, comp.company);
   db.prepare(`
     INSERT INTO salary_computations (
       employee_code, month, year, company, gross_salary, payable_days, per_day_rate,
