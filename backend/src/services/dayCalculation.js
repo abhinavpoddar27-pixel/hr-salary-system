@@ -42,6 +42,7 @@
  */
 
 const { parseHoursToDecimal } = require('./parser');
+const { normalizeCompany } = require('./salaryComputation');
 
 /** Hardcoded lenience: max absent working days before ANY weekly off is lost */
 const WEEKLY_OFF_LENIENCY = 2;
@@ -635,6 +636,7 @@ function calculateDays(employeeCode, month, year, company, attendanceRecords, le
  * Save day calculation to database
  */
 function saveDayCalculation(db, calcResult) {
+  calcResult.company = normalizeCompany(db, calcResult.employeeCode, calcResult.company);
   const stmt = db.prepare(`
     INSERT INTO day_calculations (
       employee_code, month, year, company,

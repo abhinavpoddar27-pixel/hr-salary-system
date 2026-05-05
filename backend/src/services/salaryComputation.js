@@ -5,6 +5,73 @@
  */
 
 /**
+ * Normalize company tag at write time to prevent duplicate rows under the
+ * UNIQUE(employee_code, month, year, company) constraint.
+ *
+ * Background: Stage 7 has historically been called with company='' (empty),
+ * 'null' (literal string from JS null stringification), 'Default' (parser
+ * sheetName fallback), or the canonical company name. Each variant hits a
+ * different conflict key, so re-runs INSERT duplicates instead of UPDATING.
+ *
+ * Resolution rule:
+ *   1. If company is one of the canonical company names → return as-is
+ *   2. If company is '', null, undefined, 'null', 'Default', 'default',
+ *      or 'Sheet1', 'Sheet2', etc. → look up employees.company for this
+ *      employee_code
+ *   3. If still empty after lookup → THROW. We refuse to silently default.
+ *      A loud error is far better than silent duplicates.
+ *
+ * Canonical companies: 'Asian Lakto Ind Ltd', 'Indriyan Beverages Pvt Ltd'.
+ * If a third real company is added later, extend CANONICAL_COMPANIES.
+ */
+const CANONICAL_COMPANIES = new Set([
+  'Asian Lakto Ind Ltd',
+  'Indriyan Beverages Pvt Ltd'
+]);
+
+const KNOWN_BAD_TAGS = new Set([
+  '', 'null', 'Default', 'default', 'NULL', 'undefined',
+  'Sheet1', 'Sheet2', 'Sheet3'
+]);
+
+function normalizeCompany(db, employeeCode, rawCompany) {
+  // Normalize input: handle null/undefined explicitly, trim strings
+  const trimmed = (rawCompany === null || rawCompany === undefined)
+    ? ''
+    : String(rawCompany).trim();
+
+  // Canonical: pass through
+  if (CANONICAL_COMPANIES.has(trimmed)) return trimmed;
+
+  // Known bad tag OR not in canonical set → look up master
+  if (KNOWN_BAD_TAGS.has(trimmed) || !trimmed) {
+    const emp = db.prepare(
+      'SELECT company FROM employees WHERE code = ?'
+    ).get(employeeCode);
+
+    const masterCompany = (emp?.company || '').trim();
+
+    if (CANONICAL_COMPANIES.has(masterCompany)) {
+      return masterCompany;
+    }
+
+    // Master ALSO has a bad tag — this is the master-data issue Abhinav
+    // flagged (138 'Default'-master employees etc.). Fall through to throw.
+  }
+
+  // Unknown company that isn't canonical and isn't a recognised bad tag.
+  // Could be a typo or a new real company. Refuse silently — throw loud.
+  throw new Error(
+    `[normalizeCompany] Cannot resolve company for employee ${employeeCode}: ` +
+    `received "${rawCompany}" (trimmed: "${trimmed}"), ` +
+    `master.company is "${(arguments[1] && db.prepare('SELECT company FROM employees WHERE code = ?').get(employeeCode)?.company) || 'NULL'}". ` +
+    `This is a master-data issue: fix employees.company for ${employeeCode} ` +
+    `to one of: ${[...CANONICAL_COMPANIES].join(', ')}, or extend ` +
+    `CANONICAL_COMPANIES in salaryComputation.js if a new company was added.`
+  );
+}
+
+/**
  * Get policy value from config
  */
 function getPolicyValue(db, key, defaultVal) {
@@ -726,6 +793,7 @@ function computeEmployeeSalary(db, employee, month, year, company, requestId = '
  * Save salary computation to database
  */
 function saveSalaryComputation(db, comp) {
+  comp.company = normalizeCompany(db, comp.employeeCode, comp.company);
   db.prepare(`
     INSERT INTO salary_computations (
       employee_code, month, year, company, gross_salary, payable_days, per_day_rate,
@@ -1043,4 +1111,4 @@ function generatePayslipData(db, employeeCode, month, year) {
   };
 }
 
-module.exports = { computeEmployeeSalary, saveSalaryComputation, generatePayslipData };
+module.exports = { computeEmployeeSalary, saveSalaryComputation, generatePayslipData, normalizeCompany };
