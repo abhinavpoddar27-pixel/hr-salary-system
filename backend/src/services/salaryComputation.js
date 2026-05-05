@@ -824,7 +824,7 @@ function saveSalaryComputation(db, comp) {
       ?,
       ?, ?, ?, ?, ?, ?
     )
-    ON CONFLICT(employee_code, month, year, company) DO UPDATE SET
+    ON CONFLICT(employee_code, month, year) DO UPDATE SET
       gross_salary = excluded.gross_salary,
       payable_days = excluded.payable_days,
       per_day_rate = excluded.per_day_rate,

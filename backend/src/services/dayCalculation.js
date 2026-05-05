@@ -667,7 +667,7 @@ function saveDayCalculation(db, calcResult) {
       ?, ?, ?,
       datetime('now')
     )
-    ON CONFLICT(employee_code, month, year, company) DO UPDATE SET
+    ON CONFLICT(employee_code, month, year) DO UPDATE SET
       total_calendar_days = excluded.total_calendar_days,
       total_sundays = excluded.total_sundays,
       total_holidays = excluded.total_holidays,
