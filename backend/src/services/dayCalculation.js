@@ -42,6 +42,7 @@
  */
 
 const { parseHoursToDecimal } = require('./parser');
+const { normalizeCompany } = require('./salaryComputation');
 
 /** Hardcoded lenience: max absent working days before ANY weekly off is lost */
 const WEEKLY_OFF_LENIENCY = 2;
