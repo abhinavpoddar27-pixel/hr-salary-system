@@ -224,6 +224,7 @@ app.use('/api/early-exit-deductions', requireAuth, require('./src/routes/early-e
 app.use('/api/sales',            requireAuth, require('./src/routes/sales'));
 app.use('/api/query-tool',       requireAuth, require('./src/routes/queryTool'));
 app.use('/api/ai',               requireAuth, require('./src/routes/ai'));
+app.use('/api/admin/health-checks', requireAuth, require('./src/routes/healthChecks'));
 
 // Bug Reporter authed routes. webhookRouter is mounted earlier (before
 // express.json) so the webhook handler can read raw bytes for HMAC
@@ -337,6 +338,8 @@ app.listen(PORT, () => {
   try { require('./src/services/sarvamBatchPoller').startPollerCron(); } catch (e) { console.error('Sarvam poller init failed:', e.message); }
   // Rescue bug-report rows stuck in pending state across container restarts (step 10)
   try { require('./src/services/bugReportResurrect').resurrectStuckRows(); } catch (e) { console.error('Bug report resurrect init failed:', e.message); }
+  // Start drift monitor (read-only invariant checks — env-gated; inert by default)
+  try { require('./src/services/driftMonitor').registerCron(db); } catch (e) { console.error('Drift monitor init failed:', e.message); }
 });
 
 module.exports = app;
