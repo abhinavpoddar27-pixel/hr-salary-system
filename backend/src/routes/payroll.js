@@ -4,6 +4,7 @@ const { getDb, logAudit } = require('../database/db');
 const { calculateDays, saveDayCalculation } = require('../services/dayCalculation');
 const { computeEmployeeSalary, saveSalaryComputation, generatePayslipData } = require('../services/salaryComputation');
 const { requireFinanceOrAdmin } = require('../middleware/roles');
+const { protectedWrite } = require('../services/protectedWrite');
 const XLSX = require('xlsx');
 
 /**
@@ -801,7 +802,7 @@ router.get('/salary-register-excel', (req, res) => {
  * success, creating a queryable audit trail independent of
  * salary_computations (which only stores the latest release state).
  */
-router.put('/salary/:code/hold-release', requireFinanceOrAdmin, (req, res) => {
+router.put('/salary/:code/hold-release', requireFinanceOrAdmin, async (req, res) => {
   const db = getDb();
   const { code } = req.params;
   const { month, year, release_notes } = req.body;
@@ -827,31 +828,61 @@ router.put('/salary/:code/hold-release', requireFinanceOrAdmin, (req, res) => {
     return res.status(400).json({ success: false, error: 'Salary is not currently held' });
   }
 
+  // Phase 2b: write the audit row FIRST via protectedWrite. If the invariant
+  // fires (duplicate release attempt for the same emp/month/year) or the
+  // function throws, we exit BEFORE mutating salary_computations — no orphan
+  // UPDATEs on audit failure. This is the first production caller of
+  // protectedWrite() (Phase 2a foundation, May 2026).
+  let writeResult;
+  try {
+    writeResult = await protectedWrite(db, {
+      table: 'salary_hold_releases',
+      operation: 'insert',
+      scope: { employee_code: code, month: parseInt(month), year: parseInt(year) },
+      rows: [{
+        employee_code: code,
+        employee_name: before.employee_name || '',
+        department: before.department || '',
+        month: parseInt(month),
+        year: parseInt(year),
+        company: before.company || '',
+        hold_reason: before.hold_reason || '',
+        hold_amount: before.net_salary || 0,
+        released_by: user,
+        release_notes: trimmedNotes,
+      }],
+      invariants: [
+        (rows, dbh) => {
+          const r = rows[0];
+          const existing = dbh.prepare(
+            'SELECT 1 FROM salary_hold_releases WHERE employee_code=? AND month=? AND year=?'
+          ).get(r.employee_code, r.month, r.year);
+          return existing
+            ? `salary_hold_releases already has a row for ${r.employee_code} ${r.month}/${r.year} — refusing duplicate release event`
+            : true;
+        },
+      ],
+      triggeredBy: user,
+      reason: `Release held salary for ${code} ${month}/${year}`,
+    });
+  } catch (e) {
+    console.error('[salary_hold_releases] protectedWrite threw:', e.message);
+    return res.status(500).json({ success: false, error: 'Hold release audit failed' });
+  }
+  if (writeResult.status !== 'success') {
+    return res.status(409).json({
+      success: false,
+      error: writeResult.reason || `Hold release blocked: ${writeResult.status}`,
+    });
+  }
+
+  // TODO Phase 2d: migrate this UPDATE to protectedWrite once Stage 7 UPSERT
+  // migration (Phase 2c) has baked. Tracking issue: <none yet>.
   db.prepare(`
     UPDATE salary_computations SET
       salary_held = 0, hold_released = 1, hold_released_by = ?, hold_released_at = datetime('now')
     WHERE employee_code = ? AND month = ? AND year = ?
   `).run(user, code, month, year);
-
-  // Write the audit row. Wrapped in try/catch so an audit failure
-  // never blocks the release itself — mirrors archiveRejection() in
-  // extraDutyGrants.js. A successful release + failed audit is still
-  // better than a failed release.
-  try {
-    db.prepare(`
-      INSERT INTO salary_hold_releases
-        (employee_code, employee_name, department, month, year, company,
-         hold_reason, hold_amount, released_by, release_notes)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `).run(
-      code, before.employee_name || '', before.department || '',
-      parseInt(month), parseInt(year), before.company || '',
-      before.hold_reason || '', before.net_salary || 0,
-      user, trimmedNotes
-    );
-  } catch (e) {
-    console.error('[salary_hold_releases] audit insert failed:', e.message);
-  }
 
   try {
     logAudit('salary_computations', before.id, 'salary_held', '1', '0',
