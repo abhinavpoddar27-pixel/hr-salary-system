@@ -1,3 +1,37 @@
+## Last Session — 2026-05-06
+
+**Hardening Phase 1 + Phase 2a shipped.**
+
+### Files added
+- backend/src/services/driftMonitor.js — 5 invariants, env-gated cron
+- backend/src/routes/healthChecks.js — admin-only GET /api/admin/health-checks
+- backend/src/services/protectedWrite.js — foundation, no callers yet
+- backend/src/__tests__/protectedWrite.test.js — 28 unit tests
+
+### Schema additions (additive, idempotent)
+- system_health_checks
+- protected_writes (3 indexes incl. partial idempotency_key index)
+
+### Production state
+- DRIFT_MONITOR_ENABLED=[true|false on Railway — fill in after Step 1]
+- protected_writes table exists, zero rows (no callers)
+
+### Acknowledged historical drift (excluded from invariants)
+- 1 row in salary_computations: emp 56765 Feb 2026, deliberate Math.max(0,...) floor
+- 56 rows in salary_computations: June 2025, pre divisor-cap fix
+
+### Known fragile patterns from this session
+- Phase 0 plan gates were bypassed in Phase 2a despite MANDATORY language. Future prompts must triple-emphasize.
+- CLI push to main happened in Phase 1 via "Confirmed override accepted". Rule reaffirmed in brain (claim d68a49a2). No exceptions in future, regardless of inertness.
+
+### Open / TODO
+- Activate DRIFT_MONITOR_ENABLED=true outside business hours
+- Phase 2b: migrate first salary-pipeline call site (Stage 7 UPSERT is the obvious candidate)
+- Phase 3: implement snapshotBeforeWrite() stub + create pipeline_snapshots table
+- Phase 4: wire system_health_checks to Bug Reporter, add payroll_locks, acknowledge endpoint
+- Linter rule flagging raw db.prepare(INSERT/UPDATE/DELETE) outside protectedWrite.js
+- Validate the 5 pending brain claims after next compiler pass
+
 ## Section 0: Last Session
 - **Date:** 2026-05-02 (later, after the MCP postmortem entry below)
 - **Branch:** `claude/parser-multimonth-smart-reimport-SrJOr` (5 commits — 3 source + 1 docs + 1 Phase-5-fix; pushed to origin, NOT yet merged into main; PR-ready). Branched from `main` tip `6b8291e`. Tip: `8c8d915`.
