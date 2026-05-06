@@ -2924,6 +2924,38 @@ If description and screenshot are incoherent or unrelated, set summary_confidenc
   safeCreateIndex(`CREATE INDEX IF NOT EXISTS idx_health_checks_status_severity
     ON system_health_checks (status, severity)`);
 
+  // ── Protected Write Audit — Phase 2a (foundation, no callers yet) ──
+  // Every call to protectedWrite() in backend/src/services/protectedWrite.js
+  // appends exactly one row here, including aborts and errors. Phase 2a is
+  // inert in production: the function exists but no existing call site has
+  // been migrated to use it yet (only unit tests call it). The forced cap on
+  // destructive payroll writes lives inside protectedWrite(), not in SQL.
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS protected_writes (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      operation_id TEXT NOT NULL,
+      idempotency_key TEXT,
+      table_name TEXT NOT NULL,
+      operation TEXT NOT NULL CHECK (operation IN ('insert','update','delete','upsert')),
+      scope_json TEXT,
+      row_count INTEGER NOT NULL,
+      dry_run INTEGER NOT NULL DEFAULT 0,
+      forced_large_change INTEGER NOT NULL DEFAULT 0,
+      status TEXT NOT NULL CHECK (status IN ('success','aborted_invariant','aborted_threshold','aborted_idempotent','error')),
+      aborted_reason TEXT,
+      triggered_by TEXT,
+      reason TEXT,
+      duration_ms INTEGER,
+      executed_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
+  `);
+  safeCreateIndex(`CREATE INDEX IF NOT EXISTS idx_protected_writes_executed
+    ON protected_writes (executed_at DESC)`);
+  safeCreateIndex(`CREATE INDEX IF NOT EXISTS idx_protected_writes_idempotency
+    ON protected_writes (idempotency_key) WHERE idempotency_key IS NOT NULL`);
+  safeCreateIndex(`CREATE INDEX IF NOT EXISTS idx_protected_writes_table_status
+    ON protected_writes (table_name, status)`);
+
   console.log('✅ Database schema initialized');
 }
 
