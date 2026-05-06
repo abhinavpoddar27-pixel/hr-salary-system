@@ -18,17 +18,25 @@ const { getDb } = require('../database/db');
 // ── Invariant catalog ────────────────────────────────────────────────────────
 
 const INVARIANTS = [
+  // The trailing NOT clause excludes the deliberate Math.max(0, ...)
+  // floor applied when total_deductions > gross_earned (e.g.,
+  // gross=0 + deduction=300 → net floored to 0). This floor is
+  // intentional, documented in CLAUDE.md, and surfaces ~1 row in
+  // production. Without this exclusion, the check would report a
+  // permanent fail every cron run for the same fossil row.
   {
     name: 'salary_identity_holds',
     severity: 'critical',
     countSql: `
       SELECT COUNT(*) AS c FROM salary_computations
       WHERE ABS(net_salary - (gross_earned - total_deductions)) > 1
+        AND NOT (net_salary = 0 AND total_deductions > gross_earned)
     `,
     exampleSql: `
       SELECT id, employee_code, month, year, gross_earned, total_deductions, net_salary
       FROM salary_computations
       WHERE ABS(net_salary - (gross_earned - total_deductions)) > 1
+        AND NOT (net_salary = 0 AND total_deductions > gross_earned)
       ORDER BY id DESC LIMIT 20
     `,
   },
@@ -87,6 +95,13 @@ const INVARIANTS = [
       ORDER BY sc.id DESC LIMIT 20
     `,
   },
+  // Date floor of July 2025 excludes 56 historical June-2025 rows
+  // produced before the `earnedRatio = min(payableDays /
+  // effectiveDivisor, 1.0)` cap landed. Those rows are finalized,
+  // paid out, and cannot be retroactively corrected. The floor must
+  // be moved forward (NOT backward) if a future cap regression
+  // contaminates a newer month — never lower it to re-include
+  // already-acknowledged history.
   {
     name: 'earned_ratio_cap',
     severity: 'critical',
@@ -99,12 +114,14 @@ const INVARIANTS = [
       SELECT COUNT(*) AS c FROM salary_computations
       WHERE gross_salary > 0
         AND gross_earned > gross_salary * 1.0001
+        AND (year > 2025 OR (year = 2025 AND month >= 7))
     `,
     exampleSql: `
       SELECT id, employee_code, month, year, gross_salary, gross_earned
       FROM salary_computations
       WHERE gross_salary > 0
         AND gross_earned > gross_salary * 1.0001
+        AND (year > 2025 OR (year = 2025 AND month >= 7))
       ORDER BY id DESC LIMIT 20
     `,
   },
