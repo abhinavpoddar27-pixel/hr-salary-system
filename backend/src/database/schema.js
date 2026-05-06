@@ -2901,6 +2901,29 @@ If description and screenshot are incoherent or unrelated, set summary_confidenc
     }
   }
 
+  // ── Drift Monitor — Phase 1 (read-only invariant checks) ──
+  // Records each invariant check run. Phase 1 is observation-only: rows are
+  // written by the cron in driftMonitor.js but no downstream code reads or
+  // reacts to them. The `acknowledged_*` columns are reserved for the
+  // Phase 4 acknowledge endpoint and stay NULL in Phase 1.
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS system_health_checks (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      check_name TEXT NOT NULL,
+      status TEXT NOT NULL CHECK (status IN ('pass','fail','error')),
+      severity TEXT NOT NULL CHECK (severity IN ('critical','high','medium','low')),
+      detected_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      details_json TEXT,
+      acknowledged_at DATETIME,
+      acknowledged_by TEXT,
+      acknowledged_reason TEXT
+    );
+  `);
+  safeCreateIndex(`CREATE INDEX IF NOT EXISTS idx_health_checks_detected
+    ON system_health_checks (detected_at DESC)`);
+  safeCreateIndex(`CREATE INDEX IF NOT EXISTS idx_health_checks_status_severity
+    ON system_health_checks (status, severity)`);
+
   console.log('✅ Database schema initialized');
 }
 
