@@ -1827,6 +1827,108 @@ function mountSqlConsole(app) {
     });
   });
 
+  // ============================================================
+  // BEGIN ADMIN-INSERT TEMPORARY ENDPOINT — REMOVE AFTER 2026-05-07
+  // Reason: Phase 1 SQL Console is read-only by design; we need to load
+  //         36 sales_employees rows (S196-S231) and Railway shell access
+  //         is unavailable on the current plan. See PR #17 / commit
+  //         90b6967 for the script that produced these rows.
+  // Revert PR: see PR #19 (sentinel-block delete).
+  // ============================================================
+  router.post('/admin-insert', auth, writeRateLimiter, (req, res) => {
+    const ip = req.ip || req.connection?.remoteAddress || '';
+    const ua = req.headers['user-agent'] || '';
+    const actor = req.sqlActor.username;
+    const authMethod = req.sqlActor.auth_method;
+    const txnId = crypto.randomBytes(8).toString('hex');
+
+    const reject = (httpCode, code, reason) => {
+      logAuditRow({
+        actor, authMethod, sql: `<admin-insert: ${code}>`, status: 'rejected',
+        rejectReason: `${code}: ${reason}`, ip, userAgent: ua,
+        mode: 'admin_insert', txnId
+      });
+      return res.status(httpCode).json({ success: false, error: reason, code });
+    };
+
+    const statements = req.body?.statements;
+    if (!Array.isArray(statements) || statements.length < 1 || statements.length > 50) {
+      return reject(400, 'INVALID_PAYLOAD', 'statements must be an array of 1..50 elements');
+    }
+    const PREFIX = 'INSERT INTO sales_employees (';
+    const FORBIDDEN = [' update ', ' delete ', ' drop ', ' alter ', ' attach ', ' detach ',
+                       ' pragma ', ' grant ', ' revoke ', ' create '];
+    for (let i = 0; i < statements.length; i++) {
+      const s = statements[i];
+      if (typeof s !== 'string' || s.length < 1 || s.length > 5000) {
+        return reject(400, 'INVALID_STATEMENT',
+          `statements[${i}] must be a string of length 1..5000`);
+      }
+      const trimmed = s.trim();
+      if (!trimmed.startsWith(PREFIX)) {
+        return reject(400, 'STATEMENT_NOT_INSERT_INTO_SALES_EMPLOYEES',
+          `statements[${i}] must start with "${PREFIX}"`);
+      }
+      const lower = trimmed.toLowerCase();
+      for (const tok of FORBIDDEN) {
+        if (lower.includes(tok)) {
+          return reject(400, 'FORBIDDEN_KEYWORD',
+            `statements[${i}] contains forbidden keyword:${tok}`);
+        }
+      }
+      if (trimmed.includes('--') || trimmed.includes('/*')) {
+        return reject(400, 'NO_SQL_COMMENTS',
+          `statements[${i}] must not contain SQL comments`);
+      }
+      const noTrailing = trimmed.replace(/;\s*$/, '');
+      if (noTrailing.includes(';')) {
+        return reject(400, 'NO_MULTI_STATEMENT',
+          `statements[${i}] must not contain ';' except optionally as trailing terminator`);
+      }
+    }
+
+    const start = Date.now();
+    const db = getDb();
+    let total = 0;
+    try {
+      const runAll = db.transaction((stmts) => {
+        let sum = 0;
+        for (const sql of stmts) {
+          sum += db.prepare(sql).run().changes;
+        }
+        return sum;
+      });
+      total = runAll(statements);
+    } catch (error) {
+      const ms = Date.now() - start;
+      logAuditRow({
+        actor, authMethod,
+        sql: `<${statements.length} INSERT statements>`,
+        status: 'error',
+        rejectReason: error.message.slice(0, 200),
+        rowCount: 0, ms, ip, userAgent: ua,
+        mode: 'admin_insert', txnId, affectedRows: 0
+      });
+      return res.status(500).json({
+        success: false,
+        error: error.message.slice(0, 200),
+        code: 'EXECUTION_FAILED'
+      });
+    }
+    const ms = Date.now() - start;
+    logAuditRow({
+      actor, authMethod,
+      sql: `<${statements.length} INSERT statements>`,
+      status: 'ok',
+      rowCount: total, ms, ip, userAgent: ua,
+      mode: 'admin_insert', txnId, affectedRows: total
+    });
+    return res.json({ success: true, inserted: total, txnId });
+  });
+  // ============================================================
+  // END ADMIN-INSERT TEMPORARY ENDPOINT
+  // ============================================================
+
   app.use('/api/admin/sql', router);
   console.log('[SQL_CONSOLE] enabled at /api/admin/sql/*');
   // Phase 2 status. Single line so logs stay greppable. ddl=on means an
