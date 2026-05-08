@@ -1,4 +1,5 @@
 import React, { useState, useRef, useMemo } from 'react'
+import { useNavigate } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import toast from 'react-hot-toast'
 import clsx from 'clsx'
@@ -8,6 +9,8 @@ import {
   salesUploadMatch,
   salesUploadConfirm,
   getSalesEmployees,
+  salesTemplateDownloadUrl,
+  salesUploadTemplate,
 } from '../../utils/api'
 import { useAppStore } from '../../store/appStore'
 import CompanyFilter from '../../components/shared/CompanyFilter'
@@ -81,6 +84,248 @@ function EmployeePicker({ company, initialQuery = '', onPick, disabled }) {
           ))}
         </div>
       )}
+    </div>
+  )
+}
+
+// ══════════ Template upload view (Phase 2 — preferred path) ══════════
+const REJECTION_TITLE = {
+  not_a_valid_xlsx:    'Not a valid Excel file',
+  missing_meta_sheet:  'Template metadata sheet missing',
+  cycle_mismatch:      'Cycle mismatch',
+  unknown_template:    'Unknown template',
+  master_drift:        'Sales master changed since download',
+  unknown_employee:    'Employee Code not in current master',
+  invalid_days_given:  'Days Given is missing or out of range',
+  duplicate_employee:  'Same Employee Code on more than one row',
+  row_count_mismatch:  'Row count differs from template metadata',
+  duplicate_file:      'This exact file was already uploaded',
+  persist_failed:      'Database error while saving',
+}
+
+function formatRelative(date) {
+  const ms = Date.now() - date.getTime()
+  const sec = Math.floor(ms / 1000)
+  if (sec < 60) return 'just now'
+  if (sec < 3600) return `${Math.floor(sec / 60)} min ago`
+  if (sec < 86400) return `${Math.floor(sec / 3600)} hr ago`
+  return `${Math.floor(sec / 86400)} day(s) ago`
+}
+
+function RejectionCard({ rejection }) {
+  if (!rejection) return null
+  const reason = rejection.rejectionReason
+  const d = rejection.rejectionDetails || {}
+  return (
+    <div className="card border-red-200">
+      <div className="card-body">
+        <div className="text-sm">
+          <div className="font-semibold text-red-700">{REJECTION_TITLE[reason] || reason}</div>
+          <div className="text-xs text-slate-500 mt-0.5">Audit row #{rejection.uploadId} (status=rejected)</div>
+          <div className="mt-3 space-y-1 text-xs text-slate-700">
+            {reason === 'cycle_mismatch' && (
+              <div>Template was generated for <span className="font-mono">{d.template?.month}/{d.template?.year} · {d.template?.company}</span> but you're uploading for <span className="font-mono">{d.url?.month}/{d.url?.year} · {d.url?.company}</span>.</div>
+            )}
+            {reason === 'master_drift' && (
+              <div className="space-y-1">
+                <div>The sales master changed between download and upload. Re-download the template.</div>
+                {Array.isArray(d.added_since_download) && d.added_since_download.length > 0 && (
+                  <div><span className="font-medium">Added:</span> <span className="font-mono">{d.added_since_download.join(', ')}</span></div>
+                )}
+                {Array.isArray(d.removed_since_download) && d.removed_since_download.length > 0 && (
+                  <div><span className="font-medium">Removed:</span> <span className="font-mono">{d.removed_since_download.join(', ')}</span></div>
+                )}
+              </div>
+            )}
+            {reason === 'unknown_employee' && Array.isArray(d.rows) && (
+              <div>{d.count} row(s) reference codes not in the current master:
+                <div className="font-mono mt-1 max-h-32 overflow-auto bg-slate-50 rounded px-2 py-1">
+                  {d.rows.slice(0, 50).map(r => `row ${r.row}: ${r.code}`).join(' · ')}{d.rows.length > 50 ? ' …' : ''}
+                </div>
+              </div>
+            )}
+            {reason === 'invalid_days_given' && Array.isArray(d.rows) && (
+              <div>{d.count} row(s) have missing/non-numeric Days Given (must be 0–{d.max}):
+                <div className="font-mono mt-1 max-h-32 overflow-auto bg-slate-50 rounded px-2 py-1">
+                  {d.rows.slice(0, 50).map(r => `row ${r.row}: ${r.code} (${r.value ?? 'empty'})`).join(' · ')}{d.rows.length > 50 ? ' …' : ''}
+                </div>
+              </div>
+            )}
+            {reason === 'duplicate_employee' && Array.isArray(d.rows) && (
+              <div>{d.count} duplicate code(s):
+                <div className="font-mono mt-1 max-h-32 overflow-auto bg-slate-50 rounded px-2 py-1">
+                  {d.rows.map(r => `row ${r.row}: ${r.code}`).join(' · ')}
+                </div>
+              </div>
+            )}
+            {reason === 'row_count_mismatch' && (
+              <div>Template metadata says {d.meta_count} employees but the Input sheet has {d.input_rows} rows ({d.valid_rows} valid).</div>
+            )}
+            {reason === 'unknown_template' && (
+              <div>The template's snapshot hash isn't in <span className="font-mono">sales_template_downloads</span>. Did you hand-craft the file, or was the row deleted? Re-download from this page.</div>
+            )}
+            {reason === 'duplicate_file' && (
+              <div>An accepted upload with the same exact bytes already exists (#{d.existingUploadId}).</div>
+            )}
+            {reason === 'not_a_valid_xlsx' && (
+              <div>Excel couldn't parse the file. {d?.error ? <span className="font-mono">{d.error}</span> : null}</div>
+            )}
+            {reason === 'missing_meta_sheet' && (
+              <div>The hidden <span className="font-mono">_meta</span> sheet is missing or incomplete{d?.missingKey ? <> (missing key <span className="font-mono">{d.missingKey}</span>)</> : null}. Re-download the template — don't copy/paste rows into a blank sheet.</div>
+            )}
+            {reason === 'persist_failed' && (
+              <div>Server failed to save: <span className="font-mono">{d.error}</span></div>
+            )}
+          </div>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function TemplateUploadView() {
+  const navigate = useNavigate()
+  const { selectedCompany, selectedMonth, selectedYear } = useAppStore()
+  const { dateProps } = useDateSelector({ mode: 'month', syncToStore: true })
+  const fileInputRef = useRef(null)
+  const [dragOver, setDragOver] = useState(false)
+  const [rejection, setRejection] = useState(null)
+
+  const cycleReady = !!selectedCompany && !!selectedMonth && !!selectedYear
+
+  const { data: empRes } = useQuery({
+    queryKey: ['sales-employees-freshness', selectedCompany],
+    queryFn: () => getSalesEmployees({ company: selectedCompany }),
+    enabled: !!selectedCompany,
+    staleTime: 60000,
+  })
+  const lastUpdate = useMemo(() => {
+    const rows = empRes?.data?.data || []
+    let max = 0
+    for (const e of rows) {
+      const t = e.updated_at ? new Date(e.updated_at).getTime() : 0
+      if (t > max) max = t
+    }
+    return max ? new Date(max) : null
+  }, [empRes])
+  const stale = lastUpdate ? (Date.now() - lastUpdate.getTime() > 24 * 3600 * 1000) : true
+
+  const handleDownload = () => {
+    if (!cycleReady) { toast.error('Select month, year, company first'); return }
+    const url = salesTemplateDownloadUrl({ month: selectedMonth, year: selectedYear, company: selectedCompany })
+    window.open(url, '_blank')
+  }
+
+  const uploadMut = useMutation({
+    mutationFn: ({ file }) => salesUploadTemplate({ file, month: selectedMonth, year: selectedYear, company: selectedCompany }),
+    onSuccess: (res) => {
+      const body = res.data
+      if (body && body.success) {
+        setRejection(null)
+        toast.success(`Template accepted — ${body.totalRows} rows uploaded`)
+        navigate('/sales/compute')
+      } else {
+        setRejection(body)
+      }
+    },
+    onError: (err) => {
+      const body = err?.response?.data
+      if (body && body.success === false) {
+        setRejection(body)
+      } else {
+        toast.error(body?.error || 'Upload failed')
+      }
+    },
+  })
+
+  const handleFile = (file) => {
+    if (!file) return
+    if (!cycleReady) { toast.error('Select month, year, company first'); return }
+    if (file.size > 10 * 1024 * 1024) { toast.error('File is larger than 10MB'); return }
+    setRejection(null)
+    uploadMut.mutate({ file })
+  }
+
+  const onDrop = (e) => {
+    e.preventDefault(); setDragOver(false)
+    handleFile(e.dataTransfer.files?.[0])
+  }
+
+  return (
+    <div className="p-4 md:p-6 space-y-5 animate-fade-in">
+      <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3">
+        <div>
+          <h1 className="section-title">Upload Salary Template</h1>
+          <p className="section-subtitle mt-1">
+            Download the pre-populated template for the cycle below, fill the
+            Days Given column, and upload. The template carries a snapshot hash
+            so the system can detect master changes and reject stale uploads.
+          </p>
+        </div>
+        <div className="flex items-center gap-2 flex-wrap">
+          <CompanyFilter />
+          <DateSelector {...dateProps} />
+        </div>
+      </div>
+
+      {selectedCompany && (
+        <div className={clsx('card', stale ? 'border-amber-200' : 'border-slate-200')}>
+          <div className="card-body py-3 text-sm">
+            <span className="font-medium text-slate-700">Sales master last updated:</span>{' '}
+            <span className={stale ? 'text-amber-800' : 'text-slate-700'}>
+              {lastUpdate ? `${formatRelative(lastUpdate)} (${lastUpdate.toLocaleString()})` : '—'}
+            </span>
+            {stale && (
+              <div className="text-xs text-amber-700 mt-1">
+                Verify the master is up to date before downloading. Add joiners and mark exits in <span className="font-mono">Sales → Master</span>.
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      <div className="card">
+        <div className="card-body space-y-4">
+          <button
+            onClick={handleDownload}
+            disabled={!cycleReady}
+            className={clsx('btn-primary', !cycleReady && 'opacity-60 cursor-not-allowed')}
+          >
+            Download Template
+            {cycleReady && (
+              <span className="ml-2 text-xs opacity-90">
+                ({MONTHS[selectedMonth]} {selectedYear} — {selectedCompany})
+              </span>
+            )}
+          </button>
+
+          <div
+            onDragOver={(e) => { e.preventDefault(); setDragOver(true) }}
+            onDragLeave={() => setDragOver(false)}
+            onDrop={onDrop}
+            onClick={() => !uploadMut.isPending && fileInputRef.current?.click()}
+            className={clsx(
+              'border-2 border-dashed rounded-xl p-10 text-center cursor-pointer transition-colors',
+              dragOver ? 'border-blue-400 bg-blue-50' : 'border-slate-200 hover:border-blue-300 hover:bg-slate-50',
+              uploadMut.isPending && 'opacity-60 cursor-wait'
+            )}
+          >
+            <input ref={fileInputRef} type="file" accept=".xls,.xlsx" className="hidden"
+              onChange={e => handleFile(e.target.files?.[0])} />
+            <div className="text-4xl mb-3">📄</div>
+            {uploadMut.isPending ? (
+              <p className="text-slate-600 font-medium">Validating and saving template…</p>
+            ) : (
+              <>
+                <p className="text-slate-600 font-medium">Drop the filled template here, or click to browse</p>
+                <p className="text-slate-400 text-sm mt-1">XLSX produced by the Download button above</p>
+              </>
+            )}
+          </div>
+        </div>
+      </div>
+
+      <RejectionCard rejection={rejection} />
     </div>
   )
 }
@@ -490,11 +735,43 @@ function PreviewView({ uploadId, onBack }) {
 }
 
 // ══════════ Top-level page ══════════
-export default function SalesUpload() {
+function LegacyTab() {
   const [currentUploadId, setCurrentUploadId] = useState(null)
-
   if (currentUploadId) {
     return <PreviewView uploadId={currentUploadId} onBack={() => setCurrentUploadId(null)} />
   }
   return <UploadView onUploaded={(data) => setCurrentUploadId(data.uploadId)} />
+}
+
+export default function SalesUpload() {
+  const [tab, setTab] = useState('template')
+  return (
+    <div>
+      <div className="px-4 md:px-6 pt-4 md:pt-6">
+        <div className="flex gap-1 border-b border-slate-200">
+          <button
+            type="button"
+            onClick={() => setTab('template')}
+            className={clsx(
+              'px-4 py-2 text-sm font-medium border-b-2 -mb-px',
+              tab === 'template' ? 'border-blue-600 text-blue-700' : 'border-transparent text-slate-500 hover:text-slate-700'
+            )}
+          >
+            Template <span className="text-xs opacity-70">(recommended)</span>
+          </button>
+          <button
+            type="button"
+            onClick={() => setTab('legacy')}
+            className={clsx(
+              'px-4 py-2 text-sm font-medium border-b-2 -mb-px',
+              tab === 'legacy' ? 'border-blue-600 text-blue-700' : 'border-transparent text-slate-500 hover:text-slate-700'
+            )}
+          >
+            Coordinator Sheet <span className="text-xs opacity-70">(legacy)</span>
+          </button>
+        </div>
+      </div>
+      {tab === 'template' ? <TemplateUploadView /> : <LegacyTab />}
+    </div>
+  )
 }

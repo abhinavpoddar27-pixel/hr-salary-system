@@ -30,6 +30,8 @@ const { deriveCycle: deriveCycleE, countSundaysInCycle: countSundaysE } = requir
 const { countGazettedHolidaysInCycle: countHolidaysE } = require('../services/salesSalaryComputation');
 // Phase 1 Sales Template Model (May 2026): pre-populated XLSX generator.
 const { generateTemplate } = require('../services/salesTemplateGenerator');
+// Phase 2 Sales Template Model (May 2026): 8-step validator + persister.
+const { parseAndValidate: parseTemplateUpload } = require('../services/salesTemplateParser');
 
 // ══════════════════════════════════════════════════════════════════════
 // Phase 2 — TA/DA change-request workflow.
@@ -1717,6 +1719,61 @@ function matchRow(db, company, parsed) {
   // Tier 5 — Unmatched
   return { employee_code: null, match_confidence: 'unmatched', match_method: 'no_match' };
 }
+
+// ── POST /api/sales/upload-template — Phase 2 (May 2026)
+// Multipart upload (field "file") of an XLSX produced by the Phase 1
+// /api/sales/template endpoint. Reuses the existing salesUpload multer
+// instance: 10MB cap, .xls/.xlsx only, file-on-disk dest. The parser
+// reads from disk into a Buffer and runs all 8 validation steps + the
+// success persistence transaction. Gated by the file-wide
+// requireHrOrAdmin (line ~1088). Existing legacy /upload endpoints below
+// remain functional for Tab 2 of the UI.
+router.post('/upload-template', salesUpload.single('file'), (req, res) => {
+  const db = getDb();
+  const uploadedBy = (req.user && req.user.username) || 'unknown';
+  const file = req.file;
+  if (!file) {
+    return res.status(400).json({ success: false, error: 'No file uploaded (field name: file)' });
+  }
+  const month = parseInt(req.body.month, 10);
+  const year = parseInt(req.body.year, 10);
+  const company = (req.body.company || '').trim();
+  if (!Number.isInteger(month) || month < 1 || month > 12) {
+    return res.status(400).json({ success: false, error: 'month must be an integer 1-12' });
+  }
+  if (!Number.isInteger(year) || year < 2024 || year > 2030) {
+    return res.status(400).json({ success: false, error: 'year must be an integer 2024-2030' });
+  }
+  if (!company) {
+    return res.status(400).json({ success: false, error: 'company is required' });
+  }
+
+  let buf;
+  try {
+    buf = fs.readFileSync(file.path);
+  } catch (e) {
+    console.error('[sales-upload-template] read failed:', e.message);
+    return res.status(500).json({ success: false, error: 'failed to read uploaded file' });
+  }
+
+  let result;
+  try {
+    result = parseTemplateUpload(db, {
+      fileBuffer: buf,
+      month, year, company,
+      uploadedBy,
+      filename: file.originalname,
+    });
+  } catch (e) {
+    console.error('[sales-upload-template] parse failed:', e.message, e.stack);
+    return res.status(500).json({ success: false, error: 'template parse error' });
+  }
+
+  if (result.success) {
+    return res.status(200).json(result);
+  }
+  return res.status(422).json(result);
+});
 
 // POST /api/sales/upload — multipart; field name "file"
 router.post('/upload', salesUpload.single('file'), (req, res) => {
