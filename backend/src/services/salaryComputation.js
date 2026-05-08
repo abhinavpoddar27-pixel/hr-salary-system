@@ -235,13 +235,22 @@ function computeEmployeeSalary(db, employee, month, year, company, requestId = '
   } catch (e) { /* silent — migration may not have run yet */ }
 
   // ── Early Exit Deduction: reset applied flag for clean recompute ──
+  // Derive month/year from the `date` column (YYYY-MM-DD) rather than trusting
+  // payroll_month/payroll_year — those are set at submit time and have been
+  // observed to mismatch. The date column is authoritative (populated by the
+  // detection service from attendance_processed.date). Also match rows whose
+  // stored payroll_month/year happen to agree so existing rows keep working.
   try {
     db.prepare(`
       UPDATE early_exit_deductions
       SET salary_applied = 0, salary_applied_at = NULL
-      WHERE employee_code = ? AND payroll_month = ? AND payroll_year = ?
+      WHERE employee_code = ?
         AND finance_status = 'approved'
-    `).run(employee.code, month, year);
+        AND (
+          (CAST(strftime('%m', date) AS INTEGER) = ? AND CAST(strftime('%Y', date) AS INTEGER) = ?)
+          OR (payroll_month = ? AND payroll_year = ?)
+        )
+    `).run(employee.code, month, year, month, year);
   } catch (e) { /* silent — migration may not have run yet */ }
 
   // Get day calculation for this employee — try with company, then without
@@ -682,18 +691,42 @@ function computeEmployeeSalary(db, employee, month, year, company, requestId = '
   if (!isContract) {
     try {
       const row = db.prepare(`
-        SELECT COALESCE(SUM(deduction_amount), 0) AS total
+        SELECT COALESCE(SUM(deduction_amount), 0) AS total, COUNT(*) AS cnt
         FROM early_exit_deductions
-        WHERE employee_code = ? AND payroll_month = ? AND payroll_year = ?
-          AND finance_status = 'approved' AND deduction_type != 'warning'
+        WHERE employee_code = ?
+          AND finance_status = 'approved'
+          AND deduction_type != 'warning'
           AND salary_applied = 0
-      `).get(employee.code, month, year);
+          AND (
+            (CAST(strftime('%m', date) AS INTEGER) = ? AND CAST(strftime('%Y', date) AS INTEGER) = ?)
+            OR (payroll_month = ? AND payroll_year = ?)
+          )
+      `).get(employee.code, month, year, month, year);
       if (row?.total > 0) {
         earlyExitDeduction = Math.round(row.total * 100) / 100;
+        console.log(`[salary] ${employee.code}: early exit deduction ₹${earlyExitDeduction} (${row.cnt} row(s)) for ${month}/${year}`);
       }
     } catch (e) {
       console.warn(`${RID} Early exit deduction lookup failed for ${employee.code}: ${e.message}`);
     }
+  } else {
+    // Diagnostic: contractors are intentionally excluded, log any skipped rows
+    try {
+      const row = db.prepare(`
+        SELECT COUNT(*) AS cnt, COALESCE(SUM(deduction_amount), 0) AS total
+        FROM early_exit_deductions
+        WHERE employee_code = ?
+          AND finance_status = 'approved'
+          AND deduction_type != 'warning'
+          AND (
+            (CAST(strftime('%m', date) AS INTEGER) = ? AND CAST(strftime('%Y', date) AS INTEGER) = ?)
+            OR (payroll_month = ? AND payroll_year = ?)
+          )
+      `).get(employee.code, month, year, month, year);
+      if (row?.cnt > 0) {
+        console.log(`[salary] ${employee.code}: SKIPPING ₹${row.total} early exit deduction — employee is contractor`);
+      }
+    } catch { /* silent */ }
   }
 
   // ─── Total Deductions & Net ───
@@ -957,15 +990,22 @@ function saveSalaryComputation(db, comp) {
   }
 
   // ── Early Exit Deduction: mark approved deductions as applied ──
+  // Uses the same date-derived filter as computeEmployeeSalary so rows whose
+  // payroll_month was set incorrectly at submit time still get flagged.
   if (comp.earlyExitDeduction > 0) {
     try {
       db.prepare(`
         UPDATE early_exit_deductions
         SET salary_applied = 1, salary_applied_at = datetime('now')
-        WHERE employee_code = ? AND payroll_month = ? AND payroll_year = ?
-          AND finance_status = 'approved' AND salary_applied = 0
+        WHERE employee_code = ?
+          AND finance_status = 'approved'
+          AND salary_applied = 0
           AND deduction_type != 'warning'
-      `).run(comp.employeeCode, comp.month, comp.year);
+          AND (
+            (CAST(strftime('%m', date) AS INTEGER) = ? AND CAST(strftime('%Y', date) AS INTEGER) = ?)
+            OR (payroll_month = ? AND payroll_year = ?)
+          )
+      `).run(comp.employeeCode, comp.month, comp.year, comp.month, comp.year);
 
       const { logAudit } = require('../database/db');
       logAudit(
