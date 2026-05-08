@@ -28,6 +28,8 @@ const { parseTaDaUpload } = require('../services/salesTaDaUploadParser');
 // uses so the formula stays single-source-of-truth.
 const { deriveCycle: deriveCycleE, countSundaysInCycle: countSundaysE } = require('../services/cycleUtil');
 const { countGazettedHolidaysInCycle: countHolidaysE } = require('../services/salesSalaryComputation');
+// Phase 1 Sales Template Model (May 2026): pre-populated XLSX generator.
+const { generateTemplate } = require('../services/salesTemplateGenerator');
 
 // ══════════════════════════════════════════════════════════════════════
 // Phase 2 — TA/DA change-request workflow.
@@ -1123,6 +1125,49 @@ function requireCompany(req, res) {
   }
   return company;
 }
+
+// ── GET /api/sales/template — Phase 1 Sales Template Model (May 2026)
+// Returns a pre-populated XLSX (Sheet 1 "Input" + hidden "_meta" sheet)
+// for HR to fill Days Given and re-upload. No side effects beyond the
+// audit row in sales_template_downloads. Gated by requireHrOrAdmin via
+// the file-wide router.use() above (matching /employees behaviour).
+router.get('/template', (req, res) => {
+  const month = parseInt(req.query.month, 10);
+  const year = parseInt(req.query.year, 10);
+  const company = (req.query.company || '').trim();
+  if (!Number.isInteger(month) || month < 1 || month > 12) {
+    return res.status(400).json({ success: false, error: 'month must be an integer 1-12' });
+  }
+  if (!Number.isInteger(year) || year < 2024 || year > 2030) {
+    return res.status(400).json({ success: false, error: 'year must be an integer 2024-2030' });
+  }
+  if (!company) {
+    return res.status(400).json({ success: false, error: 'company query param required' });
+  }
+
+  const db = getDb();
+  const generatedBy = (req.user && req.user.username) || 'unknown';
+  let result;
+  try {
+    result = generateTemplate(db, { month, year, company, generatedBy });
+  } catch (e) {
+    console.error('[sales-template] generation failed:', e.message);
+    return res.status(500).json({ success: false, error: e.message });
+  }
+  if (result.employeeCount === 0) {
+    return res.status(404).json({
+      success: false,
+      error: 'No eligible sales employees for this month/year/company',
+    });
+  }
+
+  res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+  res.setHeader('Content-Disposition', `attachment; filename="${result.filename}"`);
+  res.setHeader('Content-Length', result.buffer.length);
+  res.setHeader('X-Master-Snapshot-Hash', result.hash);
+  res.setHeader('X-Employee-Count', String(result.employeeCount));
+  res.send(result.buffer);
+});
 
 // ── GET /api/sales/employees — list with filters ───────────────────
 router.get('/employees', (req, res) => {
