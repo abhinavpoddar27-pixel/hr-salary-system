@@ -1,4 +1,132 @@
-## Last Session — 2026-05-06
+## Section 0 — Last Session (2026-05-08)
+
+### Shipped today
+
+**Sales Module Template Migration — Phase 1 + Phase 2 live in production.**
+
+- Phase 1 backend (PR #19, merge `f31fa2c`, deployed 11:48 UTC):
+  - `sales_uploads` gained columns: `master_snapshot_hash`,
+    `template_generated_at`, `upload_source` (default
+    `'coordinator_parser'`, all 4 historical rows backfilled).
+  - New table `sales_template_downloads` (id, month, year, company,
+    master_snapshot_hash, employee_count, downloaded_by, downloaded_at,
+    matched_upload_id) with index on master_snapshot_hash.
+  - New services:
+    - `backend/src/services/salesMasterHash.js` — `computeMasterHash()`
+      and `getEligibleEmployees()`. SHA-256 over sorted (code, status,
+      doj, dol) tuples. **Eligibility = `status='Active'` only**, NOT
+      including DOL-falls-in-month logic (decision: simplest correct
+      handling for back-month processing).
+    - `backend/src/services/salesTemplateGenerator.js` — uses xlsx
+      (SheetJS), produces an XLSX with sheet 1 "Input" (S.No, Employee
+      Code, Name, Reporting Manager, HQ/City, Designation, Status, DOJ,
+      DOL, Days Given) and hidden sheet "_meta" (month, year, company,
+      generated_at, generated_by, master_snapshot_hash, employee_count,
+      schema_version=1). Cell-level locking skipped (xlsx 0.18.5 doesn't
+      reliably support `cell.s.protection`); sheet-level !protect hint
+      applied. Real enforcement is server-side validator.
+  - New endpoint: `GET /api/sales/template?month=&year=&company=`
+    behind `requireHrOrAdmin` (NOT `requirePermission('sales-employees')`
+    — sales endpoints in this repo use the file-wide
+    `router.use(requireHrOrAdmin)` pattern at sales.js:1086).
+  - Response headers: `X-Master-Snapshot-Hash` and `X-Employee-Count`
+    for sanity checking without opening the file. CORS-safe for
+    same-origin; if ever called cross-origin, expose them via
+    `cors({exposedHeaders: [...]})`.
+
+- Phase 2 backend (PR #20, merge `0a6e27e`, deployed 13:38 UTC):
+  - `sales_uploads` rebuilt to add `'rejected'` to status CHECK
+    constraint. Migration: `migration_sales_uploads_add_rejected_status_v1`,
+    flag set 13:40:06 UTC. Rebuild used PRAGMA foreign_keys OFF +
+    transaction + row-count guard. FK from `sales_monthly_input` to
+    `sales_uploads.id` preserved. Index `idx_sales_uploads_my_company`
+    recreated.
+  - New service: `backend/src/services/salesTemplateParser.js` —
+    8-step validator with rejection persistence to `sales_uploads`.
+    Rejection reasons: `not_a_valid_xlsx`, `missing_meta_sheet`,
+    `cycle_mismatch`, `unknown_template`, `master_drift`,
+    `unknown_employee`, `invalid_days_given`, `duplicate_employee`,
+    `row_count_mismatch`. Rejected uploads are written with
+    `status='rejected'` and `notes=<reason + details JSON>`.
+  - New endpoint: `POST /api/sales/upload-template`
+    (multipart, requireHrOrAdmin). Returns 200 success / 422 rejection.
+
+- Phase 2 frontend (PR #20 source + PR `chore/rebuild-dist-after-phase-2`
+  rebuild, merge `c6a4bd8`, deployed ~21:00 UTC):
+  - `frontend/src/pages/Sales/SalesUpload.jsx` is now a 2-tab shell:
+    Tab 1 "Template (recommended)" DEFAULT and Tab 2 "Coordinator Sheet
+    (legacy)". Tab 2 is the existing UploadView/PreviewView byte-identical.
+    Tab 1: cycle picker (CompanyFilter + DateSelector — same hooks as
+    legacy view, so cycle context syncs across sales pages); master
+    freshness banner reading MAX(updated_at) from /sales/employees
+    (amber when > 24h); Download Template button using window.open
+    with auth cookie; drop zone (10MB cap, .xls/.xlsx); inline
+    RejectionCard for 422 responses showing per-row details.
+  - **Critical learning** — Phase 2 source commits (f749cc8 through
+    2c4027e) did NOT include a `frontend/dist/` rebuild. Production
+    served the old bundle for ~7 hours after backend deploy. Required
+    a corrective rebuild commit (c6a4bd8). See "Permanent rule" below.
+
+### Production state at end of session
+
+- 233 active sales_employees in 'Indriyan Beverages Pvt Ltd', 0 in
+  Asian Lakto.
+- Master quality flag: 195/233 use `city_of_operation` (not
+  `headquarters`) for the city column; 8 employees have NULL for
+  headquarters AND city_of_operation AND reporting_manager
+  (S137, S139, S140, S144, S145, S146, S147, S161 — all TSI/PSR).
+  These will appear in templates with empty cells in those 3 columns.
+  Not a Phase 2 bug — accurate mirror of master. HR may need to fix.
+- 4 historical sales_uploads: id 4 (Feb computed, 163 salaries on
+  register), ids 3/5/6 (April broken — coordinator parser
+  match-failures, never reached compute).
+- 0 rows in sales_template_downloads (Tab 1 not yet exercised in
+  production at session end).
+- Sales master column for employee identifier is `code` (NOT
+  `employee_code`). The latter exists only in sales_monthly_input.
+
+### What's next (in order, not all in one session)
+
+1. **May 2026 download smoke** — Abhinav clicks Download Template
+   for May 2026 / Indriyan, confirms file downloads correctly, opens
+   it, checks 233 rows + _meta sheet. SQL audit confirms
+   sales_template_downloads row created with downloaded_by populated.
+
+2. **May 2026 upload smoke** — Fill ~5 employees with valid
+   Days Given, upload, confirm rejection on the unfilled rows
+   (reason='invalid_days_given' with row numbers). Then fill all
+   233 with 0 (or real values), upload, confirm
+   status='matched' + 233 sales_monthly_input rows + matched_upload_id
+   set on sales_template_downloads.
+
+3. **April 2026 rescue** — Separate session, higher stakes. April has
+   3 broken coordinator uploads (ids 3, 5, 6) blocking April payroll
+   since 28 April. Plan: HR transcribes from coordinator's source
+   sheet into the new template (Path A — strict, no shortcuts). The
+   master has 233 active employees but the failed April coordinator
+   upload had 196 rows — discrepancy of 37 will surface and force a
+   master quality conversation.
+
+4. **Phase 3 (≥ 14 days after Phase 2 deploys cleanly)** — deprecate
+   Tab 2 to 410 Gone, remove legacy tab from SalesUpload.jsx. Never
+   delete salesCoordinatorParser.js or drop columns from
+   sales_monthly_input — existing Feb 2026 rows must remain
+   queryable.
+
+### Open items (not started this session)
+
+- DMS storage decision (Railway ephemeral vs persistent volume vs
+  Cloudflare R2) — was open before today, still open.
+- Historical Data Import module — design complete, implementation
+  not started.
+- 8-phase System Hardening build plan — Phase 2a (protectedWrite +
+  hold-release migration) is the most recent shipped piece (PR #16,
+  d58fa58 + 016ffdb). Phase 3 (snapshots) and onward not yet started.
+- TA/DA module Phase 4 E2E validation pending items.
+- Salary computation drift queries from CLAUDE.md memory remain the
+  canonical post-deploy check after any salary/day-calc change.
+
+## Section 0: Previous Session — 2026-05-06
 
 **Hardening Phase 1 + Phase 2a shipped.**
 
@@ -32,7 +160,7 @@
 - Linter rule flagging raw db.prepare(INSERT/UPDATE/DELETE) outside protectedWrite.js
 - Validate the 5 pending brain claims after next compiler pass
 
-## Section 0: Last Session
+## Section 0: Previous Session — 2026-05-02
 - **Date:** 2026-05-02 (later, after the MCP postmortem entry below)
 - **Branch:** `claude/parser-multimonth-smart-reimport-SrJOr` (5 commits — 3 source + 1 docs + 1 Phase-5-fix; pushed to origin, NOT yet merged into main; PR-ready). Branched from `main` tip `6b8291e`. Tip: `8c8d915`.
 - **Last commit:** `8c8d915` `fix(parser+import): surface endMonth/endYear/startDate/endDate at top level`
@@ -1727,6 +1855,41 @@ frontend/
 - Update this CLAUDE.md file after completing any major feature or pipeline change.
 - **Use curl for all API/endpoint diagnostic and verification queries** — never build a UI/HTML page for tests that can be done with curl. Start the backend server, run curl commands, check headers and response bodies directly. This applies to this project and any other project where curl can reach the server.
 - **Every /ship report's table/file/column claims must come from grep/find/sqlite3 queries executed in the current session, not from plan memory.** Quote the exact command that produced each claim. A /ship report that names tables, columns, or status values without citing the command that verified their existence is invalid. Precedent: 2026-04-20 Bug Reporter /ship report claimed 3 tables (reality: 1) and an invented retry subsystem; corrected 2026-04-21 after audit.
+
+- **Frontend dist rebuild rule (mandatory for any frontend/src change):**
+
+  Railway serves pre-built static assets directly from `frontend/dist/`.
+  A change to anything under `frontend/src/` is INVISIBLE in production
+  until `frontend/dist/` is rebuilt and committed. Backend deploys can
+  appear fully successful while the frontend silently serves the old
+  bundle.
+
+  **Required workflow** for any branch that touches `frontend/src/*`:
+
+  1. Make the source changes in normal feature commits.
+  2. As the FINAL commit on the branch, run:
+     ```
+     cd frontend && npm run build
+     git add frontend/dist
+     git status   # verify diff is dist/ only
+     git commit -m 'build(frontend): rebuild dist after <feature>'
+     ```
+  3. Verify the new bundle filename hash differs from the previous one
+     (`git show --stat HEAD` will show a delete + create pair for the
+     feature's main bundle, e.g. `SalesUpload-<oldhash>.js` deleted,
+     `SalesUpload-<newhash>.js` created).
+  4. The build report MUST include this hash comparison.
+
+  **Failure mode this prevents:** Phase 2 of the Sales Template
+  Migration on 8 May 2026 shipped backend (live) + frontend source
+  (merged to main) but did NOT rebuild dist. HR saw zero UI change for
+  ~7 hours. Required a corrective rebuild commit
+  (`chore/rebuild-dist-after-phase-2`, `c6a4bd8`) to deploy the actual
+  frontend code that had been on main since 13:38 UTC.
+
+  **Detection:** if a Claude Code build report omits the bundle hash
+  comparison, treat the deploy as suspect. Verify in the browser before
+  declaring shipped.
 
 ## Section 9: SQL Console (Read-Only) — Phase 1 (April/May 2026)
 
