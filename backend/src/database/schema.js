@@ -2365,6 +2365,94 @@ If description and screenshot are incoherent or unrelated, set summary_confidenc
     }
   }
 
+  // ── Sales Template Model — Phase 2 (May 2026) ────────────────────────
+  // Rebuild sales_uploads to expand the status CHECK with 'rejected'.
+  // The Phase 2 template parser writes a row with status='rejected' for
+  // every failed upload (so the audit trail captures the attempt + reason).
+  // SQLite can't ALTER a CHECK constraint, so we do the canonical 12-step
+  // table rebuild. Idempotent — gated on policy_config flag, plus a
+  // sqlite_master inspection so a re-run on an already-rebuilt DB is a
+  // no-op. FKs from sales_monthly_input.upload_id → sales_uploads.id are
+  // preserved because SQLite resolves FK references by table name, and
+  // ALTER TABLE … RENAME keeps the name pointing at the new table.
+  const rejectedStatusMigDone = db.prepare(
+    "SELECT value FROM policy_config WHERE key = 'migration_sales_uploads_add_rejected_status_v1'"
+  ).get();
+  if (!rejectedStatusMigDone) {
+    const tableSql = db.prepare(
+      "SELECT sql FROM sqlite_master WHERE type='table' AND name='sales_uploads'"
+    ).get();
+    const alreadyHasRejected = tableSql && tableSql.sql && tableSql.sql.includes("'rejected'");
+    if (alreadyHasRejected) {
+      db.prepare(
+        "INSERT OR REPLACE INTO policy_config (key, value, description) VALUES ('migration_sales_uploads_add_rejected_status_v1', '1', 'sales_uploads CHECK already includes rejected; flag set retroactively')"
+      ).run();
+      console.log('[MIGRATION] sales_uploads_add_rejected_status_v1: pre-existing rebuild detected; flag set');
+    } else {
+      const prevFk = db.pragma('foreign_keys', { simple: true });
+      db.pragma('foreign_keys = OFF');
+      try {
+        const oldCount = db.prepare('SELECT COUNT(*) AS n FROM sales_uploads').get().n;
+        db.exec('BEGIN TRANSACTION');
+        try {
+          db.exec(`
+            CREATE TABLE sales_uploads_new (
+              id INTEGER PRIMARY KEY AUTOINCREMENT,
+              month INTEGER NOT NULL,
+              year INTEGER NOT NULL,
+              company TEXT NOT NULL,
+              filename TEXT NOT NULL,
+              file_hash TEXT,
+              total_rows INTEGER,
+              matched_rows INTEGER,
+              unmatched_rows INTEGER,
+              status TEXT DEFAULT 'uploaded'
+                CHECK(status IN ('uploaded','matched','computed','finalized','superseded','rejected')),
+              uploaded_by TEXT NOT NULL,
+              uploaded_at TEXT DEFAULT (datetime('now')),
+              notes TEXT,
+              master_snapshot_hash TEXT,
+              template_generated_at TEXT,
+              upload_source TEXT DEFAULT 'coordinator_parser',
+              UNIQUE(month, year, company, file_hash)
+            );
+          `);
+          db.exec(`
+            INSERT INTO sales_uploads_new
+              (id, month, year, company, filename, file_hash, total_rows, matched_rows,
+               unmatched_rows, status, uploaded_by, uploaded_at, notes,
+               master_snapshot_hash, template_generated_at, upload_source)
+            SELECT
+               id, month, year, company, filename, file_hash, total_rows, matched_rows,
+               unmatched_rows, status, uploaded_by, uploaded_at, notes,
+               master_snapshot_hash, template_generated_at, upload_source
+            FROM sales_uploads
+          `);
+          db.exec('DROP TABLE sales_uploads');
+          db.exec('ALTER TABLE sales_uploads_new RENAME TO sales_uploads');
+          db.exec('CREATE INDEX IF NOT EXISTS idx_sales_uploads_my_company ON sales_uploads(month, year, company)');
+          const newCount = db.prepare('SELECT COUNT(*) AS n FROM sales_uploads').get().n;
+          if (oldCount !== newCount) {
+            throw new Error(`Row count mismatch after rebuild: before=${oldCount}, after=${newCount}`);
+          }
+          db.exec('COMMIT');
+          db.prepare(
+            "INSERT OR REPLACE INTO policy_config (key, value, description) VALUES ('migration_sales_uploads_add_rejected_status_v1', '1', 'Rebuilt sales_uploads CHECK to include rejected status')"
+          ).run();
+          console.log(`[MIGRATION] sales_uploads_add_rejected_status_v1: rebuilt with ${newCount} rows preserved`);
+        } catch (innerErr) {
+          db.exec('ROLLBACK');
+          throw innerErr;
+        }
+      } catch (e) {
+        console.error('[MIGRATION] sales_uploads_add_rejected_status_v1: FAILED —', e.message);
+        // Flag NOT set → next boot retries.
+      } finally {
+        db.pragma(prevFk ? 'foreign_keys = ON' : 'foreign_keys = OFF');
+      }
+    }
+  }
+
   // ── Sales Salary Module — Phase 3 (compute engine) ───────────────────
   // sales_salary_computations is the Phase 3 output. `incentive_amount`
   // column is reserved for HR-entered variable pay (Q6). `diwali_recovery`
