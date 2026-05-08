@@ -2318,6 +2318,53 @@ If description and screenshot are incoherent or unrelated, set summary_confidenc
   safeCreateIndex('CREATE INDEX IF NOT EXISTS idx_sales_monthly_input_upload ON sales_monthly_input(upload_id)');
   safeCreateIndex('CREATE INDEX IF NOT EXISTS idx_sales_monthly_input_match ON sales_monthly_input(employee_code, month, year, company)');
 
+  // ── Sales Template Model — Phase 1 (May 2026) ────────────────────────
+  // Template-driven upload flow: HR downloads a pre-populated XLSX from
+  // /api/sales/template, fills Days Given, uploads it back. Phase 1 adds
+  // the schema; Phase 2 wires in the parser + UI; the existing coordinator
+  // upload path stays live during the transition. master_snapshot_hash
+  // captures the master-data snapshot the template was generated from so
+  // Phase 2 can reject uploads stamped against a stale snapshot.
+  safeAddColumn('sales_uploads', 'master_snapshot_hash', 'TEXT');
+  safeAddColumn('sales_uploads', 'template_generated_at', 'TEXT');
+  safeAddColumn('sales_uploads', 'upload_source', "TEXT DEFAULT 'coordinator_parser'");
+
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS sales_template_downloads (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      month INTEGER NOT NULL,
+      year INTEGER NOT NULL,
+      company TEXT NOT NULL,
+      master_snapshot_hash TEXT NOT NULL,
+      employee_count INTEGER NOT NULL,
+      downloaded_by TEXT NOT NULL,
+      downloaded_at TEXT DEFAULT (datetime('now')),
+      matched_upload_id INTEGER,
+      FOREIGN KEY (matched_upload_id) REFERENCES sales_uploads(id)
+    );
+  `);
+  safeCreateIndex('CREATE INDEX IF NOT EXISTS idx_template_downloads_hash ON sales_template_downloads(master_snapshot_hash)');
+
+  // One-time backfill: stamp upload_source='coordinator_parser' on all
+  // pre-existing sales_uploads rows so post-deploy reads see a consistent
+  // value. Idempotent — gated on policy_config flag.
+  const uploadSourceBackfillDone = db.prepare(
+    "SELECT value FROM policy_config WHERE key = 'migration_sales_upload_source_backfill_v1'"
+  ).get();
+  if (!uploadSourceBackfillDone) {
+    try {
+      const result = db.prepare(
+        "UPDATE sales_uploads SET upload_source = 'coordinator_parser' WHERE upload_source IS NULL"
+      ).run();
+      console.log(`[MIGRATION] Backfilled upload_source on ${result.changes} sales_uploads row(s)`);
+      db.prepare(
+        "INSERT OR REPLACE INTO policy_config (key, value, description) VALUES ('migration_sales_upload_source_backfill_v1', '1', 'Backfilled upload_source=coordinator_parser on pre-template-model sales_uploads rows')"
+      ).run();
+    } catch (e) {
+      console.warn('[MIGRATION] sales_uploads upload_source backfill failed:', e.message);
+    }
+  }
+
   // ── Sales Salary Module — Phase 3 (compute engine) ───────────────────
   // sales_salary_computations is the Phase 3 output. `incentive_amount`
   // column is reserved for HR-entered variable pay (Q6). `diwali_recovery`
