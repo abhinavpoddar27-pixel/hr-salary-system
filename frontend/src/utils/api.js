@@ -510,6 +510,27 @@ export const salesHolidayCreate = (data) => api.post('/sales/holidays', data)
 export const salesHolidayUpdate = (id, data) => api.put(`/sales/holidays/${id}`, data)
 export const salesHolidayDelete = (id) => api.delete(`/sales/holidays/${id}`)
 export const salesUploadFile = (formData) => api.post('/sales/upload', formData, { headers: { 'Content-Type': 'multipart/form-data' } })
+
+// Sales Template Model — Phase 1 download URL builder + Phase 2 upload helper.
+// Download flow: open the URL in a new tab; the browser carries the auth
+// cookie and streams the XLSX directly — no fetch-and-blob dance needed.
+export const salesTemplateDownloadUrl = ({ month, year, company }) => {
+  const qs = new URLSearchParams({ month: String(month), year: String(year), company }).toString()
+  return `/api/sales/template?${qs}`
+}
+export const salesUploadTemplate = ({ file, month, year, company }) => {
+  const fd = new FormData()
+  fd.append('file', file)
+  fd.append('month', String(month))
+  fd.append('year', String(year))
+  fd.append('company', company)
+  return api.post('/sales/upload-template', fd, {
+    headers: { 'Content-Type': 'multipart/form-data' },
+    // 422 is a structured rejection from the parser — let the caller see
+    // the body instead of going through the global error toast.
+    validateStatus: (s) => (s >= 200 && s < 300) || s === 422,
+  })
+}
 export const salesUploadPreview = (uploadId) => api.get(`/sales/upload/${uploadId}/preview`)
 export const salesUploadMatch = (uploadId, rowId, data) => api.put(`/sales/upload/${uploadId}/match/${rowId}`, data)
 export const salesUploadConfirm = (uploadId, body) => api.post(`/sales/upload/${uploadId}/confirm`, body || {})
