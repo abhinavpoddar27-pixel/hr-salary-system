@@ -1216,6 +1216,34 @@ router.post('/employees', (req, res) => {
     return res.status(400).json({ success: false, error: `Missing required field(s): ${missing.join(', ')}` });
   }
 
+  // Salary-component coherence: if any of the four are supplied, all four +
+  // a positive gross_salary must be supplied AND must sum to gross_salary
+  // (±1 tolerance). This is the wiring for atomic structure-row creation.
+  // When NONE are supplied, behavior is unchanged (employee row only,
+  // preserving scripted/migration callers).
+  const componentFields = ['basic', 'hra', 'cca', 'conveyance'];
+  const anyComponent = componentFields.some(f => body[f] !== undefined && body[f] !== '');
+  const allComponents = componentFields.every(f => body[f] !== undefined && body[f] !== '');
+  const grossSupplied = body.gross_salary !== undefined && body.gross_salary !== '' && Number(body.gross_salary) > 0;
+  if (anyComponent && (!allComponents || !grossSupplied)) {
+    return res.status(400).json({
+      success: false,
+      error: 'Salary components require all four (basic, hra, cca, conveyance) and a positive gross_salary'
+    });
+  }
+  if (allComponents && grossSupplied) {
+    const sum = Number(body.basic) + Number(body.hra) + Number(body.cca) + Number(body.conveyance);
+    const expected = Number(body.gross_salary);
+    const diff = Math.abs(sum - expected);
+    if (diff > 1) {
+      return res.status(400).json({
+        success: false,
+        error: `Salary components must sum to gross_salary (got ${sum}, expected ${expected}, diff ${diff})`
+      });
+    }
+  }
+  const writeStructure = allComponents && grossSupplied;
+
   if (body.status && !VALID_STATUSES.includes(body.status)) {
     return res.status(400).json({ success: false, error: `Invalid status. Must be one of: ${VALID_STATUSES.join(', ')}` });
   }
@@ -1282,6 +1310,40 @@ router.post('/employees', (req, res) => {
           ? `Sales employee created in ${body.company} with HR-supplied code (auto-assign bypassed)`
           : `Sales employee created in ${body.company} (code auto-assigned)`,
       });
+
+      if (writeStructure) {
+        const effectiveFrom = new Date().toISOString().slice(0, 7);
+        const grossNum = Number(body.gross_salary);
+        db.prepare(
+          `INSERT INTO sales_salary_structures (
+             employee_id, created_by, effective_from,
+             basic, hra, cca, conveyance, gross_salary,
+             pf_applicable, esi_applicable, pt_applicable
+           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+        ).run(
+          info.lastInsertRowid,
+          user,
+          effectiveFrom,
+          Number(body.basic),
+          Number(body.hra),
+          Number(body.cca),
+          Number(body.conveyance),
+          grossNum,
+          body.pf_applicable === undefined ? 0 : (body.pf_applicable ? 1 : 0),
+          body.esi_applicable === undefined ? 0 : (body.esi_applicable ? 1 : 0),
+          body.pt_applicable === undefined ? 0 : (body.pt_applicable ? 1 : 0),
+        );
+        writeAudit(db, {
+          recordId: info.lastInsertRowid,
+          empCode: assignedCode,
+          field: 'structure_created',
+          oldVal: '',
+          newVal: String(grossNum),
+          user,
+          actionType: codeWasExplicit ? 'create_with_explicit_code' : 'create',
+          remark: `Structure row inserted with effective_from=${effectiveFrom}, gross=${grossNum}`,
+        });
+      }
 
       const row = db.prepare('SELECT * FROM sales_employees WHERE id = ?').get(info.lastInsertRowid);
       return row;

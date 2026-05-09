@@ -128,6 +128,7 @@ function emptyForm(defaultCompany = '') {
     working_hours: '',
     aadhaar: '', pan: '', dob: '', doj: '', contact: '', personal_contact: '',
     gross_salary: '',
+    basic: '', hra: '', cca: '', conveyance: '',
     pf_applicable: 0, esi_applicable: 0, pt_applicable: 0,
     bank_name: '', account_no: '', ifsc: '',
     status: 'Active'
@@ -151,6 +152,20 @@ function EmployeeForm({ initial, isEdit, onSubmit, onCancel, submitting }) {
     for (const f of BANK_FIELDS_REQUIRED) {
       if (!String(form[f] || '').trim()) errs[f] = 'Required'
     }
+    if (!isEdit) {
+      const grossNum = parseFloat(form.gross_salary)
+      if (!form.gross_salary || !(grossNum > 0)) errs.gross_salary = 'Required (must be > 0)'
+      const componentKeys = ['basic', 'hra', 'cca', 'conveyance']
+      for (const k of componentKeys) {
+        if (String(form[k] || '').trim() === '') errs[k] = 'Required'
+      }
+      if (!errs.gross_salary && componentKeys.every(k => !errs[k])) {
+        const sum = parseFloat(form.basic) + parseFloat(form.hra) + parseFloat(form.cca) + parseFloat(form.conveyance)
+        if (Math.abs(sum - grossNum) > 1) {
+          errs.gross_salary = `Components must sum to gross (got ₹${sum})`
+        }
+      }
+    }
     setErrors(errs)
     return Object.keys(errs).length === 0
   }
@@ -164,12 +179,20 @@ function EmployeeForm({ initial, isEdit, onSubmit, onCancel, submitting }) {
     // Coerce numbers + booleans
     const payload = { ...form }
     payload.gross_salary = payload.gross_salary === '' ? 0 : parseFloat(payload.gross_salary) || 0
+    payload.basic = payload.basic === '' ? 0 : parseFloat(payload.basic) || 0
+    payload.hra = payload.hra === '' ? 0 : parseFloat(payload.hra) || 0
+    payload.cca = payload.cca === '' ? 0 : parseFloat(payload.cca) || 0
+    payload.conveyance = payload.conveyance === '' ? 0 : parseFloat(payload.conveyance) || 0
     payload.pf_applicable = payload.pf_applicable ? 1 : 0
     payload.esi_applicable = payload.esi_applicable ? 1 : 0
     payload.pt_applicable = payload.pt_applicable ? 1 : 0
     if (isEdit) {
       delete payload.code
       delete payload.company
+      delete payload.basic
+      delete payload.hra
+      delete payload.cca
+      delete payload.conveyance
     }
     onSubmit(payload)
   }
@@ -243,13 +266,30 @@ function EmployeeForm({ initial, isEdit, onSubmit, onCancel, submitting }) {
       <section>
         <h4 className="text-sm font-semibold text-slate-800 mb-2">Salary &amp; Statutory</h4>
         <div className="grid grid-cols-2 gap-3">
-          <div>{lbl('Gross Monthly (₹)')}<input type="number" value={form.gross_salary} onChange={e => set('gross_salary', e.target.value)} className="w-full border border-slate-300 rounded-lg px-2 py-1.5 text-sm" /></div>
+          <div>
+            {lbl(isEdit ? 'Gross Monthly (₹)' : 'Gross Monthly (₹) *')}
+            <input type="number" value={form.gross_salary} onChange={e => set('gross_salary', e.target.value)}
+              className={clsx('w-full border rounded-lg px-2 py-1.5 text-sm', errors.gross_salary ? 'border-red-400' : 'border-slate-300')} />
+            {errLine('gross_salary')}
+          </div>
           <div className="flex items-end gap-4 pb-1">
             <label className="flex items-center gap-1 text-xs text-slate-700"><input type="checkbox" checked={!!form.pf_applicable} onChange={e => set('pf_applicable', e.target.checked ? 1 : 0)} /> PF</label>
             <label className="flex items-center gap-1 text-xs text-slate-700"><input type="checkbox" checked={!!form.esi_applicable} onChange={e => set('esi_applicable', e.target.checked ? 1 : 0)} /> ESI</label>
             <label className="flex items-center gap-1 text-xs text-slate-700"><input type="checkbox" checked={!!form.pt_applicable} onChange={e => set('pt_applicable', e.target.checked ? 1 : 0)} /> PT</label>
           </div>
         </div>
+        {!isEdit && (
+          <div className="grid grid-cols-4 gap-3 mt-3">
+            {[['basic', 'Basic'], ['hra', 'HRA'], ['cca', 'CCA'], ['conveyance', 'Conveyance']].map(([k, label]) => (
+              <div key={k}>
+                {lbl(`${label} (₹) *`)}
+                <input type="number" value={form[k]} onChange={e => set(k, e.target.value)}
+                  className={clsx('w-full border rounded-lg px-2 py-1.5 text-sm', errors[k] ? 'border-red-400' : 'border-slate-300')} />
+                {errLine(k)}
+              </div>
+            ))}
+          </div>
+        )}
       </section>
 
       <section className="bg-amber-50 border border-amber-200 rounded-lg p-3">

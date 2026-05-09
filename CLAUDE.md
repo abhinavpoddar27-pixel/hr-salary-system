@@ -1,4 +1,49 @@
-## Last Session — 2026-05-06
+## Last Session — 2026-05-09
+
+**Sales employee create now writes salary_structures atomically (Bug A wiring).**
+
+### Branch / commit
+- Branch: `claude/wire-salary-structure-creation-oGCDA` (pushed; PR-ready)
+- Single commit: `fix(sales): POST /employees writes salary_structures atomically (Bug A wiring)`
+- Diff: 103 insertions / 1 deletion across exactly 2 files
+
+### Files changed
+- `backend/src/routes/sales.js` — POST /employees handler at lines 1205–1297 gained:
+  (1) component-coherence validator block (immediately after the `missing.length` check, before `body.status` validation): if any of basic/hra/cca/conveyance is supplied, all four + positive gross_salary required AND must sum to gross_salary (±1 tolerance) — otherwise 400.
+  (2) structure INSERT block INSIDE the existing `db.transaction()`, after the existing `writeAudit` call, before the SELECT-and-return. Mirrors the existing `POST /employees/:code/structures` endpoint at lines 1423–1470. `effective_from` is computed at request time as `new Date().toISOString().slice(0, 7)` (ignored if user passes anything in body — the create flow is authoritative).
+  (3) second `writeAudit` with `field='structure_created'`, `remark="Structure row inserted with effective_from=<YYYY-MM>, gross=<N>"`. Atomic: structure failure rolls back the employee insert.
+- `frontend/src/pages/Sales/SalesEmployeeMaster.jsx` — `emptyForm()` extended with 4 component fields; `validate()` adds CREATE-MODE-only check (gross > 0 + all 4 components required + sum check); `handleSubmit()` coerces 4 new fields with parseFloat-or-0, deletes them from edit-mode payload; render adds a `grid-cols-4` sub-grid below the existing salary row, gated on `!isEdit`, using `.map()` over `[['basic','Basic'], ...]` to keep the diff tight.
+
+### What was verified locally
+- `node --check backend/src/routes/sales.js` → OK
+- `cd frontend && npm run build` → ✓ 18.66s, all chunks emitted, `SalesEmployeeMaster-*.js` is 27.55kB raw / 6.84kB gzip
+- Diff inspection: backend +62, frontend +42 (after `.map()` trim on the 4-input render block to stay near the 100-line ceiling)
+
+### What was NOT verified
+- **No production smoke test** — the verification SQL (Steps 2–7 in the prompt) requires a deployed build. Run the 7-step verification (pre-counts, UI create test, post-counts, structure linkage, cleanup, plant regression, backwards-compat) **after Railway picks up the merge**.
+- **Drift sanity check** is a no-op for this change (no compute paths touched), but the rule says run it: `SELECT employee_code, month, year, net_salary, gross_earned, total_deductions, ABS(net_salary - (gross_earned - total_deductions)) AS drift FROM sales_salary_computations ORDER BY drift DESC LIMIT 5;` after deploy.
+
+### What's fragile
+- **S168–S233 backlog (66 employees) NOT backfilled here** — that's a deliberate scope split. Until backfill happens, Sales Salary Compute will continue to skip those 66 rows with "No salary structure (sales_salary_structures)". Backfill is a separate prompt + commit, gated on HR's Excel breakup arriving.
+- **Backwards-compat path matters.** When NONE of the 4 components are supplied, the route falls through to the old behavior (insert into sales_employees only, no structure). This is intentional so scripted/migration callers (e.g. the old master-import path tagged `master_import_2026-04-24`) don't break, but it does mean a future "always require components" change is a separate decision.
+- **The existing `POST /employees/:code/structures` endpoint at lines 1423–1470 was NOT touched.** It remains the manual structure-edit path. The new logic in POST /employees mirrors it (column list + values) but does NOT call it — duplication is intentional to keep the create flow inside one transaction.
+- **`effective_from` is set by the server at create time**, not from any body field. This means a structure row's `effective_from` always matches the month the employee was created in (YYYY-MM). If HR creates an employee mid-cycle and the structure should have been backdated, they'd need to use the existing `POST /:code/structures` endpoint after creation to add a backdated row.
+- **PUT /employees/:code (edit flow) is OUT OF SCOPE.** The frontend handleSubmit explicitly deletes basic/hra/cca/conveyance from edit-mode payloads. Edit-side wiring was deliberately not done — structure edits go through the dedicated `/structures` endpoint as before.
+
+### Known issues remaining
+- **S168–S233 (66 employees) need separate backfill prompt** — link here once written.
+- Pre-existing `[MIGRATION] miss-punch finance queue backfill failed: no such column: miss_punch_finance_status` log on every boot — out of scope.
+- Pre-existing chunk size warnings (html2pdf 982kB, SqlConsole 462kB, xlsx 424kB) — unchanged.
+
+### Next session should
+- (a) Run the 7-step verification SQL on Railway after deploy: pre-counts → UI create "TEST WIRING FIX" with full salary breakup → post-counts (expect emp_count=234, struct_emp_count=168, missing_structures=66) → structure linkage check → cleanup → plant regression → backwards-compat curl POST.
+- (b) Confirm drift sanity check returns clean (no changes here, but the rule says run it).
+- (c) When HR's Excel breakup for S168–S233 arrives, write the separate backfill prompt to populate `sales_salary_structures` for the 66 missing rows. That backfill is a data-only operation — it can read this commit's INSERT pattern as the source of truth for column ordering.
+- (d) Decide whether to retire the backwards-compat path (no-component creates) or keep it for scripted callers. Defer until Phase 3+ master-onboarding work.
+
+---
+
+## Previous Session — 2026-05-06
 
 **Hardening Phase 1 + Phase 2a shipped.**
 
