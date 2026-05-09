@@ -2297,15 +2297,15 @@ router.get('/compute/readiness', (req, res) => {
       // BLOCKERS — compute will skip these or produce zero output
       if (e.ta_da_class === null || e.ta_da_class === undefined) {
         empIssues.push({
-          severity: 'blocker',
+          severity: 'warning',
           reason_code: 'NO_TADA_CLASS',
-          reason_label: 'No TA/DA class assigned in master',
+          reason_label: 'No TA/DA class assigned — TA/DA register will show flag_for_review; salary unaffected',
         });
       } else if (e.ta_da_class === 0) {
         empIssues.push({
-          severity: 'blocker',
+          severity: 'warning',
           reason_code: 'FLAG_FOR_REVIEW',
-          reason_label: 'TA/DA class is 0 (flag for review)',
+          reason_label: 'TA/DA class set to 0 (flag for review) — TA/DA register will show flag_for_review; salary unaffected',
         });
       } else {
         const cls = e.ta_da_class;
@@ -2317,9 +2317,9 @@ router.get('/compute/readiness', (req, res) => {
           (cls === 5 && (!e.da_rate || !e.da_outstation_rate || !e.ta_rate_primary || !e.ta_rate_secondary));
         if (rateMissing) {
           empIssues.push({
-            severity: 'blocker',
+            severity: 'warning',
             reason_code: 'RATES_MISSING',
-            reason_label: `Class ${cls} rates incomplete in master`,
+            reason_label: `Class ${cls} rates incomplete in master — TA/DA will compute partial; salary unaffected`,
           });
         }
       }

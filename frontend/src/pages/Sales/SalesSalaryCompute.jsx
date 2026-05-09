@@ -364,7 +364,7 @@ export default function SalesSalaryCompute() {
               </span>
               <span className="text-xs opacity-75">
                 {readiness.summary.blockers > 0
-                  ? `Compute will skip ${readiness.summary.blockers} entry/entries and produce incomplete output.`
+                  ? `Salary will not compute for ${readiness.summary.blockers} entry/entries (missing gross salary). Fix in master before running.`
                   : 'Compute will run; downstream exports may exclude flagged employees.'}
               </span>
             </div>
@@ -395,7 +395,7 @@ export default function SalesSalaryCompute() {
               )}
               {readiness.summary.blockers > 0 && (
                 <div className="mb-2">
-                  <div className="font-semibold mb-1">BLOCKERS — compute will skip these</div>
+                  <div className="font-semibold mb-1">BLOCKERS — salary will not compute (fix master first)</div>
                   {readiness.issues.filter(i => i.severity === 'blocker').map((i, idx) => (
                     <div key={`b${idx}`} className="font-mono">
                       <span className="inline-block w-16">{i.code}</span>
@@ -409,7 +409,7 @@ export default function SalesSalaryCompute() {
               )}
               {readiness.issues.filter(i => i.severity === 'warning').length > 0 && (
                 <div>
-                  <div className="font-semibold mb-1">WARNINGS — compute will run, downstream may exclude</div>
+                  <div className="font-semibold mb-1">WARNINGS — salary will compute; TA/DA register or NEFT export may be incomplete</div>
                   {readiness.issues.filter(i => i.severity === 'warning').map((i, idx) => (
                     <div key={`w${idx}`} className="font-mono">
                       <span className="inline-block w-16">{i.code}</span>
