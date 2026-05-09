@@ -136,35 +136,19 @@ router.post('/calculate-days', (req, res) => {
           }
         }
 
-        // Get fully-approved extra duty grants, excluding grants whose
-        // grant_date overlaps with a WOP/WO½P attendance day — those days
-        // are already counted via daysWOP in the attendance loop, so
-        // including them here would double-count and inflate finalPayable.
-        let manualExtraDutyDays = 0;
-        if (!isContract) {
-          try {
-            const wopDates = new Set(
-              records
-                .filter(r => {
-                  const s = r.status_final || r.status_original || '';
-                  return s === 'WOP' || s === 'WO½P';
-                })
-                .map(r => r.date)
-            );
-            // PBA (PRE_BIOMETRIC_ACTIVATION) grants are excluded: their days
-            // already flow through daysPresent via the placeholder
-            // attendance_processed row, so counting them here would double-pay.
-            const approvedGrants = db.prepare(`
-              SELECT grant_date, duty_days FROM extra_duty_grants
-              WHERE employee_code = ? AND month = ? AND year = ?
-                AND status = 'APPROVED' AND finance_status = 'FINANCE_APPROVED'
-                AND grant_type != 'PRE_BIOMETRIC_ACTIVATION'
-            `).all(empCode, month, year);
-            manualExtraDutyDays = approvedGrants
-              .filter(g => !wopDates.has(g.grant_date))
-              .reduce((sum, g) => sum + (g.duty_days || 0), 0);
-          } catch {}
-        }
+        // ── manualExtraDutyDays retired (April/May 2026) ──
+        // Finance-approved extra_duty_grants are now paid SOLELY via the
+        // ed_pay bucket in salaryComputation.js. They must NOT inflate
+        // Stage 6's totalPayableDays or extra_duty_days, otherwise the
+        // same physical duty is paid twice (once via ot_pay from inflated
+        // extra_duty_days, again via ed_pay).
+        //
+        // OT (ot_pay) covers biometric-detected WOP/WO½P overflow only.
+        // ED (ed_pay) covers all finance-approved grants — including
+        // grants on WOP dates (legitimate day+night dual duty).
+        //
+        // The financeEDDays block below (display-only) remains untouched.
+        const manualExtraDutyDays = 0;
 
         // ── Finance-approved ED days (display-only on Stage 6) ──
         // Count grant days that DON'T overlap with WOP/punch-OT dates so the
