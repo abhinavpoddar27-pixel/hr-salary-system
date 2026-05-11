@@ -1,3 +1,5 @@
+// ── Sentry (must be first — before any other imports) ─────────
+require('./instrument');
 // ── Crash handlers (must be first) ────────────────────────────
 console.log('[BOOT] Starting HR Salary System...');
 console.log('[BOOT] Node version:', process.version);
@@ -306,6 +308,10 @@ if (IS_PROD) {
     console.warn('⚠️  Frontend dist/ not found. Run: npm run build --prefix frontend');
   }
 }
+
+// ── Sentry error handler (must be before global error handler) ─
+const Sentry = require('./instrument');
+Sentry.setupExpressErrorHandler(app);
 
 // ── Global error handler ──────────────────────────────────────
 app.use((err, req, res, next) => {

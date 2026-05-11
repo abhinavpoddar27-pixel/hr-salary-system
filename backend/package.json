@@ -10,6 +10,8 @@
     "test:transcribe": "node --env-file=.env test/transcribe-fixture.js"
   },
   "dependencies": {
+    "@sentry/node": "^8.55.2",
+    "@sentry/profiling-node": "^8.55.2",
     "bcryptjs": "^2.4.3",
     "better-sqlite3": "^9.6.0",
     "compression": "^1.8.1",
