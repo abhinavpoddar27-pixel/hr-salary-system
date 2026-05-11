@@ -467,15 +467,23 @@ function computeEmployeeSalary(db, employee, month, year, company, requestId = '
 
   // ═══ OT CALCULATION (day-based, SEPARATE from base salary) ═══
   // OT is ONLY added AFTER deductions — it never factors into grossEarned.
-  // April 2026 ED-integration overhaul: OT and ED are now SEPARATE buckets.
+  // April 2026 ED-integration overhaul + May 2026 dual-duty fix:
+  // OT and ED are SEPARATE buckets that CAN coexist on the same date.
   //
-  //   ot_pay = punch-based extra duty days (dayCalc.extra_duty_days) × otDailyRate
-  //   ed_pay = finance-APPROVED extra_duty_grants days × otDailyRate
-  //            (minus dates that overlap with WOP/punch OT — anti-double-count)
+  //   ot_pay = biometric-detected punch-based extra duty days
+  //            (dayCalc.extra_duty_days, sourced from WOP/WO½P statuses)
+  //            × otDailyRate
+  //   ed_pay = every finance-APPROVED extra_duty_grants day × otDailyRate
   //
-  // Same per-day rate (gross / calendarDays) for both, so payslips and the
-  // Payable-OT register can show the two columns side by side. Contractors
-  // get ZERO OT and ZERO ED.
+  // The two buckets MAY overlap on a single calendar date — e.g. an
+  // employee who works a day shift on Sunday (WOP → ot_pay) AND an
+  // overnight stay the same Sunday night (grant → ed_pay) is performing
+  // two distinct physical duties and is paid for both. Finance approval
+  // is the gate against redundant grants.
+  //
+  // Same per-day rate (gross / calendarDays) for both, so payslips and
+  // the Payable-OT register show the two columns side by side.
+  // Contractors get ZERO OT and ZERO ED.
   const otDailyRate = otPerDayRateDisplay;
   let totalOTDays = 0;
   let otPay = 0;
@@ -497,19 +505,12 @@ function computeEmployeeSalary(db, employee, month, year, company, requestId = '
     otPay = Math.round(totalOTDays * otDailyRate * 100) / 100;
 
     // ─── Finance-approved Extra Duty (ED) — separate bucket ───
-    // Pull every fully-approved grant for the month, then exclude any whose
-    // grant_date already coincides with a WOP/WO½P attendance day (those
-    // days were already paid via punch OT above). The remainder are truly
-    // additional finance grants — overnight stays without biometric, gate-
-    // record-only days, completed miss-punch reconciliations, etc.
+    // Pay every fully-approved grant for the month. No WOP-overlap
+    // exclusion: a grant on a WOP date represents a second physical
+    // duty performed alongside the day-shift WOP and must be paid.
+    // Finance approval at grant level is the safeguard against
+    // duplicate/erroneous grants — see May 2026 dual-duty fix.
     try {
-      const wopRows = db.prepare(`
-        SELECT DISTINCT date FROM attendance_processed
-        WHERE employee_code = ? AND month = ? AND year = ?
-          AND (status_final IN ('WOP', 'WO½P') OR status_original IN ('WOP', 'WO½P'))
-      `).all(employee.code, month, year);
-      const wopDateSet = new Set(wopRows.map(r => r.date));
-
       const approvedGrants = db.prepare(`
         SELECT grant_date, duty_days
         FROM extra_duty_grants
@@ -520,22 +521,18 @@ function computeEmployeeSalary(db, employee, month, year, company, requestId = '
           AND finance_status = 'FINANCE_APPROVED'
       `).all(employee.code, month, year);
 
-      const validEDGrants = approvedGrants.filter(g => !wopDateSet.has(g.grant_date));
-      const skipped = approvedGrants.length - validEDGrants.length;
-
       edDays = Math.round(
-        validEDGrants.reduce((sum, g) => sum + (g.duty_days || 0), 0) * 100
+        approvedGrants.reduce((sum, g) => sum + (g.duty_days || 0), 0) * 100
       ) / 100;
       // Cap ED days at calendar days as a safety net
       edDays = Math.min(edDays, daysInMonth);
       edPay = Math.round(edDays * otDailyRate * 100) / 100;
       financeExtraDuty = edDays;  // legacy alias
 
-      if (edDays > 0 || punchBasedOT > 0 || skipped > 0) {
+      if (edDays > 0 || punchBasedOT > 0) {
         console.log(
           `[ED] ${employee.code} ${month}/${year}: ` +
           `${approvedGrants.length} approved grants, ` +
-          `${validEDGrants.length} after WOP filter (skipped ${skipped}), ` +
           `punchOT=${punchBasedOT}, edDays=${edDays}, edPay=₹${edPay}`
         );
       }
