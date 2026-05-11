@@ -1,4 +1,46 @@
-## Last Session — 2026-05-06
+## Last Session — 2026-05-11
+
+**S168–S233 sales structure backfill — data fix, no code changes.**
+
+### What was fixed
+- 66 sales employees (codes S168–S233, IDs 168–233) had rows in `sales_employees` but no matching row in `sales_salary_structures` — a wiring carryover from Bug A (create handler did not write structures until commit f3b8e4f). They were being silently excluded from Sales Salary Compute.
+- Backfilled 66 structure rows via SQL Console UI write flow (PreviewModal → DiffView → ConfirmModal): `basic = gross_salary`, `hra=cca=conveyance=0`, `gross_salary = gross_salary` (mirrored from `sales_employees`), `effective_from='2026-05'`, `pf_applicable=esi_applicable=pt_applicable=0` (matches the pattern of the 167 seeded rows `created_by='master_import_2026-04-24'`).
+- All 66 affected codes had `status='Active'` and `gross_salary > 0` (range ₹14,000 S209 → ₹109,440 S189). All belong to Indriyan Beverages Pvt Ltd.
+
+### Decision: 100% Basic, reversible
+- HR-supplied real breakup, when received, supersedes via new structure rows with `effective_from >= '2026-06'` (existing `POST /employees/:code/structures` endpoint, history preserved by the `effective_from DESC` ordering in `getLatestStructure`).
+- The backfill rows are tagged `created_by='backfill_2026-05-11_S168-S233'` for clean filtering.
+
+### Rollback (if needed)
+```sql
+DELETE FROM sales_salary_structures WHERE created_by = 'backfill_2026-05-11_S168-S233';
+```
+Removes exactly the 66 backfill rows; the 167 `master_import_2026-04-24` seeded rows are untouched.
+
+### Verification (all via SQL Console MCP, read-only agent path)
+- Pre-write: `emp_total=233 emp_active=233 struct_rows=167 struct_emps=167 missing_structures=66` ✓
+- Post-write 5a: `struct_rows=233 struct_emps=233 missing_structures=0` ✓
+- Post-write 5b coherence_failures: `0` ✓ (every new row: basic=struct_gross=emp_gross, hra/cca/conveyance=0)
+- Post-write 5c: one row `effective_from='2026-05' n=66` ✓
+- Post-write 5d untouched_seeded: `167` ✓
+- Step 6 sample (S168/S189/S196/S231/S233): all 5 rows match expected ✓
+- Drift sanity on `sales_salary_computations`: top-5 drift rows all `0.00` ✓
+
+### Lesson learned — operational
+- **SQL Console UI requires single-line SQL statements.** Multi-line `INSERT ... SELECT ...` blocks paste fine into CodeMirror but the validator/parser fails to commit. Always flatten to one line before pasting. The verbatim INSERT used this session was:
+  ```sql
+  INSERT INTO sales_salary_structures (employee_id, created_by, effective_from, basic, hra, cca, conveyance, gross_salary, pf_applicable, esi_applicable, pt_applicable) SELECT se.id, 'backfill_2026-05-11_S168-S233', '2026-05', se.gross_salary, 0, 0, 0, se.gross_salary, 0, 0, 0 FROM sales_employees se LEFT JOIN sales_salary_structures sss ON sss.employee_id = se.id WHERE sss.id IS NULL AND se.status = 'Active' AND se.gross_salary > 0;
+  ```
+- Agent path (MCP / API key) cannot do writes — confirmed in this session. Writes require the SQL Console UI with admin JWT. Future structure-fix prompts should expect a "you run the INSERT in the UI, I'll verify" hand-off pattern.
+
+### Next session should
+- (a) Verify the 66 employees are no longer excluded on the Sales Salary Compute page (the readiness banner should drop them from the `NO_SALARY` blocker bucket — they'll still potentially appear under other warnings like `BANK_INCOMPLETE` if applicable).
+- (b) When HR sends the real component breakup for any of these 66, use `POST /employees/:code/structures` with `effective_from='2026-06'` (or whichever cycle the breakup takes effect from). The backfill row stays as the May 2026 effective record; the new row supersedes from June onward.
+- (c) The next compute cycle (Apr 26 → May 25, ready early June) will be the first cycle where these 66 are eligible.
+
+---
+
+## Previous Session — 2026-05-06
 
 **Hardening Phase 1 + Phase 2a shipped.**
 
