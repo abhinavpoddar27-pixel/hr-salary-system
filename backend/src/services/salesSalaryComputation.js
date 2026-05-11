@@ -110,14 +110,32 @@ function monthEndISO(month, year) {
 }
 
 // ── Salary structure lookup ───────────────────────────────────────────
+// Newly-onboarded sales employees often have a structure row created in
+// the month they joined the master, which can be AFTER the compute month
+// (e.g. April 2026 onboarding → structure.effective_from = '2026-05').
+// Without a fallback, the date-bounded query returns nothing and compute
+// silently skips them with reason='no_structure'. Fall back to the most
+// recent structure for the employee regardless of date so they aren't
+// dropped. Mirrors the plant fallback in salaryComputation.js.
 function getLatestStructure(db, employeeId, month, year) {
   const effectiveAsOf = `${year}-${String(month).padStart(2, '0')}`;
-  return db.prepare(`
+  let structure = db.prepare(`
     SELECT * FROM sales_salary_structures
      WHERE employee_id = ? AND effective_from <= ?
   ORDER BY effective_from DESC, id DESC
      LIMIT 1
   `).get(employeeId, effectiveAsOf);
+
+  if (!structure) {
+    structure = db.prepare(`
+      SELECT * FROM sales_salary_structures
+       WHERE employee_id = ?
+    ORDER BY effective_from DESC, id DESC
+       LIMIT 1
+    `).get(employeeId);
+  }
+
+  return structure;
 }
 
 // ── Gazetted holiday count inside a cycle date range ────────────────
