@@ -27,39 +27,77 @@
  * @param {number}  args.totalSundays      Number of Sundays (or other weekly-off days) in the month
  * @param {number}  args.leniency          Absent working days permitted before any Sunday is lost
  *                                         (plant default: 2; sales default: 2 per design §4.3)
+ * @param {string} [args.mode='proportional']  'proportional' (default — plant behavior,
+ *                                         tier-2 uses workingDays/totalSundays as the
+ *                                         per-Sunday divisor) or 'fixed_6' (sales-only,
+ *                                         tier-2 uses a fixed 6-working-day divisor).
+ *                                         Unknown values throw — no silent fallback.
  *
  * @returns {Object} Granting result:
  *   paidSundays      — number of Sundays paid this month
  *   unpaidSundays    — totalSundays - paidSundays
  *   tier             — 'tier1_full' | 'tier2_proportional' | 'tier3_none'
  *   threshold        — workingDays - leniency (breakpoint for tier 1 vs 2/3)
- *   daysPerWeeklyOff — workingDays / totalSundays (breakpoint for tier 2 vs 3)
+ *   daysPerWeeklyOff — workingDays / totalSundays (breakpoint for tier 2 vs 3 in proportional mode)
+ *   mode             — the rule mode that produced this result
+ *   denominator      — effective divisor that tier 2 used (6 for fixed_6, daysPerWeeklyOff otherwise)
  *   note             — human-readable explanation, goes into audit JSON
  */
-function calculateSundayCredit({ effectivePresent, workingDays, totalSundays, leniency }) {
+function calculateSundayCredit({ effectivePresent, workingDays, totalSundays, leniency, mode = 'proportional' }) {
+  if (mode !== 'proportional' && mode !== 'fixed_6') {
+    throw new Error(`calculateSundayCredit: unknown mode '${mode}' (allowed: 'proportional', 'fixed_6')`);
+  }
+
   const daysPerWeeklyOff = totalSundays > 0 ? workingDays / totalSundays : workingDays;
   const threshold = workingDays - leniency;
+  const denominator = mode === 'fixed_6' ? 6 : daysPerWeeklyOff;
 
   let paidSundays, unpaidSundays, tier, note;
 
-  if (effectivePresent >= threshold) {
-    // TIER 1: good attendance → all weekly offs paid
-    paidSundays = totalSundays;
-    unpaidSundays = 0;
-    tier = 'tier1_full';
-    note = `Tier 1: ${effectivePresent}/${workingDays} present (≥${threshold}) → All ${totalSundays} weekly offs paid`;
-  } else if (effectivePresent > daysPerWeeklyOff) {
-    // TIER 2: proportional — each chunk of working days earns 1 weekly off
-    paidSundays = Math.min(totalSundays, Math.floor(effectivePresent / daysPerWeeklyOff));
-    unpaidSundays = totalSundays - paidSundays;
-    tier = 'tier2_proportional';
-    note = `Tier 2: ${effectivePresent}/${workingDays} present. floor(${effectivePresent}/${daysPerWeeklyOff.toFixed(2)})=${paidSundays} weekly off(s) paid, ${unpaidSundays} lost`;
+  if (mode === 'fixed_6') {
+    // Sales fixed-6 mode: 1 Sunday earned for every 6 working days present.
+    // Tier breakpoints differ from proportional — tier 2's divisor is a
+    // hardcoded 6 rather than workingDays/totalSundays.
+    if (effectivePresent >= threshold) {
+      // TIER 1: good attendance → all weekly offs paid
+      paidSundays = totalSundays;
+      unpaidSundays = 0;
+      tier = 'tier1_full';
+      note = `Tier 1 (fixed_6): ${effectivePresent}/${workingDays} present (≥${threshold}) → All ${totalSundays} weekly offs paid`;
+    } else if (effectivePresent >= 6) {
+      // TIER 2: each 6 working days present earns 1 weekly off, capped at totalSundays
+      paidSundays = Math.min(totalSundays, Math.floor(effectivePresent / 6));
+      unpaidSundays = totalSundays - paidSundays;
+      tier = 'tier2_proportional';
+      note = `Tier 2 (fixed_6): ${effectivePresent}/${workingDays} present. floor(${effectivePresent}/6)=${paidSundays} weekly off(s) paid, ${unpaidSundays} lost`;
+    } else {
+      // TIER 3: <6 present → no weekly offs
+      paidSundays = 0;
+      unpaidSundays = totalSundays;
+      tier = 'tier3_none';
+      note = `Tier 3 (fixed_6): ${effectivePresent}/${workingDays} present (<6) → 0 weekly offs paid`;
+    }
   } else {
-    // TIER 3: severe absence → no weekly offs
-    paidSundays = 0;
-    unpaidSundays = totalSundays;
-    tier = 'tier3_none';
-    note = `Tier 3: ${effectivePresent}/${workingDays} present (≤${daysPerWeeklyOff.toFixed(2)}) → 0 weekly offs paid`;
+    // mode === 'proportional' — verbatim plant behavior. DO NOT CHANGE.
+    if (effectivePresent >= threshold) {
+      // TIER 1: good attendance → all weekly offs paid
+      paidSundays = totalSundays;
+      unpaidSundays = 0;
+      tier = 'tier1_full';
+      note = `Tier 1: ${effectivePresent}/${workingDays} present (≥${threshold}) → All ${totalSundays} weekly offs paid`;
+    } else if (effectivePresent > daysPerWeeklyOff) {
+      // TIER 2: proportional — each chunk of working days earns 1 weekly off
+      paidSundays = Math.min(totalSundays, Math.floor(effectivePresent / daysPerWeeklyOff));
+      unpaidSundays = totalSundays - paidSundays;
+      tier = 'tier2_proportional';
+      note = `Tier 2: ${effectivePresent}/${workingDays} present. floor(${effectivePresent}/${daysPerWeeklyOff.toFixed(2)})=${paidSundays} weekly off(s) paid, ${unpaidSundays} lost`;
+    } else {
+      // TIER 3: severe absence → no weekly offs
+      paidSundays = 0;
+      unpaidSundays = totalSundays;
+      tier = 'tier3_none';
+      note = `Tier 3: ${effectivePresent}/${workingDays} present (≤${daysPerWeeklyOff.toFixed(2)}) → 0 weekly offs paid`;
+    }
   }
 
   return {
@@ -68,6 +106,8 @@ function calculateSundayCredit({ effectivePresent, workingDays, totalSundays, le
     tier,
     threshold,
     daysPerWeeklyOff,
+    mode,
+    denominator,
     note,
   };
 }
@@ -92,9 +132,10 @@ function calculateSundayCredit({ effectivePresent, workingDays, totalSundays, le
  * @param {number} args.effectivePresent
  * @param {number} args.leniency
  * @param {string[]} [args.gazettedHolidayDates]  ISO dates inside the cycle
+ * @param {string}   [args.mode='proportional']    Pass-through to calculateSundayCredit (see its docstring).
  */
 function calculateSundayCreditFromCycle({
-  cycleStart, cycleEnd, effectivePresent, leniency, gazettedHolidayDates = [],
+  cycleStart, cycleEnd, effectivePresent, leniency, gazettedHolidayDates = [], mode = 'proportional',
 }) {
   const { cycleLengthDays, countSundaysInCycle, dateInCycle } = require('./cycleUtil');
   const calendarDays = cycleLengthDays(cycleStart, cycleEnd);
@@ -109,7 +150,7 @@ function calculateSundayCreditFromCycle({
   const workingDays = calendarDays - totalSundays - nonSundayHolidaysInCycle;
 
   return calculateSundayCredit({
-    effectivePresent, workingDays, totalSundays, leniency,
+    effectivePresent, workingDays, totalSundays, leniency, mode,
   });
 }
 
