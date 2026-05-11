@@ -1,3 +1,55 @@
+## Section 0: Last Session
+- **Date:** 2026-05-11
+- **Branch:** `fix/comp-off-duty-days-column` (single-commit, pushed; PR pending — open at https://github.com/abhinavpoddar27-pixel/hr-salary-system/pull/new/fix/comp-off-duty-days-column). Earlier in the same session, `claude/fix-payroll-double-pay-J13Qc` (OT/ED double-pay fix, 2 commits) was merged into `main` via PR #23 → `main` tip `e5682f8`.
+- **Last commit:** `8da6904` fix(payroll): drop non-existent duty_days from compensatory_off SELECT
+- **Files changed this session (across two fixes):**
+  - **Fix 1 — OT/ED double-pay (merged to main as PR #23):**
+    - `backend/src/routes/payroll.js` — replaced the 29-line `manualExtraDutyDays` query/filter/reduce block (lines 139-167) with a 13-line comment + `const manualExtraDutyDays = 0;` constant. Finance grants no longer inflate `extra_duty_days`. The adjacent `financeEDDays` display-only block stays untouched.
+    - `backend/src/services/salaryComputation.js` — rewrote the ED bucket (lines 499-544): dropped `wopRows`/`wopDateSet` SQL + filter + `validEDGrants` step. `edDays` now sums every finance-approved grant for the month, capped at `daysInMonth`. Docstring at lines 470-478 updated to "May 2026 dual-duty fix" explanation. Console log line dropped the "after WOP filter (skipped N)" fragment.
+  - **Fix 2 — `duty_days` column mismatch (pushed to `fix/comp-off-duty-days-column`, PR pending):**
+    - `backend/src/routes/payroll.js:206` — dropped `duty_days,` from the `SELECT start_date, end_date, duty_days, finance_status FROM compensatory_off_requests` column list.
+    - `backend/src/services/jobQueue.js:127` — same one-line edit.
+    - `backend/src/routes/import.js:1084` — same one-line edit (inside `runReimportRecompute`'s try/catch).
+- **What was fixed/built:**
+  - **Fix 1 (OT/ED double-pay):** Approved finance grants were being paid twice — once via `ot_pay` (because `manualExtraDutyDays` inflated `dayCalculation.extra_duty_days`) and once via `ed_pay`. Net April 2026 plant impact (after recompute): −₹66,880 across 30 employees from the double-pay, +₹533 for 1 employee (PRIKSHAN PASWAN 10009) from a same-day day-shift WOP + night-shift grant that was being underpaid by the WOP-overlap exclusion. Net change ≈ −₹66,347.
+  - **Fix 2 (`duty_days` column):** Stage 6 was failing silently for ALL 447 employees ("0 OK, 447 failed") because three SELECT statements referenced a non-existent column `duty_days` on `compensatory_off_requests` (real column is `days`, per Leave Phase 1 schema). Better-sqlite3 throws "no such column: duty_days" at `db.prepare()` time → per-employee try/catch swallows it → no audit trail → `stage_6_done=1` set regardless. This blocked Fix 1 from taking effect (Stage 7 read stale Stage 6 data). Dropping `duty_days` from the SELECT is safe because `dayCalculation.js:424` only reads `c.start_date`/`c.end_date`/`c.grant_date` from the result — `c.duty_days` was selected but never consumed.
+- **What's fragile:**
+  - **Fix 2 is not yet deployed.** Until PR for `fix/comp-off-duty-days-column` is merged + Railway redeploys, Stage 6 will continue to return "0 OK, 447 failed" silently. The April 2026 plant payroll cannot recompute until this lands.
+  - **Stage 6 swallows per-employee errors.** The try/catch at `backend/src/routes/payroll.js:257` pushes `err.message` into `errors[]` but never `console.log`s it. The errors only surface in the HTTP response body's `errorDetails` array — the UI doesn't display them. Future failures that affect all employees uniformly (like this one) will look like a 200 OK with 0 processed. Worth adding a `console.error` inside the catch for visibility.
+  - **`stage_6_done = 1` is set regardless of error count** (`payroll.js:265`). A run that fails for every employee still flips the flag. Any consumer that gates on this flag (e.g. the month-end checklist, the Stage 6 staleness banner) will falsely think Stage 6 succeeded.
+  - **`dayCalculation.js:424` reads `c.start_date || c.grant_date`** — `grant_date` is a `compensatory_off_requests` column NAME that doesn't exist either (real columns are `start_date`/`end_date`/`days`). The `||` fallback evaluates to undefined and the `if (!d) continue;` on the next line skips the iteration. Currently harmless because `c.start_date` is always present, but reads as a latent confusion source.
+  - **The OT/ED Fix 1 has NOT been re-verified post-deploy.** It's merged into `main` and presumed live on Railway, but Stage 7 reads stale Stage 6 data until Fix 2 lands. The validation SQL in the prompt (`employee 18557` expected `ot_pay ≈ ₹1,147`, `ed_pay ≈ ₹9,173`) is still pending.
+  - **`normalizeCompany` at `salaryComputation.js:99` still throws** for any `rawCompany` that's non-canonical AND not in `KNOWN_BAD_TAGS`. Currently no caller passes such a value (frontend "All Companies" sends `''`, which is in bad-tags). But if anyone introduces a third canonical company without extending `CANONICAL_COMPANIES`, or a new bad tag without extending `KNOWN_BAD_TAGS`, Stage 6 + Stage 7 will fail for that employee with a loud error.
+- **Unfinished work:**
+  - Open PR for `fix/comp-off-duty-days-column` → `main` (Abhinav via GitHub web UI).
+  - After merge + redeploy: retrigger Stage 6 for April 2026 from the HR UI. Expected log line: "Day calculation complete: N OK, 0 failed" (or similar non-zero OK).
+  - After Stage 6 succeeds: retrigger Stage 7 to materialize the OT/ED two-bucket model.
+  - Run the validation SQL from the prompt for `employee_code='18557'` (and the dual-duty case `10009 PRIKSHAN PASWAN`) to confirm `ot_pay`/`ed_pay` reflect the fixes.
+  - Investigate the ~₹66,347 net savings against the headline target — final outflow change should match within ±₹100.
+- **Known issues remaining:**
+  - **Stage 6 silent-failure pattern.** Add `console.error` inside the per-employee catch (`payroll.js:257-258`) so future identical failures show up in Railway logs without forcing operators to inspect HTTP response bodies. Also consider not setting `stage_6_done=1` when `errors.length === results.length` (i.e. zero successes).
+  - **`day_corrections.grant_date`-style field name confusion.** `dayCalculation.js:424` references `c.grant_date` as a fallback on `compensatory_off_requests` rows, but that column doesn't exist on the table. Dead branch — should be deleted or the SELECT extended to actually surface `grant_date` from somewhere meaningful.
+  - **Sandbox egress allowlist blocks `*.up.railway.app`** (documented in 2026-05-02 postmortem). Diagnostic curl from this sandbox returns `HTTP 403 Host not in allowlist`. SQL diagnostics go through the read-only SQL Console (Section 9.2) or the MCP connector (Section 9.3) when available — direct API smoke tests require a terminal that can reach Railway.
+  - **Harness branch restriction.** During this session, pushes to `feat/fix-ot-ed-double-count` returned 403 from the upstream proxy after the first commit went through. The work was preserved by pushing the same commits to `claude/fix-payroll-double-pay-J13Qc` (the harness-allowed branch). If a future session opens a feature branch outside the `claude/*` prefix, expect intermittent push rejections.
+- **Next session should:**
+  - (a) Open the PR for `fix/comp-off-duty-days-column` → `main` and merge it.
+  - (b) After Railway redeploys, retrigger Stage 6 for April 2026 from the HR UI. Capture the log line — expect non-zero OK count.
+  - (c) Retrigger Stage 7 once Stage 6 succeeds.
+  - (d) Run the validation SQL:
+    ```sql
+    SELECT dc.extra_duty_days AS dc_xd_days,
+           sc.punch_based_ot, sc.ed_days,
+           ROUND(sc.ot_pay,2) AS ot_pay,
+           ROUND(sc.ed_pay,2) AS ed_pay
+    FROM salary_computations sc
+    JOIN day_calculations dc
+      ON dc.employee_code = sc.employee_code
+     AND dc.month = sc.month AND dc.year = sc.year
+    WHERE sc.employee_code = '18557' AND sc.month = 4 AND sc.year = 2026;
+    ```
+    Expected: `dc_xd_days=1`, `punch_based_ot=1`, `ot_pay ≈ 1147`, `ed_days=8`, `ed_pay ≈ 9173`.
+  - (e) Plan the Stage 6 logging hardening (console.error inside the per-employee catch + gate `stage_6_done` on `results.length > 0`) as a small follow-up commit.
+
 ## Last Session — 2026-05-06
 
 **Hardening Phase 1 + Phase 2a shipped.**
