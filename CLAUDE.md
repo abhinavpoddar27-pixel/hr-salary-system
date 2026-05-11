@@ -1,3 +1,34 @@
+## Section 0: Last Session
+- **Date:** 2026-05-11
+- **Branch:** `claude/add-sunday-rule-sales-s0YEl` (merged to `main` via PR #26)
+- **Last commit:** `2fbbf7f` feat(sales): add fixed_6 Sunday rule mode (sales only); plant unchanged
+- **Files changed this session:**
+  - `backend/src/services/sundayRule.js` — `calculateSundayCredit()` gained optional `mode` param (`'proportional'`|`'fixed_6'`, default `'proportional'`); branches on mode; `mode` + `denominator` added to returned trace; unknown mode throws. `calculateSundayCreditFromCycle()` gets pass-through.
+  - `backend/src/services/salesSalaryComputation.js` — reads `sales_sundayRule_mode` from `policy_config` (default `'proportional'` when missing) and passes to `calculateSundayCredit`. Single new line at the policy-read block; call site updated to pass `mode`.
+  - `backend/src/database/schema.js` — appended `INSERT OR IGNORE` seed for `sales_sundayRule_mode='proportional'` so fresh deploys boot safely.
+- **What was fixed/built:** Sales-only fixed-6 Sunday rule mode. Tier 1: `effectivePresent ≥ workingDays - leniency` → all Sundays paid. Tier 2: `effectivePresent ≥ 6` → `paidSundays = min(totalSundays, floor(effectivePresent/6))`. Tier 3: else 0. Plant `dayCalculation.js` has zero callers of this shared function so plant remains byte-identical. 30/30 inline regression tests passed (6 plant byte-identity, 6 fixed_6 cases from spec, 6 trace/mode assertions, 2 throw-on-unknown, 2 cycle-wrapper pass-through, 4 prod-transition arithmetic, 4 fixed_6-vs-proportional distinguishing). Production `policy_config` flipped: `sales_leniency 3→4` (audit id 552, 10:35:34) and `sales_sundayRule_mode proportional→fixed_6` (audit id 550, 10:35:03).
+- **What's fragile:**
+  - `calculateSundayCredit` THROWS on unknown mode by design (no silent fallback). A typo in `policy_config.sales_sundayRule_mode` will crash the entire sales compute for every employee. Allowed values are strictly `'proportional'` and `'fixed_6'`. Document this if you ever add a third mode.
+  - The `'proportional'` branch is a verbatim copy of the pre-change tier logic, including identical `note` strings. Any "DRY up the two branches" refactor will break plant byte-identity. Don't.
+  - `schema.js` seed uses `INSERT OR IGNORE` — once the row exists, re-running the migration is a no-op. Production policy_config writes from SQL Console UI win permanently. This is correct but means the seed default (`'proportional'`) is irrelevant after first boot.
+  - **Phase 3 SQL recipe correction:** the original prompt said `INSERT INTO policy_config VALUES ('sales_sundayRule_mode', 'fixed_6', ...)` — that FAILS with UNIQUE violation because the schema seed populates the row on first boot. Use `UPDATE policy_config SET value='fixed_6' WHERE key='sales_sundayRule_mode'` instead. Update any runbook that references the old INSERT recipe.
+  - SQL Console writes layer enforces single-statement per preview. Pasting both UPDATEs separated by `;` returns `MULTI_STATEMENT_NOT_ALLOWED`. Submit one preview per statement.
+- **Unfinished work:**
+  - **Recompute NOT re-triggered against the new policy values.** Last April 2026 compute at 10:32:13 used proportional + leniency=3 (BEFORE the policy commits at 10:35:03 + 10:35:34). All 167 April rows still carry trace `"mode":"proportional", "leniency":3`. Same for Feb 2026.
+  - **Phase 3 Block 3 (NEFT clear) not yet run.** When recompute lands, clear `neft_exported_at` on the 50 NEFT-stamped April rows via SQL Console UI: `UPDATE sales_salary_computations SET neft_exported_at=NULL WHERE month=4 AND year=2026 AND neft_exported_at IS NOT NULL;`. Feb 2026 has 0 stamped rows, no clear needed there.
+- **Known issues remaining:**
+  - Admin password pasted in plain text in chat transcript (with a smart-quote typo on `username` that caused the initial curl login to fail). Rotate the `admin` user password via Settings → Users when convenient. No evidence of unauthorised use, but the transcript is now logged.
+  - Pre-existing Phase 2.5 backlog (per CLAUDE.md §10): `sql_console_audit.table_name` column still missing in production — surfaced again this session when I tried to filter by it (`SQL_EXECUTION_ERROR: no such column: table_name`). Add via `ALTER TABLE sql_console_audit ADD COLUMN table_name TEXT;` via SQL Console writes UI.
+  - Sales is single-company in production (`Indriyan Beverages Pvt Ltd`, 233 active employees). The original Phase 6 curl recipe assumed two companies (Indriyan + Asian Lakto) — Asian Lakto has zero sales rows. Future sales runbooks should not assume the two-company plant pattern.
+- **Next session should:**
+  - (a) MCP-verify `policy_config` still reads `sales_leniency=4, sales_sundayRule_mode='fixed_6'`.
+  - (b) Click **Recompute** on `https://hr-app-production-681b.up.railway.app/sales/compute` for Month=Feb Year=2026 Company=`Indriyan Beverages Pvt Ltd`, then again for Month=April Year=2026 same company. (The MCP connector is read-only by architecture and CANNOT trigger writes/compute — must go through UI or authenticated curl.)
+  - (c) MCP-verify post-recompute: query `sunday_rule_trace` on `(S008, S101, S136)` in April 2026 — expect `"mode":"fixed_6"`, `"leniency":4`, sundays_paid = `4, 4, 3`. Aggregate impact should show ~20 April rows + ~19 Feb rows with `sundays_paid` increased by 1, zero decreases.
+  - (d) Run Block 3 NEFT clear via SQL Console writes UI for the 50 stamped April rows.
+  - (e) Rotate admin password and add the `table_name` column to `sql_console_audit`.
+
+---
+
 ## Last Session — 2026-05-06
 
 **Hardening Phase 1 + Phase 2a shipped.**
