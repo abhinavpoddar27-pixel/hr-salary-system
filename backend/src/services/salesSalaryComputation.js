@@ -166,6 +166,11 @@ function computeSalesEmployee(db, { salesEmployee, monthlyInputRow, cycleStart, 
   }
 
   const leniency = getPolicyNumber(db, 'sales_leniency', 2);
+  // Sales-only Sunday rule mode toggle. Defaults to 'proportional' (mirrors
+  // plant behavior) when the key is missing, so this file is safe to run
+  // against an older DB before the seed migration lands. Plant compute is
+  // unaffected — it lives in dayCalculation.js which doesn't read this key.
+  const salesSundayMode = getPolicyValue(db, 'sales_sundayRule_mode', 'proportional');
   const pfCeiling = getPolicyNumber(db, 'pf_wage_ceiling', 15000);
   const esiThreshold = getPolicyNumber(db, 'esi_threshold', 21000);
   const pfEmpRate = getPolicyNumber(db, 'pf_employee_rate', 0.12);
@@ -230,6 +235,7 @@ function computeSalesEmployee(db, { salesEmployee, monthlyInputRow, cycleStart, 
     workingDays,
     totalSundays,
     leniency,
+    mode: salesSundayMode,
   });
   const sundaysPaid = sundayResult.paidSundays;
 

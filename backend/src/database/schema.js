@@ -2868,6 +2868,8 @@ If description and screenshot are incoherent or unrelated, set summary_confidenc
     'Sales Sunday-rule leniency: absent working days allowed before Sundays start being lost');
   seedSalesPolicy.run('sales_salary_divisor_mode', 'calendar',
     'Sales salary divisor: calendar|fixed_28|hybrid (Phase 3 implements calendar only)');
+  seedSalesPolicy.run('sales_sundayRule_mode', 'proportional',
+    'Sales Sunday rule mode: proportional (default, mirrors plant) or fixed_6 (1 Sunday per 6 working days). Sales-only.');
 
   // ── One-time migration: drop sales_diwali_ledger (Q5 reversal, April 2026)
   // Phase 3 originally created this table under the wrong Diwali policy model.
