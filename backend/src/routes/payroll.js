@@ -203,7 +203,7 @@ router.post('/calculate-days', (req, res) => {
         `).all(empCode, monthEndDate, monthStartDate);
 
         const approvedCompOff = db.prepare(`
-          SELECT start_date, end_date, duty_days, finance_status
+          SELECT start_date, end_date, finance_status
           FROM compensatory_off_requests
           WHERE employee_code = ?
             AND month = ? AND year = ?
