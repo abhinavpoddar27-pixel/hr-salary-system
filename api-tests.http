@@ -1,0 +1,299 @@
+### ============================================================
+### HR Salary System — HTTP Client request stubs
+### ============================================================
+### Usage in WebStorm:
+###   1. Copy http-client.env.json.example → http-client.env.json
+###   2. Fill in token (or hit "Login" first — script writes it)
+###   3. Choose env: "dev" / "prod" at top right
+###   4. Click ▶ next to any request
+###
+### Pipeline reference (CLAUDE.md Section 3, 7 stages):
+###   1 import  →  2 miss-punch  →  3 shift-check  →  4 night-shift
+###   →  5 corrections  →  6 day-calc  →  7 salary-compute
+### ============================================================
+
+
+### ──────────────────────────────────────────────────────────────
+### Health (public, no auth)
+### ──────────────────────────────────────────────────────────────
+GET {{baseUrl}}/api/health
+Accept: application/json
+
+
+### ──────────────────────────────────────────────────────────────
+### Auth — Login (writes hr_token + sets {{token}})
+### ──────────────────────────────────────────────────────────────
+POST {{baseUrl}}/api/auth/login
+Content-Type: application/json
+
+{
+  "username": "{{username}}",
+  "password": "{{password}}"
+}
+
+> {%
+  client.global.set("token", response.body.token);
+  client.log("token captured for subsequent requests");
+%}
+
+
+### Auth — Current user
+GET {{baseUrl}}/api/auth/me
+Authorization: Bearer {{token}}
+
+
+### Auth — Heartbeat (keeps session alive)
+POST {{baseUrl}}/api/auth/heartbeat
+Authorization: Bearer {{token}}
+
+
+### Auth — Permission matrix
+GET {{baseUrl}}/api/auth/permissions
+Authorization: Bearer {{token}}
+
+
+### ──────────────────────────────────────────────────────────────
+### Employees (CRUD)
+### ──────────────────────────────────────────────────────────────
+
+### Employees — List (paginated)
+GET {{baseUrl}}/api/employees?company=Indriyan Beverages&status=Active&limit=50
+Authorization: Bearer {{token}}
+
+
+### Employees — Get one by code
+GET {{baseUrl}}/api/employees/{{employeeCode}}?company=Indriyan Beverages
+Authorization: Bearer {{token}}
+
+
+### Employees — Create
+POST {{baseUrl}}/api/employees
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{
+  "code": "REPLACE_ME",
+  "name": "Test Employee",
+  "department": "QA",
+  "company": "Indriyan Beverages",
+  "designation": "Operator",
+  "date_of_joining": "2026-05-01",
+  "gross_salary": 18000,
+  "is_contractor": 0
+}
+
+
+### Employees — Update
+PUT {{baseUrl}}/api/employees/{{employeeCode}}
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{
+  "department": "QA",
+  "designation": "Senior Operator"
+}
+
+
+### Employees — Mark left (soft delete; respects manual marker)
+PUT {{baseUrl}}/api/employees/{{employeeCode}}/mark-left
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{
+  "exit_date": "2026-05-31",
+  "exit_reason": "Resigned"
+}
+
+
+### Employees — Update salary (gated by finance approval if gross changes)
+PUT {{baseUrl}}/api/employees/{{employeeCode}}/salary
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{
+  "gross_salary": 22000,
+  "basic": 13200,
+  "hra": 5280,
+  "conveyance": 1600,
+  "other_allowances": 1920,
+  "remark": "Annual hike"
+}
+
+
+### ──────────────────────────────────────────────────────────────
+### Biometric attendance upload (Stage 1)
+### Use WebStorm's "+" → file in the body — DON'T paste binary in here
+### ──────────────────────────────────────────────────────────────
+POST {{baseUrl}}/api/import/upload
+Authorization: Bearer {{token}}
+Content-Type: multipart/form-data; boundary=----HR-IMPORT-BOUNDARY
+
+------HR-IMPORT-BOUNDARY
+Content-Disposition: form-data; name="month"
+
+{{month}}
+------HR-IMPORT-BOUNDARY
+Content-Disposition: form-data; name="year"
+
+{{year}}
+------HR-IMPORT-BOUNDARY
+Content-Disposition: form-data; name="company"
+
+Indriyan Beverages
+------HR-IMPORT-BOUNDARY
+Content-Disposition: form-data; name="files"; filename="EESL_apr_2026.xls"
+Content-Type: application/vnd.ms-excel
+
+< ./samples/EESL_apr_2026.xls
+------HR-IMPORT-BOUNDARY--
+
+
+### Import — History
+GET {{baseUrl}}/api/import/history?month={{month}}&year={{year}}
+Authorization: Bearer {{token}}
+
+
+### Import — Summary
+GET {{baseUrl}}/api/import/summary/{{month}}/{{year}}?company=Indriyan Beverages
+Authorization: Bearer {{token}}
+
+
+### ──────────────────────────────────────────────────────────────
+### Stage transitions — Attendance (Stages 2-5)
+### ──────────────────────────────────────────────────────────────
+
+### Stage 2 — List unresolved miss punches
+GET {{baseUrl}}/api/attendance/miss-punches?month={{month}}&year={{year}}&company=Indriyan Beverages
+Authorization: Bearer {{token}}
+
+
+### Stage 2 — Resolve a miss punch
+POST {{baseUrl}}/api/attendance/miss-punches/{{missPunchId}}/resolve
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{
+  "in_time_final": "08:30",
+  "out_time_final": "18:30",
+  "status_final": "P",
+  "remark": "Forgot to punch OUT"
+}
+
+
+### Stage 4 — Night shift pairs
+GET {{baseUrl}}/api/attendance/night-shifts?month={{month}}&year={{year}}&company=Indriyan Beverages
+Authorization: Bearer {{token}}
+
+
+### Stage 4 — Confirm pair
+POST {{baseUrl}}/api/attendance/night-shifts/{{pairId}}/confirm
+Authorization: Bearer {{token}}
+
+
+### Stage 5 — Recalculate metrics (after shift/punch corrections)
+POST {{baseUrl}}/api/attendance/recalculate-metrics
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{
+  "month": {{month}},
+  "year": {{year}},
+  "company": "Indriyan Beverages"
+}
+
+
+### ──────────────────────────────────────────────────────────────
+### Stage transitions — Payroll (Stages 6-7)
+### ──────────────────────────────────────────────────────────────
+
+### Stage 6 — Calculate days
+POST {{baseUrl}}/api/payroll/calculate-days
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{
+  "month": {{month}},
+  "year": {{year}},
+  "company": "Indriyan Beverages"
+}
+
+
+### Stage 6 — Day calc register
+GET {{baseUrl}}/api/payroll/day-calculations?month={{month}}&year={{year}}&company=Indriyan Beverages
+Authorization: Bearer {{token}}
+
+
+### Stage 7 — Compute salary
+POST {{baseUrl}}/api/payroll/compute-salary
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{
+  "month": {{month}},
+  "year": {{year}},
+  "company": "Indriyan Beverages"
+}
+
+
+### Stage 7 — Salary register
+GET {{baseUrl}}/api/payroll/salary-register?month={{month}}&year={{year}}&company=Indriyan Beverages
+Authorization: Bearer {{token}}
+
+
+### Stage 7 — Finalise (gated by finance signoff)
+POST {{baseUrl}}/api/payroll/finalise
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{
+  "month": {{month}},
+  "year": {{year}},
+  "company": "Indriyan Beverages"
+}
+
+
+### Stage 7 — Payslip JSON for one employee
+GET {{baseUrl}}/api/payroll/payslip/{{employeeCode}}?month={{month}}&year={{year}}&company=Indriyan Beverages
+Authorization: Bearer {{token}}
+
+
+### ──────────────────────────────────────────────────────────────
+### Reports / Exports
+### ──────────────────────────────────────────────────────────────
+
+### Bank NEFT CSV
+GET {{baseUrl}}/api/reports/bank-salary-file?month={{month}}&year={{year}}&company=Indriyan Beverages&download=true
+Authorization: Bearer {{token}}
+
+
+### PF ECR
+GET {{baseUrl}}/api/reports/pf-ecr?month={{month}}&year={{year}}&company=Indriyan Beverages
+Authorization: Bearer {{token}}
+
+
+### ESI return
+GET {{baseUrl}}/api/reports/esi-return?month={{month}}&year={{year}}&company=Indriyan Beverages
+Authorization: Bearer {{token}}
+
+
+### ──────────────────────────────────────────────────────────────
+### Finance verification — sign-off (gates Stage 7 finalise)
+### ──────────────────────────────────────────────────────────────
+
+### Finance — Red flags
+GET {{baseUrl}}/api/finance-verify/red-flags?month={{month}}&year={{year}}&company=Indriyan Beverages
+Authorization: Bearer {{token}}
+
+
+### Finance — Sign off month
+POST {{baseUrl}}/api/finance-verify/signoff
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{
+  "month": {{month}},
+  "year": {{year}},
+  "company": "Indriyan Beverages",
+  "status": "approved",
+  "remark": "All red flags reviewed"
+}
