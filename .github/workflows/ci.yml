@@ -1,0 +1,183 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # ──────────────────────────────────────────────────────────────
+  # Quality — lint + type check
+  # ──────────────────────────────────────────────────────────────
+  lint:
+    name: Lint (eslint + tsc)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: |
+            backend/package-lock.json
+            frontend/package-lock.json
+
+      - name: Install backend deps
+        working-directory: backend
+        run: npm ci --no-audit --no-fund
+
+      - name: Install frontend deps
+        working-directory: frontend
+        run: npm ci --no-audit --no-fund
+
+      - name: ESLint (skipped if no config present)
+        run: |
+          if compgen -G ".eslintrc*" >/dev/null \
+             || compgen -G "eslint.config.*" >/dev/null \
+             || compgen -G "backend/.eslintrc*" >/dev/null \
+             || compgen -G "frontend/.eslintrc*" >/dev/null; then
+            npx eslint .
+          else
+            echo "No ESLint config found — skipping. Add one to enable this step."
+          fi
+
+      - name: TypeScript check (skipped if no tsconfig present)
+        run: |
+          if [ -f tsconfig.json ] \
+             || [ -f backend/tsconfig.json ] \
+             || [ -f frontend/tsconfig.json ]; then
+            npx tsc --noEmit
+          else
+            echo "No tsconfig.json found — project is plain JS, skipping."
+          fi
+
+  # ──────────────────────────────────────────────────────────────
+  # Dependency CVE scan
+  # ──────────────────────────────────────────────────────────────
+  audit:
+    name: npm audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Backend audit (high+critical only, non-blocking on moderate)
+        working-directory: backend
+        run: npm audit --omit=dev --audit-level=high || (echo "::warning::Backend has high/critical CVEs"; exit 0)
+        # Keeping non-blocking so noisy transitive deps don't gate merges.
+        # Tighten to `exit 1` when the backlog is clean.
+
+      - name: Frontend audit (high+critical only, non-blocking)
+        working-directory: frontend
+        run: npm audit --omit=dev --audit-level=high || (echo "::warning::Frontend has high/critical CVEs"; exit 0)
+
+  # ──────────────────────────────────────────────────────────────
+  # Backend Jest suite (with Infisical-injected dev env, if available)
+  # ──────────────────────────────────────────────────────────────
+  test:
+    name: Jest (backend)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: backend/package-lock.json
+
+      - name: Install backend deps
+        working-directory: backend
+        run: npm ci --no-audit --no-fund
+
+      - name: Install Infisical CLI (only when token is configured)
+        if: ${{ env.INFISICAL_TOKEN != '' }}
+        env:
+          INFISICAL_TOKEN: ${{ secrets.INFISICAL_TOKEN }}
+        uses: Infisical/secrets-action@v1.0.10
+        with:
+          method: "universal"
+          client-id: ${{ secrets.INFISICAL_CLIENT_ID }}
+          client-secret: ${{ secrets.INFISICAL_CLIENT_SECRET }}
+          env-slug: dev
+          project-slug: hr-salary
+          # Secrets are injected as GITHUB env vars for subsequent steps.
+
+      - name: Run tests
+        working-directory: backend
+        env:
+          NODE_ENV: test
+          # Test-only fallback. Real secrets come from Infisical when configured.
+          JWT_SECRET: ci-test-jwt-secret-do-not-use-in-prod-ci-test-jwt-secret-do-not-use
+        run: npm test -- --ci --reporters=default
+
+  # ──────────────────────────────────────────────────────────────
+  # Secret scanning
+  # ──────────────────────────────────────────────────────────────
+  gitleaks:
+    name: Gitleaks
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # GITLEAKS_LICENSE only needed for organisations >25 users; we're under that.
+
+  # ──────────────────────────────────────────────────────────────
+  # SQLite migration test — fresh DB, run initSchema, verify no errors
+  # ──────────────────────────────────────────────────────────────
+  migrate:
+    name: SQLite migration test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: backend/package-lock.json
+
+      - name: Install backend deps (better-sqlite3 needs python+build tools, preinstalled on ubuntu-latest)
+        working-directory: backend
+        run: npm ci --no-audit --no-fund
+
+      - name: Run migrations on fresh in-memory DB
+        working-directory: backend
+        run: |
+          node -e "
+            const Database = require('better-sqlite3');
+            const { initSchema } = require('./src/database/schema');
+            const db = new Database(':memory:');
+            console.log('[migrate-test] Empty DB created.');
+            const t0 = Date.now();
+            initSchema(db);
+            const elapsed = Date.now() - t0;
+            const tables = db.prepare(\"SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name\").all();
+            console.log('[migrate-test] initSchema completed in ' + elapsed + 'ms.');
+            console.log('[migrate-test] Tables created: ' + tables.length);
+            tables.forEach(t => console.log('  - ' + t.name));
+            if (tables.length < 30) {
+              console.error('[migrate-test] FAIL: expected at least 30 tables, got ' + tables.length);
+              process.exit(1);
+            }
+            // Idempotency — running initSchema twice must not error.
+            const t1 = Date.now();
+            initSchema(db);
+            console.log('[migrate-test] Re-run (idempotency) completed in ' + (Date.now() - t1) + 'ms.');
+            console.log('[migrate-test] PASS');
+          "
