@@ -1995,3 +1995,106 @@ distinguish legitimate connector queries from URL-discovery queries.
 - Bug #10 April 1 / May 1 attendance corruption (re-run via MCP connector)
 - 1082 employees vs ~265-300 active expectation — confirm with active-only 
   query (test case for new MCP connector)
+
+## Section 11: JetBrains (WebStorm) Integration
+
+This section documents the JetBrains workspace setup so anyone opening the
+repo in WebStorm gets a working dev loop without hand-rolling configs.
+
+### Run configurations (shareable, committed under `.idea/runConfigurations/`)
+
+All six are Shell Script type, working directory `$PROJECT_DIR$`,
+interpreter `/bin/zsh`, execute-in-terminal enabled. They invoke Infisical
+by absolute path (`/opt/homebrew/bin/infisical`) so they don't depend on
+WebStorm inheriting the right `PATH` from the GUI launcher.
+
+- **Dev — backend with Infisical**: `infisical run --env=dev -- npm run backend` → starts the Express server on `:3001` with dev secrets injected.
+- **Dev — frontend with Infisical**: `infisical run --env=dev -- npm run frontend` → starts the Vite dev server on `:5173`.
+- **Dev — both (compound)**: Compound run config that fires both above in parallel. Equivalent to root `npm run dev` (concurrently) but with Infisical wrapping and separate terminal tabs.
+- **Test — jest with Infisical**: `infisical run --env=dev -- npm test --prefix backend` → runs the backend Jest suite.
+- **Lint — eslint + tsc**: `npx eslint . && npx tsc --noEmit`. ⚠️ The repo currently has no ESLint or TypeScript config — this run config exists for future use; it will fail until those tools are configured.
+- **Smoke test — health endpoint (dev)**: `curl -sf http://localhost:3001/api/health` — quick liveness check after starting the backend config.
+
+### SQLite verification via WebStorm's Database tool window
+
+The production DB (~75 MB) is excluded from file indexing (see
+`.idea/hr-salary-system.iml` `<excludeFolder>` entries) so WebStorm doesn't
+try to parse it as text. Use the **Database tool window** instead:
+
+1. `View → Tool Windows → Database` (or `⌘1` then pick "Database").
+2. `+` (Data Source) → **SQLite**.
+3. Path: `/Users/abhinavpoddar/hr-salary-system/data/hr_system.db`
+   (production path on Railway is `$DATA_DIR/hr_system.db`).
+4. Driver: WebStorm will offer to download the JDBC driver — accept once.
+5. Test connection → OK.
+
+Once connected, WebStorm gives you:
+- Schema browser for all ~80 tables (right-click → "Jump to Source" works on column references in JS files).
+- Query console with autocomplete fed by the live schema.
+- Diff viewer between two snapshots (useful for verifying migrations against `backups/`).
+
+**Read-only enforcement**: set the data source to read-only via Database
+properties → Options → "Read-only" — same defense-in-depth as the SQL
+Console. For prod inspections, prefer the MCP connector path (Section 9.3)
+over connecting to a production DB file directly.
+
+### `.editorconfig`
+
+LF line endings, 2-space indent for JS/JSX/TS/JSON/CSS/HTML/YAML, tabs for
+Makefiles. Lockfiles (`package-lock.json` etc.) are left alone. WebStorm
+and VS Code both honour this file natively.
+
+### HTTP Client (`api-tests.http`)
+
+Stubs for the main API surface — auth, employees, biometric upload, the
+seven pipeline stage transitions, reports, finance signoff. Env values
+live in `http-client.env.json` (gitignored — copy from
+`http-client.env.json.example`). The login request captures the JWT into
+a global `{{token}}` so subsequent requests don't need manual token paste.
+
+### Index exclusions (`.idea/hr-salary-system.iml`)
+
+Excluded from WebStorm indexing to keep memory + startup time sane:
+`node_modules` (root + backend + frontend + mcp-server), `frontend/dist`,
+`frontend/.vite`, `coverage/`, `data/` and `backend/data/` (SQLite),
+`uploads/` and `backend/uploads/`, `backups/`, `build/`. None of these
+folders contain code you want to search by content.
+
+### What's gitignored (per `.gitignore`)
+
+JetBrains noise that personal-to-a-machine: `.idea/httpRequests/`,
+`.idea/dictionaries/`, `.idea/sonarlint/`, `.idea/aws.xml`,
+`.idea/usage.statistics.xml`, `.idea/copilot/`, `.idea/codemp/`,
+`.idea/jbai.xml`, `*.iws`, `out/`.
+`.idea/workspace.xml` is already covered by `.idea/.gitignore`.
+Real HTTP env values: `http-client.env.json` (the `.example` template
+stays committed). Local Infisical secret cache: `.infisical-secrets-cache`.
+
+## Section 12 — Security debt status (as of 2026-05-12)
+
+### Resolved (PR #28, 2026-05-12)
+- path-to-regexp ReDoS (backend, high)
+- ip-address XSS via express-rate-limit (backend, moderate × 2)
+- axios 15 advisories (frontend, high)
+- postcss XSS (frontend, moderate)
+- picomatch ReDoS (frontend, moderate)
+
+### Pending — Stage 2 (target: within 2 weeks)
+- jspdf 3→4 migration (frontend, critical ReDoS via dompurify)
+- esbuild/vite 8 upgrade (frontend, moderate dev-server issue)
+- Dedicated session needed: validate payslip rendering against last month's PDFs before merge
+
+### Pending — Stage 3 (target: this month)
+- xlsx (SheetJS community edition, high prototype pollution + ReDoS)
+- No clean fix from vendor
+- Risk profile: internal file flow only (EESL biometric uploads + user-initiated exports). No untrusted file input.
+- Decision needed: risk-accept with documentation OR swap to exceljs OR buy SheetJS Pro
+
+### Known broken (not security, but blocks CI)
+- TDS calculation tests failing — see issue #<TDS_ISSUE_NUMBER>
+- Pre-dates Wave 2 integration; surfaced by new CI pipeline
+- HIGH severity: real payroll accuracy concern
+
+### CI policy
+- `npm audit` job is currently `continue-on-error: true` (warning only)
+- Plan: tighten to blocking after Stage 2 + 3 ship
