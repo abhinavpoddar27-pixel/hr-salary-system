@@ -1,0 +1,7 @@
+<component name="ProjectRunConfigurationManager">
+  <configuration default="false" name="Dev — both (compound)" type="CompoundRunConfigurationType">
+    <toRun name="Dev — backend with Infisical" type="ShConfigurationType" />
+    <toRun name="Dev — frontend with Infisical" type="ShConfigurationType" />
+    <method v="2" />
+  </configuration>
+</component>
