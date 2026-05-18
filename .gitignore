@@ -21,3 +21,35 @@ uploads/
 scripts/master-data-extracted.json
 # SQL Console Phase 2 local test scaffolding (sandbox-only, never deployed)
 backend/_p2_*
+
+# ── JetBrains (WebStorm/IntelliJ) ──────────────────────────────
+# .idea/.gitignore already handles workspace.xml, shelf/, dataSources*.
+# These extra patterns are belt-and-braces for files JetBrains writes
+# outside that scope (httpRequests, AI assistant cache, indexed deps).
+.idea/httpRequests/
+.idea/dictionaries/
+.idea/sonarlint/
+.idea/aws.xml
+.idea/usage.statistics.xml
+.idea/copilot/
+.idea/codemp/
+.idea/jbai.xml
+*.iws
+out/
+
+# ── Infisical ──────────────────────────────────────────────────
+# Local secret cache:
+.infisical-secrets-cache
+# Workspace binding (.infisical.json is per-developer; keep out of VCS so
+# different machines / forks can bind to their own workspace):
+.infisical.json
+
+# ── HTTP Client real values (template is .example, committed) ──
+http-client.env.json
+http-client.private.env.json
+
+# ── Editor / OS noise ──────────────────────────────────────────
+.vscode/
+*.swp
+*.swo
+Thumbs.db
