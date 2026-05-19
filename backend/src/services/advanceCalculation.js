@@ -3,14 +3,15 @@
  *
  * Calculate advance eligibility for all ACTIVE employees.
  *
- * RULES (updated March 2026):
- * - Attendance counted from 1st to 20th of each month.
+ * RULES (updated May 2026):
+ * - Attendance counted from the 1st to the `advance_cutoff_date` of each month (default 15).
  * - Working days include: P, ½P, WOP PLUS paid Sundays (Sunday rule applies).
- * - Sundays within the 1st-20th window where the employee qualifies for paid Sunday
+ * - Sundays within the cutoff window where the employee qualifies for paid Sunday
  *   (worked ≥4 days in that week) count as working days.
- * - If ≥15 working days (1st-20th): advance = 55% of gross monthly salary.
- * - If <15 but >0 working days: advance = 80% of pro-rata salary (gross × workingDays/26 × 0.80).
- * - Employees with 0 working days are not eligible.
+ * - Employees with fewer than `advance_min_working_days` working days are ineligible
+ *   (default 5; matches `salary_hold_min_days` precedent).
+ * - If ≥15 working days: advance = 55% of gross monthly salary.
+ * - If 5–14 working days: advance = 80% of pro-rata salary (gross × workingDays/26 × 0.80).
  * - Inactive, Exited, and Left employees are excluded.
  * - Advance is recovered from the final salary of the same month.
  */
@@ -70,6 +71,7 @@ function calculateAdvances(db, month, year) {
   const cutoffDate = parseInt(getPolicyValue(db, 'advance_cutoff_date', 20));
   const advanceFractionHigh = parseFloat(getPolicyValue(db, 'advance_fraction', 0.55));
   const advanceFractionLow = parseFloat(getPolicyValue(db, 'advance_fraction_low', 0.80));
+  const minWorkingDays = parseFloat(getPolicyValue(db, 'advance_min_working_days', 5));
 
   const employees = db.prepare(`
     SELECT DISTINCT e.id, e.code, e.name, e.department, e.designation, e.gross_salary
@@ -103,7 +105,7 @@ function calculateAdvances(db, month, year) {
     // Total working days = present + paid Sundays
     const workingDays = presentDays + paidSundays;
 
-    let isEligible = workingDays > 0;
+    let isEligible = workingDays >= minWorkingDays;
     let advanceAmount = 0;
 
     if (isEligible) {

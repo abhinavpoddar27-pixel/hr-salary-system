@@ -739,7 +739,7 @@ function initSchema(db) {
   const insertPolicyIfMissing = db.prepare('INSERT OR IGNORE INTO policy_config (key, value, description) VALUES (?, ?, ?)');
   insertPolicyIfMissing.run('salary_hold_min_days', '5', 'Minimum payable days below which salary is held');
   insertPolicyIfMissing.run('advance_cutoff_date', '20', 'Attendance data cutoff date for advance calculation (1st to 20th)');
-  insertPolicyIfMissing.run('advance_min_working_days', '0', 'Minimum working days for advance eligibility (0 = any working days)');
+  insertPolicyIfMissing.run('advance_min_working_days', '5', 'Minimum working days for advance eligibility');
   insertPolicyIfMissing.run('advance_fraction', '0.50', 'Fraction of gross salary paid as advance (>=15 days)');
   insertPolicyIfMissing.run('advance_process_date', '19', 'Date of month when advance processing starts');
 
@@ -752,6 +752,9 @@ function initSchema(db) {
   insertPolicyIfMissing2.run('advance_fraction_low', '0.80', 'Fraction of pro-rata salary for advance (<15 days) — 80%');
   // Update existing advance_fraction from 0.50 to 0.55
   db.prepare("UPDATE policy_config SET value = '0.55', description = 'Fraction of gross salary paid as advance (>=15 days) — 55%' WHERE key = 'advance_fraction' AND value = '0.50'").run();
+  // One-time migration: enforce 5-day advance floor (May 2026).
+  // Previously seeded as 0 (no floor) or manually set to 9 in some envs.
+  db.prepare("UPDATE policy_config SET value = '5', description = 'Minimum working days for advance eligibility' WHERE key = 'advance_min_working_days'").run();
 
   // ── Force-reset policy config to known defaults (undo any HR-user modifications) ──
   const policyDefaults = [
@@ -770,6 +773,7 @@ function initSchema(db) {
     ['pt_slab_2_amount', '150'],
     ['pt_slab_3_amount', '200'],
     ['salary_hold_min_days', '5'],
+    ['advance_min_working_days', '5'],
     ['advance_fraction', '0.55'],
     ['advance_fraction_low', '0.80'],
     ['sunday_grant_threshold', '6'],
