@@ -216,7 +216,7 @@ router.get('/ta-da/register',
       const taDaClass = (taDaClassRaw !== undefined && taDaClassRaw !== '')
         ? parseInt(taDaClassRaw, 10) : null;
       const page = Math.max(1, parseInt(req.query.page, 10) || 1);
-      const pageSize = Math.min(1000, Math.max(1, parseInt(req.query.pageSize, 10) || 200));
+      const pageSize = Math.min(1000, Math.max(1, parseInt(req.query.pageSize, 10) || 1000));
 
       if (!month || !year || !company) {
         return res.status(400).json({ success: false, error: 'month, year, and company are required' });
