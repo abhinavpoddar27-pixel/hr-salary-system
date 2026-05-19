@@ -191,7 +191,7 @@ export default function SalaryAdvance() {
         {/* Policy Info */}
         <div className="card p-4 bg-blue-50/50 border-blue-200">
           <p className="text-sm text-blue-800">
-            <span className="font-semibold">Policy:</span> Attendance counted from 1st to 20th (Sundays with {'\u2265'}4 working days count as paid days). If {'\u2265'}15 working days {'\u2192'} advance = 55% of gross salary. If {'<'}15 days {'\u2192'} advance = 80% of pro-rata salary due. Advance recovered from final salary.
+            <span className="font-semibold">Policy:</span> Attendance counted from 1st to 15th (Sundays with {'\u2265'}4 working days count as paid days). Minimum 5 working days required for eligibility. If {'\u2265'}15 working days {'\u2192'} advance = 55% of gross salary. If 5{'\u2013'}14 working days {'\u2192'} advance = 80% of pro-rata salary due. Advance recovered from final salary.
           </p>
         </div>
 
@@ -280,7 +280,7 @@ export default function SalaryAdvance() {
                     </th>
                     <SortHeader k="employee_name"><Abbr code="Emp">Employee</Abbr></SortHeader>
                     <SortHeader k="department"><Abbr code="Dept">Dept</Abbr></SortHeader>
-                    <SortHeader k="working_days_1_to_15" className="text-center">Days (1-20)</SortHeader>
+                    <SortHeader k="working_days_1_to_15" className="text-center">Days (1-15)</SortHeader>
                     <SortHeader k="is_eligible" className="text-center">Eligible</SortHeader>
                     <SortHeader k="advance_amount" className="text-center">Amount</SortHeader>
                     <th>Remark</th>
