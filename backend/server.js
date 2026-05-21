@@ -227,6 +227,7 @@ app.use('/api/sales',            requireAuth, require('./src/routes/sales'));
 app.use('/api/query-tool',       requireAuth, require('./src/routes/queryTool'));
 app.use('/api/ai',               requireAuth, require('./src/routes/ai'));
 app.use('/api/admin/health-checks', requireAuth, require('./src/routes/healthChecks'));
+app.use('/api/admin/record-history', requireAuth, require('./src/routes/recordHistory'));
 
 // Bug Reporter authed routes. webhookRouter is mounted earlier (before
 // express.json) so the webhook handler can read raw bytes for HMAC
