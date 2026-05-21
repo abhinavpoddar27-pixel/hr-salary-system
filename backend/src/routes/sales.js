@@ -1283,6 +1283,46 @@ router.post('/employees', (req, res) => {
           : `Sales employee created in ${body.company} (code auto-assigned)`,
       });
 
+      // Bug #14 fix: auto-create a sales_salary_structures row so the new
+      // employee is visible to POST /sales/compute. Without this, compute
+      // joins on sales_salary_structures and silently skips them with
+      // reason='no_structure'. UPSERT keeps re-saves safe; SET lists every
+      // mutable column so a re-save never silently zeros a value.
+      const grossNum = Number(body.gross_salary) || 0;
+      const effectiveFrom = (body.doj && String(body.doj).trim())
+        ? String(body.doj).trim().substring(0, 7)
+        : new Date().toISOString().substring(0, 7);
+      const pfApp = body.pf_applicable ? 1 : 0;
+      const esiApp = body.esi_applicable ? 1 : 0;
+      const ptApp = body.pt_applicable ? 1 : 0;
+
+      const structInfo = db.prepare(`
+        INSERT INTO sales_salary_structures
+          (employee_id, effective_from, basic, hra, cca, conveyance,
+           gross_salary, pf_applicable, esi_applicable, pt_applicable, created_by)
+        VALUES (?, ?, ?, 0, 0, 0, ?, ?, ?, ?, ?)
+        ON CONFLICT(employee_id, effective_from) DO UPDATE SET
+          basic           = excluded.basic,
+          hra             = excluded.hra,
+          cca             = excluded.cca,
+          conveyance      = excluded.conveyance,
+          gross_salary    = excluded.gross_salary,
+          pf_applicable   = excluded.pf_applicable,
+          esi_applicable  = excluded.esi_applicable,
+          pt_applicable   = excluded.pt_applicable
+      `).run(info.lastInsertRowid, effectiveFrom, grossNum, grossNum, pfApp, esiApp, ptApp, user);
+
+      writeAudit(db, {
+        recordId: info.lastInsertRowid,
+        empCode: assignedCode,
+        field: 'salary_structure',
+        oldVal: '',
+        newVal: `basic=${grossNum}, gross=${grossNum}, effective_from=${effectiveFrom}`,
+        user,
+        actionType: 'create_structure',
+        remark: `Auto-created sales_salary_structures (structure_id=${structInfo.lastInsertRowid}, basic=${grossNum}, gross=${grossNum}, effective_from=${effectiveFrom})`,
+      });
+
       const row = db.prepare('SELECT * FROM sales_employees WHERE id = ?').get(info.lastInsertRowid);
       return row;
     })();
