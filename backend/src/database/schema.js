@@ -2938,6 +2938,95 @@ If description and screenshot are incoherent or unrelated, set summary_confidenc
     }
   }
 
+  // ── Bug #14 backfill — sales_salary_structures for Indriyan (May 2026) ─
+  // Sales employees added to the master with a gross salary but no
+  // sales_salary_structures row were silently skipped by salary compute
+  // (joins on sales_salary_structures → reason='no_structure'). The create
+  // path is now fixed in routes/sales.js POST /employees, but four already-
+  // affected employees on Indriyan need a one-off backfill so the May 2026
+  // deploy self-heals without HR rework. Production-confirmed set is
+  // exactly S236, S237, S238, S239 (gross 20000/31000/20000/16000).
+  // Idempotent: gated on policy_config + NOT EXISTS filter + UPSERT.
+  const salesStructBackfillDone = db.prepare(
+    "SELECT value FROM policy_config WHERE key = 'migration_sales_structures_backfill_indriyan_v1'"
+  ).get();
+
+  if (!salesStructBackfillDone) {
+    try {
+      const orphans = db.prepare(`
+        SELECT e.id, e.code, e.name, e.gross_salary, e.doj,
+               e.pf_applicable, e.esi_applicable, e.pt_applicable
+          FROM sales_employees e
+         WHERE e.company = 'Indriyan Beverages Pvt Ltd'
+           AND e.status = 'Active'
+           AND NOT EXISTS (
+             SELECT 1 FROM sales_salary_structures s WHERE s.employee_id = e.id
+           )
+      `).all();
+
+      const upsertStruct = db.prepare(`
+        INSERT INTO sales_salary_structures
+          (employee_id, effective_from, basic, hra, cca, conveyance,
+           gross_salary, pf_applicable, esi_applicable, pt_applicable, created_by)
+        VALUES (?, ?, ?, 0, 0, 0, ?, ?, ?, ?, ?)
+        ON CONFLICT(employee_id, effective_from) DO UPDATE SET
+          basic           = excluded.basic,
+          hra             = excluded.hra,
+          cca             = excluded.cca,
+          conveyance      = excluded.conveyance,
+          gross_salary    = excluded.gross_salary,
+          pf_applicable   = excluded.pf_applicable,
+          esi_applicable  = excluded.esi_applicable,
+          pt_applicable   = excluded.pt_applicable
+      `);
+
+      const insertAudit = db.prepare(`
+        INSERT INTO audit_log
+          (table_name, record_id, field_name, old_value, new_value,
+           changed_by, stage, remark, employee_code, action_type)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `);
+
+      const created = [];
+      const txn = db.transaction(() => {
+        for (const e of orphans) {
+          const gross = Number(e.gross_salary) || 0;
+          const effFrom = (e.doj && String(e.doj).trim())
+            ? String(e.doj).trim().substring(0, 7)
+            : new Date().toISOString().substring(0, 7);
+          const pf = e.pf_applicable ? 1 : 0;
+          const esi = e.esi_applicable ? 1 : 0;
+          const pt = e.pt_applicable ? 1 : 0;
+
+          upsertStruct.run(e.id, effFrom, gross, gross, pf, esi, pt, 'backfill_v1');
+          created.push(e.code);
+
+          insertAudit.run(
+            'sales_salary_structures', e.id, 'salary_structure',
+            '', `basic=${gross}, gross=${gross}, effective_from=${effFrom}`,
+            'backfill_v1', 'migration',
+            `Bug #14 backfill — auto-created structure for ${e.code} (${e.name})`,
+            e.code, 'backfill_create'
+          );
+        }
+
+        db.prepare(
+          "INSERT OR REPLACE INTO policy_config (key, value, description) VALUES ('migration_sales_structures_backfill_indriyan_v1', '1', 'Bug #14: one-off backfill of sales_salary_structures for Indriyan Active employees with no structure row')"
+        ).run();
+      });
+      txn();
+
+      if (created.length > 0) {
+        console.log(`[MIGRATION] sales_structures_backfill_indriyan_v1: created ${created.length} structure(s) for: ${created.join(', ')}`);
+      } else {
+        console.log('[MIGRATION] sales_structures_backfill_indriyan_v1: no orphans found (already healthy)');
+      }
+    } catch (e) {
+      console.error('[MIGRATION] sales_structures_backfill_indriyan_v1: FAILED —', e.message);
+      // Flag NOT set → migration retries on next boot.
+    }
+  }
+
   // ── May 2026: drop `company` from UNIQUE on salary_computations + day_calculations ──
   //
   // Original constraint UNIQUE(employee_code, month, year, company) allowed the same

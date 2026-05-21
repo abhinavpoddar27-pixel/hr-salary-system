@@ -1,4 +1,40 @@
-## Last Session — 2026-05-06
+## Last Session — 2026-05-21
+
+**Bug #14 fix shipped — sales employees no longer silently skipped by salary compute.**
+
+### Problem
+Sales employees added to master via `POST /api/sales/employees` got a `sales_employees` row but NO `sales_salary_structures` row. Salary compute joins on `sales_salary_structures` via `getLatestStructure()` → returns `{ excluded: true, reason: 'no_structure' }`, silently dropping the employee from the period's computation. Production: S236, S237, S238, S239 on Indriyan (gross 20000/31000/20000/16000), matched in sales_monthly_input upload_id=14 (days 3/5/4/7), but 0 rows in `sales_salary_computations` for 4/2026.
+
+### Files changed
+- `backend/src/routes/sales.js` — POST /employees handler (lines 1204-1297) extended: inside the same `db.transaction(...)`, after the `sales_employees` INSERT, runs an `INSERT INTO sales_salary_structures ... ON CONFLICT(employee_id, effective_from) DO UPDATE SET <every column>`. Uses gross_salary as basic, hra/cca/conveyance=0, effective_from derived from `body.doj.substring(0,7)` with current-month fallback. A second `writeAudit(...)` call (actionType='create_structure') is added in the same transaction.
+- `backend/src/database/schema.js` — new idempotent migration block gated on policy_config key `migration_sales_structures_backfill_indriyan_v1`, placed right after the sales_master_import_v1 block. Queries Active Indriyan employees with no structure, UPSERTs a structure row for each, writes audit rows with `action_type='backfill_create'`, sets the flag. Production-confirmed set is exactly S236/S237/S238/S239 (gross 20000/31000/20000/16000).
+
+### What was verified
+- Local SQLite simulation (27/27 assertions in 5 scenarios): happy path with DOJ, edge case without DOJ (falls back to current YYYY-MM), UPSERT safety (no duplicates, values update in place, structure count stays at 1), compute integration (computeSalesEmployee now returns success=true and saveSalesSalaryComputation persists the row: gross=15000, days=20, net=12000), backfill idempotency (first run creates structure for orphan, sets flag; second run is no-op).
+- `node --check` clean on both modified files.
+- Backend Jest: 57/60 pass; 3 pre-existing TDS failures (CLAUDE.md Section 12 "Pre-dates Wave 2 integration") unrelated to sales code.
+- Production state pre-fix confirmed via MCP SQL: S236-S239 have `structure_count=0`, `match_confidence='exact'` in upload_id=14 with sheet_days=3/5/4/7, 0 computation rows. Total Indriyan 4/2026 computed rows = 233 (expected 237 post-fix + recompute).
+
+### Validation needed POST-DEPLOY (cannot do from this sandbox)
+- **#1, #2** (structures exist, no active Indriyan missing structures) — verifiable from this session via MCP SQL after Railway deploy runs the migration.
+- **#3** (4 rows produced for the affected employees with days 3/5/4/7) — HR must log into the UI and click Compute for Indriyan 4/2026. Then MCP verifies the 4 rows appear.
+- **#4** (drift sanity) — full `salary_computations` drift query, expect ≤1 across all rows.
+- **#5** (regression: total goes 233→237, S016/S055/S193 net unchanged) — MCP verifiable post-compute.
+
+### What's fragile
+- **`PUT /employees/:code` (UPDATE handler) does NOT sync structure on gross_salary edits.** If HR edits gross after onboarding via the employee master, the structure row keeps the OLD gross. Out of scope for this prompt — separate follow-up.
+- **The migration's `NOT EXISTS` filter is permissive** — runs against ALL Active Indriyan employees missing a structure, not just the 4 known codes. If new orphans appear before deploy, they'll also get backfilled with default `hra/cca/conveyance=0`. Acceptable: matches the create-path semantic. Production-confirmed orphan count = 4.
+- **`effective_from` from `body.doj.substring(0,7)`** assumes ISO `YYYY-MM-DD` shape. If someone POSTs `doj` in `DD/MM/YYYY` format the substring will be `DD/MM/`. Current frontend posts ISO, but a future API consumer could break this silently. Worth a regex validator in a follow-up.
+- **`computeSalesEmployee` still silently skips `no_structure`** instead of surfacing a warning to the UI. With the create-path fix in place, recurrence is unlikely — but a structured warning in `POST /sales/compute` response would help catch future drift.
+
+### Known issues / OOS
+- `sales_uploads` supersede behaviour bug (separate, OOS).
+- Compute should surface `excluded.reason='no_structure'` warnings instead of silent skips (follow-up).
+- `PUT /employees/:code` not syncing structure on gross edits (follow-up).
+
+---
+
+## Previous Session — 2026-05-06
 
 **Hardening Phase 1 + Phase 2a shipped.**
 
