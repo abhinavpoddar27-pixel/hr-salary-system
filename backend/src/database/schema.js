@@ -2457,6 +2457,18 @@ If description and screenshot are incoherent or unrelated, set summary_confidenc
     }
   }
 
+  // ── Sales upload active-pointer (May 2026) ───────────────────────────
+  // Single DB-enforced fact for "which upload is authoritative" per
+  // (month, year, company). Replaces every reader's implicit ORDER BY
+  // uploaded_at DESC / status filter — all readers consult is_active=1.
+  // The partial unique index physically enforces at-most-one active per
+  // period. Backfill (further down) stamps existing periods.
+  // Placed AFTER the sales_uploads rebuild migration so the column
+  // survives DROP+CREATE on fresh DBs.
+  safeAddColumn('sales_uploads', 'is_active', 'INTEGER DEFAULT 0');
+  safeCreateIndex(`CREATE UNIQUE INDEX IF NOT EXISTS uniq_sales_uploads_active_period
+    ON sales_uploads(month, year, company) WHERE is_active = 1`);
+
   // ── Sales Salary Module — Phase 3 (compute engine) ───────────────────
   // sales_salary_computations is the Phase 3 output. `incentive_amount`
   // column is reserved for HR-entered variable pay (Q6). `diwali_recovery`
@@ -3023,6 +3035,83 @@ If description and screenshot are incoherent or unrelated, set summary_confidenc
       }
     } catch (e) {
       console.error('[MIGRATION] sales_structures_backfill_indriyan_v1: FAILED —', e.message);
+      // Flag NOT set → migration retries on next boot.
+    }
+  }
+
+  // ── sales_uploads is_active backfill (May 2026) ──────────────────────
+  // Stamp is_active=1 on the winning upload per (month, year, company).
+  // Winner rule matches the existing implicit selector exactly:
+  //   ORDER BY uploaded_at DESC, id DESC LIMIT 1 from status IN
+  //   ('matched','computed'). Periods with no matched/computed upload are
+  //   skipped — they have no winner to point at.
+  // Per-period transaction does clear-others FIRST then set winner so the
+  // partial unique index never transiently sees two actives.
+  // Idempotent: gated on policy_config + UPDATE-then-set, safe to retry.
+  const uploadsIsActiveBackfillDone = db.prepare(
+    "SELECT value FROM policy_config WHERE key = 'migration_sales_uploads_is_active_v1'"
+  ).get();
+
+  if (!uploadsIsActiveBackfillDone) {
+    try {
+      const periods = db.prepare(`
+        SELECT DISTINCT month, year, company
+          FROM sales_uploads
+         WHERE status IN ('matched','computed')
+      `).all();
+
+      const findWinner = db.prepare(`
+        SELECT id FROM sales_uploads
+         WHERE month = ? AND year = ? AND company = ?
+           AND status IN ('matched','computed')
+         ORDER BY uploaded_at DESC, id DESC
+         LIMIT 1
+      `);
+      const clearLosers = db.prepare(`
+        UPDATE sales_uploads SET is_active = 0
+         WHERE month = ? AND year = ? AND company = ? AND id != ?
+      `);
+      const stampWinner = db.prepare(`
+        UPDATE sales_uploads SET is_active = 1 WHERE id = ?
+      `);
+      const insertAudit = db.prepare(`
+        INSERT INTO audit_log
+          (table_name, record_id, field_name, old_value, new_value,
+           changed_by, stage, remark, action_type)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `);
+
+      const stamped = [];
+      const perPeriod = db.transaction((p) => {
+        const winner = findWinner.get(p.month, p.year, p.company);
+        if (!winner) return;
+        clearLosers.run(p.month, p.year, p.company, winner.id);
+        stampWinner.run(winner.id);
+        stamped.push(`${p.month}/${p.year} ${p.company} → upload #${winner.id}`);
+        insertAudit.run(
+          'sales_uploads', winner.id, 'is_active',
+          '0', '1',
+          'backfill_v1', 'migration',
+          `is_active backfill — winner of ${p.month}/${p.year} ${p.company} (ORDER BY uploaded_at DESC, id DESC LIMIT 1)`,
+          'backfill_active_stamp'
+        );
+      });
+
+      const flag = db.transaction(() => {
+        for (const p of periods) perPeriod(p);
+        db.prepare(
+          "INSERT OR REPLACE INTO policy_config (key, value, description) VALUES ('migration_sales_uploads_is_active_v1', '1', 'Backfilled is_active=1 on the winning sales_uploads row per period (ORDER BY uploaded_at DESC, id DESC)')"
+        ).run();
+      });
+      flag();
+
+      if (stamped.length > 0) {
+        console.log(`[MIGRATION] sales_uploads_is_active_v1: stamped ${stamped.length} period winner(s): ${stamped.join('; ')}`);
+      } else {
+        console.log('[MIGRATION] sales_uploads_is_active_v1: no matched/computed uploads found');
+      }
+    } catch (e) {
+      console.error('[MIGRATION] sales_uploads_is_active_v1: FAILED —', e.message);
       // Flag NOT set → migration retries on next boot.
     }
   }

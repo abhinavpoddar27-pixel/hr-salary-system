@@ -433,8 +433,7 @@ router.patch('/ta-da/inputs/:code',
             FROM sales_monthly_input smi
             JOIN sales_uploads su ON su.id = smi.upload_id
            WHERE smi.employee_code = ? AND smi.month = ? AND smi.year = ? AND smi.company = ?
-             AND su.status IN ('matched', 'computed')
-           ORDER BY su.uploaded_at DESC
+             AND su.is_active = 1
            LIMIT 1
         `).get(code, month, year, company);
         daysWorked = attRow ? Math.round(parseFloat(attRow.sheet_days_given) || 0) : 0;
@@ -629,9 +628,11 @@ router.get('/ta-da/template-data/:class',
            AND mi.company = ?
           LEFT JOIN sales_monthly_input smi
             ON smi.employee_code = e.code
-           AND smi.month = ?
-           AND smi.year = ?
-           AND smi.company = ?
+           AND smi.upload_id = (
+                 SELECT id FROM sales_uploads
+                  WHERE month = ? AND year = ? AND company = ? AND is_active = 1
+                  LIMIT 1
+               )
          WHERE e.company = ?
            AND e.status = 'Active'
            AND e.ta_da_class = ?
@@ -697,7 +698,12 @@ router.post('/ta-da/upload/:class',
           LEFT JOIN sales_ta_da_monthly_inputs mi
             ON mi.employee_id = e.id AND mi.month = ? AND mi.year = ? AND mi.company = ?
           LEFT JOIN sales_monthly_input smi
-            ON smi.employee_code = e.code AND smi.month = ? AND smi.year = ? AND smi.company = ?
+            ON smi.employee_code = e.code
+           AND smi.upload_id = (
+                 SELECT id FROM sales_uploads
+                  WHERE month = ? AND year = ? AND company = ? AND is_active = 1
+                  LIMIT 1
+               )
          WHERE e.company = ? AND e.status = 'Active'
       `).all(month, year, company, month, year, company, company);
 
@@ -2229,7 +2235,25 @@ router.post('/upload/:uploadId/confirm', (req, res) => {
     });
   }
 
-  db.prepare("UPDATE sales_uploads SET status = 'matched' WHERE id = ?").run(uploadId);
+  // Confirm is the second write site that touches the active pointer.
+  // When HR confirms an upload it becomes authoritative for the period:
+  // demote any prior matched/computed losers and stamp this one active.
+  // Same clear-losers → stamp-winner order as the compute write site so
+  // the partial unique index never transiently sees two actives.
+  db.transaction(() => {
+    db.prepare(
+      `UPDATE sales_uploads SET is_active = 0
+        WHERE month = ? AND year = ? AND company = ? AND id != ?`
+    ).run(upload.month, upload.year, upload.company, uploadId);
+    db.prepare(
+      `UPDATE sales_uploads SET status = 'matched', is_active = 1 WHERE id = ?`
+    ).run(uploadId);
+    db.prepare(
+      `UPDATE sales_uploads SET status = 'superseded'
+        WHERE month = ? AND year = ? AND company = ?
+          AND id != ? AND status IN ('matched','computed')`
+    ).run(upload.month, upload.year, upload.company, uploadId);
+  })();
 
   writeAuditP2(db, 'sales_uploads', {
     recordId: uploadId, field: 'status', oldVal: upload.status, newVal: 'matched',
@@ -2475,11 +2499,13 @@ router.post('/compute', (req, res) => {
     return res.status(400).json({ success: false, error: `Invalid cycle for ${month}/${year}: ${e.message}` });
   }
 
-  // Supersede semantics: latest matched upload per (month, year, company) wins.
+  // Supersede semantics: the active upload per (month, year, company) is
+  // the authoritative source. Set by the compute write site (clear-losers
+  // + stamp-winner inside one txn) and physically enforced by the partial
+  // unique index uniq_sales_uploads_active_period.
   const upload = db.prepare(`
     SELECT * FROM sales_uploads
-     WHERE month = ? AND year = ? AND company = ? AND status IN ('matched', 'computed')
-  ORDER BY uploaded_at DESC, id DESC
+     WHERE month = ? AND year = ? AND company = ? AND is_active = 1
      LIMIT 1
   `).get(month, year, company);
   if (!upload) {
@@ -2556,8 +2582,25 @@ router.post('/compute', (req, res) => {
     }
   }
 
-  // Stamp the winning upload as 'computed' so the UI knows Phase 3 has run.
-  db.prepare("UPDATE sales_uploads SET status = 'computed' WHERE id = ?").run(upload.id);
+  // Stamp the winning upload as the active pointer + status='computed'.
+  // Order matters: clear losers FIRST so the partial unique index
+  // (uniq_sales_uploads_active_period) never transiently sees two actives
+  // mid-write. The 'superseded' status update is descriptive only —
+  // selection now keys off is_active, not status.
+  db.transaction(() => {
+    db.prepare(
+      `UPDATE sales_uploads SET is_active = 0
+        WHERE month = ? AND year = ? AND company = ? AND id != ?`
+    ).run(month, year, company, upload.id);
+    db.prepare(
+      `UPDATE sales_uploads SET status = 'computed', is_active = 1 WHERE id = ?`
+    ).run(upload.id);
+    db.prepare(
+      `UPDATE sales_uploads SET status = 'superseded'
+        WHERE month = ? AND year = ? AND company = ?
+          AND id != ? AND status IN ('matched','computed')`
+    ).run(month, year, company, upload.id);
+  })();
 
   writeAuditP2(db, 'sales_salary_computations', {
     recordId: upload.id, field: 'compute_run', oldVal: '', newVal: `${results.length} computed`,

@@ -1,4 +1,65 @@
-## Last Session — 2026-05-21
+## Last Session — 2026-05-21 (later)
+
+**Sales upload active-pointer (is_active) shipped — supersede semantics now a single DB-enforced fact.**
+
+### Problem
+Every reader of `sales_uploads`/`sales_monthly_input` re-derived "which upload is authoritative" using its own implicit rule, and the design intent ("latest confirmed wins, losers become superseded") was only HALF wired:
+- ONE write site (`sales.js:2560`) stamped the winner `status='computed'`, but NEVER demoted losers — `'superseded'` was a CHECK-allowed status that no code ever wrote.
+- Compute picker re-derived the winner via `ORDER BY uploaded_at DESC, id DESC LIMIT 1`.
+- Two TA/DA reader JOINs at `sales.js:~630` (template-data) and `sales.js:~699` (bulk-upload empRows) joined `sales_monthly_input` by month/company **with no upload filter, no ORDER BY, no LIMIT** — when multiple uploads existed per period, the JOIN multiplied employee rows and SQLite picked an arbitrary `days_given`. **Live cartesian fan-out bug confirmed in production for Indriyan 4/2026** (uploads 7/11/12/14).
+
+### Fix (single DB-enforced fact)
+Add `sales_uploads.is_active INTEGER DEFAULT 0` + partial unique index `uniq_sales_uploads_active_period ON (month, year, company) WHERE is_active = 1`. Every reader now keys off `is_active = 1`. Two write sites set the pointer: `confirm` (HR finalizes matching) and `compute` (HR runs salary). Both use the same clear-losers → stamp-winner order inside a single `db.transaction()` so the partial unique index never transiently sees two actives.
+
+### Files changed
+- `backend/src/database/schema.js` — (a) `safeAddColumn('sales_uploads', 'is_active', 'INTEGER DEFAULT 0')` + the partial unique index, placed AFTER the `sales_uploads_add_rejected_status_v1` rebuild migration so the column survives DROP+CREATE on fresh DBs. (b) New idempotent backfill block gated on `policy_config` key `migration_sales_uploads_is_active_v1`: iterates every distinct `(month, year, company)` with a `status IN ('matched','computed')` upload, picks the winner via `ORDER BY uploaded_at DESC, id DESC LIMIT 1` (matches the live implicit rule exactly), runs `clearLosers` then `stampWinner` per-period in its own transaction, writes one audit_log row per stamp with `action_type='backfill_active_stamp'`, sets the flag last. Skipped silently on periods with no matched/computed upload (no winner to point at).
+- `backend/src/routes/sales.js` — 6 surgical changes:
+  - **Reader (per-row patch fallback, ~line 433)**: `AND su.status IN ('matched','computed') ORDER BY su.uploaded_at DESC LIMIT 1` → `AND su.is_active = 1 LIMIT 1`.
+  - **Reader (TA/DA template-data join, ~line 629-635)**: `smi.month=? AND smi.year=? AND smi.company=?` (3 binds) → `smi.upload_id = (SELECT id FROM sales_uploads WHERE month=? AND year=? AND company=? AND is_active=1 LIMIT 1)` (3 binds). Args list unchanged (still 8). **This is the live fan-out fix.**
+  - **Reader (TA/DA bulk-upload empRows, ~line 700-706)**: same shape; args unchanged (still 7). **Also live fan-out fix.**
+  - **Reader (compute picker, ~line 2487-2493)**: `WHERE status IN ('matched','computed') ORDER BY uploaded_at DESC, id DESC LIMIT 1` → `WHERE is_active=1 LIMIT 1`. Selection identical for current data (backfill stamps active = the row the old ORDER BY would have picked).
+  - **Write site (compute, ~line 2575-2589)**: replaced the single `UPDATE sales_uploads SET status='computed' WHERE id=?` with a 3-statement `db.transaction()`: (1) clear losers' is_active to 0 in the period, (2) stamp winner `status='computed', is_active=1`, (3) descriptive `status='superseded'` on losers. Order clear-losers → stamp-winner.
+  - **Write site (confirm, ~line 2238-2256, scope extension)**: same 3-statement transaction. Necessary because Part C's compute-site stamping alone leaves a regression on NEW periods (HR uploads, confirms, then clicks Compute → picker requires is_active=1 → fails). Confirm is the natural place to set the active pointer — as soon as an upload is confirmed it's authoritative.
+
+### What was verified (in-memory simulation against the real schema, 28/28 assertions pass)
+1. Column + partial unique index exist; index is partial (`WHERE is_active = 1`).
+2. Partial unique index physically blocks a second active per period (SQLITE_CONSTRAINT_UNIQUE on attempt).
+3. Backfill stamps exactly the winner per period that the old ORDER BY rule would have picked.
+4. Reproduced the live fan-out bug: the OLD query returns 4 rows for S700 across 4 uploads; the NEW query returns 1 row with the correct `days_given=25` from the active upload.
+5. Compute picker selects the active upload via `is_active=1`.
+6. Write site transition: new upload supersedes old — exactly 1 active, old winner is `is_active=0 status='superseded'`.
+7. Idempotent re-run on the same winner: still exactly 1 active.
+8. Period with no matched/computed uploads: picker returns nothing (preserves existing 400 'no_confirmed_upload' guard).
+9. Fresh-period confirm flow: 2 uploaded-state files for 6/2026 → confirm A then B → A demoted, B active. Compute picker now succeeds on fresh periods — `no_confirmed_upload` regression averted.
+
+### Production targets (post-deploy)
+- 4/2026 Indriyan → upload #14 becomes `is_active=1`; #7/#11/#12 become `is_active=0 status='superseded'`.
+- 2/2026 Indriyan → upload #4 becomes `is_active=1` (single upload in that period, so just the active stamp).
+- All other periods with matched/computed uploads → analogous single-winner stamp.
+
+### Validation needed POST-DEPLOY (cannot do from this sandbox)
+- **#1** Exactly one active per period: `SELECT month, year, company, COUNT(*) FILTER (WHERE is_active=1) AS actives, GROUP_CONCAT(CASE WHEN is_active=1 THEN id END) AS active_id FROM sales_uploads GROUP BY month, year, company` — every row `actives ≤ 1`; Indriyan 4/2026 `active_id=14`; 2/2026 `active_id=4`.
+- **#2** Partial unique index enforced: attempt `UPDATE sales_uploads SET is_active=1 WHERE id=<a non-winner>` should fail with `UNIQUE constraint failed`.
+- **#3** LIVE fan-out fix: TA/DA template-data for class matching S016 in Indriyan 4/2026 returns ONE row with the active upload's days_given (was 5 from the cartesian product).
+- **#4** Compute still selects upload 14 for 4/2026 Indriyan; salary unchanged for S016/S055/S193 (22451.61/19645.16/8709.68) and S236-S239 (1935.48/5000/2580.65/4129.03); total rows still 237.
+- **#5** Drift sanity: `ABS(net_salary - (gross_earned - total_deductions)) ≤ 1` for every row in 4/2026 Indriyan.
+
+### What's fragile
+- **The `status='superseded'` write is descriptive only** — selection now keys off `is_active`. If a future PR re-introduces a reader that selects by status (e.g. `WHERE status IN ('matched','computed')`), it must also AND in `is_active = 1` or rely on the period-scoped subquery pattern. There's no compile-time guard against this drift.
+- **Two write sites must stay in sync** — confirm (`sales.js:~2235-2253`) and compute (`sales.js:~2570-2589`). Both run the same 3-statement transaction. If one is refactored, the other must follow.
+- **Partial unique index requires SQLite 3.8+**. Railway/production SQLite is well above that; local dev sandboxes should be fine too.
+- **`is_active` column placement in `schema.js`** is AFTER the `sales_uploads_add_rejected_status_v1` rebuild migration. If a future rebuild migration is added BEFORE the is_active block, the column will be dropped on fresh DBs unless the rebuild's `CREATE TABLE sales_uploads_new` includes `is_active INTEGER DEFAULT 0`. Add a comment to any future rebuild block reminding the author of this.
+- **The backfill picks `ORDER BY uploaded_at DESC, id DESC LIMIT 1`** — must match the live implicit rule exactly. If `uploaded_at` is identical across multiple winners (sub-second collision), `id DESC` is the tiebreaker. Production-confirmed: Indriyan 4/2026 latest-by-uploaded_at and MAX(id) agree (winner = 14).
+- **Confirm-time active stamping** is a scope expansion beyond the original Part C spec — added to avoid a fresh-period `no_confirmed_upload` regression. If HR's workflow ever differs from "confirm = authoritative" (e.g. a "draft confirm" feature), this assumption breaks.
+
+### Known issues / OOS
+- The new fan-out fix only addresses the 2 TA/DA readers that touched `sales_monthly_input`. The 1 per-row patch fallback was already SAFE (had `LIMIT 1`) but now uses `is_active=1` for consistency.
+- `frontend/src/pages/Sales/*` doesn't read `status` for upload selection — backend returns the authoritative upload, frontend just renders. No frontend changes needed.
+- Plant pipeline untouched (no `sales_uploads` analog).
+
+---
+
+## Previous Session — 2026-05-21
 
 **Bug #14 fix shipped — sales employees no longer silently skipped by salary compute.**
 
