@@ -121,6 +121,7 @@ const nav = [
   { label: 'Query Tool', icon: '🔎', to: '/admin/query-tool', adminOnly: true },
   { label: 'SQL Console', icon: '🛠', to: '/admin/sql-console', adminOnly: true },
   { label: 'Bug Reports', icon: '🐞', to: '/admin/bug-reports', adminOnly: true },
+  { label: 'Record History (dev)', icon: '🕰', to: '/admin/record-history-dev', adminOnly: true },
   {
     label: 'Settings', icon: '⚙️', to: '/settings', adminOnly: true,
     children: [
