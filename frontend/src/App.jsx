@@ -65,7 +65,7 @@ const SalesTaDaRegister = React.lazy(() => import('./pages/Sales/SalesTaDaRegist
 const SalesTaDaUpload = React.lazy(() => import('./pages/Sales/SalesTaDaUpload'))
 const BugReportsInbox = React.lazy(() => import('./pages/admin/BugReportsInbox'))
 const BugReportDetail = React.lazy(() => import('./pages/admin/BugReportDetail'))
-const RecordHistoryHarness = React.lazy(() => import('./pages/admin/RecordHistoryHarness'))
+const RecordHistoryLookup = React.lazy(() => import('./pages/admin/RecordHistoryLookup'))
 
 function PageLoader() {
   return (
@@ -207,7 +207,7 @@ export default function App() {
           <Route path="/admin/sql-console" element={<RequireAuth><Layout title="SQL Console (Read-Only)"><SqlConsole /></Layout></RequireAuth>} />
           <Route path="/admin/bug-reports" element={<RequireAuth><Layout title="Bug Reports"><BugReportsInbox /></Layout></RequireAuth>} />
           <Route path="/admin/bug-reports/:id" element={<RequireAuth><Layout title="Bug Report Detail"><BugReportDetail /></Layout></RequireAuth>} />
-          <Route path="/admin/record-history-dev" element={<RequireAuth><Layout title="Record History (dev)"><RecordHistoryHarness /></Layout></RequireAuth>} />
+          <Route path="/admin/record-history" element={<RequireAuth><Layout title="Record History"><RecordHistoryLookup /></Layout></RequireAuth>} />
           <Route path="/dept-analytics" element={<RequireAuth><Layout title="Department & Org Analytics"><DeptAnalytics /></Layout></RequireAuth>} />
           <Route path="/employee-profile" element={<RequireAuth><Layout title="Employee Intelligence Profile"><EmployeeProfile /></Layout></RequireAuth>} />
           <Route path="/employees" element={<RequireAuth><Layout title="Employee Master"><Employees /></Layout></RequireAuth>} />
