@@ -1,4 +1,36 @@
-## Last Session — 2026-05-21 (later)
+## Last Session — 2026-05-22
+
+**Piece #3 (record-history read-only timeline + resolver) — PROD-VALIDATED, live.**
+- origin/main = bc73dd9 — pieces #1+#2+#3 merged and deployed on Railway.
+- New router: backend/src/routes/recordHistory.js + 1 mount line in server.js.
+  Two GET endpoints (timeline, resolve), read-only, parameterised, zero writes.
+- Local synthetic HTTP validation: 10/10 (guards, SELECT/ORDER BY id DESC,
+  envelope shape, empty-vs-404, 401 requireAuth, 403 admin-gate via real hr token).
+  Synthetic fixtures only; DB row-count returned to prior state.
+- §10 prod fidelity (read-only, real data): 42/44 pass, 0 PII leaks. Masking held
+  on real PAN/Aadhaar/contact (cases a & d). Cases a/c/e + S178 resolver byte-clean
+  (attendance_processed correctly absent from resolver per design §2.1).
+- 2 "fails" = spec-vs-real-data shape, NOT defects: (d) attendance_processed 122270
+  returns 2 cards (canonical Stage-5 at cards[0] byte-exact + a legit prior
+  reimport_replay card); (b) sales_ta_da_monthly_inputs 514 is 17 singleton-group
+  cards so the no-op path is structurally unreachable. Both diagnosed; design doc
+  §12 amended. No revert.
+
+**Still open / carried forward:**
+- TDS bug: 3 failing tests in tdsCalculation.test.js — pre-existing, HIGH, untouched.
+- Triple-count: design doc records 58 triples, this session's handoff referenced 59
+  — third triple UNCONFIRMED, do not assert 59 until identified against live audit_log.
+
+**Next:**
+- Piece #4 (frontend timeline component) — own Phase 0 gate; depends only on the
+  now-empirically-confirmed envelope contract; VALIDATE ON RAILWAY PREVIEW BEFORE
+  MERGE (user-facing surface — merge-then-validate is not acceptable for it, unlike #3).
+- Piece #5 (record-lookup entry point) — attendance labelled "row", no employee
+  path into attendance (design §2.1).
+
+---
+
+## Previous Session — 2026-05-21 (later)
 
 **Sales upload active-pointer (is_active) shipped — supersede semantics now a single DB-enforced fact.**
 
@@ -59,7 +91,7 @@ Add `sales_uploads.is_active INTEGER DEFAULT 0` + partial unique index `uniq_sal
 
 ---
 
-## Previous Session — 2026-05-21
+## Previous Session — 2026-05-21 (earlier)
 
 **Bug #14 fix shipped — sales employees no longer silently skipped by salary compute.**
 
