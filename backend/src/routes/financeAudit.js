@@ -1543,7 +1543,7 @@ router.post('/miss-punch/:id/approve', requireFinanceOrAdmin, (req, res) => {
   `).run(user, notes || '', req.params.id);
 
   logAudit('attendance_processed', req.params.id, 'miss_punch_finance_status', 'pending', 'approved',
-    'FINANCE_MISS_PUNCH_APPROVE', notes || `Approved HR resolution for ${existing.employee_code} ${existing.date}`);
+    'FINANCE_MISS_PUNCH_APPROVE', notes || `Approved HR resolution for ${existing.employee_code} ${existing.date}`, req.user?.username);
 
   res.json({ success: true });
 });
@@ -1594,7 +1594,7 @@ router.post('/miss-punch/:id/reject', requireFinanceOrAdmin, (req, res) => {
   `).run(user, rejection_reason, req.params.id);
 
   logAudit('attendance_processed', req.params.id, 'miss_punch_finance_status', 'pending', 'rejected',
-    'FINANCE_MISS_PUNCH_REJECT', rejection_reason);
+    'FINANCE_MISS_PUNCH_REJECT', rejection_reason, req.user?.username);
 
   res.json({ success: true, message: 'Rejected — reverted to HR queue for re-resolution' });
 });
@@ -1620,7 +1620,7 @@ router.post('/miss-punch/bulk-approve', requireFinanceOrAdmin, (req, res) => {
       const info = stmt.run(user, notes || '', id);
       if (info.changes > 0) {
         logAudit('attendance_processed', id, 'miss_punch_finance_status', 'pending', 'approved',
-          'FINANCE_MISS_PUNCH_BULK_APPROVE', notes || '');
+          'FINANCE_MISS_PUNCH_BULK_APPROVE', notes || '', req.user?.username);
         count++;
       }
     }

@@ -190,7 +190,7 @@ router.post('/pba', requireHrOrAdmin, (req, res) => {
     txn();
 
     logAudit('extra_duty_grants', grantId, 'status', '', 'PENDING', 'PBA_CREATE',
-      `${employee_code} ${grant_date}: ${duty_days} day(s) (pre-biometric activation)`);
+      `${employee_code} ${grant_date}: ${duty_days} day(s) (pre-biometric activation)`, req.user?.username);
 
     res.json({ success: true, grant_id: grantId, attendance_id: attendanceId });
   } catch (err) {
@@ -213,7 +213,7 @@ router.post('/:id/approve', requireHrOrAdmin, (req, res) => {
     .run(user, req.params.id);
 
   logAudit('extra_duty_grants', req.params.id, 'status', 'PENDING', 'APPROVED', 'HR_APPROVE',
-    `${grant.employee_code} ${grant.grant_date}: ${grant.duty_days} day(s)`);
+    `${grant.employee_code} ${grant.grant_date}: ${grant.duty_days} day(s)`, req.user?.username);
 
   res.json({ success: true });
 });
@@ -232,7 +232,7 @@ router.post('/:id/reject', requireHrOrAdmin, (req, res) => {
     .run(rejection_reason, user, req.params.id);
 
   archiveRejection(db, 'EXTRA_DUTY_HR', 'extra_duty_grants', grant, rejection_reason, user);
-  logAudit('extra_duty_grants', req.params.id, 'status', 'PENDING', 'REJECTED', 'HR_REJECT', rejection_reason);
+  logAudit('extra_duty_grants', req.params.id, 'status', 'PENDING', 'REJECTED', 'HR_REJECT', rejection_reason, req.user?.username);
 
   res.json({ success: true });
 });
@@ -251,7 +251,7 @@ router.post('/bulk-approve', requireHrOrAdmin, (req, res) => {
       const info = stmt.run(user, id);
       if (info.changes > 0) {
         logAudit('extra_duty_grants', id, 'status', 'PENDING', 'APPROVED', 'HR_BULK_APPROVE',
-          `${g.employee_code} ${g.grant_date}: ${g.duty_days} day(s)`);
+          `${g.employee_code} ${g.grant_date}: ${g.duty_days} day(s)`, req.user?.username);
         count++;
       }
     }
@@ -292,7 +292,7 @@ router.post('/:id/finance-approve', requireFinanceOrAdmin, (req, res) => {
 
   logAudit('extra_duty_grants', req.params.id, 'finance_status', grant.finance_status || 'UNREVIEWED',
     'FINANCE_APPROVED', 'FINANCE_APPROVE',
-    `${grant.employee_code} ${grant.grant_date}: ${grant.duty_days} day(s)`);
+    `${grant.employee_code} ${grant.grant_date}: ${grant.duty_days} day(s)`, req.user?.username);
 
   try {
     const { createNotification } = require('../services/monthEndScheduler');
@@ -318,7 +318,7 @@ router.post('/:id/finance-flag', requireFinanceOrAdmin, (req, res) => {
     .run(finance_flag_reason, finance_notes || '', user, req.params.id);
 
   logAudit('extra_duty_grants', req.params.id, 'finance_status', grant.finance_status || 'UNREVIEWED',
-    'FINANCE_FLAGGED', 'FINANCE_FLAG', finance_flag_reason);
+    'FINANCE_FLAGGED', 'FINANCE_FLAG', finance_flag_reason, req.user?.username);
 
   res.json({ success: true });
 });
@@ -359,7 +359,7 @@ router.post('/:id/finance-reject', requireFinanceOrAdmin, (req, res) => {
 
   archiveRejection(db, 'EXTRA_DUTY_FINANCE', 'extra_duty_grants', grant, finance_flag_reason, user);
   logAudit('extra_duty_grants', req.params.id, 'finance_status', grant.finance_status || 'UNREVIEWED',
-    'FINANCE_REJECTED', 'FINANCE_REJECT', finance_flag_reason);
+    'FINANCE_REJECTED', 'FINANCE_REJECT', finance_flag_reason, req.user?.username);
 
   res.json({ success: true });
 });
@@ -379,7 +379,7 @@ router.post('/bulk-finance-approve', requireFinanceOrAdmin, (req, res) => {
       if (info.changes > 0) {
         logAudit('extra_duty_grants', id, 'finance_status', g.finance_status || 'UNREVIEWED',
           'FINANCE_APPROVED', 'FINANCE_BULK_APPROVE',
-          `${g.employee_code} ${g.grant_date}: ${g.duty_days} day(s)`);
+          `${g.employee_code} ${g.grant_date}: ${g.duty_days} day(s)`, req.user?.username);
         count++;
       }
     }
