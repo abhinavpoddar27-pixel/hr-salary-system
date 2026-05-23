@@ -877,7 +877,7 @@ router.post('/reconciliation/update-departments', (req, res) => {
         updateRaw.run(dept, c.code);
         logAudit('employees', null, 'department_correction',
           null, JSON.stringify({ code: c.code, department: dept }),
-          req.user?.username || 'hr', 'Department corrected from reconciliation'
+          'reconciliation', 'Department corrected from reconciliation', req.user?.username
         );
       }
     }
