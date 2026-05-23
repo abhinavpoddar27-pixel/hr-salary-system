@@ -46,13 +46,20 @@ function getDb() {
   return db;
 }
 
-function logAudit(tableName, recordId, fieldName, oldValue, newValue, stage, remark) {
+function logAudit(tableName, recordId, fieldName, oldValue, newValue, stage, remark, changedBy) {
   try {
     const database = getDb();
-    database.prepare(`
-      INSERT INTO audit_log (table_name, record_id, field_name, old_value, new_value, stage, remark)
-      VALUES (?, ?, ?, ?, ?, ?, ?)
-    `).run(tableName, recordId, fieldName, String(oldValue ?? ''), String(newValue ?? ''), stage, remark);
+    if (changedBy) {
+      database.prepare(`
+        INSERT INTO audit_log (table_name, record_id, field_name, old_value, new_value, changed_by, stage, remark)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(tableName, recordId, fieldName, String(oldValue ?? ''), String(newValue ?? ''), changedBy, stage, remark);
+    } else {
+      database.prepare(`
+        INSERT INTO audit_log (table_name, record_id, field_name, old_value, new_value, stage, remark)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+      `).run(tableName, recordId, fieldName, String(oldValue ?? ''), String(newValue ?? ''), stage, remark);
+    }
   } catch (e) {
     console.error('Audit log error:', e.message);
   }
