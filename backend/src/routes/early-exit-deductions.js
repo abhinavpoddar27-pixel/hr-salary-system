@@ -367,7 +367,7 @@ router.put('/:id/approve', requireFinanceOrAdmin, (req, res) => {
     );
 
     logAudit('early_exit_deductions', req.params.id, 'finance_status', 'pending', 'approved',
-      req.user.name || req.user.username, `Early exit deduction approved for ${record.employee_code}`);
+      'finance_approve', `Early exit deduction approved for ${record.employee_code}`, req.user?.username);
 
     return res.json({ success: true, message: 'Deduction approved' });
   } catch (err) {
@@ -414,7 +414,7 @@ router.put('/:id/reject', requireFinanceOrAdmin, (req, res) => {
     );
 
     logAudit('early_exit_deductions', req.params.id, 'finance_status', 'pending', 'rejected',
-      req.user.name || req.user.username, `Early exit deduction rejected for ${record.employee_code}`);
+      'finance_reject', `Early exit deduction rejected for ${record.employee_code}`, req.user?.username);
 
     return res.json({ success: true, message: 'Deduction rejected' });
   } catch (err) {

@@ -277,7 +277,7 @@ router.post('/:id/recover', (req, res) => {
       }
 
       logAudit('loan_repayments', repayment.id, 'status', 'Pending', 'Recovered', 'loan_recovery',
-        `Manual recovery ₹${amount} for ${month}/${year}. ${remarks || ''}`);
+        `Manual recovery ₹${amount} for ${month}/${year}. ${remarks || ''}`, req.user?.username);
     });
     txn();
 
@@ -317,7 +317,7 @@ router.post('/:id/skip', (req, res) => {
     `).run(reason || '', repayment.id);
 
     logAudit('loan_repayments', repayment.id, 'status', 'Pending', 'Skipped', 'loan_skip',
-      `Installment skipped for ${month}/${year}. Reason: ${reason || 'Not specified'}`);
+      `Installment skipped for ${month}/${year}. Reason: ${reason || 'Not specified'}`, req.user?.username);
 
     res.json({ success: true, message: `Installment for ${month}/${year} skipped` });
   } catch (err) {

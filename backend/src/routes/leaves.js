@@ -224,7 +224,7 @@ router.delete('/:id', (req, res) => {
   txn();
 
   try {
-    logAudit('leave_applications', id, 'status', leave.status, 'Cancelled', 'leave_cancel', `Cancelled by ${cancelledBy}`);
+    logAudit('leave_applications', id, 'status', leave.status, 'Cancelled', 'leave_cancel', `Cancelled by ${cancelledBy}`, req.user?.username);
   } catch (e) { /* audit failure must not break cancellation */ }
 
   res.json({ success: true, id });
@@ -398,7 +398,7 @@ router.post('/adjust', (req, res) => {
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(emp.id, employee_code, emp.company, leave_type, transaction_type, days, newBalance, now.getMonth() + 1, now.getFullYear(), reason || '', 'admin');
 
-  logAudit('leave_balances', emp.id, leave_type, oldBalance, newBalance, 'leave_adjustment', reason || '');
+  logAudit('leave_balances', emp.id, leave_type, oldBalance, newBalance, 'leave_adjustment', reason || '', req.user?.username);
 
   res.json({ success: true, message: 'Leave adjusted', oldBalance, newBalance });
 });
@@ -518,7 +518,7 @@ router.post('/bulk-adjust', (req, res) => {
           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         `).run(emp.id, employee_code, emp.company, leave_type, transaction_type, days, newBalance, now.getMonth() + 1, now.getFullYear(), reason || '', 'admin');
 
-        logAudit('leave_balances', emp.id, leave_type, oldBalance, newBalance, 'leave_adjustment', reason || '');
+        logAudit('leave_balances', emp.id, leave_type, oldBalance, newBalance, 'leave_adjustment', reason || '', req.user?.username);
         processed++;
       } catch (err) {
         errors.push({ employee_code: adj.employee_code, error: err.message });

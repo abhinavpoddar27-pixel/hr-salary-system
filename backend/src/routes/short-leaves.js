@@ -152,7 +152,7 @@ router.post('/', requireHrOrAdmin, (req, res) => {
       );
 
       logAudit('short_leaves', result.lastInsertRowid, 'created', null, leave_type,
-        req.user.name || req.user.username, `Gate pass created for ${employee_code} on ${date}`);
+        'short_leave_create', `Gate pass created for ${employee_code} on ${date}`, req.user?.username);
 
       return res.status(201).json({ success: true, id: result.lastInsertRowid, quota_breach: quotaBreach });
     } catch (e) {
@@ -287,7 +287,7 @@ router.put('/:id/cancel', requireHrOrAdmin, (req, res) => {
     `).run(req.user.id, req.user.name || req.user.username, cancelReason, req.params.id);
 
     logAudit('short_leaves', req.params.id, 'cancelled', 'active', 'cancelled',
-      req.user.name || req.user.username, `Gate pass cancelled for ${record.employee_code} on ${record.date}`);
+      'short_leave_cancel', `Gate pass cancelled for ${record.employee_code} on ${record.date}`, req.user?.username);
 
     return res.json({ success: true, message: 'Gate pass cancelled' });
   } catch (err) {

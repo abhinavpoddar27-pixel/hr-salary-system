@@ -281,7 +281,7 @@ router.put('/record/:id', (req, res) => {
   for (const [key, newVal] of Object.entries(updates)) {
     const oldVal = existing[key];
     if (String(oldVal) !== String(newVal)) {
-      logAudit('attendance_processed', id, key, oldVal, newVal, 'Stage 5', remark || 'Manual correction');
+      logAudit('attendance_processed', id, key, oldVal, newVal, 'Stage 5', remark || 'Manual correction', req.user?.username);
     }
   }
 
@@ -515,7 +515,7 @@ router.put('/record/:id/shift', (req, res) => {
     WHERE id = ?
   `).run(shiftId, shift.name, isLate, lateBy, id);
 
-  logAudit('attendance_processed', id, 'shift_id', record.shift_id, shiftId, 'Stage 3', `Shift changed to ${shift.name}`);
+  logAudit('attendance_processed', id, 'shift_id', record.shift_id, shiftId, 'Stage 3', `Shift changed to ${shift.name}`, req.user?.username);
 
   res.json({ success: true, data: { shiftId, shiftName: shift.name, isLate, lateBy } });
 });
