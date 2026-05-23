@@ -705,7 +705,7 @@ router.put('/:code/mark-left', (req, res) => {
     }
 
     // 3. Audit log
-    logAudit('employees', emp.id, 'status', emp.status, 'Left', 'employee_master', `Marked as Left by ${markedBy}. Reason: ${reason || 'Not specified'}. ${activeLoans.length} loans closed.`);
+    logAudit('employees', emp.id, 'status', emp.status, 'Left', 'employee_master', `Marked as Left by ${markedBy}. Reason: ${reason || 'Not specified'}. ${activeLoans.length} loans closed.`, req.user?.username);
   });
 
   txn();

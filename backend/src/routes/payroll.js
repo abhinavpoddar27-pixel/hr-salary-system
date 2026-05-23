@@ -870,7 +870,7 @@ router.put('/salary/:code/hold-release', requireFinanceOrAdmin, async (req, res)
 
   try {
     logAudit('salary_computations', before.id, 'salary_held', '1', '0',
-      'FINANCE_HOLD_RELEASE', `${code} ${month}/${year}: ${trimmedNotes}`);
+      'FINANCE_HOLD_RELEASE', `${code} ${month}/${year}: ${trimmedNotes}`, req.user?.username);
   } catch (e) { /* logAudit failures should never block the release */ }
 
   res.json({ success: true, message: `Salary released for ${code}` });

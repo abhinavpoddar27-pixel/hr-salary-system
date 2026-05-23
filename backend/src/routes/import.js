@@ -289,7 +289,7 @@ router.post('/upload', upload.array('files', 20), async (req, res) => {
                   logAudit('attendance_processed', existingRec.id, 'reimport',
                     JSON.stringify({ status: existingRec.status_final, in: existingRec.in_time_final, out: existingRec.out_time_final, company: existingRec.company }),
                     JSON.stringify({ status: r.status, in: r.inTime, out: r.outTime, company: r.company }),
-                    'reimport', `EESL reimport: ${file.originalname}`
+                    'reimport', `EESL reimport: ${file.originalname}`, req.user?.username
                   );
                   updateProcessed.run(empId, r.status, r.status, r.inTime, r.inTime, r.outTime, r.outTime,
                     r.company, r.employeeCode, r.date);
@@ -344,7 +344,7 @@ router.post('/upload', upload.array('files', 20), async (req, res) => {
               logAudit('attendance_processed', newRow.id, 'reimport_replay',
                 JSON.stringify({ status: newRow.status_final, in: newRow.in_time_final, out: newRow.out_time_final }),
                 JSON.stringify({ status: snap.status_final, in: snap.in_time_final, out: snap.out_time_final }),
-                'reimport_replay', `Restored manual correction (source: ${snap.correction_source || 'unknown'})`
+                'reimport_replay', `Restored manual correction (source: ${snap.correction_source || 'unknown'})`, req.user?.username
               );
               replayedCount++;
             }
