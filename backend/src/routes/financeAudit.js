@@ -1014,8 +1014,9 @@ router.put('/approve-flag/:flagId', (req, res) => {
     .run(flag.employee_code, flag.month, flag.year, flagId, status, reviewer, comments || '');
 
   try {
-    logAudit('salary_manual_flags', flagId, 'finance_approved', String(flag.finance_approved), String(approvedVal), reviewer,
-      `Flag ${status}: ${flag.flag_type} for ${flag.employee_code}. ${comments || ''}`);
+    logAudit('salary_manual_flags', flagId, 'finance_approved', String(flag.finance_approved), String(approvedVal),
+      status === 'APPROVED' ? 'FINANCE_FLAG_APPROVE' : status === 'REJECTED' ? 'FINANCE_FLAG_REJECT' : 'FINANCE_FLAG_CLEAR',
+      `Flag ${status}: ${flag.flag_type} for ${flag.employee_code}. ${comments || ''}`, req.user?.username);
   } catch {}
 
   // GROSS_STRUCTURE_CHANGE revert: when finance rejects, restore old gross to
@@ -1055,8 +1056,8 @@ router.put('/approve-flag/:flagId', (req, res) => {
 
         // Audit log for the gross revert
         logAudit('employees', emp?.id || flag.employee_code, 'gross_salary',
-          String(flag.manual_value), String(flag.system_value), reviewer,
-          `GROSS REVERT: Finance rejected gross change ${flag.manual_value} → ${flag.system_value} for ${flag.employee_code}`);
+          String(flag.manual_value), String(flag.system_value), 'FINANCE_GROSS_REVERT',
+          `GROSS REVERT: Finance rejected gross change ${flag.manual_value} → ${flag.system_value} for ${flag.employee_code}`, req.user?.username);
       } catch (e) {
         console.error('[GROSS_REVERT] revert failed, flag status still updated:', e.message);
       }
@@ -1543,7 +1544,7 @@ router.post('/miss-punch/:id/approve', requireFinanceOrAdmin, (req, res) => {
   `).run(user, notes || '', req.params.id);
 
   logAudit('attendance_processed', req.params.id, 'miss_punch_finance_status', 'pending', 'approved',
-    'FINANCE_MISS_PUNCH_APPROVE', notes || `Approved HR resolution for ${existing.employee_code} ${existing.date}`);
+    'FINANCE_MISS_PUNCH_APPROVE', notes || `Approved HR resolution for ${existing.employee_code} ${existing.date}`, req.user?.username);
 
   res.json({ success: true });
 });
@@ -1594,7 +1595,7 @@ router.post('/miss-punch/:id/reject', requireFinanceOrAdmin, (req, res) => {
   `).run(user, rejection_reason, req.params.id);
 
   logAudit('attendance_processed', req.params.id, 'miss_punch_finance_status', 'pending', 'rejected',
-    'FINANCE_MISS_PUNCH_REJECT', rejection_reason);
+    'FINANCE_MISS_PUNCH_REJECT', rejection_reason, req.user?.username);
 
   res.json({ success: true, message: 'Rejected — reverted to HR queue for re-resolution' });
 });
@@ -1620,7 +1621,7 @@ router.post('/miss-punch/bulk-approve', requireFinanceOrAdmin, (req, res) => {
       const info = stmt.run(user, notes || '', id);
       if (info.changes > 0) {
         logAudit('attendance_processed', id, 'miss_punch_finance_status', 'pending', 'approved',
-          'FINANCE_MISS_PUNCH_BULK_APPROVE', notes || '');
+          'FINANCE_MISS_PUNCH_BULK_APPROVE', notes || '', req.user?.username);
         count++;
       }
     }
