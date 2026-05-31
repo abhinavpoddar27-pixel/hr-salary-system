@@ -1,0 +1,21 @@
+# Phase-0 .claudeignore — keep the analytical context window clean.
+# Exclude scratch, raw scraped data, caches, generated binaries.
+
+scratch/
+sources/raw_html/
+sources/*.pdf
+sources/cache/
+**/__pycache__/
+*.pyc
+.venv/
+venv/
+.infisical-secrets-cache
+
+# Generated binary deliverables (regenerated from source — don't read as context)
+report/*.docx
+model/*.xlsx
+charts/*.png
+charts/*.svg
+
+# Keep (do NOT ignore): CLAUDE.md, PLAN.md, SHIP-ANALYSIS.md, model/*.py,
+# sources/citations.md, report/*.md drafts, ADR-*.md
