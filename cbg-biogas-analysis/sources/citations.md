@@ -102,8 +102,90 @@ Compiled Phase 1 (research fan-out). Tag key: [FACT]/[INFERENCE]/[OPINION]; Tier
 4. Dung-specific economical collection radius (15 km/4× is biomass-general).
 5. Primary PDFs (IFGE/CEEW/GMI/PNGRB) 403-blocked — confirm verbatim PLF/price numbers.
 
-## THREAD 3 — CAPEX / OPEX / TECH / DIGESTATE-ECON  ⏳ (agent running)
+## THREAD 3 — CAPEX / OPEX / TECH / DIGESTATE-ECON  ✅ (agent complete)
+*Caveat: WebFetch 403-blocked on all hosts; figures from WebSearch summaries quoting each source, triangulated ≥2 sources where possible.*
+**Governing priors:** 1 t feedstock → ~50–55 kg CBG; capex ≈ 90% of project cost; **>70% of early plants missed financial forecasts.**
 
-## THREAD 3 — CAPEX / OPEX / TECH / DIGESTATE-ECON  ⏳ (agent running)
+### Capex (D5) — prompt benchmarks are OPTIMISTIC
+- **₹1.65 cr @ 400 kg/day: maps to ~1 TPD, not 400 kg/day.** 1 TPD = ₹1.5–2.0 cr (intensity suspiciously low = vendor scope-stripping). [INFERENCE][T3].
+- **₹16 cr @ 5,000 kg/day: CONTRADICTED — consensus ₹20–25 cr** (some ₹20–30). **T1 cross-check:** Standing Committee on Petroleum & NG (2022-23): 100 TPD-feed plant (5–12 TPD CBG) = ₹25–80 cr → ~₹25 cr at 5-TPD/low end. **₹16 cr ~30–45% too low.** [FACT][T1 parliamentary via Renewable Watch 2024].
+- 2 TPD: interpolated **₹8–14 cr (base ₹10–12)** [INFERENCE][T3].
+- **Realistic intensity ~₹40,000–50,000/kg-day at 5 TPD; small plants WORSE per kg** once full scope loaded. [INFERENCE].
+- **Biomass-aggregation capex = 10–30% of project cost, reinvested every 5–6 yrs.** [FACT][T2 CBEII/Creating Circularity 2024].
+- **⚠️ OFFTAKE MODEL CHANGES CAPEX (the M2 killer):** <5 TPD **retail/bottling ≈ 2× injection capex**; 5–15 TPD **retail ≈ 3× decompression-injection, 5× direct pipeline injection.** [FACT][T1/T2 Standing Committee]. *Most decision-relevant capex fact for the bottled-cascade question.*
 
-## THREAD 4 — COMPETITIVE / MACRO / FAILURE-MODES  ⏳ (agent running)
+### Upgrading tech — membrane dominant for small/mid
+| Route | Parasitic kWh/Nm³ | slip / recovery | Capex | Fit |
+|---|---|---|---|---|
+| Water scrub | 0.25–0.35 (highest) | ~1.5% / ~98% | low | large hubs; **bad in water-scarce** |
+| PSA | 0.15–0.30 | 1.8–2.0% / 96–98% | moderate | mid, declining |
+| **Membrane** | **0.10–0.22 (lowest)** | **<0.5% / >99.5%** | **lowest small/mid** | **modular — default** |
+| Amine | 0.12–0.21 elec + ~0.55 thermal | ~0.05% / 99.9% | **high ₹11–14 cr + boiler** | large, max purity |
+[FACT/INFERENCE][T1 MDPI Energies 18(24):6506 2025 + T3 vendor].
+- **Compression: bottling ~250 bar vs injection 3–5 bar** → injection compression capex far lower (another M2 penalty). [FACT][T1 IOCL FAQ].
+- Pipeline tie-in support: ₹995 cr / 100 projects ≈ **~₹9.95 cr/project** (subsidised). [FACT][T1 PNGRB].
+
+### Opex
+- Total **₹15–22/kg** (to ₹35–40/kg incl. logistics). 1 TPD ≈ ₹0.5–0.8 cr/yr → 2 TPD ~₹1.0–1.6 cr/yr. [FACT 1TPD/INFERENCE 2TPD][T2/T3].
+- **Feedstock = 30–50% of opex** (dominant). [FACT][T2/T3].
+
+### Logistics (M2)
+- Qualitatively dominant; only proxy = generic trucking ₹2–3/km. **No CBG-cascade ₹/km or ₹/kg-delivered found.** [INFERENCE][T3].
+
+### Digestate / FOM (D8)
+- Digestate mass ≫ CBG mass (e.g. ~10 t/day gas vs ~90 t/day solid digestate). [FACT/INFERENCE].
+- FOM realisation **₹500–4,500/t**; IBA proposes ₹5.5/kg + MDA ₹1.5/kg. **Base ₹1,000–1,500/t** (near MDA floor). [FACT][T1 IBA + CSE].
+- **ZERO-FOM downside realistic:** no fixed price, poor marketability; **a Surat plant runs at 2.9% capacity citing low FOM demand.** [FACT][T2 DownToEarth 2024].
+
+### Financing (D10, D11)
+- **D:E tightened 95:5 → ~75:25 + ~20% collateral after >70% underperformed.** Loan ≤75%, tenor 10–12 yr (≤15 yr offtake). [FACT][T2 Renewable Watch 2025 + T1 Union Bank/IREDA].
+- **⭐ SBI Caps IRR by scale (KEY cross-check):** 50 TPD-feed (6 TPD CBG) → **IRR 5–7%, DSCR 1.0–1.2**; 100 TPD → 13–16%, 1.5–1.8; 200 TPD → 19–21%, 1.9–2.2. Promoter DPRs claim 18–22%. [FACT][T2 SBI Caps via Renewable Watch 2024].
+- **>70% of early plants missed forecasts; 2-yr delays → some NPA.** **Base case must sit well below DPR IRR.** [FACT/OPINION].
+- Cost of debt: no CBG-specific rate → use ~10–11%, flag.
+
+### Could not reconfirm (Thread 3)
+1. Component capex split (₹) at any scale. 2. ₹1.65 cr @ exactly 400 kg/day. 3. Cascade/bottling-skid ₹ (only 2–5× multiple). 4. CBG-cascade logistics ₹/km, ₹/kg-delivered. 5. Manpower headcount/₹, standalone power ₹/yr. 6. CBG-specific cost of debt. 7. LFOM ₹/t.
+
+---
+
+## THREAD 4 — COMPETITIVE / MACRO / FAILURE-MODES  ✅ (agent complete)
+*Caveat: WebFetch 403-blocked; quotes from search extracts, ~95% reliable not verbatim-audited.*
+**Thesis:** "Mandated demand" real on paper, brutal in operation — near-monopsony OMC sets an administered price, operator is the squeezed middle, ~70% missed financials, 5,000-plant target missed ~97%. A live PE/strategic acquirer market is the one genuine bull signal.
+
+### SATAT reality
+- **~108–132 plants commissioned vs 5,000 target = ~97–98% shortfall**; ~920 TPD vs 15 MMT/yr ambition; 1,094 active LoIs (paper). ~10% LoI→commissioned conversion. [FACT][T2 Energetica India Jan 2026 / iamRenew Nov 2025].
+
+### Failure modes (ranked)
+1. **Feedstock-cost squeeze/supply inconsistency — most-cited killer** ("most disruptive financial risk").
+2. **Low PLF / under-loading** (20–60%; many <50%; need >80%).
+3. **FOM non-clearance** (fails 5% NPK / 4mm specs → stockpiles; IBA lobbying for forced 1%→10% FOM blending = market doesn't clear on its own).
+4. **Offtake/OMC delays & thin rural sales** (rural outlets move only 500–800 kg/day; no CGD pipeline access strands output; 6–9 mo commissioning delays).
+5. **Financing gaps** (banks demand firm feedstock agreements pre-lending).
+- **>70% of early installations missed financial forecasts, only marginally EBITDA-positive.** [FACT][T2 REGlobal / Renewable Watch / Autocar Pro / DownToEarth].
+
+### Margin capture (D-strategic) — operator IS the squeezed middle [INFERENCE, strong]
+- Squeezed between feedstock aggregators (cost-push, pricing power in scarcity) and OMC monopsony (administered price cap). Operator absorbs PLF + unsold-digestate risk.
+- Clearest winners: **feedstock aggregators** + **EPC/subsidy-capture players** (earn on the build regardless of PLF). OMC margin is regulated (~85% CNG, on-sells to CGD). [INFERENCE][T2 Indian Infrastructure / Renewable Watch].
+
+### Barriers / buyer power / substitutes
+- Min viable scale **15–20+ TPD; sub-10 TPD non-viable unless heavily subsidised**; ~25–30% equity / 40–50% debt / 20–35% subsidy; 10 TPD ≈ ₹25 cr; firm feedstock agreements gating. [FACT][T2].
+- OMC near-monopsony in injection model; substitutes = imported LNG-fed NG + EV erosion + subsidised LPG capping PNG-domestic.
+
+### Consolidators / exit (strongest bull signal) [FACT]
+- **EverEnviro** (>₹1,100 cr, IOCL+ONGC JVs, seeking PE); **GPS Renewables** "ARYA ONE" $400M platform, sold minority stake to **Sojitz**, IOCL JV (IGRPL) raised ₹836 cr debt, ₹50 cr Axis AMC mezzanine; **Adani TotalEnergies** (5 units), **Reliance** (100 plants); OMC JVs vertically integrating. [FACT][T2 Business Standard / IndianWeb2 / GPS].
+- **BUT no public plant EV/EBITDA transaction multiple disclosed**; deals are raises/JVs. **Terminal value concentrates in PLATFORMS, not single sub-scale plants.** [INFERENCE].
+
+### Macro (10–15 yr)
+- CNG vehicles still growing (>1M car sales FY26 +20%; pumps 7,400→17,500 by 2030) but **EV target 30% of sales by 2030** → CNG+EV coexist to 2030–35, structural EV erosion in the tail. **PNG-domestic is the more durable CBG sink.** [FACT+INFERENCE][T2 bne/IBEF/CEEW].
+- Import dependence: "47%" stale; **LNG ≈ 50.1% of gas availability**; IEEFA: biogas could save ~US$29bn LNG bills FY25–30. [FACT][T2 IEEFA + T1 PPAC].
+- **CBG price CAPPED/administered (85% of CNG retail), NOT floating** → operator captures no upside beyond formula; compression charge ₹8/kg fixed; IBA lobbying ₹90/kg floor = operators consider price inadequate. **Monopsony pricing, not a market.** [FACT][T2 iamRenew].
+- **CBO 5% is a CEILING, not an ever-rising floor.** Undersupplied vs mandate next 2–3 yrs (real near-term cover), but post-saturation incremental plants compete for fixed obligated volume at administered price. **"Mandated demand forever" = T3 marketing conflating the 3-yr window with the 10–15 yr horizon.** [INFERENCE][T2 vs flagged T3].
+- Carbon: ~2–3 VERs/t CBG @ $20–25 ≈ $40–75/t CBG = marginal, not thesis-maker; volatile, methane-credibility under scrutiny. **Upside optionality only.** [OPINION][T3 single-source — flag].
+
+### Adversarial flags
+- **IRR bimodal:** T3 promoters claim 18–22% / 3–4 yr payback (only the >20 TPD, >80%-PLF best case); T2 reality = 70% missed forecasts, 5–7% IRR small-scale, banks treat 15% as viability bar. **Underwrite to T2, not the brochure.**
+- T3 build-it/sell-EPC sources (SATAT portal, advancebiofuel, biofics, adroit, pelletrates, buyofuel) all repeat "guaranteed demand, start now."
+- **IBA lobbying (₹90/kg fixed, forced 10% FOM blend) IS the bear case** — bodies lobby that hard only when price + digestate markets fail operators.
+
+### Could not reconfirm (Thread 4)
+1. Disclosed CBG plant/platform EV/EBITDA multiple. 2. Exact operating (not just commissioned) plant count. 3. Clean 2026 import-dependence single official figure. 4. Whether CBO rises above 5% post-FY29. 5. Independent (non-promoter) 18–22% IRR. 6. Carbon $20–25/VER economics (single T3).
