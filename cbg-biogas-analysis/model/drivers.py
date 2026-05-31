@@ -91,6 +91,7 @@ class Drivers:
     project_life_years: int = 15                    # = offtake tenor [FACT][T1]
     depreciation_years: int = 15                    # straight-line, simplification [INFERENCE]
 
+    feedstock_price_multiplier: float = 1.0         # global shock lever (Stress = 1.4) [scenario]
     mix: Dict[str, float] = field(default_factory=lambda: dict(DEFAULT_MIX))
 
     @property

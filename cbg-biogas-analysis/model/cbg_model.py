@@ -118,9 +118,10 @@ def annual_flows(scale_tpd_cbg: float, model: str, d: Drivers, mb: dict, cx: dic
     # feedstock cost (allow dung price override for breakeven solving)
     price_per_t = 0.0
     for name, share in d.mix.items():
-        p = FEEDSTOCKS[name]["price_rs_per_t"]
         if name == "dung" and dung_price_override is not None:
-            p = dung_price_override
+            p = dung_price_override                                  # absolute override (breakeven solver)
+        else:
+            p = FEEDSTOCKS[name]["price_rs_per_t"] * d.feedstock_price_multiplier  # global shock lever
         price_per_t += share * p
     feedstock_cost = feed_t_yr * price_per_t
 
