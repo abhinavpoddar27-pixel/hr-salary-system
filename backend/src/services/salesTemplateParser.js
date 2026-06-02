@@ -18,6 +18,13 @@ const {
   getEligibleEmployees,
   monthBounds,
 } = require('./salesMasterHash');
+// Bug #16: working-days cap mirrors the CONFIRM path. Import the SAME helpers
+// the confirm route uses (sales.js ~2114-2117) so the cap equals its value to
+// the day. countGazettedHolidaysInCycle lives in salesSalaryComputation (it
+// needs a db handle); cycleUtil stays pure. No circular dep — neither module
+// requires this parser.
+const { deriveCycle, countSundaysInCycle } = require('./cycleUtil');
+const { countGazettedHolidaysInCycle } = require('./salesSalaryComputation');
 
 function readMetaSheet(wb) {
   const ws = wb.Sheets['_meta'];
@@ -190,6 +197,15 @@ function parseAndValidate(db, { fileBuffer, month, year, company, uploadedBy, fi
 
   const { end } = monthBounds(m, y);
   const calendarDays = new Date(y, m, 0).getDate();
+  // Working-days bound for the salary cycle — mirrors the CONFIRM path
+  // (sales.js ~2114-2117) by calling the SAME three helpers with the same
+  // month/year/company, so the auto-cap value equals what HR's confirm/edit
+  // flow would produce to the day. Subtracts both Sundays AND non-Sunday
+  // gazetted holidays from the cycle length.
+  const cycle = deriveCycle(m, y);
+  const cycleSundays = countSundaysInCycle(cycle.start, cycle.end);
+  const { workingDayHolidays } = countGazettedHolidaysInCycle(db, cycle.start, cycle.end, company);
+  const workingDaysForCycle = cycle.lengthDays - cycleSundays - workingDayHolidays;
   const eligible = getEligibleEmployees(db, m, y, company);
   const eligibleByCode = new Map(eligible.map((e) => [e.code, e]));
   const masterByCode = new Map();
@@ -205,6 +221,7 @@ function parseAndValidate(db, { fileBuffer, month, year, company, uploadedBy, fi
   const unknownEmployees = [];
   const invalidDays = [];
   const duplicates = [];
+  const cappedRows = [];
   const seenCodes = new Set();
   const validRows = [];
 
@@ -235,6 +252,16 @@ function parseAndValidate(db, { fileBuffer, month, year, company, uploadedBy, fi
     }
     if (days < 0 || days > calendarDays) {
       invalidDays.push({ row: sheetRowNumber, code, value: days, max: calendarDays });
+      continue;
+    }
+    // Bug #16 auto-cap: the template path has no human review step, so a row
+    // over the cycle's working-days bound (but still ≤ calendarDays, i.e. not
+    // nonsensical) is silently capped to workingDaysForCycle rather than
+    // rejected. Capped rows STAY in validRows at the capped value, so the
+    // Step 7 row-count check is unaffected; each cap is audited in persistTxn.
+    if (days > workingDaysForCycle) {
+      cappedRows.push({ row: sheetRowNumber, code, original: days, capped: workingDaysForCycle });
+      validRows.push({ row: sheetRowNumber, code, days: workingDaysForCycle });
       continue;
     }
     validRows.push({ row: sheetRowNumber, code, days });
@@ -281,15 +308,56 @@ function parseAndValidate(db, { fileBuffer, month, year, company, uploadedBy, fi
     );
     const newUploadId = info.lastInsertRowid;
 
+    // Bug #16 active-pointer stamp: the template path has no confirm step, so
+    // stamp the period's is_active pointer HERE, mirroring the CONFIRM triad
+    // (sales.js ~2243-2256) exactly. Clear-losers → stamp-winner → supersede,
+    // in that order, so the partial unique index uniq_sales_uploads_active_period
+    // never transiently sees two actives. The row was already inserted with
+    // status='matched' above, so step 2 only flips is_active (status unchanged).
+    db.prepare(
+      `UPDATE sales_uploads SET is_active = 0
+        WHERE month = ? AND year = ? AND company = ? AND id != ?`
+    ).run(m, y, company, newUploadId);
+    db.prepare(
+      `UPDATE sales_uploads SET is_active = 1 WHERE id = ?`
+    ).run(newUploadId);
+    db.prepare(
+      `UPDATE sales_uploads SET status = 'superseded'
+        WHERE month = ? AND year = ? AND company = ?
+          AND id != ? AND status IN ('matched','computed')`
+    ).run(m, y, company, newUploadId);
+
     const insRow = db.prepare(`
       INSERT INTO sales_monthly_input
         (month, year, company, upload_id, sheet_row_number, sheet_employee_name,
          sheet_days_given, employee_code, match_confidence, match_method, created_by)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'exact', 'employee_code', ?)
     `);
+    // Bug #16 audit: one audit_log row per working-days auto-cap, inside the
+    // same transaction as the inserts. Inlined (writeAuditP2 is a private
+    // sales.js fn and sales.js is out of scope) but matches its exact 10-column
+    // INSERT — table_name, record_id, field_name, old_value, new_value,
+    // changed_by, stage, remark, employee_code, action_type — leaving id +
+    // changed_at to their defaults.
+    const cappedByCode = new Map(cappedRows.map((c) => [c.code, c]));
+    const insAudit = db.prepare(`
+      INSERT INTO audit_log
+        (table_name, record_id, field_name, old_value, new_value, changed_by, stage, remark, employee_code, action_type)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `);
     for (const v of validRows) {
       const masterName = (masterByCode.get(v.code) && masterByCode.get(v.code).name) || v.code;
-      insRow.run(m, y, company, newUploadId, v.row, masterName, v.days, v.code, uploadedBy);
+      const rowInfo = insRow.run(m, y, company, newUploadId, v.row, masterName, v.days, v.code, uploadedBy);
+      const cap = cappedByCode.get(v.code);
+      if (cap) {
+        insAudit.run(
+          'sales_monthly_input', rowInfo.lastInsertRowid, 'sheet_days_given',
+          String(cap.original), String(cap.capped),
+          uploadedBy, 'sales_monthly_input',
+          `Working-days auto-cap on template upload #${newUploadId}: days_given ${cap.original} → ${cap.capped} (working_days_for_cycle=${workingDaysForCycle}) for ${masterName}`,
+          v.code, 'excess_days_autocap_template'
+        );
+      }
     }
 
     db.prepare(`
