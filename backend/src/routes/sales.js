@@ -1134,6 +1134,99 @@ function requireCompany(req, res) {
   return company;
 }
 
+// ── Sales salary-structure versioning on gross change ──────────────
+// Salary compute reads gross + components from sales_salary_structures, NOT
+// from sales_employees (salesSalaryComputation.js:199-211). Earned pay is
+// min(componentSum, gross × ratio) at salesSalaryComputation.js:273-274, so
+// the component lines must track gross or a raise is silently ignored. The
+// PUT /employees/:code handler calls versionSalesStructureForGross() inside
+// its transaction whenever gross_salary actually changes.
+
+// Previous YYYY-MM (zero-padded, year-boundary safe). Never returns YYYY-00.
+function prevMonthYYYYMM(yyyymm) {
+  const [y, m] = String(yyyymm).split('-').map(Number);
+  const d = new Date(Date.UTC(y, m - 1, 1));   // first day of month F
+  d.setUTCMonth(d.getUTCMonth() - 1);          // step back one month
+  return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}`;
+}
+
+// Insert (or upsert) a structure row at `effectiveFrom` whose components sum
+// EXACTLY to newGross: basic absorbs the delta, hra/cca/conveyance + the
+// pf/esi/pt flags + pf_wage_ceiling_override + notes are carried forward from
+// the current row unchanged. No new allowance line is added. The prior open
+// row is closed (effective_to = month before F) for history hygiene —
+// getLatestStructure keys on effective_from alone, so the new row already
+// wins; closing is descriptive only. Must run inside a db.transaction().
+function versionSalesStructureForGross(db, { employeeId, newGross, effectiveFrom, user }) {
+  const grossNum = Math.round((Number(newGross) || 0) * 100) / 100;
+
+  // Carry components + flags forward from the current (most-recent) row.
+  const cur = db.prepare(`
+    SELECT * FROM sales_salary_structures
+     WHERE employee_id = ?
+  ORDER BY (effective_to IS NULL) DESC, effective_from DESC, id DESC
+     LIMIT 1
+  `).get(employeeId);
+
+  const hra        = cur ? Math.round((cur.hra || 0) * 100) / 100 : 0;
+  const cca        = cur ? Math.round((cur.cca || 0) * 100) / 100 : 0;
+  const conveyance = cur ? Math.round((cur.conveyance || 0) * 100) / 100 : 0;
+  const pfApp      = cur && cur.pf_applicable ? 1 : 0;
+  const esiApp     = cur && cur.esi_applicable ? 1 : 0;
+  const ptApp      = cur && cur.pt_applicable ? 1 : 0;
+  const ceiling    = cur ? (cur.pf_wage_ceiling_override ?? null) : null;
+  const notes      = cur ? (cur.notes ?? null) : null;
+
+  // basic absorbs the delta so componentSum === gross exactly. Single-
+  // component rows (hra/cca/conveyance = 0) collapse to basic = gross.
+  const basic = Math.round((grossNum - (hra + cca + conveyance)) * 100) / 100;
+
+  // Hygiene: close older still-open versions so the "open row wins" ordering
+  // resolves to this version. Does NOT affect compute (keys on effective_from).
+  const closedPriorTo = prevMonthYYYYMM(effectiveFrom);
+  db.prepare(`
+    UPDATE sales_salary_structures
+       SET effective_to = ?
+     WHERE employee_id = ? AND effective_to IS NULL AND effective_from < ?
+  `).run(closedPriorTo, employeeId, effectiveFrom);
+
+  // Upsert at F. ON CONFLICT rewrites EVERY mutable column so a same-cycle
+  // re-edit never leaves a component stale (and re-opens the row).
+  db.prepare(`
+    INSERT INTO sales_salary_structures
+      (employee_id, effective_from, effective_to, basic, hra, cca, conveyance,
+       gross_salary, pf_applicable, esi_applicable, pt_applicable,
+       pf_wage_ceiling_override, notes, created_by)
+    VALUES (?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT(employee_id, effective_from) DO UPDATE SET
+      effective_to             = NULL,
+      basic                    = excluded.basic,
+      hra                      = excluded.hra,
+      cca                      = excluded.cca,
+      conveyance               = excluded.conveyance,
+      gross_salary             = excluded.gross_salary,
+      pf_applicable            = excluded.pf_applicable,
+      esi_applicable           = excluded.esi_applicable,
+      pt_applicable            = excluded.pt_applicable,
+      pf_wage_ceiling_override = excluded.pf_wage_ceiling_override,
+      notes                    = excluded.notes,
+      created_by               = excluded.created_by
+  `).run(
+    employeeId, effectiveFrom, basic, hra, cca, conveyance,
+    grossNum, pfApp, esiApp, ptApp, ceiling, notes, user
+  );
+
+  const row = db.prepare(
+    'SELECT id FROM sales_salary_structures WHERE employee_id = ? AND effective_from = ?'
+  ).get(employeeId, effectiveFrom);
+
+  return {
+    structureId: row ? row.id : null,
+    basic, hra, cca, conveyance, gross: grossNum,
+    effectiveFrom, closedPriorTo,
+  };
+}
+
 // ── GET /api/sales/template — Phase 1 Sales Template Model (May 2026)
 // Returns a pre-populated XLSX (Sheet 1 "Input" + hidden "_meta" sheet)
 // for HR to fill Days Given and re-upload. No side effects beyond the
@@ -1381,26 +1474,81 @@ router.put('/employees/:code', (req, res) => {
   setClauses.push("updated_at = datetime('now')");
   params.push(req.params.code, company);
 
-  db.prepare(
-    `UPDATE sales_employees SET ${setClauses.join(', ')} WHERE code = ? AND company = ?`
-  ).run(...params);
+  const grossChanged = changedFields.some(c => c.field === 'gross_salary');
 
-  for (const ch of changedFields) {
-    writeAudit(db, {
-      recordId: existing.id,
-      empCode: existing.code,
-      field: ch.field,
-      oldVal: ch.oldVal,
-      newVal: ch.newVal,
-      user,
-      actionType: 'update',
-      remark: `Sales employee ${existing.code} field ${ch.field} updated`
-    });
+  // Resolve the structure version's effective_from (only used when gross
+  // changes). Default = current calendar month, zero-padded YYYY-MM (matches
+  // the create-path fallback). Optional body override lets a targeted/cohort
+  // correction stamp a specific cycle (e.g. 2026-05 for May arrears).
+  let effectiveFrom = new Date().toISOString().substring(0, 7);
+  if (body.effective_from !== undefined && body.effective_from !== null
+      && String(body.effective_from).trim() !== '') {
+    const v = String(body.effective_from).trim();
+    if (!/^\d{4}-\d{2}$/.test(v)) {
+      return res.status(400).json({
+        success: false,
+        error: 'effective_from must be zero-padded YYYY-MM (e.g. 2026-05)',
+      });
+    }
+    effectiveFrom = v;
+  }
+
+  let structureResult = null;
+  const applyUpdate = db.transaction(() => {
+    db.prepare(
+      `UPDATE sales_employees SET ${setClauses.join(', ')} WHERE code = ? AND company = ?`
+    ).run(...params);
+
+    for (const ch of changedFields) {
+      writeAudit(db, {
+        recordId: existing.id,
+        empCode: existing.code,
+        field: ch.field,
+        oldVal: ch.oldVal,
+        newVal: ch.newVal,
+        user,
+        actionType: 'update',
+        remark: `Sales employee ${existing.code} field ${ch.field} updated`
+      });
+    }
+
+    // Write-through: keep the gross the salary computation reads in sync.
+    // Compute reads gross + components from sales_salary_structures
+    // (salesSalaryComputation.js:199-211, 273-274) — never from
+    // sales_employees — so a gross edit that doesn't version the structure is
+    // paid at the OLD gross. Fire only on an actual gross change.
+    if (grossChanged) {
+      structureResult = versionSalesStructureForGross(db, {
+        employeeId: existing.id,
+        newGross: Number(body.gross_salary) || 0,
+        effectiveFrom,
+        user,
+      });
+      writeAudit(db, {
+        recordId: existing.id,
+        empCode: existing.code,
+        field: 'salary_structure',
+        oldVal: existing.gross_salary,
+        newVal: `basic=${structureResult.basic}, gross=${structureResult.gross}, effective_from=${effectiveFrom}`,
+        user,
+        actionType: 'update_structure',
+        remark: `Versioned sales_salary_structures (structure_id=${structureResult.structureId}, `
+          + `basic=${structureResult.basic}, hra=${structureResult.hra}, cca=${structureResult.cca}, `
+          + `conveyance=${structureResult.conveyance}, gross=${structureResult.gross}, `
+          + `effective_from=${effectiveFrom}; prior open row closed at effective_to=${structureResult.closedPriorTo})`,
+      });
+    }
+  });
+
+  try {
+    applyUpdate();
+  } catch (e) {
+    return res.status(500).json({ success: false, error: e.message });
   }
 
   const updated = db.prepare('SELECT * FROM sales_employees WHERE code = ? AND company = ?')
                     .get(req.params.code, company);
-  res.json({ success: true, data: updated });
+  res.json({ success: true, data: updated, structure: structureResult });
 });
 
 // ── PUT /api/sales/employees/:code/mark-left?company=X ─────────────
