@@ -85,11 +85,22 @@ router.post('/', requireHrOrAdmin, (req, res) => {
       return res.status(400).json({ success: false, error: 'deduction_amount is required for non-warning deductions' });
     }
 
-    // Compute daily_gross_at_time
-    const emp = db.prepare('SELECT gross_salary FROM employees WHERE code = ?').get(detection.employee_code);
-    const grossSalary = emp?.gross_salary || 0;
+    // Compute daily_gross_at_time — fall back to salary_structures when
+    // employees.gross_salary is NULL/0 (common for contractors whose wage
+    // only lives in salary_structures). Mirrors range-report fallback and
+    // the diagnostic pattern documented in CLAUDE.md Section 7.
+    const emp = db.prepare('SELECT id, gross_salary FROM employees WHERE code = ?').get(detection.employee_code);
+    let grossSalary = Number(emp?.gross_salary) || 0;
+    if (!grossSalary && emp?.id) {
+      const ss = db.prepare(`
+        SELECT gross_salary FROM salary_structures
+        WHERE employee_id = ?
+        ORDER BY effective_from DESC LIMIT 1
+      `).get(emp.id);
+      grossSalary = Number(ss?.gross_salary) || 0;
+    }
     const dim = daysInMonth(detection.date);
-    const dailyGross = Math.round(grossSalary / dim);
+    const dailyGross = dim > 0 ? Math.round(grossSalary / dim) : 0;
 
     // Extract payroll month/year from detection date
     const detDate = new Date(detection.date);
