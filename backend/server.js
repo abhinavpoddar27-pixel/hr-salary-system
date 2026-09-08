@@ -53,9 +53,19 @@ console.log('[BOOT] Database initialized');
       .run('admin', hash);
     console.log('👤 Admin user created (username: admin)');
   } else {
-    // Ensure admin is active but don't touch password
-    db.prepare("UPDATE users SET is_active = 1 WHERE username = 'admin'").run();
-    console.log('👤 Admin user exists (is_active ensured)');
+    // Emergency one-time password reset. Requires BOTH env vars set — a
+    // stray ADMIN_PASSWORD alone can never silently trigger this.
+    // After a successful login with the new password: remove FORCE_ADMIN_RESET
+    // (and ideally ADMIN_PASSWORD) from Railway variables immediately so this
+    // cannot fire again on the next restart.
+    if (process.env.FORCE_ADMIN_RESET === 'true' && process.env.ADMIN_PASSWORD) {
+      const newHash = bcrypt.hashSync(process.env.ADMIN_PASSWORD, 10);
+      db.prepare("UPDATE users SET password_hash = ?, is_active = 1 WHERE username = 'admin'").run(newHash);
+      console.log('👤 Admin password FORCE-RESET via FORCE_ADMIN_RESET env var — remove that variable now.');
+    } else {
+      db.prepare("UPDATE users SET is_active = 1 WHERE username = 'admin'").run();
+      console.log('👤 Admin user exists (is_active ensured)');
+    }
   }
 })();
 
