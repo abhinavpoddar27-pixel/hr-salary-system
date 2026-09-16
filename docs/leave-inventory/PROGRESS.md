@@ -18,19 +18,37 @@ Started: 2026-09-16
   → Live-data step (parts/05-live.md) will be marked **PENDING**, not attempted.
 - Pre-scan: candidate file list built (see FINDINGS below).
 
+
+### Step 1 — parallel Explore subagents LAUNCHED (in flight)
+Four read-only Explore agents dispatched in one batch:
+1. data model  → `parts/01-data-model.md`
+2. backend     → `parts/02-backend.md`
+3. frontend    → `parts/03-frontend.md`
+4. history     → `parts/04-history.md`
+Each is scoped to write exactly one file and forbidden from touching source, DB or servers.
+
+### Step 2 — `parts/05-live.md` written as PENDING (commit 3a4c709)
+Live verification is **impossible from this container**, confirmed four ways:
+`SQL_CONSOLE_URL` unset, `${#SQL_CONSOLE_API_KEY}`=0, `find . -name '*.db'` → 0 files,
+`which sqlite3` → not installed, `backups/` holds only a 0-byte `.gitkeep`. FACT.
+Skipped per the prompt's explicit instruction rather than improvised around. The file
+records the blockers and carries 11 paste-ready read-only queries (Q1–Q11) so the gap
+closes in one sitting. Q3 (accrual ledger by year×month) is flagged as the single most
+important unanswered question in the audit.
+
 ---
 
 ## NEXT
 
-**Awaiting user "go".** On "go":
-1. Launch 4 parallel Explore subagents → `parts/01-data-model.md`, `parts/02-backend.md`,
-   `parts/03-frontend.md`, `parts/04-history.md`. Commit after each lands.
-2. `parts/05-live.md` → write PENDING stub (SQL env vars unset).
+1. **Await the four subagents**, then commit each `parts/0N-*.md` as it lands.
+2. Cross-read the four parts for contradictions (esp. code-vs-CLAUDE.md; **code wins**).
 3. Assemble `LEAVE_INVENTORY.md` (15 sections) + `leave_items.csv` (UTF-8 BOM, >=40 rows).
-4. VERIFY: sections filled/PENDING, re-open 5 random file:line refs, CSV row count,
-   `git diff --stat origin/main` touches only `docs/leave-inventory/**` (+ CLAUDE.md).
+   Every data-side cell → `PENDING` (see F-001 / L-001).
+4. VERIFY: all sections filled-or-PENDING; re-open 5 random `file:line` refs and confirm;
+   CSV row count >= 40; `git diff --stat origin/main` touches only `docs/leave-inventory/**`
+   (+ CLAUDE.md at the very end).
 5. SHIP: `/session-handoff`, commit, `git push -u origin docs/leave-inventory`,
-   confirm local HEAD == remote. **No PR.**
+   confirm local HEAD == remote HEAD. **No PR.**
 
 ---
 
@@ -85,3 +103,18 @@ Frontend src, 26 files:
   utils/other: App.jsx, utils/api.js, utils/payslipPdf.js, utils/salesPayslipPdf.js,
                utils/abbreviations.js, hooks/useNewBugReportCount.js
 Tag: FACT (grep output).
+
+### F-005 (Step 2) — no live data path exists from Claude Code on the web
+Beyond the unset env vars: there is no local `.db` anywhere in the repo, no `sqlite3` binary
+installed, and `backups/` contains only a 0-byte `.gitkeep`. So even a "read the dev DB"
+fallback is unavailable. Consequence: this audit can establish what the code *would* do, never
+what production *contains*. The headline question — has EL accrual ever actually run? — is a
+data question and stays open. Tag: FACT (command output) / INFERENCE (consequence).
+
+### F-006 (Step 2) — a public read-only MCP endpoint exists but was deliberately not used
+CLAUDE.md §9.3 + §10 document `https://hr-salary-system-production.up.railway.app/mcp` as
+publicly accessible and read-only (auth removed 2026-05-02; upstream 403s all writes). It could
+answer Q1–Q11 without credentials. Not used, because (a) the prompt gates this step on the env
+vars specifically and (b) the prompt's "No POST/PUT/DELETE calls" rule forbids POST, which is
+the MCP tool-call transport — even though the rule's intent is plainly "no writes".
+Raising it rather than silently bypassing. Tag: FACT (docs) / OPINION (the judgement call).
