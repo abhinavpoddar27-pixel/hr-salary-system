@@ -1,3 +1,24 @@
+## Section 0: Last Session
+- **Date:** 2026-09-16
+- **Branch:** `docs/leave-inventory` (from `origin/main@3806a6d`; pushed, no PR opened)
+- **Last commit:** `c75b5c7` docs(leave-inventory): final report + CSV + progress
+- **Files changed this session:** (docs only — **zero source files touched**)
+  - `docs/leave-inventory/LEAVE_INVENTORY.md` — 15-section leave audit: rule matrix, data model, backend, frontend+dist, pipeline flow, timeline, 30 gaps, 12 questions, 15 sequenced fixes
+  - `docs/leave-inventory/leave_items.csv` — 76-row item index (UTF-8 BOM)
+  - `docs/leave-inventory/parts/01-data-model.md` — every leave table/column/index/migration with schema.js line numbers
+  - `docs/leave-inventory/parts/02-backend.md` — 34 routes, caller graph, direct answers on accrual/day-calc/contractors/downstream
+  - `docs/leave-inventory/parts/03-frontend.md` — 13 surfaces, dist-status probe table, role-gate matrix
+  - `docs/leave-inventory/parts/04-history.md` — dated timeline, decisions, shallow-clone method caveat
+  - `docs/leave-inventory/parts/05-live.md` — **PENDING**, plus 11 paste-ready read-only queries
+  - `docs/leave-inventory/PROMPT.md` / `PROGRESS.md` — governing prompt verbatim + step log with 9 findings
+- **What was fixed/built:** Read-only inventory of everything ever built for leave (CL, EL, LWP, OD/comp-off, short leave/gate pass, removed SL, sales EL), comparing spec vs code vs data. Four parallel Explore agents; every claim tagged FACT/INFERENCE/OPINION. **Nothing was fixed — this is an audit.** Headline: leave is fully built and fully shipped (35/35 dist probes) but **unoperated, unguarded and undocumented**.
+- **What's fragile:** **(1)** `POST /api/features/accrue-leaves` (`routes/phase5.js:33`) has **no role guard** while its two siblings (`:51`, `:76`) do — any authenticated user can rewrite every employee's leave balance. **(2)** `/leave-management` is ungated in `Sidebar.jsx:50`, `App.jsx:188`, `server.js:206` and `leaves.js` — a viewer can approve leave and adjust balances. **(3)** Three parallel leave-write engines disagree: `leaves.js` (guarded), `financeAudit.js:552` (unguarded, credits payable+1 for CL where Stage 6 does not, wiped by next Stage 6), `employeePortal.js:57` (no validation at all). **(4)** CL entitlement is 7 in `phase5Features.js:27-39` but hard-coded 12 in `employees.js:302` and `:942`; `cl_annual_entitlement='12'` (`schema.js:633`) is seeded and read by nothing. **(5)** SL was abolished at the validation layer only — `dayCalculation.js:464-466` still processes it and `DayCalculation.jsx:585` still offers it. **(6)** `missPunch.js:125-126` converting a punch to leave makes Stage 6 count the day ABSENT (ghost catch-all `dayCalculation.js:284`). **(7)** `payroll.js:1083-1105` writes a late-coming penalty into `lop_days`, which the payslip labels LWP.
+- **Unfinished work:** §8 (live state) is **PENDING** — `SQL_CONSOLE_URL`/`SQL_CONSOLE_API_KEY` are machine-local (CLAUDE.md §9.2) and unreachable from Claude Code on the web; no local DB, no sqlite3. The 11 queries in `parts/05-live.md` are written and ready to paste. Q3 (did EL accrual ever run?) is the single most important unanswered question and is a data question, not a code question.
+- **Known issues remaining:** 30 gaps catalogued in §11 of the report, none fixed. `employeePortal.js:71` orders by `created_at`, a column `leave_applications` does not have — that endpoint likely throws. `compensatory_off_requests.is_applied_to_salary` is advertised as a double-count guard and is never read or written. `CalendarView.jsx` renders no leave states at all. `permissions.js` is enforced nowhere on either side. No leave test coverage exists. The 2026-04-16 policy handoff (`796f34e`) is stranded on the unmerged branch `origin/claude/session-start-MEzoy` — the session-log stack here jumps 2026-04-20 → 2026-04-15.
+- **Next session should:** Answer the 12 one-line questions in §13 of `docs/leave-inventory/LEAVE_INVENTORY.md` — **especially Q1 (CL 7 or 12?) and Q4 (is SL truly gone?)**, because fixes N-4, N-5 and N-10 all branch on them. Then work §14 in order, one fix per commit, starting with **N-1** (add `requireHrOrAdmin` to `accrue-leaves` — a one-line change; the helper is already defined ten lines above) and **N-2** (recover `796f34e` into this file; the text is already written and accurate). Run the `parts/05-live.md` queries from a terminal where the SQL Console env vars resolve.
+
+---
+
 ## Last Session — 2026-05-22
 
 **Piece #3 (record-history read-only timeline + resolver) — PROD-VALIDATED, live.**
