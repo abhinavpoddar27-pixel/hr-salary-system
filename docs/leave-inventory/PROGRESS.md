@@ -36,19 +36,41 @@ records the blockers and carries 11 paste-ready read-only queries (Q1–Q11) so 
 closes in one sitting. Q3 (accrual ledger by year×month) is flagged as the single most
 important unanswered question in the audit.
 
+
+### Step 3 — four Explore subagents returned (all four)
+**None of the four had a `Write` tool** (read-only Explore agents). Each handed its report back
+as text; the orchestrator transcribed all four verbatim into `parts/`. The backend agent's report
+exceeded the message limit and was persisted by the harness to a tool-results file, then extracted
+from the fenced block. Provenance notes were appended to each transcribed part.
+- `parts/01-data-model.md` (549 lines) — commit with part 04
+- `parts/02-backend.md` (322 lines) — own commit
+- `parts/03-frontend.md` (376 lines) — own commit
+- `parts/04-history.md` (360 lines) — commit with part 01
+
+### Step 4 — orchestrator spot-verification, 8/8 CONFIRMED
+Because three parts were transcribed rather than written by their author, eight cited
+`file:line` refs were independently re-opened. All eight matched verbatim:
+`schema.js:633` · `phase5Features.js:27-39` · `server.js:212` · `dayCalculation.js:464-466` ·
+`leaves.js:354` · `phase5.js:23/33/51/76` · `employeePortal.js:71` · `Sidebar.jsx:50`.
+Two upgraded from agent-claim to orchestrator-verified FACT: the unguarded `accrue-leaves`
+endpoint (G-1) and the `ORDER BY created_at` portal crash (G-17).
+
+### Step 5 — deliverables assembled
+- `LEAVE_INVENTORY.md` (413 lines, all 15 sections filled or explicitly PENDING)
+- `leave_items.csv` (76 data rows, 7 columns, UTF-8 BOM verified by byte check)
+- `git diff --name-only --cached origin/main` → touches **only** `docs/leave-inventory/**`. Scope clean.
+
 ---
 
 ## NEXT
 
-1. **Await the four subagents**, then commit each `parts/0N-*.md` as it lands.
-2. Cross-read the four parts for contradictions (esp. code-vs-CLAUDE.md; **code wins**).
-3. Assemble `LEAVE_INVENTORY.md` (15 sections) + `leave_items.csv` (UTF-8 BOM, >=40 rows).
-   Every data-side cell → `PENDING` (see F-001 / L-001).
-4. VERIFY: all sections filled-or-PENDING; re-open 5 random `file:line` refs and confirm;
-   CSV row count >= 40; `git diff --stat origin/main` touches only `docs/leave-inventory/**`
-   (+ CLAUDE.md at the very end).
-5. SHIP: `/session-handoff`, commit, `git push -u origin docs/leave-inventory`,
-   confirm local HEAD == remote HEAD. **No PR.**
+**Audit complete.** Remaining: `/session-handoff` (CLAUDE.md Section 0), final commit,
+`git push -u origin docs/leave-inventory`, confirm local HEAD == remote HEAD. **No PR.**
+
+If this is resumed later, the open work is NOT more auditing — it is §13 of
+`LEAVE_INVENTORY.md` (12 one-line questions for Abhinav) and §14 (15 sequenced fixes,
+each naming its target file and a DO-NOT-MODIFY list). Do not start N-4, N-5 or N-10
+before Q1 (CL 7 or 12) and Q4 (is SL truly gone) are answered.
 
 ---
 
@@ -118,3 +140,22 @@ answer Q1–Q11 without credentials. Not used, because (a) the prompt gates this
 vars specifically and (b) the prompt's "No POST/PUT/DELETE calls" rule forbids POST, which is
 the MCP tool-call transport — even though the rule's intent is plainly "no writes".
 Raising it rather than silently bypassing. Tag: FACT (docs) / OPINION (the judgement call).
+
+### F-007 (Step 3) — all four Explore agents lacked a Write tool
+Every subagent reported the same blocker and returned its file content as text. Cost: four
+verbatim transcriptions plus one extraction from a harness-persisted tool-result file. Mitigated
+by the 8-point spot-check in Step 4 rather than trusting the transcription blind.
+**For future audit prompts: spawn these as `general-purpose` agents, or have the orchestrator
+write every part file itself.** Tag: FACT (agent reports) / OPINION (the recommendation).
+
+### F-008 (Step 4) — the two highest-severity findings are orchestrator-verified, not agent-claimed
+G-1 (`POST /api/features/accrue-leaves` has no role guard, while its two siblings do and the
+guard helper's own comment sits ten lines above saying balance-mutating endpoints need it) and
+G-17 (`employeePortal.js:71` orders by a column `leave_applications` does not have) were both
+re-opened and confirmed directly. Neither rests on a subagent's word. Tag: FACT.
+
+### F-009 (Step 5) — the audit's headline is operational, not structural
+Leave is fully built and fully deployed (35/35 dist probes). What is missing is that nothing
+runs it, nothing guards it, and nobody wrote the policy down. The single most valuable follow-up
+is also the cheapest: recover commit `796f34e` into CLAUDE.md — the text is already written and
+already correct. Tag: INFERENCE (synthesis) / OPINION (the priority call).

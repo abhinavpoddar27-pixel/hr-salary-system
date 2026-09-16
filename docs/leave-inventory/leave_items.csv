@@ -1,0 +1,77 @@
+﻿area,item,type,location,status,evidence,tag
+data-model,leave_balances,table,backend/src/database/schema.js:96-106,SHIPPED,"UNIQUE(employee_id,year,leave_type) :105; no extra index",FACT
+data-model,leave_transactions,table,backend/src/database/schema.js:108-122,SHIPPED,no UNIQUE constraint at all; idx_leave_transactions_employee :124,FACT
+data-model,leave_applications,table,backend/src/database/schema.js:402-417,SHIPPED,"no UNIQUE, no index; hr_remark added :1613",FACT
+data-model,leave_accrual_ledger,table,backend/src/database/schema.js:1576-1595,SHIPPED,"UNIQUE(employee_code,year,month,leave_type) :1593",FACT
+data-model,compensatory_off_requests,table,backend/src/database/schema.js:1543-1566,SHIPPED,"UNIQUE :1564; 2 indexes :1567,:1568",FACT
+data-model,short_leaves,table,backend/src/database/schema.js:1623-1649,SHIPPED,"UNIQUE(employee_code,date,leave_type) :1647",FACT
+data-model,holidays,table,backend/src/database/schema.js:64-72,SHIPPED,no UNIQUE on date; zero indexes; dup 2025-10-02 rows in seed,FACT
+data-model,holiday_audit_log,table,backend/src/database/schema.js:1002-1018,SHIPPED,"no constraints, no indexes",FACT
+data-model,day_calculations.cl_used/el_used/sl_used/lop_days,column,backend/src/database/schema.js:243-246,SHIPPED,"base columns, REAL DEFAULT 0",FACT
+data-model,day_calculations.od_days/short_leave_days/uninformed_absent,column,backend/src/database/schema.js:1601-1603,SHIPPED,safeAddColumn migrations,FACT
+data-model,salary_computations.cl_days/el_days/lwp_days/od_days/short_leave_days/uninformed_absent_days,column,backend/src/database/schema.js:1605-1610,SHIPPED,all leave cols are migrations; no sl_days counterpart,FACT
+data-model,policy_config.el_accrual_rate,config,backend/src/database/schema.js:632,SHIPPED,seeded '1'; read at phase5Features.js:76,FACT
+data-model,policy_config.el_eligibility_days,config,backend/src/database/schema.js:1617,SHIPPED,seeded '180'; read at phase5Features.js:77,FACT
+data-model,policy_config.cl_annual_entitlement,config,backend/src/database/schema.js:633,DEAD,seeded '12'; ZERO readers repo-wide; live CL is 7,FACT
+data-model,no leave_types master table,gap,backend/src/database/schema.js,MISSING,leave_type is unconstrained TEXT everywhere; no CHECK,FACT
+data-model,no schema-level leave backfill,gap,backend/src/database/schema.js,MISSING,"13 gated migrations, none populates leave tables",FACT
+data-model,2026 holiday reseed DELETE gated on sentinel row,landmine,backend/src/database/schema.js:1021-1032,SHIPPED,DELETE FROM holidays WHERE date LIKE '2026-%' gated on LOHRI row not migration flag,FACT
+data-model,schemaReference.js drift,gap,backend/src/config/schemaReference.js,DRIFT,5 of 6 leave tables undocumented; every leave-day column missing,FACT
+backend,GET/POST /api/leaves + 13 more,route,backend/src/routes/leaves.js:9-639,SHIPPED,15 routes; NO role guard anywhere in the file,FACT
+backend,POST /api/features/accrue-leaves,route,backend/src/routes/phase5.js:33,SHIPPED,NO role guard; siblings :51 :76 have requireHrOrAdmin,FACT
+backend,POST /api/features/init-cl-opening,route,backend/src/routes/phase5.js:51,SHIPPED,requireHrOrAdmin; zero frontend callers,FACT
+backend,POST /api/features/year-end-lapse,route,backend/src/routes/phase5.js:76,SHIPPED,requireHrOrAdmin; zero frontend callers,FACT
+backend,/api/comp-off (6 routes),route,backend/src/routes/compensatoryOff.js:68-365,SHIPPED,"HR create, Finance review, per-route gates",FACT
+backend,/api/short-leaves (5 routes),route,backend/src/routes/short-leaves.js:44-264,SHIPPED,quota 2/month hardcoded :127; no contractor gate,FACT
+backend,runLeaveAccrual,function,backend/src/services/phase5Features.js:73,SHIPPED,ONE call site: routes/phase5.js:38; nothing schedules it,FACT
+backend,computeClEntitlement,function,backend/src/services/phase5Features.js:27-39,SHIPPED,returns 7 - floor((effMonth-1)/2); null DOJ -> full 7,FACT
+backend,initCLOpening,function,backend/src/services/phase5Features.js:294-384,SHIPPED,guard cl_seed_<year>_v1; ON CONFLICT DO NOTHING; no UI,FACT
+backend,yearEndLapse,function,backend/src/services/phase5Features.js:394-450,SHIPPED,both CL and EL lapse to 0; no UI,FACT
+backend,calculateDays leaveBalances arg is dead,gap,"backend/src/services/dayCalculation.js:126,:141",SHIPPED,documented 'unused'; never referenced in body; payroll.js:95-99 queries to feed it,FACT
+backend,Stage 6 leave consumption,function,backend/src/services/dayCalculation.js:424-472,SHIPPED,"EL restores payable; CL/SL/LWP reclassify only; no balance check, no cap",FACT
+backend,contractor exclusion from leave,rule,backend/src/services/dayCalculation.js:294-356,SHIPPED,returns before leave block; all leave counters literal 0,FACT
+backend,SL consumption branch still live,landmine,backend/src/services/dayCalculation.js:464-466,DRIFT,else if leaveType==='SL' fully functional despite Apr-2026 abolition,FACT
+backend,financeAudit apply-leave parallel engine,landmine,backend/src/routes/financeAudit.js:552-656,SHIPPED,unguarded; credits payable+1 for CL; allows balance -1; wiped by next Stage 6,FACT
+backend,employeePortal leave-apply bypasses all rules,landmine,backend/src/routes/employeePortal.js:57-65,SHIPPED,"no balance check, no remark, no month lock, no type whitelist",FACT
+backend,employeePortal leave-history broken query,bug,backend/src/routes/employeePortal.js:71,BROKEN,ORDER BY created_at; column absent from leave_applications,FACT
+backend,missPunch convertToLeave writes unvalidated status,bug,backend/src/services/missPunch.js:125-126,SHIPPED,Stage 6 ghost catch-all :284 counts the day ABSENT,FACT
+backend,adjust/bulk-adjust can go negative,bug,"backend/src/routes/leaves.js:381-385,:503-507",SHIPPED,"newBalance = old - abs(days), no floor",FACT
+backend,adjust hardcodes current year,bug,"backend/src/routes/leaves.js:366,:489",SHIPPED,prior-year adjustment impossible,FACT
+backend,EL accrual chains off previous month ledger,landmine,"backend/src/services/phase5Features.js:169-181,:199-200",SHIPPED,skipped month silently restarts YTD at 0,FACT
+backend,two definitions of leave-used-in-month,landmine,backend/src/services/phase5Features.js:147 vs dayCalculation.js:444-451,SHIPPED,ledger attributes to start_date month; Stage 6 expands day-by-day,FACT
+backend,is_applied_to_salary never read or written,gap,backend/src/database/schema.js:1561-1562,DEAD,advertised as Stage-7 double-count guard at compensatoryOff.js:9-11,FACT
+backend,lopDeduction hardcoded 0,rule,backend/src/services/salaryComputation.js:608,SHIPPED,still summed into totalDeductions :697,FACT
+backend,late-coming penalty written into lop_days,landmine,backend/src/routes/payroll.js:1083-1105,SHIPPED,payslip labels it LWP (salaryComputation.js:797),FACT
+backend,short_leave_days is daysHalfPresent not gate passes,landmine,"backend/src/services/dayCalculation.js:329,:608",SHIPPED,payslip 'Short Leave' disagrees with quota screen,FACT
+backend,Sales earned_leave_days permanently 0,stub,backend/src/services/salesSalaryComputation.js:264,STUB,ships as populated-looking Excel column salesExportFormats.js:56,FACT
+backend,Daily MIS reads no leave data,gap,backend/src/services/dailyMIS.js,MISSING,0 grep hits; frontend calls /leaves/on-leave-today directly,FACT
+backend,no leave test coverage,gap,backend/src/__tests__/,MISSING,"only dayCalculation.test.js, passes empty leave arrays",FACT
+backend,reseed script DELETE unscoped by employee type,landmine,"backend/scripts/reseed-leave-balances-2026.js:259,:290",SHIPPED,destroys non-permanent 2026 rows; guard reseed_2026_v1 hand-deletable,FACT
+backend,investigate-manoj.js not read-only,landmine,backend/scripts/investigate-manoj.js:13-15,SHIPPED,getDb() triggers initSchema() against production,FACT
+frontend,LeaveManagement.jsx 6 tabs,page,frontend/src/pages/LeaveManagement.jsx,SHIPPED,dist: LeaveManagement-D2bheGNS.js,FACT
+frontend,Leave Management has no role gate,landmine,frontend/src/components/layout/Sidebar.jsx:50,SHIPPED,no gate flag; App.jsx:188 RequireAuth only; server.js:206 requireAuth only,FACT
+frontend,Adjustments tab writes balances directly,landmine,frontend/src/pages/LeaveManagement.jsx:604-656,SHIPPED,no approval step; reason not enforced :650,FACT
+frontend,GatePasses.jsx,component,frontend/src/components/GatePasses.jsx,SHIPPED,quota breach override; dist confirmed,FACT
+frontend,DayCalculation SL (Sick Leave) option,landmine,frontend/src/pages/DayCalculation.jsx:585,DRIFT,live write path for an abolished leave type; ships in dist,FACT
+frontend,Settings sl_per_year policy key,landmine,frontend/src/pages/Settings.jsx:320,DRIFT,editable Sick Leave entitlement after abolition,FACT
+frontend,payslipPdf SL line item,landmine,frontend/src/utils/payslipPdf.js:269,DRIFT,SL prints on payslips,FACT
+frontend,SalaryComputation SL column means Short Leave,landmine,frontend/src/pages/SalaryComputation.jsx:614,DRIFT,bound to short_leave_days; collides with Sick Leave elsewhere,FACT
+frontend,CalendarView renders no leave states,gap,frontend/src/components/ui/CalendarView.jsx:9-22,MISSING,"no CL/EL/SL/LWP/OD style, label or legend entry",FACT
+frontend,Employees.jsx has no leave UI,gap,frontend/src/pages/Employees.jsx:6,DEAD,"getLeaveBalances/updateLeaveBalance imported, never used",FACT
+frontend,no UI for accrual / lapse / CL init / ledger,gap,"frontend/src/utils/api.js:199,:200,:353",MISSING,helpers ship with zero callers,FACT
+frontend,permissions.js enforced nowhere,landmine,backend/src/config/permissions.js,DEAD,requirePermission on 0 routes; getUserPermissions 0 consumers,FACT
+frontend,HR 403s on opening Finance Audit,bug,"frontend/src/pages/FinanceAudit.jsx:1310,:1326",SHIPPED,badge query fires on mount; compensatoryOff.js:188 is finance-only,FACT
+frontend,dist is current,status,frontend/dist/,SHIPPED,35/35 probe strings found; negative control validated,FACT
+history,SL abolished,decision,commit 28c6029 (2026-04-16),SHIPPED,'SL abolished per Apr 2026 policy. New leave model is permanent-only CL+EL',FACT
+history,CL = 7 DOJ-pro-rated,decision,commit 2e09606 (2026-04-16),SHIPPED,7/6/5/4/3/2 by effective join month,FACT
+history,accrual restricted to Permanent,decision,commit 2e09606 (2026-04-16),SHIPPED,LEAVE_ELIGIBLE_TYPES=['Permanent'],FACT
+history,2026-04-16 CLAUDE.md policy entry never merged,landmine,commit 796f34e on origin/claude/session-start-MEzoy,UNMERGED,session log jumps 2026-04-20 -> 2026-04-15; only prose record of the policy,FACT
+history,CLAUDE.md:1420 contradicts shipped code,gap,CLAUDE.md:1420,DRIFT,documents 'A -> CL/EL/SL' vs leaves.js:354 rejection,FACT
+history,26-day silent Stage-6 outage,incident,commit 8da6904 (2026-05-11),RESOLVED,"duty_days column absent; all 447 employees failed, masked by try/catch",FACT
+history,leave subsystem frozen since 2026-04-16,status,git log per-file,FROZEN,~5 months; compensatoryOff.js never modified since birth,FACT
+history,no unmerged branch adds leave source,status,git branch -r --no-merged origin/main,CONFIRMED,"85 unmerged; 1 touches a leave path, dist artifact only",FACT
+history,no leave spec in docs/,gap,docs/,MISSING,policy exists only in commit messages and code docblocks,FACT
+history,2026 reseed execution unconfirmed,open,backend/scripts/reseed-leave-balances-2026.js,UNCONFIRMED,no commit/log/doc records an --execute-after-review run,INFERENCE
+history,LEAFS term not found,open,git log --all,NOT FOUND,0 hits across all refs,FACT
+live,all live-data queries,status,docs/leave-inventory/parts/05-live.md,PENDING,SQL_CONSOLE_URL unset; key length 0; no local DB; no sqlite3,FACT
+live,has EL accrual ever run in production,open,parts/05-live.md Q3,PENDING,single most important unanswered question in this audit,INFERENCE
