@@ -8,7 +8,7 @@
 - P4 TRIGGERS / AUTO STAGE 6 — DONE (19/19 specs green)
 - P5 API — DONE (22/22 specs green)
 - P6 SL REMOVAL + CL 7 — DONE (20/20 specs green)
-- P7 UI — not started
+- P7 UI — DONE (dist rebuilt and committed)
 - P8 SELF-DEBUG + SIM + V2 — not started
 - P9 SHIP — not started
 
@@ -45,8 +45,37 @@
 - backend/src/routes/employees.js (P6: both CL seeds use computeClEntitlement + cl_entitlement_base)
 - backend/src/routes/leaves.js (P6: SL rejected on submit and on approve)
 - backend/src/__tests__/slRemoval.test.js (P6: NEW)
+- frontend/src/utils/api.js (P7: 16 leave-automation helpers)
+- frontend/src/utils/formatters.js (P7: fmtIstTime / fmtIstDateTime)
+- frontend/src/utils/abbreviations.js (P7: OD added, SL relabelled historical)
+- frontend/src/components/leave/LeaveAutomationTab.jsx (P7: NEW)
+- frontend/src/pages/LeaveManagement.jsx (P7: Automation tab, balances rebuild + ledger drill-down +
+  CSV, approve/reject use the logged-in user + balance now→after, adjustments reason/negative gate,
+  CompOffTab normalizeRole)
+- frontend/src/pages/DayCalculation.jsx (P7: leave modal CL/EL/LWP + balance now→after + mandatory
+  remark, OD column, stale dot, legend)
+- frontend/src/pages/SalaryComputation.jsx (P7: stale banner + finalize gate + admin override modal)
+- frontend/src/pages/EmployeeProfile.jsx (P7: SL tile out, days worked / EL earned in)
+- frontend/src/pages/{MissPunch,Import,Settings,Reports,DailyMIS}.jsx,
+  components/ui/CalendarView.jsx, components/layout/Sidebar.jsx (P7)
+- backend/src/routes/payroll.js (P7: /finalise blocks on stale, admin override audited)
+- backend/src/routes/reports.js (P7: leave-register monthly gains sl_used, days worked, EL earned,
+  EL outside system)
+- backend/src/services/employeeProfileService.js (P7: monthlyBreakdown finally carries the leave
+  columns the profile's Leave tab already tried to read)
+- frontend/dist/** (P7: rebuilt)
 
 ## DECISIONS
+- D17 (finalize gate is server-side too): a UI-only block would be cosmetic, and the ruling asks for
+  the override to be audited, which needs a server write. payroll.js /finalise now refuses while any
+  day_calculations row for the month is salary_stale; an admin may override with a reason of 10+
+  characters, which is written to audit_log. Second and last edit to payroll.js.
+- D18 (profile leave columns): EmployeeProfile's Leave tab already read cl_used/el_used/payable_days
+  off monthlyBreakdown, but the service never attached them, so every leave cell rendered zero.
+  Fixed while adding Days worked / EL earned rather than building on a broken table.
+- D19 (Settings keys removed): cl_per_year / el_per_year / sl_per_year existed only in the Settings
+  POLICY_GROUPS list — never seeded, never read. Removed rather than left to mislead; the group is
+  now "Leave Rules" and exposes the keys the engine actually reads.
 - D16 (how SL is neutralised): deleting the SL branch outright would have made SL *restore* a payable
   day, because the shared code above the type switch already removes the date from daysAbsent. SL is
   therefore skipped before that block: the day stays exactly as the attendance file found it, and
@@ -124,5 +153,4 @@
   deduction on a re-run while the new path does not. Max salary drift in the spec: 0.
 
 ## NEXT
-Phase 7 — UI (LeaveManagement Automation tab, DayCalculation, SalaryComputation banner, profile,
-MissPunch, Import, Settings, Reports, DailyMIS, CalendarView, Sidebar) + rebuilt frontend/dist.
+Phase 8 — self-debug pass, jest, end-to-end simulation, v2 rerun, docs.

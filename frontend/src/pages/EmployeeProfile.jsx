@@ -369,10 +369,11 @@ export default function EmployeeProfile() {
                     const thisYear = new Date().getFullYear();
                     const balRows = (leaveUsage?.balances || []).filter(b => b.year === thisYear);
                     const byType = Object.fromEntries(balRows.map(b => [b.leave_type, b]));
+                    // SL was abolished in Sept 2026 (ruling 8), so its tile is
+                    // gone; the timeline below still shows historical SL rows.
                     const types = [
                       { key: 'CL', color: 'amber' },
-                      { key: 'EL', color: 'green' },
-                      { key: 'SL', color: 'teal' }
+                      { key: 'EL', color: 'green' }
                     ];
                     return types.map(({ key, color }) => {
                       const b = byType[key] || {};
@@ -405,12 +406,14 @@ export default function EmployeeProfile() {
                   { k: 'lwp_days',             label: 'LWP Days (range)',       color: 'orange' },
                   { k: 'od_days',              label: 'OD / Comp-Off (range)',  color: 'blue' },
                   { k: 'short_leave_days',     label: 'Short Leaves (range)',   color: 'teal' },
-                  { k: 'uninformed_absent',    label: 'Uninformed Absent',      color: 'red' }
+                  { k: 'uninformed_absent',    label: 'Uninformed Absent',      color: 'red' },
+                  { k: 'days_worked',          label: 'Days Worked (range)',    color: 'slate' },
+                  { k: 'el_earned',            label: 'EL Earned (range)',      color: 'green' }
                 ];
                 return (
                   <div>
                     <h3 className="font-semibold mb-2 text-sm text-gray-700">Range Leave Summary</h3>
-                    <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3">
+                    <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-8 gap-3">
                       {cards.map(c => (
                         <KpiCard key={c.k} label={c.label} value={fmt(sum(c.k))} color={c.color} />
                       ))}
@@ -431,9 +434,11 @@ export default function EmployeeProfile() {
                         <th className="text-center text-green-700">EL</th>
                         <th className="text-center text-orange-700">LWP</th>
                         <th className="text-center text-blue-700">OD</th>
-                        <th className="text-center text-teal-700">SL</th>
+                        <th className="text-center text-teal-700" title="Sick Leave was discontinued in Sept 2026">SL</th>
                         <th className="text-center text-red-700">UA</th>
                         <th className="text-center">Payable Days</th>
+                        <th className="text-center" title="Days worked — what earned leave accrues on">Days worked</th>
+                        <th className="text-center text-green-700" title="Earned leave credited that month">EL earned</th>
                       </tr>
                     </thead>
                     <tbody>
@@ -447,6 +452,8 @@ export default function EmployeeProfile() {
                           <td className="text-center">{fmt(m.short_leave_days)}</td>
                           <td className="text-center">{fmt(m.uninformed_absent)}</td>
                           <td className="text-center font-medium">{fmt(m.payable_days)}</td>
+                          <td className="text-center">{fmt(m.days_worked)}</td>
+                          <td className="text-center text-green-700">{fmt(m.el_earned)}</td>
                         </tr>
                       ))}
                     </tbody>

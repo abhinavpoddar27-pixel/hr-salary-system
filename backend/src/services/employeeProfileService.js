@@ -355,6 +355,45 @@ function computeProfileRange(db, employeeCode, startDate, endDate) {
     if (r.is_miss_punch) g.missPunches++;
   }
 
+  // Leave columns for the same months, off Stage 6 and the accrual ledger.
+  // The profile's Leave tab reads these straight from monthlyBreakdown — before
+  // Sept 2026 they were never attached, so every leave cell rendered as zero.
+  const leaveByMonth = {};
+  try {
+    const leaveRows = db.prepare(`
+      SELECT dc.month, dc.year,
+             SUM(COALESCE(dc.cl_used, 0))           AS cl_used,
+             SUM(COALESCE(dc.el_used, 0))           AS el_used,
+             SUM(COALESCE(dc.sl_used, 0))           AS sl_used,
+             SUM(COALESCE(dc.lop_days, 0))          AS lwp_days,
+             SUM(COALESCE(dc.od_days, 0))           AS od_days,
+             SUM(COALESCE(dc.short_leave_days, 0))  AS short_leave_days,
+             SUM(COALESCE(dc.uninformed_absent, 0)) AS uninformed_absent,
+             SUM(COALESCE(dc.total_payable_days, 0)) AS payable_days
+      FROM day_calculations dc
+      WHERE dc.employee_code = ?
+      GROUP BY dc.month, dc.year
+    `).all(employeeCode);
+    for (const r of leaveRows) leaveByMonth[`${r.year}-${r.month}`] = r;
+
+    const ledgerRows = db.prepare(`
+      SELECT month, year,
+             COALESCE(paid_days_this_month, 0) AS days_worked,
+             COALESCE(accrued, 0)              AS el_earned,
+             COALESCE(paid_days_ytd, 0)        AS days_worked_ytd
+      FROM leave_accrual_ledger
+      WHERE employee_code = ? AND leave_type = 'EL'
+    `).all(employeeCode);
+    for (const r of ledgerRows) {
+      const key = `${r.year}-${r.month}`;
+      leaveByMonth[key] = { ...(leaveByMonth[key] || {}), ...r };
+    }
+  } catch (e) {
+    // Very old databases may predate some of these columns; the tab then shows
+    // zeros rather than failing the whole profile.
+    console.warn('[employeeProfile] leave breakdown unavailable:', e.message);
+  }
+
   const monthlyBreakdown = Object.values(monthlyMap)
     .map(g => ({
       month: g.month, year: g.year,
@@ -366,7 +405,11 @@ function computeProfileRange(db, employeeCode, startDate, endDate) {
       avgHours:  g.hoursCount > 0 ? r2(g.hoursSum / g.hoursCount) : null,
       otDays: g.otDays, earlyExitCount: g.earlyExitCount,
       absences: g.absences, wopDays: g.wopDays,
-      halfDays: g.halfDays, missPunches: g.missPunches
+      halfDays: g.halfDays, missPunches: g.missPunches,
+      cl_used: 0, el_used: 0, sl_used: 0, lwp_days: 0, od_days: 0,
+      short_leave_days: 0, uninformed_absent: 0, payable_days: 0,
+      days_worked: 0, el_earned: 0, days_worked_ytd: 0,
+      ...(leaveByMonth[`${g.year}-${g.month}`] || {})
     }))
     .sort((a, b) => a.year !== b.year ? a.year - b.year : a.month - b.month);
 
