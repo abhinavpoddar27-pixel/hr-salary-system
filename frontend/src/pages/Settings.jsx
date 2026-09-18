@@ -312,12 +312,24 @@ function PolicyTab() {
       ]
     },
     {
-      title: 'Sunday & Leave Rules',
+      // cl_per_year / el_per_year / sl_per_year used to sit here. Nothing ever
+      // read them — the engine reads the keys below — and SL was abolished in
+      // Sept 2026, so they were removed rather than left to mislead.
+      title: 'Leave Rules',
       keys: [
         { key: 'paid_sunday_min_days', label: 'Min Days for Paid Sunday', hint: 'Days worked in week to earn paid Sunday' },
-        { key: 'cl_per_year', label: 'CL per Year', hint: 'Casual Leave entitlement' },
-        { key: 'el_per_year', label: 'EL per Year', hint: 'Earned Leave entitlement' },
-        { key: 'sl_per_year', label: 'SL per Year', hint: 'Sick Leave entitlement' }
+        { key: 'cl_entitlement_base', label: 'CL per Year (base)', hint: 'Full-year casual leave. Pro-rated by joining month: Jan–Feb full, then one day less every two months.' },
+        { key: 'el_eligibility_days', label: 'Days Worked Before EL Starts', hint: 'Nothing accrues until the employee has worked this many days in the calendar year.' },
+        { key: 'el_days_per_leave', label: 'Days Worked per EL Day', hint: 'Once eligible, one earned leave day for every this many days worked.' },
+        { key: 'el_accrual_rate', label: 'EL Days Earned Each Time', hint: 'Usually 1.' }
+      ]
+    },
+    {
+      title: 'Leave Automation',
+      keys: [
+        { key: 'leave_automation_enabled', label: 'Automation On', hint: "'true' recomputes leave automatically when attendance or approvals change. Switch it on from Leave Management → Automation." },
+        { key: 'leave_auto_stage6_enabled', label: 'Auto Day Calculation', hint: "'true' runs Stage 6 by itself once every miss punch is resolved by HR and decided by finance." },
+        { key: 'leave_recompute_debounce_seconds', label: 'Recompute Debounce (sec)', hint: 'Repeat changes inside this window are merged into one recompute.' }
       ]
     },
     {

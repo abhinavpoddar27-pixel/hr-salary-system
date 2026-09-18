@@ -16,8 +16,9 @@ const _dict = {
   // ── Leave Types ───────────────────────────────
   CL:    { full: 'Casual Leave', desc: 'Short-duration leave for personal/urgent matters' },
   EL:    { full: 'Earned Leave', desc: 'Leave earned proportional to days worked; encashable' },
-  SL:    { full: 'Sick Leave', desc: 'Leave for medical reasons; may require documentation' },
+  SL:    { full: 'Sick Leave (historical)', desc: 'Discontinued Sept 2026 — shown on old records only' },
   LWP:   { full: 'Leave Without Pay', desc: 'Approved leave where no salary is paid' },
+  OD:    { full: 'On Duty / Comp Off', desc: 'Approved compensatory off — the day counts as present' },
 
   // ── Salary Components ─────────────────────────
   DA:    { full: 'Dearness Allowance', desc: 'Cost of living adjustment linked to Consumer Price Index' },
@@ -103,7 +104,9 @@ export const ABBREVIATIONS = [
     entries: [
       { abbr: 'CL', meaning: 'Casual Leave' },
       { abbr: 'EL', meaning: 'Earned Leave' },
-      { abbr: 'SL', meaning: 'Sick Leave' },
+      { abbr: 'LWP', meaning: 'Leave Without Pay' },
+      { abbr: 'OD', meaning: 'On Duty / Comp Off' },
+      { abbr: 'SL', meaning: 'Sick Leave (historical)' },
     ],
   },
   {

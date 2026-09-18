@@ -3,7 +3,7 @@ const router = express.Router();
 const { getDb, logAudit } = require('../database/db');
 const { generatePayslipData } = require('../services/salaryComputation');
 const { recomputeDays, recomputeSalary } = require('../services/recompute');
-const { requireFinanceOrAdmin } = require('../middleware/roles');
+const { requireFinanceOrAdmin, roleIn } = require('../middleware/roles');
 const { protectedWrite } = require('../services/protectedWrite');
 const XLSX = require('xlsx');
 
@@ -758,7 +758,33 @@ router.put('/salary/:code/manual-deductions', (req, res) => {
  */
 router.post('/finalise', (req, res) => {
   const db = getDb();
-  const { month, year } = req.body;
+  const { month, year, staleOverrideReason } = req.body;
+
+  // Stage 6 moved after Stage 7 ran (Sept 2026). Finalising now would lock in
+  // salary computed against superseded day calculations, so it is blocked.
+  // An admin may override with a written reason, which is audited.
+  try {
+    const stale = db.prepare(
+      'SELECT COUNT(*) AS cnt FROM day_calculations WHERE salary_stale = 1 AND month = ? AND year = ?'
+    ).get(month, year);
+    if (stale?.cnt > 0) {
+      const isAdmin = roleIn(req, 'admin');
+      const reason = String(staleOverrideReason || '').trim();
+      if (!isAdmin || reason.length < 10) {
+        return res.status(400).json({
+          success: false,
+          error: `Cannot finalise: day calculation changed for ${stale.cnt} employee(s) after salary was computed. Run Compute Salary first.`,
+          staleCount: stale.cnt,
+          overridable: isAdmin
+        });
+      }
+      logAudit('salary_computations', 0, 'finalise_stale_override', String(stale.cnt), 'finalised',
+        'salary_finalise', reason.slice(0, 500), req.user?.username || 'admin');
+    }
+  } catch (e) {
+    // A missing column on a very old database must not block finalisation.
+    if (!/no such column/i.test(e.message || '')) throw e;
+  }
 
   // Check finance sign-off
   try {

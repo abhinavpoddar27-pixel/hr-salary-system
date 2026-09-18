@@ -84,3 +84,30 @@ export function severityIcon(severity) {
 
 export const MONTH_OPTIONS = Array.from({ length: 12 }, (_, i) => ({ value: i + 1, label: MONTHS_LONG[i + 1] }))
 export const YEAR_OPTIONS = [2024, 2025, 2026, 2027].map(y => ({ value: y, label: String(y) }))
+
+/**
+ * The server stores timestamps in UTC (`datetime('now')`). The plant reads IST.
+ * Renders a stored "YYYY-MM-DD HH:MM:SS" as HH:MM IST on the same clock the
+ * owner uses, without pulling in a date library.
+ */
+export function fmtIstTime(stored) {
+  if (!stored) return ''
+  const iso = String(stored).replace(' ', 'T')
+  const d = new Date(iso.endsWith('Z') ? iso : `${iso}Z`)
+  if (Number.isNaN(d.getTime())) return String(stored)
+  const ist = new Date(d.getTime() + 5.5 * 60 * 60 * 1000)
+  const hh = String(ist.getUTCHours()).padStart(2, '0')
+  const mm = String(ist.getUTCMinutes()).padStart(2, '0')
+  return `${hh}:${mm}`
+}
+
+/** Same, but with the date: "18 Sep, 14:35". */
+export function fmtIstDateTime(stored) {
+  if (!stored) return ''
+  const iso = String(stored).replace(' ', 'T')
+  const d = new Date(iso.endsWith('Z') ? iso : `${iso}Z`)
+  if (Number.isNaN(d.getTime())) return String(stored)
+  const ist = new Date(d.getTime() + 5.5 * 60 * 60 * 1000)
+  const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
+  return `${ist.getUTCDate()} ${MONTHS[ist.getUTCMonth()]}, ${fmtIstTime(stored)}`
+}

@@ -14,11 +14,18 @@ const STATUS_STYLES = {
   '\u00bdP':   'bg-amber-100 text-amber-700 border-amber-200',
   'WO\u00bdP': 'bg-teal-50 text-teal-600 border-teal-200',
   NH:     'bg-purple-100 text-purple-700 border-purple-200',
+  CL:     'bg-sky-100 text-sky-700 border-sky-200',
+  EL:     'bg-indigo-100 text-indigo-700 border-indigo-200',
+  LWP:    'bg-orange-100 text-orange-700 border-orange-200',
+  OD:     'bg-cyan-100 text-cyan-700 border-cyan-200',
+  SL:     'bg-slate-100 text-slate-500 border-slate-200',
 };
 
 const STATUS_LABELS = {
   P: 'Present', A: 'Absent', WO: 'Week Off', WOP: 'Work on Week Off',
   '\u00bdP': 'Half Day', 'WO\u00bdP': 'WO + Half Day', NH: 'Night Shift',
+  CL: 'Casual Leave', EL: 'Earned Leave', LWP: 'Leave Without Pay',
+  OD: 'On Duty / Comp Off', SL: 'Sick Leave (historical)',
 };
 
 /**
@@ -164,6 +171,10 @@ export default function CalendarView({ employeeCode, month, year, data: external
           { key: 'WO', label: 'Week Off', color: 'bg-slate-100 text-slate-400' },
           { key: 'WOP', label: 'WO Present', color: 'bg-teal-100 text-teal-700' },
           { key: '\u00bdP', label: 'Half Day', color: 'bg-amber-100 text-amber-700' },
+          { key: 'CL', label: 'Casual Leave', color: 'bg-sky-100 text-sky-700' },
+          { key: 'EL', label: 'Earned Leave', color: 'bg-indigo-100 text-indigo-700' },
+          { key: 'LWP', label: 'Leave W/O Pay', color: 'bg-orange-100 text-orange-700' },
+          { key: 'OD', label: 'Comp Off', color: 'bg-cyan-100 text-cyan-700' },
           ...(!compact ? [{ key: 'NH', label: 'Night Shift', color: 'bg-purple-100 text-purple-700' }] : []),
         ].map(l => (
           <span key={l.key} className={`inline-flex items-center gap-0.5 px-1 py-0.5 rounded ${l.color} font-medium`}>

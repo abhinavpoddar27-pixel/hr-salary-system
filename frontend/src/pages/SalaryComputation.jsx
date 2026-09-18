@@ -2,13 +2,14 @@ import React, { useState, useMemo, useEffect } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { Link, useSearchParams } from 'react-router-dom'
 import toast from 'react-hot-toast'
-import { getSalaryRegister, computeSalary, finaliseSalary, getPayslip, getMonthEndChecklist, getSalaryComparison, downloadSalarySlipExcel, releaseHeldSalary, getDayCalcStaleness } from '../utils/api'
+import { getSalaryRegister, computeSalary, finaliseSalary, getPayslip, getMonthEndChecklist, getSalaryComparison, downloadSalarySlipExcel, releaseHeldSalary, getDayCalcStaleness, getSalaryStale } from '../utils/api'
 import { useAppStore } from '../store/appStore'
 import CompanyFilter from '../components/shared/CompanyFilter'
 import DateSelector from '../components/common/DateSelector'
 import useDateSelector from '../hooks/useDateSelector'
 import PipelineProgress from '../components/pipeline/PipelineProgress'
 import { fmtINR, monthYearLabel } from '../utils/formatters'
+import { normalizeRole } from '../utils/role'
 import { Abbr } from '../components/ui/Tooltip'
 import AbbreviationLegend from '../components/ui/AbbreviationLegend'
 import CalendarView from '../components/ui/CalendarView'
@@ -25,6 +26,11 @@ import ReleaseHoldModal from '../components/ui/ReleaseHoldModal'
 export default function SalaryComputation() {
   const { month, year, dateProps } = useDateSelector({ mode: 'month', syncToStore: true })
   const { selectedCompany, user } = useAppStore()
+  // Salary never recomputes by itself (owner ruling 5). Stage 6 marks its rows
+  // salary_stale and this banner is how HR finds out.
+  const [staleOpen, setStaleOpen] = useState(false)
+  const [overrideReason, setOverrideReason] = useState('')
+  const [showOverride, setShowOverride] = useState(false)
   const qc = useQueryClient()
   // Held-salary release is gated to finance/admin on the backend; mirror
   // that here so HR users don't see a Release button they can't actually
@@ -109,8 +115,18 @@ export default function SalaryComputation() {
     }
   })
 
+  const { data: staleRes } = useQuery({
+    queryKey: ['salary-stale', month, year, selectedCompany],
+    queryFn: () => getSalaryStale({ month, year, company: selectedCompany || undefined }),
+    refetchInterval: 60 * 1000,
+    retry: 0,
+  })
+  const staleCodes = staleRes?.data?.employeeCodes || []
+  const staleCount = staleRes?.data?.count || 0
+  const isAdmin = normalizeRole(user?.role) === 'admin'
+
   const finaliseMutation = useMutation({
-    mutationFn: () => finaliseSalary({ month: month, year: year, company: selectedCompany }),
+    mutationFn: (opts = {}) => finaliseSalary({ month: month, year: year, company: selectedCompany, ...opts }),
     onSuccess: () => { toast.success('Salary finalised!'); refetch() }
   })
 
@@ -279,9 +295,23 @@ export default function SalaryComputation() {
               {computeMutation.isPending ? 'Computing...' : 'Compute Salary'}
             </button>
             {allSalaries.length > 0 && !allSalaries[0]?.is_finalised && (
-              <button onClick={() => setConfirmAction('finalise')} disabled={finaliseMutation.isPending} className="btn-success">
-                {finaliseMutation.isPending ? 'Finalising...' : 'Finalise'}
-              </button>
+              staleCount > 0 && !isAdmin ? (
+                <button
+                  disabled
+                  className="btn-success opacity-50 cursor-not-allowed"
+                  title={`${staleCount} employee(s) have a day calculation newer than their salary. Compute Salary first.`}
+                >
+                  Finalise
+                </button>
+              ) : staleCount > 0 && isAdmin ? (
+                <button onClick={() => setShowOverride(true)} className="btn-success" title="Finalising with stale day calculations requires a reason">
+                  Finalise (override)
+                </button>
+              ) : (
+                <button onClick={() => setConfirmAction('finalise')} disabled={finaliseMutation.isPending} className="btn-success">
+                  {finaliseMutation.isPending ? 'Finalising...' : 'Finalise'}
+                </button>
+              )
             )}
             {allSalaries.length > 0 && (
               <button onClick={handleExcelSlip} disabled={excelLoading}
@@ -487,6 +517,42 @@ export default function SalaryComputation() {
                 </button>
               ))}
             </div>
+          </div>
+        )}
+
+        {/* Day calculation moved after salary was computed. Salary is never
+            recomputed automatically — HR clicks Compute (owner ruling 5). */}
+        {staleCount > 0 && (
+          <div className="rounded-lg border border-amber-400 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+            <div className="flex flex-wrap items-center gap-3">
+              <span className="text-lg" aria-hidden="true">⚠</span>
+              <div className="flex-1 min-w-0">
+                <div className="font-semibold">
+                  Day calculation changed for {staleCount} employee{staleCount === 1 ? '' : 's'} since salary was computed. Click Compute Salary to refresh.
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setStaleOpen(v => !v)}
+                  className="text-xs text-amber-800 underline mt-0.5"
+                >
+                  {staleOpen ? 'Hide' : 'Show'} the {staleCount} employee code{staleCount === 1 ? '' : 's'}
+                </button>
+              </div>
+              <button
+                onClick={() => computeMutation.mutate()}
+                disabled={computeMutation.isPending}
+                className="btn-primary text-sm shrink-0"
+              >
+                {computeMutation.isPending ? 'Computing…' : 'Compute Salary'}
+              </button>
+            </div>
+            {staleOpen && (
+              <div className="mt-2 flex flex-wrap gap-1 max-h-32 overflow-y-auto">
+                {staleCodes.map(c => (
+                  <span key={c} className="badge-gray text-[11px]">{c}</span>
+                ))}
+              </div>
+            )}
           </div>
         )}
 
@@ -984,10 +1050,56 @@ export default function SalaryComputation() {
             message={`This will finalise salary for ${monthYearLabel(month, year)} (${allSalaries.length} employees). Finalised salaries cannot be recomputed without admin intervention. Are you sure?`}
             confirmText="Yes, Finalise"
             variant="warning"
-            onConfirm={() => { setConfirmAction(null); finaliseMutation.mutate() }}
+            onConfirm={() => { setConfirmAction(null); finaliseMutation.mutate({}) }}
             onCancel={() => setConfirmAction(null)}
           />
         )}
+
+      {/* Admin override: finalising while Stage 6 is newer than Stage 7 needs a
+          written reason, which the backend records in audit_log. */}
+      <Modal open={showOverride} onClose={() => setShowOverride(false)} title="Finalise with stale day calculations?" size="md">
+        <ModalBody>
+          <p className="text-sm text-slate-700">
+            Day calculation changed for <span className="font-semibold">{staleCount}</span> employee
+            {staleCount === 1 ? '' : 's'} after salary was computed. Finalising now locks in the older
+            salary figures.
+          </p>
+          <p className="text-sm text-slate-700 mt-2">
+            The safe path is to click <span className="font-medium">Compute Salary</span> first. If you
+            are finalising anyway, say why — it is recorded against this month.
+          </p>
+          <label className="text-xs font-medium text-slate-600 block mb-1 mt-4">
+            Reason (at least 10 characters)
+          </label>
+          <textarea
+            className="input w-full"
+            rows={3}
+            value={overrideReason}
+            onChange={(e) => setOverrideReason(e.target.value)}
+            placeholder="e.g. Bank file already sent; the changed days are next month's correction"
+          />
+        </ModalBody>
+        <ModalFooter>
+          <button className="btn-ghost" onClick={() => setShowOverride(false)}>Cancel</button>
+          <button
+            className="btn-primary"
+            onClick={() => { computeMutation.mutate(); setShowOverride(false); setOverrideReason('') }}
+          >
+            Compute Salary instead
+          </button>
+          <button
+            className="btn-success"
+            disabled={overrideReason.trim().length < 10 || finaliseMutation.isPending}
+            onClick={() => {
+              finaliseMutation.mutate({ staleOverrideReason: overrideReason.trim() })
+              setShowOverride(false)
+              setOverrideReason('')
+            }}
+          >
+            Finalise anyway
+          </button>
+        </ModalFooter>
+      </Modal>
 
         {/* Shared release modal — same component used by Finance Verify
             Held tab and the Held Salaries Register. Guarantees the
