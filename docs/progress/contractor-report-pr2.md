@@ -4,8 +4,8 @@ Branch: `feat/contractor-report` (from `main` @ 2a0d1f0)
 Prompt copy: `docs/prompts/contractor-report-pr2.md`
 
 ## STATE
-Phase 3 in progress — frontend page, nav, route, dist rebuild, user simulation.
-(Phase 2 backend complete and verified.)
+Phase 3 complete — awaiting owner `go` at the Phase 3 gate.
+Page, nav, route and rebuilt dist committed. 56/56 browser simulation checks pass.
 Backend shipped: config + pure service + 3 GET routes + 44 jest tests. Verified
 end to end against real April production aggregates.
 
@@ -27,10 +27,19 @@ end to end against real April production aggregates.
       `git diff --stat backend/server.js` → `1 +`).
 - [x] P2.5 `backend/src/__tests__/contractorReport.test.js` — 44 tests, all pass.
 - [x] P2.6 self-debug pass (see PHASE 2 VERIFICATION).
+- [x] P3.1 `frontend/src/components/contractorReport/shared.jsx`
+- [x] P3.2 `.../DayReportTab.jsx`, `.../DailyWageRegisterTab.jsx`,
+      `.../GridViewTab.jsx`, `.../ExceptionsTab.jsx`
+- [x] P3.3 `frontend/src/pages/ContractorReport.jsx`
+- [x] P3.4 `frontend/src/utils/api.js` — 3 GET helpers
+- [x] P3.5 `App.jsx` route + `Sidebar.jsx` nav child (3 added lines total with server.js)
+- [x] P3.6 `frontend/dist` rebuilt and committed
+- [x] P3.7 user-simulation pass in a real browser (see PHASE 3 VERIFICATION)
 
 ## NEXT
-Phase 3: build the 4-tab page, wire route + nav, rebuild and commit dist, run the
-user-simulation pass, then STOP at the Phase 3 gate.
+Owner `go` → Phase 4 (code review on the full diff, DO-NOT-MODIFY diff check, push
+`feat/contractor-report`, write the post-deploy checklist and the CLAUDE.md entry).
+**Never push to main** (R-0).
 
 ## BLOCKERS
 None. (B-1 prototype-unavailable was resolved by the owner's upload.)
@@ -483,3 +492,100 @@ and the filter) and does **not** include NULLs. Including them would place the s
 7 blank-company employees under *both* real companies — double-counting in a report
 whose entire purpose is reconciliation. Exact equality keeps every employee in
 exactly one bucket. Flagged rather than assumed.
+
+
+---
+
+# PHASE 3 VERIFICATION
+
+## How it was tested
+Not statically. The backend was booted in production mode (`NODE_ENV=production`,
+serving the committed `dist`) against a scratch database seeded from the same
+de-identified April aggregates used in Phase 2 — 109 synthetic workers, 2,278
+attendance rows, 78 daily-wage entries, synthetic names and codes only. Real
+Chromium (the pre-installed `/opt/pw-browsers/chromium-1194`) then drove the page
+through `playwright-core`, installed **outside the repo** so `package.json` and the
+lockfiles stay untouched.
+
+**56 / 56 checks pass**, and the page renders **2,238 / 1,916 / 322 / 699 /
+₹4,44,930 / 21** — the exact production acceptance numbers, in the browser.
+
+## Happy path
+Login as hr → the sidebar shows **Contractor Report** under Workforce after
+Contractor Management → the link navigates → title reads "Contractor Report" →
+6 stat cards with the right figures → yellow unknown-company banner → exactly
+**4 tabs, no Commission** → **no Excel/export button anywhere**.
+
+Day Report: picked 4 Apr, the two-DW-record day. Pappu's row carries both the
+"Both sources" and "2 DW records" flags; expanding shows the employees-present
+table (code / name / role / shift / status / joined / flags) and the daily-wage
+table with both PAPPU and PAPPU CONT, their rates and gate refs. The
+By-department toggle produces the "Area not recorded · <role>" buckets alongside
+normalised Production.
+
+Daily Wage Register: 30 rows for April, ₹4,44,930 total, department chips; clicking
+a row opens that Day Report.
+
+Grid View: defaults to Meera, renders the cell matrix, and a cell click, a name
+click, a date-header click, arrow keys and Enter all behave.
+
+Exceptions: all eight sections, "up to ₹22,736 possible double pay", the count
+badge, and clicking a dated row opens the Day Report.
+
+## The owner's Phase 3 notes, verified in the browser
+- **R-14 opaque sticky column** — asserted on computed style, not by eye:
+  `getComputedStyle(td[data-name]).backgroundColor === 'rgb(255, 255, 255)'` and
+  `position === 'sticky'`. The background is an inline style so the zebra rule in
+  `index.css` cannot override it.
+- **R-15 no re-render on hover/selection** — a DOM node was tagged with a custom
+  attribute, then the mouse was moved across four columns and a cell was selected.
+  The tag survived both (React would have discarded it on re-render), and the
+  highlight arrives as an inline `filter: brightness(...)`. `<GridBody>` is
+  `memo`-ised and selection is not one of its props. Keyboard handling is on the
+  scroll container (`tabIndex=0`); there is no global listener.
+- **R-16 company filter** — see the COMPANY FILTER section above.
+- **R-17** — asserted: 4 tabs, no "Commission" string anywhere, no Excel button.
+
+## AMENDMENT 1 proven negatively
+The fixture seeds `commission_rate_applied = 777` and matching commission totals on
+every daily-wage entry. The simulation walks all four tabs and asserts the word
+"commission" never appears, the number 777 never appears, and no `input[type=number]`
+exists anywhere on the page. All three pass — no commission value can reach the UI.
+
+## Edge cases
+| Case | Result |
+|---|---|
+| DW-only contractor (Chottu) in Grid View | "0 people", "No one matches these filters", DW footer still shows heads — no error |
+| Search with no match | empty message, no crash |
+| "Worked any night" / "Only flagged" / sort change | all narrow and re-order cleanly |
+| Month with no data (January) | empty state + zeroed stat cards, no crash |
+| Contractor filter (Pappu) | stat cards narrow away from the month totals |
+| Invalid API request (`month=99`) | 400 with a message, surfaced not swallowed |
+| Console errors | none, bar two known-benign entries (below) |
+
+## Three bugs found by the simulation, all fixed
+1. **Layout (real, mine).** The app's `.select`/`.input` are `block w-full`, so
+   inside a flex toolbar every control stacked onto its own row and the day-nav
+   `‹ ›` wrapped away from the date picker. Caught by looking at the screenshots,
+   not by an assertion. Fixed with explicit widths and a `flex-nowrap` group.
+2. **Seed fixture (mine, not the product).** Pre-DOJ workers were given
+   `date_of_joining = 2026-04-27`, so the real pre-DOJ bucket on 27 April stopped
+   counting as pre-joining and the page showed **2,239 / 323** instead of
+   2,238 / 322. The service was right — the Phase 2 production replay had already
+   proved 2,238. Fixed the fixture's DOJ; the page now shows 2,238.
+3. **Harness regex.** Stat-card labels render uppercase via CSS `text-transform`,
+   so a case-sensitive assertion failed on a value that was displaying correctly.
+
+## Two console entries excluded, with reasons
+- `/vite.svg` **404** — `frontend/index.html` has referenced a favicon that is
+  absent from `dist` on `main` too (`git show main:frontend/dist/vite.svg` fails),
+  so **every page in the app emits this**. Pre-existing; fixing it would mean
+  editing `index.html`, which is outside this PR's allowed edits.
+- One **400** — deliberately triggered by the invalid-month edge case above.
+
+## Build + suite
+`npm run build --prefix frontend` clean. New chunk `ContractorReport-*.js`
+46.5 kB raw / 11.6 kB gzip, lazy-loaded so the main bundle is unaffected.
+Backend suite 297 tests: 291 pass, 6 fail — 3 `tdsCalculation` + 3 `protectedWrite`
+flake, the same baseline `main` produces on a clean tree.
+Lockfiles: still zero diff vs `main` after both `npm install`s.

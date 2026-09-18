@@ -505,6 +505,11 @@ export const getEarlyExitDeptSummary = (params) => api.get('/early-exits/departm
 export const exportEarlyExitReport = (params) => api.get('/early-exits/export', { params, responseType: 'blob' })
 export const getEarlyExitEmployeeSummary = (params) => api.get('/early-exits/employee-summary', { params })
 
+// Contractor Report (PR-2) — read-only
+export const getContractorMonthReport = (params) => api.get('/contractor-report/month', { params })
+export const getContractorDayReport = (params) => api.get('/contractor-report/day', { params })
+export const getContractorGridReport = (params) => api.get('/contractor-report/grid', { params })
+
 // ── Early Exit Deductions ─────────────────────────────────
 export const submitEarlyExitDeduction = (data) => api.post('/early-exit-deductions', data)
 export const getEarlyExitDeductions = (params) => api.get('/early-exit-deductions', { params })

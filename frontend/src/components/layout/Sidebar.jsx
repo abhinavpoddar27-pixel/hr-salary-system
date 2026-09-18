@@ -80,6 +80,7 @@ const nav = [
       { label: 'Headcount & Composition', to: '/workforce/headcount' },
       { label: 'Hiring & Attrition', to: '/workforce/attrition' },
       { label: 'Contractor Management', to: '/workforce/contractors' },
+      { label: 'Contractor Report', to: '/workforce/contractor-report' },
     ]
   },
   {
