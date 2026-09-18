@@ -4,7 +4,8 @@ Branch: `feat/contractor-report` (from `main` @ 2a0d1f0)
 Prompt copy: `docs/prompts/contractor-report-pr2.md`
 
 ## STATE
-Phase 2 complete — awaiting owner `go` at the Phase 2 gate.
+Phase 3 in progress — frontend page, nav, route, dist rebuild, user simulation.
+(Phase 2 backend complete and verified.)
 Backend shipped: config + pure service + 3 GET routes + 44 jest tests. Verified
 end to end against real April production aggregates.
 
@@ -28,7 +29,8 @@ end to end against real April production aggregates.
 - [x] P2.6 self-debug pass (see PHASE 2 VERIFICATION).
 
 ## NEXT
-Owner `go` → Phase 3 (frontend page, nav, route, committed dist, user simulation).
+Phase 3: build the 4-tab page, wire route + nav, rebuild and commit dist, run the
+user-simulation pass, then STOP at the Phase 3 gate.
 
 ## BLOCKERS
 None. (B-1 prototype-unavailable was resolved by the owner's upload.)
@@ -103,6 +105,32 @@ and its 21 heads.
 
 **R-11** Allocation integrity confirmed for all 158 non-test April–May entries
 (157 approved/paid + 1 `hr_entered`): one allocation each, heads tie. No action.
+
+### Owner rulings at the Phase 2 gate (19 Sep 2026)
+
+**R-12 Lockfiles must stay untouched.** Verified before Phase 3:
+`git diff --stat main -- package-lock.json backend/package-lock.json frontend/package-lock.json`
+→ **empty**, and `git status --short` on the same three → **empty**. The container's
+`npm install` was a clean install from the existing lockfile and changed nothing.
+No lockfile is committed on this branch.
+
+**R-13 No production data in the repo.** Verified: `git diff --name-only main`
+lists 7 files, all code or docs; no `.json`/`.txt`/`.csv` among them. The April
+replay fixtures live only in the session scratchpad (`/tmp/...`), never in the
+branch, and contain bucket counts only — no employee names, no employee codes.
+
+**R-14 Grid sticky name column must be OPAQUE white.** A translucent sticky
+background made names paint blank in Chrome mid-scroll in the prototype.
+
+**R-15 Grid hover/selection must not re-render ~2,800 cells.** Cells stay memoised;
+highlight is toggled by a CSS attribute on the table (and refs), never by React
+state per mouse move. Keyboard handling is bound to the grid container
+(`tabIndex=0`) only — **no global keydown listener.**
+
+**R-16 Company filter rule** — see COMPANY FILTER below. Must be stated at the
+Phase 3 gate with per-option employee counts.
+
+**R-17 Light theme only, no Commission tab, no Excel button.**
 
 ### Deltas found during P0.4 (carried forward)
 - `employees.contractor_group` EXISTS but is **not used** per R-3.
@@ -410,3 +438,48 @@ the permanent jest suite.
 `payroll.js`, `exportFormats.js`, `employeeClassification.js`, `dailyWage.js`,
 `DailyMIS.jsx`, `AttendanceRegister.jsx` → **empty**. `backend/server.js` → **1 +**.
 No schema changes, no writes, no new npm dependencies.
+
+
+---
+
+# COMPANY FILTER (R-16)
+
+## The matching rule this report uses
+Exact string equality against **`employees.company`**, with no mapping of any kind:
+
+```sql
+AND TRIM(COALESCE(e.company,'')) = ?        -- ? = store selectedCompany
+```
+
+Omitted entirely when `selectedCompany` is `''` ("All Companies"). The filter applies
+to **biometric workers only** — `dw_entries` is effectively not company-split
+(157 blank + 6 Indriyan across April–May), so daily-wage figures are identical under
+every option. R-6 forbids company-mapping rules, so `ASIAN` is not folded into
+`Asian Lakto Ind Ltd`.
+
+## What the header dropdown actually offers
+`CompanyFilter.jsx` renders `''` ("All Companies") plus one option per row of the
+`companies` table. That table currently holds **four** rows — including two that look
+like junk but are real, selectable options:
+
+| Dropdown option | Contract employees selected (of 334) | Apr man-days | May man-days |
+|---|---|---|---|
+| All Companies (`''`) | 334 | 2,238 | 2,587.5 |
+| `Asian Lakto Ind Ltd` | 94 | 1,142.5 | 1,015 |
+| `Default` | 132 | 693.5 | 1,285 |
+| `null` (the literal string) | 98 | 290 | 197.5 |
+| `Indriyan Beverages Pvt Ltd` | 2 | 51 | 55 |
+
+94 + 132 + 2 + 98 = **326**. The remaining **8** (7 blank/SQL-NULL + 1 `ASIAN`)
+match no dropdown option and are visible only under "All Companies"; they carry
+61 April / 35 May man-days.
+
+## Deliberate divergence from Daily MIS — owner should confirm
+Daily MIS filters a different column with a NULL-inclusive clause:
+`AND (ap.company = ? OR ap.company IS NULL)` on **`attendance_processed.company`**.
+
+This report matches **`employees.company`** (as the prompt specifies for the banner
+and the filter) and does **not** include NULLs. Including them would place the same
+7 blank-company employees under *both* real companies — double-counting in a report
+whose entire purpose is reconciliation. Exact equality keeps every employee in
+exactly one bucket. Flagged rather than assumed.
