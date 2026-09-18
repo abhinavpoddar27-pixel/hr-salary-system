@@ -4,8 +4,9 @@ Branch: `feat/contractor-report` (from `main` @ 2a0d1f0)
 Prompt copy: `docs/prompts/contractor-report-pr2.md`
 
 ## STATE
-Phase 1 complete — awaiting owner `go` at the Phase 1 gate.
-All 13 acceptance numbers reproduced exactly against production. No logic bent.
+Phase 2 complete — awaiting owner `go` at the Phase 2 gate.
+Backend shipped: config + pure service + 3 GET routes + 44 jest tests. Verified
+end to end against real April production aggregates.
 
 ## DONE
 - [x] P0.1 preflight: clean tree (0 dirty), main fast-forwarded to `2a0d1f0`, SQL Console MCP reachable (`SELECT 1` → 1).
@@ -16,10 +17,18 @@ All 13 acceptance numbers reproduced exactly against production. No logic bent.
 - [x] P0.3 package manager + test runner detected.
 - [x] P0.4 repo read (mounts, guards, classification, router, sidebar, api client, styling refs, DB columns).
 - [x] P0.5 PLAN written (below).
+- [x] P1 all 13 acceptance numbers reproduced on production (see NUMBERS).
+- [x] P2.1 `backend/src/config/contractorReportConfig.js` — every rule, one file.
+- [x] P2.2 `backend/src/services/contractorReport.js` — monthReport / dayReport /
+      gridReport / contractorNamesForMonth. Read-only; one query per dataset.
+- [x] P2.3 `backend/src/routes/contractorReport.js` — 3 GETs, validation, role gate.
+- [x] P2.4 `backend/server.js` — exactly ONE mount line added (verified by
+      `git diff --stat backend/server.js` → `1 +`).
+- [x] P2.5 `backend/src/__tests__/contractorReport.test.js` — 44 tests, all pass.
+- [x] P2.6 self-debug pass (see PHASE 2 VERIFICATION).
 
 ## NEXT
-Owner `go` → Phase 2 (backend: config + pure service + 3 GET routes + jest tests).
-One open question first: is `company = 'ASIAN'` (1 employee) invalid, or Asian Lakto?
+Owner `go` → Phase 3 (frontend page, nav, route, committed dist, user simulation).
 
 ## BLOCKERS
 None. (B-1 prototype-unavailable was resolved by the owner's upload.)
@@ -71,6 +80,29 @@ empty text. Drop the Excel button.
 allocation row goes under **"Not recorded"**. Phase 1 must additionally report,
 for April–May: entries with 0 allocation rows, entries with >1, and entries whose
 allocation total differs from `dw_entries.total_worker_count`.
+
+### Owner rulings at the Phase 1 gate (19 Sep 2026)
+
+**R-6 `company = 'ASIAN'` is invalid** and counts toward the unknown-company %.
+**No company-mapping rules anywhere in the report** — it must agree with the value
+payroll stores. That record is fixed at source in the company clean-up, not here.
+
+**R-7 Add alias `SONU CONT` → `[Sonu]`.** The grey "not mapped" badge is reserved
+for names never seen before.
+
+**R-8 `SAJJAN+JIWAN LAL (12-H)`** has no live entries in April–May, so its
+both-source special case (compare against Sajan **and** Jiwan Lal) is covered by a
+**unit-test fixture**.
+
+**R-9 Rupees display rounded to whole rupees** (₹22,736). The API payload keeps
+exact values; rounding is a frontend concern only.
+
+**R-10** The config must carry a comment that the department normaliser's **rule
+order is load-bearing**, citing the 9 May `UTILITY (…ZEERA (400) PROD-5…)` entry
+and its 21 heads.
+
+**R-11** Allocation integrity confirmed for all 158 non-test April–May entries
+(157 approved/paid + 1 `hr_entered`): one allocation each, heads tie. No action.
 
 ### Deltas found during P0.4 (carried forward)
 - `employees.contractor_group` EXISTS but is **not used** per R-3.
@@ -305,3 +337,76 @@ So the report's population is a strict subset of the payroll population on the f
 13. (R-2) Full disagreement list: locked rule vs `isContractorForPayroll`, with the
     classifying path and April/May man-days per employee.
 14. (R-3) Re-confirm `contractor_group` is blank for all contract employees (expect 345).
+
+
+---
+
+# PHASE 2 VERIFICATION
+
+## Unit tests — 44 new, all pass
+`npm test --prefix backend -- src/__tests__/contractorReport.test.js` → 44/44.
+Covers: weights (½P / WO½P), night split on the punch-in date, pre-joining clip,
+no exit-date clip, both-source + max double pay, the R-8 combined-record fixture,
+PAPPU + PAPPU CONT folding to one contractor with two records, same-record-twice
+NOT being a duplicate, test-entry exclusion, not-approved handling, the department
+normaliser (including the 9 May rule-order regression guard), unknown aliases kept,
+tie-out (match / mismatch / no row), company filter, unknown-company ratio, grid
+department filtering, MEERA+MRREA folding, and a read-only assertion.
+
+## Full backend suite — baseline unchanged
+| | main (clean) | this branch |
+|---|---|---|
+| tests | 253 | 297 (+44) |
+| `tdsCalculation` failures | 3 | 3 |
+| `protectedWrite` failures | 0 or 3 (flaky) | 0 or 3 (flaky) |
+
+Both pre-existing and documented (CLAUDE.md §12 and OPEN_ITEMS OI-2). Verified by
+stashing this branch's backend changes and re-running on the clean tree: 6 failures
+(3 TDS + 3 protectedWrite flake). Two consecutive runs on this branch gave 3 then 6
+failures — the flake, reproduced, not caused here. **My 44 pass in every run.**
+
+## Production replay — the strongest check
+April 2026's real aggregates were pulled from production (de-identified: bucket
+counts by date × department × night × status × pre-DOJ, plus the daily-wage entries),
+replayed into an in-memory database, and run through the actual service.
+
+Fixture integrity was checked against production first: 349 buckets / 2,278 heads /
+1,951 day / 327 night / 36 pre-DOJ heads, and DW 72 entries / 699 heads / ₹4,44,930.
+(The first transcription dropped one bucket — 348/2,277 — and was caught by that
+checksum before any assertion ran.)
+
+All 13 checks reproduced exactly through the service:
+heads 2,278 · day 1,951 · night 327 · man-days 2,238 · day 1,916 · night 322 ·
+DW heads 699 · DW cost ₹4,44,930 · both-source 21 (all Pappu) · max double pay
+₹22,735.71 · two-DW-record days 1 (4 Apr Pappu, PAPPU CONT 2×650 + PAPPU 12×600) ·
+DW not approved non-test 1 · test entries 5. Contractors 13, unmapped 0, department
+breakdown Production 698 + Godown 1.
+
+## HTTP route harness — 50/50
+The real router booted over HTTP against a fixture: happy paths on all three
+endpoints, the company filter narrowing biometric but not daily wage, dept
+normalisation and typed-text retention, both-source, tie-out (ties / mismatch /
+no payroll row), a daily-wage-only contractor rendering an empty grid rather than a
+400, all 12 validation branches → 400, hr/finance/admin → 200, viewer/employee/no-role
+→ 403 on all three endpoints, and a row-count check proving the routes wrote nothing.
+
+**Three harness bugs were found and fixed, no product bugs:** two assertions had the
+wrong expected tie-out values (E1's man-days is 1, not the 1.5 month total, so it
+*ties*), and `get(path, role = 'hr')`'s default parameter meant the "no role" case
+was silently running as HR — masking the one genuinely security-relevant assertion.
+After fixing, no-role correctly 403s. A real tie-out *mismatch* employee was then
+added so that branch is proven over HTTP too, and the equivalent cases were added to
+the permanent jest suite.
+
+## Two efficiency fixes from the adversarial re-read
+1. `gridReport` was fetching the whole month's attendance and discarding other gangs
+   in JS. It now resolves the alias map to a department list up front and filters in
+   SQL (`CFG.departmentsForContractor`).
+2. `/grid` validated an unknown `?contractor=` by building an entire `monthReport`.
+   It now uses `contractorNamesForMonth`, two small DISTINCT queries.
+
+## Scope discipline
+`git diff --stat main` for `salaryComputation.js`, `dayCalculation.js`, `schema.js`,
+`payroll.js`, `exportFormats.js`, `employeeClassification.js`, `dailyWage.js`,
+`DailyMIS.jsx`, `AttendanceRegister.jsx` → **empty**. `backend/server.js` → **1 +**.
+No schema changes, no writes, no new npm dependencies.
