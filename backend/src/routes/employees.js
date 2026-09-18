@@ -891,6 +891,9 @@ router.post('/bulk-import', (req, res) => {
     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `);
 
+  // CL per year comes from policy_config.cl_entitlement_base and is pro-rated by
+  // joining month — the old hard-coded 12 predates the Sept 2026 ruling.
+  const bulkClBase = getPolicyNumber(db, 'cl_entitlement_base', 7);
   const insertLeave = db.prepare(`
     INSERT OR IGNORE INTO leave_balances (employee_id, year, leave_type, opening, balance)
     VALUES (?, ?, ?, ?, ?)
@@ -968,7 +971,8 @@ router.post('/bulk-import', (req, res) => {
         }
 
         for (const year of [2025, 2026]) {
-          insertLeave.run(empRow.id, year, 'CL', 12, 12);
+          const clOpeningBulk = computeClEntitlement(emp.date_of_joining || null, year, bulkClBase);
+          insertLeave.run(empRow.id, year, 'CL', clOpeningBulk, clOpeningBulk);
           insertLeave.run(empRow.id, year, 'EL', 0, 0);
         }
       } catch (err) {

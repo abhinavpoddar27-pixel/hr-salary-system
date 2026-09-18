@@ -71,6 +71,15 @@ router.post('/', (req, res) => {
     return res.status(400).json({ success: false, error: 'Missing required fields' });
   }
 
+  // SL was abolished in Sept 2026 (ruling 8). Historical rows still render
+  // everywhere; nothing may create a new one.
+  if (!['CL', 'EL', 'LWP'].includes(leaveType)) {
+    return res.status(400).json({
+      success: false,
+      error: 'Invalid leave_type. Must be CL or EL. SL is no longer supported.'
+    });
+  }
+
   const emp = db.prepare('SELECT id FROM employees WHERE code = ?').get(employeeCode);
   if (!emp) return res.status(404).json({ success: false, error: 'Employee not found' });
 
@@ -146,6 +155,15 @@ router.put('/:id/approve', (req, res) => {
 
   const leave = db.prepare('SELECT * FROM leave_applications WHERE id = ? AND status = ?').get(req.params.id, 'Pending');
   if (!leave) return res.status(404).json({ success: false, error: 'Leave not found or already processed' });
+
+  // A Pending SL row can only be one raised before Sept 2026. It cannot be
+  // approved — HR re-raises it as CL, EL or LWP.
+  if (!['CL', 'EL', 'LWP'].includes(leave.leave_type)) {
+    return res.status(400).json({
+      success: false,
+      error: 'Invalid leave_type. Must be CL or EL. SL is no longer supported.'
+    });
+  }
 
   const emp = db.prepare('SELECT id FROM employees WHERE code = ?').get(leave.employee_code);
 

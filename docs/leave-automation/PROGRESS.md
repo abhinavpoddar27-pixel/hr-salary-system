@@ -7,7 +7,7 @@
 - P3 SHARED STAGE 6 — DONE (parity proven, 6/6 specs green)
 - P4 TRIGGERS / AUTO STAGE 6 — DONE (19/19 specs green)
 - P5 API — DONE (22/22 specs green)
-- P6 SL REMOVAL + CL 7 — not started
+- P6 SL REMOVAL + CL 7 — DONE (20/20 specs green)
 - P7 UI — not started
 - P8 SELF-DEBUG + SIM + V2 — not started
 - P9 SHIP — not started
@@ -41,8 +41,16 @@
   hand-patch)
 - backend/src/routes/employeePortal.js (P5: ORDER BY applied_at; leave-apply validation + employee_id)
 - backend/src/__tests__/leaveApi.test.js, src/__tests__/helpers/apiHarness.js (P5: NEW)
+- backend/src/services/dayCalculation.js (P6: SL leaves the day untouched; sl_used still written)
+- backend/src/routes/employees.js (P6: both CL seeds use computeClEntitlement + cl_entitlement_base)
+- backend/src/routes/leaves.js (P6: SL rejected on submit and on approve)
+- backend/src/__tests__/slRemoval.test.js (P6: NEW)
 
 ## DECISIONS
+- D16 (how SL is neutralised): deleting the SL branch outright would have made SL *restore* a payable
+  day, because the shared code above the type switch already removes the date from daysAbsent. SL is
+  therefore skipped before that block: the day stays exactly as the attendance file found it, and
+  sl_used is still counted so historical rows render. Caught by the spec, not by reading.
 - D14 (API test harness): no supertest in the repo, so `helpers/apiHarness.js` points DATA_DIR at a
   temp directory before database/db.js loads, mounts the routers on a bare express app with a stub
   auth middleware, and drives them over a real socket with node's own http client. No new dependency,
@@ -108,6 +116,7 @@
 - Baseline (origin/main): 157 pass / 3 fail (tdsCalculation.test.js — pre-existing).
 - After P1: 157 pass / 3 fail (same 3). Schema verify script: 20/20 assertions pass, idempotent.
 - After P2: 182 pass / 3 fail (same 3 TDS). leaveEngine.test.js 25/25.
+- After P6: 249 pass / 3 fail (same 3 TDS). slRemoval.test.js 20/20.
 - After P5: 229 pass / 3 fail (same 3 TDS). leaveApi.test.js 22/22.
 - After P4: 207 pass / 3 fail (same 3 TDS). leaveTriggers.test.js 19/19.
 - After P3: 188 pass / 3 fail (same 3 TDS). recomputeParity.test.js 6/6, including a field-for-field
@@ -115,4 +124,5 @@
   deduction on a re-run while the new path does not. Max salary drift in the spec: 0.
 
 ## NEXT
-Phase 6 — SL removal from dayCalculation + write paths; CL 7 pro-rated in employees.js.
+Phase 7 — UI (LeaveManagement Automation tab, DayCalculation, SalaryComputation banner, profile,
+MissPunch, Import, Settings, Reports, DailyMIS, CalendarView, Sidebar) + rebuilt frontend/dist.
