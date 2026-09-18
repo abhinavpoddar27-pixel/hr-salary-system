@@ -3275,6 +3275,105 @@ If description and screenshot are incoherent or unrelated, set summary_confidenc
   safeCreateIndex(`CREATE INDEX IF NOT EXISTS idx_protected_writes_table_status
     ON protected_writes (table_name, status)`);
 
+  // ─────────────────────────────────────────────────────────────
+  // Leave Automation (Sept 2026) — additive only, idempotent.
+  // Tables: external EL grants given outside the system, change flags for
+  // finalized months, and a run log for every leave recompute.
+  // ─────────────────────────────────────────────────────────────
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS leave_external_grants (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      employee_code TEXT NOT NULL,
+      employee_id INTEGER,
+      year INTEGER NOT NULL,
+      month INTEGER NOT NULL,
+      leave_type TEXT NOT NULL DEFAULT 'EL',
+      days REAL NOT NULL DEFAULT 0,
+      mode TEXT NOT NULL CHECK (mode IN ('leave_taken','paid_salary','paid_cash')),
+      paid_month INTEGER,
+      paid_year INTEGER,
+      remark TEXT,
+      source_file TEXT,
+      uploaded_by TEXT,
+      uploaded_at TEXT DEFAULT (datetime('now')),
+      is_active INTEGER DEFAULT 1,
+      UNIQUE(employee_code, year, month, leave_type, mode)
+    );
+
+    CREATE TABLE IF NOT EXISTS leave_change_flags (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      employee_code TEXT,
+      company TEXT,
+      month INTEGER NOT NULL,
+      year INTEGER NOT NULL,
+      reason TEXT NOT NULL,
+      detail TEXT,
+      created_at TEXT DEFAULT (datetime('now')),
+      cleared_at TEXT,
+      cleared_by TEXT
+    );
+
+    CREATE TABLE IF NOT EXISTS leave_recompute_runs (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      scope TEXT NOT NULL,
+      company TEXT,
+      month INTEGER,
+      year INTEGER,
+      employee_count INTEGER DEFAULT 0,
+      started_at TEXT DEFAULT (datetime('now')),
+      finished_at TEXT,
+      status TEXT,
+      message TEXT
+    );
+  `);
+
+  safeCreateIndex(`CREATE INDEX IF NOT EXISTS idx_leave_ext_grants_emp_year
+    ON leave_external_grants (employee_code, year)`);
+  safeCreateIndex(`CREATE INDEX IF NOT EXISTS idx_leave_change_flags_open
+    ON leave_change_flags (year, month, cleared_at)`);
+  safeCreateIndex(`CREATE INDEX IF NOT EXISTS idx_leave_recompute_runs_scope
+    ON leave_recompute_runs (scope, started_at DESC)`);
+
+  // Stage 6 → Stage 7 staleness marker. Set by recomputeDays(), cleared by
+  // recomputeSalary(). Drives the "needs recompute" banner on Stage 7.
+  safeAddColumn('day_calculations', 'salary_stale', 'INTEGER DEFAULT 0');
+  safeAddColumn('day_calculations', 'leave_recomputed_at', 'TEXT');
+  // Timestamp of the automatic first Stage-6 run for a company-month.
+  safeAddColumn('monthly_imports', 'stage_6_auto_at', 'TEXT');
+
+  // Leave-automation policy keys. INSERT OR IGNORE so an existing database
+  // picks them up too (the `policyCount.cnt === 0` seed block never re-runs).
+  insertPolicyIfMissing.run('el_accrual_rate', '1', 'EL days earned per el_days_per_leave days worked');
+  insertPolicyIfMissing.run('el_eligibility_days', '180', 'Days worked in the calendar year before EL starts accruing');
+  insertPolicyIfMissing.run('el_days_per_leave', '20', 'Days worked that earn one EL day');
+  insertPolicyIfMissing.run('cl_entitlement_base', '7', 'CL days per year (pro-rated by joining month)');
+  insertPolicyIfMissing.run('leave_automation_enabled', 'false', 'Master switch for automatic leave recompute');
+  insertPolicyIfMissing.run('leave_auto_stage6_enabled', 'true', 'Run Stage 6 automatically once every miss punch is resolved and finance-decided');
+  insertPolicyIfMissing.run('leave_recompute_debounce_seconds', '45', 'Window in which repeat leave-recompute triggers merge into one job');
+  insertPolicyIfMissing.run('leave_external_grants_acknowledged', 'false', 'Owner has uploaded the outside-system EL list, or acknowledged there is none');
+
+  // One-time: CL entitlement base moves 12 -> 7 (owner ruling, Sept 2026).
+  const clEnt7Done = db.prepare(
+    "SELECT value FROM policy_config WHERE key = 'migration_cl_entitlement_7_v1'"
+  ).get();
+  if (!clEnt7Done) {
+    try {
+      db.prepare("UPDATE policy_config SET value = '7' WHERE key = 'cl_annual_entitlement'").run();
+      // `sl_per_year` was only ever exposed by the Settings UI; drop it if it is
+      // still sitting at its seeded value, otherwise leave the operator's value alone.
+      const slRow = db.prepare("SELECT value FROM policy_config WHERE key = 'sl_per_year'").get();
+      if (slRow && String(slRow.value).trim() === '0') {
+        db.prepare("DELETE FROM policy_config WHERE key = 'sl_per_year'").run();
+      }
+      db.prepare(
+        "INSERT OR REPLACE INTO policy_config (key, value, description) VALUES ('migration_cl_entitlement_7_v1', '1', 'CL entitlement base moved to 7 days')"
+      ).run();
+      console.log('[MIGRATION] cl_entitlement_7_v1 applied');
+    } catch (e) {
+      console.error('[MIGRATION] cl_entitlement_7_v1 failed:', e.message);
+    }
+  }
+
   console.log('✅ Database schema initialized');
 }
 
