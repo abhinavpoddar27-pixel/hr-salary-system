@@ -28,7 +28,7 @@ function addEmployee(db, over = {}) {
     code: over.code || `E${String(nextId++).padStart(3, '0')}`,
     name: over.name || 'TEST EMPLOYEE',
     department: over.department || 'PRODUCTION',
-    company: over.company === undefined ? 'Indriyan Beverages' : over.company,
+    company: over.company === undefined ? 'Indriyan Beverages Pvt Ltd' : over.company,
     employment_type: over.employment_type === undefined ? 'Permanent' : over.employment_type,
     status: over.status || 'Active',
     date_of_joining: over.date_of_joining || '2024-01-01',

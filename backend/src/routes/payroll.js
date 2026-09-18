@@ -1,8 +1,8 @@
 const express = require('express');
 const router = express.Router();
 const { getDb, logAudit } = require('../database/db');
-const { calculateDays, saveDayCalculation } = require('../services/dayCalculation');
-const { computeEmployeeSalary, saveSalaryComputation, generatePayslipData } = require('../services/salaryComputation');
+const { generatePayslipData } = require('../services/salaryComputation');
+const { recomputeDays, recomputeSalary } = require('../services/recompute');
 const { requireFinanceOrAdmin } = require('../middleware/roles');
 const { protectedWrite } = require('../services/protectedWrite');
 const XLSX = require('xlsx');
@@ -13,261 +13,30 @@ const XLSX = require('xlsx');
  */
 router.post('/calculate-days', (req, res) => {
   const db = getDb();
-  const { month, year, company } = req.body;
+  const { month, year, company, employeeCodes } = req.body;
 
   if (!month || !year) return res.status(400).json({ success: false, error: 'month and year required' });
 
-  // ── Ghost attendance cleanup ──
-  // Rows with no status AND no in_time AND no out_time are "ghost" records —
-  // typically second-half-of-month rows for "Returning" employees whose EESL
-  // biometric data only covered the first half. Before Fix 1 in dayCalculation.js
-  // closed the catch-all hole, these fell through the status loop without
-  // counting as absent, inflating total_payable_days by up to 12-15 days.
-  //
-  // The in-code fix in dayCalculation.js handles the calculation correctly,
-  // but we also normalise the DB here so the Stage 5 attendance UI shows
-  // 'A' instead of a blank cell on these days (and other consumers — finance
-  // audit, analytics — see a consistent status). Weekly-off and holiday days
-  // are intentionally NOT excluded: day-calc still skips them from daysAbsent
-  // via `isWeeklyOff`/`isHoliday` checks, so setting a ghost Sunday to 'A'
-  // is a no-op functionally but makes the data uniform.
-  const ghostCleanup = db.prepare(`
-    UPDATE attendance_processed
-    SET status_original = CASE
-          WHEN status_original IS NULL OR status_original = '' THEN 'A'
-          ELSE status_original
-        END,
-        status_final = 'A'
-    WHERE month = ? AND year = ?
-    ${company ? 'AND company = ?' : ''}
-    AND (status_final IS NULL OR status_final = '')
-    AND (status_original IS NULL OR status_original = '')
-    AND (in_time_original IS NULL OR in_time_original = '')
-    AND (out_time_original IS NULL OR out_time_original = '')
-    AND is_night_out_only = 0
-  `).run(...[month, year, company].filter(Boolean));
-  if (ghostCleanup.changes > 0) {
-    console.log(`[DayCalc] Cleaned ${ghostCleanup.changes} ghost attendance records → 'A' for ${month}/${year}`);
-  }
-
-  // Get employee codes from attendance — include ALL employees with attendance data
-  // (even those marked 'Left' who may have returned; auto-reactivate them)
-  const empCodes = db.prepare(`
-    SELECT DISTINCT ap.employee_code
-    FROM attendance_processed ap
-    LEFT JOIN employees e ON ap.employee_code = e.code
-    WHERE ap.month = ? AND ap.year = ? ${company ? 'AND ap.company = ?' : ''}
-    AND ap.is_night_out_only = 0
-    AND (e.status IS NULL OR e.status NOT IN ('Exited'))
-  `).all(...[month, year, company].filter(Boolean)).map(r => r.employee_code);
-
-  // Auto-reactivate 'Left' employees who have attendance this month
-  db.prepare(`
-    UPDATE employees SET status = 'Active', was_left_returned = 1, updated_at = datetime('now')
-    WHERE code IN (${empCodes.map(() => '?').join(',')})
-    AND status = 'Left'
-  `).run(...empCodes);
-
-  const monthStr = String(month).padStart(2,'0');
-  // Fetch full holiday metadata so dayCalculation can filter per-employee
-  // by applicable_to ('All' / 'Permanent' / 'Contract'). Type is included
-  // for future use (e.g. Restricted holidays may pay differently one day).
-  const holidays = db.prepare(`
-    SELECT date, name, type, applicable_to
-    FROM holidays WHERE date LIKE ?
-  `).all(`${year}-${monthStr}-%`);
-
-  const results = [];
-  const errors = [];
-
-  console.log(`[${req.requestId}] Starting day calculation: ${empCodes.length} employees, month=${month} year=${year} company=${company || 'all'}`);
-
-  const txn = db.transaction(() => {
-    for (const empCode of empCodes) {
-      try {
-        const emp = db.prepare('SELECT id FROM employees WHERE code = ?').get(empCode);
-        const records = db.prepare(`
-          SELECT * FROM attendance_processed
-          WHERE employee_code = ? AND month = ? AND year = ?
-          ${company ? 'AND company = ?' : ''}
-        `).all(...[empCode, month, year, company].filter(Boolean));
-
-        const leaveBalances = { CL: 0, EL: 0, SL: 0 };
-        if (emp) {
-          const lbs = db.prepare('SELECT * FROM leave_balances WHERE employee_id = ? AND year = ?').all(emp.id, year);
-          for (const lb of lbs) {
-            leaveBalances[lb.leave_type] = lb.balance || 0;
-          }
-        }
-
-        // Detect contractor for day calc rules
-        const empFull = db.prepare('SELECT * FROM employees WHERE code = ?').get(empCode);
-        const { isContractorForPayroll } = require('../utils/employeeClassification');
-        const isContract = isContractorForPayroll(empFull);
-
-        // ── Auto-create PENDING extra_duty_grants from detected WOP days ──
-        // April 2026 finance approval gate: an employee who worked on their
-        // weekly off (WOP / WO½P) must have the day approved by BOTH HR
-        // and Finance before it flows into salary. Auto-creating the PENDING
-        // row here means HR doesn't have to manually raise a grant every
-        // time — they just approve/reject what the biometric already caught.
-        // Idempotent via UQ (employee_code, grant_date, month, year): reruns
-        // of calculate-days never produce duplicates.
-        // Contractors get no grants (they're paid daily and never enter the
-        // OT/extra-duty pipeline).
-        if (!isContract) {
-          const wopInsert = db.prepare(`
-            INSERT OR IGNORE INTO extra_duty_grants
-              (employee_code, employee_id, grant_date, month, year, company,
-               grant_type, duty_days, verification_source, remarks,
-               linked_attendance_id, status, finance_status, requested_by)
-            VALUES (?, ?, ?, ?, ?, ?, 'OVERNIGHT_STAY', ?, 'BIOMETRIC_AUTO',
-                    'Auto-detected from attendance WOP status', ?, 'PENDING',
-                    'UNREVIEWED', 'system')
-          `);
-          for (const rec of records) {
-            const status = rec.status_final || rec.status_original || '';
-            if (status !== 'WOP' && status !== 'WO½P') continue;
-            const dutyDays = status === 'WO½P' ? 0.5 : 1.0;
-            wopInsert.run(
-              empCode, emp?.id, rec.date, parseInt(month), parseInt(year),
-              company || rec.company || '', dutyDays, rec.id
-            );
-          }
-        }
-
-        // ── manualExtraDutyDays retired (April/May 2026) ──
-        // Finance-approved extra_duty_grants are now paid SOLELY via the
-        // ed_pay bucket in salaryComputation.js. They must NOT inflate
-        // Stage 6's totalPayableDays or extra_duty_days, otherwise the
-        // same physical duty is paid twice (once via ot_pay from inflated
-        // extra_duty_days, again via ed_pay).
-        //
-        // OT (ot_pay) covers biometric-detected WOP/WO½P overflow only.
-        // ED (ed_pay) covers all finance-approved grants — including
-        // grants on WOP dates (legitimate day+night dual duty).
-        //
-        // The financeEDDays block below (display-only) remains untouched.
-        const manualExtraDutyDays = 0;
-
-        // ── Finance-approved ED days (display-only on Stage 6) ──
-        // Count grant days that DON'T overlap with WOP/punch-OT dates so the
-        // Stage 6 box shows only the truly-extra finance grants. Anti-double-
-        // counting by date — a grant on 2026-03-15 is excluded if that day's
-        // attendance record is WOP/WO½P (already counted in extra_duty_days).
-        // Contractors never accrue ED grants.
-        let financeEDDays = 0;
-        if (!isContract) {
-          try {
-            const wopDates = new Set(
-              records
-                .filter(r => {
-                  const s = r.status_final || r.status_original || '';
-                  return s === 'WOP' || s === 'WO½P';
-                })
-                .map(r => r.date)
-            );
-            // PBA (PRE_BIOMETRIC_ACTIVATION) grants are excluded: their days
-            // already flow through daysPresent via the placeholder
-            // attendance_processed row, so counting them here would double-pay.
-            const approvedGrants = db.prepare(`
-              SELECT grant_date, duty_days FROM extra_duty_grants
-              WHERE employee_code = ? AND month = ? AND year = ?
-                AND status = 'APPROVED' AND finance_status = 'FINANCE_APPROVED'
-                AND grant_type != 'PRE_BIOMETRIC_ACTIVATION'
-            `).all(empCode, month, year);
-            financeEDDays = approvedGrants
-              .filter(g => !wopDates.has(g.grant_date))
-              .reduce((sum, g) => sum + (g.duty_days || 0), 0);
-          } catch {}
-        }
-
-        // ── Phase 2 (April 2026): fetch approved leaves + comp-off grants ──
-        // Approved leave_applications that overlap this month and finance-approved
-        // compensatory_off_requests for this month. Passed into calculateDays so
-        // the pipeline can restore absences (EL → paid, OD → present) and
-        // reclassify CL/SL/LWP days as informed-but-unpaid. Balance debiting is
-        // already handled at leave-approval time in leaves.js — Stage 6 is read-only.
-        const monthStrLeave = String(month).padStart(2, '0');
-        const monthStartDate = `${year}-${monthStrLeave}-01`;
-        const lastDay = new Date(year, month, 0).getDate();
-        const monthEndDate = `${year}-${monthStrLeave}-${String(lastDay).padStart(2,'0')}`;
-
-        const approvedLeaves = db.prepare(`
-          SELECT leave_type, start_date, end_date, days, status
-          FROM leave_applications
-          WHERE employee_code = ?
-            AND status = 'Approved'
-            AND start_date <= ?
-            AND end_date >= ?
-        `).all(empCode, monthEndDate, monthStartDate);
-
-        const approvedCompOff = db.prepare(`
-          SELECT start_date, end_date, finance_status
-          FROM compensatory_off_requests
-          WHERE employee_code = ?
-            AND month = ? AND year = ?
-            AND finance_status = 'approved'
-        `).all(empCode, parseInt(month), parseInt(year));
-
-        const calcResult = calculateDays(
-          empCode, parseInt(month), parseInt(year), company || '',
-          records, leaveBalances, holidays,
-          {
-            isContractor: isContract,
-            weeklyOffDay: empFull?.weekly_off_day ?? 0,
-            employmentType: empFull?.employment_type || 'Permanent',
-            manualExtraDutyDays,
-            financeEDDays,
-            // DOJ-based holiday eligibility (April 2026): mid-month joiners
-            // must NOT receive paid credit for holidays before their DOJ.
-            dateOfJoining: empFull?.date_of_joining || null,
-            // Phase 2 leave integration (April 2026)
-            approvedLeaves,
-            approvedCompOff
-          },
-          req.requestId
-        );
-        calcResult.employeeId = emp?.id;
-        saveDayCalculation(db, calcResult);
-
-        // NOTE: The old leave_balances UPDATE block that used to run here
-        // (debiting CL/EL on every calculate-days) has been removed in Phase 2.
-        // It would now double-debit because leaves.js POST /approve already
-        // debits leave_balances at approval time. Stage 6 is read-only w.r.t.
-        // leave balances — it only consumes approved leaves to adjust day counts.
-
-        results.push({ employeeCode: empCode, ...calcResult });
-      } catch (err) {
-        errors.push({ employeeCode: empCode, error: err.message });
-      }
-    }
+  // The orchestration lives in services/recompute.js so the job queue and the
+  // reimport path run exactly the same Stage 6 as this route.
+  const out = recomputeDays(db, {
+    company, month, year, employeeCodes: employeeCodes || null, requestId: req.requestId,
   });
-
-  txn();
-  console.log(`[${req.requestId}] Day calculation complete: ${results.length} OK, ${errors.length} failed`);
-  db.prepare(`UPDATE monthly_imports SET stage_6_done = 1 WHERE month = ? AND year = ?`).run(month, year);
 
   try {
     const { createNotification } = require('../services/monthEndScheduler');
     createNotification('hr', 'DAY_CALC_COMPLETE',
-      `Day calculation complete for ${month}/${year} — ${results.length || 'all'} employees processed`,
+      `Day calculation complete for ${month}/${year} — ${out.results.length || 'all'} employees processed`,
       '/pipeline/day-calc');
   } catch (e) {}
 
   res.json({
     success: true,
-    message: `Day calculation complete for ${results.length} employees`,
-    processed: results.length,
-    errors: errors.length,
-    errorDetails: errors,
-    summary: {
-      totalPresent: results.reduce((s, r) => s + r.daysPresent, 0),
-      totalAbsent: results.reduce((s, r) => s + r.daysAbsent, 0),
-      totalPaidSundays: results.reduce((s, r) => s + r.paidSundays, 0),
-      totalLOP: results.reduce((s, r) => s + r.lopDays, 0),
-      avgPayableDays: results.length ? results.reduce((s, r) => s + r.totalPayableDays, 0) / results.length : 0
-    }
+    message: `Day calculation complete for ${out.results.length} employees`,
+    processed: out.results.length,
+    errors: out.errors.length,
+    errorDetails: out.errors,
+    summary: out.summary
   });
 });
 
@@ -357,61 +126,20 @@ router.get('/day-calculations/:code', (req, res) => {
  */
 router.post('/compute-salary', (req, res) => {
   const db = getDb();
-  const { month, year, company } = req.body;
+  const { month, year, company, employeeCodes } = req.body;
 
   if (!month || !year) return res.status(400).json({ success: false, error: 'month and year required' });
 
-  // Include ALL employees with day calculations (even returning 'Left' employees)
-  const employees = db.prepare(`
-    SELECT DISTINCT e.*
-    FROM employees e
-    INNER JOIN day_calculations dc ON e.code = dc.employee_code
-    WHERE dc.month = ? AND dc.year = ?
-    ${company ? 'AND dc.company = ?' : ''}
-    AND (e.status IS NULL OR e.status NOT IN ('Exited'))
-  `).all(...[month, year, company].filter(Boolean));
-
-  const results = [];
-  const errors = [];
-  const excluded = [];
-  const held = [];
-
-  console.log(`[${req.requestId}] Starting salary computation: ${employees.length} employees, month=${month} year=${year} company=${company || 'all'}`);
-
-  const txn = db.transaction(() => {
-    for (const emp of employees) {
-      try {
-        const comp = computeEmployeeSalary(db, emp, parseInt(month), parseInt(year), company || '', req.requestId);
-        if (comp.success) {
-          saveSalaryComputation(db, comp);
-          results.push(comp);
-          if (comp.salaryHeld) held.push({ code: emp.code, name: emp.name, reason: comp.holdReason });
-        } else if (comp.excluded) {
-          excluded.push({ code: comp.employeeCode, name: emp.name, reason: comp.reason });
-        } else if (comp.silentSkip) {
-          // Zero attendance — don't show as error, just count
-        } else {
-          errors.push({ employeeCode: emp.code, error: comp.error });
-        }
-      } catch (perEmpErr) {
-        // Per-employee try/catch so ONE bad employee's SQL error doesn't roll
-        // back the entire batch and leave Stage 7 stale.
-        console.error(`[compute-salary] employee ${emp.code} failed: ${perEmpErr.message}`);
-        if (perEmpErr.stack) console.error(perEmpErr.stack.split('\n').slice(0, 5).join('\n'));
-        errors.push({ employeeCode: emp.code, error: perEmpErr.message });
-      }
-    }
+  // Shared with the job queue and the reimport path — see services/recompute.js.
+  const out = recomputeSalary(db, {
+    company, month, year, employeeCodes: employeeCodes || null, requestId: req.requestId,
   });
-  txn();
-
-  db.prepare('UPDATE monthly_imports SET stage_7_done = 1 WHERE month = ? AND year = ?').run(month, year);
+  const { results, errors, excluded, held } = out;
 
   const totalNetSalary = results.reduce((s, r) => s + r.netSalary, 0);
   const totalGross = results.reduce((s, r) => s + r.grossEarned, 0);
   const grossChangedCount = results.filter(r => r.grossChanged).length;
   const heldCount = results.filter(r => r.salaryHeld).length;
-
-  console.log(`[${req.requestId}] Computation complete: ${results.length} OK, ${errors.length} failed, ${heldCount} held`);
 
   try {
     const { createNotification } = require('../services/monthEndScheduler');
