@@ -67,6 +67,10 @@
 - OI-1 (pre-existing, not introduced here): schema.js boot 1 != boot 2 because
   `migration_miss_punch_finance_queue_v1` only stamps on the second boot. Verified identical on
   origin/main via git stash. Boot 2 == boot 3, so it stabilises. Fix belongs to that migration block.
+- OI-3 (pre-existing, not introduced here): `protectedWrite.test.js` fails 3 of its 28 tests on roughly
+  one run in three, under jest's parallel workers. Reproduced identically on a clean origin/main
+  worktree (3 fail / 6 fail alternating across 4 runs), so it is an ordering bug in that suite, not a
+  regression. Only the 3 tdsCalculation failures are the documented-stable baseline.
 - OI-2: `sl_per_year` does not exist in policy_config, so the Phase-1 migration's delete is a no-op.
 
 ## TEST RESULTS
