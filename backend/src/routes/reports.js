@@ -475,9 +475,26 @@ router.get('/leave-register', requireHrFinanceOrAdmin, (req, res) => {
                COALESCE(dc.short_leave_days, 0)  AS short_leave_days,
                COALESCE(dc.uninformed_absent, 0) AS uninformed_absent,
                COALESCE(dc.total_payable_days, 0) AS payable_days,
-               COALESCE(dc.days_absent, 0)       AS days_absent
+               COALESCE(dc.days_absent, 0)       AS days_absent,
+               -- SL is historical only (abolished Sept 2026) but old rows still show.
+               COALESCE(dc.sl_used, 0)           AS sl_used,
+               -- Days worked and EL earned for the month, straight off the ledger,
+               -- plus any EL the owner recorded as given outside the system.
+               COALESCE(led.paid_days_this_month, 0) AS days_worked,
+               COALESCE(led.accrued, 0)              AS el_earned,
+               COALESCE(led.paid_days_ytd, 0)        AS days_worked_ytd,
+               COALESCE(ext.days, 0)                 AS el_outside_system
         FROM day_calculations dc
         LEFT JOIN employees e ON dc.employee_code = e.code
+        LEFT JOIN leave_accrual_ledger led
+               ON led.employee_code = dc.employee_code
+              AND led.year = dc.year AND led.month = dc.month AND led.leave_type = 'EL'
+        LEFT JOIN (
+          SELECT employee_code, year, month, SUM(days) AS days
+          FROM leave_external_grants
+          WHERE is_active = 1 AND leave_type = 'EL'
+          GROUP BY employee_code, year, month
+        ) ext ON ext.employee_code = dc.employee_code AND ext.year = dc.year AND ext.month = dc.month
         WHERE dc.month = ? AND dc.year = ?
           ${companyClause}
         ORDER BY e.department, e.name
@@ -485,8 +502,9 @@ router.get('/leave-register', requireHrFinanceOrAdmin, (req, res) => {
 
       headers = [
         'Employee Code', 'Name', 'Department', 'Designation', 'Company',
-        'CL Used', 'EL Used', 'LWP Days', 'OD Days',
-        'Short Leave Days', 'Uninformed Absent', 'Days Absent', 'Payable Days'
+        'CL Used', 'EL Used', 'SL Used (historical)', 'LWP Days', 'OD Days',
+        'Short Leave Days', 'Uninformed Absent', 'Days Absent', 'Payable Days',
+        'Days Worked', 'EL Earned', 'Days Worked YTD', 'EL Given Outside System'
       ];
       sheetName = 'Leave Register (Monthly)';
       filename = `leave_register_monthly_${year}_${String(month).padStart(2, '0')}.xlsx`;
@@ -590,10 +608,13 @@ router.get('/leave-register', requireHrFinanceOrAdmin, (req, res) => {
         if (format === 'monthly') {
           data.push([
             r.employee_code, r.name, r.department || '', r.designation || '', r.company || '',
-            Number(r.cl_used) || 0, Number(r.el_used) || 0, Number(r.lwp_days) || 0,
+            Number(r.cl_used) || 0, Number(r.el_used) || 0, Number(r.sl_used) || 0,
+            Number(r.lwp_days) || 0,
             Number(r.od_days) || 0, Number(r.short_leave_days) || 0,
             Number(r.uninformed_absent) || 0, Number(r.days_absent) || 0,
-            Number(r.payable_days) || 0
+            Number(r.payable_days) || 0,
+            Number(r.days_worked) || 0, Number(r.el_earned) || 0,
+            Number(r.days_worked_ytd) || 0, Number(r.el_outside_system) || 0
           ]);
         } else {
           data.push([

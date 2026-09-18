@@ -1,3 +1,88 @@
+## Last Session — 2026-09-18
+
+**Leave automation — full build. Branch `feat/leave-automation`, 12 commits, NOT merged.**
+
+Leave used to be a button nobody pressed: `runLeaveAccrual` existed, one route called it,
+nothing else ever did. It now recomputes itself whenever something that affects it changes,
+with two hard limits — a finalized month is never touched, and salary never recomputes on
+its own. Ships with automation OFF; switching it on is a deliberate owner action.
+
+### What's new
+- `services/leaveEngine.js` — `computeLeavePlan` (pure) / `applyLeavePlan` (the only writer) /
+  `recomputeLeaves` / `runYearEndLapse` / `seedYearOpenings`. Recomputes the whole year from
+  January every call, so a skipped month can no longer reset a running total.
+- `services/recompute.js` — Stage 6 and Stage 7 orchestration, extracted from `payroll.js` and
+  shared with `jobQueue.js` and `import.js runReimportRecompute`. Proven a faithful extraction by
+  `recomputeParity.test.js`, which runs the verbatim origin/main code and the new service against
+  two copies of one database and compares `day_calculations` field for field.
+- `services/leaveTriggers.js` — `queueLeaveRecalc` (debounced), `checkAutoStage6`, the
+  finalized-month flags. 17 call sites, all post-commit, all inside `safeTrigger`.
+- 3 tables (`leave_external_grants`, `leave_change_flags`, `leave_recompute_runs`), 3 columns
+  (`day_calculations.salary_stale` / `.leave_recomputed_at`, `monthly_imports.stage_6_auto_at`),
+  8 policy keys. Additive and idempotent.
+- 11 new endpoints on `/api/features`; an admin-only Automation tab in Leave Management.
+
+### Bugs fixed on the way
+- **Stage 6 re-runs silently handed back HR's late deduction.** `saveDayCalculation` rewrites
+  `total_payable_days`/`lop_days` from `excluded` but leaves `late_deduction_days` alone, so the
+  flag said 2 days were deducted while the days were back. `recomputeDays` re-applies it.
+- **The finance apply-leave screen hand-patched `day_calculations`**, allowed a negative balance
+  and wrote no leave application — so a re-run put the day back to absent while the balance stayed
+  debited. It now creates an approved application and lets Stage 6 own the day.
+- **`routes/leaves.js` had no role guard at all** — a viewer could approve leave and move balances.
+- **The employee portal's leave history ordered by `created_at`**, a column `leave_applications`
+  does not have, so the page 500'd.
+- **EL chained off the previous ledger row, half days counted 0, comp-off counted twice, the
+  day-calc lookup filtered on company** (so employees stored with blank/'null' company earned
+  nothing), and `runLeaveAccrual` rewrote balances from its own ledger, wiping manual adjustments.
+
+### Two caught by testing, not by reading
+- The debounce window compared `strftime('%s', …)` (TEXT) to an INTEGER. In SQLite every INTEGER
+  sorts before every TEXT, so it was always true and the window was silently infinite. Both sides
+  are CAST now.
+- An employee whose salary legitimately skips kept `salary_stale = 1` forever, so the Stage 7
+  banner could never reach zero. Found by the end-to-end simulation.
+
+### Rulings that changed behaviour
+- SL is abolished as a live type. Nothing can create one; an old SL row no longer moves pay
+  (it is skipped *before* the shared consumption block — deleting the branch outright would have
+  made SL start restoring a payable day). `sl_used` and every historical read path are untouched.
+- CL is 7 days pro-rated by joining month, from `policy_config.cl_entitlement_base`. The two
+  hard-coded 12s in `routes/employees.js` are gone.
+- CL and EL both lapse on 31 Dec. Accepted by the owner after being warned it likely conflicts
+  with the OSH Code — see `docs/leave-automation/OPEN_ITEMS.md` OI-4.
+
+### Tests
+253 jest tests (250 pass; the 3 `tdsCalculation` failures are the documented pre-existing
+baseline). New: `leaveEngine` 25, `recomputeParity` 7, `leaveTriggers` 19, `leaveApi` 22,
+`slRemoval` 20. Plus `backend/scripts/leave-automation-simulation.js` — 70 assertions over the
+whole pipeline, max salary drift 3.6e-12.
+
+`protectedWrite.test.js` fails 3 of 28 on about one run in three under jest's parallel workers.
+Reproduced identically on a clean origin/main worktree — pre-existing, see OPEN_ITEMS OI-2.
+
+### What's fragile
+- **`applyLeavePlan` never overwrites `leave_balances.opening`.** An employee seeded with the old
+  12-day CL keeps 12 until someone changes it; the preview's Notes column says when the stored
+  opening disagrees with the DOJ entitlement.
+- **Two UPSERTs deliberately do not cover every INSERT column**, both commented at the call site:
+  the ledger upsert skips `lapsed` (year-end rows must survive a recompute) and the balance upsert
+  skips `opening` (above).
+- **`payroll.js` was edited twice**, both sanctioned: the Stage 6/7 extraction, and a `/finalise`
+  guard that blocks while any row is `salary_stale` with an audited admin override.
+- **The finance-vs-manual discriminator for `leave_transactions`** correlates Debit/days=1 rows
+  against `attendance_processed.correction_source = 'leave_correction'`. It is not keyed on
+  `approved_by` because `leaves.js` hardcodes `'admin'` there and a real admin user would collide.
+- **Both crons are UTC with the IST time in a comment.** `'30 3 * * *'` = 09:00 IST (sweep),
+  `'35 18 * * *'` = 00:05 IST (year boundary, guarded against a same-day restart).
+
+### Next
+Merge, deploy, then the switch-on procedure in `docs/leave-automation/HOW_IT_WORKS.md`:
+upload the EL-given list (or acknowledge there is none) → preview → apply → turn Automation ON.
+Nothing writes balances before that.
+
+---
+
 ## Last Session — 2026-05-22
 
 **Piece #3 (record-history read-only timeline + resolver) — PROD-VALIDATED, live.**

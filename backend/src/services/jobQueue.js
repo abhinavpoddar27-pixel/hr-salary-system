@@ -4,8 +4,12 @@
  */
 const { getDb } = require('../database/db');
 
-function initJobQueue() {
-  const db = getDb();
+/**
+ * The jobs table lives here rather than in schema.js. `ensureJobsTable(db)` lets
+ * callers that already hold a handle (leaveTriggers, tests) create it without
+ * reaching for getDb().
+ */
+function ensureJobsTable(db) {
   db.exec(`
     CREATE TABLE IF NOT EXISTS jobs (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -20,6 +24,10 @@ function initJobQueue() {
       completed_at TEXT
     )
   `);
+}
+
+function initJobQueue() {
+  ensureJobsTable(getDb());
 }
 
 function enqueue(type, params) {
@@ -59,96 +67,95 @@ async function processNext() {
     let result;
 
     if (job.type === 'salary_compute') {
-      const { computeEmployeeSalary, saveSalaryComputation } = require('./salaryComputation');
-      const { month, year, company } = params;
-      const employees = db.prepare(`
-        SELECT DISTINCT e.* FROM employees e
-        INNER JOIN day_calculations dc ON e.code = dc.employee_code
-        WHERE dc.month = ? AND dc.year = ? ${company ? 'AND dc.company = ?' : ''}
-        AND (e.status IS NULL OR e.status NOT IN ('Exited'))
-      `).all(...[month, year, company].filter(Boolean));
-
-      const results = [], excluded = [], errors = [];
-      const total = employees.length;
-      for (let i = 0; i < total; i++) {
-        const emp = employees[i];
-        try {
-          const comp = computeEmployeeSalary(db, emp, parseInt(month), parseInt(year), company || '');
-          if (comp.success) { saveSalaryComputation(db, comp); results.push(comp); }
-          else if (comp.excluded) { excluded.push({ code: comp.employeeCode, name: emp.name, reason: comp.reason }); }
-        } catch (e) { errors.push({ code: emp.code, error: e.message }); }
-        if (i % 10 === 0) updateJob(job.id, { progress: Math.round((i / total) * 100) });
-      }
-      db.prepare('UPDATE monthly_imports SET stage_7_done = 1 WHERE month = ? AND year = ?').run(month, year);
-      result = { processed: results.length, excluded, errors: errors.length, held: results.filter(r => r.salaryHeld).length };
+      // Shared with POST /api/payroll/compute-salary — see services/recompute.js.
+      const { recomputeSalary } = require('./recompute');
+      const { month, year, company, employeeCodes } = params;
+      const out = recomputeSalary(db, {
+        month, year, company, employeeCodes: employeeCodes || null, requestId: `job-${job.id}`,
+      });
+      result = {
+        processed: out.results.length,
+        excluded: out.excluded,
+        errors: out.errors.length,
+        held: out.held.length,
+      };
 
     } else if (job.type === 'day_calculate') {
-      const { calculateDays, saveDayCalculation } = require('./dayCalculation');
-      const { month, year, company } = params;
-      const empCodes = db.prepare(`
-        SELECT DISTINCT ap.employee_code FROM attendance_processed ap
-        LEFT JOIN employees e ON ap.employee_code = e.code
-        WHERE ap.month = ? AND ap.year = ? ${company ? 'AND ap.company = ?' : ''}
-        AND ap.is_night_out_only = 0 AND (e.status IS NULL OR e.status NOT IN ('Exited'))
-      `).all(...[month, year, company].filter(Boolean)).map(r => r.employee_code);
+      // Shared with POST /api/payroll/calculate-days — see services/recompute.js.
+      const { recomputeDays } = require('./recompute');
+      const { month, year, company, employeeCodes } = params;
+      const out = recomputeDays(db, {
+        month, year, company, employeeCodes: employeeCodes || null, requestId: `job-${job.id}`,
+      });
+      result = { processed: out.results.length, errors: out.errors.length };
 
-      const monthStr = String(month).padStart(2, '0');
-      const holidays = db.prepare('SELECT date FROM holidays WHERE date LIKE ?').all(`${year}-${monthStr}-%`);
-      const results = [], errors = [];
-      const total = empCodes.length;
-      // Phase 2 (April 2026): contractor detection helper
-      const { isContractorForPayroll } = require('../utils/employeeClassification');
-      const monthStrLeave = String(month).padStart(2, '0');
-      const monthStartDate = `${year}-${monthStrLeave}-01`;
-      const lastDay = new Date(year, month, 0).getDate();
-      const monthEndDate = `${year}-${monthStrLeave}-${String(lastDay).padStart(2, '0')}`;
-
-      for (let i = 0; i < total; i++) {
-        const empCode = empCodes[i];
-        try {
-          const emp = db.prepare('SELECT id FROM employees WHERE code = ?').get(empCode);
-          const empFull = db.prepare('SELECT * FROM employees WHERE code = ?').get(empCode);
-          const records = db.prepare(`SELECT * FROM attendance_processed WHERE employee_code = ? AND month = ? AND year = ? ${company ? 'AND company = ?' : ''}`).all(...[empCode, month, year, company].filter(Boolean));
-          const leaveBalances = { CL: 0, EL: 0, SL: 0 };
-          if (emp) {
-            const lbs = db.prepare('SELECT * FROM leave_balances WHERE employee_id = ? AND year = ?').all(emp.id, year);
-            for (const lb of lbs) leaveBalances[lb.leave_type] = lb.balance || 0;
-          }
-
-          // Phase 2: approved leaves + finance-approved comp-off grants
-          const approvedLeaves = db.prepare(`
-            SELECT leave_type, start_date, end_date, days, status
-            FROM leave_applications
-            WHERE employee_code = ? AND status = 'Approved'
-              AND start_date <= ? AND end_date >= ?
-          `).all(empCode, monthEndDate, monthStartDate);
-
-          const approvedCompOff = db.prepare(`
-            SELECT start_date, end_date, finance_status
-            FROM compensatory_off_requests
-            WHERE employee_code = ? AND month = ? AND year = ?
-              AND finance_status = 'approved'
-          `).all(empCode, parseInt(month), parseInt(year));
-
-          const calcResult = calculateDays(
-            empCode, parseInt(month), parseInt(year), company || '',
-            records, leaveBalances, holidays,
-            {
-              isContractor: isContractorForPayroll(empFull),
-              weeklyOffDay: empFull?.weekly_off_day ?? 0,
-              employmentType: empFull?.employment_type || 'Permanent',
-              dateOfJoining: empFull?.date_of_joining || null,
-              approvedLeaves,
-              approvedCompOff
-            }
-          );
-          calcResult.employeeId = emp?.id;
-          saveDayCalculation(db, calcResult);
-          results.push(calcResult);
-        } catch (e) { errors.push({ code: empCode, error: e.message }); }
-        if (i % 10 === 0) updateJob(job.id, { progress: Math.round((i / total) * 100) });
+    } else if (job.type === 'leave_recalc') {
+      // Re-run Stage 6 for whatever changed, then recompute the year's leave.
+      // Stage 7 is deliberately NOT touched — salary only recomputes when a
+      // human clicks Compute (owner ruling 5). The Stage 6 rows are left marked
+      // salary_stale so the Stage 7 screen can say so.
+      const { recomputeDays } = require('./recompute');
+      const { recomputeLeaves } = require('./leaveEngine');
+      const { company, month, year, employeeCodes, skipDays, actor } = params;
+      let dayRows = 0;
+      let dayErrors = 0;
+      if (!skipDays && month && year) {
+        const dayOut = recomputeDays(db, {
+          company, month, year, employeeCodes: employeeCodes || null, requestId: `job-${job.id}`,
+        });
+        dayRows = dayOut.results.length;
+        dayErrors = dayOut.errors.length;
       }
-      result = { processed: results.length, errors: errors.length };
+      const leaveOut = recomputeLeaves(db, {
+        year, employeeCodes: employeeCodes || null, dryRun: false,
+        scope: 'trigger', company: company || null, actor: actor || 'job',
+      });
+      result = {
+        dayCalcRows: dayRows,
+        dayCalcErrors: dayErrors,
+        leaveApplied: leaveOut.applied,
+        leaveReason: leaveOut.reason || null,
+        employeesEvaluated: leaveOut.plan?.employees?.length || 0,
+        changed: leaveOut.plan?.totals?.changed || 0,
+      };
+
+    } else if (job.type === 'leave_nightly') {
+      // Nightly sweep: every non-finalized month of the year gets its Stage 6
+      // refreshed, then the year's leave is recomputed once.
+      const { recomputeDays } = require('./recompute');
+      const { recomputeLeaves } = require('./leaveEngine');
+      const year = params.year || new Date().getUTCFullYear();
+      const periods = db.prepare(`
+        SELECT month, year, company FROM monthly_imports
+        WHERE year = ? AND COALESCE(is_finalised, 0) = 0 AND COALESCE(stage_6_done, 0) = 1
+        ORDER BY month
+      `).all(year);
+      let refreshed = 0;
+      for (const p of periods) {
+        try {
+          recomputeDays(db, {
+            company: p.company, month: p.month, year: p.year, requestId: `nightly-${job.id}`,
+          });
+          refreshed += 1;
+        } catch (e) {
+          console.error(`[leave_nightly] ${p.month}/${p.year} ${p.company || 'all'} failed: ${e.message}`);
+        }
+      }
+      const leaveOut = recomputeLeaves(db, {
+        year, dryRun: false, scope: 'nightly', actor: 'scheduler',
+      });
+      const drift = db.prepare(`
+        SELECT COUNT(*) AS c FROM salary_computations
+        WHERE ABS(net_salary - (gross_earned - total_deductions)) > 1
+      `).get()?.c || 0;
+      if (drift > 0) console.error(`[leave_nightly] salary drift detected on ${drift} row(s)`);
+      result = {
+        periodsRefreshed: refreshed,
+        leaveApplied: leaveOut.applied,
+        leaveReason: leaveOut.reason || null,
+        driftRows: drift,
+      };
+
     } else {
       result = { error: `Unknown job type: ${job.type}` };
     }
@@ -167,4 +174,4 @@ function startWorker() {
   console.log('🔄 Job queue worker started');
 }
 
-module.exports = { enqueue, getJob, startWorker, initJobQueue };
+module.exports = { enqueue, getJob, startWorker, initJobQueue, ensureJobsTable };

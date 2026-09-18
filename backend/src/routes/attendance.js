@@ -1,6 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const { getDb, logAudit } = require('../database/db');
+const { safeTrigger, queueLeaveRecalc, checkAutoStage6 } = require('../services/leaveTriggers');
 const { resolveMissPunch, bulkResolveMissPunches } = require('../services/missPunch');
 const { applyPairingToDb } = require('../services/nightShift');
 const { calcShiftMetrics } = require('../utils/shiftMetrics');
@@ -149,7 +150,19 @@ router.post('/miss-punches/:id/resolve', (req, res) => {
   const { inTime, outTime, source, remark, convertToLeave, leaveType } = req.body;
 
   resolveMissPunch(db, parseInt(id), { inTime, outTime, source, remark, convertToLeave, leaveType });
-  res.json({ success: true, message: 'Miss punch resolved' });
+
+  // HR has done its half. Finance still has to decide before Stage 6 can run
+  // (effectiveStatusForDay ignores an HR fix finance has not ruled on), so this
+  // usually just reports the remaining backlog — checkAutoStage6 decides.
+  const rec = db.prepare('SELECT employee_code, month, year, company FROM attendance_processed WHERE id = ?').get(parseInt(id));
+  let autoStage6 = null;
+  if (rec) {
+    autoStage6 = safeTrigger('missPunch.resolve', () => checkAutoStage6(db, rec.company, rec.month, rec.year, {
+      actor: req.user?.username || 'hr',
+    }));
+  }
+
+  res.json({ success: true, message: 'Miss punch resolved', autoStage6 });
 });
 
 /**
@@ -165,7 +178,19 @@ router.post('/miss-punches/bulk-resolve', (req, res) => {
   }
 
   const result = bulkResolveMissPunches(db, recordIds, { inTime, outTime, source, remark });
-  res.json({ success: true, result });
+
+  // Fifty resolutions are still one company-month, so this checks the gate once
+  // rather than once per record.
+  const periods = db.prepare(`
+    SELECT DISTINCT month, year, company FROM attendance_processed
+    WHERE id IN (${recordIds.map(() => '?').join(',')})
+  `).all(...recordIds.map((n) => parseInt(n, 10)));
+  const autoStage6 = periods.map((p) => safeTrigger('missPunch.bulkResolve', () => ({
+    month: p.month, year: p.year, company: p.company,
+    ...checkAutoStage6(db, p.company, p.month, p.year, { actor: req.user?.username || 'hr' }),
+  })));
+
+  res.json({ success: true, result, autoStage6 });
 });
 
 /**

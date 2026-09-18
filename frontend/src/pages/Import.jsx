@@ -415,6 +415,37 @@ export default function Import() {
                           </div>
                         </div>
                       )}
+
+                      {/* What happens next — day calculation runs by itself once
+                          every miss punch is resolved by HR and decided by finance. */}
+                      {result.success && result.autoStage6 && (
+                        <div
+                          className={clsx(
+                            'mt-3 rounded-md border px-3 py-2 text-xs',
+                            result.autoStage6.fired
+                              ? 'bg-emerald-50 border-emerald-200 text-emerald-800'
+                              : 'bg-slate-50 border-slate-200 text-slate-600'
+                          )}
+                        >
+                          <span className="font-semibold">Automatic day calculation: </span>
+                          {result.autoStage6.fired ? (
+                            <>queued now — nothing left to correct.</>
+                          ) : result.autoStage6.reason === 'miss_punches_outstanding' ? (
+                            <>
+                              waiting on {result.autoStage6.backlog?.awaitingHr ?? 0} miss punch(es) with HR
+                              and {result.autoStage6.backlog?.awaitingFinance ?? 0} with finance.
+                            </>
+                          ) : result.autoStage6.reason === 'stage_6_already_done' ? (
+                            <>already run for this cycle — re-run it from Stage 6 if you need to.</>
+                          ) : result.autoStage6.reason === 'auto_stage6_disabled' ? (
+                            <>switched off. Run Stage 6 by hand.</>
+                          ) : result.autoStage6.reason === 'month_finalized' ? (
+                            <>this month is finalized, so nothing was recalculated.</>
+                          ) : (
+                            <>waiting.</>
+                          )}
+                        </div>
+                      )}
                     </div>
                   </div>
                 </div>

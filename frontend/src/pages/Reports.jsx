@@ -1142,12 +1142,15 @@ export default function Reports() {
                             <th>Department</th>
                             <th className="text-center">CL</th>
                             <th className="text-center">EL</th>
-                            <th className="text-center">SL</th>
+                            <th className="text-center" title="Sick Leave was discontinued in Sept 2026 — old records only">SL (historical)</th>
                             <th className="text-center">LWP</th>
                             <th className="text-center">OD</th>
                             <th className="text-center">Short Lv</th>
                             <th className="text-center">Uninfo. Abs</th>
                             <th className="text-center font-bold">Total Leave</th>
+                            <th className="text-center" title="Days worked this month — what earned leave accrues on">Days Worked</th>
+                            <th className="text-center" title="Earned leave credited this month">EL Earned</th>
+                            <th className="text-center" title="Earned leave given outside the system, as uploaded by the owner">EL Outside</th>
                           </tr>
                         </thead>
                         <tbody>
@@ -1166,6 +1169,9 @@ export default function Reports() {
                                 <td className={`text-center ${(r.short_leave_days || 0) > 0 ? 'text-slate-700' : 'text-slate-300'}`}>{r.short_leave_days || '—'}</td>
                                 <td className={`text-center ${(r.uninformed_absent || 0) > 0 ? 'text-red-600 font-semibold' : 'text-slate-300'}`}>{r.uninformed_absent || '—'}</td>
                                 <td className="text-center font-bold text-brand-700">{total > 0 ? total.toFixed(1) : '—'}</td>
+                                <td className={`text-center ${(r.days_worked || 0) > 0 ? 'text-slate-700' : 'text-slate-300'}`}>{r.days_worked || '—'}</td>
+                                <td className={`text-center ${(r.el_earned || 0) > 0 ? 'text-green-700 font-semibold' : 'text-slate-300'}`}>{r.el_earned || '—'}</td>
+                                <td className={`text-center ${(r.el_outside_system || 0) > 0 ? 'text-purple-700 font-semibold' : 'text-slate-300'}`}>{r.el_outside_system || '—'}</td>
                               </tr>
                             )
                           })}
@@ -1184,6 +1190,24 @@ export default function Reports() {
                               <td className="text-center text-brand-700">
                                 {(() => {
                                   const t = (leaveRegTotals.cl_used || 0) + (leaveRegTotals.el_used || 0) + (leaveRegTotals.sl_used || 0) + (leaveRegTotals.lwp_days || 0) + (leaveRegTotals.od_days || 0)
+                                  return t > 0 ? t.toFixed(1) : '—'
+                                })()}
+                              </td>
+                              <td className="text-center">
+                                {(() => {
+                                  const t = leaveRegData.reduce((a, r) => a + (r.days_worked || 0), 0)
+                                  return t > 0 ? t.toFixed(1) : '—'
+                                })()}
+                              </td>
+                              <td className="text-center text-green-700">
+                                {(() => {
+                                  const t = leaveRegData.reduce((a, r) => a + (r.el_earned || 0), 0)
+                                  return t > 0 ? t.toFixed(1) : '—'
+                                })()}
+                              </td>
+                              <td className="text-center text-purple-700">
+                                {(() => {
+                                  const t = leaveRegData.reduce((a, r) => a + (r.el_outside_system || 0), 0)
                                   return t > 0 ? t.toFixed(1) : '—'
                                 })()}
                               </td>

@@ -3,7 +3,7 @@ import { NavLink, useLocation } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
 import { useAppStore } from '../../store/appStore'
 import { normalizeRole } from '../../utils/role'
-import { salesTaDaRequestsPendingCount } from '../../utils/api'
+import { salesTaDaRequestsPendingCount, getLeaveChangeFlags } from '../../utils/api'
 import clsx from 'clsx'
 
 // Pending TA/DA approval count — polls every 60s. Only mounted on the
@@ -22,6 +22,32 @@ function TaDaPendingBadge() {
   if (!count) return null
   return (
     <span className="ml-auto inline-flex items-center justify-center min-w-[18px] h-[18px] px-1 rounded-full bg-red-500 text-white text-[10px] font-semibold leading-none">
+      {count}
+    </span>
+  )
+}
+
+/**
+ * Count of leave changes that landed on a finalized month and still need HR to
+ * look at them. Hidden for anyone who cannot act on them.
+ */
+function LeaveFlagBadge({ role }) {
+  const canSee = role === 'hr' || role === 'admin'
+  const { data } = useQuery({
+    queryKey: ['leave-change-flags-count'],
+    queryFn: () => getLeaveChangeFlags({}),
+    refetchInterval: 60 * 1000,
+    refetchOnWindowFocus: true,
+    enabled: canSee,
+    retry: 0,
+  })
+  const count = data?.data?.count || 0
+  if (!canSee || !count) return null
+  return (
+    <span
+      title={`${count} leave change${count === 1 ? '' : 's'} landed on a finalized month`}
+      className="ml-auto inline-flex items-center justify-center min-w-[18px] h-[18px] px-1 rounded-full bg-amber-500 text-white text-[10px] font-semibold leading-none"
+    >
       {count}
     </span>
   )
@@ -47,7 +73,7 @@ const nav = [
       { label: 'Loans', icon: '🏦', to: '/loans' },
     ]
   },
-  { label: 'Leave Management', icon: '📋', to: '/leave-management' },
+  { label: 'Leave Management', icon: '📋', to: '/leave-management', leaveFlagBadge: true },
   {
     label: 'Workforce', icon: '👥', to: '/workforce',
     children: [
@@ -226,6 +252,7 @@ function NavItem({ item, collapsed, depth = 0, userRole, onNavigate, onAction })
         {item.icon && <span className="text-base shrink-0">{item.icon}</span>}
         {!collapsed && <span>{item.label}</span>}
         {!collapsed && item.tadaPendingBadge && <TaDaPendingBadge />}
+        {!collapsed && item.leaveFlagBadge && <LeaveFlagBadge role={userRole} />}
       </NavLink>
     </li>
   )

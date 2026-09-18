@@ -341,6 +341,7 @@ export default function DayCalculation() {
                     <th><Tip text="Paid holidays">Hol</Tip></th>
                     <th><Tip text="CL used for Sunday granting"><Abbr code="CL">CL</Abbr></Tip></th>
                     <th><Tip text="EL used for Sunday granting"><Abbr code="EL">EL</Abbr></Tip></th>
+                    <th><Tip text="Comp-off days approved by finance — the day counts as present"><Abbr code="OD">OD</Abbr></Tip></th>
                     <th className="cursor-pointer select-none" onClick={() => toggleSort('lop')}>
                       <Tip text="Loss of Pay"><Abbr code="LOP">LOP</Abbr></Tip>
                       <SortIcon field="lop" sortField={sortField} sortDir={sortDir} />
@@ -377,6 +378,12 @@ export default function DayCalculation() {
                               <DrillDownChevron isExpanded={expandedRow === r.id} />
                               {isZeroDay && <span className="w-2 h-2 rounded-full bg-red-500 shrink-0" title="0 working days" />}
                               {hasExtraDuty && <span className="w-2 h-2 rounded-full bg-cyan-500 shrink-0" title="Extra duty" />}
+                              {r.salary_stale === 1 && (
+                                <span
+                                  className="w-2 h-2 rounded-full bg-amber-500 shrink-0"
+                                  title="Salary needs recompute — these days changed after Stage 7 last ran"
+                                />
+                              )}
                               <div>
                                 <div className="font-medium text-sm">{r.employee_name || r.employee_code}</div>
                                 <div className="text-xs text-slate-400 font-mono">{r.employee_code}</div>
@@ -397,7 +404,7 @@ export default function DayCalculation() {
                                 <button
                                   onClick={(e) => { e.stopPropagation(); setLeaveModal({ code: r.employee_code, name: r.employee_name || r.employee_code, days_absent: r.days_absent }) }}
                                   className="text-[10px] px-1.5 py-0.5 rounded bg-orange-100 text-orange-700 hover:bg-orange-200 transition-colors whitespace-nowrap"
-                                  title="Apply CL/EL/SL to absent days"
+                                  title="Apply CL, EL or LWP to absent days"
                                 >
                                   Apply Leave
                                 </button>
@@ -415,6 +422,7 @@ export default function DayCalculation() {
                           <td className="text-purple-600">{r.paid_holidays}</td>
                           <td className="text-orange-600">{r.cl_used || 0}</td>
                           <td className="text-orange-600">{r.el_used || 0}</td>
+                          <td className={clsx('font-medium', (r.od_days || 0) > 0 ? 'text-cyan-700' : 'text-slate-400')}>{r.od_days || 0}</td>
                           <td className={clsx('font-medium', r.lop_days > 0 ? 'text-red-600' : 'text-slate-400')}>{r.lop_days}</td>
                           <td className="bg-blue-50 font-bold text-blue-700 text-sm">{r.total_payable_days}</td>
                           <td className={clsx('font-bold text-sm', hasExtraDuty ? 'bg-cyan-50 text-cyan-700' : 'text-slate-300')}>
@@ -425,7 +433,7 @@ export default function DayCalculation() {
                           </td>
                         </tr>
                         {expandedRow === r.id && (
-                          <DrillDownRow colSpan={18}>
+                          <DrillDownRow colSpan={19}>
                             <DrillDownContent
                               r={r}
                               selectedMonth={month}
@@ -454,6 +462,7 @@ export default function DayCalculation() {
                     <td className="text-purple-600">{totals.holidays}</td>
                     <td className="text-orange-600">{totals.cl}</td>
                     <td className="text-orange-600">{totals.el}</td>
+                    <td className="text-cyan-700">{calcs.reduce((s, r) => s + (r.od_days || 0), 0).toFixed(1)}</td>
                     <td className="text-red-600">{totals.lop.toFixed(1)}</td>
                     <td className="bg-blue-100 text-blue-700">{totals.payable.toFixed(1)}</td>
                     <td className={clsx(totals.extraDuty > 0 ? 'bg-cyan-100 text-cyan-700' : 'text-slate-300')}>{totals.extraDuty > 0 ? totals.extraDuty.toFixed(1) : '—'}</td>
@@ -517,7 +526,7 @@ export default function DayCalculation() {
           </div>
         )}
 
-        <AbbreviationLegend keys={['P', 'A', '½P', 'WO', 'WOP', 'CL', 'EL', 'SL', 'LOP', 'LWP', 'OT', 'PF', 'ESI', 'PT', 'Dept', 'Att', 'Hrs']} />
+        <AbbreviationLegend keys={['P', 'A', '½P', 'WO', 'WOP', 'CL', 'EL', 'OD', 'LOP', 'LWP', 'OT', 'PF', 'ESI', 'PT', 'Dept', 'Att', 'Hrs']} />
       </div>
 
       {/* ── Leave Correction Modal ── */}
@@ -543,31 +552,39 @@ export default function DayCalculation() {
               {balanceLoading ? (
                 <div className="text-xs text-slate-400">Loading balances...</div>
               ) : (
-                <div className="grid grid-cols-3 gap-3 text-center">
-                  <div>
-                    <div className="text-lg font-bold text-blue-700">{leaveBalance.cl_balance ?? leaveBalance.cl ?? '—'}</div>
-                    <div className="text-[10px] text-slate-500">CL</div>
-                  </div>
-                  <div>
-                    <div className="text-lg font-bold text-green-700">{leaveBalance.el_balance ?? leaveBalance.el ?? '—'}</div>
-                    <div className="text-[10px] text-slate-500">EL</div>
-                  </div>
-                  <div>
-                    <div className="text-lg font-bold text-purple-700">{leaveBalance.sl_balance ?? leaveBalance.sl ?? '—'}</div>
-                    <div className="text-[10px] text-slate-500">SL</div>
-                  </div>
+                <div className="grid grid-cols-2 gap-3 text-center">
+                  {[
+                    { key: 'CL', now: leaveBalance.cl_balance ?? leaveBalance.cl ?? 0, tone: 'text-blue-700' },
+                    { key: 'EL', now: leaveBalance.el_balance ?? leaveBalance.el ?? 0, tone: 'text-green-700' },
+                  ].map(b => {
+                    const taking = leaveForm.leave_type === b.key ? 1 : 0
+                    return (
+                      <div key={b.key}>
+                        <div className={`text-lg font-bold ${b.tone}`}>
+                          {b.now}
+                          {taking > 0 && (
+                            <span className="text-sm font-normal text-slate-500"> → {Math.round((b.now - taking) * 100) / 100}</span>
+                          )}
+                        </div>
+                        <div className="text-[10px] text-slate-500">{b.key}{taking > 0 ? ' (now → after)' : ''}</div>
+                      </div>
+                    )
+                  })}
                 </div>
               )}
             </div>
 
             {/* Warning for zero balance */}
-            {!balanceLoading && (() => {
-              const bal = leaveForm.leave_type === 'CL' ? (leaveBalance.cl_balance ?? leaveBalance.cl ?? 0)
-                : leaveForm.leave_type === 'EL' ? (leaveBalance.el_balance ?? leaveBalance.el ?? 0)
-                : (leaveBalance.sl_balance ?? leaveBalance.sl ?? 0)
-              return bal <= 0 ? (
-                <div className="bg-amber-50 border border-amber-200 rounded-lg p-2 text-xs text-amber-700">
-                  Warning: {leaveForm.leave_type} balance is {bal} — this will create a negative balance (LWP)
+            {!balanceLoading && leaveForm.leave_type !== 'LWP' && (() => {
+              const bal = leaveForm.leave_type === 'CL'
+                ? (leaveBalance.cl_balance ?? leaveBalance.cl ?? 0)
+                : (leaveBalance.el_balance ?? leaveBalance.el ?? 0)
+              // The backend refuses this outright now rather than writing the
+              // balance negative — say so here instead of "warning".
+              return bal < 1 ? (
+                <div className="bg-red-50 border border-red-200 rounded-lg p-2 text-xs text-red-700">
+                  {leaveForm.leave_type} balance is {bal}. Choose LWP, or credit the balance from
+                  Leave Management first — this will be refused otherwise.
                 </div>
               ) : null
             })()}
@@ -582,7 +599,7 @@ export default function DayCalculation() {
               >
                 <option value="CL">CL (Casual Leave)</option>
                 <option value="EL">EL (Earned Leave)</option>
-                <option value="SL">SL (Sick Leave)</option>
+                <option value="LWP">LWP (Leave Without Pay)</option>
               </select>
             </div>
 
@@ -599,9 +616,11 @@ export default function DayCalculation() {
               />
             </div>
 
-            {/* Reason */}
+            {/* Reason — mandatory. It is stored on the leave application and in audit_log. */}
             <div>
-              <label className="text-xs font-medium text-slate-600 block mb-1">Reason</label>
+              <label className="text-xs font-medium text-slate-600 block mb-1">
+                Reason <span className="text-red-500">*</span>
+              </label>
               <input
                 type="text"
                 value={leaveForm.reason}
@@ -609,15 +628,23 @@ export default function DayCalculation() {
                 className="input w-full"
                 placeholder="e.g. Employee applied for CL on this date"
               />
+              {!leaveForm.reason.trim() && (
+                <p className="text-[11px] text-slate-500 mt-1">Required — this is recorded against the correction.</p>
+              )}
             </div>
+
+            <p className="text-[11px] text-slate-500">
+              This creates an approved leave application. Day calculation picks it up from there, so the
+              day stays correct on any later re-run.
+            </p>
 
             {/* Actions */}
             <div className="flex justify-end gap-2 pt-2">
               <button onClick={() => setLeaveModal(null)} className="btn-ghost px-4 py-2 text-sm">Cancel</button>
               <button
                 onClick={handleSubmitLeaveCorrection}
-                disabled={leaveCorrectionMutation.isPending}
-                className="btn-primary px-4 py-2 text-sm"
+                disabled={leaveCorrectionMutation.isPending || !leaveForm.reason.trim()}
+                className="btn-primary px-4 py-2 text-sm disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 {leaveCorrectionMutation.isPending ? 'Applying...' : 'Apply Leave'}
               </button>

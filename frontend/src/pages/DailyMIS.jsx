@@ -923,8 +923,9 @@ function OnLeaveTodaySection({ rows }) {
       if (!g[key]) g[key] = []
       g[key].push(r)
     }
-    // Preferred display order
-    const order = ['EL', 'CL', 'LWP', 'OD', 'SL']
+    // Preferred display order. SL is no longer a live type (Sept 2026) so it is
+    // off the list, but the catch-all below still renders any historical row.
+    const order = ['EL', 'CL', 'LWP', 'OD']
     const sorted = {}
     for (const k of order) if (g[k]) sorted[k] = g[k]
     for (const k of Object.keys(g)) if (!sorted[k]) sorted[k] = g[k]

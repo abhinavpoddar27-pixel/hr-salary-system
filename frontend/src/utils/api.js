@@ -102,7 +102,7 @@ export const computeSalary = (data) => api.post('/payroll/compute-salary', data)
 export const getSalaryRegister = (month, year, company) => api.get('/payroll/salary-register', { params: { month, year, company } })
 export const getPayslip = (code, month, year) => api.get(`/payroll/payslip/${code}`, { params: { month, year } })
 export const updateManualDeductions = (code, data) => api.put(`/payroll/salary/${code}/manual-deductions`, data)
-export const finaliseSalary = (data) => api.post('/payroll/finalise', data)
+export const finaliseSalary = (data) => api.post('/payroll/finalise', data)  // data may carry staleOverrideReason
 
 // ── Payable OT / Extra Duty ──────────────────────────
 export const getPayableOT = (month, year, company) =>
@@ -198,6 +198,30 @@ export const bulkAdjustLeaves = (data) => api.post('/leaves/bulk-adjust', data)
 // Leave Management Phase 4 — additional read helpers
 export const getLeaveAccrualLedger = (code, params) => api.get(`/leaves/accrual-ledger/${code}`, { params })
 export const getLeaveAnnualSummary = (code, params) => api.get(`/leaves/annual-summary/${code}`, { params })
+
+// ── Leave automation (Sept 2026) ────────────────────────
+// All mounted under /api/features. Preview is a dry run; apply is admin-only and
+// refuses until the outside-the-system EL list is uploaded or acknowledged.
+export const accrueLeavesNow = (data) => api.post('/features/accrue-leaves', data)
+export const getLeaveRecomputePreview = (params) => api.get('/features/leave-recompute/preview', { params })
+export const downloadLeaveRecomputePreview = (params) =>
+  api.get('/features/leave-recompute/preview', { params: { ...params, format: 'csv' }, responseType: 'blob' })
+export const applyLeaveRecompute = (data) => api.post('/features/leave-recompute/apply', data)
+export const getLeaveExternalGrants = (params) => api.get('/features/leave-external-grants', { params })
+export const uploadLeaveExternalGrants = (formData, dryRun = true) =>
+  api.post(`/features/leave-external-grants/upload?dryRun=${dryRun}`, formData, {
+    headers: { 'Content-Type': 'multipart/form-data' },
+  })
+export const deleteLeaveExternalGrant = (id) => api.delete(`/features/leave-external-grants/${id}`)
+export const acknowledgeNoExternalGrants = () => api.post('/features/leave-external-grants/acknowledge-none')
+export const getLeaveAutomationStatus = (params) => api.get('/features/leave-automation/status', { params })
+export const updateLeaveAutomationSettings = (data) => api.post('/features/leave-automation/settings', data)
+export const getLeaveChangeFlags = (params) => api.get('/features/leave-change-flags', { params })
+export const clearLeaveChangeFlag = (id) => api.post(`/features/leave-change-flags/${id}/clear`)
+export const getLeaveLapseReport = (params) => api.get('/features/leave-lapse-report', { params })
+export const downloadLeaveLapseReport = (params) =>
+  api.get('/features/leave-lapse-report', { params: { ...params, format: 'csv' }, responseType: 'blob' })
+export const getSalaryStale = (params) => api.get('/features/salary-stale', { params })
 
 // ── Compensatory Off / OD (Phase 4) ─────────────────────
 export const getCompOffList = (params) => api.get('/comp-off', { params })

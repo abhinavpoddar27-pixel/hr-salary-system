@@ -24,18 +24,21 @@ const { isContractorForPayroll } = require('../utils/employeeClassification');
  * Formula: 7 - floor((effectiveMonth - 1) / 2)
  * Edge case: mid-month Dec joiner rolls to Jan of next year → 0 CL.
  */
-function computeClEntitlement(dateOfJoining, year) {
-  if (!dateOfJoining) return 7;
+function computeClEntitlement(dateOfJoining, year, base) {
+  // `base` comes from policy_config.cl_entitlement_base (7 since Sept 2026).
+  // Callers that do not have a db handle keep the historic default.
+  const b = Number.isFinite(Number(base)) ? Number(base) : 7;
+  if (!dateOfJoining) return b;
   const doj = new Date(dateOfJoining);
-  if (isNaN(doj)) return 7;
+  if (isNaN(doj)) return b;
   const dojYear = doj.getUTCFullYear();
-  if (dojYear < year) return 7;
+  if (dojYear < year) return b;
   if (dojYear > year) return 0;
   const dojMonth = doj.getUTCMonth() + 1;
   const dojDay = doj.getUTCDate();
   const effectiveMonth = dojDay === 1 ? dojMonth : dojMonth + 1;
   if (effectiveMonth > 12) return 0;
-  return Math.max(0, 7 - Math.floor((effectiveMonth - 1) / 2));
+  return Math.max(0, b - Math.floor((effectiveMonth - 1) / 2));
 }
 
 function _prevMonth(month, year) {
@@ -71,201 +74,34 @@ function _getPolicyNumber(db, key, fallback) {
  * idempotent; UPDATEs leave_balances to the new closing balance directly.
  */
 function runLeaveAccrual(db, month, year) {
+  // Kept for its existing callers (POST /api/features/accrue-leaves) and its
+  // existing return shape. All the logic now lives in services/leaveEngine.js,
+  // which recomputes the whole year from January instead of chaining off the
+  // previous ledger row. `month` is accepted and ignored: a month-scoped
+  // accrual is exactly what produced the skipped-month bug.
+  // Required lazily so leaveEngine can require computeClEntitlement from here
+  // without a module-load cycle.
+  const { recomputeLeaves } = require('./leaveEngine');
   const results = { accrued: 0, skipped: 0, errors: [] };
-
-  const elRate = _getPolicyNumber(db, 'el_accrual_rate', 1);
-  const elEligibilityDays = _getPolicyNumber(db, 'el_eligibility_days', 180);
-
-  // Leave-eligible employees only (see LEAVE_ELIGIBLE_TYPES). Contractors
-  // inside these types are still filtered via isContractorForPayroll below.
-  const eligiblePlaceholders = LEAVE_ELIGIBLE_TYPES.map(() => '?').join(',');
-  const employees = db.prepare(`
-    SELECT id, code, date_of_joining, employment_type, is_contractor,
-           category, department, company
-    FROM employees
-    WHERE status = 'Active'
-      AND employment_type IN (${eligiblePlaceholders})
-  `).all(...LEAVE_ELIGIBLE_TYPES);
-
-  const upsertLedger = db.prepare(`
-    INSERT INTO leave_accrual_ledger
-      (employee_code, employee_id, year, month, leave_type,
-       opening_balance, accrued, used, lapsed, closing_balance,
-       paid_days_this_month, paid_days_ytd, el_earned_ytd, company)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?)
-    ON CONFLICT(employee_code, year, month, leave_type) DO UPDATE SET
-      opening_balance = excluded.opening_balance,
-      accrued = excluded.accrued,
-      used = excluded.used,
-      closing_balance = excluded.closing_balance,
-      paid_days_this_month = excluded.paid_days_this_month,
-      paid_days_ytd = excluded.paid_days_ytd,
-      el_earned_ytd = excluded.el_earned_ytd
-  `);
-
-  const upsertBalance = db.prepare(`
-    INSERT INTO leave_balances (employee_id, year, leave_type, opening, accrued, used, balance)
-    VALUES (?, ?, ?, 0, 0, 0, 0)
-    ON CONFLICT(employee_id, year, leave_type) DO NOTHING
-  `);
-  // CL is a one-time DOJ-based seed per year. ON CONFLICT DO NOTHING ensures
-  // subsequent runs don't overwrite an opening that may have been edited.
-  const seedClBalance = db.prepare(`
-    INSERT INTO leave_balances (employee_id, year, leave_type, opening, accrued, used, balance)
-    VALUES (?, ?, 'CL', ?, 0, 0, ?)
-    ON CONFLICT(employee_id, year, leave_type) DO NOTHING
-  `);
-  const updateBalance = db.prepare(`
-    UPDATE leave_balances
-    SET accrued = ?, used = ?, balance = ?
-    WHERE employee_id = ? AND year = ? AND leave_type = ?
-  `);
-
-  const prev = _prevMonth(month, year);
-
-  const txn = db.transaction(() => {
-    for (const emp of employees) {
-      try {
-        if (isContractorForPayroll(emp)) { results.skipped++; continue; }
-
-        // Day calculation for this month (no row → nothing to accrue against)
-        const dayCalc = db.prepare(`
-          SELECT days_present, days_half_present, days_wop, paid_sundays,
-                 paid_holidays, COALESCE(od_days, 0) AS od_days
-          FROM day_calculations
-          WHERE employee_code = ? AND month = ? AND year = ? AND (company = ? OR ? IS NULL)
-          LIMIT 1
-        `).get(emp.code, month, year, emp.company, emp.company);
-
-        // EL days used this month from approved leave applications
-        const elUsed = db.prepare(`
-          SELECT COALESCE(SUM(days), 0) AS d
-          FROM leave_applications
-          WHERE employee_code = ?
-            AND leave_type = 'EL'
-            AND status = 'Approved'
-            AND strftime('%Y-%m', start_date) = ?
-        `).get(emp.code, `${year}-${String(month).padStart(2, '0')}`).d || 0;
-
-        const clUsed = db.prepare(`
-          SELECT COALESCE(SUM(days), 0) AS d
-          FROM leave_applications
-          WHERE employee_code = ?
-            AND leave_type = 'CL'
-            AND status = 'Approved'
-            AND strftime('%Y-%m', start_date) = ?
-        `).get(emp.code, `${year}-${String(month).padStart(2, '0')}`).d || 0;
-
-        const paidDaysThisMonth = dayCalc
-          ? ((dayCalc.days_present || 0)
-             + (dayCalc.days_wop || 0)
-             + (dayCalc.paid_sundays || 0)
-             + (dayCalc.paid_holidays || 0)
-             + elUsed
-             + (dayCalc.od_days || 0))
-          : 0;
-
-        // Previous month's EL ledger row — carries paid_days_ytd + el_earned_ytd
-        const prevElRow = db.prepare(`
-          SELECT closing_balance, paid_days_ytd, el_earned_ytd
-          FROM leave_accrual_ledger
-          WHERE employee_code = ? AND year = ? AND month = ? AND leave_type = 'EL'
-          LIMIT 1
-        `).get(emp.code, prev.year, prev.month);
-
-        // For January, look at prev-year December's closing to carry forward
-        // (in practice yearEndLapse zeroes this out, but the code is
-        //  defensive — if lapse wasn't run, we keep the running balance).
-        const prevElClosing = prevElRow?.closing_balance || 0;
-        const prevPaidYtd = prevElRow?.paid_days_ytd || 0;
-        const prevElEarnedYtd = prevElRow?.el_earned_ytd || 0;
-
-        // EL eligibility — skip accrual (but still record used) if employee
-        // is within the DOJ-based floor.
-        let elEligible = true;
-        if (emp.date_of_joining) {
-          const doj = new Date(emp.date_of_joining);
-          const monthStart = new Date(Date.UTC(year, month - 1, 1));
-          const daysSinceDoj = (monthStart - doj) / (1000 * 60 * 60 * 24);
-          if (daysSinceDoj < elEligibilityDays) elEligible = false;
-        }
-
-        const newPaidYtd = prevPaidYtd + paidDaysThisMonth;
-        const newElEarnedYtd = elEligible
-          ? Math.floor(newPaidYtd / 20) * elRate
-          : prevElEarnedYtd;
-        const elAccrued = Math.max(0, newElEarnedYtd - prevElEarnedYtd);
-
-        const elOpening = prevElClosing;
-        const elClosing = elOpening + elAccrued - elUsed;
-
-        upsertLedger.run(
-          emp.code, emp.id, year, month, 'EL',
-          elOpening, elAccrued, elUsed, elClosing,
-          paidDaysThisMonth, newPaidYtd, newElEarnedYtd, emp.company || null
-        );
-        upsertBalance.run(emp.id, year, 'EL');
-        // The balance row tracks cumulative accrued/used for the year — we
-        // derive these from the ledger so re-runs stay idempotent.
-        const elYear = db.prepare(`
-          SELECT COALESCE(SUM(accrued), 0) AS acc, COALESCE(SUM(used), 0) AS usd
-          FROM leave_accrual_ledger
-          WHERE employee_code = ? AND year = ? AND leave_type = 'EL'
-        `).get(emp.code, year);
-        const elBalance = (db.prepare(`
-          SELECT opening FROM leave_balances WHERE employee_id = ? AND year = ? AND leave_type = 'EL'
-        `).get(emp.id, year)?.opening || 0) + (elYear.acc || 0) - (elYear.usd || 0);
-        updateBalance.run(elYear.acc || 0, elYear.usd || 0, elBalance, emp.id, year, 'EL');
-
-        // ── CL ledger (no accrual here — just mirror usage) ────────
-        // First-time-this-year seed of the CL opening via DOJ-based pro-ration.
-        // ON CONFLICT DO NOTHING — subsequent months/runs are no-ops, so the
-        // opening stays stable (and any manual edit via /adjust is preserved).
-        const clEntitlement = computeClEntitlement(emp.date_of_joining, year);
-        seedClBalance.run(emp.id, year, clEntitlement, clEntitlement);
-
-        const prevClRow = db.prepare(`
-          SELECT closing_balance FROM leave_accrual_ledger
-          WHERE employee_code = ? AND year = ? AND month = ? AND leave_type = 'CL'
-          LIMIT 1
-        `).get(emp.code, prev.year, prev.month);
-
-        // For January, fall back to the current-year opening balance from
-        // leave_balances (set by initCLOpening).
-        let clOpening = prevClRow?.closing_balance;
-        if (clOpening == null) {
-          const clBalRow = db.prepare(`
-            SELECT opening FROM leave_balances
-            WHERE employee_id = ? AND year = ? AND leave_type = 'CL'
-          `).get(emp.id, year);
-          clOpening = clBalRow?.opening || 0;
-        }
-        const clClosing = clOpening - clUsed;
-
-        upsertLedger.run(
-          emp.code, emp.id, year, month, 'CL',
-          clOpening, 0, clUsed, clClosing,
-          0, 0, 0, emp.company || null
-        );
-        upsertBalance.run(emp.id, year, 'CL');
-        const clYear = db.prepare(`
-          SELECT COALESCE(SUM(used), 0) AS usd
-          FROM leave_accrual_ledger
-          WHERE employee_code = ? AND year = ? AND leave_type = 'CL'
-        `).get(emp.code, year);
-        const clOpeningYear = db.prepare(`
-          SELECT opening FROM leave_balances WHERE employee_id = ? AND year = ? AND leave_type = 'CL'
-        `).get(emp.id, year)?.opening || 0;
-        updateBalance.run(0, clYear.usd || 0, clOpeningYear - (clYear.usd || 0), emp.id, year, 'CL');
-
-        results.accrued++;
-      } catch (err) {
-        results.errors.push({ code: emp.code, error: err.message });
-      }
+  try {
+    const out = recomputeLeaves(db, {
+      year,
+      dryRun: false,
+      allowWrite: true,
+      scope: 'manual',
+      actor: 'runLeaveAccrual',
+    });
+    if (!out.applied) {
+      results.skipped = out.plan?.employees?.length || 0;
+      results.errors.push({ code: '*', error: out.reason });
+      return results;
     }
-  });
-  txn();
-
+    results.accrued = out.plan.employees.length;
+    results.changed = out.plan.totals.changed;
+    results.run_id = out.run_id;
+  } catch (err) {
+    results.errors.push({ code: '*', error: err.message });
+  }
   return results;
 }
 

@@ -4,7 +4,7 @@ import toast from 'react-hot-toast'
 import Modal, { ModalBody, ModalFooter } from '../components/ui/Modal'
 import {
   getMissPunches, resolveMissPunch, bulkResolveMissPunches,
-  approveMissPunch, rejectMissPunch
+  approveMissPunch, rejectMissPunch, getLeaveAutomationStatus
 } from '../utils/api'
 import { useAppStore } from '../store/appStore'
 import { canFinance as canFinanceFn, canHR as canHRFn } from '../utils/role'
@@ -12,6 +12,7 @@ import CompanyFilter from '../components/shared/CompanyFilter'
 import DateSelector from '../components/common/DateSelector'
 import useDateSelector from '../hooks/useDateSelector'
 import PipelineProgress from '../components/pipeline/PipelineProgress'
+import { fmtIstTime } from '../utils/formatters'
 import { fmtDate, statusColor } from '../utils/formatters'
 import { Abbr } from '../components/ui/Tooltip'
 import AbbreviationLegend from '../components/ui/AbbreviationLegend'
@@ -143,18 +144,46 @@ export default function MissPunch() {
     else { setSortField(field); setSortDir('asc') }
   }
 
+  // Automatic Stage 6 waits for BOTH counters to reach zero — see
+  // services/leaveTriggers.checkAutoStage6.
+  const { data: autoStatus } = useQuery({
+    queryKey: ['leave-automation-status', year],
+    queryFn: () => getLeaveAutomationStatus({ year }),
+    refetchInterval: 30 * 1000,
+    retry: 0,
+  })
+  const period = (autoStatus?.data?.periods || []).find(
+    (p) => p.month === month && (!selectedCompany || p.company === selectedCompany)
+  )
+  const autoStage6 = period?.auto_stage6 || null
+
+  const afterResolve = () => {
+    queryClient.invalidateQueries({ queryKey: ['leave-automation-status'] })
+    queryClient.invalidateQueries({ queryKey: ['day-calculations'] })
+  }
+
   const resolveMutation = useMutation({
     mutationFn: ({ id, data }) => resolveMissPunch(id, data),
-    onSuccess: () => { toast.success('Corrected'); setEditId(null); refetch() }
+    onSuccess: (res) => {
+      const fired = res?.data?.autoStage6?.fired
+      toast.success(fired
+        ? 'Corrected — that was the last one, day calculation is running now'
+        : 'Corrected — finance still has to review this before day calculation runs')
+      setEditId(null)
+      refetch()
+      afterResolve()
+    }
   })
 
   const bulkMutation = useMutation({
     mutationFn: (data) => bulkResolveMissPunches(data),
     onSuccess: (res) => {
-      toast.success(`${res.data.result.success} records corrected`)
+      const fired = (res?.data?.autoStage6 || []).some((p) => p?.fired)
+      toast.success(`${res.data.result.success} records corrected${fired ? ' — day calculation is running now' : ''}`)
       setBulkModal(false)
       setSelected(new Set())
       refetch()
+      afterResolve()
     }
   })
 
@@ -210,6 +239,39 @@ export default function MissPunch() {
             )}
           </div>
         </div>
+
+        {/* Automatic Stage 6 gate — HR and finance both have to clear before it runs */}
+        {autoStage6 && autoStage6.hasImport && (
+          <div
+            className={`rounded-lg border px-4 py-3 text-sm ${
+              autoStage6.autoRanAt || autoStage6.stageSixDone
+                ? 'bg-emerald-50 border-emerald-200 text-emerald-800'
+                : 'bg-amber-50 border-amber-200 text-amber-800'
+            }`}
+          >
+            {autoStage6.autoRanAt || autoStage6.stageSixDone ? (
+              <span>
+                <span className="font-semibold">Day calculation has run.</span>{' '}
+                {autoStage6.autoRanAt
+                  ? `Started automatically at ${fmtIstTime(autoStage6.autoRanAt)} IST.`
+                  : 'Run manually from Stage 6.'}
+              </span>
+            ) : !autoStage6.enabled ? (
+              <span>
+                <span className="font-semibold">Automatic day calculation is switched off.</span>{' '}
+                Pending: {autoStage6.awaitingHr} awaiting HR · {autoStage6.awaitingFinance} awaiting finance.
+                Run Stage 6 by hand when the queue is clear.
+              </span>
+            ) : (
+              <span>
+                <span className="font-semibold">
+                  Pending: {autoStage6.awaitingHr} awaiting HR · {autoStage6.awaitingFinance} awaiting finance.
+                </span>{' '}
+                Day calculation runs automatically when both reach 0.
+              </span>
+            )}
+          </div>
+        )}
 
         {/* Progress bar */}
         <div className="card p-5">

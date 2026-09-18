@@ -33,6 +33,10 @@ day_calculations (Stage 6 output — one row per employee per month)
   days_wop REAL, days_absent INTEGER, paid_sundays REAL, unpaid_sundays INTEGER,
   paid_holidays INTEGER, cl_used REAL, el_used REAL, sl_used REAL,
   lop_days REAL, total_payable_days REAL, ot_hours REAL, ot_days REAL,
+  cl_used REAL, el_used REAL, sl_used REAL (historical only — SL abolished Sept 2026),
+  lop_days REAL, od_days REAL, short_leave_days REAL, uninformed_absent REAL,
+  late_deduction_days REAL, late_deduction_remark TEXT,
+  salary_stale INTEGER (1 = Stage 7 needs recompute), leave_recomputed_at TEXT,
   UNIQUE(employee_code, month, year, company)
 
 salary_computations (Stage 7 output — one row per employee per month)
@@ -48,7 +52,9 @@ salary_computations (Stage 7 output — one row per employee per month)
   advance_recovery REAL, lop_deduction REAL, other_deductions REAL,
   total_deductions REAL, net_salary REAL,
   is_finalised INTEGER, salary_held INTEGER, hold_reason TEXT,
-  late_coming_deduction REAL,
+  late_coming_deduction REAL, early_exit_deduction REAL,
+  cl_days REAL, el_days REAL, lwp_days REAL, od_days REAL,
+  short_leave_days REAL, uninformed_absent_days REAL (all display-only — pay flows through payable_days),
   UNIQUE(employee_code, month, year, company)
 
 attendance_processed (daily attendance records — ~31 rows per employee per month)
@@ -80,9 +86,54 @@ loans (employee loans with EMI tracking)
 holidays (national holiday master)
   date TEXT, name TEXT, type TEXT, applicable_to TEXT
 
-leave_balances (leave balance per employee per year)
-  employee_id INTEGER, year INTEGER, leave_type TEXT,
-  opening REAL, accrued REAL, used REAL, balance REAL
+leave_balances (leave balance per employee per year — the live figure HR sees)
+  employee_id INTEGER, year INTEGER, leave_type TEXT ('CL'/'EL'),
+  opening REAL, accrued REAL, used REAL, balance REAL,
+  UNIQUE(employee_id, year, leave_type)
+
+leave_applications (one row per leave request)
+  employee_id INTEGER, employee_code TEXT, leave_type TEXT ('CL'/'EL'/'LWP'),
+  start_date TEXT, end_date TEXT, days REAL, reason TEXT, hr_remark TEXT,
+  status TEXT ('Pending'/'Approved'/'Rejected'), applied_at TEXT,
+  approved_by TEXT, approved_at TEXT, rejection_reason TEXT
+  NOTE: there is NO created_at column — order by applied_at.
+
+leave_accrual_ledger (per employee per year per month per leave type)
+  employee_code TEXT, employee_id INTEGER, year INTEGER, month INTEGER, leave_type TEXT,
+  opening_balance REAL, accrued REAL, used REAL, lapsed REAL, closing_balance REAL,
+  paid_days_this_month REAL, paid_days_ytd REAL, el_earned_ytd REAL, company TEXT,
+  UNIQUE(employee_code, year, month, leave_type)
+
+leave_transactions (audit trail of balance movements)
+  employee_id INTEGER, employee_code TEXT, company TEXT, leave_type TEXT,
+  transaction_type TEXT ('Credit'/'Debit'/'Year-End Lapse'), days REAL,
+  balance_after REAL, reference_month INTEGER, reference_year INTEGER,
+  reason TEXT, approved_by TEXT, created_at TEXT
+
+leave_external_grants (EL given outside the system — owner-uploaded)
+  employee_code TEXT, employee_id INTEGER, year INTEGER, month INTEGER,
+  leave_type TEXT, days REAL, mode TEXT ('leave_taken'/'paid_salary'/'paid_cash'),
+  paid_month INTEGER, paid_year INTEGER, remark TEXT, source_file TEXT,
+  uploaded_by TEXT, uploaded_at TEXT, is_active INTEGER,
+  UNIQUE(employee_code, year, month, leave_type, mode)
+
+leave_change_flags (a change that would have hit a finalized month)
+  employee_code TEXT, company TEXT, month INTEGER, year INTEGER,
+  reason TEXT, detail TEXT, created_at TEXT, cleared_at TEXT, cleared_by TEXT
+
+leave_recompute_runs (log of every leave recompute)
+  scope TEXT ('trigger'/'nightly'/'manual'/'auto_stage6'), company TEXT,
+  month INTEGER, year INTEGER, employee_count INTEGER,
+  started_at TEXT, finished_at TEXT, status TEXT, message TEXT
+
+compensatory_off_requests (comp-off / OD — HR creates, finance approves)
+  employee_code TEXT, start_date TEXT, end_date TEXT, days REAL,
+  month INTEGER, year INTEGER, company TEXT, reason TEXT, hr_remark TEXT,
+  finance_status TEXT ('pending'/'approved'/'rejected'), finance_remark TEXT
+
+short_leaves (gate passes — quota 2 per employee per calendar month)
+  employee_code TEXT, date TEXT, company TEXT, duration_hours REAL,
+  authorized_leave_until TEXT, quota_breach INTEGER, cancelled_at TEXT
 
 audit_log (change audit trail)
   table_name TEXT, record_id INTEGER, field_name TEXT,

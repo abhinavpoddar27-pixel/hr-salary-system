@@ -1,6 +1,9 @@
 import React, { useState, useMemo } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { getLeaveApplications, submitLeaveApplication, approveLeave, rejectLeave, getEmployees, getLeaveSummary, getLeaveBalancesList, getLeaveRegister, adjustLeave, getLeaveTransactions, getEmployeeLeaveBalance, getCompOffList, getCompOffPending, createCompOff, reviewCompOff, bulkReviewCompOff, deleteCompOff } from '../utils/api'
+import { getLeaveApplications, submitLeaveApplication, approveLeave, rejectLeave, getEmployees, getLeaveSummary, getLeaveBalancesList, getLeaveRegister, adjustLeave, getLeaveTransactions, getEmployeeLeaveBalance, getCompOffList, getCompOffPending, createCompOff, reviewCompOff, bulkReviewCompOff, deleteCompOff, getLeaveAccrualLedger, getLeaveRecomputePreview, downloadLeaveRecomputePreview, applyLeaveRecompute, getLeaveAutomationStatus, updateLeaveAutomationSettings, getLeaveChangeFlags, clearLeaveChangeFlag, uploadLeaveExternalGrants, acknowledgeNoExternalGrants, getLeaveExternalGrants, deleteLeaveExternalGrant, downloadLeaveLapseReport } from '../utils/api'
+import { normalizeRole } from '../utils/role'
+import { fmtIstDateTime } from '../utils/formatters'
+import LeaveAutomationTab from '../components/leave/LeaveAutomationTab'
 import { useAppStore } from '../store/appStore'
 import DateSelector from '../components/common/DateSelector'
 import useDateSelector from '../hooks/useDateSelector'
@@ -176,8 +179,86 @@ const MAIN_TABS = [
   { id: 'register', label: 'Leave Register' },
   { id: 'adjustments', label: 'Adjustments' },
   { id: 'comp_off', label: 'Comp Off / OD' },
-  { id: 'gate_passes', label: 'Gate Passes' }
+  { id: 'gate_passes', label: 'Gate Passes' },
+  { id: 'automation', label: 'Automation', adminOnly: true }
 ]
+
+/** Client-side CSV of what the Balances table is showing. Codes only, no names. */
+function exportBalancesCsv(rows, year) {
+  const header = ['Employee Code', 'Department', 'Company', 'CL', 'EL', 'Total', 'Year']
+  const cell = (v) => {
+    const t = v === null || v === undefined ? '' : String(v)
+    return /[",\n]/.test(t) ? `"${t.replace(/"/g, '""')}"` : t
+  }
+  const body = [header, ...rows.map(b => {
+    const cl = b.CL ?? b.cl ?? 0
+    const el = b.EL ?? b.el ?? 0
+    return [b.employee_code, b.department || '', b.company || '', cl, el, Math.round((cl + el) * 100) / 100, year]
+  })].map(r => r.map(cell).join(',')).join('\r\n')
+  // UTF-8 BOM so Excel opens it in the right encoding.
+  const blob = new Blob(['\ufeff' + body], { type: 'text/csv;charset=utf-8' })
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = `leave_balances_${year}.csv`
+  a.click()
+  URL.revokeObjectURL(url)
+}
+
+/** Month-by-month ledger for one employee, shown when a balance row is expanded. */
+function LedgerPanel({ code, year }) {
+  const { data, isLoading, isError } = useQuery({
+    queryKey: ['leave-accrual-ledger', code, year],
+    queryFn: () => getLeaveAccrualLedger(code, { year }),
+    retry: 0,
+  })
+  const rows = data?.data?.data || data?.data?.ledger || []
+
+  if (isLoading) return <div className="p-3 text-xs text-slate-400">Loading the ledger…</div>
+  if (isError) return <div className="p-3 text-xs text-slate-400">Could not load the ledger for {code}.</div>
+  if (!rows.length) {
+    return (
+      <div className="p-3 text-xs text-slate-400">
+        No ledger rows for {code} in {year} yet — they appear after the first leave recompute.
+      </div>
+    )
+  }
+
+  const MONTHS = ['', 'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
+  return (
+    <div className="p-3 overflow-x-auto">
+      <table className="table-compact w-full text-xs">
+        <thead>
+          <tr>
+            <th>Month</th><th>Type</th>
+            <th className="text-center">Opening</th>
+            <th className="text-center">Earned</th>
+            <th className="text-center">Used</th>
+            <th className="text-center">Lapsed</th>
+            <th className="text-center">Closing</th>
+            <th className="text-center">Days worked</th>
+            <th className="text-center">Days worked YTD</th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map(r => (
+            <tr key={`${r.leave_type}-${r.month}`}>
+              <td>{MONTHS[r.month] || r.month}</td>
+              <td>{r.leave_type}</td>
+              <td className="text-center">{r.opening_balance ?? 0}</td>
+              <td className="text-center text-green-700">{r.accrued ?? 0}</td>
+              <td className="text-center">{r.used ?? 0}</td>
+              <td className="text-center text-slate-400">{r.lapsed ?? 0}</td>
+              <td className="text-center font-semibold">{r.closing_balance ?? 0}</td>
+              <td className="text-center">{r.paid_days_this_month ?? 0}</td>
+              <td className="text-center">{r.paid_days_ytd ?? 0}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  )
+}
 
 export default function LeaveManagement() {
   const { month, year, dateProps } = useDateSelector({ mode: 'month', syncToStore: true })
@@ -194,6 +275,13 @@ export default function LeaveManagement() {
 
   // -- Balances tab state --
   const [balSearch, setBalSearch] = useState('')
+  const [ledgerCode, setLedgerCode] = useState(null)
+
+  // -- Approve confirmation (shows balance now -> after) --
+  const [approveTarget, setApproveTarget] = useState(null)
+
+  // -- Adjustments: explicit opt-in before a balance may go negative --
+  const [allowNegative, setAllowNegative] = useState(false)
 
   // -- Adjustments tab state --
   const [adjForm, setAdjForm] = useState({ employee_code: '', leave_type: 'CL', transaction_type: 'Credit', days: 1, reason: '' })
@@ -224,6 +312,31 @@ export default function LeaveManagement() {
   })
   const balances = balancesRes?.data?.data || []
 
+  // The engine's dry-run plan is what supplies earned / used / outside /
+  // adjustments and the eligibility chip. Admin-only endpoint, so the extra
+  // columns simply read "—" for HR.
+  const { data: previewRes } = useQuery({
+    queryKey: ['leave-recompute-preview', year],
+    queryFn: () => getLeaveRecomputePreview({ year }),
+    enabled: mainTab === 'balances' && isAdmin,
+    retry: 0,
+  })
+  const previewByCode = useMemo(() => {
+    const out = {}
+    for (const e of previewRes?.data?.employees || []) out[e.employee_code] = e
+    return out
+  }, [previewRes])
+
+  const { data: automationRes } = useQuery({
+    queryKey: ['leave-automation-status', year],
+    queryFn: () => getLeaveAutomationStatus({ year }),
+    enabled: (mainTab === 'balances' || mainTab === 'automation') && isHrOrAdmin,
+    refetchInterval: 30 * 1000,
+    retry: 0,
+  })
+  const lastRecalcAt = (automationRes?.data?.last_runs || [])
+    .map(r => r.started_at).filter(Boolean).sort().slice(-1)[0] || null
+
   // -- Leave Register query --
   const { data: registerRes, isLoading: regLoading } = useQuery({
     queryKey: ['leave-register', month, year, selectedCompany],
@@ -239,8 +352,11 @@ export default function LeaveManagement() {
       toast.success('Leave adjustment saved')
       queryClient.invalidateQueries({ queryKey: ['leave-balances-list'] })
       queryClient.invalidateQueries({ queryKey: ['leave-transactions'] })
+      queryClient.invalidateQueries({ queryKey: ['leave-recompute-preview'] })
       setAdjForm(f => ({ ...f, days: 1, reason: '' }))
-    }
+      setAllowNegative(false)
+    },
+    onError: (err) => toast.error(err?.response?.data?.error || 'Could not save the adjustment')
   })
 
   const { data: txnRes, isLoading: txnLoading } = useQuery({
@@ -250,23 +366,39 @@ export default function LeaveManagement() {
   })
   const transactions = txnRes?.data?.data || []
 
+  // Approve/reject used to post approved_by: 'admin' regardless of who clicked.
+  const role = normalizeRole(user?.role)
+  const isAdmin = role === 'admin'
+  const isHrOrAdmin = role === 'hr' || role === 'admin'
+  const actor = user?.username || user?.name || 'unknown'
+
+  const afterLeaveChange = () => {
+    queryClient.invalidateQueries({ queryKey: ['leave-applications'] })
+    queryClient.invalidateQueries({ queryKey: ['leave-balances-list'] })
+    queryClient.invalidateQueries({ queryKey: ['day-calculations'] })
+    queryClient.invalidateQueries({ queryKey: ['leave-automation-status'] })
+    queryClient.invalidateQueries({ queryKey: ['notifications'] })
+  }
+
   const approve = useMutation({
-    mutationFn: (id) => approveLeave(id, { approved_by: 'admin' }),
+    mutationFn: (id) => approveLeave(id, { approved_by: actor }),
     onSuccess: () => {
-      toast.success('Leave approved')
-      queryClient.invalidateQueries({ queryKey: ['leave-applications'] })
-      queryClient.invalidateQueries({ queryKey: ['notifications'] })
-    }
+      toast.success('Leave approved — day calculation and EL are updating')
+      setApproveTarget(null)
+      afterLeaveChange()
+    },
+    onError: (err) => toast.error(err?.response?.data?.error || 'Could not approve the leave')
   })
 
   const reject = useMutation({
-    mutationFn: ({ id, reason }) => rejectLeave(id, { rejection_reason: reason }),
+    mutationFn: ({ id, reason }) => rejectLeave(id, { rejection_reason: reason, rejected_by: actor }),
     onSuccess: () => {
-      toast.success('Leave rejected')
+      toast.success('Leave rejected — day calculation and EL are updating')
       setRejectModal(null)
       setRejectReason('')
-      queryClient.invalidateQueries({ queryKey: ['leave-applications'] })
-    }
+      afterLeaveChange()
+    },
+    onError: (err) => toast.error(err?.response?.data?.error || 'Could not reject the leave')
   })
 
   const filtered = useMemo(() => {
@@ -311,7 +443,7 @@ export default function LeaveManagement() {
 
       {/* Main Tabs */}
       <div className="flex bg-slate-100 rounded-lg p-0.5 w-fit">
-        {MAIN_TABS.map(t => (
+        {MAIN_TABS.filter(t => !t.adminOnly || isAdmin).map(t => (
           <button
             key={t.id}
             onClick={() => setMainTab(t.id)}
@@ -426,15 +558,18 @@ export default function LeaveManagement() {
                       {l.status === 'Pending' && (
                         <div className="flex items-center justify-center gap-1">
                           <button
-                            onClick={() => approve.mutate(l.id)}
-                            disabled={approve.isPending}
-                            className="px-2 py-1 text-xs font-medium bg-green-100 text-green-700 rounded hover:bg-green-200 transition-colors"
+                            onClick={() => setApproveTarget(l)}
+                            disabled={approve.isPending || !isHrOrAdmin}
+                            title={isHrOrAdmin ? 'Approve this leave' : 'Only HR or an admin can approve leave'}
+                            className="px-2 py-1 text-xs font-medium bg-green-100 text-green-700 rounded hover:bg-green-200 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                           >
                             Approve
                           </button>
                           <button
                             onClick={() => setRejectModal(l)}
-                            className="px-2 py-1 text-xs font-medium bg-red-100 text-red-700 rounded hover:bg-red-200 transition-colors"
+                            disabled={!isHrOrAdmin}
+                            title={isHrOrAdmin ? 'Reject this leave' : 'Only HR or an admin can reject leave'}
+                            className="px-2 py-1 text-xs font-medium bg-red-100 text-red-700 rounded hover:bg-red-200 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                           >
                             Reject
                           </button>
@@ -507,7 +642,7 @@ export default function LeaveManagement() {
       {/* ── Leave Balances Tab ── */}
       {mainTab === 'balances' && (
         <>
-          <div className="flex items-center gap-4">
+          <div className="flex items-center gap-4 flex-wrap">
             <input
               type="text"
               className="input text-sm w-64"
@@ -515,7 +650,16 @@ export default function LeaveManagement() {
               value={balSearch}
               onChange={e => setBalSearch(e.target.value)}
             />
+            <CompanyFilter />
             <span className="text-sm text-slate-500">Year: {year}</span>
+            <button
+              type="button"
+              className="btn-ghost text-sm ml-auto"
+              disabled={!balances.length}
+              onClick={() => exportBalancesCsv(balances, year)}
+            >
+              Export CSV
+            </button>
           </div>
           <div className="card overflow-hidden">
             <div className="overflow-x-auto">
@@ -525,29 +669,79 @@ export default function LeaveManagement() {
                     <th>Code</th>
                     <th>Name</th>
                     <th>Department</th>
-                    <th>Company</th>
+                    <th className="text-center" title="Entitlement at the start of the year">Opening</th>
+                    <th className="text-center" title="Earned leave credited so far this year">Earned YTD</th>
+                    <th className="text-center" title="Used through leave applications">Used (app)</th>
+                    <th className="text-center" title="Given outside the system, as uploaded by the owner">Used (outside)</th>
+                    <th className="text-center" title="Net of manual credits and debits">Adjustments</th>
                     <th className="text-center">CL</th>
                     <th className="text-center">EL</th>
-                    <th className="text-center">Total</th>
+                    <th className="text-center">Balance</th>
+                    <th className="text-center" title="Days worked this year — what earned leave accrues on">Days worked YTD</th>
+                    <th className="text-center">EL eligibility</th>
+                    <th className="text-center">Last recalculated</th>
                   </tr>
                 </thead>
                 <tbody>
                   {balLoading ? (
-                    <tr><td colSpan={7} className="text-center py-8 text-slate-400">Loading...</td></tr>
+                    <tr><td colSpan={14} className="text-center py-8 text-slate-400">Loading…</td></tr>
                   ) : balances.length === 0 ? (
-                    <tr><td colSpan={7} className="text-center py-8 text-slate-400">No leave balances found</td></tr>
+                    <tr>
+                      <td colSpan={14} className="text-center py-10 text-slate-400">
+                        <div className="font-medium text-slate-500">No leave balances for {year}</div>
+                        <div className="text-xs mt-1">
+                          Balances appear once the year&rsquo;s openings are seeded and leave has been recomputed.
+                        </div>
+                      </td>
+                    </tr>
                   ) : (
-                    balances.map(b => (
-                      <tr key={b.employee_code}>
-                        <td className="font-medium text-slate-700">{b.employee_code}</td>
-                        <td>{b.employee_name || b.name || '-'}</td>
-                        <td className="text-sm text-slate-600">{b.department || '-'}</td>
-                        <td className="text-sm text-slate-600">{b.company || '-'}</td>
-                        <td className="text-center font-medium">{b.CL ?? b.cl ?? 0}</td>
-                        <td className="text-center font-medium">{b.EL ?? b.el ?? 0}</td>
-                        <td className="text-center font-bold text-slate-800">{(b.CL ?? b.cl ?? 0) + (b.EL ?? b.el ?? 0)}</td>
-                      </tr>
-                    ))
+                    balances.map(b => {
+                      const plan = previewByCode[b.employee_code]
+                      const cl = b.CL ?? b.cl ?? 0
+                      const el = b.EL ?? b.el ?? 0
+                      const open = ledgerCode === b.employee_code
+                      return (
+                        <React.Fragment key={b.employee_code}>
+                          <tr
+                            className="cursor-pointer hover:bg-slate-50"
+                            onClick={() => setLedgerCode(open ? null : b.employee_code)}
+                          >
+                            <td className="font-medium text-slate-700">
+                              <span className="inline-flex items-center gap-1">
+                                <DrillDownChevron isExpanded={open} />
+                                {b.employee_code}
+                              </span>
+                            </td>
+                            <td>{b.employee_name || b.name || '-'}</td>
+                            <td className="text-sm text-slate-600">{b.department || '-'}</td>
+                            <td className="text-center">{plan ? plan.cl.opening + plan.el.opening : '—'}</td>
+                            <td className="text-center text-green-700">{plan ? plan.el.earned : '—'}</td>
+                            <td className="text-center">{plan ? plan.cl.used + plan.el.used : '—'}</td>
+                            <td className="text-center text-purple-700">{plan ? plan.cl.external + plan.el.external : '—'}</td>
+                            <td className="text-center">{plan ? plan.cl.adjustments + plan.el.adjustments : '—'}</td>
+                            <td className="text-center font-medium">{cl}</td>
+                            <td className="text-center font-medium">{el}</td>
+                            <td className="text-center font-bold text-slate-800">{Math.round((cl + el) * 100) / 100}</td>
+                            <td className="text-center">{plan ? plan.days_worked_ytd : '—'}</td>
+                            <td className="text-center">
+                              {!plan ? '—' : plan.eligible ? (
+                                <span className="badge-green text-[11px]">Eligible</span>
+                              ) : (
+                                <span className="badge-yellow text-[11px]">{plan.days_to_eligibility} days to go</span>
+                              )}
+                            </td>
+                            <td className="text-center text-xs text-slate-500">
+                              {lastRecalcAt ? fmtIstDateTime(lastRecalcAt) : '—'}
+                            </td>
+                          </tr>
+                          {open && (
+                            <DrillDownRow colSpan={14}>
+                              <LedgerPanel code={b.employee_code} year={year} />
+                            </DrillDownRow>
+                          )}
+                        </React.Fragment>
+                      )
+                    })
                   )}
                 </tbody>
               </table>
@@ -644,15 +838,60 @@ export default function LeaveManagement() {
                 <input type="text" className="input w-full text-sm" value={adjForm.reason} onChange={e => setAdjForm(f => ({ ...f, reason: e.target.value }))} placeholder="Reason..." />
               </div>
             </div>
-            <div className="mt-4 flex justify-end">
-              <button
-                className="btn btn-primary text-sm"
-                disabled={!adjForm.employee_code || !adjForm.days || adjustMutation.isPending}
-                onClick={() => adjustMutation.mutate(adjForm)}
-              >
-                {adjustMutation.isPending ? 'Saving...' : 'Submit Adjustment'}
-              </button>
-            </div>
+            {(() => {
+              const plan = previewByCode[adjForm.employee_code]
+              const row = balances.find(b => b.employee_code === adjForm.employee_code)
+              const current = adjForm.leave_type === 'CL'
+                ? (row?.CL ?? row?.cl ?? plan?.cl.current_balance ?? 0)
+                : (row?.EL ?? row?.el ?? plan?.el.current_balance ?? 0)
+              const delta = (adjForm.transaction_type === 'Credit' ? 1 : -1) * (Number(adjForm.days) || 0)
+              const after = Math.round((current + delta) * 100) / 100
+              const goesNegative = after < 0
+              const blocked = !adjForm.employee_code || !adjForm.days || !adjForm.reason.trim()
+                || (goesNegative && !allowNegative)
+              return (
+                <>
+                  {adjForm.employee_code ? (
+                    <div className="mt-3 text-sm text-slate-600">
+                      Resulting {adjForm.leave_type} balance:{' '}
+                      <span className="font-mono">{current}</span>
+                      <span className="mx-1">→</span>
+                      <span className={clsx('font-mono font-semibold', goesNegative ? 'text-red-600' : 'text-slate-800')}>
+                        {after}
+                      </span>
+                    </div>
+                  ) : null}
+
+                  {!adjForm.reason.trim() && adjForm.employee_code && (
+                    <p className="mt-1 text-xs text-amber-700">A reason is required — it is stored on the transaction.</p>
+                  )}
+
+                  {goesNegative && (
+                    <label className="mt-2 flex items-start gap-2 text-xs text-red-700 bg-red-50 border border-red-200 rounded-lg p-2">
+                      <input
+                        type="checkbox"
+                        checked={allowNegative}
+                        onChange={e => setAllowNegative(e.target.checked)}
+                        className="mt-0.5"
+                      />
+                      <span>
+                        This leaves the balance at {after}. Tick to allow a negative balance, and say why above.
+                      </span>
+                    </label>
+                  )}
+
+                  <div className="mt-4 flex justify-end">
+                    <button
+                      className="btn btn-primary text-sm disabled:opacity-50 disabled:cursor-not-allowed"
+                      disabled={blocked || adjustMutation.isPending}
+                      onClick={() => adjustMutation.mutate(adjForm)}
+                    >
+                      {adjustMutation.isPending ? 'Saving…' : 'Submit Adjustment'}
+                    </button>
+                  </div>
+                </>
+              )
+            })()}
           </div>
 
           {/* Transaction History */}
@@ -708,6 +947,64 @@ export default function LeaveManagement() {
       {/* ── Gate Passes Tab ── */}
       {mainTab === 'gate_passes' && <GatePasses />}
 
+      {mainTab === 'automation' && isAdmin && (
+        <LeaveAutomationTab year={year} status={automationRes?.data} />
+      )}
+
+      {/* Approve confirmation — shows the balance before and after */}
+      {approveTarget && (() => {
+        const plan = previewByCode[approveTarget.employee_code]
+        const row = balances.find(b => b.employee_code === approveTarget.employee_code)
+        const type = approveTarget.leave_type
+        const tracked = type === 'CL' || type === 'EL'
+        const current = !tracked ? null : type === 'CL'
+          ? (row?.CL ?? row?.cl ?? plan?.cl.current_balance ?? 0)
+          : (row?.EL ?? row?.el ?? plan?.el.current_balance ?? 0)
+        const after = tracked ? Math.round((current - (approveTarget.days || 0)) * 100) / 100 : null
+        const short = tracked && after < 0
+        return (
+          <Modal open onClose={() => setApproveTarget(null)} title="Approve leave" size="sm">
+            <div className="p-4 space-y-3">
+              <div className="text-sm text-slate-700">
+                <span className="font-semibold">{approveTarget.employee_name || approveTarget.employee_code}</span>{' '}
+                — {approveTarget.days} day{approveTarget.days === 1 ? '' : 's'} of {type}
+              </div>
+              {tracked ? (
+                <div className="bg-slate-50 rounded-lg p-3 text-sm">
+                  {type} balance:{' '}
+                  <span className="font-mono">{current}</span>
+                  <span className="mx-1">→</span>
+                  <span className={clsx('font-mono font-semibold', short ? 'text-red-600' : 'text-slate-800')}>{after}</span>
+                </div>
+              ) : (
+                <div className="bg-slate-50 rounded-lg p-3 text-sm text-slate-600">
+                  {type} does not draw on a balance.
+                </div>
+              )}
+              {short && (
+                <p className="text-xs text-red-700 bg-red-50 border border-red-200 rounded-lg p-2">
+                  Not enough {type} balance. Credit it from the Adjustments tab first, or ask the
+                  employee to re-apply as LWP.
+                </p>
+              )}
+              <p className="text-xs text-slate-500">
+                Approving updates day calculation and earned leave for the affected month.
+              </p>
+              <div className="flex justify-end gap-2 pt-1">
+                <button className="btn-ghost px-4 py-2 text-sm" onClick={() => setApproveTarget(null)}>Cancel</button>
+                <button
+                  className="btn-primary px-4 py-2 text-sm disabled:opacity-50 disabled:cursor-not-allowed"
+                  disabled={short || approve.isPending}
+                  onClick={() => approve.mutate(approveTarget.id)}
+                >
+                  {approve.isPending ? 'Approving…' : 'Approve'}
+                </button>
+              </div>
+            </div>
+          </Modal>
+        )
+      })()}
+
       {/* ── Comp Off / OD Tab ── */}
       {mainTab === 'comp_off' && (
         <CompOffTab
@@ -728,7 +1025,8 @@ export default function LeaveManagement() {
 // ────────────────────────────────────────────────────────────
 function CompOffTab({ month, year, company, employees, user }) {
   const queryClient = useQueryClient()
-  const role = user?.role
+  // normalizeRole first — a capitalised role from the token used to fail these.
+  const role = normalizeRole(user?.role)
   const isFinanceOrAdmin = role === 'finance' || role === 'admin'
   const isHrOrAdmin = role === 'hr' || role === 'admin'
 

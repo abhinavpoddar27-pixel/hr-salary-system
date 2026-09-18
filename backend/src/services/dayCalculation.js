@@ -449,6 +449,14 @@ function calculateDays(employeeCode, month, year, company, attendanceRecords, le
       const isWeeklyOff = getDayOfWeek(d) === weeklyOffDay;
       const isHoliday = holidayDates.has(d);
       if (isWeeklyOff || isHoliday) continue;
+      if (leaveType === 'SL') {
+        // SL was abolished in Sept 2026 (owner ruling 8). Nothing can create a
+        // new SL row, and an old one must not move pay on a re-run — so the day
+        // is left exactly as the attendance file found it. The counter and the
+        // sl_used column stay so historical records still render.
+        leaveSlUsed += 1;
+        continue;
+      }
       consumedDates.add(d);
       const wasAbsent = absentDates.has(d);
       if (wasAbsent) {
@@ -460,9 +468,6 @@ function calculateDays(employeeCode, month, year, company, attendanceRecords, le
         // EL restores payable automatically via daysAbsent-- (no offset).
       } else if (leaveType === 'CL') {
         leaveClUsed += 1;
-        unpaidLeaveDays += 1;
-      } else if (leaveType === 'SL') {
-        leaveSlUsed += 1;
         unpaidLeaveDays += 1;
       } else if (leaveType === 'LWP') {
         leaveLwpUsed += 1;

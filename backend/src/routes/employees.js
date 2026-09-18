@@ -4,6 +4,9 @@ const path = require('path');
 const fs = require('fs');
 const multer = require('multer');
 const { getDb } = require('../database/db');
+const { safeTrigger, queueLeaveRecalc } = require('../services/leaveTriggers');
+const { computeClEntitlement } = require('../services/phase5Features');
+const { getPolicyNumber } = require('../services/leaveEngine');
 const { requireHrOrAdmin } = require('../middleware/roles');
 
 // ── Salary structure sync helper ──────────────────────────────────
@@ -296,11 +299,21 @@ router.post('/', (req, res) => {
     db.prepare(`INSERT INTO salary_structures (employee_id, effective_from, basic, da, hra, conveyance, other_allowances) VALUES (?, date('now'), ?, ?, ?, ?, ?)`).run(empId, basic || 0, da || 0, hra || 0, conveyance || 0, otherAllowances || 0);
   }
 
-  // Initialize leave balances for current year (CL + EL only — SL abolished Apr 2026)
+  // Initialize leave balances for current year (CL + EL only — SL abolished Apr 2026).
+  // CL is the pro-rated entitlement for the joining month, off
+  // policy_config.cl_entitlement_base — never a hard-coded number.
   const year = new Date().getFullYear();
+  const clBase = getPolicyNumber(db, 'cl_entitlement_base', 7);
+  const clOpening = computeClEntitlement(dateOfJoining || null, year, clBase);
   for (const type of ['CL', 'EL']) {
-    db.prepare('INSERT OR IGNORE INTO leave_balances (employee_id, year, leave_type, opening, balance) VALUES (?, ?, ?, ?, ?)').run(empId, year, type, type === 'CL' ? 12 : 0, type === 'CL' ? 12 : 0);
+    const opening = type === 'CL' ? clOpening : 0;
+    db.prepare('INSERT OR IGNORE INTO leave_balances (employee_id, year, leave_type, opening, balance) VALUES (?, ?, ?, ?, ?)').run(empId, year, type, opening, opening);
   }
+
+  safeTrigger('employee.create', () => queueLeaveRecalc(db, {
+    company: company || null, month: null, year,
+    employeeCodes: [code], reason: 'employee_created', actor: req.user?.username || 'hr',
+  }));
 
   res.json({ success: true, id: empId, message: 'Employee created' });
 });
@@ -477,6 +490,22 @@ router.put('/:code', (req, res) => {
       db.prepare('INSERT INTO salary_structures (employee_id, effective_from, basic, da, hra, conveyance, other_allowances) VALUES (?, date(\'now\'), ?, ?, ?, ?, ?)')
         .run(emp.id, updates.basic || 0, updates.da || 0, updates.hra || 0, updates.conveyance || 0, updates.otherAllowances || 0);
     }
+  }
+
+  // Only a DOJ or employment-type change can move CL entitlement or leave
+  // eligibility — everything else leaves leave untouched.
+  // `updates` carries the snake_case column names listed in allowedFields, and
+  // `emp` is the pre-update snapshot read at the top of this handler.
+  const dojChanged = updates.date_of_joining !== undefined
+    && String(updates.date_of_joining || '') !== String(emp.date_of_joining || '');
+  const typeChanged = updates.employment_type !== undefined
+    && String(updates.employment_type || '') !== String(emp.employment_type || '');
+  if (dojChanged || typeChanged) {
+    safeTrigger('employee.update', () => queueLeaveRecalc(db, {
+      company: emp.company || null, month: null, year: new Date().getFullYear(),
+      employeeCodes: [emp.code], reason: dojChanged ? 'doj_changed' : 'employment_type_changed',
+      actor: req.user?.username || 'hr',
+    }));
   }
 
   res.json({ success: true, message: 'Employee updated' });
@@ -862,6 +891,9 @@ router.post('/bulk-import', (req, res) => {
     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `);
 
+  // CL per year comes from policy_config.cl_entitlement_base and is pro-rated by
+  // joining month — the old hard-coded 12 predates the Sept 2026 ruling.
+  const bulkClBase = getPolicyNumber(db, 'cl_entitlement_base', 7);
   const insertLeave = db.prepare(`
     INSERT OR IGNORE INTO leave_balances (employee_id, year, leave_type, opening, balance)
     VALUES (?, ?, ?, ?, ?)
@@ -939,7 +971,8 @@ router.post('/bulk-import', (req, res) => {
         }
 
         for (const year of [2025, 2026]) {
-          insertLeave.run(empRow.id, year, 'CL', 12, 12);
+          const clOpeningBulk = computeClEntitlement(emp.date_of_joining || null, year, bulkClBase);
+          insertLeave.run(empRow.id, year, 'CL', clOpeningBulk, clOpeningBulk);
           insertLeave.run(empRow.id, year, 'EL', 0, 0);
         }
       } catch (err) {
