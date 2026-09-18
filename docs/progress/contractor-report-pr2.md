@@ -28,11 +28,56 @@ upload area, not in the repo. If a later session needs it again the owner must
 re-upload it.
 
 ## RULINGS
-All owner rulings are locked in the prompt copy (`docs/prompts/contractor-report-pr2.md`, "OWNER RULINGS" section) and will be encoded verbatim in `backend/src/config/contractorReportConfig.js`. No deviations so far.
 
-Deltas found during P0.4 that the owner should know:
-- `employees.contractor_group` column EXISTS and was not mentioned in the rulings. The locked ruling derives contractor identity from `department` via the alias map. Phase 1 will report what `contractor_group` actually contains so the owner can decide whether it is a better source (no change made without a ruling).
-- `dw_entries` has NO department column. DW department + per-department heads live in `dw_department_allocations (entry_id, department, worker_count, allocated_wage_amount, allocated_commission_amount)`. `dw_entries.total_worker_count` is the entry-level head count. The normaliser therefore runs over `dw_department_allocations.department`.
+### Locked by the prompt
+All owner rulings are in the prompt copy (`docs/prompts/contractor-report-pr2.md`,
+"OWNER RULINGS"). Encoded verbatim in `backend/src/config/contractorReportConfig.js`.
+
+### Owner rulings at the Phase 0 gate (19 Sep 2026)
+
+**R-0 Branch.** Use `feat/contractor-report`. Explicit permission to push **this
+branch and only this branch** in Phase 4. **Never push to main.**
+
+**R-1 AMENDMENT 1 — Commission tab removed from this PR entirely.** The contractor
+commission rate is fixed by admin in the contractor master. HR and Finance never
+enter, edit, preview or override a rate. No rate input anywhere.
+- Drop `CommissionTab.jsx`, the "Also pay on daily-wage heads" checkbox, any rate
+  field, any commission role guard, and their tests.
+- Tabs are: **Day Report, Daily Wage Register, Grid View, Exceptions** (4, not 5).
+- **Keep** `manDays`, `manDaysDay`, `manDaysNight` in the payloads — a later PR
+  prices them from the master.
+- **Do not read or show** `dw_contractors.current_commission_rate` or any
+  `dw_entries` commission field (`commission_rate_applied`,
+  `total_commission_amount`, `total_liability`,
+  `dw_department_allocations.allocated_commission_amount`).
+- Appended verbatim to the prompt copy.
+- Consequence: no `requireFinanceOrAdmin` gate is needed anywhere. All three
+  endpoints are `requireHrFinanceOrAdmin`.
+
+**R-2 (A) Population rule stands.** Keep the locked rule. Phase 1 must list every
+employee where `isContractorForPayroll` and the locked rule disagree — code,
+department, employment_type, which path classified them, April and May man-days.
+**Information only; no logic change.**
+
+**R-3 (B) `contractor_group` is not used.** It was blank for all 345 contract
+employees on 19 Sep. Phase 1 re-confirms the count; the column is not read.
+
+**R-4 (C) normDept + Excel.** Use the ruling's superset with `"Not recorded"` for
+empty text. Drop the Excel button.
+
+**R-5 DW departments come from `dw_department_allocations`.** Per department,
+`heads = worker_count`, `cost = allocated_wage_amount`. An entry with **no**
+allocation row goes under **"Not recorded"**. Phase 1 must additionally report,
+for April–May: entries with 0 allocation rows, entries with >1, and entries whose
+allocation total differs from `dw_entries.total_worker_count`.
+
+### Deltas found during P0.4 (carried forward)
+- `employees.contractor_group` EXISTS but is **not used** per R-3.
+- `dw_entries` has NO department column. DW department + per-department heads live
+  in `dw_department_allocations (entry_id, department, worker_count,
+  allocated_wage_amount, allocated_commission_amount)`. `dw_entries.total_worker_count`
+  is the entry-level head count. Per R-1 the `allocated_commission_amount` column is
+  never read.
 
 ## NUMBERS
 None yet — Phase 1 not started.
@@ -48,7 +93,7 @@ None yet — Phase 1 not started.
 
 # PLAN (Phase 0 output)
 
-## Files to CREATE (all new)
+## Files to CREATE (all new) — 10 files after AMENDMENT 1 (was 11)
 | File | Purpose |
 |---|---|
 | `backend/src/config/contractorReportConfig.js` | The single rules file. Biometric alias map, DW alias map, excluded depts, test contractors, present weights, dept normaliser, role normaliser, display-name resolver. A later PR replaces this with a master table. |
@@ -59,8 +104,7 @@ None yet — Phase 1 not started.
 | `frontend/src/components/contractorReport/DayReportTab.jsx` | Tab 1 (contractor / department toggle, expandable rows). |
 | `frontend/src/components/contractorReport/DailyWageRegisterTab.jsx` | Tab 2. |
 | `frontend/src/components/contractorReport/GridViewTab.jsx` | Tab 3 (grid, selection panel, keyboard nav, filters). |
-| `frontend/src/components/contractorReport/CommissionTab.jsx` | Tab 4 (preview only, finance/admin). |
-| `frontend/src/components/contractorReport/ExceptionsTab.jsx` | Tab 5. |
+| `frontend/src/components/contractorReport/ExceptionsTab.jsx` | Tab 4. |
 | `frontend/src/components/contractorReport/shared.jsx` | Badges, chips, formatters (`fmt`, `f1`, `dl`), shared bits used by 3+ tabs. |
 
 ## Files to EDIT — exactly 3 lines in 3 existing files
@@ -116,7 +160,9 @@ Gate: `requireHrFinanceOrAdmin`. Params: `month`, `year`, `contractor` (req, mus
   footer: { '<date>': { bioDay, bioNight, dwHeads, bothSource } } } }
 ```
 
-**Commission** consumes `/month` only — no new endpoint. The tab is hidden client-side for non finance/admin, and a `?commission=1` flag on `/month` is gated with `requireFinanceOrAdmin` so the API rejects it too (the rest of `/month` stays HR-readable).
+**No commission endpoint, no commission gate** (AMENDMENT 1). All three routes use
+the same `requireHrFinanceOrAdmin` gate. `manDays` / `manDaysDay` / `manDaysNight`
+stay in the `/month` payload for the later pricing PR.
 Validation failures → `400 {success:false, error:'<message>'}`.
 
 ## `isContractorForPayroll` vs the locked population rule — THEY DIFFER
@@ -141,3 +187,8 @@ So the report's population is a strict subset of the payroll population on the f
 9. 23 May and 9 May spot checks.
 10. `SELECT DISTINCT company FROM dw_entries` (for the company filter).
 11. Unmapped contractor names on both sides (so nothing is silently dropped).
+12. (R-5) DW allocation integrity, April–May: entries with 0 allocation rows, entries
+    with >1, entries whose `SUM(worker_count)` differs from `total_worker_count`.
+13. (R-2) Full disagreement list: locked rule vs `isContractorForPayroll`, with the
+    classifying path and April/May man-days per employee.
+14. (R-3) Re-confirm `contractor_group` is blank for all contract employees (expect 345).

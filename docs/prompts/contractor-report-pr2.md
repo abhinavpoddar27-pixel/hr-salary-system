@@ -69,3 +69,13 @@ Commission rates table/engine/snapshots · Excel export · Stage 7 hook · final
 | May: tie-out mismatches | 1 — 60298: 19 vs 22 |
 | 23 May | biometric 105 (88 day / 17 night), DW 53, total 158; Meera 71 (65/6) + 10 |
 | 9 May DW departments | Utility 21, Zeera 400 ml line 13, Production · night 13, Godown 1 |
+
+---
+
+## AMENDMENT 1 (owner, 19 Sep 2026) — verbatim
+
+AMENDMENT 1 — the contractor commission rate is fixed by admin in the contractor master. HR and Finance never enter, edit, preview or override a rate. No rate input anywhere.
+- Remove the Commission tab from this PR entirely: drop CommissionTab.jsx, the "Also pay on daily-wage heads" checkbox, any rate field, any commission role guard, and their tests. Tabs are: Day Report, Daily Wage Register, Grid View, Exceptions.
+- Keep manDays, manDaysDay and manDaysNight in the payloads; a later PR prices them from the master.
+- Do not read or show dw_contractors.current_commission_rate or any dw_entries commission field.
+- Append this amendment verbatim to docs/prompts/contractor-report-pr2.md.
