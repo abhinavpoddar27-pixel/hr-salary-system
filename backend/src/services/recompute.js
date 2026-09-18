@@ -332,10 +332,16 @@ function recomputeSalary(db, {
           results.push(comp);
           if (comp.salaryHeld) held.push({ code: emp.code, name: emp.name, reason: comp.holdReason });
         } else if (comp.excluded) {
+          // No salary to refresh, so the row is not waiting on anything — clear
+          // the marker, otherwise the Stage 7 banner could never reach zero.
+          clearStale.run(emp.code, month, year);
           excluded.push({ code: comp.employeeCode, name: emp.name, reason: comp.reason });
         } else if (comp.silentSkip) {
-          // Zero attendance — not an error, just not payable.
+          // Zero attendance — not an error, just not payable. Same reasoning.
+          clearStale.run(emp.code, month, year);
         } else {
+          // A real failure: this employee genuinely was not recomputed, so the
+          // marker stays and the banner keeps saying so.
           errors.push({ employeeCode: emp.code, error: comp.error });
         }
       } catch (perEmpErr) {

@@ -231,6 +231,26 @@ describe('salary staleness marker', () => {
     db.close();
   });
 
+  test('an employee salary skips does not leave the banner stuck (caught by the simulation)', () => {
+    const db = F.newDb();
+    const employees = seed(db);
+    // Only ONE employee gets a salary structure; the rest are excluded by
+    // computeEmployeeSalary. Before this fix they kept salary_stale = 1 forever,
+    // so the Stage 7 banner could never reach zero.
+    db.prepare(`
+      INSERT INTO salary_structures (employee_id, basic, hra, gross_salary, effective_from, pf_applicable, esi_applicable)
+      VALUES (?, 10000, 4000, 20000, '2024-01-01', 0, 0)
+    `).run(employees[0].id);
+
+    F.silently(() => recomputeDays(db, { month: MONTH, year: YEAR, company: COMPANY }));
+    expect(countStaleSalary(db, { month: MONTH, year: YEAR, company: COMPANY }).count).toBe(employees.length);
+
+    const out = F.silently(() => recomputeSalary(db, { month: MONTH, year: YEAR, company: COMPANY }));
+    expect(out.results.length + out.excluded.length).toBeGreaterThan(1);
+    expect(countStaleSalary(db, { month: MONTH, year: YEAR, company: COMPANY }).count).toBe(0);
+    db.close();
+  });
+
   test('employeeCodes limits the run to the codes given', () => {
     const db = F.newDb();
     seed(db);

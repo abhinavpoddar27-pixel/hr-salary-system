@@ -9,7 +9,7 @@
 - P5 API — DONE (22/22 specs green)
 - P6 SL REMOVAL + CL 7 — DONE (20/20 specs green)
 - P7 UI — DONE (dist rebuilt and committed)
-- P8 SELF-DEBUG + SIM + V2 — not started
+- P8 SELF-DEBUG + SIM + V2 — DONE (simulation 70/70, v2 pass clean)
 - P9 SHIP — not started
 
 ## FILES TOUCHED
@@ -64,8 +64,22 @@
 - backend/src/services/employeeProfileService.js (P7: monthlyBreakdown finally carries the leave
   columns the profile's Leave tab already tried to read)
 - frontend/dist/** (P7: rebuilt)
+- backend/scripts/leave-automation-simulation.js (P8: NEW — 70 assertions)
+- backend/src/services/recompute.js (P8: clear salary_stale for excluded/skipped too)
+- backend/src/__tests__/recomputeParity.test.js (P8: regression test for that)
+- docs/leave-automation/{HOW_IT_WORKS,OPEN_ITEMS}.md, CLAUDE.md (P8)
 
 ## DECISIONS
+- D20 (stale marker on skipped employees) — REAL DEFECT found by the simulation, not by reading:
+  recomputeSalary only cleared salary_stale inside `if (comp.success)`, so an employee whose salary
+  is legitimately excluded or silently skipped kept the marker forever and the Stage 7 banner could
+  never reach zero. Now cleared for excluded and silentSkip too; a genuine error still keeps it.
+- D21 (simulation fixture corrections, not code bugs): Stage 6 for one company covers 17 of the 20
+  seeded employees because it filters on the attendance row's company — the blank/'null'-company
+  pair and the other company's employee are out. The leave engine deliberately does not filter that
+  way, which is the point of defect (e). Seeding two prior months never reached 180 days worked, so
+  the fixture now seeds seven. The month-spanning case needed an employee with no Stage 6 row for
+  those months, since a Stage 6 row correctly wins over the application expansion.
 - D17 (finalize gate is server-side too): a UI-only block would be cosmetic, and the ruling asks for
   the override to be audited, which needs a server write. payroll.js /finalise now refuses while any
   day_calculations row for the month is salary_stale; an admin may override with a reason of 10+
@@ -145,6 +159,10 @@
 - Baseline (origin/main): 157 pass / 3 fail (tdsCalculation.test.js — pre-existing).
 - After P1: 157 pass / 3 fail (same 3). Schema verify script: 20/20 assertions pass, idempotent.
 - After P2: 182 pass / 3 fail (same 3 TDS). leaveEngine.test.js 25/25.
+- After P8 (v2 pass): 253 jest tests, 250 pass / 3 pre-existing TDS fails on a clean run.
+  New specs: leaveEngine 25, recomputeParity 7, leaveTriggers 19, leaveApi 22, slRemoval 20.
+  Simulation: 70 passed, 0 failed. Maximum salary drift seen: 3.6e-12.
+  Schema idempotency: all 20 assertions pass; the only diff across boots is the pre-existing OI-1.
 - After P6: 249 pass / 3 fail (same 3 TDS). slRemoval.test.js 20/20.
 - After P5: 229 pass / 3 fail (same 3 TDS). leaveApi.test.js 22/22.
 - After P4: 207 pass / 3 fail (same 3 TDS). leaveTriggers.test.js 19/19.
@@ -153,4 +171,4 @@
   deduction on a re-run while the new path does not. Max salary drift in the spec: 0.
 
 ## NEXT
-Phase 8 — self-debug pass, jest, end-to-end simulation, v2 rerun, docs.
+Phase 9 — push feat/leave-automation. No PR.

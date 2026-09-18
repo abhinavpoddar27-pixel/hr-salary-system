@@ -505,6 +505,9 @@ function applyLeavePlan(db, plan, { actor = 'system', allowWrite = false, scope 
       company              = excluded.company
   `);
 
+  // `opening` is written only when the row is created. On conflict it is left
+  // alone on purpose so an opening HR set by hand survives a recompute — see
+  // DECISION D4. Every other INSERT column is covered.
   const insertBalance = db.prepare(`
     INSERT INTO leave_balances (employee_id, year, leave_type, opening, accrued, used, balance)
     VALUES (?, ?, ?, ?, ?, ?, ?)
@@ -587,6 +590,10 @@ function runYearEndLapse(db, year, { dryRun = true, actor = 'system' } = {}) {
   };
   if (dryRun) return { dryRun: true, applied: false, year: yr, totals, report };
 
+  // Deliberately narrow: a lapse stamps `lapsed` and zeroes the closing balance
+  // and must NOT rewrite December's accrual history, so the other columns are
+  // left as the recompute wrote them. This is the exact shape the pre-Sept-2026
+  // yearEndLapse used.
   const upsertLedger = db.prepare(`
     INSERT INTO leave_accrual_ledger
       (employee_code, employee_id, year, month, leave_type,
