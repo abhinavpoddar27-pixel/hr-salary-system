@@ -14,7 +14,7 @@
 const express = require('express');
 const router = express.Router();
 const { getDb, logAudit } = require('../database/db');
-const { safeTrigger, queueLeaveRecalc, checkAutoStage6 } = require('../services/leaveTriggers');
+const { safeTrigger, queueLeaveRecalc, checkAutoStage6, isMonthFinalized } = require('../services/leaveTriggers');
 const { requireFinanceOrAdmin } = require('../middleware/roles');
 const { syncSalaryStructureFromEmployee } = require('./employees');
 
@@ -550,7 +550,7 @@ router.get('/corrections-summary', (req, res) => {
 // POST /api/finance-audit/corrections/apply-leave
 // Apply leave to an absent day (convert A → CL/EL/SL)
 // ─────────────────────────────────────────────────────────
-router.post('/corrections/apply-leave', (req, res) => {
+router.post('/corrections/apply-leave', requireFinanceOrAdmin, (req, res) => {
   try {
     const db = getDb();
     const { employee_code, date, leave_type, month, year, reason } = req.body;
@@ -559,8 +559,11 @@ router.post('/corrections/apply-leave', (req, res) => {
     if (!employee_code || !date || !leave_type || !month || !year || !reason) {
       return res.status(400).json({ success: false, error: 'Missing required fields: employee_code, date, leave_type, month, year, reason' });
     }
+    if (!String(reason).trim()) {
+      return res.status(400).json({ success: false, error: 'A reason is required' });
+    }
 
-    const validLeaveTypes = ['CL', 'EL'];
+    const validLeaveTypes = ['CL', 'EL', 'LWP'];
     if (!validLeaveTypes.includes(leave_type)) {
       return res.status(400).json({ success: false, error: 'Invalid leave_type. Must be CL or EL. SL is no longer supported.' });
     }
@@ -568,87 +571,89 @@ router.post('/corrections/apply-leave', (req, res) => {
     const m = parseInt(month);
     const y = parseInt(year);
 
-    // 1. Find the employee
     const emp = db.prepare('SELECT id, name, company FROM employees WHERE code = ?').get(employee_code);
     if (!emp) return res.status(404).json({ success: false, error: 'Employee not found' });
 
-    // 2. Find leave balance
-    const leaveBalance = db.prepare(
-      'SELECT id, balance, used FROM leave_balances WHERE employee_id = ? AND year = ? AND leave_type = ?'
-    ).get(emp.id, y, leave_type);
-
-    let currentBalance = leaveBalance ? leaveBalance.balance : 0;
-    let isLWP = false;
-
-    if (currentBalance <= 0) {
-      console.warn(`[apply-leave] LWP scenario: ${employee_code} has ${currentBalance} ${leave_type} balance. Proceeding anyway.`);
-      isLWP = true;
+    // Finalized months are closed. A correction that would move one is refused
+    // here rather than silently changing a month payroll has already paid.
+    if (isMonthFinalized(db, emp.company, m, y)) {
+      return res.status(400).json({
+        success: false,
+        error: `Cannot apply leave for a finalized month (${m}/${y}). Raise it with payroll instead.`
+      });
     }
 
-    // Run all updates in a transaction
+    // Hard-block a negative balance. The old version only console.warn'd and
+    // wrote the employee into the red.
+    const leaveBalance = db.prepare(
+      'SELECT id, balance FROM leave_balances WHERE employee_id = ? AND year = ? AND leave_type = ?'
+    ).get(emp.id, y, leave_type);
+    const currentBalance = leaveBalance ? Number(leaveBalance.balance) || 0 : 0;
+    if (leave_type !== 'LWP' && currentBalance < 1) {
+      return res.status(400).json({
+        success: false,
+        error: `Cannot apply ${leave_type}: balance is ${currentBalance}. Use LWP, or credit the balance first.`
+      });
+    }
+
+    const attendanceRecord = db.prepare(
+      'SELECT id FROM attendance_processed WHERE employee_code = ? AND date = ? AND status_final = ?'
+    ).get(employee_code, date, 'A');
+    if (!attendanceRecord) {
+      return res.status(404).json({ success: false, error: `No absent record found for ${employee_code} on ${date}` });
+    }
+
+    // Everything below is one leave application, approved on the spot, plus the
+    // attendance correction it explains. day_calculations is NOT hand-patched
+    // any more — Stage 6 recomputes it from the application, so a later re-run
+    // can no longer put the day back to absent while the balance stays debited.
+    let applicationId;
+    let newBalance = currentBalance;
     const applyLeave = db.transaction(() => {
-      // 3. Update attendance_processed: change status from 'A' to leave_type
-      const attendanceRecord = db.prepare(
-        'SELECT id FROM attendance_processed WHERE employee_code = ? AND date = ? AND status_final = ?'
-      ).get(employee_code, date, 'A');
-
-      if (!attendanceRecord) {
-        throw new Error(`No absent record found for ${employee_code} on ${date}`);
-      }
-
       db.prepare(
         'UPDATE attendance_processed SET status_final = ?, correction_source = ?, correction_remark = ? WHERE id = ?'
       ).run(leave_type, 'leave_correction', `${reason} [by ${username}]`, attendanceRecord.id);
 
-      // 4. Update leave_balances: increment used by 1, decrement balance by 1
-      if (leaveBalance) {
-        db.prepare(
-          'UPDATE leave_balances SET used = used + 1, balance = balance - 1 WHERE id = ?'
-        ).run(leaveBalance.id);
-      } else {
-        // Create a leave balance record if none exists
-        db.prepare(
-          'INSERT INTO leave_balances (employee_id, year, leave_type, opening, accrued, used, balance) VALUES (?, ?, ?, 0, 0, 1, -1)'
-        ).run(emp.id, y, leave_type);
+      applicationId = db.prepare(`
+        INSERT INTO leave_applications
+          (employee_id, employee_code, leave_type, start_date, end_date, days, reason,
+           hr_remark, status, approved_by, approved_at)
+        VALUES (?, ?, ?, ?, ?, 1, ?, ?, 'Approved', ?, datetime('now'))
+      `).run(emp.id, employee_code, leave_type, date, date,
+        reason, `Finance correction by ${username}`, username).lastInsertRowid;
+
+      if (leave_type !== 'LWP') {
+        if (leaveBalance) {
+          db.prepare('UPDATE leave_balances SET used = used + 1, balance = balance - 1 WHERE id = ?').run(leaveBalance.id);
+        } else {
+          db.prepare(
+            'INSERT INTO leave_balances (employee_id, year, leave_type, opening, accrued, used, balance) VALUES (?, ?, ?, 0, 0, 1, -1)'
+          ).run(emp.id, y, leave_type);
+        }
+        newBalance = db.prepare(
+          'SELECT balance FROM leave_balances WHERE employee_id = ? AND year = ? AND leave_type = ?'
+        ).get(emp.id, y, leave_type)?.balance ?? currentBalance - 1;
       }
 
-      // Get updated balance
-      const updatedBalance = db.prepare(
-        'SELECT balance FROM leave_balances WHERE employee_id = ? AND year = ? AND leave_type = ?'
-      ).get(emp.id, y, leave_type);
-      const newBalance = updatedBalance ? updatedBalance.balance : -1;
-
-      // 5. Insert into leave_transactions
-      db.prepare(`
-        INSERT INTO leave_transactions (employee_id, employee_code, company, leave_type, transaction_type, days, balance_after, reference_month, reference_year, reason, approved_by)
-        VALUES (?, ?, ?, ?, 'Debit', 1, ?, ?, ?, ?, ?)
-      `).run(emp.id, employee_code, emp.company, leave_type, newBalance, m, y, reason, username);
-
-      // 6. Update day_calculations: reduce absent by 1, increase cl_used/el_used/sl_used by 1
-      const leaveColumn = leave_type.toLowerCase() + '_used'; // cl_used, el_used, sl_used
-      db.prepare(`
-        UPDATE day_calculations
-        SET days_absent = days_absent - 1,
-            ${leaveColumn} = ${leaveColumn} + 1,
-            total_payable_days = total_payable_days + 1
-        WHERE employee_code = ? AND month = ? AND year = ?
-      `).run(employee_code, m, y);
-
-      // 7. Audit log
       db.prepare(`
         INSERT INTO audit_log (table_name, record_id, field_name, old_value, new_value, changed_by, stage, remark, employee_code, action_type)
         VALUES ('attendance_processed', ?, 'status', 'A', ?, ?, 'correction', ?, ?, 'leave_correction')
       `).run(attendanceRecord.id, leave_type, username, reason, employee_code);
-
-      return newBalance;
     });
+    applyLeave();
 
-    const newBalance = applyLeave();
+    // After the commit, and never able to fail the correction.
+    const recalc = safeTrigger('financeAudit.applyLeave', () => queueLeaveRecalc(db, {
+      company: emp.company || null, month: m, year: y,
+      employeeCodes: [employee_code], reason: 'finance_leave_correction', actor: username,
+    }));
 
     res.json({
       success: true,
-      message: `Leave applied: ${employee_code} on ${date} changed from Absent to ${leave_type}${isLWP ? ' (LWP - negative balance)' : ''}`,
-      new_balance: newBalance
+      message: `Leave applied: ${employee_code} on ${date} changed from Absent to ${leave_type}`,
+      application_id: applicationId,
+      new_balance: newBalance,
+      recalc
     });
   } catch (err) {
     console.error('Apply leave correction error:', err.message);

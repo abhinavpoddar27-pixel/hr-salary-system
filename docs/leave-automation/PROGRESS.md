@@ -6,7 +6,7 @@
 - P2 LEAVE ENGINE — DONE (25/25 specs green)
 - P3 SHARED STAGE 6 — DONE (parity proven, 6/6 specs green)
 - P4 TRIGGERS / AUTO STAGE 6 — DONE (19/19 specs green)
-- P5 API — not started
+- P5 API — DONE (22/22 specs green)
 - P6 SL REMOVAL + CL 7 — not started
 - P7 UI — not started
 - P8 SELF-DEBUG + SIM + V2 — not started
@@ -33,8 +33,23 @@
 - backend/src/routes/{leaves,attendance,compensatoryOff,employees,import,financeAudit}.js (P4: trigger
   call sites, all post-commit and all inside safeTrigger)
 - backend/src/__tests__/leaveTriggers.test.js (P4: NEW)
+- backend/src/routes/phase5.js (P5: shared role guards replace the local helper; every endpoint
+  guarded; 11 new leave-automation endpoints)
+- backend/src/routes/leaves.js (P5: router-level role gate — reads hr/finance/admin/viewer, writes hr/admin)
+- backend/src/routes/financeAudit.js (P5: apply-leave rewritten — requireFinanceOrAdmin, creates an
+  approved leave_application, hard-blocks a negative balance and a finalized month, no day_calculations
+  hand-patch)
+- backend/src/routes/employeePortal.js (P5: ORDER BY applied_at; leave-apply validation + employee_id)
+- backend/src/__tests__/leaveApi.test.js, src/__tests__/helpers/apiHarness.js (P5: NEW)
 
 ## DECISIONS
+- D14 (API test harness): no supertest in the repo, so `helpers/apiHarness.js` points DATA_DIR at a
+  temp directory before database/db.js loads, mounts the routers on a bare express app with a stub
+  auth middleware, and drives them over a real socket with node's own http client. No new dependency,
+  and no path from a test to a real database.
+- D15 (finance apply-leave + LWP): the rewrite accepts LWP as well as CL/EL. LWP moves no balance, so
+  it is the honest answer when an employee has none left, instead of the old behaviour of writing the
+  balance negative and warning to the console.
 - D11 (debounce CAST): SQLite's strftime('%s', …) returns TEXT and every INTEGER sorts before every
   TEXT, so the first version of the debounce window compared TEXT >= INTEGER and was always true —
   the window was silently infinite. Both sides are now CAST to INTEGER. The zero-window spec is what
@@ -93,11 +108,11 @@
 - Baseline (origin/main): 157 pass / 3 fail (tdsCalculation.test.js — pre-existing).
 - After P1: 157 pass / 3 fail (same 3). Schema verify script: 20/20 assertions pass, idempotent.
 - After P2: 182 pass / 3 fail (same 3 TDS). leaveEngine.test.js 25/25.
+- After P5: 229 pass / 3 fail (same 3 TDS). leaveApi.test.js 22/22.
 - After P4: 207 pass / 3 fail (same 3 TDS). leaveTriggers.test.js 19/19.
 - After P3: 188 pass / 3 fail (same 3 TDS). recomputeParity.test.js 6/6, including a field-for-field
   match against the origin/main orchestration and a proof that the legacy path hands back HR's late
   deduction on a re-run while the new path does not. Max salary drift in the spec: 0.
 
 ## NEXT
-Phase 5 — API (routes/phase5.js new endpoints; role guards on leaves/phase5; financeAudit apply-leave
-rewrite; employeePortal fixes).
+Phase 6 — SL removal from dayCalculation + write paths; CL 7 pro-rated in employees.js.

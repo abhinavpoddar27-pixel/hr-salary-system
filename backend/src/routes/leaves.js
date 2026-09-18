@@ -2,6 +2,20 @@ const express = require('express');
 const router = express.Router();
 const { getDb, logAudit } = require('../database/db');
 const { safeTrigger, queueLeaveRecalc, checkAutoStage6 } = require('../services/leaveTriggers');
+const { roleIn } = require('../middleware/roles');
+
+// ── Role gate ────────────────────────────────────────────────────────────────
+// Until Sept 2026 this router had no role check at all, so a viewer could
+// approve leave and move balances. Reads stay open to everyone who can see the
+// payroll screens; every write is HR or admin.
+router.use((req, res, next) => {
+  if (req.method === 'GET' || req.method === 'HEAD') {
+    if (roleIn(req, 'admin', 'hr', 'finance', 'viewer')) return next();
+    return res.status(403).json({ success: false, error: 'Access denied' });
+  }
+  if (roleIn(req, 'admin', 'hr')) return next();
+  return res.status(403).json({ success: false, error: 'HR or admin access required' });
+});
 
 /**
  * GET /api/leaves
