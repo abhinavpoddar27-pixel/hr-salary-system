@@ -10,7 +10,7 @@
 - P6 SL REMOVAL + CL 7 — DONE (20/20 specs green)
 - P7 UI — DONE (dist rebuilt and committed)
 - P8 SELF-DEBUG + SIM + V2 — DONE (simulation 70/70, v2 pass clean)
-- P9 SHIP — not started
+- P9 SHIP — DONE (pushed ae2e9ec, local == remote, no PR)
 
 ## FILES TOUCHED
 - backend/src/database/schema.js (P1: +3 tables, +3 cols, +8 policy keys, 1 guarded migration)
@@ -171,4 +171,5 @@
   deduction on a re-run while the new path does not. Max salary drift in the spec: 0.
 
 ## NEXT
-Phase 9 — push feat/leave-automation. No PR.
+Nothing. The branch is pushed and the owner merges through the GitHub web UI.
+Switch-on procedure: docs/leave-automation/HOW_IT_WORKS.md.
