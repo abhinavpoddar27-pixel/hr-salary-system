@@ -3,7 +3,7 @@
 ## PHASE STATUS
 - P0 ANALYSE + BUILD_PLAN — DONE (2ce9945)
 - P1 SCHEMA — DONE
-- P2 LEAVE ENGINE — not started
+- P2 LEAVE ENGINE — DONE (25/25 specs green)
 - P3 SHARED STAGE 6 — not started
 - P4 TRIGGERS / AUTO STAGE 6 — not started
 - P5 API — not started
@@ -15,8 +15,24 @@
 ## FILES TOUCHED
 - backend/src/database/schema.js (P1: +3 tables, +3 cols, +8 policy keys, 1 guarded migration)
 - backend/src/config/schemaReference.js (P1: leave tables + leave columns)
+- backend/src/services/leaveEngine.js (P2: NEW — computeLeavePlan/applyLeavePlan/recomputeLeaves/
+  runYearEndLapse/seedYearOpenings)
+- backend/src/services/phase5Features.js (P2: runLeaveAccrual -> thin wrapper; computeClEntitlement
+  gains a `base` param sourced from cl_entitlement_base)
+- backend/src/__tests__/leaveEngine.test.js, src/__tests__/helpers/leaveFixture.js (P2: NEW)
 
 ## DECISIONS
+- D4 (leave_balances.opening): applyLeavePlan updates accrued/used/balance only and never overwrites
+  `opening`, so an opening HR set by hand survives. computeLeavePlan uses the stored opening when a row
+  exists and the computed entitlement only when it does not; when the two differ it says so in
+  `summary.reasons` so the owner sees it in the preview instead of the engine silently rewriting money.
+- D5 (ledger horizon): the plan walks January -> min(current IST month, 12), extended to cover any month
+  that actually carries data. Future months are never written.
+- D6 (contractor test): `isContractorForPayroll` treats a non-empty `employment_type` as the source of
+  truth, so 'Permanent' + stale `is_contractor=1` IS leave-eligible by design. The spec exercises the
+  real skip paths (blank employment_type + is_contractor, and 'Contract'/'Contractual') instead.
+- D7 (circular require): `phase5Features.runLeaveAccrual` requires `leaveEngine` lazily at call time so
+  `leaveEngine` can import `computeClEntitlement` from it without a module-load cycle.
 - D1 (manual-vs-finance discriminator): only 4 writers of `leave_transactions` exist —
   phase5Features:421 ('Year-End Lapse'), leaves.js:397 /adjust, leaves.js:517 /bulk-adjust,
   financeAudit.js:622 apply-leave. Manual adjustments = `transaction_type IN ('Credit','Debit')`
@@ -41,6 +57,7 @@
 ## TEST RESULTS
 - Baseline (origin/main): 157 pass / 3 fail (tdsCalculation.test.js — pre-existing).
 - After P1: 157 pass / 3 fail (same 3). Schema verify script: 20/20 assertions pass, idempotent.
+- After P2: 182 pass / 3 fail (same 3 TDS). leaveEngine.test.js 25/25.
 
 ## NEXT
-Phase 2 — backend/src/services/leaveEngine.js.
+Phase 3 — backend/src/services/recompute.js (shared Stage 6 + late-deduction preservation).
