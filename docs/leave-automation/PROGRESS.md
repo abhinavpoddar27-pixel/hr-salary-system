@@ -5,7 +5,7 @@
 - P1 SCHEMA — DONE
 - P2 LEAVE ENGINE — DONE (25/25 specs green)
 - P3 SHARED STAGE 6 — DONE (parity proven, 6/6 specs green)
-- P4 TRIGGERS / AUTO STAGE 6 — not started
+- P4 TRIGGERS / AUTO STAGE 6 — DONE (19/19 specs green)
 - P5 API — not started
 - P6 SL REMOVAL + CL 7 — not started
 - P7 UI — not started
@@ -26,8 +26,24 @@
 - backend/src/services/jobQueue.js (P3: day_calculate + salary_compute call the service)
 - backend/src/routes/import.js (P3: runReimportRecompute calls the service; dead imports trimmed)
 - backend/src/__tests__/recomputeParity.test.js, src/__tests__/helpers/legacyStage6.js (P3: NEW)
+- backend/src/services/leaveTriggers.js (P4: NEW — queueLeaveRecalc/checkAutoStage6/flags/notify)
+- backend/src/services/jobQueue.js (P4: leave_recalc + leave_nightly job types; ensureJobsTable export)
+- backend/src/services/monthEndScheduler.js (P4: nightly sweep on the 09:00 IST cron; new 00:05 IST
+  year-boundary cron)
+- backend/src/routes/{leaves,attendance,compensatoryOff,employees,import,financeAudit}.js (P4: trigger
+  call sites, all post-commit and all inside safeTrigger)
+- backend/src/__tests__/leaveTriggers.test.js (P4: NEW)
 
 ## DECISIONS
+- D11 (debounce CAST): SQLite's strftime('%s', …) returns TEXT and every INTEGER sorts before every
+  TEXT, so the first version of the debounce window compared TEXT >= INTEGER and was always true —
+  the window was silently infinite. Both sides are now CAST to INTEGER. The zero-window spec is what
+  caught it.
+- D12 (notifications): leaveTriggers writes notifications through the db handle it was given rather
+  than monthEndScheduler.createNotification, which reaches for getDb(). Same columns, same same-day
+  dedupe, and it works under test.
+- D13 (nightly sweep): the 09:00 IST cron queues a `leave_nightly` job rather than doing the work on
+  the cron thread, so a long sweep cannot block the scheduler. One pending sweep at a time.
 - D8 (parity proof): `helpers/legacyStage6.js` is generated from `git show origin/main:.../payroll.js`
   lines 34-249 with only three edits (function wrapper, req.requestId -> 'legacy', two require paths
   rebased). The spec runs it and recompute.js against two copies of one seeded DB and asserts
@@ -77,9 +93,11 @@
 - Baseline (origin/main): 157 pass / 3 fail (tdsCalculation.test.js — pre-existing).
 - After P1: 157 pass / 3 fail (same 3). Schema verify script: 20/20 assertions pass, idempotent.
 - After P2: 182 pass / 3 fail (same 3 TDS). leaveEngine.test.js 25/25.
+- After P4: 207 pass / 3 fail (same 3 TDS). leaveTriggers.test.js 19/19.
 - After P3: 188 pass / 3 fail (same 3 TDS). recomputeParity.test.js 6/6, including a field-for-field
   match against the origin/main orchestration and a proof that the legacy path hands back HR's late
   deduction on a re-run while the new path does not. Max salary drift in the spec: 0.
 
 ## NEXT
-Phase 4 — backend/src/services/leaveTriggers.js + job types + call sites + scheduler.
+Phase 5 — API (routes/phase5.js new endpoints; role guards on leaves/phase5; financeAudit apply-leave
+rewrite; employeePortal fixes).

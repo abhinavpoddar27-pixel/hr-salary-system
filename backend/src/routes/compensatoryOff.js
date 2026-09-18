@@ -13,6 +13,7 @@
 const express = require('express');
 const router = express.Router();
 const { getDb } = require('../database/db');
+const { safeTrigger, queueLeaveRecalc } = require('../services/leaveTriggers');
 const { isContractorForPayroll } = require('../utils/employeeClassification');
 
 // ─── Role helpers ─────────────────────────────────────────
@@ -265,6 +266,17 @@ router.put('/:id/finance-review', requireFinanceOrAdmin, (req, res) => {
   });
   txn();
 
+  // Approved comp-off restores the day as present, which moves days worked and
+  // therefore EL. Fired after the transaction, never inside it.
+  safeTrigger('compOff.financeReview', () => queueLeaveRecalc(db, {
+    company: existing.company || null,
+    month: existing.month,
+    year: existing.year,
+    employeeCodes: [existing.employee_code],
+    reason: `comp_off_${status}`,
+    actor: reviewer,
+  }));
+
   res.json({ success: true, id, status });
 });
 
@@ -286,6 +298,8 @@ router.put('/bulk-review', requireFinanceOrAdmin, (req, res) => {
   const reviewer = req.user?.username || 'finance';
   const cleanRemark = String(finance_remark).trim();
   let count = 0;
+  // Collected inside the transaction, used by the leave trigger after it commits.
+  const touchedIndex = new Map();
 
   const txn = db.transaction(() => {
     for (const rawId of ids) {
@@ -325,10 +339,29 @@ router.put('/bulk-review', requireFinanceOrAdmin, (req, res) => {
         action_type: 'finance_review'
       });
 
+      const key = `${existing.company || ''}|${existing.month}|${existing.year}`;
+      if (!touchedIndex.has(key)) {
+        touchedIndex.set(key, { company: existing.company, month: existing.month, year: existing.year, codes: [] });
+      }
+      touchedIndex.get(key).codes.push(existing.employee_code);
+
       count += 1;
     }
   });
   txn();
+  const touched = Array.from(touchedIndex.values());
+
+  // One job per company-month touched; the debounce merges the rest.
+  for (const period of touched) {
+    safeTrigger('compOff.bulkReview', () => queueLeaveRecalc(db, {
+      company: period.company || null,
+      month: period.month,
+      year: period.year,
+      employeeCodes: period.codes,
+      reason: `comp_off_bulk_${status}`,
+      actor: reviewer,
+    }));
+  }
 
   res.json({ success: true, count });
 });
@@ -371,6 +404,15 @@ router.delete('/:id', requireHrOrAdmin, (req, res) => {
     employee_code: existing.employee_code,
     action_type: 'comp_off_deleted'
   });
+
+  safeTrigger('compOff.delete', () => queueLeaveRecalc(db, {
+    company: existing.company || null,
+    month: existing.month,
+    year: existing.year,
+    employeeCodes: [existing.employee_code],
+    reason: 'comp_off_deleted',
+    actor: req.user?.username || 'hr',
+  }));
 
   res.json({ success: true, id });
 });

@@ -4,6 +4,7 @@ const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
 const { getDb, logAudit } = require('../database/db');
+const { safeTrigger, queueLeaveRecalc, checkAutoStage6 } = require('../services/leaveTriggers');
 const { parseEESLFile, extractEmployees, getImportSummary } = require('../services/parser');
 const { pairNightShifts, applyPairingToDb } = require('../services/nightShift');
 const { detectMissPunches, applyMissPunchFlags } = require('../services/missPunch');
@@ -195,6 +196,9 @@ router.post('/upload', upload.array('files', 20), async (req, res) => {
         let replayedCount = 0;
         let skippedCount = 0;
         let recomputeStats = null;
+        // Result of the automatic Stage-6 gate, surfaced in the per-file response
+        // so the Import screen can say what happens next.
+        let autoStage6 = null;
 
         if (isReimport) {
           // ── REIMPORT: Upsert strategy ──
@@ -515,6 +519,19 @@ router.post('/upload', upload.array('files', 20), async (req, res) => {
           }
         }
 
+        // Fresh import: Stage 6 waits for the miss punches to be cleared.
+        // Reimport: Stage 6 has just re-run above, so this only requeues the
+        // leave side. Either way the trigger can never fail the upload.
+        if (isReimport) {
+          safeTrigger('import.reimport', () => queueLeaveRecalc(db, {
+            company, month, year, employeeCodes: null,
+            reason: 'reimport', actor: req.user?.username || 'hr',
+          }));
+        }
+        autoStage6 = safeTrigger('import.confirm', () => checkAutoStage6(db, company, month, year, {
+          actor: req.user?.username || 'hr',
+        }));
+
         const summary = getImportSummary(parseResult);
 
         results.push({
@@ -522,6 +539,7 @@ router.post('/upload', upload.array('files', 20), async (req, res) => {
           sheet: sheet.sheetName,
           success: true,
           importId,
+          autoStage6,
           month, year, company,
           isReimport,
           employeeCount: sheet.employeeCount,

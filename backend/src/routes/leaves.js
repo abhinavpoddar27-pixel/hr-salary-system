@@ -1,6 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const { getDb, logAudit } = require('../database/db');
+const { safeTrigger, queueLeaveRecalc, checkAutoStage6 } = require('../services/leaveTriggers');
 
 /**
  * GET /api/leaves
@@ -165,6 +166,17 @@ router.put('/:id/approve', (req, res) => {
   });
   txn();
 
+  // Fired after the transaction above has committed, and wrapped so a trigger
+  // failure can never fail the approval itself.
+  safeTrigger('leave.approve', () => queueLeaveRecalc(db, {
+    company: db.prepare('SELECT company FROM employees WHERE code = ?').get(leave.employee_code)?.company || null,
+    month: new Date(leave.start_date).getMonth() + 1,
+    year: new Date(leave.start_date).getFullYear(),
+    employeeCodes: [leave.employee_code],
+    reason: 'leave_approved',
+    actor: approvedBy,
+  }));
+
   res.json({ success: true, message: 'Leave approved' });
 });
 
@@ -227,6 +239,15 @@ router.delete('/:id', (req, res) => {
     logAudit('leave_applications', id, 'status', leave.status, 'Cancelled', 'leave_cancel', `Cancelled by ${cancelledBy}`, req.user?.username);
   } catch (e) { /* audit failure must not break cancellation */ }
 
+  safeTrigger('leave.cancel', () => queueLeaveRecalc(db, {
+    company: db.prepare('SELECT company FROM employees WHERE code = ?').get(leave.employee_code)?.company || null,
+    month: new Date(leave.start_date).getMonth() + 1,
+    year: new Date(leave.start_date).getFullYear(),
+    employeeCodes: [leave.employee_code],
+    reason: 'leave_cancelled',
+    actor: cancelledBy,
+  }));
+
   res.json({ success: true, id });
 });
 
@@ -242,6 +263,20 @@ router.put('/:id/reject', (req, res) => {
     rejection_reason = ?
     WHERE id = ? AND status = 'Pending'
   `).run(req.user?.username || 'admin', reason || '', req.params.id);
+
+  // A rejection can undo a day already counted as leave, so the month is
+  // requeued the same way an approval is.
+  const rejected = db.prepare('SELECT employee_code, start_date FROM leave_applications WHERE id = ?').get(req.params.id);
+  if (rejected) {
+    safeTrigger('leave.reject', () => queueLeaveRecalc(db, {
+      company: db.prepare('SELECT company FROM employees WHERE code = ?').get(rejected.employee_code)?.company || null,
+      month: new Date(rejected.start_date).getMonth() + 1,
+      year: new Date(rejected.start_date).getFullYear(),
+      employeeCodes: [rejected.employee_code],
+      reason: 'leave_rejected',
+      actor: req.user?.username || 'admin',
+    }));
+  }
 
   res.json({ success: true, message: 'Leave rejected' });
 });
@@ -400,6 +435,15 @@ router.post('/adjust', (req, res) => {
 
   logAudit('leave_balances', emp.id, leave_type, oldBalance, newBalance, 'leave_adjustment', reason || '', req.user?.username);
 
+  safeTrigger('leave.adjust', () => queueLeaveRecalc(db, {
+    company: emp.company || null,
+    month: null,
+    year: now.getFullYear(),
+    employeeCodes: [employee_code],
+    reason: 'manual_adjustment',
+    actor: req.user?.username || 'admin',
+  }));
+
   res.json({ success: true, message: 'Leave adjusted', oldBalance, newBalance });
 });
 
@@ -527,6 +571,17 @@ router.post('/bulk-adjust', (req, res) => {
   });
 
   txn();
+
+  // One job for the whole batch — the debounce in queueLeaveRecalc merges the
+  // per-employee triggers that follow within the window.
+  safeTrigger('leave.bulkAdjust', () => queueLeaveRecalc(db, {
+    company: null,
+    month: null,
+    year: new Date().getFullYear(),
+    employeeCodes: null,
+    reason: 'bulk_adjustment',
+    actor: req.user?.username || 'admin',
+  }));
 
   res.json({ success: true, processed, errors });
 });

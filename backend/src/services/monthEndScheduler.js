@@ -95,15 +95,111 @@ function checkPipelineStatus() {
   }
 }
 
+/**
+ * Server clock is UTC; the plant runs on IST (UTC+05:30). Every cron string in
+ * this file is UTC — the IST time it corresponds to is named beside it.
+ */
+function istParts() {
+  const d = new Date(Date.now() + 5.5 * 60 * 60 * 1000);
+  return { year: d.getUTCFullYear(), month: d.getUTCMonth() + 1, day: d.getUTCDate() };
+}
+
+/**
+ * Nightly leave sweep. Queues one `leave_nightly` job rather than doing the work
+ * on the cron thread, so a long sweep can never block the scheduler. The job
+ * refreshes Stage 6 for every non-finalized month of the current year, recomputes
+ * the year's leave, and logs any salary drift it finds.
+ */
+function runNightlyLeaveSweep() {
+  const db = getDb();
+  const { year } = istParts();
+  const { ensureJobsTable } = require('./jobQueue');
+  const { getPolicyBool } = require('./leaveEngine');
+
+  if (!getPolicyBool(db, 'leave_automation_enabled', false)) {
+    db.prepare(`
+      INSERT INTO leave_recompute_runs (scope, year, employee_count, started_at, finished_at, status, message)
+      VALUES ('nightly', ?, 0, datetime('now'), datetime('now'), 'skipped_disabled', 'leave_automation_enabled is false')
+    `).run(year);
+    console.log('[Scheduler] Nightly leave sweep skipped — automation is off');
+    return;
+  }
+
+  ensureJobsTable(db);
+  // One pending sweep at a time.
+  const existing = db.prepare(
+    "SELECT id FROM jobs WHERE type = 'leave_nightly' AND status = 'pending' LIMIT 1"
+  ).get();
+  if (existing) {
+    console.log(`[Scheduler] Nightly leave sweep already queued as job ${existing.id}`);
+    return;
+  }
+  const jobId = db.prepare("INSERT INTO jobs (type, params) VALUES ('leave_nightly', ?)")
+    .run(JSON.stringify({ year, reason: 'nightly' })).lastInsertRowid;
+  console.log(`[Scheduler] Nightly leave sweep queued as job ${jobId} for ${year}`);
+}
+
+/**
+ * Year boundary. Seeds next year's CL openings on 1 Jan and lapses CL + EL on
+ * 31 Dec (no carry-forward, no encashment). Both sides are guarded by a
+ * policy_config key so a restart on the same day cannot run them twice.
+ */
+function runYearBoundaryCheck() {
+  const db = getDb();
+  const { year, month, day } = istParts();
+  const { seedYearOpenings, runYearEndLapse } = require('./leaveEngine');
+
+  const guardDone = (key) => !!db.prepare('SELECT value FROM policy_config WHERE key = ?').get(key);
+  const stampGuard = (key, note) => db.prepare(
+    'INSERT OR REPLACE INTO policy_config (key, value, description) VALUES (?, ?, ?)'
+  ).run(key, '1', note);
+
+  try {
+    if (month === 1 && day === 1) {
+      const key = `leave_year_open_${year}_done`;
+      if (!guardDone(key)) {
+        const out = seedYearOpenings(db, year);
+        stampGuard(key, `CL/EL openings seeded for ${year}`);
+        console.log(`[Scheduler] Seeded ${out.seeded} leave opening rows for ${year}`);
+      }
+    }
+    if (month === 12 && day === 31) {
+      const key = `leave_year_lapse_${year}_done`;
+      if (!guardDone(key)) {
+        const out = runYearEndLapse(db, year, { dryRun: false, actor: 'scheduler' });
+        stampGuard(key, `CL/EL lapsed for ${year}`);
+        console.log(`[Scheduler] Year-end lapse ${year}: ${out.totals.rows} rows, CL ${out.totals.cl_days}d, EL ${out.totals.el_days}d`);
+        createNotification('hr', 'LEAVE_YEAR_END_LAPSE',
+          `Year-end lapse complete for ${year} — ${out.totals.rows} balance(s) zeroed`,
+          '/leave-management');
+      }
+    }
+  } catch (e) {
+    console.error('[Scheduler] Year-boundary check failed:', e.message);
+  }
+}
+
 function startScheduler() {
   initNotificationsTable();
-  // Run daily at 9:00 AM IST (3:30 AM UTC)
+  // 09:00 IST (03:30 UTC) — pipeline status, then the nightly leave sweep.
   cron.schedule('30 3 * * *', () => {
     try { checkPipelineStatus(); } catch (e) { console.error('[Scheduler] Error:', e.message); }
+    try { runNightlyLeaveSweep(); } catch (e) { console.error('[Scheduler] Leave sweep error:', e.message); }
+  });
+  // 00:05 IST (18:35 UTC the previous day) — year-boundary seed / lapse.
+  cron.schedule('35 18 * * *', () => {
+    try { runYearBoundaryCheck(); } catch (e) { console.error('[Scheduler] Year-boundary error:', e.message); }
   });
   // Also run on startup
   try { checkPipelineStatus(); } catch {}
   console.log('📅 Month-end scheduler started');
 }
 
-module.exports = { startScheduler, createNotification, initNotificationsTable };
+module.exports = {
+  startScheduler,
+  createNotification,
+  initNotificationsTable,
+  runNightlyLeaveSweep,
+  runYearBoundaryCheck,
+  istParts,
+};

@@ -14,6 +14,7 @@
 const express = require('express');
 const router = express.Router();
 const { getDb, logAudit } = require('../database/db');
+const { safeTrigger, queueLeaveRecalc, checkAutoStage6 } = require('../services/leaveTriggers');
 const { requireFinanceOrAdmin } = require('../middleware/roles');
 const { syncSalaryStructureFromEmployee } = require('./employees');
 
@@ -1546,7 +1547,12 @@ router.post('/miss-punch/:id/approve', requireFinanceOrAdmin, (req, res) => {
   logAudit('attendance_processed', req.params.id, 'miss_punch_finance_status', 'pending', 'approved',
     'FINANCE_MISS_PUNCH_APPROVE', notes || `Approved HR resolution for ${existing.employee_code} ${existing.date}`, req.user?.username);
 
-  res.json({ success: true });
+  // Finance has now decided, so this record no longer blocks the automatic
+  // first Stage 6 run for its company-month.
+  const autoStage6 = safeTrigger('missPunch.financeApprove', () =>
+    checkAutoStage6(db, existing.company, existing.month, existing.year, { actor: user }));
+
+  res.json({ success: true, autoStage6 });
 });
 
 // POST /miss-punch/:id/reject — Finance rejects HR resolution; revert to original
@@ -1597,7 +1603,12 @@ router.post('/miss-punch/:id/reject', requireFinanceOrAdmin, (req, res) => {
   logAudit('attendance_processed', req.params.id, 'miss_punch_finance_status', 'pending', 'rejected',
     'FINANCE_MISS_PUNCH_REJECT', rejection_reason, req.user?.username);
 
-  res.json({ success: true, message: 'Rejected — reverted to HR queue for re-resolution' });
+  // A rejection sends the record back to HR, so the gate stays shut — this call
+  // just refreshes the backlog the Miss Punch screen shows.
+  const autoStage6 = safeTrigger('missPunch.financeReject', () =>
+    checkAutoStage6(db, existing.company, existing.month, existing.year, { actor: user }));
+
+  res.json({ success: true, message: 'Rejected — reverted to HR queue for re-resolution', autoStage6 });
 });
 
 // POST /miss-punch/bulk-approve — Finance bulk approve
@@ -1627,7 +1638,18 @@ router.post('/miss-punch/bulk-approve', requireFinanceOrAdmin, (req, res) => {
     }
   });
   txn();
-  res.json({ success: true, count });
+
+  // One gate check per company-month touched, not one per record.
+  const periods = ids.length ? db.prepare(`
+    SELECT DISTINCT month, year, company FROM attendance_processed
+    WHERE id IN (${ids.map(() => '?').join(',')})
+  `).all(...ids.map((n) => parseInt(n, 10))) : [];
+  const autoStage6 = periods.map((p) => safeTrigger('missPunch.financeBulkApprove', () => ({
+    month: p.month, year: p.year, company: p.company,
+    ...checkAutoStage6(db, p.company, p.month, p.year, { actor: user }),
+  })));
+
+  res.json({ success: true, count, autoStage6 });
 });
 
 // GET /miss-punch/rejections — read the archive (scoped to miss-punch)
