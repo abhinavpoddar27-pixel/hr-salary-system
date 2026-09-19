@@ -73,6 +73,15 @@ function reportStatusOf(row) {
 }
 
 /**
+ * Normalised status for comparison. STATUS_EXPR yields SQL NULL when a row has
+ * neither status, while effectiveStatusForDay returns ''. Without this, those
+ * two spellings of "no status" compare as different and every such day is
+ * flagged as a correction awaiting finance. Production carries 898 of them
+ * across 2025 — 318 in December alone.
+ */
+const normStatus = (v) => String(v == null ? '' : v).trim();
+
+/**
  * Rows where payroll's view of the day differs from the report's view — i.e.
  * an HR miss-punch correction finance has not ruled on. Only divergent rows are
  * returned: a resolution that lands on the same status cannot move a man-day,
@@ -85,8 +94,8 @@ function reportStatusOf(row) {
 function correctionDivergences(rows) {
   const out = [];
   for (const r of rows) {
-    const reportStatus = reportStatusOf(r);
-    const payrollStatus = effectiveStatusForDay(r);
+    const reportStatus = normStatus(reportStatusOf(r));
+    const payrollStatus = normStatus(effectiveStatusForDay(r));
     if (payrollStatus === reportStatus) continue;
     const preJoining = Number(r.pre_doj) === 1;
     out.push({
@@ -102,9 +111,13 @@ function correctionDivergences(rows) {
       // effectiveStatusForDay, so both surface as 'pending' rather than blank.
       financeStatus: r.miss_punch_finance_status || 'pending',
       preJoining,
+      // Each side weighed the way its own owner counts it: payroll's status by
+      // payroll's weights (which pay HP as half a day), the report's by the
+      // report's. Weighing both with PRESENT_WEIGHTS scores an HP at 0 against
+      // payroll's 0.5 and invents a mismatch.
       delta: preJoining
         ? 0
-        : r2(CFG.statusWeight(payrollStatus) - CFG.statusWeight(reportStatus)),
+        : r2(CFG.payrollStatusWeight(payrollStatus) - CFG.statusWeight(reportStatus)),
     });
   }
   return out;
@@ -163,7 +176,7 @@ function loadStaleRoster(db, pop, today) {
                AND COALESCE(ap.is_night_out_only,0) <> 1
                AND ${STATUS_EXPR} IN (${holes})
         WHERE ${pop.sql}
-          AND TRIM(COALESCE(e.status,'')) = 'Active'
+          AND ${CFG.activeClause('e')}
         GROUP BY e.code`
     )
     .all(...CFG.PRESENT_STATUSES, ...pop.params);
@@ -171,9 +184,17 @@ function loadStaleRoster(db, pop, today) {
   const out = [];
   for (const r of rows) {
     const lastPunch = r.last_punch || null;
-    // Never punched is always stale, whatever the arithmetic would say.
     const daysSince = lastPunch === null ? null : daysBetween(lastPunch, today);
-    if (lastPunch !== null && !(daysSince > CFG.STALE_NO_PUNCH_DAYS)) continue;
+    if (lastPunch === null) {
+      // Never punched. Measured from the joining date instead, so somebody
+      // hired last week is not reported as an abandoned roster row. With no
+      // joining date on record there is nothing to measure from, so they are
+      // flagged — an unknown of that age is worth a look either way.
+      const sinceJoining = r.doj ? daysBetween(r.doj, today) : null;
+      if (sinceJoining != null && !(sinceJoining > CFG.STALE_NO_PUNCH_DAYS)) continue;
+    } else if (!(daysSince > CFG.STALE_NO_PUNCH_DAYS)) {
+      continue;
+    }
     out.push({
       code: r.code,
       name: r.name,
@@ -194,9 +215,17 @@ function loadStaleRoster(db, pop, today) {
   return out;
 }
 
-/** Today as YYYY-MM-DD, from the database so it matches every other date. */
+/**
+ * Today as YYYY-MM-DD, from the database so it matches every other date.
+ *
+ * Shifted to IST because attendance dates are IST business dates while
+ * SQLite's date('now') is UTC. Without the shift, every day between 00:00 and
+ * 05:30 IST measures one day short, and the nine people who sit exactly on the
+ * 30-day boundary drop out of the stale list and reappear after 05:30 with no
+ * change in the data.
+ */
 function dbToday(db) {
-  return db.prepare(`SELECT date('now') AS today`).get().today;
+  return db.prepare(`SELECT date('now', '+05:30') AS today`).get().today;
 }
 
 /** Whole days between two YYYY-MM-DD dates. */
@@ -522,13 +551,21 @@ function monthReport(db, { month, year, company, today }) {
     .prepare(
       `SELECT DISTINCT UPPER(TRIM(COALESCE(e.department,''))) AS dept
          FROM employees e
-        WHERE ${pop.sql} AND TRIM(COALESCE(e.status,'')) = 'Active'`
+        WHERE ${pop.sql} AND ${CFG.activeClause('e')}`
     )
     .all(...pop.params);
+  // Only names the /grid route will accept and the alias map can resolve back
+  // to a department list. An unmapped department resolves to its own raw name,
+  // which the route rejects with a 400 and which departmentsForContractor()
+  // could not turn into a query anyway — offering it would be a dead option.
+  const known = new Set(CFG.knownContractorNames());
   const gridContractors = [
     ...new Set([
       ...contractors,
-      ...rosterDepts.map((r) => CFG.resolveBiometricContractor(r.dept).name),
+      ...rosterDepts
+        .map((r) => CFG.resolveBiometricContractor(r.dept))
+        .filter((c) => !c.unmapped && known.has(c.name))
+        .map((c) => c.name),
     ]),
   ].sort();
 
@@ -539,6 +576,9 @@ function monthReport(db, { month, year, company, today }) {
     // 4dp, not 2 — this drives a percentage, and rounding the ratio to 2dp
     // would quantise the banner to whole steps of 1%.
     unknownCompanyRatio: totalMd > 0 ? Math.round((unknownMd / totalMd) * 1e4) / 1e4 : 0,
+    // Published so the Exceptions tab names the same threshold the rule uses,
+    // rather than keeping a second copy of the number in the UI.
+    staleDays: CFG.STALE_NO_PUNCH_DAYS,
     exceptions,
   };
 }
@@ -672,6 +712,10 @@ function buildExceptions({
     payrollStatus: c.payrollStatus,
     correctionSource: c.correctionSource,
     financeStatus: c.financeStatus,
+    // Kept so the tab can say which rows actually move a payroll figure: a
+    // pre-joining day is listed for visibility but payroll skips it either way.
+    preJoining: c.preJoining,
+    delta: c.delta,
   }));
   financePending.sort(
     (a, b) =>
@@ -679,10 +723,11 @@ function buildExceptions({
       String(a.code).localeCompare(String(b.code))
   );
 
-  const stale = staleRows;
+
 
   return {
-    both, dup, pre, tie, financePending, aft, nodoj, stale, pend, rejected, test,
+    both, dup, pre, tie, financePending, aft, nodoj, pend, rejected, test,
+    stale: staleRows,
     // `stale` is deliberately OUTSIDE the count, for the same reason `rejected`
     // is: the badge answers "what happened in this month", and stale roster
     // rows are measured against today, not the month. 231 month-independent
@@ -827,7 +872,7 @@ function gridReport(db, { month, year, contractor, company }) {
          FROM employees e
         WHERE ${pop.sql}
           AND UPPER(TRIM(COALESCE(e.department,''))) IN (${deptHoles})
-          AND TRIM(COALESCE(e.status,'')) = 'Active'`
+          AND ${CFG.activeClause('e')}`
     )
     .all(...pop.params, ...depts);
 
@@ -846,7 +891,7 @@ function gridReport(db, { month, year, contractor, company }) {
     doj: row.doj || null, doe: row.doe || null,
     cells: {},
     noPunch: true,
-    active: row.emp_status === 'Active',
+    active: CFG.isActiveStatus(row.emp_status),
     stats: {
       dayShifts: 0, nightShifts: 0, halfDays: 0, wop: 0, absent: 0,
       weeklyOff: 0, preJoining: 0, workedDays: 0, manDays: 0,
@@ -871,8 +916,17 @@ function gridReport(db, { month, year, contractor, company }) {
     // correction is still waiting on finance. Carried on the cell so the grid
     // can outline it and the selection panel can explain it. Only attached when
     // the two views actually differ — these fields ride ~2,800 cells.
-    const payrollStatus = effectiveStatusForDay(row);
-    if (payrollStatus !== row.status) {
+    //
+    // Gated on the same predicate loadCorrections uses, so the grid and the
+    // Exceptions tab can never disagree about what is pending. Without the
+    // miss-punch gate, a row carrying no status at all compares SQL NULL
+    // against '' and every one is painted as awaiting finance — 318 cells in
+    // December 2025 alone.
+    const unruled =
+      Number(row.is_miss_punch) === 1 &&
+      !CFG.FINANCE_STATES_MATCHING_REPORT.includes(normStatus(row.miss_punch_finance_status));
+    const payrollStatus = normStatus(effectiveStatusForDay(row));
+    if (unruled && payrollStatus !== normStatus(row.status)) {
       cell.pending = true;
       cell.punchedAs = row.status_original || '';
       cell.hrMarkedAs = row.status;
@@ -899,7 +953,7 @@ function gridReport(db, { month, year, contractor, company }) {
     }
     if (cell.pending && !preJoining) {
       s.pendingDays = r2(
-        s.pendingDays + (CFG.statusWeight(payrollStatus) - CFG.statusWeight(row.status))
+        s.pendingDays + (CFG.payrollStatusWeight(payrollStatus) - CFG.statusWeight(row.status))
       );
     }
   }
@@ -915,6 +969,7 @@ function gridReport(db, { month, year, contractor, company }) {
   // man-days still have to tie out.
   const employees = [...byCode.values()].filter((e) => !e.noPunch || e.active);
   for (const emp of employees) {
+    delete emp.active;          // an internal filter flag; the list is filtered
     const s = emp.stats;
     s.manDays = r2(s.manDays);
     // Payroll's view of the same days — the report's man-days plus whatever the

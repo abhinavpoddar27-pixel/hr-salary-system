@@ -46,6 +46,47 @@ const PRESENT_WEIGHTS = { P: 1, WOP: 1, '½P': 0.5, 'WO½P': 0.5 };
 // Man-days are NOT clipped by date_of_exit: payroll does not clip either, so
 // clipping here would break the tie-out. Post-exit punching is flagged instead.
 
+// ─── Payroll's own day weights (2.1) ──────────────────────────────────────
+// What STAGE 6 counts a day as, mirroring dayCalculation.js's main loop
+// (`daysPresent`/`daysWOP`/`daysHalfPresent`, lines 263-266) and its
+// countWorkingDays helper. It differs from PRESENT_WEIGHTS above by ONE entry:
+// payroll also pays 'HP' as half a day. PRESENT_WEIGHTS is left exactly as it
+// was — it defines what this report calls a head, which is a PR-2 ruling.
+//
+// Used only to weigh payroll's side of a pending-correction difference. Weighing
+// an HP with PRESENT_WEIGHTS there would score it 0 against payroll's 0.5 and
+// manufacture the very false mismatch the payroll rule was imported to remove.
+// Production carries 2 HP rows in the contract population today, so this is a
+// guard against a real status, not a hypothetical one.
+const PAYROLL_PRESENT_WEIGHTS = { P: 1, WOP: 1, '½P': 0.5, HP: 0.5, 'WO½P': 0.5 };
+
+/** Weight of a status as STAGE 6 counts it. Unknown statuses weigh 0. */
+function payrollStatusWeight(status) {
+  const key = String(status == null ? '' : status).trim();
+  return Object.prototype.hasOwnProperty.call(PAYROLL_PRESENT_WEIGHTS, key)
+    ? PAYROLL_PRESENT_WEIGHTS[key]
+    : 0;
+}
+
+// ─── Who is still on the roster (2.1) ─────────────────────────────────────
+// "Active" means the status says Active, OR nothing is recorded at all. A blank
+// status is treated as active everywhere else in this codebase (analytics.js,
+// recompute.js both read `status IS NULL OR status = 'Active'`), and treating it
+// as "left" would silently delete those people from the grid along with the
+// absence pattern the worked/no-punch split exists to show.
+const ACTIVE_STATUS = 'Active';
+
+/** SQL predicate for "still on the roster", for a given table alias. */
+function activeClause(alias) {
+  return `(TRIM(COALESCE(${alias}.status,'')) = '' OR TRIM(COALESCE(${alias}.status,'')) = '${ACTIVE_STATUS}')`;
+}
+
+/** The JS counterpart of activeClause, for a row already fetched. */
+function isActiveStatus(status) {
+  const v = String(status == null ? '' : status).trim();
+  return v === '' || v === ACTIVE_STATUS;
+}
+
 // ─── Roster staleness (2.1) ───────────────────────────────────────────────
 // "Active on roster, no punch for 30+ days" flags people payroll still treats
 // as employed who have stopped showing up. STRICTLY more than 30 days since
@@ -324,6 +365,11 @@ module.exports = {
   PRESENT_STATUSES,
   STALE_NO_PUNCH_DAYS,
   FINANCE_STATES_MATCHING_REPORT,
+  PAYROLL_PRESENT_WEIGHTS,
+  payrollStatusWeight,
+  ACTIVE_STATUS,
+  activeClause,
+  isActiveStatus,
   DW_COUNTED_STATUSES,
   TEST_CONTRACTORS,
   VALID_COMPANIES,

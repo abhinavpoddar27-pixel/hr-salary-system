@@ -1063,3 +1063,133 @@ describe('2.1 · grid shows people who worked (A)', () => {
     expect(g.footer['2026-04-02']).toMatchObject({ bioDay: 2, bioNight: 0 });
   });
 });
+
+// ─── 2.1 · the grid's contractor picker ───────────────────────────────────
+describe('2.1 · gridContractors', () => {
+  test('G1: a gang with an Active roster but no activity is still selectable', () => {
+    // `contractors` is "who appears in this month's data" and drives the header
+    // filter and every exception list — it must NOT gain the idle gang.
+    const db = makeDb();
+    addEmp(db, { code: 'GA', dept: 'MEERA' });
+    addAtt(db, 'GA', '2026-04-02', 'P');
+    addEmp(db, { code: 'GB', dept: 'MOTI LAL CON' });      // Active, never punched
+    const rep = monthReport(db, M);
+    expect(rep.contractors).toEqual(['Meera']);
+    expect(rep.gridContractors).toEqual(['Meera', 'Moti Lal']);
+  });
+
+  test('G2: a gang whose only people have left is not offered', () => {
+    const db = makeDb();
+    addEmp(db, { code: 'GC', dept: 'MEERA' });
+    addAtt(db, 'GC', '2026-04-02', 'P');
+    addEmp(db, { code: 'GD', dept: 'RANJIT CONT', status: 'Left' });
+    expect(monthReport(db, M).gridContractors).toEqual(['Meera']);
+  });
+
+  test('G3: it honours the company filter like every other query', () => {
+    const db = makeDb();
+    addEmp(db, { code: 'GE', dept: 'MEERA', company: 'Asian Lakto Ind Ltd' });
+    addAtt(db, 'GE', '2026-04-02', 'P');
+    addEmp(db, { code: 'GF', dept: 'PAPPU CONT', company: 'Indriyan Beverages Pvt Ltd' });
+    const rep = monthReport(db, { ...M, company: 'Asian Lakto Ind Ltd' });
+    expect(rep.gridContractors).toEqual(['Meera']);
+  });
+});
+
+// ─── 2.1 · code-review regressions ────────────────────────────────────────
+describe('2.1 · code-review regressions', () => {
+  test('R1: a blank or NULL employee status still counts as on the roster', () => {
+    // Treating an unrecorded status as "left" silently deleted those people
+    // from the grid along with the absence pattern the split exists to show.
+    // analytics.js and recompute.js both read `status IS NULL OR = Active`.
+    const db = makeDb();
+    addEmp(db, { code: 'NULLST', dept: 'MEERA', status: null });
+    addEmp(db, { code: 'BLANKST', dept: 'MEERA', status: '' });
+    addEmp(db, { code: 'LEFTST', dept: 'MEERA', status: 'Left' });
+    for (const c of ['NULLST', 'BLANKST', 'LEFTST']) addAtt(db, c, '2026-04-02', 'A');
+    const g = gridReport(db, { ...M, contractor: 'Meera' });
+    expect(g.employees.map((e) => e.code).sort()).toEqual(['BLANKST', 'NULLST']);
+    expect(monthReport(db, { ...M, today: '2026-09-19' }).exceptions.stale.map((r) => r.code).sort())
+      .toEqual(['BLANKST', 'NULLST']);
+  });
+
+  test('R2: payroll pays HP as half a day, so the delta must too', () => {
+    // PRESENT_WEIGHTS has no HP (a PR-2 ruling about what counts as a head),
+    // but dayCalculation.js:265 counts HP as daysHalfPresent += 0.5. Weighing
+    // payroll's side with the report's map scored it 0 and invented a mismatch.
+    const db = makeDb();
+    addEmp(db, { code: 'HPX', dept: 'MEERA', doj: '2026-01-01' });
+    addAtt(db, 'HPX', '2026-04-01', 'P', {
+      original: 'HP', final: 'P', missPunch: true, financeStatus: 'pending',
+    });
+    addAtt(db, 'HPX', '2026-04-02', 'P');
+    addDayCalc(db, 'HPX', 4, 2026, 1.5);          // payroll: HP 0.5 + P 1
+    const x = monthReport(db, M).exceptions;
+    expect(x.financePending[0].delta).toBe(-0.5);  // not -1
+    expect(x.tie).toHaveLength(0);
+    const g = gridReport(db, { ...M, contractor: 'Meera' });
+    expect(g.employees[0].stats).toMatchObject({ manDays: 2, payrollView: 1.5, tie: true });
+  });
+
+  test('R3: the grid picker only offers gangs the /grid route accepts', () => {
+    // An unmapped department resolves to its own raw name, which the route
+    // rejects with a 400 and departmentsForContractor() cannot resolve back.
+    const db = makeDb();
+    addEmp(db, { code: 'K1', dept: 'MEERA' });
+    addAtt(db, 'K1', '2026-04-02', 'P');
+    addEmp(db, { code: 'U1', dept: 'NEW GANG CONT' });   // Active, unmapped, no punch
+    addEmp(db, { code: 'U2', dept: '' });                // blank department
+    const rep = monthReport(db, M);
+    expect(rep.gridContractors).toEqual(['Meera']);
+    expect(rep.gridContractors.every((c) => CFG.knownContractorNames().includes(c))).toBe(true);
+  });
+
+  test('R4: a day with no status at all is not a correction awaiting finance', () => {
+    // STATUS_EXPR gives SQL NULL, effectiveStatusForDay gives '' — comparing
+    // them directly painted 318 December-2025 cells as awaiting finance.
+    const db = makeDb();
+    addEmp(db, { code: 'NS', dept: 'MEERA' });
+    addAtt(db, 'NS', '2026-04-01', null, { original: null, final: null });
+    addAtt(db, 'NS', '2026-04-02', 'P');
+    const g = gridReport(db, { ...M, contractor: 'Meera' });
+    expect(g.employees[0].cells['2026-04-01'].pending).toBeUndefined();
+    expect(monthReport(db, M).exceptions.financePending).toHaveLength(0);
+  });
+
+  test('R5: someone hired last week who has not punched yet is not "stale"', () => {
+    const db = makeDb();
+    addEmp(db, { code: 'NEWHIRE', dept: 'MEERA', doj: '2026-09-15' });   // 4 days ago
+    addEmp(db, { code: 'OLDHIRE', dept: 'MEERA', doj: '2025-01-01' });   // long ago
+    addEmp(db, { code: 'NODOJ', dept: 'MEERA', doj: null });             // unknowable
+    const stale = monthReport(db, { ...M, today: '2026-09-19' }).exceptions.stale;
+    expect(stale.map((r) => r.code).sort()).toEqual(['NODOJ', 'OLDHIRE']);
+  });
+
+  test('R6: the grid and the Exceptions tab always agree on what is pending', () => {
+    // Both sides are gated on the same predicate, so a row can never be
+    // outlined on one tab and absent from the other.
+    const db = makeDb();
+    addEmp(db, { code: 'AG', dept: 'MEERA', doj: '2026-01-01' });
+    addAtt(db, 'AG', '2026-04-01', 'A', { original: 'P', final: 'A', missPunch: true, financeStatus: 'pending' });
+    addAtt(db, 'AG', '2026-04-02', 'A', { original: 'P', final: 'A', missPunch: true, financeStatus: 'approved' });
+    addAtt(db, 'AG', '2026-04-03', null, { original: null, final: null });
+    addAtt(db, 'AG', '2026-04-04', 'P');
+    addDayCalc(db, 'AG', 4, 2026, 2);
+    const gridPending = Object.entries(gridReport(db, { ...M, contractor: 'Meera' }).employees[0].cells)
+      .filter(([, c]) => c.pending).map(([d]) => d);
+    const tabPending = monthReport(db, M).exceptions.financePending.map((r) => r.date);
+    expect(gridPending).toEqual(['2026-04-01']);
+    expect(tabPending).toEqual(gridPending);
+  });
+
+  test('R7: the stale threshold is published, not re-typed in the UI', () => {
+    expect(monthReport(makeDb(), M).staleDays).toBe(CFG.STALE_NO_PUNCH_DAYS);
+  });
+
+  test('R8: the grid does not ship its internal active flag', () => {
+    const db = makeDb();
+    addEmp(db, { code: 'IF1', dept: 'MEERA' });
+    addAtt(db, 'IF1', '2026-04-02', 'P');
+    expect(gridReport(db, { ...M, contractor: 'Meera' }).employees[0]).not.toHaveProperty('active');
+  });
+});

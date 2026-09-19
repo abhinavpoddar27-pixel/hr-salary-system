@@ -28,6 +28,9 @@ const H = (key, label, num) => ({ key, label, num })
 
 export default function ExceptionsTab({ report, contractor, onOpenDay }) {
   const x = report.exceptions
+  // The threshold comes from the config via the payload — never re-typed here,
+  // or changing it would leave the heading announcing the old number.
+  const staleDays = report.staleDays ?? 30
   const keep = (o) => !contractor || o.contractor === contractor
   const both = x.both.filter(keep)
   const dup = x.dup.filter(keep)
@@ -121,7 +124,16 @@ export default function ExceptionsTab({ report, contractor, onOpenDay }) {
             <td><span className="badge-green">{o.punchedAs || '—'}</span></td>
             <td><span className="badge-red">{o.hrMarkedAs || '—'}</span></td>
             <td className="text-slate-500">{o.correctionSource || '—'}</td>
-            <td><span className="badge-yellow">{o.financeStatus}</span></td>
+            <td>
+              <span className={o.financeStatus === 'rejected' ? 'badge-gray' : 'badge-yellow'}>
+                {o.financeStatus}
+              </span>
+              {o.preJoining && (
+                <div className="text-xs font-normal text-slate-400">
+                  before joining — no pay either way
+                </div>
+              )}
+            </td>
           </tr>
         ))}
       </Section>
@@ -129,7 +141,8 @@ export default function ExceptionsTab({ report, contractor, onOpenDay }) {
       <Section
         title="Biometric days don’t match payroll days"
         count={tie.length} tone="badge-red"
-        headers={[H('c', 'Code'), H('n', 'Name'), H('ct', 'Contractor'), H('b', 'Biometric', 1), H('p', 'Payroll', 1)]}
+        headers={[H('c', 'Code'), H('n', 'Name'), H('ct', 'Contractor'),
+          H('b', 'Biometric, as payroll counts it', 1), H('p', 'Payroll', 1)]}
       >
         {tie.map((o) => (
           <tr key={o.code}>
@@ -177,7 +190,7 @@ export default function ExceptionsTab({ report, contractor, onOpenDay }) {
       </Section>
 
       <Section
-        title="Active on roster, no punch for 30+ days · as of today, not this month"
+        title={`Active on roster, no punch for ${staleDays}+ days · as of today, not this month`}
         count={stale.length} tone="badge-yellow"
         headers={[H('c', 'Code'), H('n', 'Name'), H('ct', 'Contractor'), H('j', 'Joined'),
           H('lp', 'Last punch'), H('ds', 'Days since', 1)]}

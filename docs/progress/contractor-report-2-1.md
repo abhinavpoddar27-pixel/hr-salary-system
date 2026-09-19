@@ -1,8 +1,11 @@
 # PROGRESS — Contractor Report 2.1 — `feat/contractor-report-2-1`
 
 ## STATE
-Phase 1 COMPLETE — all 11 acceptance checks reproduce on production **exactly, zero drift**.
-Branch off main `3f0041f` (PR #44 squash merge of PR-2). Proceeding to Phase 2 (build).
+Phases 0–3 COMPLETE. Branch `feat/contractor-report-2-1` off main `3f0041f` (PR #44).
+All 11 acceptance checks reproduce on production exactly. 88 contractor-report unit tests,
+341 backend tests (3 TDS + flaky `protectedWrite` = the documented baseline, unchanged),
+36 browser checks in Chromium, 27 assertions replaying real September rows through the service.
+Code review run at high effort: 13 findings, all resolved, each locked by a regression test.
 
 ## DONE
 - **Preflight** — clean tree; `git fetch`; `main` fast-forwarded 23 commits to `3f0041f`
@@ -13,10 +16,18 @@ Branch off main `3f0041f` (PR #44 squash merge of PR-2). Proceeding to Phase 2 (
 - **`effectiveStatusForDay` read (read-only)** — see RULING 2.
 - **Phase 1 — all 11 acceptance checks verified on production (read-only).** See NUMBERS.
   Zero drift: September, May and April all landed on the expected values on the first run.
+- **Phase 2 — built, tested, simulated.** Backend (config + service), frontend (grid tab,
+  exceptions tab, page), 38 new unit tests, `frontend/dist` rebuilt and committed.
+- **Phase 2 self-debug** caught two real defects before any review: REJECTED corrections were
+  filtered out of the correction query (so their forced ½P divergence would have surfaced as an
+  unexplained mismatch with nothing to explain it), and a worker marked Left with no punch was
+  still listed on the idle roster.
+- **Phase 2 user simulation** — 36 checks driving the built page in Chromium, plus 27 assertions
+  replaying the real September rows of all ten flagged employees through the service.
+- **Phase 3 code review** — 13 findings, all fixed, each with a regression test. See RULING 6.
 
 ## NEXT
-Phase 2 — build A/B/C, unit tests, full backend suite, rebuild + commit `frontend/dist`,
-self-debug pass, browser user-simulation pass.
+Owner review and merge of the PR. Nothing is blocked.
 
 ## RULINGS
 
@@ -109,6 +120,75 @@ so each showed as a false 1-day (10026: 2-day) shortfall. Applying the payroll r
 Moti Lal 18 · Ranjit 12 · Pappu 10 · Davinder 7 · Rajendra 4 · Jiwan Lal 3 · Sajan 3 · Amar 1 · Sonu 1
 (59 Active heads across 9 gangs, zero September punches between them.)
 
+### Re-verified after the code-review fixes
+The active-status rule, the never-punched joining-date guard and the IST date shift were all
+re-run against production: **231 stale (7 never punched) out of 320 active — unchanged**, and the
+service replay of the ten flagged September employees still returns 11 corrections and 0
+unexplained mismatches.
+
 ### Detail — check 9, the 30-day rule boundary
 `days_since > 30` (strictly more than 30, i.e. last punch before 2026-08-20) → **231**.
 `>= 30` would give 240. The prompt's "more than 30 days before today" is therefore `> 30`.
+
+
+### RULING 3 — the worked list is any status, the idle list is Active only
+Change A says the worked list is "whatever their current status", and the acceptance pins Meera's
+September grid at **51 worked · 124 no punch**. Production reconciles both at once: all 51 who
+worked are Active anyway, and 124 is exactly the *Active* count with no worked day (127 including
+three already marked Left).
+
+So: **worked** = anyone in the population with a day of weight > 0, whatever their status — a
+worker who left mid-month still has man-days that must tie out. **No punch** = Active only — a
+worker already marked Left with no punch is a closed row, not an idle one, and listing them would
+bury the live ones under everyone who has ever left. "Active" means the status says Active *or
+nothing is recorded at all*, matching `analytics.js` and `recompute.js`.
+
+### RULING 4 — the stale section stays out of the month badge
+`exceptions.count` drives a badge that answers "what happened in this month". The stale roster is
+measured against today and is identical whichever month is open, so 231 month-independent rows
+would swamp it. It is excluded for the same reason `rejected` already is — not because nobody
+should act on it, but because it is not a month signal. It carries its own count on its own
+section header. `financePending` **is** in the count: it is month-scoped and actionable.
+
+### RULING 5 — the grid picker had to be widened, or A could not be used
+`report.contractors` is "who appears in this month's data". A gang where nobody punched appears in
+neither biometric nor daily wage, so **Moti Lal's 18 idle workers could not be selected at all** —
+precisely the gang the worked/no-punch split exists to show. A separate `gridContractors` list adds
+anyone with an Active roster, filtered to names the `/grid` route accepts and the alias map can
+resolve. `contractors` itself is untouched, so the header filter, the per-contractor totals and
+every exception list behave exactly as before.
+
+### RULING 6 — code-review findings and how each was resolved
+Run at high effort against `main`. Thirteen findings, all fixed, each with a regression test
+(`2.1 · code-review regressions`, R1–R8).
+
+| # | Finding | Resolution |
+|---|---|---|
+| 1 | A blank/NULL `employees.status` was treated as "left", deleting those people and their absence pattern from the grid | `CFG.activeClause()` / `isActiveStatus()` treat unrecorded as Active, matching `analytics.js` and `recompute.js`. Latent on today's data (production carries only Active/Left) but a real regression. **R1** |
+| 2 | Payroll pays `HP` as half a day; `PRESENT_WEIGHTS` has no `HP`, so a pending HP correction produced a delta wrong by 0.5 — inventing the very mismatch this PR removes | New `PAYROLL_PRESENT_WEIGHTS` mirrors `dayCalculation.js:263-266`, used **only** for payroll's side of a delta. `PRESENT_WEIGHTS` is a PR-2 ruling and is untouched. **R2** |
+| 3 | `gridContractors` offered gangs the `/grid` route answers with HTTP 400 | Filtered to `knownContractorNames()` and resolvable aliases. **R3** |
+| 4 | A row with no status at all compared SQL `NULL` against JS `''`, so it was painted as awaiting finance — **318 such cells in December 2025** | Statuses normalised, and the grid gated on the same predicate the month query uses, so the two tabs cannot disagree. **R4, R6** |
+| 5 | Someone hired days ago and yet to punch was reported as an abandoned roster row | Never-punched is measured from the joining date; no joining date still flags. Verified not to move the 231. **R5** |
+| 6 | A finance **rejection** was shown under "waiting for Finance" and described as pending | Badge, tooltip and panel now read the row's actual finance status. |
+| 7 | `loadStaleRoster` scans all attendance history on every `/month` call | Accepted, documented under **Known costs**. |
+| 8 | `date('now')` is UTC against IST business dates, so nine boundary people flickered in and out before 05:30 IST | Shifted to `date('now', '+05:30')`. |
+| 9 | The tie-out column read "Biometric" but rendered payroll's adjusted view | Header now reads "Biometric, as payroll counts it". |
+| 10 | The UI hard-coded "30+ days", a second copy of a config rule | `staleDays` published in the payload and rendered from it. **R7** |
+| 11 | `financePending` discarded the `preJoining` / `delta` it had computed | Both carried; pre-joining rows say "before joining — no pay either way". |
+| 12 | Internal `active` flag shipped on every grid row; pointless `stale` alias | Flag deleted after filtering; alias removed. **R8** |
+| 13 | Role-group headers re-scanned the whole row list, O(n x roles) | Counted once up front, honouring R-15. |
+
+## Known costs
+- **`loadStaleRoster` scans attendance history on every `/month` request** (~235 ms on production),
+  even though its answer is month-independent, so paging Apr → May → Jun repeats identical work.
+  Left as one query for correctness; a per-(company, today) cache is the obvious next step.
+- **`contractorReport.js` now requires `dayCalculation.js`**, which pulls in `parser.js` (and
+  `xlsx`) and `salaryComputation.js`. Verified side-effect-free at require time — the only
+  `database/db` requires in that chain are inside functions — and the server already loads both.
+
+## R-16 — the pending outline is a class, never an inline style
+The selection effect writes and clears `node.style.outline` directly on DOM nodes (R-15). An inline
+dashed outline would be wiped the first time its cell was selected and never restored, because
+`rows` has not changed and React will not re-render it. As a Tailwind arbitrary-property class it is
+simply overridden while selected and reappears when the selection moves on — verified in Chromium:
+dashed amber → solid blue on select → dashed amber again on deselect.

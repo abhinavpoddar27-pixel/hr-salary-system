@@ -52,6 +52,13 @@ const GridBody = memo(function GridBody({ rows, days, footer, grouped }) {
   let noPunchOpened = false
   const colCount = days.length + 6
   const noPunchTotal = rows.reduce((n, r) => n + (r.noPunch ? 1 : 0), 0)
+  // Counted once up front. Scanning `rows` inside the map made header rendering
+  // O(n x roles), and with the idle roster shown `rows` is now the whole gang.
+  const roleCounts = new Map()
+  for (const r of rows) {
+    const k = `${r.noPunch ? 1 : 0}\u0000${r.role}`
+    roleCounts.set(k, (roleCounts.get(k) || 0) + 1)
+  }
   return (
     <table className="border-separate border-spacing-[2px]" data-grid="1">
       <thead>
@@ -101,7 +108,7 @@ const GridBody = memo(function GridBody({ rows, days, footer, grouped }) {
             header && (
               <tr key={emp.code + '-g'}>
                 <td className="text-xs font-semibold text-slate-500 px-2 pt-2" style={STICKY_NAME}>
-                  {emp.role} · {rows.filter((r) => r.role === emp.role && !!r.noPunch === !!emp.noPunch).length}
+                  {emp.role} · {roleCounts.get(`${emp.noPunch ? 1 : 0}\u0000${emp.role}`) || 0}
                 </td>
                 <td colSpan={colCount - 1}></td>
               </tr>
@@ -121,7 +128,11 @@ const GridBody = memo(function GridBody({ rows, days, footer, grouped }) {
                     key={d.date}
                     data-r={emp.code} data-i={d.date}
                     style={cell?.preJoining ? PRE_JOINING_RING : undefined}
-                    title={cell?.pending ? 'Finance review pending — payroll still pays this day' : undefined}
+                    title={cell?.pending
+                      ? (cell.financeStatus === 'rejected'
+                        ? `Finance rejected this correction — payroll pays it as ${cell.payrollStatus}`
+                        : 'Finance review pending — payroll still pays this day')
+                      : undefined}
                     className={`h-6 min-w-[26px] text-center text-[11px] font-semibold rounded cursor-pointer ${cellClass(cell)}${cell?.pending ? ' ' + PENDING_OUTLINE : ''}`}
                   >
                     {cell ? CELL_LETTER[cell.status] ?? '' : ''}
@@ -257,14 +268,21 @@ function Panel({ sel, byCode, report, onOpenDay, onSelectRow }) {
         {present && cell.preJoining && (
           <span className="badge-red">Before joining {emp.doj} — not paid by payroll</span>
         )}
-        {cell?.pending && <span className="badge-yellow">Waiting for Finance</span>}
+        {cell?.pending && (
+          <span className={cell.financeStatus === 'rejected' ? 'badge-gray' : 'badge-yellow'}>
+            {cell.financeStatus === 'rejected' ? 'Finance rejected' : 'Waiting for Finance'}
+          </span>
+        )}
         {!emp.doj && <span className="badge-gray">No joining date</span>}
       </div>
       {cell?.pending && (
         <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-amber-900">
           Punched {cell.punchedAs || '—'}; HR marked {cell.hrMarkedAs || '—'}
-          {cell.correctionSource ? ` from ${cell.correctionSource}` : ''}; Finance review pending
-          — payroll still pays this day{cell.payrollStatus ? ` as ${cell.payrollStatus}` : ''}.
+          {cell.correctionSource ? ` from ${cell.correctionSource}` : ''};{' '}
+          {cell.financeStatus === 'rejected'
+            ? 'Finance rejected the correction'
+            : 'Finance review pending'}
+          {' '}— payroll still pays this day{cell.payrollStatus ? ` as ${cell.payrollStatus}` : ''}.
         </div>
       )}
       <div className="text-slate-500">{gangLine}</div>
