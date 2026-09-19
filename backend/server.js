@@ -258,6 +258,20 @@ app.get('/diagnostic/request-id', (req, res) => {
   res.sendFile(htmlPath);
 });
 
+// Captured once, at module load — i.e. when this process booted. The old value
+// was `new Date()` evaluated inside the handler, which just echoed the time of
+// the request back and told you nothing about the deployment.
+const STARTED_AT = new Date().toISOString();
+
+// The platform injects the deployed commit. Railway sets RAILWAY_GIT_COMMIT_SHA;
+// SOURCE_COMMIT and GIT_COMMIT are the common fallbacks elsewhere. Never shelled
+// out to git — the container has no checkout, and the previous hardcoded string
+// went stale the moment it was committed.
+const DEPLOYED_COMMIT = process.env.RAILWAY_GIT_COMMIT_SHA
+  || process.env.SOURCE_COMMIT
+  || process.env.GIT_COMMIT
+  || 'unknown';
+
 // Version endpoint (public) — for deployment diagnostics
 app.get('/api/version', (req, res) => {
   const distIndex = path.join(__dirname, '../frontend/dist/index.html');
@@ -269,8 +283,8 @@ app.get('/api/version', (req, res) => {
   } catch (e) {}
   res.json({
     version: '1.1.0',
-    deployedAt: new Date().toISOString(),
-    commit: 'bebc936',
+    startedAt: STARTED_AT,
+    commit: DEPLOYED_COMMIT,
     frontendBundle,
     nodeEnv: process.env.NODE_ENV || 'development'
   });

@@ -7,6 +7,7 @@ const { getDb } = require('../database/db');
 const { safeTrigger, queueLeaveRecalc } = require('../services/leaveTriggers');
 const { computeClEntitlement } = require('../services/phase5Features');
 const { getPolicyNumber } = require('../services/leaveEngine');
+const { setLeaveBalance } = require('../services/leaveBalanceGuard');
 const { requireHrOrAdmin } = require('../middleware/roles');
 
 // ── Salary structure sync helper ──────────────────────────────────
@@ -522,21 +523,25 @@ router.get('/:code/leaves', (req, res) => {
   res.json({ success: true, data: balances });
 });
 
-// UPDATE leave balance
-router.put('/:code/leaves', (req, res) => {
+// UPDATE leave balance.
+// Guarded since Sept 2026: this writes leave_balances directly, so until now any
+// authenticated role — viewer included — could rewrite an employee's entitlement.
+router.put('/:code/leaves', requireHrOrAdmin, (req, res) => {
   const db = getDb();
   const emp = db.prepare('SELECT id FROM employees WHERE code = ?').get(req.params.code);
   if (!emp) return res.status(404).json({ success: false, error: 'Employee not found' });
 
   const { year, leaveType, opening, used } = req.body;
-  const balance = (parseFloat(opening) || 0) - (parseFloat(used) || 0);
 
-  db.prepare(`
-    INSERT INTO leave_balances (employee_id, year, leave_type, opening, used, balance)
-    VALUES (?, ?, ?, ?, ?, ?)
-    ON CONFLICT(employee_id, year, leave_type) DO UPDATE SET
-      opening = excluded.opening, used = excluded.used, balance = excluded.balance
-  `).run(emp.id, year, leaveType, opening || 0, used || 0, balance);
+  // `used` greater than `opening` used to be written straight through as a
+  // negative balance, with no floor and no trace — see services/leaveBalanceGuard.js.
+  const result = setLeaveBalance(db, {
+    employeeId: emp.id, employeeCode: req.params.code, year, leaveType, opening, used,
+    allowNegative: Boolean(req.body?.allow_negative),
+    reason: req.body?.negative_reason,
+    role: req.user?.role, username: req.user?.username,
+  });
+  if (!result.ok) return res.status(result.status).json({ success: false, error: result.error, code: result.code });
 
   res.json({ success: true });
 });

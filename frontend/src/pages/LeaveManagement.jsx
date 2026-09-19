@@ -847,8 +847,15 @@ export default function LeaveManagement() {
               const delta = (adjForm.transaction_type === 'Credit' ? 1 : -1) * (Number(adjForm.days) || 0)
               const after = Math.round((current + delta) * 100) / 100
               const goesNegative = after < 0
+              // The backend floors the balance at zero and only an admin with a
+              // reason of 10+ characters may cross it — mirror both rules here so
+              // the button does not offer a request the server will refuse.
+              const canOverride = role === 'admin'
+              const reasonLongEnough = adjForm.reason.trim().length >= 10
+              const overriding = goesNegative && allowNegative && canOverride
               const blocked = !adjForm.employee_code || !adjForm.days || !adjForm.reason.trim()
-                || (goesNegative && !allowNegative)
+                || (goesNegative && !overriding)
+                || (overriding && !reasonLongEnough)
               return (
                 <>
                   {adjForm.employee_code ? (
@@ -866,7 +873,7 @@ export default function LeaveManagement() {
                     <p className="mt-1 text-xs text-amber-700">A reason is required — it is stored on the transaction.</p>
                   )}
 
-                  {goesNegative && (
+                  {goesNegative && canOverride && (
                     <label className="mt-2 flex items-start gap-2 text-xs text-red-700 bg-red-50 border border-red-200 rounded-lg p-2">
                       <input
                         type="checkbox"
@@ -875,16 +882,28 @@ export default function LeaveManagement() {
                         className="mt-0.5"
                       />
                       <span>
-                        This leaves the balance at {after}. Tick to allow a negative balance, and say why above.
+                        This leaves the balance at {after}. Tick to allow a negative balance, and say why above
+                        {overriding && !reasonLongEnough ? ' — at least 10 characters' : ''}.
                       </span>
                     </label>
+                  )}
+
+                  {goesNegative && !canOverride && (
+                    <p className="mt-2 text-xs text-red-700 bg-red-50 border border-red-200 rounded-lg p-2">
+                      This would leave the balance at {after}. Only an admin can take a balance below zero,
+                      and only with a written reason.
+                    </p>
                   )}
 
                   <div className="mt-4 flex justify-end">
                     <button
                       className="btn btn-primary text-sm disabled:opacity-50 disabled:cursor-not-allowed"
                       disabled={blocked || adjustMutation.isPending}
-                      onClick={() => adjustMutation.mutate(adjForm)}
+                      onClick={() => adjustMutation.mutate({
+                        ...adjForm,
+                        allow_negative: overriding,
+                        negative_reason: overriding ? adjForm.reason : undefined,
+                      })}
                     >
                       {adjustMutation.isPending ? 'Saving…' : 'Submit Adjustment'}
                     </button>
