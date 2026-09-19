@@ -728,3 +728,44 @@ rebuild ships every chunk:
 Log in as a non-HR/finance/admin user (or ask one to): **Contractor Report must not
 appear** under Workforce, and `/workforce/contractor-report` typed directly must show
 the red "HR, finance, or admin access required" panel.
+
+
+---
+
+# PR #44 — CI triage (19 Sep 2026)
+
+**`Jest (backend)` is red, and it is not this PR's.**
+
+| | suites | tests |
+|---|---|---|
+| `main` @ `2a0d1f0` (base) | 1 failed, 12 passed, 13 | **3 failed**, 250 passed, 253 |
+| PR #44 @ `6e7c63a` | 1 failed, 13 passed, 14 | **3 failed**, 300 passed, 303 |
+
+Same single suite (`tdsCalculation.test.js`), same three tests. This PR adds a
+suite and 50 tests, all passing; the failure count does not move. CI has been red
+on `main` for the last 8 runs listed. The run on `ebaf1a4` (docs-only) failed
+identically, which serves as the confirming re-run — deterministic, not a flake,
+so the one re-run allowance is not spent on a second attempt.
+
+**The recorded diagnosis is backwards.** CLAUDE.md §12 calls this
+"HIGH severity: real payroll accuracy concern". In fact the production code is
+right and the *tests* are stale. `tdsCalculation.js` gained a deliberate gate —
+no tax declaration means no auto-deduction, added to stop ghost deductions
+(SL Verma 23234, ₹10,487, Mar 2026). The test's mock returns **no** declaration
+and then asserts TDS is computed, i.e. it asserts the exact behaviour the gate
+removed.
+
+Proven by running the real function with a declaration supplied:
+₹50,000 → 0 (rebate) · ₹80,000 → ₹2,470 · ₹3,00,000 → ₹55,250, all `regime: 'new'`
+— which satisfies all three failing assertions.
+
+**Proposed patch (test-only, ~2 lines):** change the mock to
+`get: () => ({ regime: 'new' })`, and add a fourth case asserting
+`regime === 'none'` with no declaration so the gate itself is covered.
+
+**Not applied here.** `tdsCalculation.test.js` is outside this PR's scope and is
+payroll-adjacent; it deserves its own review rather than riding a read-only
+reporting PR. Offered as a separate one-file PR — it should turn `main` green too.
+
+Posted as one comment on PR #44:
+https://github.com/abhinavpoddar27-pixel/hr-salary-system/pull/44#issuecomment-5740204172
