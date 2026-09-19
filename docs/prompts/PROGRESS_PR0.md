@@ -16,6 +16,37 @@ Every claim is tagged **FACT** (file:line or command output), **INFERENCE**, or 
 - **Stage 7 salary never recomputes automatically.**
 - Do **not** repair employee 23725's data. Code only.
 
+### Gate rulings (2026-09-19, owner, 6)
+
+- **R1 — `applyLeavePlan` (site 14): leave the engine alone. No guard call, no clamp.**
+  Rationale to preserve: the engine is a *derived recompute*, not a transaction. A negative
+  `new_balance` there is the **symptom** of upstream over-debiting, not an act of
+  over-debiting. Rejecting inside it would make every subsequent recompute throw for
+  exactly the employees whose data is already wrong — and with automation ON, one bad row
+  would break the nightly sweep for everyone. The floor's job is to stop a **human action**
+  creating an overdraft, not to stop arithmetic from reporting one.
+- **R2 — the `PUT /:code/leaves` role guard ships as its own commit, ahead of the floor.**
+  Authorization fixes never ride along with behaviour changes: if the floor is ever
+  reverted, the guard must not revert with it.
+- **R3 — `financeAudit.js:630`'s literal `-1` is a balance write**, so it belongs in the
+  floor commit through the helper, not in the role-guard commit. One *concern* per commit,
+  judged by concern rather than by file.
+- **R4 — THE FLOOR MUST BE ATOMIC.** Check and write in ONE transaction, and the UPDATE
+  itself must carry the floor as a SQL predicate (`... AND balance - ? >= 0`), with
+  `changes !== 1` as the rejection path — never a prior SELECT. The 23725 incident was six
+  single-day debits in four minutes, which is exactly the shape that walks through a
+  non-atomic check. Bring the two already-floored paths onto the same helper, without
+  changing their response shapes or status codes.
+- **R5 — `mark-present`: role guard only.** The missing finalized-month check ships only if
+  it is a straight reuse of apply-leave's existing helper and error shape (then as its own
+  commit 3b); otherwise it is an open item. A safety PR does not invent new blocking
+  behaviour on a finance workflow.
+- **R6 — NO CHECK constraint on `leave_balances.balance`,** and the reason is recorded so
+  nobody later adds one thinking it is the real fix: a CHECK would break **both** the admin
+  override **and** the engine's legitimately-derived negatives (R1). The floor belongs at
+  the write paths, not in the schema. (It would also be a schema change, which the HARD
+  RULES forbid outright.)
+
 ---
 
 ## HARD RULES
@@ -36,14 +67,15 @@ Every claim is tagged **FACT** (file:line or command output), **INFERENCE**, or 
 |---|---|---|
 | Step 0 | Branch + prompt + tracker + baseline | **done** |
 | Step 0.5 | Reconcile delta since `2a0d1f0` | **done** |
-| Phase 0 | Verify anchors A–G, then STOP at gate | **done — AT GATE** |
-| Phase 1 | The floor | blocked on gate |
-| Phase 2 | Only what Phase 0 proved open | blocked on gate |
-| Phase 3 | `protectedWrite` assertions | blocked on gate |
-| Phase 4 | TDS tests | blocked on gate |
-| Phase 5 | `/api/version` | blocked on gate |
-| Phase 6 | Self-debug + user simulation + v2 | blocked on gate |
-| Phase 7 | Verify, CLAUDE.md, push | blocked on gate |
+| Phase 0 | Verify anchors A–G, then STOP at gate | **done — passed, 6 rulings** |
+| C1 | role-guard `PUT /:code/leaves` | **done** |
+| C2 | the floor (helper + 5 balance-write sites + frontend + dist) | in progress |
+| C3 | role-guard `mark-present` | pending |
+| C4 | `protectedWrite` assertions | pending |
+| C5 | TDS tests | pending |
+| C6 | `/api/version` | pending |
+| Phase 6 | Self-debug + user simulation + v2 | pending |
+| Phase 7 | Verify, CLAUDE.md, push | pending |
 
 ---
 
@@ -54,13 +86,17 @@ Every claim is tagged **FACT** (file:line or command output), **INFERENCE**, or 
 2. Committed `39f7c77 docs: PR-0 prompt and progress tracker`.
 3. Baseline installed and measured (see FINDINGS).
 4. Step 0.5 delta computed.
-5. Phase 0 anchors A–G verified.
+5. Phase 0 anchors A–G verified. Gate passed with 6 rulings (recorded above).
+6. **C1** — `routes/employees.js:526` `PUT /:code/leaves` now carries `requireHrOrAdmin`
+   (R2: shipped alone, ahead of the floor). Per the prompt's Phase 2 rule ("Nothing else
+   changes") no test rides in this commit; the guard is asserted in C2's
+   `leaveBalanceFloor.test.js`, which drives the same endpoint.
 
 ---
 
 ## NEXT
 
-**AT THE PHASE 0 GATE.** Waiting for the word `go`.
+**C2 — the floor.**
 
 ---
 

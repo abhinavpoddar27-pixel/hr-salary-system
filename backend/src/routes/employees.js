@@ -522,8 +522,10 @@ router.get('/:code/leaves', (req, res) => {
   res.json({ success: true, data: balances });
 });
 
-// UPDATE leave balance
-router.put('/:code/leaves', (req, res) => {
+// UPDATE leave balance.
+// Guarded since Sept 2026: this writes leave_balances directly, so until now any
+// authenticated role — viewer included — could rewrite an employee's entitlement.
+router.put('/:code/leaves', requireHrOrAdmin, (req, res) => {
   const db = getDb();
   const emp = db.prepare('SELECT id FROM employees WHERE code = ?').get(req.params.code);
   if (!emp) return res.status(404).json({ success: false, error: 'Employee not found' });
