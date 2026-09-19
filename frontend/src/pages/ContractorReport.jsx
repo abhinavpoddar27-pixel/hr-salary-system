@@ -67,7 +67,10 @@ export default function ContractorReport() {
   useEffect(() => {
     if (!report?.contractors?.length) return
     const wanted = contractor || gridContractor
-    if (report.contractors.includes(wanted)) {
+    // The grid may be opened on a gang with no activity this month, so it picks
+    // from the wider list; the header filter still uses `contractors`.
+    const pickable = report.gridContractors || report.contractors
+    if (pickable.includes(wanted)) {
       if (gridContractor !== wanted) setGridContractor(wanted)
     } else {
       setGridContractor(report.contractors[0])
@@ -97,8 +100,12 @@ export default function ContractorReport() {
     if (!contractor) return report.exceptions.count
     const x = report.exceptions
     const keep = (o) => o.contractor === contractor
+    // Mirrors exceptions.count on the server: financePending is in, `stale` and
+    // `rejected` are out. Keep the two in step — this branch enumerates the
+    // lists by hand, so a new section added there is silently missed here.
     return x.both.filter(keep).length + x.dup.filter(keep).length + x.pre.filter(keep).length +
-      x.tie.filter(keep).length + x.aft.filter(keep).length + x.nodoj.filter(keep).length +
+      x.tie.filter(keep).length + (x.financePending || []).filter(keep).length +
+      x.aft.filter(keep).length + x.nodoj.filter(keep).length +
       x.pend.filter(keep).length
   }, [report, contractor])
 
@@ -214,7 +221,7 @@ export default function ContractorReport() {
           {tab === 'grid' && (
             <GridViewTab
               report={grid} isLoading={gridLoading} error={gridError}
-              contractor={gridContractor} contractors={report.contractors}
+              contractor={gridContractor} contractors={report.gridContractors || report.contractors}
               setContractor={setGridContractor} onOpenDay={openDay}
             />
           )}

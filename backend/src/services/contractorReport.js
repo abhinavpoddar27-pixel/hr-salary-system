@@ -511,9 +511,30 @@ function monthReport(db, { month, year, company, today }) {
     .filter((r) => !CFG.isValidCompany(r.company))
     .reduce((s, r) => s + (Number(r.man_days) || 0), 0);
 
+  // 7 — the gangs the GRID may be opened on (2.1). `contractors` above is
+  //     "who appears in this month's data" and drives the header filter, the
+  //     per-contractor totals and every exception list — it is left exactly as
+  //     it was. But a gang where nobody punched all month appears in neither
+  //     biometric nor daily wage, so it could not be selected at all, which is
+  //     precisely the gang the worked/no-punch split exists to show. This adds
+  //     anyone with an Active roster on top, for the grid picker only.
+  const rosterDepts = db
+    .prepare(
+      `SELECT DISTINCT UPPER(TRIM(COALESCE(e.department,''))) AS dept
+         FROM employees e
+        WHERE ${pop.sql} AND TRIM(COALESCE(e.status,'')) = 'Active'`
+    )
+    .all(...pop.params);
+  const gridContractors = [
+    ...new Set([
+      ...contractors,
+      ...rosterDepts.map((r) => CFG.resolveBiometricContractor(r.dept).name),
+    ]),
+  ].sort();
+
   return {
     month, year, company: company || null,
-    days, contractors, cells,
+    days, contractors, gridContractors, cells,
     totals: { perContractor, stats },
     // 4dp, not 2 — this drives a percentage, and rounding the ratio to 2dp
     // would quantise the banner to whole steps of 1%.

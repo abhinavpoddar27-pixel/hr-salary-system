@@ -38,10 +38,20 @@ function cellClass(cell) {
 const PRE_JOINING_RING = { boxShadow: 'inset 0 0 0 1.5px #ef4444' }
 const STICKY_NAME = { position: 'sticky', left: 0, backgroundColor: '#ffffff', zIndex: 1 }
 
+//  R-16  A day whose HR correction is still waiting on finance gets a dashed
+//        amber outline. It is a CLASS, never an inline style, because the
+//        selection effect below writes and clears `node.style.outline`
+//        directly: an inline dashed outline would be wiped the first time the
+//        cell was selected and never come back. As a class it is simply
+//        overridden while selected and reappears when the selection moves on.
+const PENDING_OUTLINE = '[outline:1.5px_dashed_#d97706] [outline-offset:-2px]'
+
 // ─── the grid body — memoised, selection-independent (R-15) ───────────────
 const GridBody = memo(function GridBody({ rows, days, footer, grouped }) {
   let lastRole = null
+  let noPunchOpened = false
   const colCount = days.length + 6
+  const noPunchTotal = rows.reduce((n, r) => n + (r.noPunch ? 1 : 0), 0)
   return (
     <table className="border-separate border-spacing-[2px]" data-grid="1">
       <thead>
@@ -71,19 +81,32 @@ const GridBody = memo(function GridBody({ rows, days, footer, grouped }) {
           </tr>
         )}
         {rows.map((emp) => {
+          // The idle roster opens its own block, once, wherever it starts.
+          const opensNoPunch = emp.noPunch && !noPunchOpened
+          if (opensNoPunch) { noPunchOpened = true; lastRole = null }
           const header = grouped && emp.role !== lastRole
           if (header) lastRole = emp.role
           const s = emp.stats
           return [
+            opensNoPunch && (
+              <tr key="no-punch-group">
+                <td className="text-xs font-semibold text-slate-500 px-2 pt-4" style={STICKY_NAME}>
+                  No punch this month · {noPunchTotal}
+                </td>
+                <td colSpan={colCount - 1} className="pt-4">
+                  <div className="border-t border-slate-200" />
+                </td>
+              </tr>
+            ),
             header && (
               <tr key={emp.code + '-g'}>
                 <td className="text-xs font-semibold text-slate-500 px-2 pt-2" style={STICKY_NAME}>
-                  {emp.role} · {rows.filter((r) => r.role === emp.role).length}
+                  {emp.role} · {rows.filter((r) => r.role === emp.role && !!r.noPunch === !!emp.noPunch).length}
                 </td>
                 <td colSpan={colCount - 1}></td>
               </tr>
             ),
-            <tr key={emp.code} data-row={emp.code}>
+            <tr key={emp.code} data-row={emp.code} className={emp.noPunch ? 'opacity-50' : undefined}>
               <td
                 className="text-xs px-2 truncate cursor-pointer min-w-[190px] max-w-[190px]"
                 style={STICKY_NAME} data-name={emp.code}
@@ -98,7 +121,8 @@ const GridBody = memo(function GridBody({ rows, days, footer, grouped }) {
                     key={d.date}
                     data-r={emp.code} data-i={d.date}
                     style={cell?.preJoining ? PRE_JOINING_RING : undefined}
-                    className={`h-6 min-w-[26px] text-center text-[11px] font-semibold rounded cursor-pointer ${cellClass(cell)}`}
+                    title={cell?.pending ? 'Finance review pending — payroll still pays this day' : undefined}
+                    className={`h-6 min-w-[26px] text-center text-[11px] font-semibold rounded cursor-pointer ${cellClass(cell)}${cell?.pending ? ' ' + PENDING_OUTLINE : ''}`}
                   >
                     {cell ? CELL_LETTER[cell.status] ?? '' : ''}
                   </td>
@@ -192,6 +216,7 @@ function Panel({ sel, byCode, report, onOpenDay, onSelectRow }) {
           <RoleBadge role={emp.role} /> · joined {emp.doj || '—'}
         </div>
         <div className="flex flex-wrap gap-1.5">
+          {emp.noPunch && <span className="badge-gray">No punch this month</span>}
           <span className="badge-yellow">☀ {s.dayShifts} day shifts</span>
           <span className="badge-purple">☾ {s.nightShifts} night shifts</span>
           {s.halfDays > 0 && <span className="badge-yellow">{s.halfDays} half days</span>}
@@ -202,7 +227,10 @@ function Panel({ sel, byCode, report, onOpenDay, onSelectRow }) {
         </div>
         <div className="text-slate-500">
           {monthLabel(report.month)}: first punch {s.firstPunch ? dateShort(s.firstPunch) : '—'}, last punch{' '}
-          {s.lastPunch ? dateShort(s.lastPunch) : '—'}. Biometric man-days {days1(s.manDays)}, payroll days{' '}
+          {s.lastPunch ? dateShort(s.lastPunch) : '—'}. Biometric man-days {days1(s.manDays)}
+          {s.payrollView != null && s.payrollView !== s.manDays && (
+            <> ({days1(s.payrollView)} once the days waiting for Finance are counted)</>
+          )}, payroll days{' '}
           {s.payrollDays == null ? 'not computed' : days1(s.payrollDays)}
           {s.tie === false && <> <span className="badge-red">does not tie</span></>}
           {s.tie === true && <> <span className="badge-green">ties</span></>}.
@@ -229,8 +257,16 @@ function Panel({ sel, byCode, report, onOpenDay, onSelectRow }) {
         {present && cell.preJoining && (
           <span className="badge-red">Before joining {emp.doj} — not paid by payroll</span>
         )}
+        {cell?.pending && <span className="badge-yellow">Waiting for Finance</span>}
         {!emp.doj && <span className="badge-gray">No joining date</span>}
       </div>
+      {cell?.pending && (
+        <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-amber-900">
+          Punched {cell.punchedAs || '—'}; HR marked {cell.hrMarkedAs || '—'}
+          {cell.correctionSource ? ` from ${cell.correctionSource}` : ''}; Finance review pending
+          — payroll still pays this day{cell.payrollStatus ? ` as ${cell.payrollStatus}` : ''}.
+        </div>
+      )}
       <div className="text-slate-500">{gangLine}</div>
       <div className="flex gap-2">
         {openBtn}
@@ -248,6 +284,8 @@ export default function GridViewTab({ report, isLoading, error, contractor, cont
   const [sort, setSort] = useState('role')
   const [shift, setShift] = useState('all')
   const [flaggedOnly, setFlaggedOnly] = useState(false)
+  // Off by default: the grid is about the people who actually worked.
+  const [showNoPunch, setShowNoPunch] = useState(false)
   const [sel, setSel] = useState(null)
 
   const tableRef = useRef(null)
@@ -256,6 +294,7 @@ export default function GridViewTab({ report, isLoading, error, contractor, cont
   const rows = useMemo(() => {
     if (!report) return []
     let list = report.employees
+    if (!showNoPunch) list = list.filter((e) => !e.noPunch)
     const needle = q.trim().toLowerCase()
     if (needle) {
       list = list.filter((e) => e.name.toLowerCase().includes(needle) || String(e.code).includes(needle))
@@ -273,8 +312,11 @@ export default function GridViewTab({ report, isLoading, error, contractor, cont
       night: (a, b) => b.stats.nightShifts - a.stats.nightShifts || a.name.localeCompare(b.name),
       joined: (a, b) => String(a.doj || '9999').localeCompare(String(b.doj || '9999')),
     }
-    return [...list].sort(by[sort] || by.role)
-  }, [report, q, sort, shift, flaggedOnly])
+    // Whichever sort is chosen, the idle roster stays below the people who
+    // worked — that split is the point of the view, not a tie-break.
+    const chosen = by[sort] || by.role
+    return [...list].sort((a, b) => Number(!!a.noPunch) - Number(!!b.noPunch) || chosen(a, b))
+  }, [report, q, sort, shift, flaggedOnly, showNoPunch])
 
   const byCode = useMemo(() => new Map(rows.map((e) => [e.code, e])), [rows])
 
@@ -377,8 +419,11 @@ export default function GridViewTab({ report, isLoading, error, contractor, cont
       <div className="card">
         <div className="card-header">
           <span className="font-semibold text-slate-700">
-            Grid view · {contractor} · {report ? `${monthLabel(report.month)} ${report.year} · ` : ''}
-            {rows.length} {rows.length === 1 ? 'person' : 'people'}
+            {contractor}
+            {report && <> · {monthLabel(report.month)} {report.year} · {report.workedCount} worked · {report.noPunchCount} no punch</>}
+            {report && rows.length !== (showNoPunch ? report.workedCount + report.noPunchCount : report.workedCount) && (
+              <span className="font-normal text-slate-400"> · showing {rows.length}</span>
+            )}
           </span>
           <div className="flex gap-3 flex-wrap text-xs text-slate-400">
             <span className="inline-flex items-center gap-1"><i className="w-3 h-3 rounded-sm inline-block bg-emerald-200" />Present (day)</span>
@@ -388,6 +433,7 @@ export default function GridViewTab({ report, isLoading, error, contractor, cont
             <span className="inline-flex items-center gap-1"><i className="w-3 h-3 rounded-sm inline-block bg-red-200" />Absent</span>
             <span className="inline-flex items-center gap-1"><i className="w-3 h-3 rounded-sm inline-block bg-slate-200" />Week off</span>
             <span className="inline-flex items-center gap-1"><i className="w-3 h-3 rounded-sm inline-block" style={PRE_JOINING_RING} />Before joining</span>
+            <span className="inline-flex items-center gap-1"><i className={`w-3 h-3 rounded-sm inline-block ${PENDING_OUTLINE}`} />Waiting for Finance</span>
           </div>
         </div>
 
@@ -420,6 +466,13 @@ export default function GridViewTab({ report, isLoading, error, contractor, cont
           <label className="text-xs text-slate-600 inline-flex items-center gap-1.5">
             <input type="checkbox" checked={flaggedOnly} onChange={(e) => setFlaggedOnly(e.target.checked)} />
             Only flagged
+          </label>
+          <label className="text-xs text-slate-600 inline-flex items-center gap-1.5">
+            <input
+              type="checkbox" checked={showNoPunch}
+              onChange={(e) => setShowNoPunch(e.target.checked)}
+            />
+            Show people with no punch this month ({report ? report.noPunchCount : 0})
           </label>
         </div>
 
