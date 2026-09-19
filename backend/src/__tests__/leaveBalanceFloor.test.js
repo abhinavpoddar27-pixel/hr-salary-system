@@ -154,6 +154,35 @@ describe('POST /api/leaves/adjust', () => {
     expect(res.body.newBalance).toBe(6);
     expect(balanceOf(e)).toBe(6);
   });
+
+  // Regression, found by self-debug: the floor predicate was attached to every
+  // write, so `balance + 2 >= 0` refused a credit onto a -5 balance — the very
+  // repair an override leaves behind. Floors belong on debits only.
+  test('an already-negative balance can still be credited, even partway', async () => {
+    const e = addEmployee(); setBalance(e, 'CL', -5);
+    const res = await adjust({
+      employee_code: e.code, leave_type: 'CL', transaction_type: 'Credit', days: 2, reason: 'repair',
+    });
+    expect(res.status).toBe(200);
+    expect(balanceOf(e)).toBe(-3);
+  });
+
+  test('an already-negative balance can be credited back above zero', async () => {
+    const e = addEmployee(); setBalance(e, 'CL', -2);
+    const res = await adjust({
+      employee_code: e.code, leave_type: 'CL', transaction_type: 'Credit', days: 5, reason: 'repair',
+    });
+    expect(res.status).toBe(200);
+    expect(balanceOf(e)).toBe(3);
+  });
+
+  test('an already-negative balance still cannot be debited further', async () => {
+    const e = addEmployee(); setBalance(e, 'CL', -2);
+    const res = await debit(e, 1);
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe('INSUFFICIENT_LEAVE_BALANCE');
+    expect(balanceOf(e)).toBe(-2);
+  });
 });
 
 // ─────────────────────────────────────────────────────────────────────────────

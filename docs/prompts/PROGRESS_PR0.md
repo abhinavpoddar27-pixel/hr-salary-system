@@ -75,8 +75,8 @@ Every claim is tagged **FACT** (file:line or command output), **INFERENCE**, or 
 | C4 | `protectedWrite` assertions | **done** |
 | C5 | TDS tests | **done** |
 | C6 | `/api/version` | **done** |
-| Phase 6 | Self-debug + user simulation + v2 | in progress |
-| Phase 7 | Verify, CLAUDE.md, push | pending |
+| Phase 6 | Self-debug + user simulation + v2 | **done** |
+| Phase 7 | Verify, CLAUDE.md, push | in progress |
 
 ---
 
@@ -139,11 +139,58 @@ Every claim is tagged **FACT** (file:line or command output), **INFERENCE**, or 
     `deployedAt` had no consumer anywhere in the repo (grep, FACT), so the rename
     breaks nothing.
 
+13. **Phase 6 — self-debug.** Re-read every diff line against the HARD RULES: the four
+    forbidden files are byte-identical to `origin/main`; `recompute.js` untouched;
+    `leaveEngine.js` shows **zero non-comment changed lines**; no `policy_config` in the
+    diff; no schema change. Then found **one real defect** by reading the guard
+    adversarially — see "What self-debug caught" below.
+14. **Phase 6 — user simulation.** `backend/scripts/pr0-floor-simulation.sh` boots the
+    real `backend/server.js`, logs in as hr / admin / finance / employee with real
+    passwords and real JWTs, and drives the floor over HTTP. **32/32 pass.** The jest
+    suite mounts routers behind a stubbed `req.user`; this proves the role guards hold
+    end to end, which a stub cannot.
+15. **Phase 6 — v2.** Defect fixed, 3 regression tests added, full suite re-run 3× at
+    **378/378**.
+
+### What self-debug caught (FACT)
+
+**The floor predicate was attached to every write, not just debits.** `balance + :delta >= 0`
+was in the WHERE clause for credits too, so crediting an employee who was already
+negative was *refused*: at -5, a credit of 2 evaluates `-3 >= 0` → false → 0 rows
+changed → 400. That is precisely the repair action an admin override leaves behind —
+the floor would have trapped an employee below zero with no way back except another
+override. Not caught by the original tests because they only credited from a positive
+balance.
+
+Fix: `const floored = d < 0 && !overriding;` — the predicate attaches to debits only.
+A zero-delta write is likewise not a debit and is not floored. Three regression tests
+added: credit a negative partway (-5 → -3), credit a negative back above zero
+(-2 → +3), and a debit from a negative still refused.
+
+Also split the rejection: a genuinely missing `leave_balances` row now returns
+`NO_LEAVE_BALANCE_ROW` rather than claiming "0 day(s) available", while still carrying
+`available: 0` so the two callers that render the old wording are unaffected.
+
+### What could not be tested, and why (FACT)
+
+- **True concurrency.** `better-sqlite3` is synchronous, so two HTTP requests cannot
+  interleave mid-statement in one process. The atomicity tests fire two requests via
+  `Promise.all` and assert exactly one lands, which matches production (a single Node
+  process serialises them) — but a multi-process deployment is not exercised. The SQL
+  predicate is what makes it safe there, and that is asserted; the *race* itself is not.
+- **The rebuilt `frontend/dist` in a browser.** No browser in this sandbox. The
+  `allow_negative` wiring is verified only by grepping the built bundle
+  (`LeaveManagement-BshOrHPp.js` contains `allow_negative`) and by the backend
+  accepting the field. The tick, the 10-character hint and the non-admin message need
+  a human on Railway preview.
+- **Production data.** No access, by design. Employee 23725 is not repaired; this PR is
+  code only.
+
 ---
 
 ## NEXT
 
-**Phase 6 — self-debug, user simulation, v2.**
+**Phase 7 — verify, CLAUDE.md, push.**
 
 ---
 

@@ -14,11 +14,15 @@
  * So the floor is enforced by the UPDATE statement itself:
  *
  *     ... WHERE employee_id = ? AND year = ? AND leave_type = ?
- *           AND balance + :delta >= 0
+ *           AND balance + :delta >= 0        -- debits only
  *
  * and `changes !== 1` is the rejection path. Nothing here trusts a prior SELECT.
  * A read still happens, but only to build the error message after the write has
  * already declined — never to decide whether the write may proceed.
+ *
+ * The predicate is attached to debits only. A credit must never be floored: an
+ * employee left at -5 by an override has to be repairable, and `balance + 2 >= 0`
+ * would refuse the very credit that repairs them.
  *
  * There is deliberately NO CHECK constraint on the column. A CHECK would also
  * reject the admin override below, and it would reject the leave engine's
@@ -124,17 +128,22 @@ function adjustLeaveBalance(db, o) {
       `).run(employeeId, year, leaveType);
     }
 
-    // The floor lives in the WHERE clause. With the override the predicate is
-    // dropped, so an admin write is the only one that can land below zero.
+    // The floor lives in the WHERE clause, and applies ONLY to a debit. A
+    // credit must never be blocked by it: an employee sitting at -5 after an
+    // override has to be repairable, and `balance + 2 >= 0` would refuse the
+    // very credit that repairs them. A zero-delta write is likewise not a
+    // debit and is not floored. With the override the predicate is dropped
+    // altogether, so an admin write is the only one that can land below zero.
+    const floored = d < 0 && !overriding;
     const sql = `
       UPDATE leave_balances
       SET used = used + ?, balance = balance + ?
       WHERE employee_id = ? AND year = ? AND leave_type = ?
-      ${overriding ? '' : 'AND balance + ? >= 0'}
+      ${floored ? 'AND balance + ? >= 0' : ''}
     `;
-    const params = overriding
-      ? [Number(usedDelta) || 0, d, employeeId, year, leaveType]
-      : [Number(usedDelta) || 0, d, employeeId, year, leaveType, d];
+    const params = floored
+      ? [Number(usedDelta) || 0, d, employeeId, year, leaveType, d]
+      : [Number(usedDelta) || 0, d, employeeId, year, leaveType];
 
     const info = db.prepare(sql).run(...params);
 
@@ -143,7 +152,14 @@ function adjustLeaveBalance(db, o) {
       const row = db.prepare(
         'SELECT balance FROM leave_balances WHERE employee_id = ? AND year = ? AND leave_type = ?'
       ).get(employeeId, year, leaveType);
-      const available = row ? Number(row.balance) || 0 : 0;
+      if (!row) {
+        return reject(
+          `No ${leaveType} balance on file for ${employeeCode} in ${year}.`,
+          'NO_LEAVE_BALANCE_ROW',
+          { employeeCode, leaveType, requested: Math.abs(d), available: 0 }
+        );
+      }
+      const available = Number(row.balance) || 0;
       return reject(
         `Cannot debit ${Math.abs(d)} day(s) of ${leaveType} for ${employeeCode}: `
         + `${available} day(s) available. An admin may override with a written reason.`,
