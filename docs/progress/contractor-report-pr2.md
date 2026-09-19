@@ -4,7 +4,12 @@ Branch: `feat/contractor-report` (from `main` @ 2a0d1f0)
 Prompt copy: `docs/prompts/contractor-report-pr2.md`
 
 ## STATE
-Phase 4 complete — branch pushed, PR not opened (owner opens and merges it).
+Phase 4 complete. Branch pushed; **PR #44 is open** —
+https://github.com/abhinavpoddar27-pixel/hr-salary-system/pull/44
+(opened by the owner from the Claude Code UI, not by this session).
+This session is subscribed to its activity and will act on CI failures and
+review comments. Further commits to `feat/contractor-report` update PR #44.
+The owner merges it; this session does not.
 Backend shipped: config + pure service + 3 GET routes + 44 jest tests. Verified
 end to end against real April production aggregates.
 
@@ -36,8 +41,8 @@ end to end against real April production aggregates.
 - [x] P3.7 user-simulation pass in a real browser (see PHASE 3 VERIFICATION)
 
 ## NEXT
-Owner opens the PR on GitHub and merges it there. Then work the POST-DEPLOY
-CHECKLIST below. **Never push to main** (R-0).
+Watch PR #44 to green, then the owner merges on GitHub and works the
+POST-DEPLOY CHECKLIST below. **Never push to main** (R-0).
 
 ## BLOCKERS
 None. (B-1 prototype-unavailable was resolved by the owner's upload.)
@@ -672,6 +677,9 @@ the call site, and a test covers the multi-company sum.
 ---
 
 # POST-DEPLOY CHECKLIST (for Abhinav)
+
+Tracking PR: **#44** — https://github.com/abhinavpoddar27-pixel/hr-salary-system/pull/44
+
 
 ## 1. Numbers to eyeball on production
 Open **Workforce → Contractor Report** and check the stat cards:
