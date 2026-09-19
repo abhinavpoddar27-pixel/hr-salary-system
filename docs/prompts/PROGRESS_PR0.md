@@ -73,8 +73,8 @@ Every claim is tagged **FACT** (file:line or command output), **INFERENCE**, or 
 | C3 | role-guard `mark-present` | **done** |
 | C3b | finalized-month check on `mark-present` (R5) | **done** |
 | C4 | `protectedWrite` assertions | **done** |
-| C5 | TDS tests | in progress |
-| C6 | `/api/version` | pending |
+| C5 | TDS tests | **done** |
+| C6 | `/api/version` | in progress |
 | Phase 6 | Self-debug + user simulation + v2 | pending |
 | Phase 7 | Verify, CLAUDE.md, push | pending |
 
@@ -122,11 +122,17 @@ Every claim is tagged **FACT** (file:line or command output), **INFERENCE**, or 
     same-realm, already pass, and were left alone as instructed. No production code
     touched.
 
+11. **C5** — the three new-regime tests now mock a filed new-regime declaration instead
+    of running against a `mockDb` that returns `null` for everything. Added two cases
+    pinning the gate itself: no declaration → `monthly_tds 0`, `regime 'none'`; and zero
+    salary *with* a declaration → still zero. `services/tdsCalculation.js` is byte-unchanged
+    (`git diff origin/main` on it is empty). **Suite green for the first time: 375/375.**
+
 ---
 
 ## NEXT
 
-**C5 — TDS tests.**
+**C6 — `/api/version`.**
 
 ---
 
