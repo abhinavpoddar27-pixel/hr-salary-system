@@ -69,8 +69,8 @@ Every claim is tagged **FACT** (file:line or command output), **INFERENCE**, or 
 | Step 0.5 | Reconcile delta since `2a0d1f0` | **done** |
 | Phase 0 | Verify anchors A–G, then STOP at gate | **done — passed, 6 rulings** |
 | C1 | role-guard `PUT /:code/leaves` | **done** |
-| C2 | the floor (helper + 5 balance-write sites + frontend + dist) | in progress |
-| C3 | role-guard `mark-present` | pending |
+| C2 | the floor (helper + 5 balance-write sites + frontend + dist) | **done** |
+| C3 | role-guard `mark-present` | in progress |
 | C4 | `protectedWrite` assertions | pending |
 | C5 | TDS tests | pending |
 | C6 | `/api/version` | pending |
@@ -92,11 +92,21 @@ Every claim is tagged **FACT** (file:line or command output), **INFERENCE**, or 
    changes") no test rides in this commit; the guard is asserted in C2's
    `leaveBalanceFloor.test.js`, which drives the same endpoint.
 
+7. **C2** — the floor. New `services/leaveBalanceGuard.js`; five balance-write paths
+   routed through it; `financeAudit.js`'s literal `balance = -1` deleted (R3); the false
+   "only writer" comments at `leaveEngine.js:10` / `:450` corrected, with R1's rationale
+   recorded there (comments only — `git diff` on that file is 22 insertions / 5 deletions,
+   all comment lines, no formula touched); frontend `allow_negative` wiring + rebuilt
+   `dist`; `leaveBalanceFloor.test.js` with **30** tests, all passing.
+   Full suite after C2: **3 failed / 368 passed / 371** — only the 3 known TDS failures,
+   no regression, and `leaveApi.test.js`'s existing apply-leave assertions still pass,
+   which is the evidence that response shapes and status codes were preserved (R4).
+
 ---
 
 ## NEXT
 
-**C2 — the floor.**
+**C3 — role-guard `mark-present`.**
 
 ---
 
