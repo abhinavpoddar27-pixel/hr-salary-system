@@ -41,6 +41,22 @@ export const dateShort = (iso) => {
 export const isSunday = (iso) => asUtc(iso).getUTCDay() === 0
 export const monthLabel = (m) => MONTHS.find((x) => x.value === Number(m))?.label || ''
 
+// ─── attendance weights + role order (single frontend definition) ─────────
+// Mirrors PRESENT_WEIGHTS / ROLE_ORDER in backend/src/config/contractorReportConfig.js.
+// Kept here — not re-declared per tab — so a new status code or role only has to
+// be added to the backend config and to this one place, instead of to three or
+// four scattered copies that silently disagree with the numbers beside them.
+export const PRESENT_WEIGHTS = { P: 1, WOP: 1, '½P': 0.5, 'WO½P': 0.5 }
+export const weightOf = (status) => PRESENT_WEIGHTS[status] || 0
+export const CELL_LETTER = { P: 'P', WOP: 'W', '½P': '½', 'WO½P': '½', A: 'A', WO: 'WO' }
+
+export const ROLE_ORDER = ['Supervisor', 'Loading', 'Helper', 'Guard', 'Sweeper']
+export const ROLE_NO_DESIGNATION = 'No designation'
+export const roleRank = (r) => {
+  const i = ROLE_ORDER.indexOf(r)
+  return i >= 0 ? i : r === ROLE_NO_DESIGNATION ? ROLE_ORDER.length + 1 : ROLE_ORDER.length
+}
+
 // ─── shift + status marks ─────────────────────────────────────────────────
 // Night is indigo/purple to match AttendanceRegister's night convention.
 export const SUN_MARK = <span className="text-amber-500" aria-hidden="true">☀</span>

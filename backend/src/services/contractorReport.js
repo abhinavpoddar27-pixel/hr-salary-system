@@ -117,6 +117,7 @@ function loadDwEntries(db, startDate, endDate) {
         amount: r2(row.total_wage_amount),
         status: row.status,
         counted: CFG.DW_COUNTED_STATUSES.includes(row.status),
+        rejected: row.status === 'rejected',
         gateRef: row.gate_entry_reference || '',
         allocations: [],
       };
@@ -209,6 +210,15 @@ function monthReport(db, { month, year, company }) {
     .all(...pop.params, start, end);
 
   // 3 — payroll days for the tie-out.
+  //
+  //     Deliberately NOT filtered by company, and deliberately summed per
+  //     employee. day_calculations.company disagrees with employees.company on
+  //     325 of the 512 contract rows in April–May 2026, so filtering by the
+  //     selected company would drop most employees' payroll row and turn the
+  //     tie-out into a wall of false mismatches. Summing is right when an
+  //     employee genuinely has one row per company: their biometric man-days
+  //     (unfiltered) span both companies too. Verified: no contract employee
+  //     currently has more than one row for a month.
   const dcRows = db
     .prepare(
       `SELECT employee_code AS code, SUM(total_payable_days) AS payroll_days
@@ -217,19 +227,25 @@ function monthReport(db, { month, year, company }) {
     .all(month, year);
   const payrollByCode = new Map(dcRows.map((r) => [r.code, Number(r.payroll_days)]));
 
-  // 4 — company mix, for the yellow banner.
+  // 4 — company mix for the yellow banner. This one deliberately runs WITHOUT
+  //     the company filter: the banner's job is to say how much of the month
+  //     sits on workers with no valid company, and filtering to a company first
+  //     would make that share structurally zero and silence the banner at the
+  //     exact moment it matters (selecting a company drops every blank /
+  //     'null' / 'Default' worker from the figures above it).
+  const popAll = populationClause('e', null);
   const coRows = db
     .prepare(
       `SELECT TRIM(COALESCE(e.company,'')) AS company,
               SUM(CASE WHEN ${PRE_DOJ_EXPR} = 0 THEN ${wt} ELSE 0 END) AS man_days
          FROM attendance_processed ap
          JOIN employees e ON e.code = ap.employee_code
-        WHERE ${pop.sql}
+        WHERE ${popAll.sql}
           AND COALESCE(ap.is_night_out_only,0) <> 1
           AND ap.date BETWEEN ? AND ?
         GROUP BY 1`
     )
-    .all(...pop.params, start, end);
+    .all(...popAll.params, start, end);
 
   // 5 — daily wage.
   const dwEntries = loadDwEntries(db, start, end);
@@ -243,13 +259,11 @@ function monthReport(db, { month, year, company }) {
     return cells[date][contractor];
   };
   const contractorSet = new Set();
-  const unmappedNames = new Set();
 
   for (const row of bioRows) {
     const weight = CFG.statusWeight(row.status);
     if (weight <= 0) continue;
     const resolved = CFG.resolveBiometricContractor(row.dept);
-    if (resolved.unmapped) unmappedNames.add(resolved.name);
     const cell = cellFor(row.date, resolved.name);
     contractorSet.add(resolved.name);
     const n = Number(row.n) || 0;
@@ -267,13 +281,12 @@ function monthReport(db, { month, year, company }) {
     if (entry.isTest) continue; // surfaced only under "Test entries to void"
     const cell = cellFor(entry.date, entry.contractor);
     contractorSet.add(entry.contractor);
-    if (entry.unmapped) unmappedNames.add(entry.contractor);
     if (entry.counted) {
       cell.dwHeads += entry.heads;
       cell.dwCost = r2(cell.dwCost + entry.amount);
       cell.dwRecords += 1;
       addDeptBreakdown(cell, entry);
-    } else {
+    } else if (!entry.rejected) {
       cell.dwPending += entry.heads;
     }
   }
@@ -337,9 +350,9 @@ function monthReport(db, { month, year, company }) {
     month, year, company: company || null,
     days, contractors, cells,
     totals: { perContractor, stats },
-    unknownCompanyManDays: r2(unknownMd),
-    unknownCompanyRatio: totalMd > 0 ? r2(unknownMd / totalMd) : 0,
-    unmappedContractors: [...unmappedNames].sort(),
+    // 4dp, not 2 — this drives a percentage, and rounding the ratio to 2dp
+    // would quantise the banner to whole steps of 1%.
+    unknownCompanyRatio: totalMd > 0 ? Math.round((unknownMd / totalMd) * 1e4) / 1e4 : 0,
     exceptions,
   };
 }
@@ -377,17 +390,21 @@ function buildExceptions({ days, cells, dwEntries, empRows, payrollByCode }) {
 
   // Two or more distinct daily-wage contractor records for one display-name
   // contractor on one day (e.g. PAPPU and PAPPU CONT on 4 Apr).
+  // Grouped with the date and contractor carried on the value. A contractor
+  // display name can be raw free text typed at the gate and may contain the
+  // separator, so the key must never be parsed back apart.
   const byDayContractor = new Map();
   for (const e of dwEntries) {
     if (e.isTest || !e.counted) continue;
-    const key = `${e.date}|${e.contractor}`;
-    if (!byDayContractor.has(key)) byDayContractor.set(key, []);
-    byDayContractor.get(key).push(e);
+    const key = `${e.date}\u0000${e.contractor}`;
+    if (!byDayContractor.has(key)) {
+      byDayContractor.set(key, { date: e.date, contractor: e.contractor, list: [] });
+    }
+    byDayContractor.get(key).list.push(e);
   }
-  for (const [key, list] of byDayContractor) {
+  for (const { date, contractor, list } of byDayContractor.values()) {
     const distinct = new Set(list.map((e) => e.contractorId));
     if (distinct.size < 2) continue;
-    const [date, contractor] = key.split('|');
     dup.push({
       date, contractor,
       records: list.map((e) => ({
@@ -417,12 +434,16 @@ function buildExceptions({ days, cells, dwEntries, empRows, payrollByCode }) {
     }
   }
 
-  const pend = dwEntries
-    .filter((e) => !e.isTest && !e.counted)
-    .map((e) => ({
-      date: e.date, rawName: e.rawName, contractor: e.contractor,
-      heads: e.heads, status: e.status,
-    }));
+  // "Not counted" splits two ways. Rejected entries are a terminal decision
+  // finance already made — listing them as "not approved" would keep the
+  // Exceptions badge permanently non-zero with nothing anyone can act on.
+  const dwNotCounted = dwEntries.filter((e) => !e.isTest && !e.counted);
+  const toRow = (e) => ({
+    date: e.date, rawName: e.rawName, contractor: e.contractor,
+    heads: e.heads, status: e.status,
+  });
+  const pend = dwNotCounted.filter((e) => !e.rejected).map(toRow);
+  const rejected = dwNotCounted.filter((e) => e.rejected).map(toRow);
 
   const test = dwEntries
     .filter((e) => e.isTest)
@@ -432,16 +453,16 @@ function buildExceptions({ days, cells, dwEntries, empRows, payrollByCode }) {
     }));
 
   const bySorter = (a, b) => String(a.date).localeCompare(String(b.date));
-  both.sort(bySorter); dup.sort(bySorter); pend.sort(bySorter); test.sort(bySorter);
+  both.sort(bySorter); dup.sort(bySorter); pend.sort(bySorter);
+  rejected.sort(bySorter); test.sort(bySorter);
   const byDays = (a, b) => b.days - a.days || String(a.code).localeCompare(String(b.code));
   pre.sort(byDays); aft.sort(byDays); nodoj.sort(byDays);
   tie.sort((a, b) => String(a.code).localeCompare(String(b.code)));
 
   return {
-    both, dup, pre, tie, aft, nodoj, pend, test,
+    both, dup, pre, tie, aft, nodoj, pend, rejected, test,
     count: both.length + dup.length + pre.length + tie.length +
            aft.length + nodoj.length + pend.length + test.length,
-    maxDoublePayTotal: r2(both.reduce((s, o) => s + o.maxDoublePay, 0)),
   };
 }
 
@@ -503,7 +524,7 @@ function dayReport(db, { date, company }) {
       c.dwHeads += e.heads;
       c.dwCost = r2(c.dwCost + e.amount);
       c.dwRecords += 1;
-    } else {
+    } else if (!e.rejected) {
       c.dwPending += e.heads;
     }
     c.dwEntries.push({

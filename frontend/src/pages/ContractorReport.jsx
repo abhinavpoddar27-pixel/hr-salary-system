@@ -29,8 +29,11 @@ const TABS = [
   { value: 'exceptions', label: 'Exceptions' },
 ]
 
+const ALLOWED_ROLES = ['hr', 'finance', 'admin']
+
 export default function ContractorReport() {
-  const { selectedMonth, selectedYear, selectedCompany } = useAppStore()
+  const { user, selectedMonth, selectedYear, selectedCompany } = useAppStore()
+  const allowed = ALLOWED_ROLES.includes(user?.role)
 
   const [month, setMonth] = useState(selectedMonth || new Date().getMonth() + 1)
   const [year, setYear] = useState(selectedYear || new Date().getFullYear())
@@ -45,6 +48,7 @@ export default function ContractorReport() {
   const { data: res, isLoading, error } = useQuery({
     queryKey: ['contractor-report-month', month, year, company],
     queryFn: () => getContractorMonthReport({ month, year, company: company || undefined }),
+    enabled: allowed,
   })
   const report = res?.data?.data
 
@@ -75,7 +79,7 @@ export default function ContractorReport() {
   } = useQuery({
     queryKey: ['contractor-report-grid', month, year, gridContractor, company],
     queryFn: () => getContractorGridReport({ month, year, contractor: gridContractor, company: company || undefined }),
-    enabled: tab === 'grid' && !!gridContractor,
+    enabled: allowed && tab === 'grid' && !!gridContractor,
   })
   const grid = gridRes?.data?.data
 
@@ -98,11 +102,27 @@ export default function ContractorReport() {
       x.pend.filter(keep).length
   }, [report, contractor])
 
+
   const openDay = (d, c = null) => {
     setDate(d)
     setOpenContractor(c)
     setTab('day')
     window.scrollTo({ top: 0, behavior: 'smooth' })
+  }
+
+  // Same shape as the SQL Console's admin gate. The backend enforces this too
+  // (every endpoint is HR/finance/admin); this is the client-side courtesy so a
+  // viewer who types the URL gets the app's normal denial state, not a page that
+  // renders and then fails three API calls.
+  if (!allowed) {
+    return (
+      <div className="p-8 max-w-2xl mx-auto">
+        <div className="bg-red-50 border border-red-300 rounded p-4 text-red-800">
+          <h2 className="font-semibold mb-1">HR, finance, or admin access required</h2>
+          <p className="text-sm">The Contractor Report is restricted to HR, finance and admin users.</p>
+        </div>
+      </div>
+    )
   }
 
   return (

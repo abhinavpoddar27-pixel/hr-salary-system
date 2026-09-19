@@ -36,11 +36,14 @@ export default function ExceptionsTab({ report, contractor, onOpenDay }) {
   const aft = x.aft.filter(keep)
   const nodoj = x.nodoj.filter(keep)
   const pend = x.pend.filter(keep)
+  // Rejected entries are a decision finance already made — shown for the record,
+  // but they are terminal, so they are not part of the actionable count.
+  const rejected = (x.rejected || []).filter(keep)
   const test = contractor ? [] : x.test
   const risk = both.reduce((s, o) => s + o.maxDoublePay, 0)
 
   const total = both.length + dup.length + pre.length + tie.length +
-    aft.length + nodoj.length + pend.length + test.length
+    aft.length + nodoj.length + pend.length + rejected.length + test.length
   if (!total) {
     return <div className="card"><EmptyState>Nothing to flag for this month.</EmptyState></div>
   }
@@ -155,6 +158,21 @@ export default function ExceptionsTab({ report, contractor, onOpenDay }) {
             <td>{o.rawName}</td>
             <td className="text-right tabular-nums">{o.heads}</td>
             <td><span className="badge-yellow">{o.status}</span></td>
+          </tr>
+        ))}
+      </Section>
+
+      <Section
+        title="Daily-wage entries rejected by finance (not counted, no action needed)"
+        count={rejected.length} tone="badge-gray"
+        headers={[H('d', 'Date'), H('r', 'Record'), H('h', 'Heads', 1), H('s', 'Status')]}
+      >
+        {rejected.map((o, i) => (
+          <tr key={i} className="cursor-pointer" onClick={() => onOpenDay(o.date, o.contractor)}>
+            <td>{dateLong(o.date)}</td>
+            <td>{o.rawName}</td>
+            <td className="text-right tabular-nums">{o.heads}</td>
+            <td><span className="badge-gray">{o.status}</span></td>
           </tr>
         ))}
       </Section>

@@ -28,13 +28,17 @@ function makeDb() {
     );
     CREATE TABLE day_calculations (
       id INTEGER PRIMARY KEY, employee_code TEXT, month INTEGER, year INTEGER,
-      total_payable_days REAL
+      company TEXT, total_payable_days REAL,
+      UNIQUE(employee_code, month, year, company)
     );
     CREATE TABLE dw_contractors (id INTEGER PRIMARY KEY, contractor_name TEXT);
     CREATE TABLE dw_entries (
-      id INTEGER PRIMARY KEY, contractor_id INTEGER, entry_date TEXT,
-      total_worker_count INTEGER, wage_rate_applied REAL, total_wage_amount REAL,
-      status TEXT, gate_entry_reference TEXT, company TEXT
+      id INTEGER PRIMARY KEY, contractor_id INTEGER, entry_date TEXT NOT NULL,
+      in_time TEXT NOT NULL, out_time TEXT NOT NULL,
+      total_worker_count INTEGER NOT NULL, wage_rate_applied REAL NOT NULL,
+      commission_rate_applied REAL NOT NULL, total_wage_amount REAL NOT NULL DEFAULT 0,
+      total_commission_amount REAL NOT NULL DEFAULT 0, total_liability REAL NOT NULL DEFAULT 0,
+      status TEXT NOT NULL DEFAULT 'hr_entered', gate_entry_reference TEXT NOT NULL
     );
     CREATE TABLE dw_department_allocations (
       id INTEGER PRIMARY KEY, entry_id INTEGER, department TEXT,
@@ -65,11 +69,11 @@ function addAtt(db, code, date, status, opts = {}) {
     opts.final === undefined ? status : opts.final,
     opts.night ? 1 : 0, opts.nightOutOnly ? 1 : 0);
 }
-function addDayCalc(db, code, month, year, days) {
+function addDayCalc(db, code, month, year, days, company = 'Asian Lakto Ind Ltd') {
   db.prepare(
-    `INSERT INTO day_calculations (id, employee_code, month, year, total_payable_days)
-     VALUES (?,?,?,?,?)`
-  ).run(++idSeq, code, month, year, days);
+    `INSERT INTO day_calculations (id, employee_code, month, year, company, total_payable_days)
+     VALUES (?,?,?,?,?,?)`
+  ).run(++idSeq, code, month, year, company, days);
 }
 function addContractor(db, id, name) {
   db.prepare(`INSERT INTO dw_contractors (id, contractor_name) VALUES (?,?)`).run(id, name);
@@ -77,12 +81,17 @@ function addContractor(db, id, name) {
 function addDwEntry(db, o) {
   const id = ++idSeq;
   const amount = o.amount === undefined ? o.heads * o.rate : o.amount;
+  // Commission columns are seeded with a deliberately distinctive value: the
+  // report must never read them (AMENDMENT 1), so a 777 surfacing anywhere is a leak.
   db.prepare(
-    `INSERT INTO dw_entries (id, contractor_id, entry_date, total_worker_count,
-       wage_rate_applied, total_wage_amount, status, gate_entry_reference, company)
-     VALUES (?,?,?,?,?,?,?,?,?)`
+    `INSERT INTO dw_entries (id, contractor_id, entry_date, in_time, out_time,
+       total_worker_count, wage_rate_applied, commission_rate_applied,
+       total_wage_amount, total_commission_amount, total_liability,
+       status, gate_entry_reference)
+     VALUES (?,?,?,'08:00','18:00',?,?,777,?,?,?,?,?)`
   ).run(id, o.contractorId, o.date, o.heads, o.rate, amount,
-    o.status || 'approved', o.gateRef || `GATE-${id}`, o.company || '');
+    o.heads * 777, amount + o.heads * 777,
+    o.status || 'approved', o.gateRef || `GATE-${id}`);
   const allocs = o.allocations === undefined
     ? [{ dept: o.dept === undefined ? 'PRODUCTION' : o.dept, heads: o.heads, cost: amount }]
     : o.allocations;
@@ -455,8 +464,7 @@ describe('company filter and the unknown-company banner', () => {
     for (const c of ['V1', 'X1', 'X2', 'X3']) addAtt(db, c, '2026-04-01', 'P');
 
     const rep = monthReport(db, M);
-    expect(rep.unknownCompanyManDays).toBe(3);
-    expect(rep.unknownCompanyRatio).toBe(0.75);
+    expect(rep.unknownCompanyRatio).toBe(0.75);   // 3 of 4 man-days
   });
 });
 
@@ -643,5 +651,101 @@ describe('grid department filter and contractor lookup', () => {
     addDwEntry(db, { contractorId: 1, date: '2026-04-02', heads: 3, rate: 450 });
     const names = contractorNamesForMonth(db, M).sort();
     expect(names).toEqual(['Chottu', 'Meera']);
+  });
+});
+
+
+// ─── regressions from the Phase 4 code review ─────────────────────────────
+describe('code-review regressions', () => {
+  test('F1: a combined record\u2019s grid shows BOTH component gangs, and its footer agrees with the exception', () => {
+    const db = makeDb();
+    addEmp(db, { code: 'S1', dept: 'SAJAN', name: 'SAJAN ONE' });
+    addEmp(db, { code: 'J1', dept: 'JIWAN CONT', name: 'JIWAN ONE' });
+    addAtt(db, 'S1', '2026-04-10', 'P');
+    addAtt(db, 'J1', '2026-04-10', 'P');
+    addContractor(db, 11, 'SAJJAN+JIWAN LAL (12-H)');
+    addDwEntry(db, { contractorId: 11, date: '2026-04-10', heads: 4, rate: 700 });
+
+    const name = 'Sajan + Jiwan Lal (12-h)';
+    const grid = gridReport(db, { ...M, contractor: name });
+    expect(grid.employees.map((e) => e.code).sort()).toEqual(['J1', 'S1']);
+    // The grid must not contradict the Exceptions tab for the same day.
+    expect(grid.footer['2026-04-10']).toMatchObject({ dwHeads: 4, bothSource: true });
+    const flag = monthReport(db, M).exceptions.both.find((o) => o.contractor === name);
+    expect(flag.bio).toBe(2);
+  });
+
+  test('F3: a gate contractor named exactly like a biometric department still raises both-source', () => {
+    const db = makeDb();
+    addEmp(db, { code: 'M1', dept: 'MEERA' });
+    addAtt(db, 'M1', '2026-04-01', 'P');
+    addContractor(db, 99, 'MEERA');          // NOT in DW_CONTRACTOR_ALIASES
+    addDwEntry(db, { contractorId: 99, date: '2026-04-01', heads: 3, rate: 500 });
+
+    const rep = monthReport(db, M);
+    expect(rep.contractors).toEqual(['Meera']);          // one gang, not two
+    expect(rep.exceptions.both).toHaveLength(1);
+    expect(rep.exceptions.both[0]).toMatchObject({ contractor: 'Meera', bio: 1, dwHeads: 3 });
+  });
+
+  test('F4: the unknown-company banner survives a company filter', () => {
+    const db = makeDb();
+    addEmp(db, { code: 'V1', dept: 'MEERA', company: 'Asian Lakto Ind Ltd' });
+    addEmp(db, { code: 'X1', dept: 'MEERA', company: 'Default' });
+    addEmp(db, { code: 'X2', dept: 'MEERA', company: 'null' });
+    for (const c of ['V1', 'X1', 'X2']) addAtt(db, c, '2026-04-01', 'P');
+
+    // Filtering to a real company must NOT silence the warning about the
+    // workers that filter just dropped.
+    const filtered = monthReport(db, { ...M, company: 'Asian Lakto Ind Ltd' });
+    expect(filtered.totals.stats.manDays).toBe(1);
+    expect(filtered.unknownCompanyRatio).toBeCloseTo(2 / 3, 3);
+    expect(monthReport(db, M).unknownCompanyRatio).toBeCloseTo(2 / 3, 3);
+  });
+
+  test('F6: a finance-rejected entry is not reported as awaiting approval', () => {
+    const db = makeDb();
+    addContractor(db, 10, 'CHOTTU CONT');
+    addDwEntry(db, { contractorId: 10, date: '2026-04-01', heads: 5, rate: 600, status: 'rejected' });
+    addDwEntry(db, { contractorId: 10, date: '2026-04-02', heads: 4, rate: 600, status: 'hr_entered' });
+
+    const rep = monthReport(db, M);
+    expect(rep.exceptions.pend.map((o) => o.status)).toEqual(['hr_entered']);
+    expect(rep.exceptions.rejected.map((o) => o.status)).toEqual(['rejected']);
+    // rejected is terminal, so it must not keep the actionable badge non-zero
+    expect(rep.exceptions.count).toBe(1);
+    expect(rep.cells['2026-04-01'].Chottu.dwPending).toBe(0);
+    expect(rep.cells['2026-04-02'].Chottu.dwPending).toBe(4);
+  });
+
+  test('F7: a contractor name containing the key separator survives the duplicate grouping', () => {
+    const db = makeDb();
+    addContractor(db, 20, 'PAPPU | NIGHT');
+    addContractor(db, 21, 'PAPPU|NIGHT EXTRA');
+    addDwEntry(db, { contractorId: 20, date: '2026-04-04', heads: 3, rate: 600 });
+    addDwEntry(db, { contractorId: 20, date: '2026-04-05', heads: 3, rate: 600 });
+    const rep = monthReport(db, M);
+    expect(rep.contractors).toContain('PAPPU | NIGHT');
+    expect(rep.exceptions.dup).toHaveLength(0);
+    // and the same name on one day from two records is still caught intact
+    addDwEntry(db, { contractorId: 21, date: '2026-04-04', heads: 2, rate: 600 });
+    const rep2 = monthReport(db, M);
+    const dup = rep2.exceptions.dup.find((d) => d.date === '2026-04-04');
+    expect(dup).toBeUndefined();   // different display names, so not a duplicate
+  });
+
+  test('F14: the tie-out sums a genuinely multi-company employee rather than picking one row', () => {
+    // day_calculations is UNIQUE(employee_code, month, year, company), so one
+    // employee can hold a row per company. Their biometric man-days are
+    // company-wide too, so the sum is the right comparison.
+    const db = makeDb();
+    addEmp(db, { code: 'MC1', dept: 'MEERA' });
+    for (const d of ['2026-04-01', '2026-04-02', '2026-04-03']) addAtt(db, 'MC1', d, 'P');
+    addDayCalc(db, 'MC1', 4, 2026, 1, 'Asian Lakto Ind Ltd');
+    addDayCalc(db, 'MC1', 4, 2026, 2, 'Indriyan Beverages Pvt Ltd');
+    const rep = monthReport(db, M);
+    expect(rep.exceptions.tie).toHaveLength(0);          // 3 man-days vs 1 + 2
+    const grid = gridReport(db, { ...M, contractor: 'Meera' });
+    expect(grid.employees[0].stats).toMatchObject({ manDays: 3, payrollDays: 3, tie: true });
   });
 });

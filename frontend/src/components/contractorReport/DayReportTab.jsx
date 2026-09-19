@@ -7,12 +7,6 @@ import {
   RoleBadge, ContractorName, Chips, Segmented, EmptyState, Loading, ErrorState,
 } from './shared'
 
-const ROLE_ORDER = ['Supervisor', 'Loading', 'Helper', 'Guard', 'Sweeper']
-const roleRank = (r) => {
-  const i = ROLE_ORDER.indexOf(r)
-  return i >= 0 ? i : r === 'No designation' ? ROLE_ORDER.length + 1 : ROLE_ORDER.length
-}
-
 // ─── the expanded detail under a contractor row ───────────────────────────
 function ContractorDetail({ c }) {
   return (

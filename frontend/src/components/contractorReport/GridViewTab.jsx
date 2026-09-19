@@ -15,20 +15,10 @@
 //        there is no global keydown listener.
 import { useEffect, useMemo, useRef, useState, memo, useCallback } from 'react'
 import {
-  money, days1, dateLong, dateShort, isSunday, monthLabel,
+  days1, dateLong, dateShort, isSunday, monthLabel,
   SUN_MARK, MOON_MARK, RoleBadge, Loading, ErrorState,
+  weightOf, CELL_LETTER, roleRank,
 } from './shared'
-
-const ROLE_ORDER = ['Supervisor', 'Loading', 'Helper', 'Guard', 'Sweeper']
-const roleRank = (r) => {
-  const i = ROLE_ORDER.indexOf(r)
-  return i >= 0 ? i : r === 'No designation' ? ROLE_ORDER.length + 1 : ROLE_ORDER.length
-}
-
-const PRESENT = { P: 1, WOP: 1, '½P': 0.5, 'WO½P': 0.5 }
-const weightOf = (s) => PRESENT[s] || 0
-
-const CELL_LETTER = { P: 'P', WOP: 'W', '½P': '½', 'WO½P': '½', A: 'A', WO: 'WO' }
 
 // Night is purple to match AttendanceRegister's convention.
 function cellClass(cell) {

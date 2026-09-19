@@ -194,11 +194,23 @@ function resolveBiometricContractor(department) {
   return { name: key || 'Unmapped (blank department)', unmapped: true };
 }
 
-/** dw_contractors.contractor_name → { name, unmapped }. Never returns empty. */
+/**
+ * dw_contractors.contractor_name → { name, unmapped }. Never returns empty.
+ *
+ * Falls back to the BIOMETRIC map on a miss. Without that fallback a gate
+ * contractor named exactly like a biometric department — plain "MEERA",
+ * "SAJAN", "AMAR" — would resolve to its own raw name while the biometric gang
+ * resolves to "Meera"/"Sajan"/"Amar". They would land in two different cells and
+ * the same gang being paid twice on one day would NOT raise a both-source flag,
+ * which is the single thing this report exists to catch.
+ */
 function resolveDwContractor(contractorName) {
   const key = up(contractorName);
   if (DW_CONTRACTOR_ALIASES[key]) {
     return { name: DW_CONTRACTOR_ALIASES[key], unmapped: false };
+  }
+  if (BIOMETRIC_CONTRACTOR_ALIASES[key]) {
+    return { name: BIOMETRIC_CONTRACTOR_ALIASES[key], unmapped: false };
   }
   return { name: key || 'Unmapped (blank name)', unmapped: true };
 }
@@ -253,10 +265,15 @@ function isTestContractorName(contractorName) {
  * discarding other gangs in JS. An unmapped contractor is its own department.
  */
 function departmentsForContractor(displayName) {
+  // A combined daily-wage record covers several gangs, so its grid must show
+  // every component gang's people. Without this expansion the grid for
+  // "Sajan + Jiwan Lal (12-h)" comes back empty and its footer reports
+  // bothSource = false on the very day the Exceptions tab flags for double pay.
+  const names = componentContractors(displayName);
   const mapped = Object.entries(BIOMETRIC_CONTRACTOR_ALIASES)
-    .filter(([, name]) => name === displayName)
+    .filter(([, name]) => names.includes(name))
     .map(([dept]) => dept);
-  return mapped.length ? mapped : [up(displayName)];
+  return mapped.length ? mapped : names.map(up);
 }
 
 /** Every display name this config knows about, for grid-param validation. */

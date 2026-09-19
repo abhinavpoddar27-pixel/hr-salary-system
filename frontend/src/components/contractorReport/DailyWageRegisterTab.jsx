@@ -8,25 +8,34 @@ import {
 export default function DailyWageRegisterTab({ report, contractor, onOpenDay }) {
   const rows = useMemo(() => {
     const names = contractor ? [contractor] : report.contractors
+    // Both-source comes from the server's exception list, not from a second
+    // per-contractor derivation here: a combined daily-wage record (one gate
+    // entry covering two gangs) has no biometric heads of its own, so a naive
+    // `bio > 0 && dw > 0` per contractor would miss exactly the day the
+    // Exceptions tab flags for double pay.
+    const bothByDate = new Map()
+    for (const o of report.exceptions.both) {
+      if (contractor && o.contractor !== contractor) continue
+      if (!bothByDate.has(o.date)) bothByDate.set(o.date, [])
+      bothByDate.get(o.date).push(o.contractor)
+    }
     return report.days.map((d) => {
       const cells = report.cells[d.date] || {}
       const R = { bioDay: 0, bioNight: 0, bio: 0, dwHeads: 0, dwCost: 0, manDays: 0 }
       const depts = new Map()
-      const both = []
       for (const name of names) {
         const c = cells[name]
         if (!c) continue
         R.bioDay += c.bioDay; R.bioNight += c.bioNight; R.bio += c.bio
         R.dwHeads += c.dwHeads; R.dwCost += c.dwCost; R.manDays += c.manDays
         for (const b of c.deptBreakdown) depts.set(b.dept, (depts.get(b.dept) || 0) + b.heads)
-        if (c.bio > 0 && c.dwHeads > 0) both.push(name)
       }
       return {
         ...d,
         ...R,
         depts: [...depts.entries()].sort((a, b) => b[1] - a[1])
           .map(([dept, n]) => ({ key: dept, label: `${dept} ${n}` })),
-        both,
+        both: bothByDate.get(d.date) || [],
       }
     })
   }, [report, contractor])

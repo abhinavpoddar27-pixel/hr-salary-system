@@ -4,8 +4,7 @@ Branch: `feat/contractor-report` (from `main` @ 2a0d1f0)
 Prompt copy: `docs/prompts/contractor-report-pr2.md`
 
 ## STATE
-Phase 3 complete — awaiting owner `go` at the Phase 3 gate.
-Page, nav, route and rebuilt dist committed. 56/56 browser simulation checks pass.
+Phase 4 complete — branch pushed, PR not opened (owner opens and merges it).
 Backend shipped: config + pure service + 3 GET routes + 44 jest tests. Verified
 end to end against real April production aggregates.
 
@@ -37,9 +36,8 @@ end to end against real April production aggregates.
 - [x] P3.7 user-simulation pass in a real browser (see PHASE 3 VERIFICATION)
 
 ## NEXT
-Owner `go` → Phase 4 (code review on the full diff, DO-NOT-MODIFY diff check, push
-`feat/contractor-report`, write the post-deploy checklist and the CLAUDE.md entry).
-**Never push to main** (R-0).
+Owner opens the PR on GitHub and merges it there. Then work the POST-DEPLOY
+CHECKLIST below. **Never push to main** (R-0).
 
 ## BLOCKERS
 None. (B-1 prototype-unavailable was resolved by the owner's upload.)
@@ -589,3 +587,136 @@ exists anywhere on the page. All three pass — no commission value can reach th
 Backend suite 297 tests: 291 pass, 6 fail — 3 `tdsCalculation` + 3 `protectedWrite`
 flake, the same baseline `main` produces on a clean tree.
 Lockfiles: still zero diff vs `main` after both `npm install`s.
+
+
+---
+
+# PHASE 4 — code review, access, ship
+
+## Owner ruling at the Phase 3 gate
+
+**R-18 Company filter — the rule stands.** Exact match on `employees.company`,
+NULL/blank excluded, biometric workers only. Do **not** copy Daily MIS's
+`OR company IS NULL`: in a reconciliation report it would count the same people
+under both companies.
+
+## Access control — a real gap was found and fixed
+
+The nav child shipped in Phase 3 with **no role gate**, and the fix was not the
+obvious one-liner: `Sidebar.jsx`'s **child** filter handles `adminOnly`,
+`financeOnly`, `salesAllowed` and `tadaApprover` but **not** `hrFinanceOrAdmin`,
+even though the **parent** filter does. Adding the flag alone would have been
+silently ignored. Both lines were needed — the flag on the child, and the matching
+case in the child filter, which now mirrors the parent.
+
+The page also gained a client-side role gate in the shape the SQL Console already
+uses, so a viewer typing the URL gets the app's normal denial panel instead of a
+page that renders and then fails three API calls.
+
+Verified in a real browser across four roles — **15/15**:
+
+| role | nav child | direct URL | API |
+|---|---|---|---|
+| hr | visible | renders the report | 200 |
+| finance | visible | renders the report | 200 |
+| admin | visible | renders the report | 200 |
+| viewer | **hidden** | access-denied panel, not blank, no raw 403/JSON | **403** |
+
+## Code review — 14 findings, 13 fixed, 1 rejected with evidence
+
+| # | Finding | Action |
+|---|---|---|
+| F1 | `departmentsForContractor()` never expanded `COMBINED_CONTRACTORS`, so the Grid View for a combined gang was empty and its footer said `bothSource: false` on the day Exceptions flagged for double pay | **fixed** + test |
+| F2 | "tie-out should filter `day_calculations` by company" | **rejected — see below** |
+| F3 | A gate contractor named exactly like a biometric department (plain `MEERA`) resolved to a different display name and escaped the both-source check entirely | **fixed** + test |
+| F4 | `unknownCompanyRatio` was structurally 0 whenever a company was selected, so the banner died at the exact moment it mattered | **fixed** + test |
+| F5 | The register re-derived both-source per contractor, missing the combined-record case | **fixed** — now reads the server's list |
+| F6 | Finance-**rejected** entries were bucketed as "not approved", so the Exceptions badge could never reach zero | **fixed** + test — rejected now has its own non-actionable section |
+| F7 | The duplicate map key `${date}\|${contractor}` was split back apart, truncating any contractor name containing a pipe | **fixed** + test |
+| F8 | The role gate re-implemented raw string equality instead of `roleIn()`, bypassing `normalizeRole()`; my comment claiming no such export existed was wrong | **fixed** |
+| F9 | Dead `ROLE_ORDER`/`roleRank` copy in `DayReportTab` | **fixed** — deleted |
+| F10 | A fourth copy of the attendance weights in `GridViewTab` | **fixed** — one frontend definition in `shared.jsx` |
+| F11 | `maxDoublePayTotal`, `unknownCompanyManDays`, `unmappedContractors` shipped on every request, consumed by nothing | **fixed** — removed |
+| F12 | Three full scans of the same population | **partly** — `coRows` must stay separate to fix F4; the index observation is a documented known limit |
+| F13 | No CLAUDE.md update, which the repo's own Section 8 requires | **fixed** |
+| F14 | The fixture omitted `day_calculations.company`, so the multi-row case could never be tested | **fixed** — fixture now mirrors the production DDL |
+
+### F2 rejected, with evidence
+The review proposed filtering `day_calculations` by the selected company. Checked
+against production first:
+
+```
+day_calculations rows for contract employees, Apr–May 2026: 512
+  dc.company == employees.company : 187
+  dc.company != employees.company : 325
+```
+
+`day_calculations.company` disagrees with `employees.company` on **325 of 512**
+rows, so that filter would drop most employees' payroll row and turn the tie-out
+into a wall of false mismatches — the opposite of the intended fix. The latent
+half of the finding (an employee holding one row per company) currently affects
+**0** employees. The query was left unfiltered, the reasoning is now a comment at
+the call site, and a test covers the multi-company sum.
+
+## Re-verification after the fixes
+- April production replay: **13/13 still exact** (2,238 / 1,916 / 322 / 699 /
+  ₹4,44,930 / 21 / ₹22,735.71).
+- Unit tests: **50/50**.
+- Browser functional: **56/56**. Browser access: **15/15**.
+- Backend suite: **303 tests**, 297 pass, 6 fail = 3 `tdsCalculation` + 3
+  `protectedWrite` flake — the same baseline `main` produces.
+- Two of my own artefacts broke and were caught by the suite/replay rather than
+  shipped: a test still asserting `unknownCompanyManDays` after F11 removed it,
+  and the replay script reading the same removed field.
+
+---
+
+# POST-DEPLOY CHECKLIST (for Abhinav)
+
+## 1. Numbers to eyeball on production
+Open **Workforce → Contractor Report** and check the stat cards:
+
+| Month | Expect |
+|---|---|
+| April 2026 | man-days **2,238** (day 1,916 / night 322), DW **699** / **₹4,44,930**, both-source **21** |
+| May 2026 | man-days **2,587.5** (day 2,195 / night 392.5), DW **827** / **₹5,13,670**, both-source **5** |
+
+Spot checks: **4 Apr** Pappu carries "Both sources" + "2 DW records" ·
+**23 May** totals 158 (biometric 105 = 88 day + 17 night, DW 53), Meera 71 (65/6) + 10 ·
+**9 May** departments Utility 21, Zeera 400 ml line 13, Production · night 13, Godown 1 ·
+Exceptions header reads "up to **₹22,736** possible double pay" for April.
+
+## 2. August 2026 — per-contractor man-days
+Switch to August and check Grid View / the contractor filter against the figures from
+chat on 18 Sep. These should come out **close** (not necessarily identical — attendance
+may have been corrected since):
+
+| Contractor | Aug man-days |
+|---|---|
+| Meera | 1,044.5 |
+| Parikshan Paswan | 231 |
+| Kuldeep | 126 |
+| Manpreet | 111.5 |
+| Ranjit | 11 |
+
+## 3. September 2026 — expect tie-out mismatches, and that is correct
+September **will** show payroll-tie mismatches (red ≠ in Grid View, rows in the
+Exceptions "Biometric days don't match payroll days" section). Stage 6 ran on
+**16 Sep**, before later miss-punch corrections landed, so biometric man-days have
+since moved while `day_calculations` has not. **This is the report doing its job, not
+a bug.** Re-running Stage 6 for September would clear them.
+
+## 4. Unrelated pages to open (regression sweep)
+Confirm these are untouched — the PR edits 4 lines in existing files, but the `dist`
+rebuild ships every chunk:
+- **Daily MIS** — loads, today's figures render.
+- **Daily Wage Records** (`/daily-wage/...`) — list, entry form, finance review.
+- **Attendance Register** — a month loads, night cells still purple.
+- **Stage 6 Day Calculation** — register renders, totals unchanged.
+- **Stage 7 Salary Computation** — register renders, totals unchanged.
+- Sidebar: **Workforce** now has a 4th child; the other three still navigate.
+
+## 5. Access spot-check
+Log in as a non-HR/finance/admin user (or ask one to): **Contractor Report must not
+appear** under Workforce, and `/workforce/contractor-report` typed directly must show
+the red "HR, finance, or admin access required" panel.

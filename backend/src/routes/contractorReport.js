@@ -10,18 +10,17 @@
 const express = require('express');
 const router = express.Router();
 const { getDb } = require('../database/db');
+const { roleIn } = require('../middleware/roles');
 const CFG = require('../config/contractorReportConfig');
 const service = require('../services/contractorReport');
 
-// Matches the local helper in early-exits.js / short-leaves.js. roles.js has
-// no HR+finance+admin export, and adding one would touch a shared file that is
-// outside this PR's allowed edits.
+// Built on roles.js's roleIn(), which runs normalizeRole() first, so a legacy
+// user row carrying "Finance" / "Finance Team" / "finance " is admitted here
+// exactly as it is everywhere else. early-exits.js and short-leaves.js still
+// hand-roll this with raw string equality; this route deliberately does not.
 function requireHrFinanceOrAdmin(req, res, next) {
-  const role = req.user?.role;
-  if (role !== 'hr' && role !== 'finance' && role !== 'admin') {
-    return res.status(403).json({ success: false, error: 'HR, finance, or admin access required' });
-  }
-  next();
+  if (roleIn(req, 'admin', 'hr', 'finance')) return next();
+  return res.status(403).json({ success: false, error: 'HR, finance, or admin access required' });
 }
 
 const MIN_YEAR = 2024;
