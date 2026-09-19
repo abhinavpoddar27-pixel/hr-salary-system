@@ -74,8 +74,8 @@ Every claim is tagged **FACT** (file:line or command output), **INFERENCE**, or 
 | C3b | finalized-month check on `mark-present` (R5) | **done** |
 | C4 | `protectedWrite` assertions | **done** |
 | C5 | TDS tests | **done** |
-| C6 | `/api/version` | in progress |
-| Phase 6 | Self-debug + user simulation + v2 | pending |
+| C6 | `/api/version` | **done** |
+| Phase 6 | Self-debug + user simulation + v2 | in progress |
 | Phase 7 | Verify, CLAUDE.md, push | pending |
 
 ---
@@ -128,11 +128,22 @@ Every claim is tagged **FACT** (file:line or command output), **INFERENCE**, or 
     salary *with* a declaration → still zero. `services/tdsCalculation.js` is byte-unchanged
     (`git diff origin/main` on it is empty). **Suite green for the first time: 375/375.**
 
+12. **C6** — `/api/version` now reports `commit` from `RAILWAY_GIT_COMMIT_SHA` →
+    `SOURCE_COMMIT` → `GIT_COMMIT` → `'unknown'`, and `startedAt` captured once at module
+    load in place of the per-request `deployedAt`. `frontendBundle` parsing is untouched.
+    Nothing shells out to git. Verified by curl against a booted server (FACT):
+    without the env var → `"commit":"unknown"`; with
+    `RAILWAY_GIT_COMMIT_SHA=deadbeefcafe1234` → that value; and `startedAt` identical
+    across two requests 2 s apart, proving it is not per-request.
+    `"frontendBundle":"CeHbyHOC"` matches the `index-CeHbyHOC.js` built in C2.
+    `deployedAt` had no consumer anywhere in the repo (grep, FACT), so the rename
+    breaks nothing.
+
 ---
 
 ## NEXT
 
-**C6 — `/api/version`.**
+**Phase 6 — self-debug, user simulation, v2.**
 
 ---
 
