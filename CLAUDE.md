@@ -1,3 +1,84 @@
+## Last Session — 2026-09-19
+
+**Contractor Report (PR-2, read-only). Branch `feat/contractor-report`, NOT merged.**
+
+A read-only page at `/workforce/contractor-report` that puts biometric contract
+attendance and daily-wage gate entries side by side, so the same gang being paid
+twice on one day becomes visible. Four tabs: Day Report, Daily Wage Register,
+Grid View, Exceptions. No writes, no schema changes, no new npm dependencies.
+
+### Files added
+- `backend/src/config/contractorReportConfig.js` — **the single rules file.**
+  Population, attendance weights, contractor alias maps, department normaliser,
+  roles, company validity. A later PR replaces the alias maps with a contractor
+  master; when it does, only this file changes.
+- `backend/src/services/contractorReport.js` — `monthReport` / `dayReport` /
+  `gridReport` / `contractorNamesForMonth`. SELECT only, one query per dataset.
+- `backend/src/routes/contractorReport.js` — 3 GETs at `/api/contractor-report`,
+  all HR/finance/admin via `roleIn()`.
+- `backend/src/__tests__/contractorReport.test.js` — 50 tests.
+- `frontend/src/pages/ContractorReport.jsx` + `components/contractorReport/*` (6).
+
+### Files edited — 4 lines total
+`backend/server.js` (+1 mount), `frontend/src/App.jsx` (+2: lazy import + route),
+`frontend/src/components/layout/Sidebar.jsx` (+2: the nav child **and** a missing
+`hrFinanceOrAdmin` case in the child filter — see below).
+
+### Rules that are load-bearing
+- **Population** is `employment_type LIKE '%contract%'` minus SECURITY and
+  BISLERI WORKERS. This is narrower than `isContractorForPayroll`, which also
+  falls back to `is_contractor` and a dept-keyword heuristic. They disagree on
+  exactly 11 employees, all SECURITY. All 1,221 employees have a non-empty
+  `employment_type`, so those two fallbacks are dead code on this dataset.
+- **`DEPARTMENT_RULES` order is load-bearing.** A real 9 May allocation reads
+  `UTILITY (… ZEERA (400) PROD-5 …)` — it contains both "zeera" and "prod", so
+  only the starts-with-`utility` rule running first puts its 21 heads under
+  Utility. Reordering silently changes the answer.
+- **`day_calculations` is deliberately NOT company-filtered** in the tie-out.
+  `day_calculations.company` disagrees with `employees.company` on **325 of 512**
+  contract rows (Apr–May 2026), so filtering it would produce a wall of false
+  mismatches. It is summed per employee, which is correct for a genuinely
+  multi-company employee.
+- **The unknown-company banner query deliberately ignores the company filter.**
+  Otherwise selecting a company makes the unknown share structurally zero and
+  silences the banner at the exact moment it matters.
+- **`contractor_group` and `is_contractor` are read nowhere.** `contractor_group`
+  was blank on 345/345 contract employees on 19 Sep.
+- **No commission column is read anywhere** (AMENDMENT 1): rates are admin-set in
+  the contractor master and are a later PR.
+
+### What's fragile
+- **The alias maps are hand-maintained.** A gate contractor whose name is not in
+  either map shows under its own name with a grey "not mapped" badge — never
+  dropped. `SONU CONT` is mapped but had no present days in Apr–May, so that path
+  is untested against live data.
+- **`SAJJAN+JIWAN LAL (12-H)`** (one gate entry covering two gangs) has no live
+  entries, so its both-source and grid behaviour is proven by unit fixtures only.
+- **Grid View performance is a contract, not an accident.** `<GridBody>` is
+  memoised and selection is *not* a prop; hover and selection are painted onto
+  the DOM through a table ref. Making either a React state prop re-renders ~2,800
+  cells on every mouse move. Keyboard is bound to the container, never `window`.
+- **The sticky name column's white background is an inline style** so the
+  `index.css` zebra rule cannot win. A translucent value makes names paint blank
+  in Chrome mid-scroll.
+- **`Sidebar.jsx`'s child filter never handled `hrFinanceOrAdmin`** even though
+  the parent filter did. Adding the flag alone would have been silently ignored
+  and the nav child would have stayed visible to viewers. Both lines are needed.
+
+### Verification
+All 13 acceptance numbers reproduce exactly by replaying real April aggregates
+through the service; 50 unit tests; 56 browser checks driving the built page in
+Chromium; 15 access checks across hr/finance/admin/viewer. Backend suite goes
+253 → 303 tests with the pre-existing `tdsCalculation` (3) and `protectedWrite`
+(flaky 3) baselines unchanged.
+
+### Known limits
+Unknown company on 47% of April and 59% of May man-days (only 96 of 334 contract
+employees carry a valid company). `/vite.svg` 404 is pre-existing on `main` —
+`index.html` references a favicon absent from `dist`, so every page emits it.
+
+---
+
 ## Last Session — 2026-09-18
 
 **Leave automation — full build. Branch `feat/leave-automation`, 12 commits, NOT merged.**
@@ -1288,6 +1369,7 @@ backend/
 │   ├── middleware/auth.js                     JWT verify, requireAuth, requireAdmin
 │   ├── middleware/requestId.js               Request-ID stamp, x-request-id header, arrival/completion logging
 │   ├── config/permissions.js                  Role → page access matrix
+│   ├── config/contractorReportConfig.js       Contractor Report rules (aliases, weights, normalisers)
 │   ├── utils/employeeClassification.js        isContractor() — dept keywords + flag
 │   ├── utils/pagination.js                    Server-side pagination helper
 │   ├── routes/
@@ -1320,9 +1402,11 @@ backend/
 │   │   ├── short-leaves.js     Gate pass / short leave CRUD, quota check
 │   │   ├── early-exits.js      Early exit detection trigger, list, summary, analytics
 │   │   ├── early-exit-deductions.js  HR deduction submit/revise + finance approve/reject
+│   │   ├── contractorReport.js  Contractor Report (PR-2) — 3 read-only GETs
 │   │   └── analytics.js         Workforce analytics
 │   └── services/
 │       ├── earlyExitDetection.js     Detect employees who punched out before shift end
+│       ├── contractorReport.js       Contractor Report aggregation (read-only)
 │       ├── parser.js                 EESL XLS parsing — dynamic column detection
 │       ├── missPunch.js              Stage 2: detect missing IN/OUT, NIGHT_UNPAIRED
 │       ├── nightShift.js             Stage 4: pair IN day D + OUT day D+1

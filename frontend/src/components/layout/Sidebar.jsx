@@ -80,6 +80,7 @@ const nav = [
       { label: 'Headcount & Composition', to: '/workforce/headcount' },
       { label: 'Hiring & Attrition', to: '/workforce/attrition' },
       { label: 'Contractor Management', to: '/workforce/contractors' },
+      { label: 'Contractor Report', to: '/workforce/contractor-report', hrFinanceOrAdmin: true },
     ]
   },
   {
@@ -207,6 +208,7 @@ function NavItem({ item, collapsed, depth = 0, userRole, onNavigate, onAction })
   if (hasChildren) {
     const visibleChildren = item.children.filter(c => {
       if (c.adminOnly && userRole !== 'admin') return false
+      if (c.hrFinanceOrAdmin && !['hr', 'finance', 'admin'].includes(userRole)) return false
       if (c.financeOnly && userRole !== 'finance' && userRole !== 'admin') return false
       if (c.salesAllowed && !['hr', 'admin'].includes(userRole)) return false
       if (c.tadaApprover && !['finance', 'admin'].includes(userRole)) return false
