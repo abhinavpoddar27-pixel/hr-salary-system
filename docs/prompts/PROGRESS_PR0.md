@@ -76,7 +76,7 @@ Every claim is tagged **FACT** (file:line or command output), **INFERENCE**, or 
 | C5 | TDS tests | **done** |
 | C6 | `/api/version` | **done** |
 | Phase 6 | Self-debug + user simulation + v2 | **done** |
-| Phase 7 | Verify, CLAUDE.md, push | in progress |
+| Phase 7 | Verify, CLAUDE.md, push | **done** |
 
 ---
 
@@ -186,11 +186,24 @@ Also split the rejection: a genuinely missing `leave_balances` row now returns
 - **Production data.** No access, by design. Employee 23725 is not repaired; this PR is
   code only.
 
+16. **Phase 7 — all gates pass (FACT, command output).**
+    - 7.1 Full suite ×3: `378 passed, 378 total`, 15/15 suites, zero failures. Six
+      consecutive clean runs counting Phase 6's.
+    - 7.2 `git diff origin/main -- backend/src/database/schema.js` → **empty**.
+    - 7.3 `git diff --stat origin/main -- salaryComputation.js dayCalculation.js payroll.js`
+      → **empty**.
+    - 7.4 `leaveEngine.js` + `recompute.js`: **zero non-comment changed lines**.
+    - 7.5 `frontend/src` changed in exactly one commit (`2bb151c`), and that same
+      commit carries 73 rebuilt `frontend/dist` files.
+    - 7.6 HEAD is `fix/leave-safety-and-ci`; `git log origin/main..HEAD` lists only
+      this session's commits.
+    - 7.7 `CLAUDE.md` Section 0 updated.
+
 ---
 
 ## NEXT
 
-**Phase 7 — verify, CLAUDE.md, push.**
+**Done.** Pushed; owner merges in the GitHub web UI. No PR opened, as instructed.
 
 ---
 
