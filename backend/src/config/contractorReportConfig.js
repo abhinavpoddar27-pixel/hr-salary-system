@@ -46,6 +46,36 @@ const PRESENT_WEIGHTS = { P: 1, WOP: 1, '½P': 0.5, 'WO½P': 0.5 };
 // Man-days are NOT clipped by date_of_exit: payroll does not clip either, so
 // clipping here would break the tie-out. Post-exit punching is flagged instead.
 
+// ─── Roster staleness (2.1) ───────────────────────────────────────────────
+// "Active on roster, no punch for 30+ days" flags people payroll still treats
+// as employed who have stopped showing up. STRICTLY more than 30 days since
+// the last day of weight > 0 — a worker last seen exactly 30 days ago is not
+// flagged. Verified on production 19 Sep 2026: > 30 gives 231 people (7 of
+// whom never punched at all), >= 30 would give 240.
+//
+// Deliberately measured against today, not the selected month: a roster that
+// has gone stale does not become fresh because you paged back to April.
+const STALE_NO_PUNCH_DAYS = 30;
+
+// ─── Payroll's own status rule (2.1) ──────────────────────────────────────
+// The report reads status_final. Stage 6 does NOT: dayCalculation.js's
+// effectiveStatusForDay() ignores an HR miss-punch resolution until finance
+// approves it. The two views therefore disagree on exactly the rows where a
+// correction is still awaiting finance, and every one of those showed up as a
+// false "biometric days don't match payroll days" mismatch.
+//
+// That function is exported and pure, so the service IMPORTS it rather than
+// mirroring the rule here — see docs/progress/contractor-report-2-1.md
+// RULING 2. Nothing in this file duplicates it.
+//
+// The one thing this file owns is which finance states let us skip a row
+// without looking at it. ONLY 'approved': on approval effectiveStatusForDay
+// returns status_final, which is exactly what this report shows, so the two
+// views cannot differ. 'rejected' is NOT in this list — it forces ½P, which
+// can and does differ from status_final, and dropping it would hide a real
+// divergence. 'pending', '' and NULL fall back to status_original.
+const FINANCE_STATES_MATCHING_REPORT = ['approved'];
+
 // ─── Daily wage ───────────────────────────────────────────────────────────
 const DW_COUNTED_STATUSES = ['approved', 'paid'];
 
@@ -292,6 +322,8 @@ module.exports = {
   EXCLUDED_DEPARTMENTS,
   PRESENT_WEIGHTS,
   PRESENT_STATUSES,
+  STALE_NO_PUNCH_DAYS,
+  FINANCE_STATES_MATCHING_REPORT,
   DW_COUNTED_STATUSES,
   TEST_CONTRACTORS,
   VALID_COMPANIES,

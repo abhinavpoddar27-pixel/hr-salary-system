@@ -19,12 +19,15 @@ function makeDb() {
     CREATE TABLE employees (
       id INTEGER PRIMARY KEY, code TEXT, name TEXT, department TEXT, designation TEXT,
       company TEXT, employment_type TEXT, date_of_joining TEXT, date_of_exit TEXT,
-      is_contractor INTEGER DEFAULT 0, contractor_group TEXT
+      is_contractor INTEGER DEFAULT 0, contractor_group TEXT,
+      status TEXT DEFAULT 'Active'
     );
     CREATE TABLE attendance_processed (
       id INTEGER PRIMARY KEY, employee_code TEXT, date TEXT,
       status_original TEXT, status_final TEXT,
-      is_night_shift INTEGER DEFAULT 0, is_night_out_only INTEGER DEFAULT 0
+      is_night_shift INTEGER DEFAULT 0, is_night_out_only INTEGER DEFAULT 0,
+      is_miss_punch INTEGER DEFAULT 0, miss_punch_finance_status TEXT,
+      correction_source TEXT
     );
     CREATE TABLE day_calculations (
       id INTEGER PRIMARY KEY, employee_code TEXT, month INTEGER, year INTEGER,
@@ -52,22 +55,29 @@ let idSeq = 0;
 function addEmp(db, o) {
   db.prepare(
     `INSERT INTO employees (id, code, name, department, designation, company,
-       employment_type, date_of_joining, date_of_exit, is_contractor, contractor_group)
-     VALUES (?,?,?,?,?,?,?,?,?,?,?)`
+       employment_type, date_of_joining, date_of_exit, is_contractor, contractor_group,
+       status)
+     VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`
   ).run(
     ++idSeq, o.code, o.name || `EMP ${o.code}`, o.dept, o.designation || 'HELPER',
     o.company === undefined ? 'Asian Lakto Ind Ltd' : o.company,
     o.employmentType === undefined ? 'Contract' : o.employmentType,
-    o.doj || null, o.doe || null, o.isContractor || 0, o.contractorGroup || null
+    o.doj || null, o.doe || null, o.isContractor || 0, o.contractorGroup || null,
+    o.status === undefined ? 'Active' : o.status
   );
 }
 function addAtt(db, code, date, status, opts = {}) {
   db.prepare(
     `INSERT INTO attendance_processed (id, employee_code, date, status_original,
-       status_final, is_night_shift, is_night_out_only) VALUES (?,?,?,?,?,?,?)`
+       status_final, is_night_shift, is_night_out_only,
+       is_miss_punch, miss_punch_finance_status, correction_source)
+     VALUES (?,?,?,?,?,?,?,?,?,?)`
   ).run(++idSeq, code, date, opts.original || status,
     opts.final === undefined ? status : opts.final,
-    opts.night ? 1 : 0, opts.nightOutOnly ? 1 : 0);
+    opts.night ? 1 : 0, opts.nightOutOnly ? 1 : 0,
+    opts.missPunch ? 1 : 0,
+    opts.financeStatus === undefined ? null : opts.financeStatus,
+    opts.correctionSource === undefined ? null : opts.correctionSource);
 }
 function addDayCalc(db, code, month, year, days, company = 'Asian Lakto Ind Ltd') {
   db.prepare(
@@ -747,5 +757,309 @@ describe('code-review regressions', () => {
     expect(rep.exceptions.tie).toHaveLength(0);          // 3 man-days vs 1 + 2
     const grid = gridReport(db, { ...M, contractor: 'Meera' });
     expect(grid.employees[0].stats).toMatchObject({ manDays: 3, payrollDays: 3, tie: true });
+  });
+});
+
+// ─── 2.1 · C — payroll's own status rule on the tie-out ───────────────────
+//
+// Stage 6 reads effectiveStatusForDay(), which ignores an HR miss-punch
+// resolution until finance approves it. The report reads status_final. Every
+// correction still awaiting finance therefore showed up as a false mismatch —
+// 10 of them across September 2026 on production, all explained by 11 pending
+// "Gate Register" corrections that turned a punched P into an A.
+describe('2.1 · corrections awaiting finance (C)', () => {
+  // One worker, three P days, one of which HR marked absent from the gate
+  // register. Payroll still pays it, so payroll says 3 and status_final says 2.
+  function pendingFixture(financeStatus) {
+    const db = makeDb();
+    addEmp(db, { code: 'C1', name: 'LALIT SADA', dept: 'MEERA', doj: '2026-01-01' });
+    addAtt(db, 'C1', '2026-04-01', 'P');
+    addAtt(db, 'C1', '2026-04-02', 'P');
+    addAtt(db, 'C1', '2026-04-03', 'A', {
+      original: 'P', final: 'A', missPunch: true,
+      financeStatus, correctionSource: 'Gate Register',
+    });
+    addDayCalc(db, 'C1', 4, 2026, 3);
+    return db;
+  }
+
+  test('C1: a pending correction is explained, not reported as a mismatch', () => {
+    const x = monthReport(pendingFixture('pending'), M).exceptions;
+    expect(x.tie).toHaveLength(0);
+    expect(x.financePending).toHaveLength(1);
+    expect(x.financePending[0]).toMatchObject({
+      code: 'C1', name: 'LALIT SADA', contractor: 'Meera', date: '2026-04-03',
+      punchedAs: 'P', hrMarkedAs: 'A', payrollStatus: 'P',
+      correctionSource: 'Gate Register', financeStatus: 'pending',
+    });
+  });
+
+  test('C2: an APPROVED correction is payroll reality — it must still mismatch', () => {
+    // Finance agreed the day was absent, so payroll should have paid 2. It paid
+    // 3. That is a real problem and must NOT be explained away.
+    const x = monthReport(pendingFixture('approved'), M).exceptions;
+    expect(x.financePending).toHaveLength(0);
+    expect(x.tie).toHaveLength(1);
+    expect(x.tie[0]).toMatchObject({ code: 'C1', manDays: 2, payrollView: 2, payrollDays: 3 });
+  });
+
+  test('C3: a REJECTED correction falls back to half a day, per the payroll rule', () => {
+    // effectiveStatusForDay forces ½P on rejection. Production has never
+    // produced a rejected row, so this branch is covered here or nowhere.
+    const db = pendingFixture('rejected');
+    const x = monthReport(db, M).exceptions;
+    expect(x.financePending[0]).toMatchObject({ payrollStatus: '½P', financeStatus: 'rejected' });
+    // payroll's view is 2 + 0.5; day_calculations says 3, so 0.5 is unexplained
+    expect(x.tie[0]).toMatchObject({ manDays: 2, payrollView: 2.5, payrollDays: 3 });
+  });
+
+  test('C4: NULL and empty finance status both mean "not ruled on yet"', () => {
+    for (const fs of [null, '']) {
+      const x = monthReport(pendingFixture(fs), M).exceptions;
+      expect(x.tie).toHaveLength(0);
+      expect(x.financePending[0].financeStatus).toBe('pending');
+    }
+  });
+
+  test('C5: a resolution that does not move the day is not an exception', () => {
+    // HR filled in a missing punch time but the status stayed P. Nothing to
+    // explain, so it must not pad the list.
+    const db = makeDb();
+    addEmp(db, { code: 'C2', dept: 'MEERA' });
+    addAtt(db, 'C2', '2026-04-01', 'P', {
+      original: 'P', final: 'P', missPunch: true, financeStatus: 'pending',
+    });
+    addDayCalc(db, 'C2', 4, 2026, 1);
+    const x = monthReport(db, M).exceptions;
+    expect(x.financePending).toHaveLength(0);
+    expect(x.tie).toHaveLength(0);
+  });
+
+  test('C6: several pending days on one person add up', () => {
+    const db = makeDb();
+    addEmp(db, { code: 'C3', dept: 'MEERA' });
+    for (const d of ['2026-04-01', '2026-04-07']) {
+      addAtt(db, 'C3', d, 'A', {
+        original: 'P', final: 'A', missPunch: true,
+        financeStatus: 'pending', correctionSource: 'Gate Register',
+      });
+    }
+    addAtt(db, 'C3', '2026-04-08', 'P');
+    addDayCalc(db, 'C3', 4, 2026, 3);            // payroll pays all three
+    const x = monthReport(db, M).exceptions;
+    expect(x.financePending).toHaveLength(2);
+    expect(x.tie).toHaveLength(0);
+  });
+
+  test('C7: heads and man-days everywhere else still read status_final', () => {
+    const rep = monthReport(pendingFixture('pending'), M);
+    // 3 punched days, one of which HR marked absent → 2 man-days, not 3.
+    expect(rep.totals.stats.manDays).toBe(2);
+    expect(rep.totals.perContractor.Meera.manDays).toBe(2);
+    // the corrected day reads as absent, so it raises no Meera cell at all,
+    // while an untouched day still shows its head
+    expect(rep.cells['2026-04-03'].Meera).toBeUndefined();
+    expect(rep.cells['2026-04-01'].Meera.bio).toBe(1);
+  });
+
+  test('C8: a pending day is flagged on the grid cell and ties the employee', () => {
+    const grid = gridReport(pendingFixture('pending'), { ...M, contractor: 'Meera' });
+    const emp = grid.employees[0];
+    expect(emp.stats).toMatchObject({ manDays: 2, payrollView: 3, payrollDays: 3, tie: true });
+    expect(emp.cells['2026-04-03']).toMatchObject({
+      status: 'A', pending: true, punchedAs: 'P', hrMarkedAs: 'A',
+      payrollStatus: 'P', correctionSource: 'Gate Register', financeStatus: 'pending',
+    });
+    // an ordinary day carries none of those fields
+    expect(emp.cells['2026-04-01'].pending).toBeUndefined();
+  });
+
+  test('C9: a pre-joining pending day moves nothing, because payroll skips it too', () => {
+    const db = makeDb();
+    addEmp(db, { code: 'C4', dept: 'MEERA', doj: '2026-04-10' });
+    addAtt(db, 'C4', '2026-04-02', 'A', {
+      original: 'P', final: 'A', missPunch: true, financeStatus: 'pending',
+    });
+    addAtt(db, 'C4', '2026-04-11', 'P');
+    addDayCalc(db, 'C4', 4, 2026, 1);
+    const x = monthReport(db, M).exceptions;
+    expect(x.tie).toHaveLength(0);               // 1 man-day, payroll 1
+    expect(x.financePending).toHaveLength(1);    // still listed, still visible
+  });
+
+  test('C10: financePending counts toward the exceptions badge', () => {
+    const x = monthReport(pendingFixture('pending'), M).exceptions;
+    expect(x.count).toBe(x.financePending.length);
+  });
+});
+
+// ─── 2.1 · B — active on roster, no punch for 30+ days ────────────────────
+describe('2.1 · stale roster (B)', () => {
+  const TODAY = '2026-09-19';
+  const stale = (db) => monthReport(db, { ...M, today: TODAY }).exceptions.stale;
+
+  test('B1: 31 days silent is flagged, 30 is not', () => {
+    const db = makeDb();
+    addEmp(db, { code: 'S30', name: 'EXACTLY THIRTY', dept: 'MEERA' });
+    addAtt(db, 'S30', '2026-08-20', 'P');        // 30 days before 19 Sep
+    addEmp(db, { code: 'S31', name: 'THIRTY ONE', dept: 'MEERA' });
+    addAtt(db, 'S31', '2026-08-19', 'P');        // 31 days
+    const codes = stale(db).map((r) => r.code);
+    expect(codes).toEqual(['S31']);
+    expect(stale(db)[0]).toMatchObject({
+      name: 'THIRTY ONE', contractor: 'Meera', lastPunch: '2026-08-19', daysSince: 31,
+    });
+  });
+
+  test('B2: someone who never punched at all is flagged, with a null last punch', () => {
+    const db = makeDb();
+    addEmp(db, { code: 'NEVER', name: 'NO PUNCH EVER', dept: 'MEERA', doj: '2026-01-05' });
+    const rows = stale(db);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({
+      code: 'NEVER', doj: '2026-01-05', lastPunch: null, daysSince: null,
+    });
+  });
+
+  test('B3: only absences do not count as a punch', () => {
+    const db = makeDb();
+    addEmp(db, { code: 'ABS', dept: 'MEERA' });
+    addAtt(db, 'ABS', '2026-09-18', 'A');        // yesterday, but not present
+    addAtt(db, 'ABS', '2026-09-17', 'WO');
+    expect(stale(db).map((r) => r.code)).toEqual(['ABS']);
+  });
+
+  test('B4: a half day counts as a punch', () => {
+    const db = makeDb();
+    addEmp(db, { code: 'HALF', dept: 'MEERA' });
+    addAtt(db, 'HALF', '2026-09-18', '½P');
+    expect(stale(db)).toHaveLength(0);
+  });
+
+  test('B5: people already marked Left are not stale roster rows', () => {
+    const db = makeDb();
+    addEmp(db, { code: 'LEFT', dept: 'MEERA', status: 'Left' });
+    addEmp(db, { code: 'LIVE', dept: 'MEERA', status: 'Active' });
+    expect(stale(db).map((r) => r.code)).toEqual(['LIVE']);
+  });
+
+  test('B6: it ignores the month selector entirely', () => {
+    const db = makeDb();
+    addEmp(db, { code: 'OLD', dept: 'MEERA' });
+    addAtt(db, 'OLD', '2026-01-04', 'P');
+    const april = monthReport(db, { ...M, today: TODAY }).exceptions.stale;
+    const may = monthReport(db, { month: 5, year: 2026, today: TODAY }).exceptions.stale;
+    expect(april).toEqual(may);
+    expect(april[0].daysSince).toBe(258);
+  });
+
+  test('B7: longest silent first, never-punched above everyone', () => {
+    const db = makeDb();
+    addEmp(db, { code: 'A1', dept: 'MEERA' }); addAtt(db, 'A1', '2026-08-01', 'P');
+    addEmp(db, { code: 'B1', dept: 'MEERA' }); addAtt(db, 'B1', '2026-05-01', 'P');
+    addEmp(db, { code: 'Z9', dept: 'MEERA' });   // never punched
+    expect(stale(db).map((r) => r.code)).toEqual(['Z9', 'B1', 'A1']);
+  });
+
+  test('B8: stale rows stay OUT of the month badge count', () => {
+    // 231 month-independent rows would swamp a month signal.
+    const db = makeDb();
+    addEmp(db, { code: 'ST', dept: 'MEERA' });
+    const x = monthReport(db, { ...M, today: TODAY }).exceptions;
+    expect(x.stale).toHaveLength(1);
+    expect(x.count).toBe(0);
+  });
+
+  test('B9: excluded departments and non-contract staff never reach it', () => {
+    const db = makeDb();
+    addEmp(db, { code: 'SEC', dept: 'SECURITY' });
+    addEmp(db, { code: 'PERM', dept: 'MEERA', employmentType: 'Permanent' });
+    expect(stale(db)).toHaveLength(0);
+  });
+});
+
+// ─── 2.1 · A — the grid shows people who worked ───────────────────────────
+describe('2.1 · grid shows people who worked (A)', () => {
+  function gangFixture() {
+    const db = makeDb();
+    addEmp(db, { code: 'W1', name: 'WORKED ONE', dept: 'MEERA' });
+    addAtt(db, 'W1', '2026-04-02', 'P');
+    addEmp(db, { code: 'W2', name: 'WORKED HALF', dept: 'MEERA' });
+    addAtt(db, 'W2', '2026-04-02', '½P');
+    addEmp(db, { code: 'N1', name: 'ABSENT ALL MONTH', dept: 'MEERA' });
+    addAtt(db, 'N1', '2026-04-02', 'A');
+    addAtt(db, 'N1', '2026-04-05', 'WO');
+    addEmp(db, { code: 'N2', name: 'NO ROW AT ALL', dept: 'MEERA' });
+    return db;
+  }
+
+  test('A1: worked first, idle after, each flagged', () => {
+    const g = gridReport(gangFixture(), { ...M, contractor: 'Meera' });
+    expect(g.workedCount).toBe(2);
+    expect(g.noPunchCount).toBe(2);
+    // within each block the gang's own order applies (role, then name)
+    expect(g.employees.map((e) => e.code)).toEqual(['W2', 'W1', 'N1', 'N2']);
+    expect(g.employees.map((e) => e.noPunch)).toEqual([false, false, true, true]);
+  });
+
+  test('A2: someone with no attendance row at all still appears', () => {
+    // The old grid started from attendance_processed, so this person was
+    // invisible — and a gang that worked no days rendered as an empty table.
+    const g = gridReport(gangFixture(), { ...M, contractor: 'Meera' });
+    const n2 = g.employees.find((e) => e.code === 'N2');
+    expect(n2).toBeDefined();
+    expect(n2.cells).toEqual({});
+    expect(n2.stats).toMatchObject({ workedDays: 0, manDays: 0 });
+  });
+
+  test('A3: an absent-all-month worker keeps their cells, so the pattern shows', () => {
+    const g = gridReport(gangFixture(), { ...M, contractor: 'Meera' });
+    const n1 = g.employees.find((e) => e.code === 'N1');
+    expect(n1.noPunch).toBe(true);
+    expect(n1.cells['2026-04-02']).toMatchObject({ status: 'A' });
+    expect(n1.stats).toMatchObject({ absent: 1, weeklyOff: 1, workedDays: 0 });
+  });
+
+  test('A4: a gang where nobody worked still renders its roster', () => {
+    const db = makeDb();
+    addEmp(db, { code: 'IDLE1', dept: 'MOTI LAL CON' });
+    addEmp(db, { code: 'IDLE2', dept: 'MOTI LAL CON' });
+    const g = gridReport(db, { ...M, contractor: 'Moti Lal' });
+    expect(g.workedCount).toBe(0);
+    expect(g.noPunchCount).toBe(2);
+  });
+
+  test('A5: a worker marked Left who DID work is kept — their man-days must tie', () => {
+    const db = makeDb();
+    addEmp(db, { code: 'LW', dept: 'MEERA', status: 'Left' });
+    addAtt(db, 'LW', '2026-04-02', 'P');
+    const g = gridReport(db, { ...M, contractor: 'Meera' });
+    expect(g.workedCount).toBe(1);
+    expect(g.employees[0]).toMatchObject({ code: 'LW', noPunch: false });
+  });
+
+  test('A6: a worker marked Left with no punch is dropped, not listed as idle', () => {
+    const db = makeDb();
+    addEmp(db, { code: 'LN', dept: 'MEERA', status: 'Left' });
+    addAtt(db, 'LN', '2026-04-02', 'A');
+    const g = gridReport(db, { ...M, contractor: 'Meera' });
+    expect(g.employees).toHaveLength(0);
+    expect(g.noPunchCount).toBe(0);
+  });
+
+  test('A7: only pre-joining punches still count as having worked', () => {
+    // They punched. Payroll does not pay it, which the red ring already says —
+    // but they are not an idle roster row.
+    const db = makeDb();
+    addEmp(db, { code: 'PJ', dept: 'MEERA', doj: '2026-04-20' });
+    addAtt(db, 'PJ', '2026-04-02', 'P');
+    const g = gridReport(db, { ...M, contractor: 'Meera' });
+    expect(g.workedCount).toBe(1);
+    expect(g.employees[0].stats).toMatchObject({ workedDays: 1, preJoining: 1, manDays: 0 });
+  });
+
+  test('A8: idle people contribute nothing to the footer', () => {
+    const g = gridReport(gangFixture(), { ...M, contractor: 'Meera' });
+    expect(g.footer['2026-04-02']).toMatchObject({ bioDay: 2, bioNight: 0 });
   });
 });
