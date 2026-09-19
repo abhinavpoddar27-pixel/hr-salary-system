@@ -70,7 +70,8 @@ Every claim is tagged **FACT** (file:line or command output), **INFERENCE**, or 
 | Phase 0 | Verify anchors A–G, then STOP at gate | **done — passed, 6 rulings** |
 | C1 | role-guard `PUT /:code/leaves` | **done** |
 | C2 | the floor (helper + 5 balance-write sites + frontend + dist) | **done** |
-| C3 | role-guard `mark-present` | in progress |
+| C3 | role-guard `mark-present` | **done** |
+| C3b | finalized-month check on `mark-present` (R5) | in progress |
 | C4 | `protectedWrite` assertions | pending |
 | C5 | TDS tests | pending |
 | C6 | `/api/version` | pending |
@@ -102,11 +103,16 @@ Every claim is tagged **FACT** (file:line or command output), **INFERENCE**, or 
    no regression, and `leaveApi.test.js`'s existing apply-leave assertions still pass,
    which is the evidence that response shapes and status codes were preserved (R4).
 
+8. **C3** — `financeAudit.js:683` `POST /corrections/mark-present` now carries
+   `requireFinanceOrAdmin`, the same guard its apply-leave sibling has had. It was the
+   only unguarded route in the file, reachable by any authenticated role, and it
+   hand-patches `day_calculations`. +1 test (31 in the floor suite).
+
 ---
 
 ## NEXT
 
-**C3 — role-guard `mark-present`.**
+**C3b — the finalized-month check on `mark-present` (R5).**
 
 ---
 

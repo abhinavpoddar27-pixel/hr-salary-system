@@ -680,7 +680,7 @@ router.post('/corrections/apply-leave', requireFinanceOrAdmin, (req, res) => {
 // POST /api/finance-audit/corrections/mark-present
 // Manual present marking with evidence tracking
 // ─────────────────────────────────────────────────────────
-router.post('/corrections/mark-present', (req, res) => {
+router.post('/corrections/mark-present', requireFinanceOrAdmin, (req, res) => {
   try {
     const db = getDb();
     const { employee_code, date, month, year, in_time, out_time, reason, evidence_type } = req.body;

@@ -398,3 +398,19 @@ describe('PUT /api/employees/:code/leaves', () => {
     expect(res.body.code).toBe('NEGATIVE_OVERRIDE_NOT_ADMIN');
   });
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// POST /api/finance-audit/corrections/mark-present — role guard (commit 3)
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('POST /api/finance-audit/corrections/mark-present', () => {
+  const post = (role) => api.request('POST', '/api/finance-audit/corrections/mark-present', { body: {}, role });
+
+  test('only finance and admin can reach it', async () => {
+    expect((await post('hr')).status).toBe(403);
+    expect((await post('viewer')).status).toBe(403);
+    // Past the gate, then refused for missing fields — which is the point.
+    expect((await post('finance')).status).toBe(400);
+    expect((await post('admin')).status).toBe(400);
+  });
+});
