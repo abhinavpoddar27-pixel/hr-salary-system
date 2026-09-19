@@ -72,8 +72,8 @@ Every claim is tagged **FACT** (file:line or command output), **INFERENCE**, or 
 | C2 | the floor (helper + 5 balance-write sites + frontend + dist) | **done** |
 | C3 | role-guard `mark-present` | **done** |
 | C3b | finalized-month check on `mark-present` (R5) | **done** |
-| C4 | `protectedWrite` assertions | pending |
-| C5 | TDS tests | pending |
+| C4 | `protectedWrite` assertions | **done** |
+| C5 | TDS tests | in progress |
 | C6 | `/api/version` | pending |
 | Phase 6 | Self-debug + user simulation + v2 | pending |
 | Phase 7 | Verify, CLAUDE.md, push | pending |
@@ -114,11 +114,19 @@ Every claim is tagged **FACT** (file:line or command output), **INFERENCE**, or 
    `day_calculations` for a month payroll had already paid, which violates owner ruling
    R4 (finalized months are never recalculated). +1 test (32 in the floor suite).
 
+10. **C4** — T24 (`:442`), T26 (`:477`), T27 (`:498`) now assert
+    `rejects.toMatchObject({ message: expect.stringContaining('UNIQUE') })`, each with a
+    do-not-convert-back note. **Eight consecutive full-suite runs with zero
+    `protectedWrite` failures** (was failing on roughly half of runs). The other nine
+    `.rejects.toThrow()` in the file assert plain in-process validator `Error`s, are
+    same-realm, already pass, and were left alone as instructed. No production code
+    touched.
+
 ---
 
 ## NEXT
 
-**C4 — `protectedWrite` assertions.**
+**C5 — TDS tests.**
 
 ---
 
