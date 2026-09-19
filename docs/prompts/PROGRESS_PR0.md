@@ -71,7 +71,7 @@ Every claim is tagged **FACT** (file:line or command output), **INFERENCE**, or 
 | C1 | role-guard `PUT /:code/leaves` | **done** |
 | C2 | the floor (helper + 5 balance-write sites + frontend + dist) | **done** |
 | C3 | role-guard `mark-present` | **done** |
-| C3b | finalized-month check on `mark-present` (R5) | in progress |
+| C3b | finalized-month check on `mark-present` (R5) | **done** |
 | C4 | `protectedWrite` assertions | pending |
 | C5 | TDS tests | pending |
 | C6 | `/api/version` | pending |
@@ -108,11 +108,17 @@ Every claim is tagged **FACT** (file:line or command output), **INFERENCE**, or 
    only unguarded route in the file, reachable by any authenticated role, and it
    hand-patches `day_calculations`. +1 test (31 in the floor suite).
 
+9. **C3b** — R5's condition is met: `isMonthFinalized` is already imported in the file
+   and apply-leave already uses exactly this shape, so the check is a straight reuse, not
+   new logic. Added as its own commit. Without it `mark-present` could move
+   `day_calculations` for a month payroll had already paid, which violates owner ruling
+   R4 (finalized months are never recalculated). +1 test (32 in the floor suite).
+
 ---
 
 ## NEXT
 
-**C3b — the finalized-month check on `mark-present` (R5).**
+**C4 — `protectedWrite` assertions.**
 
 ---
 

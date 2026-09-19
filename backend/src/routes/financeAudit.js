@@ -702,6 +702,17 @@ router.post('/corrections/mark-present', requireFinanceOrAdmin, (req, res) => {
     const emp = db.prepare('SELECT id, name, company FROM employees WHERE code = ?').get(employee_code);
     if (!emp) return res.status(404).json({ success: false, error: 'Employee not found' });
 
+    // Finalized months are closed (owner ruling: never recalculated). This
+    // handler writes day_calculations directly, so without the check it could
+    // move a month payroll has already paid. Same helper and same shape as
+    // apply-leave above.
+    if (isMonthFinalized(db, emp.company, m, y)) {
+      return res.status(400).json({
+        success: false,
+        error: `Cannot mark present for a finalized month (${m}/${y}). Raise it with payroll instead.`
+      });
+    }
+
     const markPresent = db.transaction(() => {
       // 2. Insert punch corrections (IN + OUT records)
       const existing = db.prepare(

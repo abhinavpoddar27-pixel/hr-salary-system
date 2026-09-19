@@ -413,4 +413,29 @@ describe('POST /api/finance-audit/corrections/mark-present', () => {
     expect((await post('finance')).status).toBe(400);
     expect((await post('admin')).status).toBe(400);
   });
+
+  test('a finalized month is refused, and day_calculations is not moved', async () => {
+    const e = addEmployee();
+    db.prepare(`
+      INSERT INTO monthly_imports (month, year, company, file_name, status, is_finalised)
+      VALUES (3, ?, ?, 'x.xls', 'done', 1)
+    `).run(YEAR, CO);
+    db.prepare(`
+      INSERT INTO day_calculations (employee_code, month, year, company, days_present, days_absent, total_payable_days)
+      VALUES (?, 3, ?, ?, 10, 5, 10)
+    `).run(e.code, YEAR, CO);
+
+    const res = await api.request('POST', '/api/finance-audit/corrections/mark-present', {
+      role: 'finance',
+      body: {
+        employee_code: e.code, date: `${YEAR}-03-10`, month: 3, year: YEAR,
+        in_time: '09:00', out_time: '18:00',
+        reason: 'gate register', evidence_type: 'Gate Register',
+      },
+    });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/finalized month \(3\/\d{4}\)/);
+    const dc = db.prepare('SELECT days_present, days_absent FROM day_calculations WHERE employee_code = ?').get(e.code);
+    expect(dc).toEqual({ days_present: 10, days_absent: 5 });
+  });
 });
