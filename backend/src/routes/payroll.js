@@ -800,7 +800,7 @@ router.post('/finalise', (req, res) => {
 
   // Check extra duty grants reviewed
   try {
-    const unreviewed = db.prepare("SELECT COUNT(*) as cnt FROM extra_duty_grants WHERE month = ? AND year = ? AND status = 'APPROVED' AND finance_status IN ('UNREVIEWED', 'FINANCE_FLAGGED')").get(month, year);
+    const unreviewed = db.prepare("SELECT COUNT(*) as cnt FROM extra_duty_grants WHERE month = ? AND year = ? AND status = 'APPROVED' AND finance_status IN ('UNREVIEWED', 'FINANCE_FLAGGED', 'FINANCE_RETURNED')").get(month, year);
     if (unreviewed?.cnt > 0) {
       return res.status(400).json({ success: false, error: `Cannot finalise: ${unreviewed.cnt} extra duty grant(s) pending finance review.`, pendingGrants: unreviewed.cnt });
     }

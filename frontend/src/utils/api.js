@@ -339,6 +339,7 @@ export const rejectExtraDutyGrant = (id, reason) => api.post(`/extra-duty-grants
 export const financeApproveGrant = (id) => api.post(`/extra-duty-grants/${id}/finance-approve`)
 export const financeFlagGrant = (id, reason, notes) => api.post(`/extra-duty-grants/${id}/finance-flag`, { finance_flag_reason: reason, finance_notes: notes })
 export const financeRejectGrant = (id, reason) => api.post(`/extra-duty-grants/${id}/finance-reject`, { finance_flag_reason: reason })
+export const financeReturnGrant = (id, reason) => api.post(`/extra-duty-grants/${id}/finance-return`, { finance_flag_reason: reason })
 export const bulkFinanceApproveGrants = (ids) => api.post('/extra-duty-grants/bulk-finance-approve', { ids })
 export const getFinanceReviewQueue = (month, year) => api.get('/extra-duty-grants/finance-review', { params: { month, year } })
 

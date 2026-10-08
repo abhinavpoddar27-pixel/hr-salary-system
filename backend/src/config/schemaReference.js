@@ -69,7 +69,7 @@ attendance_processed (daily attendance records — ~31 rows per employee per mon
 extra_duty_grants (HR-initiated extra duty for OT/ED pay)
   employee_code TEXT, grant_date TEXT, month INTEGER, year INTEGER, company TEXT,
   grant_type TEXT, duty_days REAL, status TEXT ('PENDING'/'APPROVED'/'REJECTED'),
-  finance_status TEXT ('UNREVIEWED'/'FINANCE_APPROVED'/'FINANCE_FLAGGED'/'FINANCE_REJECTED'),
+  finance_status TEXT ('UNREVIEWED'/'FINANCE_APPROVED'/'FINANCE_FLAGGED'/'FINANCE_REJECTED'/'FINANCE_RETURNED'),
   requested_by TEXT, approved_by TEXT, salary_impact_amount REAL,
   UNIQUE(employee_code, grant_date, month, year)
 

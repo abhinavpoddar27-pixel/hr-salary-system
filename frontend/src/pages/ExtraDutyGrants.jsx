@@ -3,7 +3,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import {
   getExtraDutyGrants, getExtraDutyGrantsSummary, createExtraDutyGrant,
   approveExtraDutyGrant, rejectExtraDutyGrant,
-  financeApproveGrant, financeFlagGrant, financeRejectGrant, bulkFinanceApproveGrants,
+  financeApproveGrant, financeFlagGrant, financeRejectGrant, financeReturnGrant, bulkFinanceApproveGrants,
   getFinanceReviewQueue
 } from '../utils/api'
 import { useAppStore } from '../store/appStore'
@@ -14,6 +14,16 @@ import Modal from '../components/ui/Modal'
 import { normalizeRole, canHR as canHRFn, canFinance as canFinanceFn } from '../utils/role'
 import clsx from 'clsx'
 import toast from 'react-hot-toast'
+
+const BLANK_FORM = { employee_code: '', grant_date: '', grant_type: 'OVERNIGHT_STAY', duty_days: 1, verification_source: 'Gate Register', reference_number: '', remarks: '', original_punch_date: '' }
+const GRANT_TYPES = [['OVERNIGHT_STAY', 'Overnight Stay'], ['EXTENDED_SHIFT', 'Extended Shift'], ['OTHER', 'Other']]
+const SOURCES = ['Gate Register', 'Production Office', 'Supervisor Confirmed', 'Other']
+
+// Mirrors financeReturnBlocker() in backend/src/routes/extraDutyGrants.js.
+// The finalised-month check is server-side only; a 409 toast covers it.
+const canBeReturned = (g) => g.status === 'APPROVED'
+  && ['UNREVIEWED', 'FINANCE_REJECTED', 'FINANCE_APPROVED'].includes(g.finance_status)
+  && g.grant_type !== 'PRE_BIOMETRIC_ACTIVATION' && !g.is_processed
 
 function KPI({ label, value, color = 'blue' }) {
   const colors = { blue: 'text-blue-700', green: 'text-green-700', red: 'text-red-700', amber: 'text-amber-700', purple: 'text-purple-700', indigo: 'text-indigo-700' }
@@ -49,7 +59,9 @@ export default function ExtraDutyGrants() {
   // starts on the HR queue.
   const [activeTab, setActiveTab] = useState(role === 'finance' ? 'finance' : 'hr')
   const [showCreate, setShowCreate] = useState(false)
-  const [form, setForm] = useState({ employee_code: '', grant_date: '', grant_type: 'OVERNIGHT_STAY', duty_days: 1, verification_source: 'Gate Register', reference_number: '', remarks: '', original_punch_date: '' })
+  const [form, setForm] = useState(BLANK_FORM)
+  // The returned grant being re-entered through the New Grant form, or null.
+  const [reenterOf, setReenterOf] = useState(null)
   const [rejectId, setRejectId] = useState(null)
   const [rejectReason, setRejectReason] = useState('')
   const [flagId, setFlagId] = useState(null)
@@ -57,6 +69,8 @@ export default function ExtraDutyGrants() {
   const [flagNotes, setFlagNotes] = useState('')
   const [finRejectId, setFinRejectId] = useState(null)
   const [finRejectReason, setFinRejectReason] = useState('')
+  const [finReturnId, setFinReturnId] = useState(null)
+  const [finReturnReason, setFinReturnReason] = useState('')
   const [selectedIds, setSelectedIds] = useState([])
   const qc = useQueryClient()
 
@@ -73,18 +87,34 @@ export default function ExtraDutyGrants() {
   const allSelected = bulkEligibleIds.length > 0 && bulkEligibleIds.every(id => selectedIds.includes(id))
   const toggleSelectAll = () => setSelectedIds(allSelected ? [] : bulkEligibleIds)
   const toggleSelect = (id) => setSelectedIds(prev => prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id])
+  // A row acted on one at a time leaves the bulk selection. Otherwise a grant
+  // returned here and re-entered by HR comes back UNREVIEWED still ticked, and
+  // Bulk Approve would approve HR's new values without finance seeing them.
+  const unselect = (id) => setSelectedIds(prev => prev.filter(x => x !== id))
+  const bulkIds = selectedIds.filter(id => bulkEligibleIds.includes(id))
 
-  const createMut = useMutation({ mutationFn: createExtraDutyGrant, onSuccess: () => { qc.invalidateQueries({ queryKey: ['edg-list'] }); qc.invalidateQueries({ queryKey: ['edg-summary'] }); setShowCreate(false); toast.success('Grant created') } })
+  const createMut = useMutation({
+    mutationFn: createExtraDutyGrant,
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['edg-list'] }); qc.invalidateQueries({ queryKey: ['edg-summary'] }); setShowCreate(false)
+      if (reenterOf) { setReenterOf(null); setForm(BLANK_FORM); toast.success('Re-entered and sent back to finance') }
+      else toast.success('Grant created')
+    }
+  })
   const approveMut = useMutation({ mutationFn: (id) => approveExtraDutyGrant(id), onSuccess: () => { qc.invalidateQueries({ queryKey: ['edg-list'] }); qc.invalidateQueries({ queryKey: ['edg-summary'] }); toast.success('Approved') } })
   const rejectMut = useMutation({ mutationFn: ({ id, reason }) => rejectExtraDutyGrant(id, reason), onSuccess: () => { qc.invalidateQueries({ queryKey: ['edg-list'] }); qc.invalidateQueries({ queryKey: ['edg-summary'] }); setRejectId(null); toast.success('Rejected') } })
-  const finApproveMut = useMutation({ mutationFn: (id) => financeApproveGrant(id), onSuccess: () => { qc.invalidateQueries({ queryKey: ['edg-list'] }); qc.invalidateQueries({ queryKey: ['edg-summary'] }); toast.success('Finance approved') } })
+  const finApproveMut = useMutation({ mutationFn: (id) => financeApproveGrant(id), onSuccess: (_, id) => { qc.invalidateQueries({ queryKey: ['edg-list'] }); qc.invalidateQueries({ queryKey: ['edg-summary'] }); unselect(id); toast.success('Finance approved') } })
   const finFlagMut = useMutation({
     mutationFn: ({ id, reason, notes }) => financeFlagGrant(id, reason, notes),
-    onSuccess: () => { qc.invalidateQueries({ queryKey: ['edg-list'] }); qc.invalidateQueries({ queryKey: ['edg-summary'] }); setFlagId(null); setFlagReason(''); setFlagNotes(''); toast.success('Flagged for review') }
+    onSuccess: (_, { id }) => { qc.invalidateQueries({ queryKey: ['edg-list'] }); qc.invalidateQueries({ queryKey: ['edg-summary'] }); unselect(id); setFlagId(null); setFlagReason(''); setFlagNotes(''); toast.success('Flagged for review') }
   })
   const finRejectMut = useMutation({
     mutationFn: ({ id, reason }) => financeRejectGrant(id, reason),
-    onSuccess: () => { qc.invalidateQueries({ queryKey: ['edg-list'] }); qc.invalidateQueries({ queryKey: ['edg-summary'] }); setFinRejectId(null); setFinRejectReason(''); toast.success('Finance rejected') }
+    onSuccess: (_, { id }) => { qc.invalidateQueries({ queryKey: ['edg-list'] }); qc.invalidateQueries({ queryKey: ['edg-summary'] }); unselect(id); setFinRejectId(null); setFinRejectReason(''); toast.success('Finance rejected') }
+  })
+  const finReturnMut = useMutation({
+    mutationFn: ({ id, reason }) => financeReturnGrant(id, reason),
+    onSuccess: (_, { id }) => { qc.invalidateQueries({ queryKey: ['edg-list'] }); qc.invalidateQueries({ queryKey: ['edg-summary'] }); unselect(id); setFinReturnId(null); setFinReturnReason(''); toast.success('Returned to HR for correction') }
   })
   const bulkFinApproveMut = useMutation({
     mutationFn: (ids) => bulkFinanceApproveGrants(ids),
@@ -92,9 +122,12 @@ export default function ExtraDutyGrants() {
   })
 
   const hrBadge = { PENDING: 'bg-amber-100 text-amber-800', APPROVED: 'bg-green-100 text-green-800', REJECTED: 'bg-red-100 text-red-800' }
-  const finBadge = { UNREVIEWED: 'bg-slate-100 text-slate-600', FINANCE_APPROVED: 'bg-green-100 text-green-800', FINANCE_FLAGGED: 'bg-amber-100 text-amber-800', FINANCE_REJECTED: 'bg-red-100 text-red-800' }
+  const finBadge = { UNREVIEWED: 'bg-slate-100 text-slate-600', FINANCE_APPROVED: 'bg-green-100 text-green-800', FINANCE_FLAGGED: 'bg-amber-100 text-amber-800', FINANCE_REJECTED: 'bg-red-100 text-red-800', FINANCE_RETURNED: 'bg-purple-100 text-purple-800' }
 
   const showSelectColumn = activeTab === 'finance' && canFinance
+  const returnedBy = reenterOf
+    ? [reenterOf.finance_reviewed_by, reenterOf.finance_reviewed_at && String(reenterOf.finance_reviewed_at).slice(0, 10)].filter(Boolean).join(', ')
+    : ''
 
   return (
     <div className="p-6 space-y-5 animate-fade-in">
@@ -150,14 +183,14 @@ export default function ExtraDutyGrants() {
           ))}
         </div>
         <div className="ml-auto flex gap-2">
-          {showSelectColumn && selectedIds.length > 0 && (
-            <button onClick={() => bulkFinApproveMut.mutate(selectedIds)}
+          {showSelectColumn && bulkIds.length > 0 && (
+            <button onClick={() => bulkFinApproveMut.mutate(bulkIds)}
               disabled={bulkFinApproveMut.isPending}
               className="btn-primary text-sm">
-              {bulkFinApproveMut.isPending ? 'Approving...' : `Bulk Approve (${selectedIds.length})`}
+              {bulkFinApproveMut.isPending ? 'Approving...' : `Bulk Approve (${bulkIds.length})`}
             </button>
           )}
-          {canHR && <button onClick={() => setShowCreate(true)} className="btn-primary text-sm">+ New Grant</button>}
+          {canHR && <button onClick={() => { if (reenterOf) { setReenterOf(null); setForm(BLANK_FORM) } setShowCreate(true) }} className="btn-primary text-sm">+ New Grant</button>}
         </div>
       </div>
 
@@ -189,7 +222,7 @@ export default function ExtraDutyGrants() {
             {grants.map(g => {
               const bulkEligible = g.status === 'APPROVED' && g.finance_status === 'UNREVIEWED'
               return (
-                <tr key={g.id} className={g.finance_status === 'FINANCE_FLAGGED' ? 'bg-amber-50' : ''}>
+                <tr key={g.id} className={clsx(g.finance_status === 'FINANCE_FLAGGED' && 'bg-amber-50', g.finance_status === 'FINANCE_RETURNED' && 'bg-purple-50')}>
                   {showSelectColumn && (
                     <td>
                       <input type="checkbox"
@@ -205,7 +238,14 @@ export default function ExtraDutyGrants() {
                   <td className="text-center font-mono">{g.duty_days}</td>
                   <td className="text-xs">{g.verification_source}</td>
                   <td><span className={clsx('text-[10px] px-1.5 py-0.5 rounded-full', hrBadge[g.status])}>{g.status}</span></td>
-                  <td><span className={clsx('text-[10px] px-1.5 py-0.5 rounded-full', finBadge[g.finance_status])}>{g.finance_status?.replace('FINANCE_', '')}</span></td>
+                  <td>
+                    <span className={clsx('text-[10px] px-1.5 py-0.5 rounded-full', finBadge[g.finance_status])}>{g.finance_status?.replace('FINANCE_', '')}</span>
+                    {g.finance_status === 'FINANCE_RETURNED' && (
+                      <div className="mt-1 text-[10px] text-purple-800 bg-purple-100 rounded px-1.5 py-0.5 max-w-[220px] whitespace-normal">
+                        Returned by finance: {g.finance_flag_reason || '(no reason)'}
+                      </div>
+                    )}
+                  </td>
                   <td>
                     <div className="flex gap-1 flex-wrap">
                       {canHR && g.status === 'PENDING' && <>
@@ -221,6 +261,20 @@ export default function ExtraDutyGrants() {
                         <button onClick={() => finApproveMut.mutate(g.id)} className="text-green-600 hover:bg-green-50 px-1.5 py-0.5 rounded text-[10px] font-medium">✓ Approve</button>
                         <button onClick={() => { setFinRejectId(g.id); setFinRejectReason('') }} className="text-red-600 hover:bg-red-50 px-1.5 py-0.5 rounded text-[10px] font-medium">✕ Reject</button>
                       </>}
+                      {canFinance && canBeReturned(g) && (
+                        <button onClick={() => { setFinReturnId(g.id); setFinReturnReason('') }} className="text-purple-700 hover:bg-purple-50 px-1.5 py-0.5 rounded text-[10px] font-medium">↩ Return for correction</button>
+                      )}
+                      {canHR && g.finance_status === 'FINANCE_RETURNED' && (
+                        <button onClick={() => {
+                          setForm({
+                            employee_code: g.employee_code, grant_date: g.grant_date, grant_type: g.grant_type || 'OVERNIGHT_STAY',
+                            duty_days: g.duty_days, verification_source: g.verification_source || '', reference_number: g.reference_number || '',
+                            remarks: g.remarks || '', original_punch_date: g.original_punch_date || ''
+                          })
+                          setReenterOf(g)
+                          setShowCreate(true)
+                        }} className="text-purple-700 hover:bg-purple-50 px-1.5 py-0.5 rounded text-[10px] font-medium">✎ Re-enter</button>
+                      )}
                     </div>
                   </td>
                 </tr>
@@ -233,18 +287,36 @@ export default function ExtraDutyGrants() {
 
       {/* Create Modal */}
       {showCreate && (
-        <Modal onClose={() => setShowCreate(false)} title="New Extra Duty Grant">
+        <Modal onClose={() => setShowCreate(false)} title={reenterOf ? 'Re-enter Returned Grant' : 'New Extra Duty Grant'}>
           <div className="space-y-3">
+            {reenterOf && (
+              <div className="rounded-lg border border-purple-300 bg-purple-50 px-3 py-2 text-xs text-purple-900 space-y-1">
+                <div className="font-semibold">Returned by finance{returnedBy ? ` (${returnedBy})` : ''}:</div>
+                <div className="whitespace-pre-wrap">{reenterOf.finance_flag_reason || '(no reason given)'}</div>
+                <div className="text-purple-700">Correct the values below and resubmit. The grant goes back to finance for review; nothing is paid until finance approves it.</div>
+              </div>
+            )}
             <div className="grid grid-cols-2 gap-3">
-              <div><label className="label">Employee Code *</label><input value={form.employee_code} onChange={e => setForm(f => ({ ...f, employee_code: e.target.value }))} className="input" /></div>
-              <div><label className="label">Grant Date *</label><input type="date" value={form.grant_date} onChange={e => setForm(f => ({ ...f, grant_date: e.target.value }))} className="input" /></div>
-              <div><label className="label">Type</label><select value={form.grant_type} onChange={e => setForm(f => ({ ...f, grant_type: e.target.value }))} className="input"><option value="OVERNIGHT_STAY">Overnight Stay</option><option value="EXTENDED_SHIFT">Extended Shift</option><option value="OTHER">Other</option></select></div>
-              <div><label className="label">Duty Days</label><input type="number" step="0.5" min="0.5" max="2" value={form.duty_days} onChange={e => setForm(f => ({ ...f, duty_days: parseFloat(e.target.value) }))} className="input" /></div>
-              <div><label className="label">Verification Source *</label><select value={form.verification_source} onChange={e => setForm(f => ({ ...f, verification_source: e.target.value }))} className="input"><option>Gate Register</option><option>Production Office</option><option>Supervisor Confirmed</option><option>Other</option></select></div>
+              <div><label className="label">Employee Code *</label><input value={form.employee_code} readOnly={!!reenterOf} onChange={e => setForm(f => ({ ...f, employee_code: e.target.value }))} className={clsx('input', reenterOf && 'bg-slate-100')} /></div>
+              <div><label className="label">Grant Date *</label><input type="date" value={form.grant_date} readOnly={!!reenterOf} onChange={e => setForm(f => ({ ...f, grant_date: e.target.value }))} className={clsx('input', reenterOf && 'bg-slate-100')} /></div>
+              <div><label className="label">Type</label><select value={form.grant_type} onChange={e => setForm(f => ({ ...f, grant_type: e.target.value }))} className="input">
+                {GRANT_TYPES.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
+                {form.grant_type && !GRANT_TYPES.some(([v]) => v === form.grant_type) && <option value={form.grant_type}>{form.grant_type.replace(/_/g, ' ')}</option>}
+              </select></div>
+              <div>
+                <label className={clsx('label', reenterOf && 'text-amber-800 font-semibold')}>Duty Days{reenterOf ? ` (entered: ${reenterOf.duty_days})` : ''}</label>
+                <input type="number" step="0.5" min="0.5" max="2" value={form.duty_days} onChange={e => setForm(f => ({ ...f, duty_days: parseFloat(e.target.value) }))} className={clsx('input', reenterOf && 'ring-2 ring-amber-400 bg-amber-50')} />
+              </div>
+              <div><label className="label">Verification Source *</label><select value={form.verification_source} onChange={e => setForm(f => ({ ...f, verification_source: e.target.value }))} className="input">
+                {SOURCES.map(v => <option key={v}>{v}</option>)}
+                {form.verification_source && !SOURCES.includes(form.verification_source) && <option value={form.verification_source}>{form.verification_source}</option>}
+              </select></div>
               <div><label className="label">Reference #</label><input value={form.reference_number} onChange={e => setForm(f => ({ ...f, reference_number: e.target.value }))} className="input" /></div>
             </div>
             <div><label className="label">Remarks</label><textarea value={form.remarks} onChange={e => setForm(f => ({ ...f, remarks: e.target.value }))} className="input w-full h-16" /></div>
-            <button onClick={() => createMut.mutate({ ...form, month, year, company: selectedCompany })} disabled={createMut.isPending} className="btn-primary w-full">{createMut.isPending ? 'Creating...' : 'Create Grant'}</button>
+            <button onClick={() => createMut.mutate({ ...form, month: reenterOf ? reenterOf.month : month, year: reenterOf ? reenterOf.year : year, company: selectedCompany })} disabled={createMut.isPending} className="btn-primary w-full">
+              {createMut.isPending ? (reenterOf ? 'Resubmitting...' : 'Creating...') : (reenterOf ? 'Resubmit to Finance' : 'Create Grant')}
+            </button>
           </div>
         </Modal>
       )}
@@ -300,6 +372,22 @@ export default function ExtraDutyGrants() {
               disabled={!finRejectReason || finRejectMut.isPending}
               className="btn-danger w-full">
               {finRejectMut.isPending ? 'Rejecting...' : 'Finance Reject'}
+            </button>
+          </div>
+        </Modal>
+      )}
+
+      {/* Finance Return-for-correction Modal */}
+      {finReturnId && (
+        <Modal onClose={() => setFinReturnId(null)} title="Return Grant for Correction">
+          <div className="space-y-3">
+            <p className="text-xs text-slate-600">HR can re-enter this grant with corrected values; it then comes back to you for review. It pays nothing until you approve it again.</p>
+            <textarea value={finReturnReason} onChange={e => setFinReturnReason(e.target.value)}
+              className="input w-full h-20" placeholder="What should HR correct? (required) e.g. only 0.5 day was due" />
+            <button onClick={() => finReturnMut.mutate({ id: finReturnId, reason: finReturnReason })}
+              disabled={!finReturnReason.trim() || finReturnMut.isPending}
+              className="btn-primary w-full">
+              {finReturnMut.isPending ? 'Returning...' : 'Return to HR'}
             </button>
           </div>
         </Modal>

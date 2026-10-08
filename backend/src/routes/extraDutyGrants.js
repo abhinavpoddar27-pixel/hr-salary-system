@@ -2,6 +2,7 @@ const express = require('express');
 const router = express.Router();
 const { getDb, logAudit } = require('../database/db');
 const { requireHrOrAdmin, requireFinanceOrAdmin } = require('../middleware/roles');
+const { isMonthFinalized } = require('../services/leaveTriggers');
 
 // Role gates are imported from the centralised middleware module so the
 // same canonical normalizeRole-based check is enforced everywhere
@@ -32,6 +33,23 @@ function archiveRejection(db, rejectionType, sourceTable, grant, reason, user) {
   }
 }
 
+// ─── Finance "Return for correction" eligibility ───────────
+// A returned grant goes back to HR, who re-enters it through POST / (same id)
+// and it lands in finance's queue again as UNREVIEWED. Pre-biometric grants
+// are excluded: they own a placeholder attendance row that only
+// finance-reject knows how to revert. Finalise is month-wide (payroll.js
+// POST /finalise), so the month check ignores company — the 2026-09 target
+// rows carry company ''. Returns null when returnable, else the reason.
+const RETURNABLE_FINANCE_STATES = ['UNREVIEWED', 'FINANCE_REJECTED', 'FINANCE_APPROVED'];
+function financeReturnBlocker(db, grant) {
+  if (grant.status !== 'APPROVED') return `HR status is ${grant.status}; only HR-approved grants can be returned`;
+  if (!RETURNABLE_FINANCE_STATES.includes(grant.finance_status)) return `finance status is ${grant.finance_status}`;
+  if (grant.grant_type === 'PRE_BIOMETRIC_ACTIVATION') return 'pre-biometric grants cannot be returned; reject instead';
+  if (grant.is_processed) return 'the grant is already processed';
+  if (isMonthFinalized(db, null, grant.month, grant.year)) return `${grant.month}/${grant.year} is finalised`;
+  return null;
+}
+
 // GET / — List grants
 router.get('/', (req, res) => {
   const db = getDb();
@@ -60,6 +78,7 @@ router.get('/summary', (req, res) => {
     financeApproved: all.filter(g => g.finance_status === 'FINANCE_APPROVED').length,
     financeFlagged: all.filter(g => g.finance_status === 'FINANCE_FLAGGED').length,
     financeRejected: all.filter(g => g.finance_status === 'FINANCE_REJECTED').length,
+    financeReturned: all.filter(g => g.finance_status === 'FINANCE_RETURNED').length,
     rejected: all.filter(g => g.status === 'REJECTED').length
   }});
 });
@@ -78,7 +97,8 @@ router.get('/employee/:code', (req, res) => {
 // same employee+date used to hit UNIQUE(employee_code, grant_date, month, year)
 // and 500 (Sentry HR-SALARY-BACKEND-2). An untouched auto row is now upgraded
 // in place to HR's grant (same id, linked_attendance_id kept, still PENDING);
-// any other existing row gets a 409 naming it.
+// a row finance returned for correction is replaced in place and goes back
+// to finance as UNREVIEWED; any other existing row gets a 409 naming it.
 router.post('/', requireHrOrAdmin, (req, res) => {
   const db = getDb();
   const { employee_code, grant_date, month, year, company, grant_type, duty_days, verification_source, reference_number, remarks, original_punch_date } = req.body;
@@ -111,6 +131,26 @@ router.post('/', requireHrOrAdmin, (req, res) => {
         );
         return { kind: 'created', id: result.lastInsertRowid };
       }
+      // Finance returned this grant for correction. HR's re-entry is the
+      // approval (HR approve has no side effects beyond status), so the row
+      // goes straight back to finance's queue. Never PBA: those can't be
+      // returned, and a PBA request must not take over a non-PBA row.
+      if (existing.finance_status === 'FINANCE_RETURNED' && grantType !== 'PRE_BIOMETRIC_ACTIVATION') {
+        if (isMonthFinalized(db, null, existing.month, existing.year)) return { kind: 'finalised', row: existing };
+        db.prepare(`UPDATE extra_duty_grants
+          SET duty_days = ?, grant_type = ?, verification_source = ?, reference_number = ?, remarks = ?,
+              original_punch_date = ?, requested_by = ?, requested_at = datetime('now'),
+              status = 'APPROVED', approved_by = ?, approved_at = datetime('now'),
+              finance_status = 'UNREVIEWED', finance_reviewed_by = NULL, finance_reviewed_at = NULL
+          WHERE id = ?`).run(
+          dutyDays, grantType, verification_source, reference_number || '', remarks || '',
+          original_punch_date || '', user, user, existing.id
+        );
+        return { kind: 'resubmitted', id: existing.id, old: existing };
+      }
+      if (existing.finance_status === 'FINANCE_REJECTED' && !financeReturnBlocker(db, existing)) {
+        return { kind: 'finance_rejected', row: existing };
+      }
       const untouchedAuto = existing.verification_source === 'BIOMETRIC_AUTO' && existing.status === 'PENDING'
         && existing.finance_status === 'UNREVIEWED' && !existing.is_processed;
       if (!untouchedAuto) return { kind: 'conflict', row: existing };
@@ -137,6 +177,32 @@ router.post('/', requireHrOrAdmin, (req, res) => {
   }
 
   if (outcome.kind === 'conflict') return conflict(outcome.row);
+  if (outcome.kind === 'finance_rejected') {
+    const r = outcome.row;
+    const on = (r.finance_reviewed_at || '').slice(0, 10) || 'an unknown date';
+    const why = (r.finance_flag_reason || '').trim() || 'no reason recorded';
+    return res.status(409).json({
+      success: false,
+      error: `Rejected by finance on ${on}: ${why}. Ask finance to Return it for correction.`,
+      grant_id: r.id
+    });
+  }
+  if (outcome.kind === 'finalised') {
+    return res.status(409).json({
+      success: false,
+      error: `Cannot re-enter this grant: ${outcome.row.month}/${outcome.row.year} is finalised.`,
+      grant_id: outcome.row.id
+    });
+  }
+  if (outcome.kind === 'resubmitted') {
+    const o = outcome.old;
+    logAudit('extra_duty_grants', outcome.id, 'finance_status', 'FINANCE_RETURNED', 'UNREVIEWED', 'HR_RESUBMIT',
+      `${employee_code} ${grant_date}: HR re-entered after finance return, duty_days ${o.duty_days} -> ${dutyDays}. ` +
+      `Old: grant_type=${o.grant_type}, verification_source=${o.verification_source}, ` +
+      `reference_number="${o.reference_number || ''}", remarks="${o.remarks || ''}", ` +
+      `original_punch_date="${o.original_punch_date || ''}", requested_by=${o.requested_by}`,
+      req.user?.username);
+  }
   if (outcome.kind === 'pba_conflict') {
     return res.status(409).json({
       success: false,
@@ -343,7 +409,8 @@ router.get('/finance-review', (req, res) => {
     total: data.length,
     unreviewed: data.filter(g => g.finance_status === 'UNREVIEWED').length,
     approved: data.filter(g => g.finance_status === 'FINANCE_APPROVED').length,
-    flagged: data.filter(g => g.finance_status === 'FINANCE_FLAGGED').length
+    flagged: data.filter(g => g.finance_status === 'FINANCE_FLAGGED').length,
+    returned: data.filter(g => g.finance_status === 'FINANCE_RETURNED').length
   };
   res.json({ success: true, data, summary });
 });
@@ -353,6 +420,11 @@ router.post('/:id/finance-approve', requireFinanceOrAdmin, (req, res) => {
   const db = getDb();
   const grant = db.prepare("SELECT * FROM extra_duty_grants WHERE id = ? AND status = 'APPROVED'").get(req.params.id);
   if (!grant) return res.status(404).json({ success: false, error: 'Grant not found or not HR-approved' });
+  // A returned grant still carries the values finance sent back; it is
+  // approvable only after HR re-enters it (POST / → UNREVIEWED).
+  if (grant.finance_status === 'FINANCE_RETURNED') {
+    return res.status(409).json({ success: false, error: 'This grant was returned to HR for correction. Approve it after HR re-enters it.', grant_id: grant.id });
+  }
 
   const user = req.user?.username || 'finance';
   db.prepare("UPDATE extra_duty_grants SET finance_status = 'FINANCE_APPROVED', finance_reviewed_by = ?, finance_reviewed_at = datetime('now') WHERE id = ?")
@@ -432,17 +504,51 @@ router.post('/:id/finance-reject', requireFinanceOrAdmin, (req, res) => {
   res.json({ success: true });
 });
 
+// POST /:id/finance-return — send a grant back to HR for correction
+// Reject is final (the UNIQUE key blocks re-entry); return is not: HR
+// re-enters the same employee+date through POST /, which updates this row
+// in place. status, duty_days and attendance are left untouched here, and
+// FINANCE_RETURNED pays nothing (salary reads FINANCE_APPROVED only).
+router.post('/:id/finance-return', requireFinanceOrAdmin, (req, res) => {
+  const db = getDb();
+  const { finance_flag_reason } = req.body;
+  const reason = typeof finance_flag_reason === 'string' ? finance_flag_reason.trim() : '';
+  if (!reason) return res.status(400).json({ success: false, error: 'Return reason required' });
+
+  const user = req.user?.username || 'finance';
+  const outcome = db.transaction(() => {
+    const grant = db.prepare('SELECT * FROM extra_duty_grants WHERE id = ?').get(req.params.id);
+    if (!grant) return { kind: 'missing' };
+    const blocker = financeReturnBlocker(db, grant);
+    if (blocker) return { kind: 'blocked', grant, blocker };
+    db.prepare("UPDATE extra_duty_grants SET finance_status = 'FINANCE_RETURNED', finance_flag_reason = ?, finance_reviewed_by = ?, finance_reviewed_at = datetime('now') WHERE id = ?")
+      .run(reason, user, grant.id);
+    return { kind: 'returned', grant };
+  }).immediate();
+
+  if (outcome.kind === 'missing') return res.status(404).json({ success: false, error: 'Grant not found' });
+  if (outcome.kind === 'blocked') {
+    return res.status(409).json({ success: false, error: `Cannot return this grant: ${outcome.blocker}.`, grant_id: outcome.grant.id });
+  }
+  const g = outcome.grant;
+  logAudit('extra_duty_grants', g.id, 'finance_status', g.finance_status, 'FINANCE_RETURNED', 'FINANCE_RETURN',
+    `${reason} (old duty_days=${g.duty_days})`, req.user?.username);
+
+  res.json({ success: true });
+});
+
 // POST /bulk-finance-approve
 router.post('/bulk-finance-approve', requireFinanceOrAdmin, (req, res) => {
   const db = getDb();
   const { ids } = req.body;
-  const stmt = db.prepare("UPDATE extra_duty_grants SET finance_status = 'FINANCE_APPROVED', finance_reviewed_by = ?, finance_reviewed_at = datetime('now') WHERE id = ? AND status = 'APPROVED'");
+  // Returned grants are skipped: they wait on HR's re-entry, not on finance.
+  const stmt = db.prepare("UPDATE extra_duty_grants SET finance_status = 'FINANCE_APPROVED', finance_reviewed_by = ?, finance_reviewed_at = datetime('now') WHERE id = ? AND status = 'APPROVED' AND finance_status <> 'FINANCE_RETURNED'");
   const user = req.user?.username || 'finance';
   let count = 0;
   const txn = db.transaction(() => {
     for (const id of ids) {
       const g = db.prepare('SELECT * FROM extra_duty_grants WHERE id = ?').get(id);
-      if (!g || g.status !== 'APPROVED') continue;
+      if (!g || g.status !== 'APPROVED' || g.finance_status === 'FINANCE_RETURNED') continue;
       const info = stmt.run(user, id);
       if (info.changes > 0) {
         logAudit('extra_duty_grants', id, 'finance_status', g.finance_status || 'UNREVIEWED',
