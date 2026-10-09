@@ -1,3 +1,16 @@
+## Last Session — 2026-10-10 (Leave Management page crash)
+**Branch `fix/leave-automation-tab-tdz`, NOT merged.** Frontend only.
+- **Bug:** `/leave-management` showed "Something went wrong — Cannot access 're' before initialization" on load,
+  for every role. `pages/LeaveManagement.jsx` read `isAdmin`/`isHrOrAdmin` in two `useQuery` `enabled` options
+  (recompute preview, automation status) ~50 lines ABOVE their `const` declarations → temporal dead zone.
+  Introduced by 44c8468 (leave automation UI); surfaced on deploy with PR #55. Not caused by the switchover card.
+- **Fix:** the four role consts (`role`, `isAdmin`, `isHrOrAdmin`, `actor`) moved to just after `useAppStore()`.
+  No other change. dist rebuilt.
+- **Verified (Chromium, scratch DB, real logins):** old bundle reproduces the crash; new bundle: all 46 routes as
+  admin load with 0 page errors; all Leave Management tabs open; switchover card Preview renders (98 skipped on an
+  empty DB, as expected); hr + finance load the page, Automation tab hidden. **Not tested:** Railway itself.
+- **Rule:** no ESLint in the repo, so nothing catches use-before-declare. Declare role flags before any hook reads them.
+
 ## Last Session — 2026-10-09 (Leave switchover 2026)
 **Leave switchover 2026. Branch `feat/leave-switchover-2026`, NOT merged (PR #55).**
 Spec + rulings R-A…R-H: `docs/leave-switchover-2026/PROMPT.md`; log, decisions and prod facts: `PROGRESS.md`.
