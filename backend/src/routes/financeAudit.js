@@ -16,6 +16,7 @@ const router = express.Router();
 const { getDb, logAudit } = require('../database/db');
 const { safeTrigger, queueLeaveRecalc, checkAutoStage6, isMonthFinalized } = require('../services/leaveTriggers');
 const { requireFinanceOrAdmin } = require('../middleware/roles');
+const { adjustLeaveBalance } = require('../services/leaveBalanceGuard');
 const { syncSalaryStructureFromEmployee } = require('./employees');
 
 const CORRECTION_REASONS = [
@@ -553,7 +554,8 @@ router.get('/corrections-summary', (req, res) => {
 router.post('/corrections/apply-leave', requireFinanceOrAdmin, (req, res) => {
   try {
     const db = getDb();
-    const { employee_code, date, leave_type, month, year, reason } = req.body;
+    const { employee_code, date, leave_type, month, year, reason,
+      allow_negative: allowNegative, negative_reason: negativeReason } = req.body;
     const username = req.user?.username || 'Unknown';
 
     if (!employee_code || !date || !leave_type || !month || !year || !reason) {
@@ -583,18 +585,14 @@ router.post('/corrections/apply-leave', requireFinanceOrAdmin, (req, res) => {
       });
     }
 
-    // Hard-block a negative balance. The old version only console.warn'd and
-    // wrote the employee into the red.
-    const leaveBalance = db.prepare(
-      'SELECT id, balance FROM leave_balances WHERE employee_id = ? AND year = ? AND leave_type = ?'
-    ).get(emp.id, y, leave_type);
-    const currentBalance = leaveBalance ? Number(leaveBalance.balance) || 0 : 0;
-    if (leave_type !== 'LWP' && currentBalance < 1) {
-      return res.status(400).json({
-        success: false,
-        error: `Cannot apply ${leave_type}: balance is ${currentBalance}. Use LWP, or credit the balance first.`
-      });
-    }
+    // Read for the response only. The floor itself is enforced inside the
+    // transaction below, by the UPDATE's own WHERE clause — see
+    // services/leaveBalanceGuard.js. Reading the balance out here and acting on
+    // it later is check-then-act, which is exactly how 23725 reached -5 EL
+    // through six one-day debits in four minutes.
+    const currentBalance = Number(db.prepare(
+      'SELECT balance FROM leave_balances WHERE employee_id = ? AND year = ? AND leave_type = ?'
+    ).get(emp.id, y, leave_type)?.balance) || 0;
 
     const attendanceRecord = db.prepare(
       'SELECT id FROM attendance_processed WHERE employee_code = ? AND date = ? AND status_final = ?'
@@ -609,6 +607,7 @@ router.post('/corrections/apply-leave', requireFinanceOrAdmin, (req, res) => {
     // can no longer put the day back to absent while the balance stays debited.
     let applicationId;
     let newBalance = currentBalance;
+    let floorRejection = null;
     const applyLeave = db.transaction(() => {
       db.prepare(
         'UPDATE attendance_processed SET status_final = ?, correction_source = ?, correction_remark = ? WHERE id = ?'
@@ -623,16 +622,19 @@ router.post('/corrections/apply-leave', requireFinanceOrAdmin, (req, res) => {
         reason, `Finance correction by ${username}`, username).lastInsertRowid;
 
       if (leave_type !== 'LWP') {
-        if (leaveBalance) {
-          db.prepare('UPDATE leave_balances SET used = used + 1, balance = balance - 1 WHERE id = ?').run(leaveBalance.id);
-        } else {
-          db.prepare(
-            'INSERT INTO leave_balances (employee_id, year, leave_type, opening, accrued, used, balance) VALUES (?, ?, ?, 0, 0, 1, -1)'
-          ).run(emp.id, y, leave_type);
-        }
-        newBalance = db.prepare(
-          'SELECT balance FROM leave_balances WHERE employee_id = ? AND year = ? AND leave_type = ?'
-        ).get(emp.id, y, leave_type)?.balance ?? currentBalance - 1;
+        // Was: an UPDATE with no predicate, and an INSERT that hard-coded
+        // balance = -1 when no row existed. Both now go through the guard,
+        // which carries the floor in SQL and can only write below zero for an
+        // admin who supplied a reason.
+        const moved = adjustLeaveBalance(db, {
+          employeeId: emp.id, employeeCode: employee_code, year: y,
+          leaveType: leave_type, delta: -1, usedDelta: 1, ensureRow: true,
+          allowNegative: Boolean(allowNegative),
+          reason: negativeReason || reason,
+          role: req.user?.role, username,
+        });
+        if (!moved.ok) { floorRejection = moved; throw new Error('LEAVE_FLOOR_REJECTED'); }
+        newBalance = moved.newBalance;
       }
 
       db.prepare(`
@@ -640,7 +642,20 @@ router.post('/corrections/apply-leave', requireFinanceOrAdmin, (req, res) => {
         VALUES ('attendance_processed', ?, 'status', 'A', ?, ?, 'correction', ?, ?, 'leave_correction')
       `).run(attendanceRecord.id, leave_type, username, reason, employee_code);
     });
-    applyLeave();
+    try {
+      applyLeave();
+    } catch (e) {
+      // The floor declined, so the whole correction rolled back — the
+      // attendance row and the leave application go with it. Response shape and
+      // status code are unchanged from the pre-guard version.
+      if (floorRejection) {
+        return res.status(400).json({
+          success: false,
+          error: `Cannot apply ${leave_type}: balance is ${floorRejection.available}. Use LWP, or credit the balance first.`
+        });
+      }
+      throw e;
+    }
 
     // After the commit, and never able to fail the correction.
     const recalc = safeTrigger('financeAudit.applyLeave', () => queueLeaveRecalc(db, {
@@ -665,7 +680,7 @@ router.post('/corrections/apply-leave', requireFinanceOrAdmin, (req, res) => {
 // POST /api/finance-audit/corrections/mark-present
 // Manual present marking with evidence tracking
 // ─────────────────────────────────────────────────────────
-router.post('/corrections/mark-present', (req, res) => {
+router.post('/corrections/mark-present', requireFinanceOrAdmin, (req, res) => {
   try {
     const db = getDb();
     const { employee_code, date, month, year, in_time, out_time, reason, evidence_type } = req.body;
@@ -686,6 +701,17 @@ router.post('/corrections/mark-present', (req, res) => {
     // 1. Find employee
     const emp = db.prepare('SELECT id, name, company FROM employees WHERE code = ?').get(employee_code);
     if (!emp) return res.status(404).json({ success: false, error: 'Employee not found' });
+
+    // Finalized months are closed (owner ruling: never recalculated). This
+    // handler writes day_calculations directly, so without the check it could
+    // move a month payroll has already paid. Same helper and same shape as
+    // apply-leave above.
+    if (isMonthFinalized(db, emp.company, m, y)) {
+      return res.status(400).json({
+        success: false,
+        error: `Cannot mark present for a finalized month (${m}/${y}). Raise it with payroll instead.`
+      });
+    }
 
     const markPresent = db.transaction(() => {
       // 2. Insert punch corrections (IN + OUT records)

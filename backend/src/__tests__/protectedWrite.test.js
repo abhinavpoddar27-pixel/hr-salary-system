@@ -437,9 +437,14 @@ describe('protectedWrite — audit log', () => {
     expect(countAuditRows(db)).toBe(5);
 
     // error path (UNIQUE violation throws inside txn)
+    // Assert on the message, not the class: better-sqlite3 is a native module
+    // loaded once per process while jest gives each test file its own realm, so
+    // whichever file loads it first owns the SqliteError prototype chain and
+    // `err instanceof Error` is false everywhere else. toThrow() then reports
+    // nothing was thrown. Do not convert this back.
     await expect(protectedWrite(db, {
       table: 'widgets', operation: 'insert', rows: [{ code: 'A' }], // collides with first insert
-    })).rejects.toThrow();
+    })).rejects.toMatchObject({ message: expect.stringContaining('UNIQUE') });
     expect(countAuditRows(db)).toBe(6);
 
     const statuses = db.prepare('SELECT status FROM protected_writes ORDER BY id').all().map((r) => r.status);
@@ -472,9 +477,10 @@ describe('protectedWrite — audit log', () => {
   test('T26 status=error row contains aborted_reason from the thrown error', async () => {
     const db = setupDb();
     db.prepare('INSERT INTO widgets (code) VALUES (?)').run('A');
+    // Message, not class — see the note in T24. Do not convert this back.
     await expect(protectedWrite(db, {
       table: 'widgets', operation: 'insert', rows: [{ code: 'A' }],
-    })).rejects.toThrow(/UNIQUE/);
+    })).rejects.toMatchObject({ message: expect.stringContaining('UNIQUE') });
     const a = lastAudit(db);
     expect(a.status).toBe('error');
     expect(a.aborted_reason).toMatch(/UNIQUE/);
@@ -488,6 +494,7 @@ describe('protectedWrite — transaction safety', () => {
     const db = setupDb();
     db.prepare('INSERT INTO widgets (code) VALUES (?)').run('EXISTING');
     expect(countWidgets(db)).toBe(1);
+    // Message, not class — see the note in T24. Do not convert this back.
     await expect(protectedWrite(db, {
       table: 'widgets', operation: 'insert',
       rows: [
@@ -495,7 +502,7 @@ describe('protectedWrite — transaction safety', () => {
         { code: 'EXISTING' }, // collides → throws
         { code: 'NEW2' },     // never reached
       ],
-    })).rejects.toThrow();
+    })).rejects.toMatchObject({ message: expect.stringContaining('UNIQUE') });
     // Atomicity: no partial state. Only the pre-seeded EXISTING remains.
     expect(countWidgets(db)).toBe(1);
     expect(db.prepare('SELECT code FROM widgets').get().code).toBe('EXISTING');

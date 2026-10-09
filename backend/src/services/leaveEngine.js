@@ -7,10 +7,18 @@
  *   computeLeavePlan()  pure — reads, never writes. Recomputes the whole year
  *                       from January on every call, so a skipped month can
  *                       never reset a running total.
- *   applyLeavePlan()    the only writer. Refuses to run unless the owner has
- *                       switched automation on (or the caller passes
- *                       allowWrite) AND the outside-the-system EL list has
- *                       either been uploaded or explicitly acknowledged empty.
+ *   applyLeavePlan()    the only writer IN THIS PIPELINE — not in the repo.
+ *                       Routes and other services write leave_balances directly
+ *                       in a dozen other places (leaves.js approve / adjust /
+ *                       bulk-adjust, financeAudit apply-leave, employees.js
+ *                       create / bulk-import / PUT :code/leaves, the two
+ *                       year-end lapses, the two CL seeders). Those request
+ *                       paths are floored by services/leaveBalanceGuard.js;
+ *                       this one deliberately is not — see below.
+ *                       Refuses to run unless the owner has switched automation
+ *                       on (or the caller passes allowWrite) AND the
+ *                       outside-the-system EL list has either been uploaded or
+ *                       explicitly acknowledged empty.
  *
  * Rules implemented (owner rulings, Sept 2026):
  *   • Days worked = days_present + 0.5 × days_half_present + days_wop + el_used.
@@ -447,7 +455,16 @@ function computeLeavePlan(db, { year, employeeCodes = null } = {}) {
 }
 
 // ────────────────────────────────────────────────────────────────────────────
-// applyLeavePlan — the only writer
+// applyLeavePlan — the only writer in this pipeline (the repo has others)
+//
+// Deliberately NOT floored at zero, unlike every request path in
+// services/leaveBalanceGuard.js. This is a derived recompute, not a
+// transaction: a negative closing balance here is the *symptom* of upstream
+// over-debiting, not an act of it. Rejecting inside it would make every
+// subsequent recompute throw for exactly the employees whose data is already
+// wrong — and with automation on, one bad row would break the nightly sweep for
+// everyone. The floor's job is to stop a human action creating an overdraft,
+// not to stop arithmetic from reporting one. (Owner ruling, Sept 2026.)
 // ────────────────────────────────────────────────────────────────────────────
 
 function externalGrantsReady(db) {

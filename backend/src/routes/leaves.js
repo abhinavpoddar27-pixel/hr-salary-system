@@ -3,6 +3,7 @@ const router = express.Router();
 const { getDb, logAudit } = require('../database/db');
 const { safeTrigger, queueLeaveRecalc, checkAutoStage6 } = require('../services/leaveTriggers');
 const { roleIn } = require('../middleware/roles');
+const { adjustLeaveBalance } = require('../services/leaveBalanceGuard');
 
 // ── Role gate ────────────────────────────────────────────────────────────────
 // Until Sept 2026 this router had no role check at all, so a viewer could
@@ -167,21 +168,11 @@ router.put('/:id/approve', (req, res) => {
 
   const emp = db.prepare('SELECT id FROM employees WHERE code = ?').get(leave.employee_code);
 
-  // Hard-block CL / EL when balance is insufficient.
-  if (emp && ['CL', 'EL'].includes(leave.leave_type)) {
-    const year = new Date(leave.start_date).getFullYear();
-    const bal = db.prepare(`
-      SELECT balance FROM leave_balances WHERE employee_id = ? AND year = ? AND leave_type = ?
-    `).get(emp.id, year, leave.leave_type);
-    const currentBalance = bal?.balance || 0;
-    if (currentBalance < leave.days) {
-      return res.status(400).json({
-        success: false,
-        error: `Cannot approve: insufficient ${leave.leave_type} balance (current: ${currentBalance}, requested: ${leave.days})`
-      });
-    }
-  }
-
+  // The balance check used to sit out here, ahead of the transaction, with the
+  // UPDATE below carrying no predicate of its own. That is check-then-act: six
+  // approvals arriving together all read the same balance and all debit it.
+  // The floor now lives in the UPDATE's WHERE clause — services/leaveBalanceGuard.js.
+  let floorRejection = null;
   const txn = db.transaction(() => {
     db.prepare(`
       UPDATE leave_applications SET status = 'Approved', approved_by = ?, approved_at = datetime('now')
@@ -190,13 +181,29 @@ router.put('/:id/approve', (req, res) => {
 
     if (emp && ['CL', 'EL'].includes(leave.leave_type)) {
       const year = new Date(leave.start_date).getFullYear();
-      db.prepare(`
-        UPDATE leave_balances SET used = used + ?, balance = balance - ?
-        WHERE employee_id = ? AND year = ? AND leave_type = ?
-      `).run(leave.days, leave.days, emp.id, year, leave.leave_type);
+      const moved = adjustLeaveBalance(db, {
+        employeeId: emp.id, employeeCode: leave.employee_code, year,
+        leaveType: leave.leave_type, delta: -leave.days, usedDelta: leave.days,
+        allowNegative: Boolean(req.body?.allow_negative),
+        reason: req.body?.negative_reason,
+        role: req.user?.role, username: approvedBy,
+      });
+      if (!moved.ok) { floorRejection = moved; throw new Error('LEAVE_FLOOR_REJECTED'); }
     }
   });
-  txn();
+  try {
+    txn();
+  } catch (e) {
+    // The approval rolls back with the debit. Response shape and status code
+    // are unchanged from the pre-guard version.
+    if (floorRejection) {
+      return res.status(400).json({
+        success: false,
+        error: `Cannot approve: insufficient ${leave.leave_type} balance (current: ${floorRejection.available}, requested: ${leave.days})`
+      });
+    }
+    throw e;
+  }
 
   // Fired after the transaction above has committed, and wrapped so a trigger
   // failure can never fail the approval itself.
@@ -432,31 +439,25 @@ router.post('/adjust', (req, res) => {
 
   const currentYear = new Date().getFullYear();
 
-  // Ensure leave_balances row exists
-  db.prepare(`
-    INSERT OR IGNORE INTO leave_balances (employee_id, year, leave_type, opening, accrued, used, balance)
-    VALUES (?, ?, ?, 0, 0, 0, 0)
-  `).run(emp.id, currentYear, leave_type);
+  // This is the path employee 23725 went to -5 EL and -2 CL on: a Debit branch
+  // that subtracted whatever it was handed, with no floor anywhere. Both
+  // branches now go through the guard, which does the check and the write in
+  // one transaction with the floor in the UPDATE's WHERE clause.
+  const isDebit = transaction_type === 'Debit';
+  const magnitude = Math.abs(Number(days) || 0);
+  const moved = adjustLeaveBalance(db, {
+    employeeId: emp.id, employeeCode: employee_code, year: currentYear,
+    leaveType: leave_type,
+    delta: isDebit ? -magnitude : magnitude,
+    usedDelta: isDebit ? magnitude : 0,
+    ensureRow: true,
+    allowNegative: Boolean(req.body?.allow_negative),
+    reason: req.body?.negative_reason || reason,
+    role: req.user?.role, username: req.user?.username,
+  });
+  if (!moved.ok) return res.status(moved.status).json({ success: false, error: moved.error, code: moved.code });
 
-  const bal = db.prepare(`
-    SELECT * FROM leave_balances WHERE employee_id = ? AND year = ? AND leave_type = ?
-  `).get(emp.id, currentYear, leave_type);
-
-  const oldBalance = bal.balance;
-  let newBalance = oldBalance;
-
-  if (transaction_type === 'Debit') {
-    newBalance = oldBalance - Math.abs(days);
-    db.prepare(`
-      UPDATE leave_balances SET used = used + ?, balance = ? WHERE id = ?
-    `).run(Math.abs(days), newBalance, bal.id);
-  } else {
-    // Credit, Manual Adjustment, Opening Balance, Carry Forward all add
-    newBalance = oldBalance + Math.abs(days);
-    db.prepare(`
-      UPDATE leave_balances SET balance = ? WHERE id = ?
-    `).run(newBalance, bal.id);
-  }
+  const { oldBalance, newBalance } = moved;
 
   // Insert leave transaction
   const now = new Date();
@@ -564,29 +565,25 @@ router.post('/bulk-adjust', (req, res) => {
 
         const currentYear = new Date().getFullYear();
 
-        db.prepare(`
-          INSERT OR IGNORE INTO leave_balances (employee_id, year, leave_type, opening, accrued, used, balance)
-          VALUES (?, ?, ?, 0, 0, 0, 0)
-        `).run(emp.id, currentYear, leave_type);
-
-        const bal = db.prepare(`
-          SELECT * FROM leave_balances WHERE employee_id = ? AND year = ? AND leave_type = ?
-        `).get(emp.id, currentYear, leave_type);
-
-        const oldBalance = bal.balance;
-        let newBalance = oldBalance;
-
-        if (transaction_type === 'Debit') {
-          newBalance = oldBalance - Math.abs(days);
-          db.prepare(`
-            UPDATE leave_balances SET used = used + ?, balance = ? WHERE id = ?
-          `).run(Math.abs(days), newBalance, bal.id);
-        } else {
-          newBalance = oldBalance + Math.abs(days);
-          db.prepare(`
-            UPDATE leave_balances SET balance = ? WHERE id = ?
-          `).run(newBalance, bal.id);
+        // Same floor as /adjust. A row that would go below zero is reported in
+        // `errors` and skipped; the rest of the batch still applies.
+        const isDebit = transaction_type === 'Debit';
+        const magnitude = Math.abs(Number(days) || 0);
+        const moved = adjustLeaveBalance(db, {
+          employeeId: emp.id, employeeCode: employee_code, year: currentYear,
+          leaveType: leave_type,
+          delta: isDebit ? -magnitude : magnitude,
+          usedDelta: isDebit ? magnitude : 0,
+          ensureRow: true,
+          allowNegative: Boolean(adj.allow_negative),
+          reason: adj.negative_reason || reason,
+          role: req.user?.role, username: req.user?.username,
+        });
+        if (!moved.ok) {
+          errors.push({ employee_code, error: moved.error, code: moved.code });
+          continue;
         }
+        const { oldBalance, newBalance } = moved;
 
         const now = new Date();
         db.prepare(`

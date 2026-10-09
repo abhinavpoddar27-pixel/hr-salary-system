@@ -1,3 +1,111 @@
+## Last Session — 2026-09-19 (later)
+
+**PR-0: leave safety floor + CI truth. Branch `fix/leave-safety-and-ci`, 10 commits, NOT merged.**
+
+Closes the hole employee 23725 fell through — `leave_balances.balance` of -5 EL and
+-2 CL from six single-day debits in four minutes — and makes the backend suite green
+for the first time. Code only: no schema change, no data repair, no automation
+switched on.
+
+### The floor
+`backend/src/services/leaveBalanceGuard.js` (new) is the single front door for every
+request path that moves a balance. The floor is **in the UPDATE's WHERE clause**:
+
+```sql
+... WHERE employee_id = ? AND year = ? AND leave_type = ?
+      AND balance + :delta >= 0          -- debits only
+```
+
+and `changes !== 1` is the rejection path. Nothing trusts a prior SELECT; the read
+that happens afterwards only builds the error message. An authenticated **admin**
+passing `allow_negative` with a reason of **10+ characters** is the only way below
+zero, and it always writes an `audit_log` row with action
+`leave_balance_negative_override`. Nothing is ever silently clamped.
+
+Routed through it: `leaves.js` `/adjust` (the incident path — had no check at all),
+`/bulk-adjust` (same), `PUT /:id/approve` (checked, but not atomically),
+`financeAudit.js` apply-leave (same), `employees.js` `PUT /:code/leaves` (absolute
+set, no floor, no audit trail). The `INSERT ... balance = -1` literal in
+`financeAudit.js` is gone.
+
+### Also fixed
+- **`PUT /employees/:code/leaves` had no role guard** — any authenticated role,
+  viewer included, could rewrite an entitlement. Shipped as its own commit, ahead of
+  the floor, so a revert of one never reverts the other.
+- **`POST /finance-audit/corrections/mark-present` had no role guard** either, and no
+  finalized-month check while hand-patching `day_calculations`. Both added (the second
+  is a straight reuse of apply-leave's `isMonthFinalized` and error shape).
+- **`protectedWrite` T24/T26/T27** flaked on ~half of runs. `better-sqlite3` is a
+  native module loaded once per process while jest gives each file its own realm, so
+  `err instanceof Error` is false across files and `.rejects.toThrow()` reports
+  nothing thrown. They assert on the message now.
+- **3 `tdsCalculation` tests** predated the March 2026 no-declaration gate and ran
+  against a mock returning `null`. They mock a declaration now; the service is
+  byte-unchanged and the gate stays.
+- **`/api/version`** reported a hardcoded `commit: 'bebc936'` and a `deployedAt` of
+  `new Date()` evaluated per request. Now `RAILWAY_GIT_COMMIT_SHA` →`SOURCE_COMMIT` →
+  `GIT_COMMIT` → `'unknown'`, and `startedAt` captured once at module load.
+
+### Caught by self-debug, not by the first pass
+The floor predicate was attached to **every** write, not just debits. An employee at
+-5 could therefore not be credited back: `-5 + 2 >= 0` is false, so the UPDATE matched
+nothing and the repair was refused. The floor would have trapped exactly the people it
+protects. Fixed to `d < 0 && !overriding`; 3 regression tests added. The original
+credit test passed only because it credited from a positive balance.
+
+### What's fragile
+- **`applyLeavePlan` is deliberately NOT floored** (owner ruling). It is a derived
+  recompute, not a transaction: a negative closing balance there is the *symptom* of
+  upstream over-debiting, and rejecting inside it would make every later recompute
+  throw for exactly the employees whose data is already wrong — with automation on,
+  one bad row would break the nightly sweep for everyone. Do not "fix" this.
+- **No CHECK constraint on `leave_balances.balance`, on purpose.** It would reject both
+  the admin override and the engine's legitimate negatives. The floor belongs on the
+  write paths.
+- **`leaveEngine.js`'s "the only writer" comments were false** at repo scope — 18 write
+  sites across 5 files, 17 bypassing `applyLeavePlan`. Corrected in place; no
+  arithmetic touched.
+- **The guard returns plain objects, never a thrown class.** Deliberate: an
+  `instanceof` across jest realms is what made `protectedWrite` flaky.
+- **`approve` and apply-leave now roll the whole correction back** when the floor
+  declines, so an application can no longer read Approved against a debit that failed.
+  Their 400 bodies and status codes are unchanged, and their pre-existing assertions
+  in `leaveApi.test.js` still pass — that is the evidence.
+- **`/bulk-adjust` calls the guard inside its own outer transaction** (nested SAVEPOINT).
+  A refused row is reported in `errors` and skipped; the batch still applies.
+
+### Verification
+Backend suite **378/378, six consecutive clean runs** (baseline was 341 with 3 hard
+failures and 3 flaky). New `leaveBalanceFloor.test.js` = 35 tests.
+`backend/scripts/pr0-floor-simulation.sh` boots the real server and drives the floor
+over HTTP with real JWTs as hr / admin / finance / employee — **32/32**, including the
+six-one-day-debits shape, which now stops at 0.
+
+### Not tested
+True cross-process concurrency (better-sqlite3 is synchronous, so requests serialise
+in one process; the SQL predicate is what makes a multi-process deploy safe, and that
+is asserted, but the race is not). The rebuilt `frontend/dist` in a browser — the
+`allow_negative` wiring is confirmed only by grep of the bundle and by the backend
+accepting the field; the tick, the 10-char hint and the non-admin message need a human
+on Railway preview.
+
+### Still open
+- Employee 23725's data is **not** repaired — separate one-off script, owner's call.
+- `leave_applications` has no overlap check: the portal will accept the same date range
+  repeatedly (`employeePortal.js`, leave-apply).
+- Six of 18 balance-write sites pair with a `leave_transactions` ledger row; `approve`,
+  cancel, apply-leave, the employee seeders and `PUT /:code/leaves` write none.
+- Two year-end lapse implementations and two CL seeders coexist and disagree
+  (`leaveEngine.runYearEndLapse` vs `phase5Features.yearEndLapse`;
+  `seedYearOpenings` vs `initCLOpening`, the latter hard-coding 7 instead of reading
+  `cl_entitlement_base`).
+- `partitionTransactions` (`leaveEngine.js:107-144`) still absorbs 1-day Debit rows
+  against `correction_source = 'leave_correction'`, but finance apply-leave no longer
+  writes `leave_transactions`, so it may now be discarding genuine manual adjustments.
+  Unverified — worth a look before automation goes on.
+
+---
+
 ## Last Session — 2026-09-19
 
 **Contractor Report (PR-2, read-only). Branch `feat/contractor-report`, NOT merged.**
