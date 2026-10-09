@@ -19,6 +19,22 @@ const { calculateDays, saveDayCalculation } = require('./dayCalculation');
 const { computeEmployeeSalary, saveSalaryComputation } = require('./salaryComputation');
 const { isContractorForPayroll } = require('../utils/employeeClassification');
 
+const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
+
+/**
+ * The date after which work counts as a return for a 'Left' employee: the later
+ * of date_of_exit and inactive_since. Only valid YYYY-MM-DD values are used — a
+ * value in any other shape is ignored rather than string-compared. Returns null
+ * when neither is usable.
+ */
+function exitCutoff(row) {
+  const dates = [row.date_of_exit, row.inactive_since]
+    .map((d) => (typeof d === 'string' ? d.trim() : ''))
+    .filter((d) => ISO_DATE.test(d));
+  if (!dates.length) return null;
+  return dates.sort()[dates.length - 1];
+}
+
 /**
  * Stage 6 for a company-month.
  *
@@ -66,8 +82,9 @@ function recomputeDays(db, {
     console.log(`[DayCalc] Cleaned ${ghostCleanup.changes} ghost attendance records → 'A' for ${month}/${year}`);
   }
 
-  // Every employee with attendance this month, including 'Left' ones who came
-  // back (they get auto-reactivated below).
+  // Every employee with attendance this month, including 'Left' ones: a leaver's
+  // final month still needs computing for the days they worked. Being in this
+  // list does NOT reactivate anyone — see the genuine-return check below.
   let empCodes = db.prepare(`
     SELECT DISTINCT ap.employee_code
     FROM attendance_processed ap
@@ -82,12 +99,49 @@ function recomputeDays(db, {
     empCodes = empCodes.filter((c) => want.has(c));
   }
 
+  // ── Reactivate a 'Left' employee only on a genuine return ──
+  // Before this, anyone Left with ANY attendance row this month — including the
+  // days before their exit — was flipped back to Active on every Stage 6 run.
+  // Now: reactivate only when there is a WORKED day this month dated strictly
+  // after the exit cutoff. The cutoff is the later of date_of_exit and
+  // inactive_since (valid YYYY-MM-DD only): Mark Left writes both, the
+  // auto-detect-Left paths in import.js/analytics.js write only inactive_since.
+  // Side effects of a reactivation are unchanged (status + was_left_returned).
   if (empCodes.length) {
-    db.prepare(`
-      UPDATE employees SET status = 'Active', was_left_returned = 1, updated_at = datetime('now')
+    const leftRows = db.prepare(`
+      SELECT code, date_of_exit, inactive_since FROM employees
       WHERE code IN (${empCodes.map(() => '?').join(',')})
       AND status = 'Left'
-    `).run(...empCodes);
+    `).all(...empCodes);
+
+    if (leftRows.length) {
+      const workedAfter = db.prepare(`
+        SELECT 1 FROM attendance_processed
+        WHERE employee_code = ? AND month = ? AND year = ?
+        ${company ? 'AND company = ?' : ''}
+        AND is_night_out_only = 0
+        AND date > ?
+        AND COALESCE(NULLIF(status_final, ''), status_original) IN ('P', '½P', 'HP', 'WOP', 'WO½P')
+        LIMIT 1
+      `);
+      const reactivate = db.prepare(`
+        UPDATE employees SET status = 'Active', was_left_returned = 1, updated_at = datetime('now')
+        WHERE code = ? AND status = 'Left'
+      `);
+      let keptLeft = 0;
+      for (const row of leftRows) {
+        const cutoff = exitCutoff(row);
+        // LEGACY (owner ruling): no usable exit date at all → keep the old
+        // behaviour, any attendance row this month reactivates.
+        const returned = cutoff === null
+          || !!workedAfter.get(...[row.code, month, year, company, cutoff].filter(Boolean));
+        if (returned) reactivate.run(row.code);
+        else keptLeft += 1;
+      }
+      if (keptLeft > 0) {
+        console.log(`[DayCalc] Kept ${keptLeft} Left employee(s) as Left — no worked day after exit (${month}/${year})`);
+      }
+    }
   }
 
   const monthStr = String(month).padStart(2, '0');
