@@ -1,3 +1,23 @@
+## Last Session — 2026-10-10 (Switchover backup: disk full)
+**Branch `fix/switchover-backup-space`, NOT merged.** Owner's switchover Apply failed twice with
+"Backup failed, nothing changed: database or disk is full". Prod verified unchanged (guard unset, policy 20/180/7,
+106 Permanent, 12 txns, 0 switchover audit rows). Prod DB = 62,414 pages × 4 KB ≈ 256 MB; the backup is a full copy
+on the same Railway volume, which lacked the space.
+- **Bug:** a failed `db.backup` left its half-written file in `<DATA_DIR>/backups`, eating the volume's last space
+  (2 attempts ⇒ likely 2 leftovers on prod right now). Double-click could also start two backups at once.
+- **Fix (`services/leaveSwitchover2026.js` only + 2 route lines + card):** apply now (1) refuses a concurrent apply
+  (`APPLY_IN_PROGRESS`, in-process flag); (2) deletes `pre-leave-switchover-*.db` leftovers ONLY while the guard key is
+  unset (then no attempt changed anything, so every such file is a copy of an unchanged DB); (3) measures free space
+  (`fs.statfsSync`) and refuses with numbers, `507 BACKUP_NO_SPACE`, if free < DB×1.05 + 64 MB; (4) unlinks the
+  partial file if the copy still fails. Preview returns `backup_check` {db_mb, needed_mb, free_mb, stale_files,
+  reclaimable_mb, ok, space_known}; the card shows it and disables Apply when not ok.
+- **Fragile:** `statfsSync` missing (Node < 18.15) or throwing ⇒ `space_known:false`, not blocking (old behaviour).
+  Once applied, the real backup is never listed or removed. Margin 64 MB is for the live WAL during the copy.
+- **Verified:** 5 new tests (all 5 fail on main's service); suite 697/697 (34 suites); simulation ALL CHECKS PASSED.
+  Chromium on scratch DBs with real admin login: preview shows the space line; Apply removed 2 planted leftovers and
+  wrote 1 backup; with a patched 10 MB-free disk the card blocks Apply and a direct API call gets 507; 0 page errors.
+- **Owner action still needed:** grow the Railway volume (needs ≈ 335 MB free at today's DB size). Not tested: Railway.
+
 ## Last Session — 2026-10-10 (Leave Management page crash)
 **Branch `fix/leave-automation-tab-tdz`, NOT merged.** Frontend only.
 - **Bug:** `/leave-management` showed "Something went wrong — Cannot access 're' before initialization" on load,

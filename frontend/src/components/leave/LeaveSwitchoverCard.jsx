@@ -98,6 +98,9 @@ export default function LeaveSwitchoverCard() {
 
   if (!isAdmin) return null
   const t = data?.totals
+  // Backup space (preview only; null once applied or when the server can't measure).
+  const bc = !done ? data?.backup_check : null
+  const noSpace = !!(bc && bc.ok === false)
 
   return (
     <div className="card p-4 border-brand-200">
@@ -117,7 +120,9 @@ export default function LeaveSwitchoverCard() {
             {preview.isFetching ? 'Previewing…' : 'Preview'}
           </button>
           <button className="btn-primary text-sm disabled:opacity-50 disabled:cursor-not-allowed"
-            disabled={!data || done || apply.isPending} onClick={() => setApplyOpen(true)}>
+            disabled={!data || done || apply.isPending || noSpace}
+            title={noSpace ? 'Not enough free space on the volume for the backup' : undefined}
+            onClick={() => setApplyOpen(true)}>
             Apply
           </button>
         </div>
@@ -126,6 +131,17 @@ export default function LeaveSwitchoverCard() {
       {preview.isError && (
         <div className="mt-3 text-xs bg-red-50 border border-red-200 rounded-lg p-2 text-red-700">
           {preview.error?.response?.data?.error || 'Preview failed'}
+        </div>
+      )}
+
+      {bc && (
+        <div className={clsx('mt-3 text-xs rounded-lg p-2 border',
+          bc.ok ? 'bg-slate-50 border-slate-200 text-slate-600' : 'bg-red-50 border-red-200 text-red-700')}>
+          {bc.ok ? 'The backup taken before Apply ' : 'Apply is blocked: the backup '}
+          needs about {bc.needed_mb} MB
+          {bc.space_known ? <>; {bc.free_mb} MB free on the volume</> : <>; free space could not be measured</>}
+          {bc.reclaimable_mb > 0 && <> (+{bc.reclaimable_mb} MB from {bc.stale_files.length} leftover file{bc.stale_files.length === 1 ? '' : 's'} of failed attempts, removed automatically on Apply)</>}
+          .{!bc.ok && <> Grow the Railway volume, then click Preview again.</>}
         </div>
       )}
 
