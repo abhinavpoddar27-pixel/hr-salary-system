@@ -411,6 +411,27 @@ describe('a month already posted is frozen (K2)', () => {
   });
 });
 
+describe('a posted month of a loan that is no longer live (Loans PR-6)', () => {
+  test('the close completes the loan; a later re-run of that month still deducts exactly the posted amount', () => {
+    const db = F.newDb();
+    const { loanId, emp } = LF.activeLoan(db, { principal: 3000, tenure: 1 });
+    worked(db, emp);
+    stage7(db);
+    const p = L.postDeduction(db, { deductionId: deductions(db, loanId)[0].id }, SYS);
+    expect(p.ok).toBe(true);
+    expect(LF.loan(db, loanId)).toMatchObject({ status: 'completed', remaining_balance: 0 });
+    const events = eventCount(db);
+    const out = stage7(db, 'run-2');
+    expect(out.errors).toEqual([]);
+    expect(salary(db, emp.code).loan_recovery).toBe(3000);   // was ₹0 before the fix: payslip ≠ ledger
+    expect(deductions(db, loanId)).toEqual([expect.objectContaining({ state: 'posted', amount: 3000 })]);
+    expect(eventCount(db)).toBe(events);
+    expect(L.reconcileLoan(db, loanId).ok).toBe(true);
+    expectClean(db);
+    db.close();
+  });
+});
+
 describe('loan tables not migrated', () => {
   test('the loan step returns ₹0 and Stage 7 still completes', () => {
     const db = F.newDb();

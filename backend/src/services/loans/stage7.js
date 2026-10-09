@@ -66,7 +66,14 @@ function planStage7Loans(db, { employeeCode, month, year, payroll = 'plant', sal
   }
   const loans = db.prepare(`SELECT * FROM loans WHERE employee_code = ? AND borrower_type = ? AND status IN (${LIVE_SQL}) ORDER BY id`)
     .all(String(employeeCode), payroll);
-  if (loans.length === 0) return empty();
+  // Posted months are read from the ledger whatever the loan's status now (Loans
+  // PR-6): the close that posts a last instalment completes the loan, and a
+  // later re-run of that month must still deduct exactly the posted amount.
+  const postedRows = db.prepare(`SELECT ld.*, l.status AS loan_status FROM loan_deductions ld JOIN loans l ON l.id = ld.loan_id
+                                  WHERE ld.employee_code = ? AND ld.month = ? AND ld.year = ? AND ld.payroll = ? AND ld.state = 'posted'
+                                    AND l.borrower_type = ? ORDER BY ld.loan_id`)
+    .all(String(employeeCode), month, year, payroll, payroll);
+  if (loans.length === 0 && postedRows.length === 0) return empty();
 
   const capPct = readLoanPolicy(db).deductionCapPct;
   const headroomPaise = computeHeadroom({
@@ -77,20 +84,17 @@ function planStage7Loans(db, { employeeCode, month, year, payroll = 'plant', sal
   const alerts = [];
 
   // 1. Months already posted at a loan close are frozen (K2): deduct exactly that.
-  const postedStmt = db.prepare("SELECT * FROM loan_deductions WHERE loan_id = ? AND month = ? AND year = ? AND payroll = ? AND state = 'posted'");
   const frozenIds = new Set();
-  for (const loan of loans) {
-    const posted = postedStmt.get(loan.id, month, year, payroll);
-    if (!posted) continue;
+  for (const posted of postedRows) {
     const p = planLoanDeduction({ duePaise: 0, headroomPaise: room, postedPaise: toPaise(posted.amount) });
-    frozenIds.add(loan.id);
-    items.push({ loanId: loan.id, instalmentId: posted.instalment_id, duePaise: p.deductPaise, amountPaise: p.deductPaise, shortfallPaise: 0, unbornePaise: p.unbornePaise, frozen: true });
+    frozenIds.add(posted.loan_id);
+    items.push({ loanId: posted.loan_id, instalmentId: posted.instalment_id, duePaise: p.deductPaise, amountPaise: p.deductPaise, shortfallPaise: 0, unbornePaise: p.unbornePaise, frozen: true });
     if (p.unbornePaise > 0) {
       alerts.push({
         type: 'loan_posted_unborne', severity: 'action_required', audience: 'finance',
-        loanId: loan.id, employeeCode: loan.employee_code, payroll, month, year,
+        loanId: posted.loan_id, employeeCode: posted.employee_code, payroll, month, year,
         postedAmount: toRupees(p.deductPaise), unborneAmount: toRupees(p.unbornePaise),
-        message: `Loan ${loan.id} (${loan.employee_code}) ${month}/${year}: posted ₹${toRupees(p.deductPaise)} no longer fits the cap by ₹${toRupees(p.unbornePaise)}; it is still deducted in full until the loan close moves the unborne part (PR-6).`,
+        message: `Loan ${posted.loan_id} (${posted.employee_code}) ${month}/${year}: posted ₹${toRupees(p.deductPaise)} no longer fits the cap by ₹${toRupees(p.unbornePaise)}; it is still deducted in full until the loan close moves the unborne part (PR-6).`,
       });
     }
     room = Math.max(0, room - p.deductPaise);
