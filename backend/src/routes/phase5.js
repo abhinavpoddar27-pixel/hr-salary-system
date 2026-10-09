@@ -21,6 +21,7 @@ const {
 } = require('../services/phase5Features');
 const { recomputeLeaves, computeLeavePlan, applyLeavePlan, runYearEndLapse, getPolicy, getPolicyBool, istToday } = require('../services/leaveEngine');
 const { autoStage6Status } = require('../services/leaveTriggers');
+const { previewSwitchover, applySwitchover } = require('../services/leaveSwitchover2026');
 const { countStaleSalary } = require('../services/recompute');
 // The local role helper this file used to carry compared req.user.role raw and
 // so disagreed with every other route on capitalisation. Use the shared one,
@@ -254,6 +255,9 @@ router.get('/attrition-risk', requireHrFinanceOrAdmin, (req, res) => {
 // system or acknowledged there is none — see services/leaveEngine.applyLeavePlan.
 //
 // PII rule: responses carry employee codes and aggregates only. No names.
+// One exception: the 2026 switchover preview/apply below returns names, because
+// the owner asked to check the 98 retyped employees by name before applying,
+// and both routes are admin-only.
 // ─────────────────────────────────────────────────────────────────────────────
 
 const CSV_BOM = '﻿';
@@ -367,6 +371,41 @@ router.post('/leave-recompute/apply', requireAdmin, (req, res) => {
     });
   } catch (err) {
     console.error('[leave-recompute/apply]', err.message);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// ── Leave switchover 2026 (rulings R-A…R-H) ──────────────────────────────────
+// Preview runs every change inside a rolled-back transaction. Apply backs the
+// database up first, then retypes, sets policy, offsets HR's hand credits and
+// resets 2026 openings in one transaction. Neither route applies balances or
+// touches leave_automation_enabled — the owner does that afterwards in this tab.
+
+router.get('/leave-switchover-2026/preview', requireAdmin, (req, res) => {
+  try {
+    const out = previewSwitchover(getDb());
+    if (!out.ok) return res.status(out.status || 500).json({ success: false, error: out.error, code: out.code });
+    const { ok, ...body } = out;
+    res.json({ success: true, ...body });
+  } catch (err) {
+    console.error('[leave-switchover-2026/preview]', err.message);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+router.post('/leave-switchover-2026/apply', requireAdmin, async (req, res) => {
+  try {
+    const { confirm, note } = req.body || {};
+    const out = await applySwitchover(getDb(), { confirm, note, actor: req.user?.username || 'admin' });
+    if (!out.ok) {
+      return res.status(out.status || 500).json({
+        success: false, error: out.error, code: out.code, ...(out.backup_path ? { backup_path: out.backup_path } : {}),
+      });
+    }
+    const { ok, ...body } = out;
+    res.json({ success: true, ...body });
+  } catch (err) {
+    console.error('[leave-switchover-2026/apply]', err.message);
     res.status(500).json({ success: false, error: err.message });
   }
 });
