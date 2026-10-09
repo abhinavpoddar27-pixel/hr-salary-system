@@ -337,45 +337,9 @@ function initSchema(db) {
     -- LOANS & ADVANCE REGISTER
     -- ─────────────────────────────────────────────────────────
 
-    CREATE TABLE IF NOT EXISTS loans (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      employee_id INTEGER REFERENCES employees(id),
-      employee_code TEXT NOT NULL,
-      loan_type TEXT NOT NULL,
-      principal_amount REAL NOT NULL,
-      interest_rate REAL DEFAULT 0,
-      total_amount REAL NOT NULL,
-      emi_amount REAL NOT NULL,
-      tenure_months INTEGER NOT NULL,
-      start_month INTEGER,
-      start_year INTEGER,
-      status TEXT DEFAULT 'Active',
-      approved_by TEXT,
-      approved_at TEXT,
-      disbursed_date TEXT,
-      disbursement_mode TEXT DEFAULT 'Bank Transfer',
-      total_recovered REAL DEFAULT 0,
-      remaining_balance REAL DEFAULT 0,
-      remarks TEXT,
-      created_at TEXT DEFAULT (datetime('now')),
-      updated_at TEXT DEFAULT (datetime('now'))
-    );
-
-    CREATE TABLE IF NOT EXISTS loan_repayments (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      loan_id INTEGER REFERENCES loans(id),
-      employee_code TEXT NOT NULL,
-      month INTEGER NOT NULL,
-      year INTEGER NOT NULL,
-      emi_amount REAL NOT NULL,
-      principal_component REAL DEFAULT 0,
-      interest_component REAL DEFAULT 0,
-      deducted_from_salary INTEGER DEFAULT 0,
-      deduction_date TEXT,
-      status TEXT DEFAULT 'Pending',
-      remarks TEXT,
-      created_at TEXT DEFAULT (datetime('now'))
-    );
+    -- The loan tables (loans, loan_instalments, loan_deductions, loan_receipts,
+    -- loan_closes, loan_events) and the legacy loan_repayments view are created
+    -- only by the guarded Loans PR-1 block near the end of initSchema().
 
     -- ─────────────────────────────────────────────────────────
     -- EMPLOYEE DOCUMENTS
@@ -3373,6 +3337,264 @@ If description and screenshot are incoherent or unrelated, set summary_confidenc
       console.error('[MIGRATION] cl_entitlement_7_v1 failed:', e.message);
     }
   }
+
+  // ── Loans PR-1 (docs/loans/SPEC.md §6): rebuild the loan tables ─────────────
+  // The old `loans` + `loan_repayments` shape is replaced by six tables. The
+  // rebuild runs once (policy_config.migration_loans_schema_v2_done) and ONLY if
+  // both old tables are empty; if either holds a row it refuses, does no DDL at
+  // all, and retries on the next boot. Production had 0 rows in both on 9 Oct 2026.
+  //
+  // `loan_repayments` survives as a VIEW that always returns zero rows with the
+  // old column names, so every old reader (Stage 7 getLoanDeductions, sales
+  // getLoanRecovery, loanService, routes/loans.js, ai.js, the portal) still
+  // parses and sees nothing, and any write to it fails. That keeps the old
+  // Stage 7 path (defect D1) from ever deducting until Loans PR-5 replaces it.
+  // A future migration must `DROP VIEW loan_repayments`, not `DROP TABLE`.
+  //
+  // Ledger rules the schema assumes (owner rulings, 9 Oct 2026):
+  //  - loan_deductions.state = 'reversed' is only for a PROVISIONAL row that a
+  //    later Stage 7 run superseded before the loan close. A POSTED row is never
+  //    edited; its correction is a new opposite entry (Loans PR-6).
+  //  - loan_events is append-only: the two triggers below abort UPDATE / DELETE.
+  //  - loan_closes is one row per month + year + payroll (plant / sales).
+  //  - instalment `origin` is free text on purpose (schedule, shortfall,
+  //    deferred, no_salary, restructure, …); the engine validates it.
+  const loansSchemaV2Ddl = `
+    CREATE TABLE IF NOT EXISTS loans (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      borrower_type TEXT NOT NULL CHECK (borrower_type IN ('plant','sales')),
+      employee_code TEXT NOT NULL CHECK (length(trim(employee_code)) > 0),
+      company TEXT NOT NULL CHECK (length(trim(company)) > 0
+                                   AND lower(trim(company)) NOT IN ('default','null')),
+      loan_type TEXT NOT NULL,
+      principal_amount REAL NOT NULL CHECK (principal_amount > 0),
+      interest_rate REAL NOT NULL DEFAULT 0,
+      tenure_months INTEGER NOT NULL CHECK (tenure_months > 0),
+      emi_amount REAL NOT NULL DEFAULT 0,
+      status TEXT NOT NULL DEFAULT 'requested'
+        CHECK (status IN ('requested','approved','rejected','active','recover_at_exit',
+                          'completed','settled_at_exit','written_off')),
+      requested_by TEXT NOT NULL,
+      requested_at TEXT NOT NULL DEFAULT (datetime('now')),
+      request_reason TEXT,
+      decided_by TEXT,
+      decided_at TEXT,
+      decision_reason TEXT,
+      disbursed_amount REAL,
+      disbursement_mode TEXT,
+      disbursement_reference TEXT,
+      disbursed_on TEXT,
+      disbursed_by TEXT,
+      disbursed_at TEXT,
+      agreement_file_path TEXT,
+      agreement_uploaded_by TEXT,
+      agreement_uploaded_at TEXT,
+      first_emi_month INTEGER CHECK (first_emi_month IS NULL OR first_emi_month BETWEEN 1 AND 12),
+      first_emi_year INTEGER,
+      exit_flag INTEGER NOT NULL DEFAULT 0 CHECK (exit_flag IN (0,1)),
+      exit_flagged_at TEXT,
+      exit_flagged_by TEXT,
+      exit_date TEXT,
+      remaining_balance REAL NOT NULL DEFAULT 0,
+      written_off_amount REAL NOT NULL DEFAULT 0,
+      written_off_by TEXT,
+      written_off_at TEXT,
+      write_off_reason TEXT,
+      remarks TEXT,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+
+    CREATE TABLE IF NOT EXISTS loan_closes (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      month INTEGER NOT NULL CHECK (month BETWEEN 1 AND 12),
+      year INTEGER NOT NULL,
+      payroll TEXT NOT NULL CHECK (payroll IN ('plant','sales')),
+      run_at TEXT NOT NULL DEFAULT (datetime('now')),
+      run_by TEXT NOT NULL,
+      trigger_kind TEXT,
+      posted_count INTEGER NOT NULL DEFAULT 0,
+      posted_amount REAL NOT NULL DEFAULT 0,
+      deferred_count INTEGER NOT NULL DEFAULT 0,
+      held_count INTEGER NOT NULL DEFAULT 0,
+      no_salary_count INTEGER NOT NULL DEFAULT 0,
+      shortfall_count INTEGER NOT NULL DEFAULT 0,
+      reconciliation_ok INTEGER,
+      notes TEXT,
+      UNIQUE (month, year, payroll)
+    );
+
+    CREATE TABLE IF NOT EXISTS loan_receipts (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      receipt_no TEXT NOT NULL UNIQUE,
+      loan_id INTEGER NOT NULL REFERENCES loans(id),
+      amount REAL NOT NULL CHECK (amount > 0),
+      mode TEXT NOT NULL,
+      reference TEXT,
+      receipt_date TEXT NOT NULL,
+      recorded_by TEXT NOT NULL,
+      recorded_at TEXT NOT NULL DEFAULT (datetime('now')),
+      instalments_cleared TEXT,
+      remarks TEXT
+    );
+
+    CREATE TABLE IF NOT EXISTS loan_instalments (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      loan_id INTEGER NOT NULL REFERENCES loans(id),
+      sequence INTEGER NOT NULL CHECK (sequence >= 1),
+      due_month INTEGER NOT NULL CHECK (due_month BETWEEN 1 AND 12),
+      due_year INTEGER NOT NULL,
+      amount_due REAL NOT NULL CHECK (amount_due >= 0),
+      status TEXT NOT NULL DEFAULT 'scheduled'
+        CHECK (status IN ('scheduled','provisional','posted','paid_in_cash','deferred','cancelled')),
+      origin TEXT NOT NULL DEFAULT 'schedule',
+      source_instalment_id INTEGER REFERENCES loan_instalments(id),
+      posted_amount REAL,
+      posted_at TEXT,
+      posted_close_id INTEGER REFERENCES loan_closes(id),
+      receipt_id INTEGER REFERENCES loan_receipts(id),
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+      UNIQUE (loan_id, sequence)
+    );
+
+    CREATE TABLE IF NOT EXISTS loan_deductions (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      loan_id INTEGER NOT NULL REFERENCES loans(id),
+      instalment_id INTEGER REFERENCES loan_instalments(id),
+      payroll TEXT NOT NULL CHECK (payroll IN ('plant','sales')),
+      month INTEGER NOT NULL CHECK (month BETWEEN 1 AND 12),
+      year INTEGER NOT NULL,
+      company TEXT,
+      employee_code TEXT NOT NULL,
+      amount REAL NOT NULL CHECK (amount >= 0),
+      state TEXT NOT NULL DEFAULT 'provisional'
+        CHECK (state IN ('provisional','posted','reversed')),
+      run_id TEXT,
+      posted_at TEXT,
+      posted_close_id INTEGER REFERENCES loan_closes(id),
+      reversed_at TEXT,
+      reversed_by TEXT,
+      reversal_reason TEXT,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+      UNIQUE (loan_id, month, year, payroll)
+    );
+
+    CREATE TABLE IF NOT EXISTS loan_events (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      loan_id INTEGER NOT NULL REFERENCES loans(id),
+      instalment_id INTEGER REFERENCES loan_instalments(id),
+      event TEXT NOT NULL,
+      from_state TEXT,
+      to_state TEXT,
+      amount REAL,
+      actor TEXT NOT NULL,
+      reason TEXT,
+      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+
+    CREATE TRIGGER IF NOT EXISTS loan_events_no_update
+      BEFORE UPDATE ON loan_events
+      BEGIN SELECT RAISE(ABORT, 'loan_events is append-only'); END;
+    CREATE TRIGGER IF NOT EXISTS loan_events_no_delete
+      BEFORE DELETE ON loan_events
+      BEGIN SELECT RAISE(ABORT, 'loan_events is append-only'); END;
+
+    CREATE INDEX IF NOT EXISTS idx_loans_employee ON loans(employee_code, borrower_type);
+    CREATE INDEX IF NOT EXISTS idx_loans_status ON loans(status);
+    CREATE INDEX IF NOT EXISTS idx_loans_company_status ON loans(company, status);
+    CREATE INDEX IF NOT EXISTS idx_loan_instalments_loan_status ON loan_instalments(loan_id, status);
+    CREATE INDEX IF NOT EXISTS idx_loan_instalments_due ON loan_instalments(due_year, due_month, status);
+    CREATE INDEX IF NOT EXISTS idx_loan_deductions_period ON loan_deductions(payroll, year, month, state);
+    CREATE INDEX IF NOT EXISTS idx_loan_deductions_employee ON loan_deductions(employee_code, year, month);
+    CREATE INDEX IF NOT EXISTS idx_loan_deductions_instalment ON loan_deductions(instalment_id);
+    CREATE INDEX IF NOT EXISTS idx_loan_receipts_loan ON loan_receipts(loan_id);
+    CREATE INDEX IF NOT EXISTS idx_loan_events_loan ON loan_events(loan_id, created_at);
+
+    CREATE VIEW IF NOT EXISTS loan_repayments AS
+      SELECT CAST(NULL AS INTEGER) AS id, CAST(NULL AS INTEGER) AS loan_id,
+             CAST(NULL AS TEXT) AS employee_code, CAST(NULL AS INTEGER) AS month,
+             CAST(NULL AS INTEGER) AS year, CAST(NULL AS REAL) AS emi_amount,
+             CAST(NULL AS REAL) AS principal_component, CAST(NULL AS REAL) AS interest_component,
+             CAST(NULL AS INTEGER) AS deducted_from_salary, CAST(NULL AS TEXT) AS deduction_date,
+             CAST(NULL AS TEXT) AS status, CAST(NULL AS TEXT) AS remarks,
+             CAST(NULL AS TEXT) AS created_at
+      WHERE 0;
+  `;
+
+  const objType = (name) => {
+    const r = db.prepare('SELECT type FROM sqlite_master WHERE name = ?').get(name);
+    return r ? r.type : null;
+  };
+  const loansIsNewShape = () => db.prepare('PRAGMA table_info(loans)').all()
+    .some((c) => c.name === 'borrower_type');
+
+  const loansV2Done = db.prepare(
+    "SELECT value FROM policy_config WHERE key = 'migration_loans_schema_v2_done'"
+  ).get();
+
+  if (loansV2Done) {
+    // Already migrated. Re-assert the objects (all IF NOT EXISTS → no-op) so a
+    // missing index or trigger comes back; never touches rows.
+    if (objType('loans') === 'table' && loansIsNewShape()) {
+      db.exec(loansSchemaV2Ddl);
+    } else {
+      console.error('[MIGRATION] loans_schema_v2: flag is set but the loans table is missing or old-shape; no action taken.');
+    }
+  } else {
+    const oldTables = [];
+    if (objType('loans') === 'table' && !loansIsNewShape()) oldTables.push('loans');
+    if (objType('loan_repayments') === 'table') oldTables.push('loan_repayments');
+
+    const nonEmpty = [];
+    for (const t of oldTables) {
+      const r = db.prepare(`SELECT COUNT(*) AS n FROM ${t}`).get();
+      if (r.n > 0) nonEmpty.push(`${t} (${r.n} rows)`);
+    }
+
+    if (nonEmpty.length > 0) {
+      console.error('[MIGRATION] loans_schema_v2: REFUSING TO REBUILD — old loan tables have data:', nonEmpty.join(', '));
+      console.error('[MIGRATION] loans_schema_v2: no DDL run; flag NOT set; will retry on next boot. Manual intervention required.');
+    } else {
+      // PRAGMA foreign_keys cannot change inside a transaction, so it wraps it.
+      const prevFk = db.pragma('foreign_keys', { simple: true });
+      db.pragma('foreign_keys = OFF');
+      try {
+        db.transaction(() => {
+          if (oldTables.includes('loan_repayments')) db.exec('DROP TABLE loan_repayments');
+          if (oldTables.includes('loans')) db.exec('DROP TABLE loans');
+          db.exec(loansSchemaV2Ddl);
+          db.prepare(
+            "INSERT OR REPLACE INTO policy_config (key, value, description) VALUES ('migration_loans_schema_v2_done', '1', 'Loans PR-1: loan tables rebuilt to docs/loans/SPEC.md §6')"
+          ).run();
+        })();
+        console.log(`[MIGRATION] loans_schema_v2: complete (${oldTables.length ? 'rebuilt ' + oldTables.join(' + ') : 'fresh create'})`);
+      } catch (e) {
+        console.error('[MIGRATION] loans_schema_v2 failed (rolled back, will retry next boot):', e.message);
+      } finally {
+        db.pragma(prevFk ? 'foreign_keys = ON' : 'foreign_keys = OFF');
+      }
+    }
+  }
+
+  // Loan policy defaults (SPEC §4). INSERT OR IGNORE: seeded once, never overwritten.
+  insertPolicyIfMissing.run('loan_close_day', '13', 'Day of the next month (IST) the monthly loan close runs, once payroll is computed');
+  insertPolicyIfMissing.run('loan_deduction_cap_pct', '50', 'Total deductions cap, % of earned base pay (pending labour consultant)');
+  insertPolicyIfMissing.run('loan_max_multiple_gross', '2', 'Maximum loan as a multiple of monthly gross');
+  insertPolicyIfMissing.run('loan_max_multiple_gross_emergency', '3', 'Maximum Emergency / medical loan as a multiple of monthly gross (proposal)');
+  insertPolicyIfMissing.run('loan_max_tenure_months', '12', 'Maximum loan tenure, months');
+  insertPolicyIfMissing.run('loan_min_service_months', '6', 'Minimum service before a loan, months');
+  insertPolicyIfMissing.run('loan_max_active_per_person', '1', 'Active loans allowed per person');
+  insertPolicyIfMissing.run('loan_emi_ceiling_pct_gross', '30', 'EMI ceiling, % of monthly gross');
+  insertPolicyIfMissing.run('loan_deduction_load_warning_pct', '30', 'Approval warning when the 3-month average deductions exceed this % of earned pay');
+  insertPolicyIfMissing.run('loan_held_emi_wait_days', '60', 'Days a held month\'s EMI waits after the loan close before moving to the end');
+  insertPolicyIfMissing.run('loan_max_shortfall_extension_months', '3', 'Maximum extension from shortfalls, months');
+  insertPolicyIfMissing.run('loan_eligible_employment_types', '["Permanent","SILP","Worker","Sales"]', 'Eligible borrowers; "Sales" means sales-master borrowers only, never plant rows typed Sales');
+  insertPolicyIfMissing.run('loan_types', '["Personal","Emergency / medical","Festival advance","Education"]', 'Loan types');
+  insertPolicyIfMissing.run('loan_agreement_required', 'true', 'A scanned signed agreement is required before disbursement');
+  insertPolicyIfMissing.run('loan_interest_rate', '0', 'Interest rate, % (interest-free only in v1)');
+  insertPolicyIfMissing.run('loan_perquisite_threshold', '20000', 'Perquisite reporting threshold, ₹ aggregate (pending CA)');
 
   console.log('✅ Database schema initialized');
 }
