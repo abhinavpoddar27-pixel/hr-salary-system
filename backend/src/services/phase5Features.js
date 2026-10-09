@@ -16,18 +16,18 @@ const { isContractorForPayroll } = require('../utils/employeeClassification');
 /**
  * CL entitlement for a given year based on effective join month.
  * Effective month = DOJ month (if DOJ day === 1) or DOJ month + 1 (mid-month join).
- * Pre-year joiners treated as January joiners.
+ * Pre-year joiners (and a missing / unparseable DOJ) are treated as January joiners.
  *
- * Table (2026 policy):
- *   Jan-Feb=7, Mar-Apr=6, May-Jun=5, Jul-Aug=4, Sep-Oct=3, Nov-Dec=2
+ * Table (owner ruling R-C, leave switchover 2026 — base 4):
+ *   Jan-Mar=4, Apr-Jun=3, Jul-Sep=2, Oct-Dec=1
  *
- * Formula: 7 - floor((effectiveMonth - 1) / 2)
+ * Formula: effectiveMonth > 12 ? 0 : ceil(base × (13 − effectiveMonth) / 12)
  * Edge case: mid-month Dec joiner rolls to Jan of next year → 0 CL.
  */
 function computeClEntitlement(dateOfJoining, year, base) {
-  // `base` comes from policy_config.cl_entitlement_base (7 since Sept 2026).
-  // Callers that do not have a db handle keep the historic default.
-  const b = Number.isFinite(Number(base)) ? Number(base) : 7;
+  // `base` comes from policy_config.cl_entitlement_base (4 after the 2026
+  // switchover). Callers that do not have a db handle get the ruling's default.
+  const b = Number.isFinite(Number(base)) && base !== null && base !== '' ? Number(base) : 4;
   if (!dateOfJoining) return b;
   const doj = new Date(dateOfJoining);
   if (isNaN(doj)) return b;
@@ -38,7 +38,7 @@ function computeClEntitlement(dateOfJoining, year, base) {
   const dojDay = doj.getUTCDate();
   const effectiveMonth = dojDay === 1 ? dojMonth : dojMonth + 1;
   if (effectiveMonth > 12) return 0;
-  return Math.max(0, b - Math.floor((effectiveMonth - 1) / 2));
+  return Math.max(0, Math.ceil((b * (13 - effectiveMonth)) / 12));
 }
 
 function _prevMonth(month, year) {
@@ -56,13 +56,13 @@ function _getPolicyNumber(db, key, fallback) {
  * 1. LEAVE ACCRUAL (Phase 1 rewrite — April 2026)
  *
  * BUSINESS RULES:
- *  - CL: Opening-balance model. Granted as a year-start block (7 at Jan
+ *  - CL: Opening-balance model. Granted as a year-start block (cl_entitlement_base at Jan
  *    for full-year employees, pro-rata for DOJ mid-year) via initCLOpening.
  *    runLeaveAccrual does NOT accrue CL — it only mirrors monthly CL usage
  *    into the ledger.
  *  - EL: Paid-days-driven. The employee must be past their DOJ-based
  *    eligibility floor (policy_config.el_eligibility_days, default 180).
- *    Earned = floor(paid_days_ytd / 20) × rate (policy_config.el_accrual_rate,
+ *    Earned = floor(paid_days_ytd / el_days_per_leave) × rate (policy_config.el_accrual_rate,
  *    default 1). This month's accrual is delta vs the running earned total.
  *  - SL: not accrued here (fixed annual entitlement — handled via Settings).
  *  - Contractors skipped entirely.
@@ -112,7 +112,7 @@ function runLeaveAccrual(db, month, year) {
  * @param {number} deploymentMonth  month at which this system goes live for
  *                                  this tenant — controls pro-rata for
  *                                  existing employees. Defaults to 1 (Jan)
- *                                  meaning a full 7-day grant.
+ *                                  meaning the full cl_entitlement_base grant.
  *
  * For each active permanent employee:
  *   - If DOJ is within `year`, pro-rata by DOJ month.
@@ -148,6 +148,7 @@ function initCLOpening(db, year, deploymentMonth = 1) {
     FROM employees
     WHERE status = 'Active'
   `).all();
+  const clBase = _getPolicyNumber(db, 'cl_entitlement_base', 4);
 
   // ON CONFLICT DO NOTHING — preserves any manual adjustments made via /adjust
   // or subsequent accrual between two calls of /init-cl-opening. A re-run is
@@ -186,10 +187,11 @@ function initCLOpening(db, year, deploymentMonth = 1) {
         }
 
         // Entitlement value uses DOJ-based pro-ration (mid-month rolls forward).
-        // Pre-year joiners get the full `depMonth` grant as before.
+        // Pre-year joiners (and a missing DOJ) are pro-rated as if they joined
+        // on the 1st of `depMonth`. Both branches read the same policy base.
         const opening = emp.date_of_joining && new Date(emp.date_of_joining).getUTCFullYear() === year
-          ? computeClEntitlement(emp.date_of_joining, year)
-          : Math.max(0, 7 - Math.floor((depMonth - 1) / 2));
+          ? computeClEntitlement(emp.date_of_joining, year, clBase)
+          : computeClEntitlement(`${year}-${String(depMonth).padStart(2, '0')}-01`, year, clBase);
         seedBalance.run(emp.id, year, opening, opening);
         seedLedger.run(
           emp.code, emp.id, year, ledgerMonth,
@@ -489,18 +491,17 @@ function computeAttritionRisk(db, month, year) {
   return results.sort((a, b) => b.riskScore - a.riskScore);
 }
 
-// TEMP TEST BLOCK — remove after verification
+// TEMP TEST BLOCK — remove after verification (quarterly rule R-C, base 4)
 // console.log('CL entitlement tests (year=2026):');
-// console.log('  Pre-2026 (2024-05-10):', computeClEntitlement('2024-05-10', 2026), '→ expected 7');
-// console.log('  Jan 1 2026:', computeClEntitlement('2026-01-01', 2026), '→ expected 7');
-// console.log('  Jan 15 2026:', computeClEntitlement('2026-01-15', 2026), '→ expected 7 (Feb start)');
-// console.log('  Feb 1 2026:', computeClEntitlement('2026-02-01', 2026), '→ expected 7');
-// console.log('  Mar 1 2026:', computeClEntitlement('2026-03-01', 2026), '→ expected 6');
-// console.log('  Mar 25 2026:', computeClEntitlement('2026-03-25', 2026), '→ expected 6 (Apr start)');
-// console.log('  Jul 1 2026:', computeClEntitlement('2026-07-01', 2026), '→ expected 4');
-// console.log('  Dec 1 2026:', computeClEntitlement('2026-12-01', 2026), '→ expected 2');
+// console.log('  Pre-2026 (2024-05-10):', computeClEntitlement('2024-05-10', 2026), '→ expected 4');
+// console.log('  Jan 1 2026:', computeClEntitlement('2026-01-01', 2026), '→ expected 4');
+// console.log('  Mar 1 2026:', computeClEntitlement('2026-03-01', 2026), '→ expected 4');
+// console.log('  Mar 25 2026:', computeClEntitlement('2026-03-25', 2026), '→ expected 3 (Apr start)');
+// console.log('  Jul 1 2026:', computeClEntitlement('2026-07-01', 2026), '→ expected 2');
+// console.log('  Oct 1 2026:', computeClEntitlement('2026-10-01', 2026), '→ expected 1');
+// console.log('  Dec 1 2026:', computeClEntitlement('2026-12-01', 2026), '→ expected 1');
 // console.log('  Dec 15 2026:', computeClEntitlement('2026-12-15', 2026), '→ expected 0 (rolls to Jan 2027)');
-// console.log('  Null DOJ:', computeClEntitlement(null, 2026), '→ expected 7 (treated as pre-year)');
+// console.log('  Null DOJ:', computeClEntitlement(null, 2026), '→ expected 4 (treated as pre-year)');
 // console.log('  2027 DOJ:', computeClEntitlement('2027-03-01', 2026), '→ expected 0');
 
 module.exports = {

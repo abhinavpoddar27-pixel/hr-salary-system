@@ -318,7 +318,7 @@ function PolicyTab() {
       title: 'Leave Rules',
       keys: [
         { key: 'paid_sunday_min_days', label: 'Min Days for Paid Sunday', hint: 'Days worked in week to earn paid Sunday' },
-        { key: 'cl_entitlement_base', label: 'CL per Year (base)', hint: 'Full-year casual leave. Pro-rated by joining month: Jan–Feb full, then one day less every two months.' },
+        { key: 'cl_entitlement_base', label: 'CL per Year (base)', hint: 'CL 4 for a full year, pro-rated by joining quarter: Jan–Mar 4, Apr–Jun 3, Jul–Sep 2, Oct–Dec 1.' },
         { key: 'el_eligibility_days', label: 'Days Worked Before EL Starts', hint: 'Nothing accrues until the employee has worked this many days in the calendar year.' },
         { key: 'el_days_per_leave', label: 'Days Worked per EL Day', hint: 'Once eligible, one earned leave day for every this many days worked.' },
         { key: 'el_accrual_rate', label: 'EL Days Earned Each Time', hint: 'Usually 1.' }

@@ -1,0 +1,693 @@
+{
+ "purpose": "2026 leave switchover: employees to retype as Permanent (owner ruling 9 Oct 2026). Only rows whose current employment_type matches old_type and status='Active' are changed.",
+ "generated": "2026-10-09",
+ "count": 98,
+ "employees": [
+  {
+   "code": "14686",
+   "name": "ANIL KUMAR",
+   "department": "ELECTRICIAN",
+   "old_type": "SILP",
+   "days_worked_jan_sep": 260.0
+  },
+  {
+   "code": "17360",
+   "name": "Ramesh Prasad",
+   "department": "PRODUCTION",
+   "old_type": "SILP",
+   "days_worked_jan_sep": 230.0
+  },
+  {
+   "code": "17575",
+   "name": "UMA SHANKAR MISHRA",
+   "department": "OFFICE ADMIN",
+   "old_type": "SILP",
+   "days_worked_jan_sep": 228.5
+  },
+  {
+   "code": "18054",
+   "name": "RAKESH KUMAR PURI",
+   "department": "STORE",
+   "old_type": "SILP",
+   "days_worked_jan_sep": 219.25
+  },
+  {
+   "code": "18557",
+   "name": "JAGDEV SAH",
+   "department": "PRODUCTION",
+   "old_type": "SILP",
+   "days_worked_jan_sep": 239.0
+  },
+  {
+   "code": "18766",
+   "name": "Md. Shabir",
+   "department": "PRODUCTION",
+   "old_type": "SILP",
+   "days_worked_jan_sep": 216.25
+  },
+  {
+   "code": "18841",
+   "name": "Garish Kumar",
+   "department": "PRODUCTION",
+   "old_type": "SILP",
+   "days_worked_jan_sep": 126.25
+  },
+  {
+   "code": "18989",
+   "name": "Ashok Kumar",
+   "department": "PRODUCTION",
+   "old_type": "Worker",
+   "days_worked_jan_sep": 216.0
+  },
+  {
+   "code": "19222",
+   "name": "PAWAN KUMAR",
+   "department": "PRODUCTION",
+   "old_type": "SILP",
+   "days_worked_jan_sep": 220.0
+  },
+  {
+   "code": "19366",
+   "name": "ROSHAN",
+   "department": "PRODUCTION",
+   "old_type": "Worker",
+   "days_worked_jan_sep": 217.0
+  },
+  {
+   "code": "19954",
+   "name": "VIKAS RAI",
+   "department": "PRODUCTION",
+   "old_type": "Worker",
+   "days_worked_jan_sep": 214.0
+  },
+  {
+   "code": "21498",
+   "name": "MEERA DEVI",
+   "department": "HOUSE KEEPING",
+   "old_type": "Worker",
+   "days_worked_jan_sep": 204.0
+  },
+  {
+   "code": "21825",
+   "name": "ANSHUL TRIPATHI",
+   "department": "PRODUCTION",
+   "old_type": "SILP",
+   "days_worked_jan_sep": 207.5
+  },
+  {
+   "code": "22129",
+   "name": "Neeraj Kumar Aneja",
+   "department": "OFFICE ADMIN",
+   "old_type": "SILP",
+   "days_worked_jan_sep": 205.5
+  },
+  {
+   "code": "22232",
+   "name": "SACHIN RANA",
+   "department": "PRODUCTION",
+   "old_type": "SILP",
+   "days_worked_jan_sep": 248.0
+  },
+  {
+   "code": "22283",
+   "name": "RAJ PAL SINGH",
+   "department": "ETP",
+   "old_type": "Worker",
+   "days_worked_jan_sep": 240.0
+  },
+  {
+   "code": "22331",
+   "name": "Gudu Kumar Patel",
+   "department": "OFFICE ADMIN",
+   "old_type": "SILP",
+   "days_worked_jan_sep": 205.0
+  },
+  {
+   "code": "22713",
+   "name": "PREETI DEVI",
+   "department": "OFFICE ADMIN",
+   "old_type": "SILP",
+   "days_worked_jan_sep": 195.25
+  },
+  {
+   "code": "22906",
+   "name": "Avinash",
+   "department": "PRODUCTION",
+   "old_type": "SILP",
+   "days_worked_jan_sep": 194.0
+  },
+  {
+   "code": "22970",
+   "name": "GURMUKH SINGH",
+   "department": "STORE",
+   "old_type": "Worker",
+   "days_worked_jan_sep": 229.0
+  },
+  {
+   "code": "23103",
+   "name": "SIYA RAM",
+   "department": "STORE",
+   "old_type": "SILP",
+   "days_worked_jan_sep": 213.0
+  },
+  {
+   "code": "23118",
+   "name": "VIKRAM",
+   "department": "HOUSE KEEPING",
+   "old_type": "Worker",
+   "days_worked_jan_sep": 228.25
+  },
+  {
+   "code": "23130",
+   "name": "Vikas Singh",
+   "department": "OFFICE ADMIN",
+   "old_type": "SILP",
+   "days_worked_jan_sep": 191.75
+  },
+  {
+   "code": "23138",
+   "name": "SHUBHAM",
+   "department": "ELECTRICIAN",
+   "old_type": "SILP",
+   "days_worked_jan_sep": 226.0
+  },
+  {
+   "code": "23140",
+   "name": "SADANAND SINGH",
+   "department": "PRODUCTION",
+   "old_type": "SILP",
+   "days_worked_jan_sep": 171.0
+  },
+  {
+   "code": "23145",
+   "name": "JATINDER RASTOGI",
+   "department": "PRODUCTION",
+   "old_type": "SILP",
+   "days_worked_jan_sep": 221.0
+  },
+  {
+   "code": "23155",
+   "name": "PANKAJ",
+   "department": "PRODUCTION",
+   "old_type": "SILP",
+   "days_worked_jan_sep": 205.25
+  },
+  {
+   "code": "23169",
+   "name": "Narendra",
+   "department": "PRODUCTION",
+   "old_type": "SILP",
+   "days_worked_jan_sep": 213.0
+  },
+  {
+   "code": "23188",
+   "name": "ARVIND TIWARI",
+   "department": "OPR",
+   "old_type": "SILP",
+   "days_worked_jan_sep": 207.25
+  },
+  {
+   "code": "23190",
+   "name": "KULDEEP",
+   "department": "MAINTANCE",
+   "old_type": "SILP",
+   "days_worked_jan_sep": 208.25
+  },
+  {
+   "code": "23212",
+   "name": "GAURAV KUAMAR",
+   "department": "ELECTRICIAN",
+   "old_type": "SILP",
+   "days_worked_jan_sep": 210.5
+  },
+  {
+   "code": "23213",
+   "name": "INDERJIT SINGH",
+   "department": "MAINTANCE",
+   "old_type": "SILP",
+   "days_worked_jan_sep": 233.0
+  },
+  {
+   "code": "23215",
+   "name": "Suresh",
+   "department": "GODOWN",
+   "old_type": "SILP",
+   "days_worked_jan_sep": 207.5
+  },
+  {
+   "code": "23216",
+   "name": "dhanraj",
+   "department": "BLOW MOULDING",
+   "old_type": "SILP",
+   "days_worked_jan_sep": 91.5
+  },
+  {
+   "code": "23234",
+   "name": "sl verma",
+   "department": "LAB",
+   "old_type": "SILP",
+   "days_worked_jan_sep": 227.0
+  },
+  {
+   "code": "23253",
+   "name": "VIKASH KUMAR",
+   "department": "OFFICE ADMIN",
+   "old_type": "SILP",
+   "days_worked_jan_sep": 223.0
+  },
+  {
+   "code": "23288",
+   "name": "Sarabjeet",
+   "department": "OPR",
+   "old_type": "SILP",
+   "days_worked_jan_sep": 183.75
+  },
+  {
+   "code": "23316",
+   "name": "MANOJ KUMAR",
+   "department": "OPR",
+   "old_type": "SILP",
+   "days_worked_jan_sep": 193.75
+  },
+  {
+   "code": "23317",
+   "name": "RANJEET KUMAR MISHRA",
+   "department": "GODOWN",
+   "old_type": "SILP",
+   "days_worked_jan_sep": 239.75
+  },
+  {
+   "code": "23356",
+   "name": "ARUN KUMAR TIWARI",
+   "department": "PRODUCTION",
+   "old_type": "SILP",
+   "days_worked_jan_sep": 217.25
+  },
+  {
+   "code": "23357",
+   "name": "YOGESH KUMAR",
+   "department": "BLOW MOULDING",
+   "old_type": "SILP",
+   "days_worked_jan_sep": 206.25
+  },
+  {
+   "code": "23388",
+   "name": "SURESH",
+   "department": "OFFICE ADMIN",
+   "old_type": "Worker",
+   "days_worked_jan_sep": 210.25
+  },
+  {
+   "code": "23392",
+   "name": "RANVIR SINGH",
+   "department": "SECURITY",
+   "old_type": "SILP",
+   "days_worked_jan_sep": 184.75
+  },
+  {
+   "code": "23406",
+   "name": "RAVI KUMAR",
+   "department": "ETP",
+   "old_type": "Worker",
+   "days_worked_jan_sep": 137.0
+  },
+  {
+   "code": "23408",
+   "name": "UMESH",
+   "department": "OFFICE ADMIN",
+   "old_type": "SILP",
+   "days_worked_jan_sep": 205.25
+  },
+  {
+   "code": "23427",
+   "name": "PAWAN KUMAR",
+   "department": "ETP",
+   "old_type": "Worker",
+   "days_worked_jan_sep": 239.0
+  },
+  {
+   "code": "23460",
+   "name": "VIJAY KUMAR GUPTA",
+   "department": "MAINTANCE",
+   "old_type": "SILP",
+   "days_worked_jan_sep": 212.0
+  },
+  {
+   "code": "23473",
+   "name": "SONU KUMAR",
+   "department": "BLOW MOULDING",
+   "old_type": "SILP",
+   "days_worked_jan_sep": 184.0
+  },
+  {
+   "code": "23481",
+   "name": "SANDEEP KUSHWAHA",
+   "department": "PRODUCTION",
+   "old_type": "SILP",
+   "days_worked_jan_sep": 211.0
+  },
+  {
+   "code": "23484",
+   "name": "VINIT PAL",
+   "department": "OPR",
+   "old_type": "Worker",
+   "days_worked_jan_sep": 169.0
+  },
+  {
+   "code": "23525",
+   "name": "VINAY KUMAR",
+   "department": "OFFICE ADMIN",
+   "old_type": "SILP",
+   "days_worked_jan_sep": 208.0
+  },
+  {
+   "code": "23534",
+   "name": "KANCHAN BHATIA",
+   "department": "OFFICE ADMIN",
+   "old_type": "SILP",
+   "days_worked_jan_sep": 89.0
+  },
+  {
+   "code": "23539",
+   "name": "RAJINDER KUMAR SHUKLA",
+   "department": "OPR",
+   "old_type": "SILP",
+   "days_worked_jan_sep": 219.0
+  },
+  {
+   "code": "23540",
+   "name": "AMAN MISHRA",
+   "department": "COM. HELPER",
+   "old_type": "SILP",
+   "days_worked_jan_sep": 156.0
+  },
+  {
+   "code": "23546",
+   "name": "GOPAL SAV",
+   "department": "PRODUCTION",
+   "old_type": "SILP",
+   "days_worked_jan_sep": 203.75
+  },
+  {
+   "code": "23547",
+   "name": "RAM BHAVAN",
+   "department": "RO",
+   "old_type": "SILP",
+   "days_worked_jan_sep": 175.0
+  },
+  {
+   "code": "23548",
+   "name": "ROHIT KUMAR",
+   "department": "MAINTANCE",
+   "old_type": "SILP",
+   "days_worked_jan_sep": 176.5
+  },
+  {
+   "code": "23552",
+   "name": "SUSHIL KUMAR",
+   "department": "ELECTRICIAN",
+   "old_type": "SILP",
+   "days_worked_jan_sep": 226.5
+  },
+  {
+   "code": "23561",
+   "name": "JAI SINGH",
+   "department": "GODOWN",
+   "old_type": "SILP",
+   "days_worked_jan_sep": 212.5
+  },
+  {
+   "code": "23573",
+   "name": "SUNIL KUMAR",
+   "department": "OFFICE ADMIN",
+   "old_type": "SILP",
+   "days_worked_jan_sep": 210.75
+  },
+  {
+   "code": "23574",
+   "name": "SUKHPAL SINGH",
+   "department": "OPR",
+   "old_type": "Worker",
+   "days_worked_jan_sep": 189.0
+  },
+  {
+   "code": "23577",
+   "name": "MANOJ KUMAR SINGH",
+   "department": "OFFICE ADMIN",
+   "old_type": "SILP",
+   "days_worked_jan_sep": 194.75
+  },
+  {
+   "code": "23588",
+   "name": "ROHIT KUMAR",
+   "department": "LAB",
+   "old_type": "SILP",
+   "days_worked_jan_sep": 207.5
+  },
+  {
+   "code": "23591",
+   "name": "RAMSWARUP",
+   "department": "OPR",
+   "old_type": "SILP",
+   "days_worked_jan_sep": 234.25
+  },
+  {
+   "code": "23596",
+   "name": "RAJ KUMAR",
+   "department": "PRODUCTION",
+   "old_type": "SILP",
+   "days_worked_jan_sep": 191.5
+  },
+  {
+   "code": "23602",
+   "name": "PARGAT SINGH",
+   "department": "SECURITY",
+   "old_type": "SILP",
+   "days_worked_jan_sep": 246.5
+  },
+  {
+   "code": "23611",
+   "name": "MAHESH KUMAR MISHRA",
+   "department": "BLOW MOULDING",
+   "old_type": "SILP",
+   "days_worked_jan_sep": 172.0
+  },
+  {
+   "code": "23621",
+   "name": "SABIR SK",
+   "department": "OPR",
+   "old_type": "SILP",
+   "days_worked_jan_sep": 197.5
+  },
+  {
+   "code": "23625",
+   "name": "Balkar",
+   "department": "LAB",
+   "old_type": "SILP",
+   "days_worked_jan_sep": 198.0
+  },
+  {
+   "code": "23626",
+   "name": "Amanpreet",
+   "department": "LAB",
+   "old_type": "SILP",
+   "days_worked_jan_sep": 211.25
+  },
+  {
+   "code": "23627",
+   "name": "VAIBHAV",
+   "department": "ELECTRICIAN",
+   "old_type": "SILP",
+   "days_worked_jan_sep": 182.25
+  },
+  {
+   "code": "23635",
+   "name": "Sashi",
+   "department": "BLOW MOULDING",
+   "old_type": "SILP",
+   "days_worked_jan_sep": 178.5
+  },
+  {
+   "code": "23637",
+   "name": "Amit",
+   "department": "BLOW MOULDING",
+   "old_type": "SILP",
+   "days_worked_jan_sep": 197.75
+  },
+  {
+   "code": "23645",
+   "name": "PAMME KUMARI",
+   "department": "LAB",
+   "old_type": "SILP",
+   "days_worked_jan_sep": 236.0
+  },
+  {
+   "code": "23648",
+   "name": "sumeet",
+   "department": "OPR",
+   "old_type": "SILP",
+   "days_worked_jan_sep": 211.25
+  },
+  {
+   "code": "23653",
+   "name": "SACHIN",
+   "department": "OPR",
+   "old_type": "SILP",
+   "days_worked_jan_sep": 175.0
+  },
+  {
+   "code": "23657",
+   "name": "VINOD KUMAR",
+   "department": "COM. HELPER",
+   "old_type": "Worker",
+   "days_worked_jan_sep": 214.75
+  },
+  {
+   "code": "23658",
+   "name": "JASWINDER SINGH SAINI",
+   "department": "OFFICE ADMIN",
+   "old_type": "SILP",
+   "days_worked_jan_sep": 213.5
+  },
+  {
+   "code": "23659",
+   "name": "RAJU KUMAR",
+   "department": "MAINTANCE",
+   "old_type": "SILP",
+   "days_worked_jan_sep": 240.5
+  },
+  {
+   "code": "23661",
+   "name": "PAVAN",
+   "department": "OPR",
+   "old_type": "SILP",
+   "days_worked_jan_sep": 168.0
+  },
+  {
+   "code": "23666",
+   "name": "DHARMENDRA KUMAR",
+   "department": "OPR",
+   "old_type": "SILP",
+   "days_worked_jan_sep": 167.75
+  },
+  {
+   "code": "23673",
+   "name": "BABLU YADAV",
+   "department": "OPR",
+   "old_type": "SILP",
+   "days_worked_jan_sep": 161.75
+  },
+  {
+   "code": "23675",
+   "name": "RAHUL SINGH",
+   "department": "OPR",
+   "old_type": "SILP",
+   "days_worked_jan_sep": 213.0
+  },
+  {
+   "code": "23676",
+   "name": "VIPUL GUPTA",
+   "department": "OPR",
+   "old_type": "SILP",
+   "days_worked_jan_sep": 214.0
+  },
+  {
+   "code": "23677",
+   "name": "SHISHPAL",
+   "department": "COM. HELPER",
+   "old_type": "Worker",
+   "days_worked_jan_sep": 50.0
+  },
+  {
+   "code": "23679",
+   "name": "VIKASH KUMAR",
+   "department": "COM. HELPER",
+   "old_type": "Worker",
+   "days_worked_jan_sep": 182.75
+  },
+  {
+   "code": "23682",
+   "name": "NANDANI KUMARI",
+   "department": "LAB",
+   "old_type": "SILP",
+   "days_worked_jan_sep": 159.25
+  },
+  {
+   "code": "23688",
+   "name": "MOHIT KUMAR YADAV",
+   "department": "OPR",
+   "old_type": "SILP",
+   "days_worked_jan_sep": 216.0
+  },
+  {
+   "code": "23693",
+   "name": "PUNEET",
+   "department": "PRODUCTION",
+   "old_type": "SILP",
+   "days_worked_jan_sep": 212.0
+  },
+  {
+   "code": "23695",
+   "name": "AMIT PRABHAT",
+   "department": "STORE",
+   "old_type": "SILP",
+   "days_worked_jan_sep": 187.0
+  },
+  {
+   "code": "23697",
+   "name": "ANIL KUMAR TIWARI",
+   "department": "PRODUCTION",
+   "old_type": "SILP",
+   "days_worked_jan_sep": 160.0
+  },
+  {
+   "code": "23698",
+   "name": "HARMESH LAL",
+   "department": "OFFICE ADMIN",
+   "old_type": "SILP",
+   "days_worked_jan_sep": 192.5
+  },
+  {
+   "code": "23700",
+   "name": "ISHWAR KUMAR",
+   "department": "H.R",
+   "old_type": "SILP",
+   "days_worked_jan_sep": 198.0
+  },
+  {
+   "code": "23706",
+   "name": "SANDEEP SINGH",
+   "department": "OFFICE ADMIN",
+   "old_type": "SILP",
+   "days_worked_jan_sep": 151.0
+  },
+  {
+   "code": "23707",
+   "name": "KARAN YADAV",
+   "department": "PRODUCTION",
+   "old_type": "SILP",
+   "days_worked_jan_sep": 181.0
+  },
+  {
+   "code": "23709",
+   "name": "SHIVJHARI",
+   "department": "PRODUCTION",
+   "old_type": "Worker",
+   "days_worked_jan_sep": 166.0
+  },
+  {
+   "code": "23712",
+   "name": "SAHIL BARNIYAL",
+   "department": "OFFICE ADMIN",
+   "old_type": "SILP",
+   "days_worked_jan_sep": 152.0
+  },
+  {
+   "code": "50020",
+   "name": "GURPREET SINGH",
+   "department": "OPR",
+   "old_type": "SILP",
+   "days_worked_jan_sep": 191.25
+  }
+ ]
+}

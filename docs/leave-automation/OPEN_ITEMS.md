@@ -69,3 +69,55 @@ window become one job covering both. That is the point, but it means the job's
 (outside) / Adjustments / Days worked columns read "—". The balance itself, which
 comes from `leave_balances`, still shows.
 *Needs:* either widening the preview endpoint to HR, or a slimmer HR-visible summary.
+
+## Leave switchover 2026 (9 Oct 2026, branch `feat/leave-switchover-2026`)
+
+Owner rulings, final (full text in `docs/leave-switchover-2026/PROMPT.md` §2):
+- **R-A** 98 SILP/Worker employees (`permanent-codes.json`) become Permanent — only if Active and
+  still typed as listed. `employment_type` only; `category` is left alone. Salary unaffected.
+- **R-B** EL = 1 per **21** days worked, rounded down, nothing until **180** days worked in the year.
+- **R-C** CL = **4** a year, pro-rated by joining **quarter** (Jan–Mar 4, Apr–Jun 3, Jul–Sep 2,
+  Oct–Dec 1); mid-month joiners roll to the next month; a mid-December joiner gets 0.
+- **R-D** CL taken outside the app counts as CL used, never as days worked. EL taken outside
+  counts as days worked.
+- **R-E** Outside-system leave is uploaded through the grants upload, which now takes an optional
+  Leave Type (EL default, CL) and a Days column (`EL Days` still accepted). CL can only be
+  "Leave taken". Duplicates within one sheet are per-row errors.
+- **R-F** `leave_transactions` #1, #3, #2 (HR's hand accrual credits) are neutralised by
+  offsetting Debit rows; the originals are never edited or deleted.
+- **R-G** 2026 CL opening = new entitlement, EL opening = 0, on existing rows of Active Permanent
+  employees; `used`/`balance` left to the engine; no rows created.
+- **R-H** Negative balances stay visible; CL and EL still lapse 31 Dec; sales excluded.
+
+**OI-11 — window between merge and switchover apply (accepted).**
+After this branch is deployed and before the owner clicks Apply on the switchover card, the
+CL formula is already quarterly but `cl_entitlement_base` is still 7 — so e.g. an October joiner
+created in that window gets ceil(7×3/12) = 2 instead of the old 3 (and the new 1). The apply sets
+the base to 4; the CL opening reset (R-G) then corrects every existing Active Permanent row.
+
+**OI-12 — the retype can be undone by a bulk employee import.**
+`routes/employees.js:954-958` derives `employment_type` from `category` on bulk import
+(`category='SILP'` → `SILP`, `'Worker'` → `Worker`). The 98 keep their old category, so a later
+bulk import of a sheet carrying that category would set them back. The switchover preview counts
+them ("Category still SILP/Worker").
+*Needs:* an owner decision — fix the category on those rows, or stop the bulk import from
+overriding a non-empty `employment_type`.
+
+**OI-13 — possible double count of August leave for 23725 and 23700.**
+Their August leave is in the owner's outside-app sheet AND in `attendance_processed` as
+`correction_source='leave_correction'` rows (the old finance apply-leave path). Today Stage 6
+counts none of it (`el_used`/`cl_used` 0 for August) and `partitionTransactions` absorbs
+txns #4–#11 as finance rows, so it is counted once — via the upload. If August Stage 6 is
+re-run and counts those statuses, it would be counted twice. The switchover preview flags
+every employee with both in the same month ("Possible double count…"); information only.
+*Needs:* HR to confirm per employee before the leave recompute is applied.
+
+**OI-14 — `backend/scripts/reseed-leave-balances-2026.js` left as is.**
+It calls `computeClEntitlement` without a base, so its default moves from 7 to 4 with the new
+quarterly formula. One-off script, not run by anything; leave it alone.
+
+**OI-15 — a soft-deleted outside-system grant still blocks re-uploading the same row.**
+Pre-existing: the duplicate check and the table's UNIQUE key both ignore `is_active`, so after
+"delete" the same (code, year, month, type, how given) is still rejected as "Already recorded".
+*Needs:* reactivate-on-upload or a hard delete; not changed here.
+
