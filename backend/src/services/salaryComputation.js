@@ -38,6 +38,8 @@
  * Canonical companies: 'Asian Lakto Ind Ltd', 'Indriyan Beverages Pvt Ltd'.
  * If a third real company is added later, extend CANONICAL_COMPANIES.
  */
+const { planStage7Loans, applyStage7Loans } = require('./loans/stage7');
+
 const CANONICAL_COMPANIES = new Set([
   'Asian Lakto Ind Ltd',
   'Indriyan Beverages Pvt Ltd'
@@ -198,20 +200,6 @@ function getAdvanceRecovery(db, employeeCode, month, year) {
     console.error(`[ADVANCE RECOVERY ERROR] emp=${employeeCode} month=${month} year=${year}:`, err.message);
     return 0;
   }
-}
-
-/**
- * Get loan EMI deductions for this month
- */
-function getLoanDeductions(db, employeeCode, month, year) {
-  try {
-    const repayments = db.prepare(`
-      SELECT SUM(emi_amount) as total_emi FROM loan_repayments
-      WHERE employee_code = ? AND month = ? AND year = ?
-      AND status = 'Pending'
-    `).get(employeeCode, month, year);
-    return repayments?.total_emi || 0;
-  } catch { return 0; }
 }
 
 /**
@@ -611,9 +599,6 @@ function computeEmployeeSalary(db, employee, month, year, company, requestId = '
   const autoAdvanceRecovery = getAdvanceRecovery(db, employee.code, month, year);
   if (autoAdvanceRecovery > 0) console.log(`[ADVANCE] ${employee.code}: auto recovery = ${autoAdvanceRecovery}`);
 
-  // ─── Loan EMI Recovery ───
-  const loanRecovery = getLoanDeductions(db, employee.code, month, year);
-
   // ─── TDS (auto-calculate if declaration exists, else preserve manual) ───
   let tds = 0;
   let tdsAutoCalculated = false;
@@ -692,6 +677,21 @@ function computeEmployeeSalary(db, employee, month, year, company, requestId = '
       console.warn(`${RID} Early exit deduction lookup failed for ${employee.code}: ${e.message}`);
     }
   }
+
+  // ─── Loan EMI (Loans PR-5) — LAST deduction, within the cap's headroom (D-11, D-12) ───
+  // Read-only here: amount = min(instalment due, room left under the cap after
+  // every deduction above, balance). The provisional ledger row is written after
+  // the salary row is saved (saveSalaryComputation → applyStage7Loans).
+  const loanPlan = planStage7Loans(db, {
+    employeeCode: employee.code, month, year, payroll: 'plant',
+    salary: {
+      gross_earned: grossEarned, ot_pay: otPay, holiday_duty_pay: holidayDutyPay,
+      pf_employee: pfEmployee, esi_employee: esiEmployee, professional_tax: professionalTax, tds,
+      advance_recovery: advanceRecovery, lop_deduction: lopDeduction, other_deductions: otherDeductions,
+      late_coming_deduction: lateComingDeduction, early_exit_deduction: earlyExitDeduction,
+    },
+  });
+  const loanRecovery = loanPlan.totalRupees;
 
   // ─── Total Deductions & Net ───
   let totalDeductions = pfEmployee + esiEmployee + professionalTax + tds + advanceRecovery + lopDeduction + otherDeductions + loanRecovery + lateComingDeduction + earlyExitDeduction;
@@ -807,7 +807,7 @@ function computeEmployeeSalary(db, employee, month, year, company, requestId = '
     esiEmployee, esiEmployer,
     professionalTax, tds,
     advanceRecovery, lopDeduction, otherDeductions,
-    loanRecovery,
+    loanRecovery, loanPlan,
     // Phase 2 — finance-approved late coming deduction
     lateComingDeduction: Math.round(lateComingDeduction * 100) / 100,
     // Early exit deduction (April 2026)
@@ -1009,16 +1009,15 @@ function saveSalaryComputation(db, comp) {
     } catch {}
   }
 
-  // Mark loan repayments as deducted
-  if (comp.loanRecovery > 0) {
-    try {
-      db.prepare(`
-        UPDATE loan_repayments SET status = 'Deducted', deducted_from_salary = 1
-        WHERE employee_code = ? AND month = ? AND year = ?
-        AND status = 'Pending'
-      `).run(comp.employeeCode, comp.month, comp.year);
-    } catch {}
-  }
+  // ── Loans PR-5: this month's provisional loan deduction(s), AFTER the salary row ──
+  // Keyed loan + month + payroll (never the salary row id). Not wrapped in
+  // try/catch on purpose: a ledger refusal throws, and the caller's per-employee
+  // savepoint rolls back the salary row with it, so the payslip and the loan
+  // ledger never disagree. Never moves a balance (the loan close does, PR-6).
+  comp.loanApplied = applyStage7Loans(db, {
+    employeeCode: comp.employeeCode, month: comp.month, year: comp.year, payroll: 'plant',
+    company: comp.company, plan: comp.loanPlan, runId: comp.loanRunId || null,
+  });
 
   // ── Auto-populate salary_manual_flags for finance audit ──
   try {

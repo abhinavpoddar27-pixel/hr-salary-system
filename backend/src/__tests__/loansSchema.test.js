@@ -410,7 +410,7 @@ describe('old readers against the new schema (nothing edited in them)', () => {
 });
 
 // ── Simulation: real Stage 7 with a live loan on the books ─────────────────
-describe('simulation: Stage 7 ignores loans until Loans PR-5', () => {
+describe('simulation: Stage 7 with a live loan on the PR-1 tables (Loans PR-5 deducts it)', () => {
   const { recomputeSalary } = require('../services/recompute');
   const M = 3; const Y = 2026;
   const stage7 = (db) => F.silently(() => recomputeSalary(db, { month: M, year: Y, company: COMPANY }));
@@ -431,16 +431,20 @@ describe('simulation: Stage 7 ignores loans until Loans PR-5', () => {
     return db;
   }
 
-  test('loan_recovery = 0, loan rows untouched, drift and component checks clean, totals identical', () => {
+  // Until Loans PR-5 this block proved Stage 7 ignored the loan. PR-5 wires the
+  // loan step in, so the same fixture now proves it is deducted provisionally —
+  // and that nothing else in the month moves.
+  test('provisional EMI deducted, balance untouched, other employee identical, drift and component checks clean', () => {
     const plain = seeded(false);
     const withLoan = seeded(true);
     stage7(plain); stage7(withLoan); stage7(withLoan);              // re-run too
 
     const row = withLoan.prepare('SELECT * FROM salary_computations WHERE employee_code = ? AND month = ? AND year = ?').get('S001', M, Y);
     expect(row).toBeDefined();
-    expect(row.loan_recovery).toBe(0);
+    expect(row.loan_recovery).toBe(2000);
     expect(withLoan.prepare('SELECT status FROM loan_instalments ORDER BY sequence').all().map((r) => r.status))
-      .toEqual(['scheduled', 'scheduled']);
+      .toEqual(['provisional', 'scheduled']);
+    expect(withLoan.prepare('SELECT amount, state FROM loan_deductions').all()).toEqual([{ amount: 2000, state: 'provisional' }]);
     expect(withLoan.prepare('SELECT remaining_balance, status FROM loans').get()).toEqual({ remaining_balance: 6000, status: 'active' });
 
     for (const db of [plain, withLoan]) {
@@ -453,8 +457,16 @@ describe('simulation: Stage 7 ignores loans until Loans PR-5', () => {
           + COALESCE(late_coming_deduction,0) + COALESCE(early_exit_deduction,0))) > 1`).get().n;
       expect(short).toBe(0);
     }
-    expect(totals(withLoan)).toEqual(totals(plain));
-    expect(totals(plain).n).toBe(2);
+    const plainRow = (db, code) => {
+      const r = db.prepare('SELECT * FROM salary_computations WHERE employee_code = ? AND month = ? AND year = ?').get(code, M, Y);
+      delete r.id; delete r.computed_at; delete r.created_at; delete r.updated_at;
+      return r;
+    };
+    expect(plainRow(withLoan, 'S002')).toEqual(plainRow(plain, 'S002'));
+    const p = totals(plain); const w = totals(withLoan);
+    expect(w.n).toBe(p.n);
+    expect(w.ded).toBeCloseTo(p.ded + 2000, 2);
+    expect(w.net).toBeCloseTo(p.net - 2000, 2);
     plain.close(); withLoan.close();
   });
 });

@@ -12,6 +12,32 @@
 - **Verified (Chromium, scratch DB, admin):** window shows CL 3→2 / EL 8→7, no false warning; with EL −5 the warning
   shows and EL reads −5→−6; 0 page errors. **Not tested:** Railway. Endpoint uses the current calendar year.
 
+## Last Session — 2026-10-10 (Loans PR-5)
+**Loans PR-5: plant Stage 7 deducts the loan EMI provisionally. Branch `feat/loans-pr5`, NOT merged.** No schema change.
+- **New `services/loans/stage7.js`:** `planStage7Loans` (read-only; LAST deduction, after every other one; amount =
+  min(instalment due in M, room under the 50% cap, balance); oldest loan first; a month already posted is frozen at the
+  posted amount with an `unborne` alert), `applyStage7Loans` (after the salary row is saved: `recordProvisional` per loan,
+  reverses this employee+month's provisional rows the plan dropped; diff, so a re-run writes no events; THROWS on refusal),
+  `clearStage7Loans` (excluded / zero-attendance employee, K29), `clearOrphanProvisional` (no salary row for M).
+- **`salaryComputation.js`:** `getLoanDeductions` + the early read deleted; plan call between early-exit and
+  `totalDeductions`; `loanPlan` in the return; the `loan_repayments` 'Deducted' block replaced by `applyStage7Loans`.
+- **`recompute.js` `recomputeSalary`:** per-employee SAVEPOINT (K25 — own commit), run id = requestId, K29 clears,
+  orphan sweep (own savepoint), additive `loans` result key `{recorded, cleared, orphansCleared, alerts, staleRows, errors}`.
+- **`headroom.js` (own commit):** plant earned base = `gross_earned` (was − OT − holiday duty, which plant
+  `gross_earned` never contained). Also corrects the PR-4 approval screen's 3-month load %.
+- **Fragile:** (1) `applyStage7Loans` is deliberately NOT in a try/catch — the savepoint is what keeps payslip and ledger
+  in step; never wrap it. (2) Stage 7 never deletes an old salary row of an employee it skips; their loan rows are
+  reversed but the old row still shows the loan → `loans.staleRows` + `console.warn LOAN STALE ROW` (owner ruling Q3).
+  (3) Matching is by employee code only (Q10): an employee with salary rows in TWO companies in one month would show the
+  loan on both rows while the ledger holds one (SPEC K8 wants the second run to skip; 0 cases Jan–Sep 2026).
+  (4) `loan_repayments` view stays — the sales reader uses it until PR-8.
+- **Verified:** suite 692 → 713 (34 → 36 suites). `loansStage7.test.js` (savepoint keeps the failing employee's prior
+  salary row + provisional rows exactly; event count stable across re-runs; stale row warned). recomputeParity and
+  holdRelease* untouched and green. `node backend/scripts/loans-stage7-simulation.js --dump` byte-identical on
+  origin/main and the branch (210 rows); full mode 5 loans, re-run, reimport: all checks pass, drift 0, component 0.
+- **Not tested:** cross-process concurrency; the frozen/posted path beyond a direct `postDeduction` (close is PR-6);
+  a two-company employee; production data (prod has 0 loans and gate '0', so merge impact is nil).
+
 ## Last Session — 2026-10-10 (Leave Management page crash)
 **Branch `fix/leave-automation-tab-tdz`, NOT merged.** Frontend only.
 - **Bug:** `/leave-management` showed "Something went wrong — Cannot access 're' before initialization" on load,
@@ -1962,8 +1988,8 @@ frontend/
 
 ## Stage 7: Salary Computation
 - Route: `backend/src/routes/payroll.js` → `POST /compute-salary`, `GET /salary-register`, `POST /finalise`, `GET /payslip/:code`, `GET /salary-slip-excel`
-- Service: `backend/src/services/salaryComputation.js` → `computeEmployeeSalary()`, `saveSalaryComputation()`, `generatePayslipData()`, `getAdvanceRecovery()`, `getLoanDeductions()`
-- Tables read: `day_calculations`, `salary_structures`, `employees`, `salary_advances`, `loan_repayments`, `tax_declarations`, `policy_config`, `extra_duty_grants` (April 2026 — for `ed_pay` bucket), `attendance_processed` (for WOP overlap detection)
+- Service: `backend/src/services/salaryComputation.js` → `computeEmployeeSalary()`, `saveSalaryComputation()`, `generatePayslipData()`, `getAdvanceRecovery()`; loan step in `services/loans/stage7.js` (Loans PR-5)
+- Tables read: `day_calculations`, `salary_structures`, `employees`, `salary_advances`, `loans` + `loan_instalments` + `loan_deductions` (Loans PR-5; writes provisional `loan_deductions`), `tax_declarations`, `policy_config`, `extra_duty_grants` (April 2026 — for `ed_pay` bucket), `attendance_processed` (for WOP overlap detection)
 - Tables written: `salary_computations` (one row per employee per month per company; includes new `ed_days`/`ed_pay`/`take_home`/`late_coming_deduction`), `salary_manual_flags` (auto-populated for finance audit), `salary_advances` (marked recovered), `late_coming_deductions` (is_applied_to_salary flag flipped after compute)
 - Input contract: Stage 6 complete; salary_structures populated; `employees.gross_salary` set
 - Output contract: salary_computations row with: gross_salary, gross_earned, basic/da/hra/conveyance/other_allowances_earned, ot_pay, holiday_duty_pay, ed_days, ed_pay, take_home, pf_employee/employer, esi_employee/employer, professional_tax, tds, advance_recovery, loan_recovery, lop_deduction, total_deductions, net_salary, total_payable, salary_held, hold_reason, finance_remark
@@ -2104,7 +2130,8 @@ frontend/
   finance_status='FINANCE_APPROVED' AND grant_date NOT IN (WOP/WO½P dates))`.
   Capped at calendarDays. Excluded from `grossEarned`/PF/ESI. Not paid for contractors.
   `take_home = total_payable + ed_pay`.
-- **grossEarned formula**: `min(baseEarned, grossMonthly) + otPay + holidayDutyPay`
+- **grossEarned formula**: `min(baseEarned, grossMonthly)` — base salary ONLY. OT, holiday duty and ED are
+  NOT in `gross_earned` (they are added in `total_payable` / `take_home`). (Corrected 2026-10-10, Loans PR-5.)
 - **PF**: 12% of `min(basic + da, 15000)` for both employee and employer. EPS split: `min(pfWageBase × 0.0833, 1250)`. Rates from `policy_config`. Gated by `salStruct.pf_applicable`.
 - **ESI**: 0.75% employee / 3.25% employer of `grossEarned`, only if `grossMonthly <= 21000` threshold. Gated by `salStruct.esi_applicable`.
 - **Professional Tax**: **DISABLED** (April 2026). Always 0. `calcProfessionalTax()` helper retained but never invoked.

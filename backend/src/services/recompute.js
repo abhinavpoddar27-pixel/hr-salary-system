@@ -18,6 +18,7 @@
 const { calculateDays, saveDayCalculation } = require('./dayCalculation');
 const { computeEmployeeSalary, saveSalaryComputation } = require('./salaryComputation');
 const { isContractorForPayroll } = require('../utils/employeeClassification');
+const { clearStage7Loans, clearOrphanProvisional } = require('./loans/stage7');
 
 const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
 
@@ -376,35 +377,103 @@ function recomputeSalary(db, {
     WHERE employee_code = ? AND month = ? AND year = ?
   `);
 
+  // Loans PR-5: the run id stamped on every provisional loan deduction this run
+  // writes (loan_deductions.run_id), so the loan close can tell runs apart.
+  const runId = requestId || `stage7-${new Date().toISOString()}`;
+  const loans = { recorded: 0, cleared: 0, orphansCleared: 0, alerts: [], staleRows: [], errors: [] };
+  const oldSalaryLoan = db.prepare('SELECT loan_recovery FROM salary_computations WHERE employee_code = ? AND month = ? AND year = ?');
+
+  // Stage 7 did not pay this employee this run: their provisional loan rows are
+  // reversed (SPEC K29). An older salary row, if one is left from an earlier run
+  // (Stage 7 has never deleted it), is NOT touched — but it can still show a
+  // loan the ledger no longer holds, so it is listed and logged (owner ruling Q3).
+  const clearSkippedLoans = (emp, why) => {
+    const { cleared } = clearStage7Loans(db, {
+      employeeCode: emp.code, month, year, payroll: 'plant',
+      reason: `Stage 7 ${runId}: no salary computed (${why})`,
+    });
+    const old = oldSalaryLoan.get(emp.code, month, year);
+    const staleRow = old && (cleared > 0 || (old.loan_recovery || 0) !== 0)
+      ? { employeeCode: emp.code, month, year, loanRecovery: old.loan_recovery || 0, deductionsCleared: cleared, reason: why }
+      : null;
+    return { cleared, staleRow };
+  };
+
+  // One SAVEPOINT per employee (SPEC K25). better-sqlite3 runs a transaction
+  // function called inside another transaction as a savepoint: if anything in
+  // here throws, that employee's writes (salary row, advance / late-coming /
+  // early-exit applied flags, auto-created structure) roll back together and
+  // the rest of the month carries on. Before this, a throw after the salary
+  // INSERT left a half-written employee behind.
+  const perEmployee = db.transaction((emp) => {
+    const comp = computeEmployeeSalary(db, emp, month, year, company || '', requestId);
+    if (comp.success) {
+      comp.loanRunId = runId;
+      saveSalaryComputation(db, comp);
+      clearStale.run(emp.code, month, year);
+    } else if (comp.excluded) {
+      // No salary to refresh, so the row is not waiting on anything — clear
+      // the marker, otherwise the Stage 7 banner could never reach zero.
+      clearStale.run(emp.code, month, year);
+      comp.loanSkipped = clearSkippedLoans(emp, comp.reason || 'excluded');
+    } else if (comp.silentSkip) {
+      // Zero attendance — not an error, just not payable. Same reasoning.
+      clearStale.run(emp.code, month, year);
+      comp.loanSkipped = clearSkippedLoans(emp, comp.reason || 'zero attendance');
+    }
+    // else: a real failure — this employee genuinely was not recomputed, so
+    // the marker stays and the banner keeps saying so.
+    return comp;
+  });
+
   const txn = db.transaction(() => {
     for (const emp of employees) {
       try {
-        const comp = computeEmployeeSalary(db, emp, month, year, company || '', requestId);
+        const comp = perEmployee(emp);
+        if (comp.success && comp.loanApplied) {
+          loans.recorded += comp.loanApplied.recorded;
+          loans.cleared += comp.loanApplied.cleared;
+        }
+        if (comp.loanPlan && comp.loanPlan.alerts.length) loans.alerts.push(...comp.loanPlan.alerts);
+        if (comp.loanSkipped) {
+          loans.cleared += comp.loanSkipped.cleared;
+          const st = comp.loanSkipped.staleRow;
+          if (st) {
+            loans.staleRows.push(st);
+            console.warn(`[compute-salary] LOAN STALE ROW ${emp.code} ${month}/${year}: not recomputed (${st.reason}); `
+              + `its earlier salary row still shows loan ₹${st.loanRecovery} while ${st.deductionsCleared} provisional loan deduction(s) were reversed. Review this row.`);
+          }
+        }
         if (comp.success) {
-          saveSalaryComputation(db, comp);
-          clearStale.run(emp.code, month, year);
           results.push(comp);
           if (comp.salaryHeld) held.push({ code: emp.code, name: emp.name, reason: comp.holdReason });
         } else if (comp.excluded) {
-          // No salary to refresh, so the row is not waiting on anything — clear
-          // the marker, otherwise the Stage 7 banner could never reach zero.
-          clearStale.run(emp.code, month, year);
           excluded.push({ code: comp.employeeCode, name: emp.name, reason: comp.reason });
         } else if (comp.silentSkip) {
-          // Zero attendance — not an error, just not payable. Same reasoning.
-          clearStale.run(emp.code, month, year);
+          // not payable this month — nothing to report
         } else {
-          // A real failure: this employee genuinely was not recomputed, so the
-          // marker stays and the banner keeps saying so.
           errors.push({ employeeCode: emp.code, error: comp.error });
         }
       } catch (perEmpErr) {
         // Per-employee try/catch so one bad row can't roll back the batch and
-        // leave Stage 7 stale.
+        // leave Stage 7 stale. The savepoint above has already undone this
+        // employee's partial writes.
         console.error(`[compute-salary] employee ${emp.code} failed: ${perEmpErr.message}`);
         if (perEmpErr.stack) console.error(perEmpErr.stack.split('\n').slice(0, 5).join('\n'));
         errors.push({ employeeCode: emp.code, error: perEmpErr.message });
       }
+    }
+    // Provisional loan rows for this month whose employee has no salary row at
+    // all (a reimport deleted it and the employee was not recomputed) can never
+    // be shown on a payslip, so they are reversed.
+    // Own savepoint: a refusal here is reported, never allowed to undo the month.
+    try {
+      loans.orphansCleared = db.transaction(() => clearOrphanProvisional(db, {
+        month, year, payroll: 'plant', reason: `Stage 7 ${runId}: no salary row for this month`,
+      }).cleared)();
+    } catch (sweepErr) {
+      console.error(`[compute-salary] loan orphan sweep failed for ${month}/${year}: ${sweepErr.message}`);
+      loans.errors.push({ step: 'orphan_sweep', error: sweepErr.message });
     }
   });
   txn();
@@ -420,7 +489,7 @@ function recomputeSalary(db, {
   }
 
   console.log(`[${requestId}] Computation complete: ${results.length} OK, ${errors.length} failed, ${held.length} held`);
-  return { results, errors, excluded, held, employeeCount: employees.length };
+  return { results, errors, excluded, held, employeeCount: employees.length, loans };
 }
 
 /** How many Stage 6 rows are waiting for a Stage 7 recompute. */
