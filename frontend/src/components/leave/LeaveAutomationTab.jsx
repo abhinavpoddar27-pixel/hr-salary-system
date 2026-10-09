@@ -10,6 +10,7 @@ import {
   getLeaveExternalGrants, deleteLeaveExternalGrant, downloadLeaveLapseReport,
 } from '../../utils/api'
 import { fmtIstDateTime } from '../../utils/formatters'
+import LeaveSwitchoverCard from './LeaveSwitchoverCard'
 
 function saveBlob(res, filename) {
   const url = URL.createObjectURL(new Blob([res.data]))
@@ -174,6 +175,9 @@ export default function LeaveAutomationTab({ year, status }) {
 
   return (
     <div className="space-y-5">
+      {/* ── 2026 switchover (one-time) ─────────────────────────────────── */}
+      <LeaveSwitchoverCard />
+
       {/* ── Switches ───────────────────────────────────────────────────── */}
       <div className="grid gap-4 md:grid-cols-2">
         <Card title="Switches">
