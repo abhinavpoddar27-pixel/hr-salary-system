@@ -13,13 +13,14 @@
 - PR-3 feat/statutory-filing — NOT STARTED
 
 ## LAST STEP
-STEP 1 done — commit eca75e2 `feat(statutory): lwf columns, batch table, new-employee flags-off trigger`.
-Tests: statutorySchema.test.js T8a (3) + T13 (4) green; full suite 43 suites / 776 tests green.
-(Phase 0: rebased on d1ad7bf, drift nil on FILES ranges, baseline 42/769 all green — see commit dd1d849.)
+STEP 2 done — commit 1aef14d `fix(statutory): remove the startup PF/ESI reset (L2)`.
+T8 (3 tests, on withLiveDefaults DEFAULT-1 fixture) green; the T8 flag test + source-grep test FAIL with the
+reset restored (verified via stash). Full suite 43 / 779 green.
+STEP 1 done — eca75e2.
 
 ## NEXT STEP
-STEP 2: remove the startup reset (schema.js 816–821 → shifted +0, block is above the STEP 1 insert),
-add `withLiveDefaults(db)` to the fixture, T8 (initSchema twice → uploaded flags intact).
+STEP 3: services/statutoryFlags.js read half — parseFlagFile, planFlagChanges, structureForDate, carryFlags.
+Tests T7, T14, T15 (plan).
 
 ## OWNER RULINGS ADDED DURING THE BUILD
 (record date + ruling; BUILD_PLAN §1 holds the original set)
@@ -34,7 +35,8 @@ add `withLiveDefaults(db)` to the fixture, T8 (initSchema twice → uploaded fla
 ## FILES TOUCHED
 - backend/src/database/schema.js (STEP 1)
 - backend/src/__tests__/helpers/statutoryFixture.js (new, STEP 1)
-- backend/src/__tests__/statutorySchema.test.js (new, STEP 1)
+- backend/src/__tests__/statutorySchema.test.js (new, STEP 1; T8 added STEP 2)
+- statutoryFixture.js: withLiveDefaults(db) + dflt() (STEP 2)
 
 ## FRAGILE-FILE EDITS (before / after)
 - STEP 1 schema.js — BEFORE (lines 2214–2218 on d1ad7bf):
@@ -50,9 +52,18 @@ add `withLiveDefaults(db)` to the fixture, T8 (initSchema twice → uploaded fla
   DROP TRIGGER IF EXISTS employees_statutory_default_off + CREATE TRIGGER … AFTER INSERT ON employees
   FOR EACH ROW BEGIN UPDATE employees SET pf_applicable=0, esi_applicable=0, lwf_applicable=0 WHERE id=NEW.id; END
   (in try/catch with console.error). No existing line edited.
+- STEP 2 schema.js — BEFORE (lines 816–821 on d1ad7bf):
+    // PF/ESI: disabled by default — set all existing records to 0 unless explicitly set via master import
+    // This runs idempotently on every startup but only affects defaults
+    db.prepare("UPDATE employees SET pf_applicable = 0 WHERE pf_applicable = 1 AND (uan IS NULL OR uan = '') AND (pf_number IS NULL OR pf_number = '')").run();
+    db.prepare("UPDATE employees SET esi_applicable = 0 WHERE esi_applicable = 1 AND (esi_number IS NULL OR esi_number = '')").run();
+    db.prepare("UPDATE salary_structures SET pf_applicable = 0 WHERE pf_applicable = 1 AND employee_id IN (SELECT id FROM employees WHERE (uan IS NULL OR uan = '') AND (pf_number IS NULL OR pf_number = ''))").run();
+    db.prepare("UPDATE salary_structures SET esi_applicable = 0 WHERE esi_applicable = 1 AND employee_id IN (SELECT id FROM employees WHERE (esi_number IS NULL OR esi_number = ''))").run();
+  AFTER: a 6-line comment only (reset removed (L2); trigger + upload now own the flags). No other line edited.
 
 ## TEST STATUS
 Baseline on d1ad7bf (rebased PR-1 branch, 10 Oct 2026): 42 suites / 769 tests, 0 failures, 2 clean runs.
 After STEP 1: 43 / 776, 0 failures.
+After STEP 2: 43 / 779, 0 failures.
 (The older "tdsCalculation 3 red / protectedWrite flaky" note is obsolete — both were fixed before d1ad7bf.)
 Frontend build: OK, dist reproduces byte-identical.
