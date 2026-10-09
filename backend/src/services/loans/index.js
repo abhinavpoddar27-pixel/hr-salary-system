@@ -16,6 +16,7 @@ module.exports = {
   ...require('./requests'),
   ...require('./reconcile'),
   ...require('./adjustments'),
+  ...require('./close'),
   money: require('./money'),
   months: require('./months'),
 };

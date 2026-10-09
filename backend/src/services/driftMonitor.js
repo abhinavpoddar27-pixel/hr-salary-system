@@ -17,6 +17,30 @@ const { getDb } = require('../database/db');
 
 // ── Invariant catalog ────────────────────────────────────────────────────────
 
+const LOAN_RECON_SQL = `
+  SELECT l.id AS loan_id, l.status, l.remaining_balance AS balance,
+         ROUND(l.disbursed_amount
+           - COALESCE((SELECT SUM(i.posted_amount) FROM loan_instalments i WHERE i.loan_id = l.id AND i.status IN ('posted','deferred')), 0)
+           + COALESCE((SELECT SUM(a.amount) FROM loan_adjustments a WHERE a.loan_id = l.id), 0)
+           - COALESCE((SELECT SUM(r.amount) FROM loan_receipts r WHERE r.loan_id = l.id), 0)
+           - COALESCE(l.written_off_amount, 0), 2) AS expected
+    FROM loans l WHERE l.disbursed_amount IS NOT NULL`;
+
+const LOAN_PAYSLIP_SQL = `
+  SELECT k.employee_code, k.month, k.year,
+         COALESCE((SELECT SUM(s.loan_recovery) FROM salary_computations s
+                    WHERE s.employee_code = k.employee_code AND s.month = k.month AND s.year = k.year), 0) AS payslip,
+         COALESCE((SELECT SUM(CASE WHEN d.state = 'posted'
+                                   THEN d.amount - COALESCE((SELECT SUM(a.amount) FROM loan_adjustments a WHERE a.deduction_id = d.id), 0)
+                                   ELSE d.amount END)
+                     FROM loan_deductions d
+                    WHERE d.payroll = 'plant' AND d.state IN ('provisional','posted')
+                      AND d.employee_code = k.employee_code AND d.month = k.month AND d.year = k.year), 0) AS ledger
+    FROM (SELECT employee_code, month, year FROM salary_computations WHERE COALESCE(loan_recovery, 0) <> 0
+          UNION
+          SELECT employee_code, month, year FROM loan_deductions WHERE payroll = 'plant' AND state IN ('provisional','posted')) k`;
+
+
 const INVARIANTS = [
   // The trailing NOT clause excludes the deliberate Math.max(0, ...)
   // floor applied when total_deductions > gross_earned (e.g.,
@@ -124,6 +148,25 @@ const INVARIANTS = [
         AND (year > 2025 OR (year = 2025 AND month >= 7))
       ORDER BY id DESC LIMIT 20
     `,
+  },
+  // Loans PR-6 (SPEC §5.2 r13, K34): every disbursed loan reconciles —
+  // disbursed − (posted − opposite entries) − receipts − written off = balance.
+  // Same formula as services/loans/reconcile.js reconcileLoan. 0 loans → pass.
+  {
+    name: 'loan_balance_reconciles',
+    severity: 'critical',
+    countSql: `SELECT COUNT(*) AS c FROM (${LOAN_RECON_SQL}) WHERE ABS(balance - expected) > 0.005`,
+    exampleSql: `SELECT * FROM (${LOAN_RECON_SQL}) WHERE ABS(balance - expected) > 0.005 ORDER BY loan_id LIMIT 20`,
+  },
+  // Loans PR-6 (§5.2 r7, K8, K28): a plant payslip's loan_recovery equals the
+  // loan ledger (provisional + effective posted) for the employee-month.
+  // Medium, not critical: it is legitimately non-zero between a held
+  // instalment moving to the end and the Stage 7 re-run that follows.
+  {
+    name: 'loan_payslip_matches_ledger',
+    severity: 'medium',
+    countSql: `SELECT COUNT(*) AS c FROM (${LOAN_PAYSLIP_SQL}) WHERE ABS(payslip - ledger) > 0.005`,
+    exampleSql: `SELECT * FROM (${LOAN_PAYSLIP_SQL}) WHERE ABS(payslip - ledger) > 0.005 ORDER BY year DESC, month DESC LIMIT 20`,
   },
 ];
 
