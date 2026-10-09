@@ -9,15 +9,18 @@
  * │ and read only through earnedBase(). The labour consultant may redefine   │
  * │ what the 50% cap is measured on (SPEC §12 Q1); when that happens, change │
  * │ this table and nothing else. Default (coordinator ruling 13, 9 Oct 2026): │
- * │ plant = gross_earned − ot_pay − holiday_duty_pay (= basic + DA + HRA +    │
- * │ conveyance + other, earned); sales = gross_earned (OT, incentive and      │
- * │ Diwali sit outside it). The sales mapping is provisional until PR-8.     │
+ * │ plant = gross_earned (= basic + DA + HRA + conveyance + other, earned —   │
+ * │ plant gross_earned already EXCLUDES ot_pay and holiday_duty_pay, see      │
+ * │ salaryComputation.js "GROSS EARNED = BASE SALARY ONLY"; Loans PR-5 fixed  │
+ * │ the PR-2 version that subtracted them a second time); sales =             │
+ * │ gross_earned (OT, incentive and Diwali sit outside it). The sales mapping │
+ * │ is provisional until PR-8.                                                │
  * └───────────────────────────────────────────────────────────────────────────┘
  */
 const { toPaise } = require('./money');
 
 const EARNED_BASE_DEFINITION = Object.freeze({
-  plant: Object.freeze({ base: 'gross_earned', minus: Object.freeze(['ot_pay', 'holiday_duty_pay']) }),
+  plant: Object.freeze({ base: 'gross_earned', minus: Object.freeze([]) }),
   sales: Object.freeze({ base: 'gross_earned', minus: Object.freeze([]) }),
 });
 
