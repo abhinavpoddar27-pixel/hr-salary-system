@@ -22,6 +22,24 @@ from the Held register (it filters `hold_released != 1`) and excluded from NEFT 
   green. HTTP simulation with the real payroll + reports routers 16/16 (9/16 on origin/main), drift 0.
 - **Not tested:** frontend (unchanged); production data — the effect appears only on the next re-run.
 
+**Stage 6 stops reactivating leavers. Branch `fix/stage6-no-reactivate-leavers`, NOT merged.**
+
+`recompute.js recomputeDays` flipped every `Left` employee with ANY attendance row in the
+month back to Active (incl. the days before their exit). Now a `Left` employee is
+reactivated only on a WORKED day (P/½P/HP/WOP/WO½P) this month, same company scope, dated
+strictly after the cutoff = later of `date_of_exit` and `inactive_since` (ISO only).
+Leavers still stay in the Stage 6 population, so their final month is computed.
+- **Fragile:** both dates are needed — auto-detect-Left (import.js/analytics.js) writes only
+  `inactive_since`. No usable date at all → LEGACY (owner ruling): any row reactivates.
+  Reactivation side effects unchanged (status + was_left_returned; `auto_inactive` and the
+  exit dates are left as-is).
+- **Verified:** new `recomputeLeavers.test.js` 12 tests (8 fail on old code); suite
+  394 → 406 green, twice. Simulation: only status differs vs old code (day calc + net
+  identical), drift > ₹1 = 0 rows. Prod read-only: 387 of 456 current "returners" have no
+  worked day after their cutoff.
+- **NOT done:** no data repair of those rows; analytics.js L433–451 reactivates manual Mark
+  Left (no `auto_inactive` check) — follow-up; import.js nits (ignores date_of_exit, no HP).
+
 ## Last Session — 2026-10-09 (P3)
 
 **Retired `PUT /api/payroll/salary/:code/manual-deductions` → 410 Gone. Branch `fix/retire-manual-deductions-endpoint`, 1 commit, NOT merged.**
