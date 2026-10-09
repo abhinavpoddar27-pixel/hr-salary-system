@@ -17,12 +17,13 @@
 - STEP 1 — eca75e2
 - STEP 2 — 1aef14d
 - STEP 3 — d7ce444 `feat(statutory): flag file parser and planner`. statutoryFlagsService.test.js 20 tests (parse ×6, lookups ×3, plan ×11 incl. T7, T15, T17-plan, malformed date). Parser uses SheetJS raw:true (formatted text turned a 12-digit UAN into '1.00012E+11' — caught while writing the parser).
+- STEP 4 — 867c515 `feat(statutory): apply with freeze/effective rows and undo file`. applyFlagChanges (immediate txn; batch row first; re-plan inside; freeze S copy of latest w/ its own flags; E rows updated in place or copy of forE; later rows updated; master flags + numbers; audit on the passed handle with stage statutory_upload remark batch:<id>), buildUndoWorkbook, listBatches, sha256. 19 new tests: T1, T2, T3 (×2: only 2026-08-24 / only 2026-09-06 — real Stage 7, August byte-identical), T4, T5 (+numbers), T6 (×3), T10a (+missing batch), T14 (×2), T16, T17, row-error isolation, master-only diff, audit rows. Decision D-1 below.
 
 ## LAST STEP
-STEP 3 — d7ce444 `feat(statutory): flag file parser and planner`. statutoryFlagsService.test.js 20 tests (parse ×6, lookups ×3, plan ×11 incl. T7, T15, T17-plan, malformed date). Parser uses SheetJS raw:true (formatted text turned a 12-digit UAN into '1.00012E+11' — caught while writing the parser).
+STEP 4 — 867c515 `feat(statutory): apply with freeze/effective rows and undo file`. applyFlagChanges (immediate txn; batch row first; re-plan inside; freeze S copy of latest w/ its own flags; E rows updated in place or copy of forE; later rows updated; master flags + numbers; audit on the passed handle with stage statutory_upload remark batch:<id>), buildUndoWorkbook, listBatches, sha256. 19 new tests: T1, T2, T3 (×2: only 2026-08-24 / only 2026-09-06 — real Stage 7, August byte-identical), T4, T5 (+numbers), T6 (×3), T10a (+missing batch), T14 (×2), T16, T17, row-error isolation, master-only diff, audit rows. Decision D-1 below.
 
 ## NEXT STEP
-STEP 4: service write half — applyFlagChanges (immediate txn, batch row first, re-plan inside, freeze S / effective E / later rows / master / numbers / audit on the passed handle) + buildUndoWorkbook. Tests T1–T6, T10a, T16, T17.
+STEP 5: routes/statutoryFlags.js (router-level requireAdmin; multer memory 2 MB .xlsx/.xls/.csv) + server.js mount after line 231. Tests: API admin 200; hr/finance/viewer 403; no token 401 (jwtApiHarness); .txt and >2 MB → 400; duplicate applied batch → 409.
 
 ## OWNER RULINGS ADDED DURING THE BUILD
 (record date + ruling; BUILD_PLAN §1 holds the original set)
@@ -32,7 +33,15 @@ STEP 4: service write half — applyFlagChanges (immediate txn, batch row first,
 - 10 Oct 2026: the repo was confirmed PUBLIC (GitHub API, raw file 200). Nothing on this branch is pushed until the owner makes it private (T0 prerequisite). Build and commit locally; push is the last step.
 
 ## DECISIONS TAKEN BY CLAUDE CODE (safest option, owner to review)
-(none)
+- D-1 (STEP 4) Structure rows are touched only when a structure actually needs new flags (forE or a row >= E
+  differs from the file). A difference on the employee master alone updates the master and writes no freeze /
+  effective rows — fewer rows, same compute result (compute reads flags from structures only).
+- D-2 (STEP 4) A file whose rows contain a Y/N cell that is neither Y/N/yes/no/1/0/true/false is BLOCKED as a whole
+  (never guessed). §4.2 lists only missing column / repeated code as blocking; an unreadable flag is treated the same.
+- D-3 (STEP 4) Copies made by the upload stamp sales `created_by = 'statutory_upload batch:<id>'` (plant has no
+  created_by column). Every other column is copied verbatim (PRAGMA list minus id/created_at/updated_at).
+- D-4 (STEP 4) The undo file carries the flags that were IN FORCE AT E before the batch (what September compute
+  used), not the master's flags; numbers are left blank (blank = unchanged, per §4.2).
 
 ## FILES TOUCHED
 - backend/src/database/schema.js (STEP 1)
@@ -72,3 +81,4 @@ After STEP 2: 43 / 779, 0 failures.
 (The older "tdsCalculation 3 red / protectedWrite flaky" note is obsolete — both were fixed before d1ad7bf.)
 Frontend build: OK, dist reproduces byte-identical.
 After STEP 3: 44 / 799, 0 failures.
+After STEP 4: 44 / 818, 0 failures.
