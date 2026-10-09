@@ -22,6 +22,27 @@ from the Held register (it filters `hold_released != 1`) and excluded from NEFT 
   green. HTTP simulation with the real payroll + reports routers 16/16 (9/16 on origin/main), drift 0.
 - **Not tested:** frontend (unchanged); production data — the effect appears only on the next re-run.
 
+## Last Session — 2026-10-09 (P3)
+
+**Retired `PUT /api/payroll/salary/:code/manual-deductions` → 410 Gone. Branch `fix/retire-manual-deductions-endpoint`, 1 commit, NOT merged.**
+
+- **Why:** no role guard (viewer could call it), no audit row, no `company` in its WHERE, and it rebuilt
+  `total_deductions`/`net_salary` WITHOUT `late_coming_deduction` + `early_exit_deduction` — every call
+  silently raised net pay. No caller: `api.js` `updateManualDeductions` is exported but imported nowhere;
+  prod `usage_logs` shows **0 hits 2026-03-17 → 2026-10-09** (earlier history not covered).
+- **Change:** handler body in `payroll.js` replaced by a 410 JSON; route stays registered (stale client gets
+  an explicit 410, not a 404). No role guard on purpose — it writes nothing, every role gets the same 410.
+- **Fragile / note:** the drift check `ABS(net-(gross_earned-total_deductions))>1` CANNOT see this bug class —
+  the old handler kept net and total_deductions consistent with each other while dropping components.
+  Simulation showed drift=0 yet total_deductions ₹514.29 short of its parts.
+- **Verified:** new `manualDeductionsRetired.test.js` (5 tests; 3 of them fail against origin/main's handler);
+  suite 394 → 399, 17 suites. HTTP simulation on the real router: 410 for admin/viewer/empty body/odd code,
+  rows md5-identical, drift 0.
+- **NOT tested / follow-ups:** frontend untouched — delete the dead `updateManualDeductions` helper next time
+  `dist` is rebuilt. Pre-March-2026 calls cannot be ruled out. Seen in passing, not fixed:
+  `hold-release` also looks up `salary_computations` by (code, month, year) with no company, so for a
+  two-company employee it may read the wrong row.
+
 ---
 
 ## Last Session — 2026-09-19 (later)
