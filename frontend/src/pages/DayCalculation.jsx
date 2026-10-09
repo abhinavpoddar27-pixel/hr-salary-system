@@ -150,7 +150,14 @@ export default function DayCalculation() {
     enabled: !!leaveModal?.code,
     staleTime: 30000
   })
-  const leaveBalance = leaveBalanceRes?.data?.data || leaveBalanceRes?.data || {}
+  // GET /leaves/balances/:code returns { CL, EL } (upper-case keys). This modal
+  // used to read cl_balance / cl, which never exist, so it always showed 0 and
+  // told HR to pick LWP even when the employee had EL to spend.
+  const leaveBalanceRaw = leaveBalanceRes?.data?.data || {}
+  const leaveBalance = {
+    CL: Number(leaveBalanceRaw.CL ?? 0),
+    EL: Number(leaveBalanceRaw.EL ?? 0),
+  }
 
   const leaveCorrectionMutation = useMutation({
     mutationFn: (data) => applyLeaveCorrection(data),
@@ -554,8 +561,8 @@ export default function DayCalculation() {
               ) : (
                 <div className="grid grid-cols-2 gap-3 text-center">
                   {[
-                    { key: 'CL', now: leaveBalance.cl_balance ?? leaveBalance.cl ?? 0, tone: 'text-blue-700' },
-                    { key: 'EL', now: leaveBalance.el_balance ?? leaveBalance.el ?? 0, tone: 'text-green-700' },
+                    { key: 'CL', now: leaveBalance.CL, tone: 'text-blue-700' },
+                    { key: 'EL', now: leaveBalance.EL, tone: 'text-green-700' },
                   ].map(b => {
                     const taking = leaveForm.leave_type === b.key ? 1 : 0
                     return (
@@ -577,8 +584,8 @@ export default function DayCalculation() {
             {/* Warning for zero balance */}
             {!balanceLoading && leaveForm.leave_type !== 'LWP' && (() => {
               const bal = leaveForm.leave_type === 'CL'
-                ? (leaveBalance.cl_balance ?? leaveBalance.cl ?? 0)
-                : (leaveBalance.el_balance ?? leaveBalance.el ?? 0)
+                ? leaveBalance.CL
+                : leaveBalance.EL
               // The backend refuses this outright now rather than writing the
               // balance negative — say so here instead of "warning".
               return bal < 1 ? (
