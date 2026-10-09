@@ -75,6 +75,8 @@ const POLICY_DEFAULTS = {
   loan_agreement_required: 'true',
   loan_interest_rate: '0',
   loan_perquisite_threshold: '20000',
+  // Loans PR-3 gate (coordinator ruling A): no disbursement until PR-5/PR-6.
+  loans_disbursement_enabled: '0',
 };
 
 let tmpDir;
@@ -344,7 +346,7 @@ describe('constraints', () => {
 
 // ── 9. Policy defaults ─────────────────────────────────────────────────────
 describe('policy defaults', () => {
-  test('all 16 keys seeded with SPEC §4 values; an edited value survives a re-boot', () => {
+  test('all 16 keys + the PR-3 disbursement gate seeded with SPEC §4 values; an edited value survives a re-boot', () => {
     const db = openFile();
     boot(db);
     const rows = db.prepare("SELECT key, value FROM policy_config WHERE key LIKE 'loan%'").all();
