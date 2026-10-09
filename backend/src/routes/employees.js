@@ -730,16 +730,35 @@ router.put('/:code/mark-left', (req, res) => {
       WHERE code = ?`)
       .run(exitDate, reason || '', exitDate, code);
 
-    // 2. Close any active loans — write off or close
-    const activeLoans = db.prepare("SELECT id, status FROM loans WHERE employee_code = ? AND status IN ('Active', 'Approved', 'Pending')").all(code);
-    for (const loan of activeLoans) {
-      db.prepare("UPDATE loans SET status = 'Closed', remarks = 'Auto-closed: employee left', updated_at = datetime('now') WHERE id = ?").run(loan.id);
-      // Cancel pending repayments
-      db.prepare("UPDATE loan_repayments SET status = 'Cancelled', remarks = 'Employee left' WHERE loan_id = ? AND status = 'Pending'").run(loan.id);
+    // 2. Flag the leaver's open plant loans for exit recovery (Loans PR-1, SPEC §5.2
+    //    rule 11). Nothing is closed or written off and no balance or instalment
+    //    moves: an active loan becomes recover_at_exit; a requested / approved
+    //    loan keeps its status and only gets the exit flag (the admin decides it).
+    //    The flag lives on the loan, so a later Stage 6 reactivation cannot undo
+    //    it. borrower_type = 'plant' keeps a sales loan with the same code untouched.
+    const exitLoans = db.prepare(`
+      SELECT id, status, remaining_balance FROM loans
+       WHERE borrower_type = 'plant' AND employee_code = ?
+         AND status IN ('requested', 'approved', 'active') AND exit_flag = 0
+    `).all(code);
+    for (const loan of exitLoans) {
+      const toState = loan.status === 'active' ? 'recover_at_exit' : loan.status;
+      db.prepare(`
+        UPDATE loans SET status = ?, exit_flag = 1, exit_flagged_at = datetime('now'),
+               exit_flagged_by = ?, exit_date = ?, updated_at = datetime('now')
+         WHERE id = ? AND status = ? AND exit_flag = 0
+      `).run(toState, markedBy, exitDate, loan.id, loan.status);
+      db.prepare(`
+        INSERT INTO loan_events (loan_id, event, from_state, to_state, amount, actor, reason)
+        VALUES (?, 'borrower_left', ?, ?, ?, ?, ?)
+      `).run(loan.id, loan.status, toState, loan.remaining_balance, markedBy,
+        `Marked Left (exit ${exitDate}). ${reason || 'No reason given'}`);
+      logAudit('loans', loan.id, 'status', loan.status, toState, 'loan_exit',
+        `Borrower ${code} marked Left; loan flagged for exit recovery`, req.user?.username);
     }
 
     // 3. Audit log
-    logAudit('employees', emp.id, 'status', emp.status, 'Left', 'employee_master', `Marked as Left by ${markedBy}. Reason: ${reason || 'Not specified'}. ${activeLoans.length} loans closed.`, req.user?.username);
+    logAudit('employees', emp.id, 'status', emp.status, 'Left', 'employee_master', `Marked as Left by ${markedBy}. Reason: ${reason || 'Not specified'}. ${exitLoans.length} loan(s) flagged for exit recovery.`, req.user?.username);
   });
 
   txn();
