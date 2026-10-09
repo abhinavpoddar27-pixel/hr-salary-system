@@ -18,12 +18,13 @@
 - STEP 2 — 1aef14d
 - STEP 3 — d7ce444 `feat(statutory): flag file parser and planner`. statutoryFlagsService.test.js 20 tests (parse ×6, lookups ×3, plan ×11 incl. T7, T15, T17-plan, malformed date). Parser uses SheetJS raw:true (formatted text turned a 12-digit UAN into '1.00012E+11' — caught while writing the parser).
 - STEP 4 — 867c515 `feat(statutory): apply with freeze/effective rows and undo file`. applyFlagChanges (immediate txn; batch row first; re-plan inside; freeze S copy of latest w/ its own flags; E rows updated in place or copy of forE; later rows updated; master flags + numbers; audit on the passed handle with stage statutory_upload remark batch:<id>), buildUndoWorkbook, listBatches, sha256. 19 new tests: T1, T2, T3 (×2: only 2026-08-24 / only 2026-09-06 — real Stage 7, August byte-identical), T4, T5 (+numbers), T6 (×3), T10a (+missing batch), T14 (×2), T16, T17, row-error isolation, master-only diff, audit rows. Decision D-1 below.
+- STEP 5 — 2207bf4 `feat(statutory): /api/statutory-flags preview/apply/batches`. Router-level requireAdmin; multer memoryStorage 2 MB, .xlsx/.xls/.csv; preview returns plan + sha256 + canApply; apply requires expectedSha256 (409 HASH_MISMATCH / DUPLICATE_BATCH, 400 BLOCKED); GET /batches and undo-file send Cache-Control no-store (N7). server.js: one mount line after contractor-report (line 232). statutoryFlagsApi.test.js 12 tests via jwtApiHarness (real requireAuth + JWTs): 401 ×4, hr/finance/viewer 403 ×4 each with counts unchanged, admin preview/apply/dup/batches/undo, .txt 400, >2 MB 400, bad scope/month/column 400, BLOCKED 400. server.js boots on a temp DATA_DIR with the mount present.
 
 ## LAST STEP
-STEP 4 — 867c515 `feat(statutory): apply with freeze/effective rows and undo file`. applyFlagChanges (immediate txn; batch row first; re-plan inside; freeze S copy of latest w/ its own flags; E rows updated in place or copy of forE; later rows updated; master flags + numbers; audit on the passed handle with stage statutory_upload remark batch:<id>), buildUndoWorkbook, listBatches, sha256. 19 new tests: T1, T2, T3 (×2: only 2026-08-24 / only 2026-09-06 — real Stage 7, August byte-identical), T4, T5 (+numbers), T6 (×3), T10a (+missing batch), T14 (×2), T16, T17, row-error isolation, master-only diff, audit rows. Decision D-1 below.
+STEP 5 — 2207bf4 `feat(statutory): /api/statutory-flags preview/apply/batches`. Router-level requireAdmin; multer memoryStorage 2 MB, .xlsx/.xls/.csv; preview returns plan + sha256 + canApply; apply requires expectedSha256 (409 HASH_MISMATCH / DUPLICATE_BATCH, 400 BLOCKED); GET /batches and undo-file send Cache-Control no-store (N7). server.js: one mount line after contractor-report (line 232). statutoryFlagsApi.test.js 12 tests via jwtApiHarness (real requireAuth + JWTs): 401 ×4, hr/finance/viewer 403 ×4 each with counts unchanged, admin preview/apply/dup/batches/undo, .txt 400, >2 MB 400, bad scope/month/column 400, BLOCKED 400. server.js boots on a temp DATA_DIR with the mount present.
 
 ## NEXT STEP
-STEP 5: routes/statutoryFlags.js (router-level requireAdmin; multer memory 2 MB .xlsx/.xls/.csv) + server.js mount after line 231. Tests: API admin 200; hr/finance/viewer 403; no token 401 (jwtApiHarness); .txt and >2 MB → 400; duplicate applied batch → 409.
+STEP 6: plant master writers in routes/employees.js (sync helper, POST /, PUT /:code, PUT /:code/salary, bulk-import, integrity-check/fix) — flags preserved, carried via carryFlags, ignoredFields returned; requireAdmin on bulk-import and integrity routes. Tests T9a (+C4 GET self-heal + financeAudit gross revert), T8b on withLiveDefaults (C2), guards.
 
 ## OWNER RULINGS ADDED DURING THE BUILD
 (record date + ruling; BUILD_PLAN §1 holds the original set)
@@ -50,6 +51,9 @@ STEP 5: routes/statutoryFlags.js (router-level requireAdmin; multer memory 2 MB 
 - statutoryFixture.js: withLiveDefaults(db) + dflt() (STEP 2)
 - backend/src/services/statutoryFlags.js (new, STEP 3)
 - backend/src/__tests__/statutoryFlagsService.test.js (new, STEP 3)
+- backend/src/routes/statutoryFlags.js (new, STEP 5)
+- backend/server.js (STEP 5, +1 mount line)
+- backend/src/__tests__/statutoryFlagsApi.test.js (new, STEP 5)
 
 ## FRAGILE-FILE EDITS (before / after)
 - STEP 1 schema.js — BEFORE (lines 2214–2218 on d1ad7bf):
@@ -82,3 +86,4 @@ After STEP 2: 43 / 779, 0 failures.
 Frontend build: OK, dist reproduces byte-identical.
 After STEP 3: 44 / 799, 0 failures.
 After STEP 4: 44 / 818, 0 failures.
+After STEP 5: 45 / 830, 0 failures.
