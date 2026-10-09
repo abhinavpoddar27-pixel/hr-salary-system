@@ -20,6 +20,30 @@ Not the same as the leave-safety "PR-0" below: always write "Loans PR-n".
 
 ## Last Session — 2026-10-09
 
+**Hold release survives recompute. Branch `fix/hold-release-survives-recompute`, NOT merged.**
+
+Finance's hold release (`PUT /payroll/salary/:code/hold-release`) was undone by every later
+Stage 7 run: `computeEmployeeSalary` re-derived the hold and the upsert wrote it back; reimport
+DELETEs the row first. Prod 9 Oct: 47 of 53 released rows re-held (₹1,55,795.74 net), hidden
+from the Held register (it filters `hold_released != 1`) and excluded from NEFT (`salary_held = 0`).
+
+- **Fix:** `salaryComputation.js` hold block only — if held and `salary_hold_releases` has a row for
+  (code, month, year) → `salaryHeld = 0`, `holdReason = ''`, and `financeRemark` = "Hold released by
+  X on Y" only when empty. Covers re-run AND reimport (both go through `recomputeSalary`).
+- **Fragile:** keyed on code+month+year, deliberately NOT company (all-company runs pass `''`
+  before `normalizeCompany`). `hold_released` is not restored on the reimport path (stays 0 on the
+  rebuilt row; harmless — every reader also requires `salary_held = 1`). A release overrides any
+  hold reason for that month.
+- **Not covered:** 7 Mar-2026 rows released before `salary_hold_releases` existed (no audit row,
+  ₹38,967.76) — finance must release them again through the route.
+- **Owner risk:** the next Stage 7 re-run un-holds the 47 rows; 16 Aug-2026 releases say "already
+  paid" (F&F). Regenerating the Aug bank file after a re-run would pay them twice. No data repair.
+- **Verified:** `holdReleaseRecompute.test.js` 10 tests (8 fail on origin/main); suite 394 → 404
+  green. HTTP simulation with the real payroll + reports routers 16/16 (9/16 on origin/main), drift 0.
+- **Not tested:** frontend (unchanged); production data — the effect appears only on the next re-run.
+
+## Last Session — 2026-10-09 (P2)
+
 **Stage 6 stops reactivating leavers. Branch `fix/stage6-no-reactivate-leavers`, NOT merged.**
 
 `recompute.js recomputeDays` flipped every `Left` employee with ANY attendance row in the
