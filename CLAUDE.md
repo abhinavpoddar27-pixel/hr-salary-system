@@ -1,3 +1,17 @@
+## Last Session — 2026-10-10 (Stage 6 leave window showed 0 balance)
+**Branch `fix/stage6-leave-balance-display`, NOT merged (PR #60).** Frontend only (`pages/DayCalculation.jsx`).
+- **Bug:** Stage 6 → "Apply Leave" window read `cl_balance`/`cl` from `GET /leaves/balances/:code`, which returns
+  `{ CL, EL }` (upper-case). It always showed CL 0 / EL 0 and the red "balance is 0 — choose LWP" warning, steering HR
+  to LWP (unpaid) when the employee had EL (paid). Surfaced right after the 2026 balances went live.
+- **Fix:** read `CL`/`EL`. Leave Management already read them correctly. dist rebuilt.
+- **Context (not changed, spec rule):** in Stage 6 an approved EL day restores a payable day; CL and LWP only relabel
+  the absence (leave-management spec §4.2 "CL is UNPAID"). Leave balances themselves never feed Stage 6/7 —
+  `calculateDays`' `leaveBalances` argument is unused. Outside-app grants never touch day_calculations.
+- **Leave go-live (10 Oct, 01:09 IST):** switchover applied, 44 outside-app rows uploaded, recompute run #49 applied
+  204 employees, automation ON. Details: project doc `claude/leave-switchover-2026-golive.md`.
+- **Verified (Chromium, scratch DB, admin):** window shows CL 3→2 / EL 8→7, no false warning; with EL −5 the warning
+  shows and EL reads −5→−6; 0 page errors. **Not tested:** Railway. Endpoint uses the current calendar year.
+
 ## Last Session — 2026-10-10 (Leave Management page crash)
 **Branch `fix/leave-automation-tab-tdz`, NOT merged.** Frontend only.
 - **Bug:** `/leave-management` showed "Something went wrong — Cannot access 're' before initialization" on load,
