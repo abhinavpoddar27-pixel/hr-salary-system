@@ -153,21 +153,32 @@ export const getHoldReleasesReport = (params) => api.get('/payroll/salary/hold-r
 export const getDayCalcStaleness = (month, year, company) =>
   api.get('/payroll/day-calc-staleness', { params: { month, year, company } })
 
-// ── Loans ────────────────────────────────────────────────
-export const getLoans = (params) => api.get('/loans', { params })
-export const getLoanTypes = () => api.get('/loans/types')
-export const getLoanStats = () => api.get('/loans/stats')
-export const getLoanDeductions = (month, year) => api.get('/loans/deductions', { params: { month, year } })
+// ── Loans (Loans PR-4: rebuilt on the PR-3 API, routes/loans.js) ──────────
+// server.js marks every GET `Cache-Control: private, max-age=5`, so the browser
+// would answer the refetch after an approve / disburse / receipt with the
+// stale copy for up to 5 s. Loan reads ask the browser to skip its cache.
+const fresh = { headers: { 'Cache-Control': 'no-cache' } }
+export const getLoans = (params) => api.get('/loans', { params, ...fresh })
+export const getLoanStats = (params) => api.get('/loans/stats', { params, ...fresh })
+export const getLoanTypes = () => api.get('/loans/types', fresh)
+export const getLoanQueue = () => api.get('/loans/queue', fresh)
+export const getLoansDue = (month, year) => api.get('/loans/due', { params: { month, year }, ...fresh })
+export const getLoanPolicy = () => api.get('/loans/policy', fresh)
+export const updateLoanPolicy = (values, reason) => api.put('/loans/policy', { values, reason })
+export const checkLoanEligibility = (data) => api.post('/loans/eligibility', data)
 export const createLoan = (data) => api.post('/loans', data)
-export const getLoanDetails = (id) => api.get(`/loans/${id}`)
+export const getLoan = (id) => api.get(`/loans/${id}`, fresh)
+export const getLoanStatement = (id) => api.get(`/loans/${id}/statement`, fresh)
+export const getEmployeeLoans = (code) => api.get(`/loans/employee/${encodeURIComponent(code)}`, fresh)
 export const approveLoan = (id, data) => api.put(`/loans/${id}/approve`, data)
 export const rejectLoan = (id, data) => api.put(`/loans/${id}/reject`, data)
-export const closeLoan = (id, data) => api.put(`/loans/${id}/close`, data)
-export const getEmployeeLoans = (code) => api.get(`/loans/employee/${code}`)
-export const processLoanDeductions = (month, year) => api.post('/loans/process-deductions', { month, year })
-export const recoverLoanInstallment = (id, data) => api.post(`/loans/${id}/recover`, data)
-export const skipLoanInstallment = (id, data) => api.post(`/loans/${id}/skip`, data)
-export const getMonthlyLoanRecovery = (month, year) => api.get(`/loans/monthly-recovery/${month}/${year}`)
+export const cancelLoan = (id, data) => api.post(`/loans/${id}/cancel`, data)
+export const disburseLoan = (id, data) => api.post(`/loans/${id}/disburse`, data)
+export const recordLoanReceipt = (id, data) => api.post(`/loans/${id}/receipts`, data)
+export const requestLoanChange = (id, data) => api.post(`/loans/${id}/requests`, data)
+export const approveLoanChange = (rid, data) => api.post(`/loans/requests/${rid}/approve`, data)
+export const rejectLoanChange = (rid, data) => api.post(`/loans/requests/${rid}/reject`, data)
+export const withdrawLoanChange = (rid, data) => api.post(`/loans/requests/${rid}/withdraw`, data)
 export const getAlerts = (month, year, unread, opts = {}) => api.get('/analytics/alerts', { params: { month, year, ...(unread ? { unread: 'true' } : {}), ...opts } })
 export const generateAlerts = (month, year) => api.post('/analytics/alerts/generate', { month, year })
 export const markAlertRead = (id) => api.put(`/analytics/alerts/${id}/read`)

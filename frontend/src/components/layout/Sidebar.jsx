@@ -3,7 +3,7 @@ import { NavLink, useLocation } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
 import { useAppStore } from '../../store/appStore'
 import { normalizeRole } from '../../utils/role'
-import { salesTaDaRequestsPendingCount, getLeaveChangeFlags } from '../../utils/api'
+import { salesTaDaRequestsPendingCount, getLeaveChangeFlags, getLoanStats } from '../../utils/api'
 import clsx from 'clsx'
 
 // Pending TA/DA approval count — polls every 60s. Only mounted on the
@@ -53,6 +53,37 @@ function LeaveFlagBadge({ role }) {
   )
 }
 
+/**
+ * Loans PR-4: loans and change requests waiting for the admin. Only the admin
+ * decides (SPEC §7), so only the admin sees the count.
+ */
+function LoanQueueBadge({ role }) {
+  const isAdminRole = role === 'admin'
+  const { data } = useQuery({
+    queryKey: ['loan-stats', 'sidebar'],
+    queryFn: () => getLoanStats({}),
+    refetchInterval: 60 * 1000,
+    refetchOnWindowFocus: true,
+    enabled: isAdminRole,
+    retry: 0,
+  })
+  const p = data?.data?.data?.pendingApprovals
+  const count = (p?.loans || 0) + (p?.changes || 0)
+  if (!isAdminRole || !count) return null
+  return (
+    <span
+      title={`${count} loan request${count === 1 ? '' : 's'} waiting for approval`}
+      className="ml-auto inline-flex items-center justify-center min-w-[18px] h-[18px] px-1 rounded-full bg-red-500 text-white text-[10px] font-semibold leading-none"
+    >
+      {count}
+    </span>
+  )
+}
+
+// Roles that may read loans (routes/loans.js READ_ROLES). Supervisors and
+// employees get 403 from the API, so the entry is hidden from them.
+const LOAN_READ_ROLES = ['admin', 'hr', 'finance', 'viewer']
+
 const nav = [
   { label: 'Dashboard', icon: '🏠', to: '/' },
   { label: 'Daily MIS', icon: '📊', to: '/daily-mis' },
@@ -70,7 +101,7 @@ const nav = [
       { label: 'Salary Advance', icon: '💵', to: '/salary-advance' },
       { label: 'Payable OT', icon: '⏱️', to: '/payable-ot' },
       { label: 'Salary Input', icon: '📝', to: '/salary-input' },
-      { label: 'Loans', icon: '🏦', to: '/loans' },
+      { label: 'Loans', icon: '🏦', to: '/loans', loansRead: true, loanQueueBadge: true },
     ]
   },
   { label: 'Leave Management', icon: '📋', to: '/leave-management', leaveFlagBadge: true },
@@ -180,6 +211,8 @@ function NavItem({ item, collapsed, depth = 0, userRole, onNavigate, onAction })
   // employee master, but cannot approve, so the approval queue is hidden
   // from HR to avoid clutter).
   if (item.tadaApprover && !['finance', 'admin'].includes(userRole)) return null
+  // Loans PR-4: hide the Loans entry from roles the loan API refuses.
+  if (item.loansRead && !LOAN_READ_ROLES.includes(userRole)) return null
 
   // Auto-open active parent
   React.useEffect(() => {
@@ -212,6 +245,7 @@ function NavItem({ item, collapsed, depth = 0, userRole, onNavigate, onAction })
       if (c.financeOnly && userRole !== 'finance' && userRole !== 'admin') return false
       if (c.salesAllowed && !['hr', 'admin'].includes(userRole)) return false
       if (c.tadaApprover && !['finance', 'admin'].includes(userRole)) return false
+      if (c.loansRead && !LOAN_READ_ROLES.includes(userRole)) return false
       return true
     })
     return (
@@ -255,6 +289,7 @@ function NavItem({ item, collapsed, depth = 0, userRole, onNavigate, onAction })
         {!collapsed && <span>{item.label}</span>}
         {!collapsed && item.tadaPendingBadge && <TaDaPendingBadge />}
         {!collapsed && item.leaveFlagBadge && <LeaveFlagBadge role={userRole} />}
+        {!collapsed && item.loanQueueBadge && <LoanQueueBadge role={userRole} />}
       </NavLink>
     </li>
   )
