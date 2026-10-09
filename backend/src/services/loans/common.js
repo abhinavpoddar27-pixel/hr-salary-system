@@ -2,7 +2,7 @@
  * Loans engine — shared internals (Loans PR-2). Not part of the public façade.
  */
 const { toPaise, toRupees } = require('./money');
-const { addMonths, compareMonth } = require('./months');
+const { addMonths, compareMonth, dateToMonth, todayIst, monthLabel } = require('./months');
 const { readLoanPolicy } = require('./policy');
 const { AUTO_EXTENSION_ORIGINS, LIVE_LOAN_STATES } = require('./states');
 const { writeEvent } = require('./events');
@@ -65,6 +65,66 @@ function firstUnclosedMonth(db, payroll) {
 function notBeforeOpen(db, payroll, m) {
   const open = firstUnclosedMonth(db, payroll);
   return open && compareMonth(m, open) < 0 ? open : m;
+}
+
+/**
+ * Final month F of an exit loan (Loans PR-7): the calendar month of
+ * loans.exit_date; if that is missing or unreadable, the IST month of
+ * exit_flagged_at; failing both, the current IST month. A pure function of the
+ * loan row — never of employee status, so a Stage 6 reactivation cannot move it.
+ */
+function finalMonthOf(loan, now = new Date()) {
+  const fromExit = dateToMonth(String((loan && loan.exit_date) || '').trim());
+  if (fromExit) return fromExit;
+  if (loan && loan.exit_flagged_at) {
+    const d = new Date(`${String(loan.exit_flagged_at).replace(' ', 'T')}Z`);
+    if (!Number.isNaN(d.getTime())) return dateToMonth(todayIst(d));
+  }
+  return dateToMonth(todayIst(now));
+}
+
+/**
+ * Is month m past for a payroll — its loan close has run, or a later month has
+ * already closed? (A month with no loan activity never gets a close row, so the
+ * row check alone is not enough.) Inside the close of m the close row is written
+ * first, so during that close m is already past.
+ */
+function isMonthPast(db, payroll, m) {
+  if (db.prepare('SELECT 1 FROM loan_closes WHERE payroll = ? AND month = ? AND year = ?').get(payroll, m.month, m.year)) return true;
+  const open = firstUnclosedMonth(db, payroll);
+  return !!open && compareMonth(m, open) < 0;
+}
+
+/** THE single "F is past" test (Loans PR-7): nothing more can come from the final payroll. */
+function isFinalMonthPast(db, loan) {
+  return isMonthPast(db, loan.borrower_type, finalMonthOf(loan));
+}
+
+/** Exit residual (paise) = balance − open instalments (the reconciliation's "uncovered"), never below 0. */
+function exitResidualPaise(db, loanId) {
+  const fresh = getLoan(db, loanId);
+  return Math.max(0, toPaise(fresh.remaining_balance) - openPaise(getInstalments(db, loanId)));
+}
+
+/** Finance alert: an amount the final payroll could not recover (residual = receipt or write-off). */
+function exitResidualAlert(db, loan, { amountPaise, origin, sourceInstalmentId = null }) {
+  const F = finalMonthOf(loan);
+  const residual = exitResidualPaise(db, loan.id);
+  return {
+    type: 'loan_exit_residual',
+    severity: 'action_required',
+    audience: 'finance',
+    loanId: loan.id,
+    borrowerType: loan.borrower_type,
+    employeeCode: loan.employee_code,
+    company: loan.company,
+    finalMonth: F,
+    origin,
+    amount: toRupees(amountPaise),
+    residual: toRupees(residual),
+    sourceInstalmentId,
+    message: `Loan ${loan.id} (${loan.employee_code}): ₹${toRupees(amountPaise)} could not be recovered in the final payroll (${monthLabel(F)}); exit residual now ₹${toRupees(residual)}. Record a cash receipt or raise a write-off request.`,
+  };
 }
 
 /**
@@ -160,4 +220,5 @@ function autoComplete(db, loanId, actor, reason) {
 module.exports = {
   fail, text, getLoan, getInstalments, inTxn, openPaise, nextAppendMonth, firstUnclosedMonth, notBeforeOpen,
   extensionMonthsUsed, appendInstalment, moveBalance, autoComplete,
+  finalMonthOf, isMonthPast, isFinalMonthPast, exitResidualPaise, exitResidualAlert,
 };
