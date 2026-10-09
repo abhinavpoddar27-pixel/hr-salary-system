@@ -71,6 +71,24 @@ function dateToMonth(str) {
   return d ? { month: d.month, year: d.year } : null;
 }
 
+/**
+ * Sales cycle month of a date (Loans PR-8, SPEC §5.3 / K12): the sales cycle for
+ * month M runs from the 26th of M−1 to the 25th of M, so a date on day 26 or
+ * later belongs to the NEXT month's cycle. 2026-10-28 → Nov 2026; 2026-10-25 →
+ * Oct 2026; 2026-12-26 → Jan 2027. Null for an invalid date.
+ */
+function salesCycleMonthOf(str) {
+  const d = parseDate(str);
+  if (!d) return null;
+  const m = { month: d.month, year: d.year };
+  return d.day >= 26 ? addMonths(m, 1) : m;
+}
+
+/** Payroll month of a date: plant = calendar month, sales = sales cycle month. */
+function payrollMonthOf(str, payroll = 'plant') {
+  return payroll === 'sales' ? salesCycleMonthOf(str) : dateToMonth(str);
+}
+
 function monthLabel(m) {
   return `${m.year}-${String(m.month).padStart(2, '0')}`;
 }
@@ -78,4 +96,5 @@ function monthLabel(m) {
 module.exports = {
   monthIndex, fromIndex, addMonths, compareMonth, isValidMonth, daysInMonth,
   parseDate, formatDate, addMonthsToDate, todayIst, dateToMonth, monthLabel,
+  salesCycleMonthOf, payrollMonthOf,
 };

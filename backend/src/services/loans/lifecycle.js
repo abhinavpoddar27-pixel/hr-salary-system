@@ -33,7 +33,7 @@ function requestLoan(db, input, actor, { asOf } = {}) {
     borrowerType: input.borrowerType, company: text(input.company), loanType: input.loanType,
     principal: input.principal, tenure: input.tenure, asOf: asOf || todayIst(),
   };
-  const facts = loadBorrowerFacts(db, { borrowerType: input.borrowerType, employeeCode: input.employeeCode, company: req.company });
+  const facts = loadBorrowerFacts(db, { borrowerType: input.borrowerType, employeeCode: input.employeeCode, company: req.company, asOf: req.asOf });
   const verdict = evaluateEligibility(facts, req, policy);
   if (!verdict.eligible) {
     return fail('NOT_ELIGIBLE', verdict.refusals.map((r) => r.message).join('; '), { refusals: verdict.refusals, warnings: verdict.warnings, limits: verdict.limits });
@@ -65,7 +65,7 @@ function approveLoan(db, loanId, actor, { reason, asOf } = {}) {
   if (loan.status !== 'requested') return fail('ILLEGAL_TRANSITION', `loan is ${loan.status}, not requested`);
   if (loan.exit_flag === 1) return fail('LOAN_EXIT_FLAGGED', 'the borrower has been marked Left; this loan cannot be approved');
   const policy = readLoanPolicy(db);
-  const facts = loadBorrowerFacts(db, { borrowerType: loan.borrower_type, employeeCode: loan.employee_code, company: loan.company, excludeLoanId: loan.id });
+  const facts = loadBorrowerFacts(db, { borrowerType: loan.borrower_type, employeeCode: loan.employee_code, company: loan.company, excludeLoanId: loan.id, asOf: asOf || todayIst() });
   const verdict = evaluateEligibility(facts, {
     borrowerType: loan.borrower_type, company: loan.company, loanType: loan.loan_type,
     principal: loan.principal_amount, tenure: loan.tenure_months, asOf: asOf || todayIst(),
@@ -132,7 +132,7 @@ function disburseLoan(db, loanId, actor, d = {}, { asOf } = {}) {
   const agreement = text(d.agreementFilePath) || text(loan.agreement_file_path);
   if (policy.agreementRequired && !agreement) return fail('AGREEMENT_REQUIRED', 'attach the scanned signed agreement before disbursement');
 
-  const first = firstEmiMonth({ disbursedOn: d.disbursedOn, closed: closedMonths(db, loan.borrower_type), requested: d.firstEmiMonth || null });
+  const first = firstEmiMonth({ disbursedOn: d.disbursedOn, closed: closedMonths(db, loan.borrower_type), requested: d.firstEmiMonth || null, payroll: loan.borrower_type });
   if (!first.ok) return first;
   const sched = buildSchedule({ principalPaise, tenure: loan.tenure_months, firstMonth: first.month });
   if (!sched.ok) return sched;
