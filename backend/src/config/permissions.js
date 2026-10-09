@@ -19,9 +19,9 @@ const PERMISSIONS = {
             'extra-duty-grants', 'payable-ot', 'payslips', 'notifications', 'alerts',
             'employees', 'compliance', 'salary-input', 'miss-punch',
             'held-salaries-register', 'late-coming', 'daily-wage', 'early-exit', 'dept-analytics', 'employee-profile', 'comp-off',
-            'sales-tada-approve', 'sales-tada-payable-export'],
+            'sales-tada-approve', 'sales-tada-payable-export', 'loans'],
   supervisor: ['dashboard', 'supervisor-dashboard', 'notifications', 'daily-mis'],
-  viewer: ['dashboard', 'reports', 'notifications', 'daily-mis'],
+  viewer: ['dashboard', 'reports', 'notifications', 'daily-mis', 'loans'],
   employee: ['portal']
 };
 

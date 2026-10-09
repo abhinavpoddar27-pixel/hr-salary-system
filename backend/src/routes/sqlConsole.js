@@ -324,8 +324,8 @@ const SNIPPETS = [
   {
     group: 'Finance & Reviews',
     name: 'Active loans with pending recovery',
-    description: 'Outstanding principal per active loan',
-    sql: "SELECT l.employee_code, l.principal_amount, l.emi_amount, l.disbursed_at,\n       (l.principal_amount - COALESCE(SUM(lr.amount_recovered), 0)) as outstanding\nFROM loans l\nLEFT JOIN loan_repayments lr ON lr.loan_id = l.id\nWHERE l.status = 'active'\nGROUP BY l.id\nHAVING outstanding > 0\nORDER BY outstanding DESC;"
+    description: 'Outstanding balance per live loan (active or recover at exit)',
+    sql: "SELECT id, borrower_type, employee_code, company, loan_type, principal_amount,\n       disbursed_amount, emi_amount, disbursed_on, remaining_balance, status\nFROM loans\nWHERE status IN ('active', 'recover_at_exit') AND remaining_balance > 0\nORDER BY remaining_balance DESC;"
   },
   {
     group: 'Finance & Reviews',
