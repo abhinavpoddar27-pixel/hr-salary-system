@@ -138,6 +138,15 @@ describe('T9a — plant master writers keep the uploaded flags', () => {
     expect(latest.gross_salary).toBe(15500);
   });
 
+  test('integrity-fix syncs gross only: a pt mismatch is reported, not written', async () => {
+    const e = uploaded('W113');
+    db.prepare('UPDATE employees SET pt_applicable = 0 WHERE id = ?').run(e.id);
+    const before = S.plantRows(db, e).map((r) => r.pt_applicable);
+    const fix = await api.request('POST', '/api/employees/admin/integrity-fix', { as: 'boss', body: {} });
+    expect(fix.body.actions.find((x) => x.code === 'W113')).toMatchObject({ action: 'skipped' });
+    expect(S.plantRows(db, e).map((r) => r.pt_applicable)).toEqual(before);
+  });
+
   test('integrity-fix: a flag-only mismatch is skipped and reported', async () => {
     const e = uploaded('W110');
     db.prepare('UPDATE employees SET esi_applicable = 0 WHERE id = ?').run(e.id);

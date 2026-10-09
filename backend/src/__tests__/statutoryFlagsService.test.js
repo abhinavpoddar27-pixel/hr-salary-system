@@ -506,3 +506,29 @@ describe('T10a — undo workbook', () => {
     expect(SF.buildUndoWorkbook(db, 99)).toMatchObject({ ok: false, status: 404 });
   });
 });
+
+describe('preview totals predict apply exactly (owner checks V10 against them)', () => {
+  test('mixed plant file: planned freeze/effective/at-E/later counts = applied counts', () => {
+    const db = S.newDb();
+    const a = S.plant(db); S.plantStructure(db, a, '2025-01-01');                               // freeze + effective
+    const b = S.plant(db); S.plantStructure(db, b, '1946-06-01');                               // effective only
+    const c = S.plant(db); S.plantStructure(db, c, '2025-01-01'); S.plantStructure(db, c, '2026-09-01'); // freeze + at-E
+    const d = S.plant(db); S.plantStructure(db, d, '2026-04-22'); S.plantStructure(db, d, '2026-10-15'); // freeze + effective + later
+    const e = S.plant(db, { esi: 1, lwf: 1 }); S.plantStructure(db, e, '2025-01-01', { esi: 1, lwf: 1 }); // unchanged
+    const f = S.plant(db); S.plantStructure(db, f, '2025-01-01', { esi: 1, lwf: 1 });           // master-only
+    const buf = S.plantFile(...[a, b, c, d, e, f].map((x) => S.prow(x.code, 1, 0, 1)));
+    const parsed = SF.parseFlagFile(buf, 'plant');
+    const plan = SF.planFlagChanges(db, { scope: 'plant', effectiveMonth: '2026-09', rows: parsed.rows });
+    expect(plan.totals).toMatchObject({ changed: 5, unchanged: 1, freezeRows: 3, effectiveRows: 3, rowsUpdatedAtE: 1, laterRowsUpdated: 1 });
+    const r = S.applyFile(db, 'plant', buf);
+    expect(r.summary.counts).toMatchObject({ employees: 5, freezeRows: 3, effectiveRows: 3, rowsUpdatedAtE: 1, laterRowsUpdated: 1 });
+  });
+
+  test('sales company matching ignores case / spacing', () => {
+    const db = S.newDb();
+    const a = S.salesEmp(db, { code: 'Z900' }); S.salesStructure(db, a, '2025-01');
+    const rows = SF.parseFlagFile(S.salesFile(S.srow('Z900', `  ${S.COMPANY.toUpperCase()} `, 1, 0, 1)), 'sales').rows;
+    const p = SF.planFlagChanges(db, { scope: 'sales', effectiveMonth: '2026-09', rows });
+    expect(p.rows[0]).toMatchObject({ matched: true, error: null, company: S.COMPANY });
+  });
+});

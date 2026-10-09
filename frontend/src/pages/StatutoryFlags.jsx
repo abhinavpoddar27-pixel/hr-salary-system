@@ -257,6 +257,10 @@ export default function StatutoryFlags() {
               {' '}{t.unchanged} unchanged, {t.errors} rows skipped with an error.
               After the apply: ESI {t.after.esi} · PF {t.after.pf} · LWF {t.after.lwf}.
             </div>
+            <div className="text-xs text-slate-600" data-testid="planned-rows">
+              Structure rows: {t.freezeRows} freeze + {t.effectiveRows} effective inserted,
+              {' '}{t.rowsUpdatedAtE} updated at {preview.keys?.E}, {t.laterRowsUpdated} later rows updated.
+            </div>
             <div className="text-xs text-slate-500">
               Earlier months are frozen and do not change. The undo file restores the flags; it cannot remove numbers added here
               (blank means unchanged) or the extra structure rows (they get the original flags back).

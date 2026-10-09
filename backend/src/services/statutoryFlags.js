@@ -176,7 +176,9 @@ function matchEmployee(db, scope, row) {
     return e ? { emp: e } : { error: 'Unmatched code — no plant employee with this code' };
   }
   const all = db.prepare('SELECT * FROM sales_employees WHERE code = ?').all(row.code);
-  const exact = all.filter((e) => e.company === row.company);
+  // case / spacing-insensitive company compare (UNIQUE(code, company) makes this unambiguous)
+  const normCo = (c) => String(c || '').trim().replace(/\s+/g, ' ').toLowerCase();
+  const exact = all.filter((e) => normCo(e.company) === normCo(row.company));
   if (exact.length === 1) return { emp: exact[0] };
   if (exact.length > 1) return { error: `Ambiguous — ${exact.length} sales employees with code ${row.code} in ${row.company}` };
   if (all.length === 0) return { error: 'Unmatched code — no sales employee with this code' };
@@ -263,6 +265,15 @@ function planFlagChanges(db, { scope, effectiveMonth, rows }) {
     const atOrAfterE = all.filter((r) => r.effective_from >= E);
     p.flagChanged = !sameFlags(p.before, p.after) || !sameFlags(p.beforeE, p.after)
       || atOrAfterE.some((r) => !sameFlags(flagsOf(r), p.after));
+    // What apply will write for this employee (same rules as applyFlagChanges) —
+    // the preview totals the owner checks against VERIFY.sql V10.
+    const structNeedsChange = p.flagChanged && (!sameFlags(p.beforeE, p.after) || atOrAfterE.some((r) => !sameFlags(flagsOf(r), p.after)));
+    p.planned = {
+      freezeRow: structNeedsChange && !all.some((r) => r.effective_from <= S) ? 1 : 0,
+      effectiveRow: structNeedsChange && !all.some((r) => r.effective_from === E) ? 1 : 0,
+      rowsUpdatedAtE: structNeedsChange ? all.filter((r) => r.effective_from === E && !sameFlags(flagsOf(r), p.after)).length : 0,
+      laterRowsUpdated: structNeedsChange ? all.filter((r) => r.effective_from > E && !sameFlags(flagsOf(r), p.after)).length : 0,
+    };
 
     // Numbers: blank = leave unchanged; malformed = warning, not written.
     for (const [col, re, label] of [['esi_number', ESI_NUMBER_RE, 'ESI number (10 digits)'], ['uan', UAN_RE, 'UAN (12 digits)']]) {
@@ -293,7 +304,8 @@ function planFlagChanges(db, { scope, effectiveMonth, rows }) {
 
 function emptyTotals() {
   return { rows: 0, matched: 0, unmatched: 0, errors: 0, changed: 0, unchanged: 0, flagChanged: 0, numbersAdded: 0,
-    after: { esi: 0, pf: 0, lwf: 0 }, warnings: 0 };
+    after: { esi: 0, pf: 0, lwf: 0 }, warnings: 0,
+    freezeRows: 0, effectiveRows: 0, rowsUpdatedAtE: 0, laterRowsUpdated: 0 };
 }
 
 function totalsOf(rows) {
@@ -308,6 +320,10 @@ function totalsOf(rows) {
       if (r.flagChanged) t.flagChanged++;
       t.numbersAdded += (r.numbers.esi_number ? 1 : 0) + (r.numbers.uan ? 1 : 0);
       for (const k of FLAG_KEYS) t.after[k] += r.after[k];
+      if (r.planned) {
+        t.freezeRows += r.planned.freezeRow; t.effectiveRows += r.planned.effectiveRow;
+        t.rowsUpdatedAtE += r.planned.rowsUpdatedAtE; t.laterRowsUpdated += r.planned.laterRowsUpdated;
+      }
     }
     t.warnings += r.warnings.length;
   }

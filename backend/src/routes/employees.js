@@ -1176,7 +1176,7 @@ router.post('/admin/integrity-fix', requireAdmin, (req, res) => {
       )
   `).all();
 
-  // Statutory flags PR-1 (R10): only gross (and pt) is repaired. A PF/ESI
+  // Statutory flags PR-1 (R10): only GROSS is repaired. A PF/ESI (or pt)
   // mismatch is reported but never written — flags change only through the
   // statutory upload. A row whose only difference is a flag is left alone.
   const needsGrossFix = (row) => !row.ss_id || Math.abs((row.employee_gross || 0) - (row.struct_gross || 0)) > 1;
@@ -1186,19 +1186,18 @@ router.post('/admin/integrity-fix', requireAdmin, (req, res) => {
   if (!dryRun) {
     const txn = db.transaction(() => {
       for (const row of mismatches) {
-        if (!needsGrossFix(row) && (row.e_pt ?? 1) === (row.ss_pt ?? 1)) {
+        if (!needsGrossFix(row)) {
           actions.push({
             code: row.code, name: row.name,
             before: { gross: row.struct_gross, pf: row.ss_pf, esi: row.ss_esi, pt: row.ss_pt },
             after: { gross: row.struct_gross, pf: row.ss_pf, esi: row.ss_esi, pt: row.ss_pt },
-            action: 'skipped', reason: 'flag mismatch reported only — change flags via Statutory Flags',
+            action: 'skipped', reason: 'flag / pt mismatch reported only — change flags via Statutory Flags',
             flagMismatch: true,
           });
           continue;
         }
         const result = syncSalaryStructureFromEmployee(db, row.id, {
-          gross_salary: row.employee_gross,
-          pt_applicable: row.e_pt
+          gross_salary: row.employee_gross
         });
         const afterRow = db.prepare('SELECT gross_salary, pf_applicable, esi_applicable, pt_applicable FROM salary_structures WHERE employee_id = ? ORDER BY effective_from DESC LIMIT 1').get(row.id) || {};
         actions.push({
@@ -1219,8 +1218,8 @@ router.post('/admin/integrity-fix', requireAdmin, (req, res) => {
         code: row.code,
         name: row.name,
         before: { gross: row.struct_gross, pf: row.ss_pf, esi: row.ss_esi, pt: row.ss_pt },
-        after: { gross: needsGrossFix(row) ? row.employee_gross : row.struct_gross, pf: row.ss_pf, esi: row.ss_esi, pt: row.e_pt },
-        action: !needsGrossFix(row) && (row.e_pt ?? 1) === (row.ss_pt ?? 1) ? 'skipped' : (row.ss_id ? 'would-update' : 'would-create'),
+        after: { gross: needsGrossFix(row) ? row.employee_gross : row.struct_gross, pf: row.ss_pf, esi: row.ss_esi, pt: row.ss_pt },
+        action: !needsGrossFix(row) ? 'skipped' : (row.ss_id ? 'would-update' : 'would-create'),
         flagMismatch: flagMismatch(row),
       });
     }
