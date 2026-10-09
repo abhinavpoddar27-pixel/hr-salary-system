@@ -376,31 +376,48 @@ function recomputeSalary(db, {
     WHERE employee_code = ? AND month = ? AND year = ?
   `);
 
+  // One SAVEPOINT per employee (SPEC K25). better-sqlite3 runs a transaction
+  // function called inside another transaction as a savepoint: if anything in
+  // here throws, that employee's writes (salary row, advance / late-coming /
+  // early-exit applied flags, auto-created structure) roll back together and
+  // the rest of the month carries on. Before this, a throw after the salary
+  // INSERT left a half-written employee behind.
+  const perEmployee = db.transaction((emp) => {
+    const comp = computeEmployeeSalary(db, emp, month, year, company || '', requestId);
+    if (comp.success) {
+      saveSalaryComputation(db, comp);
+      clearStale.run(emp.code, month, year);
+    } else if (comp.excluded) {
+      // No salary to refresh, so the row is not waiting on anything — clear
+      // the marker, otherwise the Stage 7 banner could never reach zero.
+      clearStale.run(emp.code, month, year);
+    } else if (comp.silentSkip) {
+      // Zero attendance — not an error, just not payable. Same reasoning.
+      clearStale.run(emp.code, month, year);
+    }
+    // else: a real failure — this employee genuinely was not recomputed, so
+    // the marker stays and the banner keeps saying so.
+    return comp;
+  });
+
   const txn = db.transaction(() => {
     for (const emp of employees) {
       try {
-        const comp = computeEmployeeSalary(db, emp, month, year, company || '', requestId);
+        const comp = perEmployee(emp);
         if (comp.success) {
-          saveSalaryComputation(db, comp);
-          clearStale.run(emp.code, month, year);
           results.push(comp);
           if (comp.salaryHeld) held.push({ code: emp.code, name: emp.name, reason: comp.holdReason });
         } else if (comp.excluded) {
-          // No salary to refresh, so the row is not waiting on anything — clear
-          // the marker, otherwise the Stage 7 banner could never reach zero.
-          clearStale.run(emp.code, month, year);
           excluded.push({ code: comp.employeeCode, name: emp.name, reason: comp.reason });
         } else if (comp.silentSkip) {
-          // Zero attendance — not an error, just not payable. Same reasoning.
-          clearStale.run(emp.code, month, year);
+          // not payable this month — nothing to report
         } else {
-          // A real failure: this employee genuinely was not recomputed, so the
-          // marker stays and the banner keeps saying so.
           errors.push({ employeeCode: emp.code, error: comp.error });
         }
       } catch (perEmpErr) {
         // Per-employee try/catch so one bad row can't roll back the batch and
-        // leave Stage 7 stale.
+        // leave Stage 7 stale. The savepoint above has already undone this
+        // employee's partial writes.
         console.error(`[compute-salary] employee ${emp.code} failed: ${perEmpErr.message}`);
         if (perEmpErr.stack) console.error(perEmpErr.stack.split('\n').slice(0, 5).join('\n'));
         errors.push({ employeeCode: emp.code, error: perEmpErr.message });
