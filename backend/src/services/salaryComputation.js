@@ -763,6 +763,29 @@ function computeEmployeeSalary(db, employee, month, year, company, requestId = '
     } catch {}
   }
 
+  // ─── Finance hold release survives recompute (Oct 2026) ───
+  // salary_hold_releases is finance's durable decision. salary_computations is
+  // rebuilt on every Stage 7 run and deleted outright on reimport, so a hold
+  // re-derived from the rules above must yield to a recorded release —
+  // otherwise the released salary silently drops out of the bank file.
+  // Keyed on code+month+year (same key as the release route), not company:
+  // all-company runs pass '' here, before normalizeCompany() runs in save.
+  if (salaryHeld) {
+    let release = null;
+    try {
+      release = db.prepare(`
+        SELECT released_by, released_at FROM salary_hold_releases
+        WHERE employee_code = ? AND month = ? AND year = ?
+        ORDER BY id DESC LIMIT 1
+      `).get(employee.code, month, year);
+    } catch { /* table absent on a very old DB — the hold stands */ }
+    if (release) {
+      salaryHeld = 0;
+      holdReason = '';
+      if (!financeRemark) financeRemark = `Hold released by ${release.released_by} on ${release.released_at}`;
+    }
+  }
+
   if (salaryHeld) {
     console.warn(`${RID} ${employee.code}: SALARY HELD — ${holdReason}`);
   }
