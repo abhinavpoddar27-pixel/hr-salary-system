@@ -75,6 +75,8 @@ const POLICY_DEFAULTS = {
   loan_agreement_required: 'true',
   loan_interest_rate: '0',
   loan_perquisite_threshold: '20000',
+  // Loans PR-3 gate (coordinator ruling A): no disbursement until PR-5/PR-6.
+  loans_disbursement_enabled: '0',
 };
 
 let tmpDir;
@@ -344,7 +346,7 @@ describe('constraints', () => {
 
 // ── 9. Policy defaults ─────────────────────────────────────────────────────
 describe('policy defaults', () => {
-  test('all 16 keys seeded with SPEC §4 values; an edited value survives a re-boot', () => {
+  test('all 16 keys + the PR-3 disbursement gate seeded with SPEC §4 values; an edited value survives a re-boot', () => {
     const db = openFile();
     boot(db);
     const rows = db.prepare("SELECT key, value FROM policy_config WHERE key LIKE 'loan%'").all();
@@ -387,38 +389,23 @@ describe('old readers against the new schema (nothing edited in them)', () => {
     expect(r.emi).toBe(0);
   });
 
-  test('loanService readers all run', () => {
-    const svc = require('../services/loanService');
-    expect(svc.getLoans(db, {}).length).toBe(1);                       // lists, does not crash
-    expect(svc.getLoanDetails(db, 1).repayments).toEqual([]);
-    const emp = svc.getEmployeeLoans(db, 'L001');
-    expect(emp[0].paidEmis).toBe(0);
-    expect(emp[0].totalRecovered).toBe(0);
-    expect(svc.getPendingDeductions(db, M, Y)).toEqual([]);
-    expect(svc.processMonthlyDeductions(db, M, Y)).toEqual([]);
-    const stats = svc.getLoanStats(db);
-    expect(stats.totalRecovered).toBe(0);
-    expect(stats.activeLoans).toBe(0);                                  // old 'Active' vocabulary
-  });
-
-  test('portal and Salary Explainer SQL run (employeePortal.js L122, ai.js L367–372)', () => {
-    expect(() => db.prepare("SELECT * FROM loans WHERE employee_code = ? AND status != 'Closed' ORDER BY created_at DESC").all('L001')).not.toThrow();
+  // Loans PR-3: loanService.js is deleted and routes/loans.js, the portal and the Salary
+  // Explainer read the new tables (their queries are covered over HTTP in loansApi.test.js).
+  test('portal and Salary Explainer SQL run on the new tables (employeePortal.js, ai.js — Loans PR-3)', () => {
+    expect(() => db.prepare(`SELECT id, loan_type, status FROM loans
+      WHERE employee_code = ? AND borrower_type = 'plant' AND status != 'rejected' ORDER BY requested_at DESC, id DESC`).all('L001')).not.toThrow();
     const ai = db.prepare(`
       SELECT l.*,
-        (SELECT SUM(emi_amount) FROM loan_repayments
-          WHERE loan_id = l.id AND month = ? AND year = ? AND deducted_from_salary = 1) AS emi_this_month
+        (SELECT SUM(amount) FROM loan_deductions
+          WHERE loan_id = l.id AND month = ? AND year = ? AND state IN ('provisional', 'posted')) AS emi_this_month
       FROM loans l
-      WHERE l.employee_code = ? AND l.status IN ('Active', 'active')
+      WHERE l.employee_code = ? AND l.borrower_type = 'plant' AND l.status IN ('active', 'recover_at_exit')
     `).all(M, Y, 'L001');
-    expect(ai.length).toBe(1);
-    expect(ai[0].emi_this_month).toBeNull();
+    expect(Array.isArray(ai)).toBe(true);
   });
 
-  test('the old create path fails without writing anything (raw error until Loans PR-3)', () => {
-    const svc = require('../services/loanService');
-    expect(() => svc.createLoan(db, { employeeCode: 'L001', loanType: 'Personal Loan', principalAmount: 5000, tenureMonths: 5 }))
-      .toThrow();
-    expect(db.prepare('SELECT COUNT(*) AS n FROM loans').get().n).toBe(1);
+  test('loanService.js is gone', () => {
+    expect(() => require('../services/loanService')).toThrow();
   });
 });
 

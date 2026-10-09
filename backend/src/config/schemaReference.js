@@ -78,10 +78,26 @@ salary_advances (mid-month advance per employee)
   eligible_amount REAL, approved_amount REAL, is_paid INTEGER,
   recovery_status TEXT, recovered_in_month INTEGER, recovered_in_year INTEGER
 
-loans (employee loans with EMI tracking)
-  employee_id INTEGER, employee_code TEXT, loan_type TEXT,
-  principal REAL, emi_amount REAL, total_emis INTEGER,
-  emis_remaining INTEGER, status TEXT
+loans (one row per employee loan; interest-free; docs/loans/SPEC.md)
+  id, borrower_type TEXT ('plant'/'sales'), employee_code TEXT, company TEXT,
+  loan_type TEXT, principal_amount REAL, tenure_months INTEGER, emi_amount REAL,
+  status TEXT ('requested','approved','rejected','active','recover_at_exit',
+               'completed','settled_at_exit','written_off'),
+  requested_by, requested_at, decided_by, decided_at, decision_reason,
+  disbursed_amount REAL, disbursed_on TEXT, disbursed_by, first_emi_month, first_emi_year,
+  exit_flag INTEGER, remaining_balance REAL, written_off_amount REAL
+
+loan_instalments (the schedule) loan_id, sequence, due_month, due_year, amount_due,
+  status ('scheduled','provisional','posted','paid_in_cash','deferred','cancelled'),
+  origin, posted_amount
+loan_deductions (Stage 7 loan deduction per loan+month+payroll) loan_id, instalment_id,
+  payroll ('plant'/'sales'), month, year, company, employee_code, amount,
+  state ('provisional','posted','reversed')
+loan_receipts (numbered cash receipts) receipt_no, loan_id, amount, mode, receipt_date
+loan_closes (one monthly loan close per month+year+payroll)
+loan_events (append-only history) loan_id, event, from_state, to_state, amount, actor, reason
+loan_requests (defer/restructure/write-off awaiting the admin) loan_id, kind, status, requested_by
+  NOTE: loan_repayments is a legacy VIEW that always returns 0 rows — do not query it.
 
 holidays (national holiday master)
   date TEXT, name TEXT, type TEXT, applicable_to TEXT

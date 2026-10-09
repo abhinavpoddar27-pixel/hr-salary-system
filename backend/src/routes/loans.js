@@ -1,328 +1,556 @@
+/**
+ * Loans API (Loans PR-3) — rebuilt on the engine in services/loans/.
+ * Spec: docs/loans/SPEC.md §7 (roles), §5.2; rulings in docs/loans/PROGRESS.md.
+ *
+ * Mounted in server.js as `app.use('/api/loans', requireAuth, …)`. Every route
+ * below has its own role guard, and the engine re-checks the actor
+ * (checkActor) — the server enforces every cell of the §7 matrix:
+ *
+ *   HR / finance raise loans and change requests. The admin approves every
+ *   loan, defer, restructure and write-off and never their own — and, with no
+ *   backup approver, the admin cannot RAISE either (ADMIN_CANNOT_RAISE,
+ *   coordinator ruling B). Finance (or admin) records disbursements and
+ *   receipts. Viewers read. Supervisors and employees get nothing here.
+ *
+ * Disbursement is gated by policy_config.loans_disbursement_enabled ('0' until
+ * Stage 7 + the loan close can recover the money — ruling A); PUT /policy can
+ * never change that key.
+ *
+ * The engine is given {username, role: normalizeRole(...)}. normalizeRole can
+ * never return 'system', so a user cannot act as the engine's automatic actor.
+ */
 const express = require('express');
 const router = express.Router();
-const { getDb, logAudit } = require('../database/db');
-const {
-  LOAN_TYPES, createLoan, approveLoan, getLoans, getLoanDetails,
-  getEmployeeLoans, getPendingDeductions, getLoanStats
-} = require('../services/loanService');
+const { getDb } = require('../database/db');
+const { normalizeRole } = require('./auth');
+const L = require('../services/loans');
+const { toPaise, toRupees } = require('../services/loans/money');
+const { todayIst } = require('../services/loans/months');
 
-/**
- * GET /api/loans
- * List all loans with optional filters
- */
-router.get('/', (req, res) => {
-  const db = getDb();
-  const { status, employeeCode } = req.query;
-  const loans = getLoans(db, { status, employeeCode });
-  const stats = getLoanStats(db);
-  res.json({ success: true, data: loans, stats });
-});
+const READ_ROLES = ['admin', 'hr', 'finance', 'viewer'];
+const RAISE_ROLES = ['hr', 'finance'];
+const DECIDE_ROLES = ['admin'];
+const PAY_ROLES = ['finance', 'admin'];
 
-/**
- * GET /api/loans/types
- * Get available loan types
- */
-router.get('/types', (req, res) => {
-  res.json({ success: true, data: LOAN_TYPES });
-});
+const ADMIN_CANNOT_RAISE = { code: 'ADMIN_CANNOT_RAISE', error: 'HR raises loans; admin approves' };
 
-/**
- * GET /api/loans/stats
- * Get loan summary statistics
- */
-router.get('/stats', (req, res) => {
-  const db = getDb();
-  const stats = getLoanStats(db);
-  res.json({ success: true, data: stats });
-});
+// ── helpers ──────────────────────────────────────────────────────────────────
 
-/**
- * GET /api/loans/deductions
- * Get pending deductions for a month
- */
-router.get('/deductions', (req, res) => {
-  const db = getDb();
-  const { month, year } = req.query;
-  if (!month || !year) return res.status(400).json({ success: false, error: 'month and year required' });
-  const deductions = getPendingDeductions(db, parseInt(month), parseInt(year));
-  const totalAmount = deductions.reduce((s, d) => s + d.emi_amount, 0);
-  res.json({ success: true, data: deductions, totalAmount: Math.round(totalAmount * 100) / 100 });
-});
+const STATUS_403 = new Set(['ACTOR_REQUIRED', 'ROLE_NOT_ALLOWED', 'SELF_APPROVAL', 'SELF_DISBURSEMENT',
+  'NOT_REQUESTER', 'ADMIN_CANNOT_RAISE', 'COMPANY_NOT_ALLOWED']);
+const STATUS_409 = new Set(['CONCURRENT_CHANGE', 'REQUEST_ALREADY_PENDING', 'REQUEST_NOT_PENDING', 'DISBURSEMENT_DISABLED']);
 
-/**
- * POST /api/loans
- * Create a new loan
- */
-router.post('/', (req, res) => {
+function httpStatus(code) {
+  if (STATUS_403.has(code)) return 403;
+  if (STATUS_409.has(code)) return 409;
+  if (/_NOT_FOUND$/.test(code)) return 404;
+  return 400;
+}
+
+function refuse(res, r) {
+  const body = { success: false, code: r.code, error: r.message || r.error || r.code };
+  if (r.refusals) body.refusals = r.refusals;
+  if (r.warnings) body.warnings = r.warnings;
+  return res.status(httpStatus(r.code)).json(body);
+}
+
+function reply(res, r, status = 200) {
+  if (!r || r.ok === false) return refuse(res, r || { code: 'UNKNOWN', message: 'no result' });
+  const { ok: _ok, ...data } = r;
+  return res.status(status).json({ success: true, data });
+}
+
+/** Wraps a handler: unexpected exceptions → 500 with a generic message (no SQL text). */
+const handle = (fn) => (req, res) => {
   try {
-    const db = getDb();
-    const loan = createLoan(db, req.body);
-    res.json({ success: true, data: loan, message: 'Loan created successfully' });
-  } catch (err) {
-    res.status(400).json({ success: false, error: err.message });
+    return fn(req, res);
+  } catch (e) {
+    console.error(`[loans] ${req.method} ${req.originalUrl} failed:`, e.message);
+    return res.status(500).json({ success: false, code: 'INTERNAL_ERROR', error: 'the loan request could not be completed' });
   }
-});
+};
 
-/**
- * GET /api/loans/monthly-recovery/:month/:year
- * All installments due for a given month/year with employee details
- */
-router.get('/monthly-recovery/:month/:year', (req, res) => {
-  const db = getDb();
-  const month = parseInt(req.params.month);
-  const year = parseInt(req.params.year);
-
-  const repayments = db.prepare(`
-    SELECT lr.*, l.loan_type, l.principal_amount, l.emi_amount as loan_emi,
-           l.status as loan_status, e.name as employee_name, e.department, e.designation
-    FROM loan_repayments lr
-    JOIN loans l ON lr.loan_id = l.id
-    LEFT JOIN employees e ON l.employee_code = e.code
-    WHERE lr.month = ? AND lr.year = ? AND lr.status = 'Pending'
-    AND l.status = 'Active'
-    ORDER BY e.department, e.name
-  `).all(month, year);
-
-  const totalAmount = repayments.reduce((s, r) => s + r.emi_amount, 0);
-  res.json({ success: true, data: repayments, totalAmount: Math.round(totalAmount * 100) / 100 });
-});
-
-/**
- * GET /api/loans/:id
- * Get loan details with repayment schedule
- */
-router.get('/:id', (req, res) => {
-  const db = getDb();
-  const loan = getLoanDetails(db, parseInt(req.params.id));
-  if (!loan) return res.status(404).json({ success: false, error: 'Loan not found' });
-  res.json({ success: true, data: loan });
-});
-
-/**
- * PUT /api/loans/:id/approve
- * Approve a loan and generate repayment schedule
- */
-router.put('/:id/approve', (req, res) => {
-  try {
-    const db = getDb();
-    const { startMonth, startYear } = req.body;
-    const approvedBy = req.user?.username || 'admin';
-    const result = approveLoan(db, parseInt(req.params.id), approvedBy, startMonth, startYear);
-    res.json({ success: true, data: result, message: 'Loan approved and schedule generated' });
-  } catch (err) {
-    res.status(400).json({ success: false, error: err.message });
-  }
-});
-
-/**
- * PUT /api/loans/:id/reject
- * Reject a loan
- */
-router.put('/:id/reject', (req, res) => {
-  const db = getDb();
-  const { reason } = req.body;
-  db.prepare(`
-    UPDATE loans SET status = 'Rejected', remarks = COALESCE(remarks, '') || ' | Rejected: ' || ?, updated_at = datetime('now')
-    WHERE id = ? AND status = 'Pending'
-  `).run(reason || 'No reason', req.params.id);
-  res.json({ success: true, message: 'Loan rejected' });
-});
-
-/**
- * PUT /api/loans/:id/close
- * Close a loan (early closure or write-off)
- */
-router.put('/:id/close', (req, res) => {
-  const db = getDb();
-  const { reason } = req.body;
-
-  const txn = db.transaction(() => {
-    db.prepare(`
-      UPDATE loans SET status = 'Closed', remaining_balance = 0,
-        remarks = COALESCE(remarks, '') || ' | Closed: ' || ?, updated_at = datetime('now')
-      WHERE id = ?
-    `).run(reason || 'Manual closure', req.params.id);
-
-    // Cancel remaining pending repayments
-    db.prepare(`
-      UPDATE loan_repayments SET status = 'Cancelled'
-      WHERE loan_id = ? AND status = 'Pending'
-    `).run(req.params.id);
-  });
-  txn();
-
-  res.json({ success: true, message: 'Loan closed' });
-});
-
-/**
- * GET /api/loans/employee/:code
- * Get all loans for an employee
- */
-router.get('/employee/:code', (req, res) => {
-  const db = getDb();
-  const loans = getEmployeeLoans(db, req.params.code);
-  res.json({ success: true, data: loans });
-});
-
-/**
- * POST /api/loans/process-deductions
- * Batch process monthly deductions (marks repayments as deducted)
- */
-router.post('/process-deductions', (req, res) => {
-  const db = getDb();
-  const { month, year } = req.body;
-  if (!month || !year) return res.status(400).json({ success: false, error: 'month and year required' });
-
-  const pending = getPendingDeductions(db, parseInt(month), parseInt(year));
-
-  const txn = db.transaction(() => {
-    for (const rep of pending) {
-      // Mark repayment as deducted
-      db.prepare(`
-        UPDATE loan_repayments SET deducted_from_salary = 1, deduction_date = datetime('now'), status = 'Deducted'
-        WHERE id = ?
-      `).run(rep.id);
-
-      // Update loan totals
-      db.prepare(`
-        UPDATE loans SET
-          total_recovered = total_recovered + ?,
-          remaining_balance = remaining_balance - ?,
-          updated_at = datetime('now')
-        WHERE id = ?
-      `).run(rep.emi_amount, rep.principal_component, rep.loan_id);
-
-      // Check if loan is fully repaid
-      const remaining = db.prepare(`
-        SELECT COUNT(*) as count FROM loan_repayments
-        WHERE loan_id = ? AND status = 'Pending'
-      `).get(rep.loan_id);
-
-      if (remaining.count === 0) {
-        db.prepare(`
-          UPDATE loans SET status = 'Completed', remaining_balance = 0, updated_at = datetime('now')
-          WHERE id = ?
-        `).run(rep.loan_id);
-      }
+/** Role guard. Sets req.actor for the engine. */
+function allow(roles, { adminRaise = false } = {}) {
+  return (req, res, next) => {
+    const role = normalizeRole(req.user && req.user.role);
+    const username = String((req.user && req.user.username) || '').trim();
+    if (adminRaise && role === 'admin') return res.status(403).json({ success: false, ...ADMIN_CANNOT_RAISE });
+    if (!username || !roles.includes(role)) {
+      return res.status(403).json({ success: false, code: 'ROLE_NOT_ALLOWED', error: `${role} cannot do this` });
     }
-  });
-  txn();
+    req.actor = { username, role };
+    return next();
+  };
+}
 
+const allowedCompanies = (req) => (req.user && Array.isArray(req.user.allowedCompanies) && req.user.allowedCompanies.length
+  ? req.user.allowedCompanies : null);
+
+function companyAllowed(req, company) {
+  const ac = allowedCompanies(req);
+  return !ac || ac.includes(company);
+}
+
+/** SQL fragment restricting loans (alias l) to the user's companies. */
+function companyClause(req, alias = 'l') {
+  const ac = allowedCompanies(req);
+  if (!ac) return { sql: '', args: [] };
+  return { sql: ` AND ${alias}.company IN (${ac.map(() => '?').join(',')})`, args: ac };
+}
+
+const posInt = (v) => {
+  const n = Number(v);
+  return Number.isInteger(n) && n > 0 ? n : null;
+};
+
+function text(v) { return String(v == null ? '' : v).trim(); }
+
+const notAllowedCompany = { code: 'COMPANY_NOT_ALLOWED', message: 'you do not have access to this company' };
+
+/** Loads loan :id, 404 / 403 handled. Returns the row, or null when a response was sent. */
+function loadLoan(req, res, db) {
+  const id = posInt(req.params.id);
+  const loan = id && L.getLoan(db, id);
+  if (!loan) { refuse(res, { code: 'LOAN_NOT_FOUND', message: `loan ${req.params.id} not found` }); return null; }
+  if (!companyAllowed(req, loan.company)) { refuse(res, notAllowedCompany); return null; }
+  return loan;
+}
+
+/** Signed-agreement reference (ruling Q4): free text, 3–200 characters. No upload in PR-3. */
+function checkAgreementRef(v) {
+  const s = text(v);
+  if (!s) return { ok: false, code: 'AGREEMENT_REQUIRED', message: 'give the signed agreement reference before disbursement' };
+  if (s.length < 3 || s.length > 200) return { ok: false, code: 'AGREEMENT_REF_INVALID', message: 'the agreement reference must be 3–200 characters' };
+  return { ok: true, value: s };
+}
+
+/**
+ * Best-effort notification after the change is committed; never fails the route.
+ * Written directly (not monthEndScheduler.createNotification): that helper
+ * de-duplicates on type + message per day across ALL roles, so the same
+ * message to finance and to hr would reach only the first.
+ */
+function notify(db, roleTarget, type, message, link = '/loans') {
+  try {
+    db.prepare('INSERT INTO notifications (role_target, type, title, message, link, action_url) VALUES (?, ?, ?, ?, ?, ?)')
+      .run(roleTarget, type, message, message, link, link);
+  } catch (e) {
+    console.warn('[loans] notification failed:', e.message);
+  }
+}
+
+const rs = (n) => `₹${Number(n || 0).toLocaleString('en-IN')}`;
+
+function borrowerName(db, loan) {
+  try {
+    const r = loan.borrower_type === 'sales'
+      ? db.prepare('SELECT name FROM sales_employees WHERE code = ? AND company = ?').get(loan.employee_code, loan.company)
+      : db.prepare('SELECT name, department FROM employees WHERE code = ?').get(loan.employee_code);
+    return r || {};
+  } catch (e) {
+    return {};
+  }
+}
+
+const LIST_SQL = `
+  SELECT l.*,
+         CASE WHEN l.borrower_type = 'sales'
+              THEN (SELECT s.name FROM sales_employees s WHERE s.code = l.employee_code AND s.company = l.company)
+              ELSE (SELECT e.name FROM employees e WHERE e.code = l.employee_code) END AS employee_name,
+         CASE WHEN l.borrower_type = 'plant'
+              THEN (SELECT e.department FROM employees e WHERE e.code = l.employee_code) END AS department,
+         CAST(julianday('now') - julianday(l.requested_at) AS INTEGER) AS waiting_days,
+         (SELECT r.kind FROM loan_requests r WHERE r.loan_id = l.id AND r.status = 'pending') AS pending_request
+    FROM loans l
+   WHERE 1 = 1`;
+
+function istMonth() {
+  const [y, m] = todayIst().split('-').map(Number);
+  return { month: m, year: y };
+}
+
+const daysSince = (ts) => Math.floor((Date.now() - new Date(`${String(ts).replace(' ', 'T')}Z`).getTime()) / 86400000);
+
+// ── retired endpoints (410 Gone, like P3). Declared before /:id. ─────────────
+
+function retired(replacement) {
+  return (req, res) => res.status(410).json({
+    success: false,
+    code: 'ENDPOINT_RETIRED',
+    error: `This endpoint has been retired (Loans PR-3). ${replacement}`,
+  });
+}
+router.all('/process-deductions', retired('Loan EMIs are deducted by Stage 7 and posted at the monthly loan close.'));
+router.all('/deductions', retired('Use GET /api/loans/due?month=&year=.'));
+router.all('/monthly-recovery/:month/:year', retired('Use GET /api/loans/due?month=&year=.'));
+router.all('/:id/recover', retired('Record a numbered cash receipt: POST /api/loans/:id/receipts.'));
+router.all('/:id/skip', retired('Raise a defer request: POST /api/loans/:id/requests with kind "defer".'));
+router.all('/:id/close', retired('Raise a write-off request: POST /api/loans/:id/requests with kind "write_off".'));
+
+// ── reads ────────────────────────────────────────────────────────────────────
+
+router.get('/', allow(READ_ROLES), handle((req, res) => {
+  const db = getDb();
+  const where = [];
+  const args = [];
+  for (const [param, col] of [['status', 'status'], ['company', 'company'], ['employeeCode', 'employee_code'], ['borrowerType', 'borrower_type']]) {
+    if (text(req.query[param])) { where.push(` AND l.${col} = ?`); args.push(text(req.query[param])); }
+  }
+  const cc = companyClause(req);
+  const rows = db.prepare(`${LIST_SQL}${where.join('')}${cc.sql} ORDER BY l.requested_at DESC, l.id DESC`).all(...args, ...cc.args);
+  res.json({ success: true, data: rows });
+}));
+
+router.get('/stats', allow(READ_ROLES), handle((req, res) => {
+  const db = getDb();
+  const cc = companyClause(req);
+  const companyFilter = text(req.query.company) ? { sql: ' AND l.company = ?', args: [text(req.query.company)] } : { sql: '', args: [] };
+  const m = posInt(req.query.month) && posInt(req.query.year) ? { month: posInt(req.query.month), year: posInt(req.query.year) } : istMonth();
+  const scope = `${companyFilter.sql}${cc.sql}`;
+  const scopeArgs = [...companyFilter.args, ...cc.args];
+  const byStatus = Object.fromEntries(db.prepare(`SELECT l.status, COUNT(*) AS n FROM loans l WHERE 1 = 1${scope} GROUP BY l.status`)
+    .all(...scopeArgs).map((r) => [r.status, r.n]));
+  const outstanding = db.prepare(`SELECT COALESCE(SUM(l.remaining_balance), 0) AS v FROM loans l WHERE l.status IN ('active','recover_at_exit')${scope}`).get(...scopeArgs).v;
+  const inst = (sqlWhere, extra = []) => db.prepare(`
+    SELECT COUNT(*) AS n, COALESCE(SUM(i.amount_due), 0) AS amount
+      FROM loan_instalments i JOIN loans l ON l.id = i.loan_id
+     WHERE l.status IN ('active','recover_at_exit') AND ${sqlWhere}${scope}`).get(...extra, ...scopeArgs);
+  const due = inst("i.due_month = ? AND i.due_year = ? AND i.status IN ('scheduled','provisional')", [m.month, m.year]);
+  const provisional = inst("i.status = 'provisional'");
+  const deferred = inst("i.status = 'deferred'");
+  const pendingChanges = db.prepare(`SELECT COUNT(*) AS n FROM loan_requests r JOIN loans l ON l.id = r.loan_id WHERE r.status = 'pending'${scope}`).get(...scopeArgs).n;
   res.json({
     success: true,
-    processed: pending.length,
-    totalDeducted: Math.round(pending.reduce((s, p) => s + p.emi_amount, 0) * 100) / 100,
-    message: `${pending.length} loan deductions processed`
+    data: {
+      byStatus,
+      outstanding: toRupees(toPaise(outstanding)),
+      dueThisMonth: { month: m.month, year: m.year, count: due.n, amount: toRupees(toPaise(due.amount)) },
+      provisional: { count: provisional.n, amount: toRupees(toPaise(provisional.amount)) },
+      deferred: { count: deferred.n },
+      pendingApprovals: { loans: byStatus.requested || 0, changes: pendingChanges },
+      disbursementEnabled: L.disbursementEnabled(db),
+    },
   });
-});
+}));
 
-/**
- * POST /api/loans/:id/recover
- * Record manual recovery for a loan installment
- * Body: { amount, month, year, remarks }
- */
-router.post('/:id/recover', (req, res) => {
-  try {
-    const db = getDb();
-    const loanId = parseInt(req.params.id);
-    const { amount, month, year, remarks } = req.body;
+router.get('/types', allow(READ_ROLES), handle((req, res) => {
+  res.json({ success: true, data: L.readLoanPolicy(getDb()).loanTypes });
+}));
 
-    if (!amount || !month || !year) {
-      return res.status(400).json({ success: false, error: 'amount, month and year are required' });
-    }
+router.get('/policy', allow(READ_ROLES), handle((req, res) => {
+  const db = getDb();
+  const { warnings, ...values } = L.readLoanPolicy(db);
+  const raw = Object.fromEntries(db.prepare("SELECT key, value FROM policy_config WHERE key LIKE 'loan%'").all().map((r) => [r.key, r.value]));
+  res.json({
+    success: true,
+    data: { values, warnings, raw, editableKeys: L.POLICY_KEYS.map((k) => k.key), disbursementEnabled: L.disbursementEnabled(db) },
+  });
+}));
 
-    const loan = db.prepare('SELECT * FROM loans WHERE id = ?').get(loanId);
-    if (!loan) return res.status(404).json({ success: false, error: 'Loan not found' });
-
-    const txn = db.transaction(() => {
-      // Find the pending repayment for that month/year, or create one
-      let repayment = db.prepare(`
-        SELECT * FROM loan_repayments
-        WHERE loan_id = ? AND month = ? AND year = ? AND status = 'Pending'
-      `).get(loanId, month, year);
-
-      if (!repayment) {
-        // Create an ad-hoc repayment entry
-        const insertResult = db.prepare(`
-          INSERT INTO loan_repayments (loan_id, employee_code, month, year, emi_amount, principal_component, interest_component, status)
-          VALUES (?, ?, ?, ?, ?, ?, 0, 'Pending')
-        `).run(loanId, loan.employee_code, month, year, amount, amount);
-        repayment = { id: insertResult.lastInsertRowid };
-      }
-
-      // Update repayment: mark as Recovered
-      db.prepare(`
-        UPDATE loan_repayments
-        SET amount_recovered = ?, status = 'Recovered', recovery_date = datetime('now'),
-            remarks = ?
-        WHERE id = ?
-      `).run(amount, remarks || '', repayment.id);
-
-      // Update loan totals
-      db.prepare(`
-        UPDATE loans SET
-          total_recovered = total_recovered + ?,
-          remaining_balance = remaining_balance - ?,
-          updated_at = datetime('now')
-        WHERE id = ?
-      `).run(amount, amount, loanId);
-
-      // Check if loan is fully repaid
-      const updated = db.prepare('SELECT remaining_balance FROM loans WHERE id = ?').get(loanId);
-      if (updated.remaining_balance <= 0) {
-        db.prepare(`
-          UPDATE loans SET status = 'Closed', remaining_balance = 0, updated_at = datetime('now')
-          WHERE id = ?
-        `).run(loanId);
-      }
-
-      logAudit('loan_repayments', repayment.id, 'status', 'Pending', 'Recovered', 'loan_recovery',
-        `Manual recovery ₹${amount} for ${month}/${year}. ${remarks || ''}`, req.user?.username);
-    });
-    txn();
-
-    res.json({ success: true, message: `Recovery of ₹${amount} recorded successfully` });
-  } catch (err) {
-    res.status(400).json({ success: false, error: err.message });
+router.put('/policy', allow(DECIDE_ROLES), handle((req, res) => {
+  const db = getDb();
+  const values = req.body && req.body.values;
+  const reason = text(req.body && req.body.reason);
+  if (!values || typeof values !== 'object' || Array.isArray(values) || !Object.keys(values).length) {
+    return refuse(res, { code: 'VALUES_REQUIRED', message: 'give {values: {key: value}}' });
   }
-});
-
-/**
- * POST /api/loans/:id/skip
- * Skip a monthly installment
- * Body: { month, year, reason }
- */
-router.post('/:id/skip', (req, res) => {
-  try {
-    const db = getDb();
-    const loanId = parseInt(req.params.id);
-    const { month, year, reason } = req.body;
-
-    if (!month || !year) {
-      return res.status(400).json({ success: false, error: 'month and year are required' });
+  if (!reason) return refuse(res, { code: 'REASON_REQUIRED', message: 'a reason is required to change loan policy' });
+  const checked = [];
+  for (const [key, value] of Object.entries(values)) {
+    if (key === L.DISBURSEMENT_GATE_KEY) {
+      return refuse(res, { code: 'POLICY_KEY_LOCKED', message: `${key} is switched on at cutover only, not from the settings screen` });
     }
-
-    const repayment = db.prepare(`
-      SELECT * FROM loan_repayments
-      WHERE loan_id = ? AND month = ? AND year = ? AND status = 'Pending'
-    `).get(loanId, month, year);
-
-    if (!repayment) {
-      return res.status(404).json({ success: false, error: 'No pending repayment found for that month/year' });
-    }
-
-    db.prepare(`
-      UPDATE loan_repayments SET status = 'Skipped', remarks = ?
-      WHERE id = ?
-    `).run(reason || '', repayment.id);
-
-    logAudit('loan_repayments', repayment.id, 'status', 'Pending', 'Skipped', 'loan_skip',
-      `Installment skipped for ${month}/${year}. Reason: ${reason || 'Not specified'}`, req.user?.username);
-
-    res.json({ success: true, message: `Installment for ${month}/${year} skipped` });
-  } catch (err) {
-    res.status(400).json({ success: false, error: err.message });
+    const v = L.validatePolicyValue(key, value);
+    if (!v.ok) return refuse(res, v);
+    checked.push(v);
   }
-});
+  const changed = [];
+  db.transaction(() => {
+    for (const v of checked) {
+      const old = db.prepare('SELECT value FROM policy_config WHERE key = ?').get(v.key);
+      if (old && old.value === v.value) continue;
+      if (old) db.prepare("UPDATE policy_config SET value = ?, updated_at = datetime('now') WHERE key = ?").run(v.value, v.key);
+      else db.prepare('INSERT INTO policy_config (key, value) VALUES (?, ?)').run(v.key, v.value);
+      db.prepare(`INSERT INTO audit_log (table_name, record_id, field_name, old_value, new_value, changed_by, stage, remark, action_type)
+                  VALUES ('policy_config', NULL, ?, ?, ?, ?, 'loans', ?, 'loan_policy_change')`)
+        .run(v.key, old ? old.value : '', v.value, req.actor.username, reason);
+      changed.push({ key: v.key, from: old ? old.value : null, to: v.value });
+    }
+  })();
+  return res.json({ success: true, data: { changed, warnings: L.readLoanPolicy(db).warnings } });
+}));
+
+router.get('/queue', allow(READ_ROLES), handle((req, res) => {
+  const db = getDb();
+  const cc = companyClause(req);
+  const loans = db.prepare(`${LIST_SQL} AND l.status = 'requested'${cc.sql}
+    ORDER BY CASE WHEN l.loan_type = ? THEN 0 ELSE 1 END, l.requested_at, l.id`).all(...cc.args, L.EMERGENCY_LOAN_TYPE)
+    .map((l) => ({ ...l, urgent: l.loan_type === L.EMERGENCY_LOAN_TYPE }));
+  const changes = L.listRequests(db, { status: 'pending' })
+    .filter((r) => companyAllowed(req, r.company))
+    .map((r) => ({ ...r, waiting_days: daysSince(r.requested_at) }));
+  res.json({ success: true, data: { loans, changes } });
+}));
+
+router.get('/due', allow(READ_ROLES), handle((req, res) => {
+  const month = posInt(req.query.month);
+  const year = posInt(req.query.year);
+  if (!month || month > 12 || !year) return refuse(res, { code: 'MONTH_REQUIRED', message: 'month (1–12) and year are required' });
+  const db = getDb();
+  const cc = companyClause(req);
+  const rows = db.prepare(`
+    SELECT i.id AS instalment_id, i.loan_id, i.sequence, i.due_month, i.due_year, i.amount_due, i.status, i.origin,
+           l.borrower_type, l.employee_code, l.company, l.loan_type, l.status AS loan_status
+      FROM loan_instalments i JOIN loans l ON l.id = i.loan_id
+     WHERE i.due_month = ? AND i.due_year = ? AND l.status IN ('active','recover_at_exit')
+       AND i.status IN ('scheduled','provisional','posted')${cc.sql}
+     ORDER BY l.company, l.employee_code, i.sequence`).all(month, year, ...cc.args);
+  const totalOpen = rows.filter((r) => r.status !== 'posted').reduce((s, r) => s + toPaise(r.amount_due), 0);
+  return res.json({ success: true, data: rows, totalOpen: toRupees(totalOpen) });
+}));
+
+/** Request body → engine input. Sales borrowers wait for Loans PR-8 (ruling Q6). */
+function loanInput(body = {}) {
+  const borrowerType = text(body.borrowerType) || 'plant';
+  if (borrowerType === 'sales') return { ok: false, code: 'SALES_LOANS_NOT_YET_ENABLED', message: 'loans for sales staff arrive with Loans PR-8' };
+  return {
+    ok: true,
+    input: {
+      borrowerType, employeeCode: text(body.employeeCode), company: text(body.company), loanType: text(body.loanType),
+      principal: body.principal, tenure: body.tenure, reason: body.reason, remarks: body.remarks,
+    },
+  };
+}
+
+router.post('/eligibility', allow(['hr', 'finance', 'admin']), handle((req, res) => {
+  const db = getDb();
+  const p = loanInput(req.body || {});
+  if (!p.ok) return refuse(res, p);
+  if (p.input.company && !companyAllowed(req, p.input.company)) return refuse(res, notAllowedCompany);
+  const facts = L.loadBorrowerFacts(db, p.input);
+  const verdict = L.evaluateEligibility(facts, { ...p.input, asOf: todayIst() }, L.readLoanPolicy(db));
+  const { emiPaise: _e, ...data } = verdict;
+  return res.json({ success: true, data: { ...data, history: facts.history || null } });
+}));
+
+router.get('/employee/:code', allow(READ_ROLES), handle((req, res) => {
+  const db = getDb();
+  const borrowerType = text(req.query.borrowerType) || 'plant';
+  const cc = companyClause(req);
+  const loans = db.prepare(`${LIST_SQL} AND l.employee_code = ? AND l.borrower_type = ?${cc.sql} ORDER BY l.requested_at DESC, l.id DESC`)
+    .all(text(req.params.code), borrowerType, ...cc.args);
+  for (const l of loans) {
+    // Recovered = posted payroll deductions + cash receipts (D12: the old tab ignored cash).
+    const paid = db.prepare(`SELECT COUNT(*) AS n, COALESCE(SUM(CASE WHEN status = 'posted' THEN posted_amount ELSE 0 END), 0) AS posted
+                               FROM loan_instalments WHERE loan_id = ? AND status IN ('posted','paid_in_cash')`).get(l.id);
+    const cash = db.prepare('SELECT COALESCE(SUM(amount), 0) AS v FROM loan_receipts WHERE loan_id = ?').get(l.id).v;
+    l.paidEmis = paid.n;
+    l.recoveredByPayroll = toRupees(toPaise(paid.posted));
+    l.recoveredByCash = toRupees(toPaise(cash));
+    l.totalRecovered = toRupees(toPaise(paid.posted) + toPaise(cash));
+    l.remainingEmis = db.prepare("SELECT COUNT(*) AS n FROM loan_instalments WHERE loan_id = ? AND status IN ('scheduled','provisional')").get(l.id).n;
+  }
+  res.json({ success: true, data: loans });
+}));
+
+router.get('/requests', allow(READ_ROLES), handle((req, res) => {
+  const db = getDb();
+  const rows = L.listRequests(db, { status: text(req.query.status) || null, loanId: posInt(req.query.loanId) })
+    .filter((r) => companyAllowed(req, r.company));
+  res.json({ success: true, data: rows });
+}));
+
+router.get('/:id', allow(READ_ROLES), handle((req, res) => {
+  const db = getDb();
+  const loan = loadLoan(req, res, db);
+  if (!loan) return undefined;
+  const who = borrowerName(db, loan);
+  const data = {
+    ...loan,
+    employee_name: who.name || null,
+    department: who.department || null,
+    urgent: loan.loan_type === L.EMERGENCY_LOAN_TYPE,
+    instalments: db.prepare('SELECT * FROM loan_instalments WHERE loan_id = ? ORDER BY sequence').all(loan.id),
+    receipts: db.prepare('SELECT * FROM loan_receipts WHERE loan_id = ? ORDER BY id').all(loan.id),
+    events: db.prepare('SELECT * FROM loan_events WHERE loan_id = ? ORDER BY id').all(loan.id),
+    requests: L.listRequests(db, { loanId: loan.id }),
+    reconciliation: loan.disbursed_amount !== null ? L.reconcileLoan(db, loan.id) : null,
+    approvalCheck: null,
+  };
+  if (loan.status === 'requested') {
+    // The admin's approval screen: eligibility re-run, last 3 months of deductions, warnings.
+    const facts = L.loadBorrowerFacts(db, { borrowerType: loan.borrower_type, employeeCode: loan.employee_code, company: loan.company, excludeLoanId: loan.id });
+    const verdict = L.evaluateEligibility(facts, {
+      borrowerType: loan.borrower_type, company: loan.company, loanType: loan.loan_type,
+      principal: loan.principal_amount, tenure: loan.tenure_months, asOf: todayIst(),
+    }, L.readLoanPolicy(db));
+    const { emiPaise: _e, ...v } = verdict;
+    data.approvalCheck = { ...v, exitFlagged: loan.exit_flag === 1, history: facts.history || null };
+  }
+  return res.json({ success: true, data });
+}));
+
+router.get('/:id/statement', allow(READ_ROLES), handle((req, res) => {
+  const db = getDb();
+  const loan = loadLoan(req, res, db);
+  if (!loan) return undefined;
+  return reply(res, L.loanStatement(db, loan.id));
+}));
+
+// ── writes: loans ────────────────────────────────────────────────────────────
+
+router.post('/', allow(RAISE_ROLES, { adminRaise: true }), handle((req, res) => {
+  const db = getDb();
+  const p = loanInput(req.body || {});
+  if (!p.ok) return refuse(res, p);
+  if (p.input.company && !companyAllowed(req, p.input.company)) return refuse(res, notAllowedCompany);
+  const r = L.requestLoan(db, p.input, req.actor);
+  if (r.ok) {
+    const urgent = r.urgent ? 'URGENT: ' : '';
+    notify(db, 'admin', 'LOAN_REQUESTED', `${urgent}Loan #${r.loanId} for ${p.input.employeeCode} (${rs(p.input.principal)}, ${p.input.loanType}) awaits approval`);
+  }
+  return reply(res, r, 201);
+}));
+
+router.put('/:id/approve', allow(DECIDE_ROLES), handle((req, res) => {
+  const db = getDb();
+  const loan = loadLoan(req, res, db);
+  if (!loan) return undefined;
+  const r = L.approveLoan(db, loan.id, req.actor, { reason: req.body && req.body.reason });
+  if (r.ok) {
+    const msg = `Loan #${loan.id} for ${loan.employee_code} approved — record the disbursement with the signed agreement`;
+    notify(db, 'finance', 'LOAN_APPROVED', msg);
+    notify(db, 'hr', 'LOAN_APPROVED', msg);
+  }
+  return reply(res, r);
+}));
+
+router.put('/:id/reject', allow(DECIDE_ROLES), handle((req, res) => {
+  const db = getDb();
+  const loan = loadLoan(req, res, db);
+  if (!loan) return undefined;
+  const r = L.rejectLoan(db, loan.id, req.actor, { reason: req.body && req.body.reason });
+  if (r.ok) notify(db, 'hr', 'LOAN_REJECTED', `Loan #${loan.id} for ${loan.employee_code} rejected`);
+  return reply(res, r);
+}));
+
+router.post('/:id/cancel', allow(DECIDE_ROLES), handle((req, res) => {
+  const db = getDb();
+  const loan = loadLoan(req, res, db);
+  if (!loan) return undefined;
+  const r = L.cancelLoan(db, loan.id, req.actor, { reason: req.body && req.body.reason });
+  if (r.ok) {
+    const msg = `Loan #${loan.id} for ${loan.employee_code} cancelled before disbursement`;
+    notify(db, 'hr', 'LOAN_CANCELLED', msg);
+    notify(db, 'finance', 'LOAN_CANCELLED', msg);
+  }
+  return reply(res, r);
+}));
+
+router.post('/:id/disburse', allow(PAY_ROLES), handle((req, res) => {
+  const db = getDb();
+  const loan = loadLoan(req, res, db);
+  if (!loan) return undefined;
+  const b = req.body || {};
+  // Role / self checks first (same answer whether or not the gate is on), then the gate, then the payload.
+  const gate = L.checkActor('disburse', req.actor, { requestedBy: loan.requested_by });
+  if (!gate.ok) return refuse(res, gate);
+  if (!L.disbursementEnabled(db)) {
+    return refuse(res, { code: 'DISBURSEMENT_DISABLED', message: 'loan disbursement is switched off until payroll recovery (Loans PR-5/PR-6) is live' });
+  }
+  const ag = checkAgreementRef(b.agreementRef);
+  if (!ag.ok) return refuse(res, ag);
+  const r = L.disburseLoan(db, loan.id, req.actor, {
+    mode: b.mode, reference: b.reference, disbursedOn: b.disbursedOn, amount: b.amount,
+    agreementFilePath: ag.value, firstEmiMonth: b.firstEmiMonth || null,
+  });
+  return reply(res, r);
+}));
+
+router.post('/:id/receipts', allow(PAY_ROLES), handle((req, res) => {
+  const db = getDb();
+  const loan = loadLoan(req, res, db);
+  if (!loan) return undefined;
+  const b = req.body || {};
+  // allowProvisional is deliberately never passed (ruling Q13): PR-6 decides it.
+  const r = L.recordReceipt(db, loan.id, req.actor, {
+    amount: b.amount, mode: b.mode, reference: b.reference, receiptDate: b.receiptDate, remarks: b.remarks,
+  });
+  return reply(res, r, 201);
+}));
+
+// ── writes: change requests (defer / restructure / write-off) ────────────────
+
+const KIND_LABEL = { defer: 'Defer', restructure: 'Restructure', write_off: 'Write-off' };
+
+router.post('/:id/requests', allow(RAISE_ROLES, { adminRaise: true }), handle((req, res) => {
+  const db = getDb();
+  const loan = loadLoan(req, res, db);
+  if (!loan) return undefined;
+  const b = req.body || {};
+  const r = L.requestChange(db, {
+    loanId: loan.id, kind: b.kind, reason: b.reason,
+    instalmentId: b.instalmentId, newTenure: b.newTenure, newEmi: b.newEmi, topupAmount: b.topupAmount,
+  }, req.actor);
+  if (r.ok) notify(db, 'admin', 'LOAN_CHANGE_REQUESTED', `${KIND_LABEL[r.kind]} request #${r.requestId} on loan #${loan.id} (${loan.employee_code}) awaits approval`);
+  return reply(res, r, 201);
+}));
+
+/** Loads request :rid (404 / 403 handled) with its loan, or null when a response was sent. */
+function loadRequest(req, res, db) {
+  const id = posInt(req.params.rid);
+  const r = id && L.getRequest(db, id);
+  if (!r) { refuse(res, { code: 'REQUEST_NOT_FOUND', message: `request ${req.params.rid} not found` }); return null; }
+  const loan = L.getLoan(db, r.loan_id);
+  if (!companyAllowed(req, loan.company)) { refuse(res, notAllowedCompany); return null; }
+  return { request: r, loan };
+}
+
+router.post('/requests/:rid/approve', allow(DECIDE_ROLES), handle((req, res) => {
+  const db = getDb();
+  const x = loadRequest(req, res, db);
+  if (!x) return undefined;
+  const b = req.body || {};
+  let topup = null;
+  if (x.request.kind === 'restructure' && x.request.payload.topupAmount) {
+    // A top-up is a disbursement: role / self check, then the gate, then the payout details.
+    const pre = L.checkActor('approve_change', req.actor, { requestedBy: x.request.requested_by });
+    if (!pre.ok) return refuse(res, pre);
+    if (!L.disbursementEnabled(db)) {
+      return refuse(res, { code: 'DISBURSEMENT_DISABLED', message: 'loan disbursement is switched off until payroll recovery (Loans PR-5/PR-6) is live; a top-up cannot be paid' });
+    }
+    const ag = checkAgreementRef(b.agreementRef);
+    if (!ag.ok) return refuse(res, { ...ag, message: `top-up: ${ag.message}` });
+    topup = { mode: b.mode, reference: b.reference, disbursedOn: b.disbursedOn, agreementFilePath: ag.value };
+  }
+  const r = L.approveChange(db, x.request.id, req.actor, { topup, reason: b.reason });
+  if (r.ok) {
+    const msg = `${KIND_LABEL[r.kind]} request #${r.requestId} on loan #${x.loan.id} (${x.loan.employee_code}) approved`;
+    notify(db, 'hr', 'LOAN_CHANGE_APPROVED', msg);
+    notify(db, 'finance', 'LOAN_CHANGE_APPROVED', msg);
+  }
+  return reply(res, r);
+}));
+
+router.post('/requests/:rid/reject', allow(DECIDE_ROLES), handle((req, res) => {
+  const db = getDb();
+  const x = loadRequest(req, res, db);
+  if (!x) return undefined;
+  const r = L.rejectChange(db, x.request.id, req.actor, { reason: req.body && req.body.reason });
+  if (r.ok) {
+    const msg = `${KIND_LABEL[r.kind]} request #${r.requestId} on loan #${x.loan.id} (${x.loan.employee_code}) rejected`;
+    notify(db, 'hr', 'LOAN_CHANGE_REJECTED', msg);
+    notify(db, 'finance', 'LOAN_CHANGE_REJECTED', msg);
+  }
+  return reply(res, r);
+}));
+
+router.post('/requests/:rid/withdraw', allow(RAISE_ROLES), handle((req, res) => {
+  const db = getDb();
+  const x = loadRequest(req, res, db);
+  if (!x) return undefined;
+  return reply(res, L.withdrawChange(db, x.request.id, req.actor, { reason: req.body && req.body.reason }));
+}));
 
 module.exports = router;

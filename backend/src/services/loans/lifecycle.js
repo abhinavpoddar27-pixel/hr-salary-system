@@ -167,6 +167,31 @@ function disburseLoan(db, loanId, actor, d = {}, { asOf } = {}) {
 }
 
 /**
+ * Admin cancels an approved loan before any money is paid (Loans PR-3,
+ * coordinator ruling Q3). `loans.status` has no 'cancelled' value (a CHECK
+ * constraint), so the loan ends `rejected`; the `cancelled` event and the
+ * "Cancelled after approval:" decision reason tell it apart from a rejection.
+ * Allowed on an exit-flagged loan — that is the way out for one.
+ */
+function cancelLoan(db, loanId, actor, { reason } = {}) {
+  const loan = getLoan(db, loanId);
+  if (!loan) return fail('LOAN_NOT_FOUND', `loan ${loanId} not found`);
+  const gate = checkActor('cancel', actor);
+  if (!gate.ok) return gate;
+  if (!text(reason)) return fail('REASON_REQUIRED', 'a reason is required to cancel a loan');
+  if (loan.status !== 'approved') return fail('ILLEGAL_TRANSITION', `loan is ${loan.status}; only an approved loan that is not yet disbursed can be cancelled`);
+  return inTxn(db, () => {
+    const r = db.prepare(`
+      UPDATE loans SET status = 'rejected', decided_by = ?, decided_at = datetime('now'), decision_reason = ?, updated_at = datetime('now')
+       WHERE id = ? AND status = 'approved' AND disbursed_amount IS NULL
+    `).run(gate.actor.username, `Cancelled after approval: ${text(reason)}`, loan.id);
+    if (r.changes !== 1) return fail('CONCURRENT_CHANGE', 'the loan changed while it was being cancelled');
+    writeEvent(db, { loan, event: 'cancelled', fromState: 'approved', toState: 'rejected', amountPaise: toPaise(loan.principal_amount), actor: gate.actor, reason: text(reason) });
+    return { ok: true, loanId: loan.id, status: 'rejected', cancelled: true };
+  });
+}
+
+/**
  * Exit flag (SPEC §5.2 r11). Same semantics as PR-1's Mark Left block in
  * employees.js: active → recover_at_exit; requested / approved keep their
  * status and only get the flag. For PR-7 to call; no balance moves.
@@ -190,4 +215,4 @@ function flagForExit(db, loanId, actor, { exitDate, reason } = {}) {
   });
 }
 
-module.exports = { getLoan, inTxn, requestLoan, approveLoan, rejectLoan, disburseLoan, flagForExit };
+module.exports = { getLoan, inTxn, requestLoan, approveLoan, rejectLoan, cancelLoan, disburseLoan, flagForExit };
