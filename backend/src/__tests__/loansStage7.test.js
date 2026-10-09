@@ -459,6 +459,7 @@ describe('a month already posted is frozen (K2)', () => {
     const out = stage7(db, 'run-2');
     expect(salary(db, emp.code).loan_recovery).toBe(3000);
     expect(out.loans.alerts).toEqual([expect.objectContaining({ type: 'loan_posted_unborne', unborneAmount: 2000 })]);
+    expect(db.prepare("SELECT COUNT(*) AS n FROM notifications WHERE type = 'LOAN_POSTED_UNBORNE' AND role_target = 'finance'").get().n).toBe(1);
     expect(db.prepare('SELECT COUNT(*) AS n FROM loan_adjustments').get().n).toBe(0);
     expect(L.reconcileLoan(db, loanId).problems).toEqual([]);
     expectClean(db);

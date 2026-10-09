@@ -191,8 +191,9 @@ function applyStage7Loans(db, { employeeCode, month, year, payroll = 'plant', co
     if (!r.ok) throw refuse(`clearing loan ${s.loan_id} ${month}/${year}`, r);
     if (r.changed) cleared += 1;
   }
-  // Finance is flagged (SPEC §5.2 r7). Inside the savepoint: rolls back with the employee.
-  if (adjusted > 0) notifyAlerts(db, plan.alerts);
+  // Finance is flagged (SPEC §5.2 r7) — both kinds of unborne alert, de-duplicated per
+  // day. Inside the savepoint: rolls back with the employee.
+  if (plan.alerts.length) notifyAlerts(db, plan.alerts);
   return { recorded, cleared, adjusted };
 }
 
@@ -228,4 +229,4 @@ function clearOrphanProvisional(db, { month, year, payroll = 'plant', reason }) 
   return { cleared: rows.length, rows: rows.map((r) => ({ loanId: r.loan_id, employeeCode: r.employee_code })) };
 }
 
-module.exports = { planStage7Loans, applyStage7Loans, clearStage7Loans, clearOrphanProvisional, STAGE7_ACTOR: SYSTEM };
+module.exports = { planStage7Loans, applyStage7Loans, clearStage7Loans, clearOrphanProvisional, loansReady, STAGE7_ACTOR: SYSTEM };
