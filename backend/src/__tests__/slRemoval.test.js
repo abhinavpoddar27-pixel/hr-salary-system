@@ -76,22 +76,83 @@ describe('SL no longer changes pay (ruling 8)', () => {
   });
 });
 
-describe('CL entitlement is 7, pro-rated by joining month (ruling 7)', () => {
+describe('CL entitlement is 4, pro-rated by joining quarter (ruling R-C, switchover 2026)', () => {
   test.each([
-    ['2026-01-01', 7], ['2026-02-01', 7],
-    ['2026-03-01', 6], ['2026-04-01', 6],
-    ['2026-05-01', 5], ['2026-06-01', 5],
-    ['2026-07-01', 4], ['2026-08-01', 4],
-    ['2026-09-01', 3], ['2026-10-01', 3],
-    ['2026-11-01', 2], ['2026-12-01', 2],
+    ['2026-01-01', 4], ['2026-02-01', 4], ['2026-03-01', 4],
+    ['2026-04-01', 3], ['2026-05-01', 3], ['2026-06-01', 3],
+    ['2026-07-01', 2], ['2026-08-01', 2], ['2026-09-01', 2],
+    ['2026-10-01', 1], ['2026-11-01', 1], ['2026-12-01', 1],
   ])('joining %s gives %i days', (doj, expected) => {
-    expect(computeClEntitlement(doj, YEAR, 7)).toBe(expected);
+    expect(computeClEntitlement(doj, YEAR, 4)).toBe(expected);
   });
 
   test('a mid-month joiner rolls to the next month, and a prior-year joiner gets the full base', () => {
-    expect(computeClEntitlement('2026-02-15', YEAR, 7)).toBe(6); // effective March
-    expect(computeClEntitlement('2026-12-15', YEAR, 7)).toBe(0); // rolls into next year
-    expect(computeClEntitlement('2023-06-01', YEAR, 7)).toBe(7);
+    expect(computeClEntitlement('2026-03-15', YEAR, 4)).toBe(3); // effective April
+    expect(computeClEntitlement('2026-06-20', YEAR, 4)).toBe(2); // effective July
+    expect(computeClEntitlement('2026-09-02', YEAR, 4)).toBe(1); // effective October
+    expect(computeClEntitlement('2026-12-15', YEAR, 4)).toBe(0); // rolls into next year
+    expect(computeClEntitlement('2023-06-01', YEAR, 4)).toBe(4);
+  });
+
+  test('a null / unparseable DOJ is a full-year joiner; a future-year DOJ gets nothing', () => {
+    expect(computeClEntitlement(null, YEAR, 4)).toBe(4);
+    expect(computeClEntitlement('', YEAR, 4)).toBe(4);
+    expect(computeClEntitlement('not-a-date', YEAR, 4)).toBe(4);
+    expect(computeClEntitlement('2027-03-01', YEAR, 4)).toBe(0);
+  });
+
+  test('with no base passed the default is 4', () => {
+    expect(computeClEntitlement('2026-01-01', YEAR)).toBe(4);
+    expect(computeClEntitlement('2026-07-01', YEAR)).toBe(2);
+    expect(computeClEntitlement('2026-07-01', YEAR, undefined)).toBe(2);
+  });
+
+  test('the formula follows whatever base policy holds', () => {
+    expect(computeClEntitlement('2026-01-01', YEAR, 7)).toBe(7);
+    expect(computeClEntitlement('2026-10-01', YEAR, 7)).toBe(2); // ceil(7*3/12)
+    expect(computeClEntitlement('2026-12-01', YEAR, 7)).toBe(1); // ceil(7/12)
+    expect(computeClEntitlement('2026-01-01', YEAR, 0)).toBe(0);
+  });
+});
+
+describe('initCLOpening reads cl_entitlement_base for both branches', () => {
+  const Database = require('better-sqlite3');
+  const { initSchema } = require('../database/schema');
+  const { initCLOpening } = require('../services/phase5Features');
+  function fresh() {
+    const db = new Database(':memory:');
+    const l = console.log; const w = console.warn; const e = console.error;
+    console.log = () => {}; console.warn = () => {}; console.error = () => {};
+    try { initSchema(db); } finally { console.log = l; console.warn = w; console.error = e; }
+    return db;
+  }
+  const ins = (db, code, doj) => db.prepare(
+    "INSERT INTO employees (code, name, employment_type, status, date_of_joining) VALUES (?, 'T', 'Permanent', 'Active', ?)"
+  ).run(code, doj).lastInsertRowid;
+  const opening = (db, id) => db.prepare(
+    "SELECT opening FROM leave_balances WHERE employee_id = ? AND year = 2026 AND leave_type = 'CL'"
+  ).get(id).opening;
+
+  test('prior-year, null-DOJ and in-year joiners all use the policy base', () => {
+    const db = fresh();
+    db.prepare("UPDATE policy_config SET value = '4' WHERE key = 'cl_entitlement_base'").run();
+    const a = ins(db, 'Q1', '2020-05-01');
+    const b = ins(db, 'Q2', null);
+    const c = ins(db, 'Q3', '2026-08-01');
+    initCLOpening(db, 2026, 1);
+    expect(opening(db, a)).toBe(4);
+    expect(opening(db, b)).toBe(4);
+    expect(opening(db, c)).toBe(2);
+    db.close();
+  });
+
+  test('a deployment month pro-rates pre-year joiners by quarter', () => {
+    const db = fresh();
+    db.prepare("UPDATE policy_config SET value = '4' WHERE key = 'cl_entitlement_base'").run();
+    const a = ins(db, 'Q4', '2020-05-01');
+    initCLOpening(db, 2026, 10);
+    expect(opening(db, a)).toBe(1);
+    db.close();
   });
 });
 

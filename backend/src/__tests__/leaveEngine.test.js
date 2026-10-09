@@ -331,11 +331,12 @@ describe('leaveEngine — CL, year end and seeding', () => {
     const db = F.newDb();
     F.addEmployee(db, { code: 'K001', date_of_joining: '2024-06-01' }); // prior year -> full 7
     F.addEmployee(db, { code: 'K002', date_of_joining: '2026-09-01' }); // Sep -> 3
-    F.addEmployee(db, { code: 'K003', date_of_joining: '2026-11-20' }); // Dec effective -> 2
+    F.addEmployee(db, { code: 'K003', date_of_joining: '2026-11-20' }); // Dec effective -> ceil(7/12) = 1
     const plan = computeLeavePlan(db, { year: YEAR });
     expect(who(plan, 'K001').cl.opening).toBe(7);
     expect(who(plan, 'K002').cl.opening).toBe(3);
-    expect(who(plan, 'K003').cl.opening).toBe(2);
+    // Quarterly rule (R-C, switchover 2026): ceil(base*(13-eff)/12); base here is still the seeded 7.
+    expect(who(plan, 'K003').cl.opening).toBe(1);
     db.close();
   });
 
