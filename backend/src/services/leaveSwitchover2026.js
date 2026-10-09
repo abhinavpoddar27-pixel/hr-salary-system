@@ -310,8 +310,12 @@ function runAll(db, log) {
 // ────────────────────────────────────────────────────────────────────────────
 
 /** Dry run. Every change happens inside a transaction that is always rolled back. */
-function previewSwitchover(db) {
+function previewSwitchover(db, { backupDir = null } = {}) {
   const guard = guardRow(db);
+  let backup_check = null;
+  if (!guard && !(db.memory || !db.name || db.name === ':memory:')) {
+    try { backup_check = publicCheck(backupCheck(db, backupDir || backupDirFor(db))); } catch { backup_check = null; }
+  }
   let captured = null;
   try {
     db.transaction(() => {
@@ -327,11 +331,85 @@ function previewSwitchover(db) {
     already_applied: !!guard,
     applied_at: guard ? guard.value : null,
     ...captured,
+    backup_check,
   };
 }
 
 function backupDirFor(db) {
   return path.join(process.env.DATA_DIR || path.dirname(db.name), 'backups');
+}
+
+// ── Backup space ────────────────────────────────────────────────────────────
+// The backup is a full copy of the database on the same volume. On 10 Oct 2026
+// production (≈256 MB) failed with "database or disk is full", and each failed
+// attempt left its half-written file behind, eating the volume's last free
+// space. So: measure first, refuse with numbers, and never leave a partial file.
+const MB = 1024 * 1024;
+const BACKUP_MARGIN_BYTES = 64 * MB; // head-room for the live DB's WAL while copying
+const BACKUP_FILE_RE = /^pre-leave-switchover-.*\.db$/;
+let applyInFlight = false;
+
+function nearestExisting(p) {
+  let cur = path.resolve(p);
+  while (!fs.existsSync(cur)) {
+    const up = path.dirname(cur);
+    if (up === cur) return null;
+    cur = up;
+  }
+  return cur;
+}
+
+function freeBytes(dir) {
+  if (typeof fs.statfsSync !== 'function') return null; // Node < 18.15: unknown, not blocking
+  try {
+    const target = nearestExisting(dir);
+    if (!target) return null;
+    const s = fs.statfsSync(target);
+    return Number(s.bavail) * Number(s.bsize);
+  } catch { return null; }
+}
+
+/**
+ * Switchover backup files left in the backup dir. Only meaningful while the
+ * guard key is unset: then no attempt has changed anything, so every such file
+ * is a copy of an unchanged database (or a half-written one) and is safe to
+ * remove. Once applied, the real backup lives here — never listed, never removed.
+ */
+function staleBackupFiles(db, dir) {
+  if (guardRow(db) || !fs.existsSync(dir)) return [];
+  return fs.readdirSync(dir)
+    .filter((n) => BACKUP_FILE_RE.test(n))
+    .map((n) => {
+      const p = path.join(dir, n);
+      let size = 0;
+      try { size = fs.statSync(p).size; } catch { /* vanished */ }
+      return { name: n, path: p, bytes: size };
+    });
+}
+
+function backupCheck(db, dir) {
+  const dbBytes = Number(db.pragma('page_count', { simple: true })) * Number(db.pragma('page_size', { simple: true }));
+  const needed = Math.ceil(dbBytes * 1.05) + BACKUP_MARGIN_BYTES;
+  const free = freeBytes(dir);
+  const stale = staleBackupFiles(db, dir);
+  const reclaimable = stale.reduce((a, f) => a + f.bytes, 0);
+  const known = free !== null;
+  return {
+    dir,
+    db_mb: Math.round(dbBytes / MB),
+    needed_mb: Math.ceil(needed / MB),
+    free_mb: known ? Math.floor(free / MB) : null,
+    stale_files: stale.map((f) => ({ name: f.name, mb: Math.round(f.bytes / MB) })),
+    reclaimable_mb: Math.round(reclaimable / MB),
+    ok: known ? free + reclaimable >= needed : true,
+    space_known: known,
+    _stale: stale, // internal: paths for apply's cleanup; stripped before returning to callers
+  };
+}
+
+function publicCheck(check) {
+  const { _stale, ...rest } = check;
+  return rest;
 }
 
 /**
@@ -353,12 +431,46 @@ async function applySwitchover(db, { confirm, note, actor = 'admin', backupDir =
   const dir = backupDir || backupDirFor(db);
   const stamp = new Date().toISOString().replace(/[:.]/g, '-');
   const backupPath = path.join(dir, `pre-leave-switchover-${stamp}.db`);
+
+  // A second click while the first copy is still running must not start (or
+  // delete) a second backup. One process serves the app, so a flag is enough.
+  if (applyInFlight) {
+    return { ok: false, status: 409, code: 'APPLY_IN_PROGRESS', error: 'The switchover is already being applied — wait for it to finish.' };
+  }
+  applyInFlight = true;
+  const removed = [];
   try {
-    fs.mkdirSync(dir, { recursive: true });
-    await db.backup(backupPath);
-    if (!fs.existsSync(backupPath) || fs.statSync(backupPath).size === 0) throw new Error('backup file is empty');
-  } catch (err) {
-    return { ok: false, status: 500, code: 'BACKUP_FAILED', error: `Backup failed, nothing changed: ${err.message}` };
+    // 1. Remove leftovers of earlier failed attempts (guard unset ⇒ nothing was applied).
+    for (const f of backupCheck(db, dir)._stale) {
+      try { fs.unlinkSync(f.path); removed.push(f.name); } catch { /* already gone */ }
+    }
+    if (removed.length) console.warn(`[leave-switchover-2026] removed ${removed.length} leftover backup file(s) from failed attempts: ${removed.join(', ')}`);
+    // 2. Refuse with numbers rather than fail half-way through the copy.
+    const check = backupCheck(db, dir);
+    if (!check.ok) {
+      return {
+        ok: false, status: 507, code: 'BACKUP_NO_SPACE',
+        error: `Backup needs about ${check.needed_mb} MB free but the volume has ${check.free_mb} MB. `
+          + 'Grow the Railway volume, then try again. Nothing changed.',
+        backup_check: publicCheck(check),
+        removed_files: removed,
+      };
+    }
+    // 3. Copy. A failed copy never leaves its partial file behind.
+    try {
+      fs.mkdirSync(dir, { recursive: true });
+      await db.backup(backupPath);
+      if (!fs.existsSync(backupPath) || fs.statSync(backupPath).size === 0) throw new Error('backup file is empty');
+    } catch (err) {
+      try { if (fs.existsSync(backupPath)) fs.unlinkSync(backupPath); } catch { /* best effort */ }
+      return {
+        ok: false, status: 500, code: 'BACKUP_FAILED',
+        error: `Backup failed, nothing changed: ${err.message}`,
+        removed_files: removed,
+      };
+    }
+  } finally {
+    applyInFlight = false;
   }
 
   const log = { actor, note: note ? String(note).slice(0, 500) : 'No note.' };
@@ -388,13 +500,14 @@ async function applySwitchover(db, { confirm, note, actor = 'admin', backupDir =
     }
     return { ok: false, status: 500, code: 'APPLY_FAILED', error: `Apply failed and was rolled back: ${err.message}`, backup_path: backupPath };
   }
-  return { ok: true, dry_run: false, already_applied: true, ...result, backup_path: backupPath };
+  return { ok: true, dry_run: false, already_applied: true, ...result, backup_path: backupPath, removed_files: removed };
 }
 
 module.exports = {
   previewSwitchover,
   applySwitchover,
   backupDirFor,
+  backupCheck: (db, dir) => publicCheck(backupCheck(db, dir)),
   CONFIRM_PHRASE,
   GUARD_KEY,
   POLICY_TARGET,

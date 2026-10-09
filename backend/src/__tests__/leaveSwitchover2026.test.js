@@ -244,6 +244,96 @@ describe('apply', () => {
   });
 });
 
+// 10 Oct 2026, production: "Backup failed, nothing changed: database or disk is
+// full" — twice. Each failed attempt left its half-written copy on the volume.
+describe('backup space (10 Oct 2026 incident)', () => {
+  const { backupCheck } = require('../services/leaveSwitchover2026');
+  const backupsIn = (dir) => (fs.existsSync(dir) ? fs.readdirSync(dir).filter((n) => n.startsWith('pre-leave-switchover-')) : []);
+  afterEach(() => jest.restoreAllMocks());
+
+  test('a failed copy leaves no partial file behind and changes nothing', async () => {
+    const { db, dir, cleanup } = S.newFileDb();
+    seed(db);
+    const before = S.fingerprint(db);
+    const bdir = path.join(dir, 'backups');
+    db.backup = async (p) => { fs.writeFileSync(p, 'half a database'); throw new Error('database or disk is full'); };
+    const out = await applySwitchover(db, { confirm: CONFIRM_PHRASE, backupDir: bdir });
+    expect(out).toMatchObject({ ok: false, code: 'BACKUP_FAILED' });
+    expect(out.error).toMatch(/database or disk is full/);
+    expect(backupsIn(bdir)).toEqual([]);
+    expect(S.fingerprint(db)).toEqual(before);
+    cleanup();
+  });
+
+  test('leftovers of earlier failed attempts are removed, then the backup and apply go through', async () => {
+    const { db, dir, cleanup } = S.newFileDb();
+    seed(db);
+    const bdir = path.join(dir, 'backups');
+    fs.mkdirSync(bdir);
+    fs.writeFileSync(path.join(bdir, 'pre-leave-switchover-2026-10-09T19-10-00-000Z.db'), Buffer.alloc(4096));
+    fs.writeFileSync(path.join(bdir, 'pre-leave-switchover-2026-10-09T19-11-00-000Z.db'), Buffer.alloc(4096));
+    fs.writeFileSync(path.join(bdir, 'unrelated.db'), 'keep me');
+
+    const pv = previewSwitchover(db, { backupDir: bdir });
+    expect(pv.backup_check.stale_files.map((f) => f.name)).toHaveLength(2);
+    expect(backupsIn(bdir)).toHaveLength(2); // preview deletes nothing
+
+    const out = await applySwitchover(db, { confirm: CONFIRM_PHRASE, backupDir: bdir });
+    expect(out.ok).toBe(true);
+    expect(out.removed_files).toHaveLength(2);
+    expect(backupsIn(bdir)).toEqual([path.basename(out.backup_path)]);
+    expect(fs.existsSync(path.join(bdir, 'unrelated.db'))).toBe(true);
+    // Once applied, the real backup is never listed as a leftover.
+    expect(backupCheck(db, bdir).stale_files).toEqual([]);
+    cleanup();
+  });
+
+  test('not enough free space: refused with the numbers, no file written, nothing changed', async () => {
+    const { db, dir, cleanup } = S.newFileDb();
+    seed(db);
+    const before = S.fingerprint(db);
+    const bdir = path.join(dir, 'backups');
+    jest.spyOn(fs, 'statfsSync').mockReturnValue({ bavail: 1, bsize: 4096 });
+    const pv = previewSwitchover(db, { backupDir: bdir });
+    expect(pv.backup_check).toMatchObject({ ok: false, space_known: true, free_mb: 0 });
+    expect(pv.backup_check.needed_mb).toBeGreaterThanOrEqual(64);
+    const out = await applySwitchover(db, { confirm: CONFIRM_PHRASE, backupDir: bdir });
+    expect(out).toMatchObject({ ok: false, status: 507, code: 'BACKUP_NO_SPACE' });
+    expect(out.error).toMatch(/Grow the Railway volume/);
+    expect(backupsIn(bdir)).toEqual([]);
+    expect(S.fingerprint(db)).toEqual(before);
+    cleanup();
+  });
+
+  test('space that cannot be measured does not block (old Node), and enough space passes', async () => {
+    const { db, dir, cleanup } = S.newFileDb();
+    seed(db);
+    const bdir = path.join(dir, 'backups');
+    jest.spyOn(fs, 'statfsSync').mockImplementation(() => { throw new Error('ENOSYS'); });
+    expect(backupCheck(db, bdir)).toMatchObject({ ok: true, space_known: false, free_mb: null });
+    jest.restoreAllMocks();
+    const real = backupCheck(db, bdir);
+    expect(real.space_known).toBe(true);
+    expect(real.db_mb).toBeGreaterThanOrEqual(0);
+    cleanup();
+  });
+
+  test('a double click starts one backup, not two', async () => {
+    const { db, dir, cleanup } = S.newFileDb();
+    seed(db);
+    const bdir = path.join(dir, 'backups');
+    const [a, b] = await Promise.all([
+      applySwitchover(db, { confirm: CONFIRM_PHRASE, backupDir: bdir }),
+      applySwitchover(db, { confirm: CONFIRM_PHRASE, backupDir: bdir }),
+    ]);
+    const codes = [a, b].map((o) => (o.ok ? 'OK' : o.code)).sort();
+    expect(codes).toEqual(['APPLY_IN_PROGRESS', 'OK']);
+    expect(backupsIn(bdir)).toHaveLength(1);
+    expect(policy(db, GUARD_KEY)).not.toBeNull();
+    cleanup();
+  });
+});
+
 describe('double-count flag (amendment A)', () => {
   test('grants and an in-app leave correction in the same month are flagged, and apply still runs', async () => {
     const { db, dir, cleanup } = S.newFileDb();

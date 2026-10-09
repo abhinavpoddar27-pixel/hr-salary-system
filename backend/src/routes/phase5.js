@@ -400,6 +400,8 @@ router.post('/leave-switchover-2026/apply', requireAdmin, async (req, res) => {
     if (!out.ok) {
       return res.status(out.status || 500).json({
         success: false, error: out.error, code: out.code, ...(out.backup_path ? { backup_path: out.backup_path } : {}),
+        ...(out.backup_check ? { backup_check: out.backup_check } : {}),
+        ...(out.removed_files && out.removed_files.length ? { removed_files: out.removed_files } : {}),
       });
     }
     const { ok, ...body } = out;
