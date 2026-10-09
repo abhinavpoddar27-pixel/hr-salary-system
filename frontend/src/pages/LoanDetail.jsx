@@ -8,7 +8,7 @@ import toast from 'react-hot-toast'
 import clsx from 'clsx'
 import {
   getLoan, getLoanStats, getLoanStatement, getLoanPolicy, approveLoan, rejectLoan, cancelLoan, disburseLoan,
-  recordLoanReceipt, requestLoanChange,
+  recordLoanReceipt, requestLoanChange, reverseLoanDeduction,
 } from '../utils/api'
 import { useAppStore } from '../store/appStore'
 import { ReasonModal, DisburseModal, ReceiptModal, ChangeRequestModal } from '../components/loans/LoanActionModals'
@@ -16,7 +16,14 @@ import { openStatementWindow } from '../components/loans/printStatement'
 import {
   loanCaps, sameUser, LOAN_STATE, INSTALMENT_STATE, REQUEST_STATE, KIND_LABEL, ORIGIN_LABEL, LIVE_STATES,
   stateCls, stateLabel, rupees, paiseToRupees, monthLabel, istDateTime, errText, requestSummary, GATE_OFF_TEXT,
+  ADJUSTMENT_KIND,
 } from '../components/loans/loanUi'
+
+const DEDUCTION_STATE = {
+  provisional: { label: 'Provisional', cls: 'bg-amber-100 text-amber-800' },
+  posted: { label: 'Posted', cls: 'bg-green-100 text-green-800' },
+  reversed: { label: 'Superseded', cls: 'bg-slate-100 text-slate-500' },
+}
 
 function Fact({ label, children }) {
   return (
@@ -252,8 +259,8 @@ export default function LoanDetail() {
 
       {rec && (
         <div className={clsx('rounded-xl border px-4 py-2.5 text-sm', rec.ok ? 'border-green-200 bg-green-50 text-green-800' : 'border-red-200 bg-red-50 text-red-800')} data-testid="reconciliation">
-          <strong>{rec.ok ? '✓ Reconciles' : '✗ Does not reconcile'}</strong>: disbursed {rupees(rec.disbursed)} − posted {rupees(rec.posted)} −
-          receipts {rupees(rec.receipts)} − written off {rupees(rec.writtenOff)} = {rupees(rec.expectedBalance)}; balance {rupees(rec.balance)}.
+          <strong>{rec.ok ? '✓ Reconciles' : '✗ Does not reconcile'}</strong>: disbursed {rupees(rec.disbursed)} − (posted {rupees(rec.posted)}
+          {' '}− opposite entries {rupees(rec.adjusted || 0)}) − receipts {rupees(rec.receipts)} − written off {rupees(rec.writtenOff)} = {rupees(rec.expectedBalance)}; balance {rupees(rec.balance)}.
           {Number(rec.uncovered) > 0 && <span> Uncovered by the schedule: {rupees(rec.uncovered)}.</span>}
           {rec.problems?.length > 0 && <ul className="list-disc ml-5 text-xs mt-1">{rec.problems.map((p) => <li key={p}>{p}</li>)}</ul>}
         </div>
@@ -281,6 +288,72 @@ export default function LoanDetail() {
               </tbody>
             </table>
           </div>
+        </Section>
+      )}
+
+      {loan.deductions?.length > 0 && (
+        <Section title="Payroll deductions"
+          right={caps.canReverse ? <span className="text-[11px] text-slate-500">Reverse returns a posted amount to the schedule as a new last instalment</span> : null}>
+          <div className="overflow-x-auto">
+            <table className="table-compact w-full" data-testid="deductions">
+              <thead><tr>
+                <th>Payroll month</th><th>State</th><th className="text-right">Amount</th><th className="text-right">Opposite entries</th>
+                <th className="text-right">Standing</th><th>Posted at</th>{caps.canReverse && <th />}
+              </tr></thead>
+              <tbody>
+                {loan.deductions.map((d) => {
+                  const reverseReason = d.state !== 'posted' ? ''
+                    : Number(d.effective_posted) <= 0 ? 'Already reversed in full'
+                      : !live ? `The loan is ${stateLabel(LOAN_STATE, loan.status).toLowerCase()} — an opposite entry applies to a live loan only` : ''
+                  return (
+                    <tr key={d.id} data-testid={`deduction-${d.id}`}>
+                      <td className="text-xs">{monthLabel(d.month, d.year)} <span className="text-slate-400">· {d.payroll}</span></td>
+                      <td>
+                        <span className={clsx('text-xs px-2 py-0.5 rounded-full', stateCls(DEDUCTION_STATE, d.state))} title={d.reversal_reason || ''}>{stateLabel(DEDUCTION_STATE, d.state)}</span>
+                      </td>
+                      <td className="text-right font-mono text-xs">{rupees(d.amount)}</td>
+                      <td className="text-right font-mono text-xs">{Number(d.adjusted) > 0 ? `− ${rupees(d.adjusted)}` : '—'}</td>
+                      <td className="text-right font-mono text-xs font-semibold">{d.state === 'posted' ? rupees(d.effective_posted) : '—'}</td>
+                      <td className="text-xs">{d.posted_at ? istDateTime(d.posted_at) : '—'}</td>
+                      {caps.canReverse && (
+                        <td className="text-right">
+                          {d.state === 'posted' && (
+                            <GatedButton disabledReason={reverseReason} className="btn-ghost text-xs text-red-700" data-testid={`reverse-${d.id}`}
+                              onClick={() => setModal({ kind: 'reverse', deduction: d })}>Reverse</GatedButton>
+                          )}
+                        </td>
+                      )}
+                    </tr>
+                  )
+                })}
+              </tbody>
+            </table>
+          </div>
+        </Section>
+      )}
+
+      {loan.adjustments?.length > 0 && (
+        <Section title="Opposite entries">
+          <table className="table-compact w-full" data-testid="adjustments">
+            <thead><tr><th>When (IST)</th><th>Kind</th><th>Of</th><th className="text-right">Amount</th><th>Back in the schedule as</th><th>By</th><th>Reason</th></tr></thead>
+            <tbody>
+              {loan.adjustments.map((a) => {
+                const ded = (loan.deductions || []).find((d) => d.id === a.deduction_id)
+                const added = (loan.instalments || []).find((i) => i.id === a.added_instalment_id)
+                return (
+                  <tr key={a.id}>
+                    <td className="text-xs whitespace-nowrap">{istDateTime(a.created_at)}</td>
+                    <td className="text-xs">{ADJUSTMENT_KIND[a.kind] || a.kind}</td>
+                    <td className="text-xs">{ded ? `${monthLabel(ded.month, ded.year)} deduction` : `deduction ${a.deduction_id}`}</td>
+                    <td className="text-right font-mono text-xs">{rupees(a.amount)}</td>
+                    <td className="text-xs">{added ? `#${added.sequence}, ${monthLabel(added.due_month, added.due_year)}` : 'not scheduled (extension limit) — uncovered'}</td>
+                    <td className="text-xs">{a.actor}</td>
+                    <td className="text-xs text-slate-600">{a.reason}</td>
+                  </tr>
+                )
+              })}
+            </tbody>
+          </table>
         </Section>
       )}
 
@@ -364,6 +437,17 @@ export default function LoanDetail() {
       {modal === 'receipt' && (
         <ReceiptModal loan={loan} busy={run.isPending} onClose={() => setModal(null)}
           onSubmit={(body) => run.mutate({ fn: () => recordLoanReceipt(loan.id, body), ok: (d) => `Receipt ${d.receiptNo} recorded — balance ${rupees(d.balance)}` })} />
+      )}
+      {modal?.kind === 'reverse' && (
+        <ReasonModal title={`Reverse the ${monthLabel(modal.deduction.month, modal.deduction.year)} deduction`} danger minLength={10}
+          confirmText={`Reverse ${rupees(modal.deduction.effective_posted)}`} busy={run.isPending}
+          message={`${rupees(modal.deduction.effective_posted)} goes back on the balance and onto the end of the schedule as a new instalment. `
+            + 'The posted row is never edited; an opposite entry is recorded. Then re-run Stage 7 for this employee and month so the payslip matches.'}
+          onSubmit={(reason) => run.mutate({
+            fn: () => reverseLoanDeduction(modal.deduction.id, reason),
+            ok: (d) => `${rupees(d.amount)} reversed — re-run Stage 7 for ${d.employeeCode} ${monthLabel(d.month, d.year)}`,
+          })}
+          onClose={() => setModal(null)} />
       )}
       {modal === 'change' && (
         <ChangeRequestModal loan={loan} instalments={loan.instalments} busy={run.isPending} onClose={() => setModal(null)}
