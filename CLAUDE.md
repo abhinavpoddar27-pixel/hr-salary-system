@@ -1,3 +1,27 @@
+## Last Session — 2026-10-10 (Loans PR-6)
+**Loans PR-6: monthly loan close, held sweep, daily job. Branch `feat/loans-pr6`, NOT merged.** First code that posts.
+- **`services/loans/close.js`:** `runLoanClose` (one payroll + month, one txn; `loan_closes` row FIRST = restart guard;
+  posts provisional rows whose salary is not held and whose payslip `loan_recovery` = ledger; due instalment with no
+  deduction → end as `no_salary`; reconciles before/after, rolls back if the close broke a loan), `runHeldSweep` (posts
+  a released hold; held 60 days after the close → moved to the end), `runCatchUp` (needed months ≤ due month, oldest
+  first; 13th IST rule in `dueCloseMonth`), `reverseDeduction` (admin), `loanHoldReleaseCheck`, `previewClose`.
+- **`closeScheduler.js` + server.js (1 line):** cron `'45 0 * * *'` UTC = 06:15 IST daily, tz pinned; same run at boot.
+- **Opposite entries:** new append-only `loan_adjustments` (inside `loansSchemaV2Ddl`); effective posted = amount − Σ
+  adjustments. Stage 7 re-run of a posted month that no longer fits: deducts what fits, writes an `unborne` entry in the
+  same savepoint (payslip = ledger). Admin reversal returns the amount to the schedule (origin `reversal`).
+- **Also:** Stage 7 reads posted months of completed loans (PR-5 gap, own commit); K8 hard check in `applyStage7Loans`;
+  `payroll.js` hold-release: 409 `LOAN_ROW_STALE`; routes `GET /closes`, `GET /close/preview`, `POST /close`,
+  `POST /deductions/:id/reverse`; drift invariants `loan_balance_reconciles`, `loan_payslip_matches_ledger`.
+- **Fragile:** (1) EMPTY LEDGER WRITES NOTHING — a close is "needed" only with a provisional row or an open instalment
+  for that month; keep it so. (2) The 60-day stale marker is loan-side: `loan_deductions.state='reversed'` +
+  `reversal_reason = HELD_MOVE_REVERSAL_REASON`; never use `day_calculations.salary_stale` for it. (3) Plant never
+  waits for sales; sales close refuses `SALES_CLOSE_NOT_WIRED` until PR-8. (4) A per-employee payslip/ledger mismatch
+  never blocks a close: that row stays provisional and the sweep posts it once Stage 7 agrees.
+- **Verified:** suite 713 → 753 (36 → 41 suites). `loans-close-simulation.js`: 7 loans × 4 months, daily clock 1 Nov –
+  30 Apr, closes on each 13th only, reconciles daily, drift 0, component 0; `--empty`: 84 tables unchanged over 181 runs
+  + 3 boots. PR-5 `--dump` byte-identical on origin/main and branch.
+- **Not tested:** cross-process concurrency; Railway's real clock; the close screen (PR-6b); sales close (PR-8).
+
 ## Last Session — 2026-10-10 (Loans PR-5)
 **Loans PR-5: plant Stage 7 deducts the loan EMI provisionally. Branch `feat/loans-pr5`, NOT merged.** No schema change.
 - **New `services/loans/stage7.js`:** `planStage7Loans` (read-only; LAST deduction, after every other one; amount =

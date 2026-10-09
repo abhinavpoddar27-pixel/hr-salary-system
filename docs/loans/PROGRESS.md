@@ -6,12 +6,12 @@ after a context compaction or a new session there is a file to read and build fr
 ## RESUME (read this first)
 
 - **As of:** 2026-10-10.
-- **Current state:** P1–P3 and Loans PR-0 … PR-4 (#48–#54, #56) are merged. PR-3 verified on production (loan_requests +
-  index, gate '0', 18 keys, loans 0, drift = 1 known row). Loans PR-5 (plant Stage 7) is open on `feat/loans-pr5`,
-  waiting for review.
-- **Next PR:** Loans PR-6 (loan close, held sweep, cron), branch `feat/loans-pr6`, after PR-5 is merged and checked.
+- **Current state:** P1–P3 and Loans PR-0 … PR-5 (#48–#54, #56, #58) are merged. PR-5 verified on production (gate '0',
+  loans 0, loan_deductions 0, no salary row with loan_recovery, drift = 1 known row, component-short = 5 known rows).
+  Loans PR-6 (loan close, held sweep, cron) is open on `feat/loans-pr6`, waiting for review.
+- **Next PR:** Loans PR-6b (close screen, frontend only; the planner briefs it after PR-6 merges), then PR-7 (exit).
 - **Blockers:**
-  - Loans PR-5 review and merge, then the post-merge checks below (drift + components unchanged; nil loan impact).
+  - Loans PR-6 review and merge, then the PR-6 check below (nil loan impact: the 13 Oct run writes nothing).
   - Finance is checking the 35 re-held rows that were released to be paid, against what was
     actually paid. (There are 54 re-held rows in all: 35 released to be paid, 17 with notes
     saying already paid outside the app, 2 with nothing payable.)
@@ -50,8 +50,9 @@ after a context compaction or a new session there is a file to read and build fr
 | Loans PR-2 | `feat/loans-pr2` | Merged | #53 | 2026-10-09 | none (engine not called yet) |
 | Loans PR-3 | `feat/loans-pr3` | Merged | #54 | 2026-10-09 | verified (planner) |
 | Loans PR-4 | `feat/loans-pr4` | Merged | #56 | 2026-10-10 | browser look on Railway preview |
-| Loans PR-5 | `feat/loans-pr5` | Open | see GitHub | — | checks 1–3 below; loans still 0 |
-| Loans PR-6 | `feat/loans-pr6` | Not started | — | — | — |
+| Loans PR-5 | `feat/loans-pr5` | Merged | #58 | 2026-10-10 | verified (planner) |
+| Loans PR-6 | `feat/loans-pr6` | Open | see GitHub | — | PR-6 check below + checks 1–3 |
+| Loans PR-6b | `feat/loans-pr6b` | Not started (close screen) | — | — | — |
 | Loans PR-7 | `feat/loans-pr7` | Not started | — | — | — |
 | Loans PR-8 | `feat/loans-pr8` | Not started | — | — | — |
 | Loans PR-9 | `feat/loans-pr9` | Not started | — | — | — |
@@ -246,6 +247,59 @@ Then drift check 1 (still the 1 known row). No salary code changed.
 - Simulation: `node backend/scripts/loans-stage7-simulation.js` (exit 0 = all checks pass);
   `--dump <file>` writes the no-loan month for an origin/main vs branch byte comparison.
 
+## Loans PR-6 rulings (planner, 10 Oct 2026)
+
+- **Q1** `loan_adjustments` (append-only, inside `loansSchemaV2Ddl`): the opposite entry for a posted deduction.
+  Effective posted = `loan_deductions.amount` − Σ adjustments. Reconciliation: disbursed − (posted − adjusted) − receipts
+  − written off = balance.
+- **Q2** admin reversal (`POST /api/loans/deductions/:id/reverse`, reason ≥ 10) returns the amount to the schedule as a new
+  last instalment (origin `reversal`, not counted toward the 3-month limit); live loans only. The month's next Stage 7
+  re-run deducts the remaining effective posted amount (₹0 after a full reversal).
+- **Q3** a Stage 7 re-run of a posted month that pay can no longer bear: a live loan deducts what fits and writes an
+  `unborne` opposite entry in the same savepoint (origin `shortfall`, counts toward the limit); a loan no longer live keeps
+  the full posted amount + finance alert.
+- **Change to Q4 (coordinator):** the 60-day "salary row stale" marker is on the loan side — the deduction row
+  `state = 'reversed'` with `reversal_reason = 'instalment moved to the end (held)'` (`HELD_MOVE_REVERSAL_REASON`).
+  `day_calculations.salary_stale` (leave automation) is never touched. Hold release → 409 `LOAN_ROW_STALE` while that
+  marker exists AND the salary row disagrees with the ledger; a Stage 7 re-run of the employee lifts it. No loans → no-op.
+- **Q5** an empty ledger writes nothing (no `loan_closes` row, notification or audit row).
+- **Q6** the close screen is a separate frontend-only PR-6b. **Q7** payrolls close separately; plant never waits for sales.
+  **Q8** a due instalment with a salary row but no deduction moves to the end as `no_salary` with a note. **Q11** a close
+  that breaks a reconciliation it found clean rolls back; a pre-existing mismatch is recorded (`reconciliation_ok = 0`).
+  **Q12** drift monitor: `loan_balance_reconciles` (critical), `loan_payslip_matches_ledger` (medium).
+- **Q10** cron `'45 0 * * *'` UTC = 06:15 IST daily + boot catch-up; the unique close row stops a same-day double close.
+- **PR-5 gap fixed (own commit):** Stage 7 now reads posted months of loans that are no longer live (completed by the close).
+
+### For PR-8 (sales)
+
+- **K8 sales guard (planner ruling Q9):** `sales_salary_computations` is unique per (employee_code, month, year, company),
+  so a sales rep can have two rows in one month. PR-8 must make the second company's Stage 7 plan ₹0 for a loan whose
+  deduction for that loan + month + payroll already belongs to the other company's salary row (plant needs no such guard:
+  its table is unique per employee-month; PR-6 added a hard check + the close-time payslip check).
+- Replace the sales branch of `closeReadiness` (`SALES_CLOSE_NOT_WIRED`) with: active `computed` sales upload for M, and
+  a row on Hold counts as held. `checkPayslipLedger` and the sweep are plant-only today.
+
+### For PR-6b (close screen)
+
+`GET /api/loans/close/preview?month&year` (readiness, would-post count/amount, held, shortfalls, no-salary, mismatches),
+`POST /api/loans/close {month, year}` (finance / admin; 201; 409 `ALREADY_CLOSED`; 400 readiness codes
+`NOT_NEEDED`, `STAGE7_NOT_COMPUTED`, `EARLIER_MONTH_OPEN`, `MONTH_NOT_ENDED`), `GET /api/loans/closes` (history, notes
+parsed), `POST /api/loans/deductions/:id/reverse` (admin). Company-restricted users get 403 on preview / close.
+
+### Loans PR-6 check (read-only, after deploy)
+
+```sql
+SELECT name FROM sqlite_master WHERE name IN ('loan_adjustments','loan_adjustments_no_update','loan_adjustments_no_delete');  -- 3
+SELECT (SELECT COUNT(*) FROM loan_closes), (SELECT COUNT(*) FROM loan_adjustments), (SELECT COUNT(*) FROM loans);              -- 0, 0, 0
+SELECT value FROM policy_config WHERE key = 'loans_disbursement_enabled';                                                     -- '0'
+-- after 13 Oct 2026 06:15 IST (00:45 UTC): still nothing written by the loan job
+SELECT COUNT(*) FROM loan_closes;                                                                                             -- 0
+SELECT COUNT(*) FROM notifications WHERE type LIKE 'LOAN_%';                                                                  -- 0
+```
+Then checks 1–3 below. Railway log line at boot: `[loans-close] daily job scheduled (45 0 * * * UTC = 06:15 IST)`.
+
+**Cutover gate:** disbursement may be switched on only after this check passes (see "Cutover and SOP items" above).
+
 ## Post-merge checks
 
 Run after every PR that touches salary, and after every deploy. Both queries are read-only;
@@ -329,3 +383,4 @@ FROM sales_salary_computations WHERE month = ? AND year = ?;
 | 2026-10-09 | Loans PR-4 | Screens built | Frontend only. Dist on main = fresh build (0 diffs). Browser check 63/63 (scratch DB, real logins, gate 0 then 1). Self-debug: 5-second GET cache made mutations look ignored → loan reads send `Cache-Control: no-cache`. Backend 31/667. |
 | 2026-10-09 | Loans PR-2 | Engine built | `services/loans/` (15 files), 7 new suites, simulation script. Suite 454 → 588 (3 clean runs). Simulation: 13 loans × 12 months reconcile exactly, exit 0. |
 | 2026-10-10 | Loans PR-5 | Built | Q1 earned-base fix, per-employee savepoint, Stage 7 loan step (`services/loans/stage7.js`), simulation. Suite 692 → 713 (36 suites). No-loan simulation dump byte-identical on origin/main and the branch (210 rows); full mode (5 loans, re-run, reimport) all checks pass, drift 0, component-short 0. |
+| 2026-10-10 | Loans PR-6 | Built | Loan close, sweep, daily job, opposite entries, hold-release guard, close API, drift invariants. Suite 713 → 753 (41 suites). Close simulation 7 loans × 4 months PASS; `--empty` 84 tables unchanged. |
