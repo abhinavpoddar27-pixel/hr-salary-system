@@ -12,15 +12,17 @@
 - PR-2 feat/lwf-deduction — NOT STARTED
 - PR-3 feat/statutory-filing — NOT STARTED
 
+## STEPS DONE
+- Phase 0 — dd1d849 (rebased on d1ad7bf; baseline 42/769 green)
+- STEP 1 — eca75e2
+- STEP 2 — 1aef14d
+- STEP 3 — d7ce444 `feat(statutory): flag file parser and planner`. statutoryFlagsService.test.js 20 tests (parse ×6, lookups ×3, plan ×11 incl. T7, T15, T17-plan, malformed date). Parser uses SheetJS raw:true (formatted text turned a 12-digit UAN into '1.00012E+11' — caught while writing the parser).
+
 ## LAST STEP
-STEP 2 done — commit 1aef14d `fix(statutory): remove the startup PF/ESI reset (L2)`.
-T8 (3 tests, on withLiveDefaults DEFAULT-1 fixture) green; the T8 flag test + source-grep test FAIL with the
-reset restored (verified via stash). Full suite 43 / 779 green.
-STEP 1 done — eca75e2.
+STEP 3 — d7ce444 `feat(statutory): flag file parser and planner`. statutoryFlagsService.test.js 20 tests (parse ×6, lookups ×3, plan ×11 incl. T7, T15, T17-plan, malformed date). Parser uses SheetJS raw:true (formatted text turned a 12-digit UAN into '1.00012E+11' — caught while writing the parser).
 
 ## NEXT STEP
-STEP 3: services/statutoryFlags.js read half — parseFlagFile, planFlagChanges, structureForDate, carryFlags.
-Tests T7, T14, T15 (plan).
+STEP 4: service write half — applyFlagChanges (immediate txn, batch row first, re-plan inside, freeze S / effective E / later rows / master / numbers / audit on the passed handle) + buildUndoWorkbook. Tests T1–T6, T10a, T16, T17.
 
 ## OWNER RULINGS ADDED DURING THE BUILD
 (record date + ruling; BUILD_PLAN §1 holds the original set)
@@ -37,6 +39,8 @@ Tests T7, T14, T15 (plan).
 - backend/src/__tests__/helpers/statutoryFixture.js (new, STEP 1)
 - backend/src/__tests__/statutorySchema.test.js (new, STEP 1; T8 added STEP 2)
 - statutoryFixture.js: withLiveDefaults(db) + dflt() (STEP 2)
+- backend/src/services/statutoryFlags.js (new, STEP 3)
+- backend/src/__tests__/statutoryFlagsService.test.js (new, STEP 3)
 
 ## FRAGILE-FILE EDITS (before / after)
 - STEP 1 schema.js — BEFORE (lines 2214–2218 on d1ad7bf):
@@ -67,3 +71,4 @@ After STEP 1: 43 / 776, 0 failures.
 After STEP 2: 43 / 779, 0 failures.
 (The older "tdsCalculation 3 red / protectedWrite flaky" note is obsolete — both were fixed before d1ad7bf.)
 Frontend build: OK, dist reproduces byte-identical.
+After STEP 3: 44 / 799, 0 failures.
