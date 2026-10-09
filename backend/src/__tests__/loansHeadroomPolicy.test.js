@@ -28,10 +28,12 @@ describe('headroom', () => {
     const row = { gross_earned: 25000, ot_pay: 3000, holiday_duty_pay: 1000, pf_employee: 1800, esi_employee: 0, tds: 0,
       advance_recovery: 2000, late_coming_deduction: 500, early_exit_deduction: 250, other_deductions: 100, lop_deduction: 0,
       professional_tax: 0, loan_recovery: 9999 };
-    expect(H.earnedBase(row, 'plant')).toBe(2100000);
+    // Plant gross_earned already excludes OT and holiday duty (salaryComputation.js),
+    // so they are NOT subtracted again (Loans PR-5 fix of the PR-2 definition).
+    expect(H.earnedBase(row, 'plant')).toBe(2500000);
     expect(H.priorDeductions(row, 'plant')).toBe(465000); // loan_recovery never counted
     expect(H.earnedBase({ gross_earned: 18000 }, 'sales')).toBe(1800000);
-    expect(H.EARNED_BASE_DEFINITION.plant.minus).toEqual(['ot_pay', 'holiday_duty_pay']);
+    expect(H.EARNED_BASE_DEFINITION.plant.minus).toEqual([]);
     expect(H.PRIOR_DEDUCTION_COMPONENTS.plant).not.toContain('loan_recovery');
     expect(() => H.earnedBase(row, 'x')).toThrow();
   });
