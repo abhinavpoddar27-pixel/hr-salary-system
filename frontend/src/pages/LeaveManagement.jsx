@@ -263,6 +263,14 @@ function LedgerPanel({ code, year }) {
 export default function LeaveManagement() {
   const { month, year, dateProps } = useDateSelector({ mode: 'month', syncToStore: true })
   const { selectedCompany, user } = useAppStore()
+  // Role flags must be declared before any query below reads them: a `const`
+  // read before its line throws "Cannot access … before initialization" and
+  // takes the whole page down (it did, for every role, until Oct 2026).
+  // Approve/reject used to post approved_by: 'admin' regardless of who clicked.
+  const role = normalizeRole(user?.role)
+  const isAdmin = role === 'admin'
+  const isHrOrAdmin = role === 'hr' || role === 'admin'
+  const actor = user?.username || user?.name || 'unknown'
   const queryClient = useQueryClient()
   const [mainTab, setMainTab] = useState('applications')
   const [statusFilter, setStatusFilter] = useState('All')
@@ -366,11 +374,6 @@ export default function LeaveManagement() {
   })
   const transactions = txnRes?.data?.data || []
 
-  // Approve/reject used to post approved_by: 'admin' regardless of who clicked.
-  const role = normalizeRole(user?.role)
-  const isAdmin = role === 'admin'
-  const isHrOrAdmin = role === 'hr' || role === 'admin'
-  const actor = user?.username || user?.name || 'unknown'
 
   const afterLeaveChange = () => {
     queryClient.invalidateQueries({ queryKey: ['leave-applications'] })
