@@ -722,35 +722,18 @@ router.get('/payslip/:code', (req, res) => {
 });
 
 /**
- * PUT /api/payroll/salary/:code/manual-deductions
+ * PUT /api/payroll/salary/:code/manual-deductions — RETIRED (Oct 2026).
+ * Rewrote deductions/net with no role guard, no audit row, no company filter,
+ * and a formula that omitted late_coming_deduction + early_exit_deduction.
+ * Stage 7 re-derives advance/TDS/other on every compute, and nothing in the
+ * frontend calls this. Kept registered so a stale client gets an explicit 410
+ * rather than a 404. Writes nothing.
  */
 router.put('/salary/:code/manual-deductions', (req, res) => {
-  const db = getDb();
-  const { code } = req.params;
-  const { month, year, advanceRecovery, tds, otherDeductions } = req.body;
-
-  // Recalculate total_deductions, net_salary, total_payable, take_home
-  //   net          = gross_earned − deductions   (base only, no OT/ED)
-  //   total_payable = net + ot_pay + holiday_duty_pay
-  //   take_home    = total_payable + ed_pay
-  db.prepare(`
-    UPDATE salary_computations SET
-      advance_recovery = ?, tds = ?, other_deductions = ?,
-      total_deductions = pf_employee + esi_employee + professional_tax + ? + ? + lop_deduction + ? + COALESCE(loan_recovery, 0),
-      net_salary = MAX(0, gross_earned - (pf_employee + esi_employee + professional_tax + ? + ? + lop_deduction + ? + COALESCE(loan_recovery, 0))),
-      total_payable = MAX(0, gross_earned - (pf_employee + esi_employee + professional_tax + ? + ? + lop_deduction + ? + COALESCE(loan_recovery, 0))) + COALESCE(ot_pay, 0) + COALESCE(holiday_duty_pay, 0),
-      take_home = MAX(0, gross_earned - (pf_employee + esi_employee + professional_tax + ? + ? + lop_deduction + ? + COALESCE(loan_recovery, 0))) + COALESCE(ot_pay, 0) + COALESCE(holiday_duty_pay, 0) + COALESCE(ed_pay, 0)
-    WHERE employee_code = ? AND month = ? AND year = ?
-  `).run(
-    advanceRecovery || 0, tds || 0, otherDeductions || 0,
-    advanceRecovery || 0, tds || 0, otherDeductions || 0,
-    advanceRecovery || 0, tds || 0, otherDeductions || 0,
-    advanceRecovery || 0, tds || 0, otherDeductions || 0,
-    advanceRecovery || 0, tds || 0, otherDeductions || 0,
-    code, month, year
-  );
-
-  res.json({ success: true });
+  return res.status(410).json({
+    success: false,
+    error: 'This endpoint has been retired. Advance, TDS and other deductions are derived in Stage 7.'
+  });
 });
 
 /**
