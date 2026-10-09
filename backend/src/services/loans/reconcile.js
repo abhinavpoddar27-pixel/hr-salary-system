@@ -9,7 +9,7 @@
  */
 const { toPaise, toRupees } = require('./money');
 const { monthIndex, fromIndex, dateToMonth, monthLabel } = require('./months');
-const { getLoan, getInstalments, openPaise } = require('./common');
+const { getLoan, getInstalments, openPaise, finalMonthOf } = require('./common');
 
 /** Opposite entries of one loan (Loans PR-6); [] before the table exists. */
 function adjustmentsOf(db, loanId) {
@@ -118,17 +118,35 @@ function loanStatement(db, loanId) {
   return { ok: true, loanId, employeeCode: loan.employee_code, company: loan.company, status: loan.status, rows, closing: toRupees(bal) };
 }
 
-/** Write-offs in a month (IST), for TDS in the final month (D-7, K35; Q4 pending CA). */
-function writeOffsForTds(db, { month, year }) {
-  return db.prepare(`
+/**
+ * Write-offs for TDS (D-7, K35; Q4 pending CA). Keyed by the write-off month
+ * in IST (planner ruling Q-A, Loans PR-7). Each row also carries the loan's
+ * exitDate and finalMonth (the final payroll, null for a loan never flagged
+ * for exit); basis 'final' lists by the final month instead.
+ * @param {{month:number, year:number, basis?:'writeoff'|'final'}} q
+ */
+function writeOffsForTds(db, { month, year, basis = 'writeoff' }) {
+  const rows = db.prepare(`
     SELECT id AS loanId, borrower_type AS borrowerType, employee_code AS employeeCode, company, loan_type AS loanType,
-           written_off_amount AS amount, status, written_off_at AS writtenOffAt, written_off_by AS writtenOffBy, write_off_reason AS reason
+           written_off_amount AS amount, status, written_off_at AS writtenOffAt, written_off_by AS writtenOffBy, write_off_reason AS reason,
+           exit_flag, exit_date, exit_flagged_at,
+           CAST(strftime('%m', datetime(written_off_at, '+330 minutes')) AS INTEGER) AS woMonth,
+           CAST(strftime('%Y', datetime(written_off_at, '+330 minutes')) AS INTEGER) AS woYear
       FROM loans
      WHERE written_off_amount > 0
-       AND CAST(strftime('%m', datetime(written_off_at, '+330 minutes')) AS INTEGER) = ?
-       AND CAST(strftime('%Y', datetime(written_off_at, '+330 minutes')) AS INTEGER) = ?
-     ORDER BY company, employee_code
-  `).all(month, year);
+     ORDER BY company, employee_code, id
+  `).all();
+  return rows
+    .map(({ exit_flag: flagged, exit_date: exitDate, exit_flagged_at: flaggedAt, woMonth, woYear, ...r }) => ({
+      ...r,
+      exitDate: flagged === 1 ? exitDate || null : null,
+      finalMonth: flagged === 1 ? finalMonthOf({ exit_date: exitDate, exit_flagged_at: flaggedAt }) : null,
+      writeOffMonth: { month: woMonth, year: woYear },
+    }))
+    .filter((r) => {
+      const m = basis === 'final' ? r.finalMonth : r.writeOffMonth;
+      return !!m && m.month === Number(month) && m.year === Number(year);
+    });
 }
 
 module.exports = { reconcileLoan, reconcileAll, loanStatement, writeOffsForTds };

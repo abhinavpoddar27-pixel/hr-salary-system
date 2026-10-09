@@ -160,6 +160,43 @@ function exitFinalPayrollWarnings(db, payroll, m) {
   return out;
 }
 
+/**
+ * Finance's exit list (GET /api/loans/exit-residuals).
+ *  residuals: recover_at_exit, final payroll past, balance > 0 — residual
+ *    (receipt / write-off) and heldPending (a held final salary still waiting
+ *    for release or the D-14 days); stage 'held_pending' while anything is held.
+ *  awaitingFinalPayroll: recover_at_exit, final payroll still open.
+ * @param {{companies?: string[]|null}} opts
+ */
+function listExitResiduals(db, { companies = null } = {}) {
+  const loans = db.prepare("SELECT * FROM loans WHERE status = 'recover_at_exit' ORDER BY company, employee_code, id").all()
+    .filter((l) => !companies || companies.includes(l.company));
+  const nameOf = db.prepare('SELECT name, department FROM employees WHERE code = ?');
+  const pending = db.prepare("SELECT kind FROM loan_requests WHERE loan_id = ? AND status = 'pending'");
+  const out = { residuals: [], awaitingFinalPayroll: [] };
+  for (const l of loans) {
+    const who = l.borrower_type === 'plant' ? (nameOf.get(l.employee_code) || {}) : {};
+    const F = finalMonthOf(l);
+    const balance = toPaise(l.remaining_balance);
+    const row = {
+      loanId: l.id, borrowerType: l.borrower_type, employeeCode: l.employee_code, employeeName: who.name || null, department: who.department || null,
+      company: l.company, loanType: l.loan_type, exitDate: l.exit_date || null, finalMonth: F, balance: toRupees(balance),
+      pendingRequest: (pending.get(l.id) || {}).kind || null,
+    };
+    if (isFinalMonthPast(db, l)) {
+      if (balance <= 0) continue;
+      const held = heldPendingPaise(db, l.id);
+      out.residuals.push({ ...row, residual: toRupees(exitResidualPaise(db, l.id)), heldPending: toRupees(held), stage: held > 0 ? 'held_pending' : 'residual' });
+    } else {
+      const ins = db.prepare(`SELECT COALESCE(SUM(amount_due), 0) AS v FROM loan_instalments WHERE loan_id = ? AND due_month = ? AND due_year = ?
+                                AND status IN ('scheduled','provisional')`).get(l.id, F.month, F.year).v;
+      out.awaitingFinalPayroll.push({ ...row, dueInFinalPayroll: toRupees(toPaise(ins)), residual: toRupees(exitResidualPaise(db, l.id)) });
+    }
+  }
+  return out;
+}
+
 module.exports = {
+  listExitResiduals,
   consolidateForExit, finalMonthOf, isFinalMonthPast, exitLoansForMonth, heldPendingPaise, exitFinalPayrollWarnings,
 };
