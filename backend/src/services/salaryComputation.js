@@ -300,11 +300,11 @@ function computeEmployeeSalary(db, employee, month, year, company, requestId = '
       try {
         db.prepare(`INSERT OR REPLACE INTO salary_structures
           (employee_id, effective_from, gross_salary, basic, da, hra, special_allowance, other_allowances,
-           basic_percent, hra_percent, da_percent, pf_applicable, esi_applicable, pt_applicable, pf_wage_ceiling)
-          VALUES (?, '2025-01-01', ?, ?, 0, ?, 0, 0, ?, ?, 0, ?, ?, ?, 15000)`).run(
+           basic_percent, hra_percent, da_percent, pf_applicable, esi_applicable, lwf_applicable, pt_applicable, pf_wage_ceiling)
+          VALUES (?, '2025-01-01', ?, ?, 0, ?, 0, 0, ?, ?, 0, ?, ?, ?, ?, 15000)`).run(
             employee.id, gross, basic, hra,
             basicPct, hraPct,
-            employee.pf_applicable || 0, employee.esi_applicable || 0, employee.pt_applicable ?? 1
+            employee.pf_applicable || 0, employee.esi_applicable || 0, employee.lwf_applicable || 0, employee.pt_applicable ?? 1
         );
       } catch (e) { /* structure may already exist */ }
       salStruct = db.prepare(`

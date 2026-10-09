@@ -217,3 +217,93 @@ describe('guards (STEP 6)', () => {
 });
 
 module.exports = { snapshot };
+
+// ═══════════════════════ STEP 7 — salary approval + auto-create ═══════════════════════
+
+function pendingRequest(code, newStructure) {
+  const emp = db.prepare('SELECT id FROM employees WHERE code = ?').get(code);
+  return Number(db.prepare(`INSERT INTO salary_change_requests (employee_id, employee_code, requested_by, old_gross, new_gross, old_structure, new_structure, reason, status)
+                            VALUES (?, ?, 'hr1', 15000, ?, '{}', ?, 't', 'Pending')`)
+    .run(emp.id, code, newStructure.gross_salary || 0, JSON.stringify(newStructure)).lastInsertRowid);
+}
+
+describe('T9b — salary approval carries the in-force flags', () => {
+  test('approval (effectiveFrom 2026-10-01) → new row carries ESI/LWF ON from the upload, request JSON flags ignored; master gross only', async () => {
+    const e = uploaded('W130');
+    db.prepare('UPDATE salary_structures SET pt_applicable = 0, basic_percent = 47, hra_percent = 21, da_percent = 3, pf_wage_ceiling = 14000 WHERE employee_id = ?').run(e.id);
+    const id = pendingRequest('W130', { gross_salary: 18000, basic: 9000, hra: 3600, other_allowances: 5400, pf_applicable: 1, esi_applicable: 0 });
+    const r = await api.request('PUT', `/api/salary-input/approve/${id}`, { as: 'fin1', body: { effectiveFrom: '2026-10-01' } });
+    expect(r.status).toBe(200);
+    const row = S.plantRows(db, e).find((x) => x.effective_from === '2026-10-01');
+    expect(row).toMatchObject({ gross_salary: 18000, pf_applicable: 0, esi_applicable: 1, lwf_applicable: 1,
+      pt_applicable: 0, basic_percent: 47, hra_percent: 21, da_percent: 3, pf_wage_ceiling: 14000 });
+    expect(S.master(db, e)).toMatchObject({ gross_salary: 18000, pf_applicable: 0, esi_applicable: 1, lwf_applicable: 1 });
+  });
+
+  test('approval with no effectiveFrom (today) → carries the flags in force today', async () => {
+    const e = uploaded('W131');
+    const id = pendingRequest('W131', { gross_salary: 16000, basic: 8000, hra: 3200, other_allowances: 4800, esi_applicable: 0 });
+    await api.request('PUT', `/api/salary-input/approve/${id}`, { as: 'fin1', body: {} });
+    const today = new Date().toISOString().slice(0, 10);
+    const row = S.plantRows(db, e).find((x) => x.effective_from === today);
+    expect(S.flags(row)).toEqual(SF.carryFlags(db, 'plant', e.id, today));
+    expect(S.flags(row)).toEqual({ pf: 0, esi: 1, lwf: 1 }); // today is after 2026-09-01
+  });
+
+  test('request-change strips flag keys and returns ignoredFields', async () => {
+    uploaded('W132');
+    const r = await api.request('POST', '/api/salary-input/request-change', { as: 'hr1', body: {
+      employeeCode: 'W132', reason: 't', newStructure: { basic: 9000, hra: 3600, pf_applicable: 1, esi_applicable: 0, lwf_applicable: 0 },
+    } });
+    expect(r.body).toMatchObject({ success: true, ignoredFields: ['pf_applicable', 'esi_applicable', 'lwf_applicable'] });
+    const ns = JSON.parse(db.prepare("SELECT new_structure FROM salary_change_requests WHERE employee_code = 'W132' ORDER BY id DESC").get().new_structure);
+    expect(ns).toEqual({ basic: 9000, hra: 3600 });
+  });
+});
+
+describe('T11b — back-dated plant approval does not leak the new flags into earlier months', () => {
+  test('effectiveFrom 2026-05-15 after the upload → May–Aug compute unchanged, Sep still ON; bad format → 400', async () => {
+    const e = S.plant(db, { code: 'W133', gross_salary: 15000 });
+    S.plantStructure(db, e, '2025-01-01', { gross_salary: 15000 });
+    for (const m of [5, 6, 7, 8, 9]) S.plantMonth(db, e, m, 2026);
+    const before = {};
+    for (const m of [5, 6, 7, 8]) before[m] = S.computePlant(db, e, m, 2026);
+    expect(S.applyFile(db, 'plant', S.plantFile(S.prow('W133', 1, 1, 1))).ok).toBe(true);
+    // gross unchanged so the comparison isolates the flags
+    const id = pendingRequest('W133', { gross_salary: 15000, basic: 7500, hra: 3000, other_allowances: 4500, pf_applicable: 1, esi_applicable: 1 });
+    const bad = await api.request('PUT', `/api/salary-input/approve/${id}`, { as: 'fin1', body: { effectiveFrom: '2026-5-15' } });
+    expect(bad.status).toBe(400);
+    expect((await api.request('PUT', `/api/salary-input/approve/${id}`, { as: 'fin1', body: { effectiveFrom: '15/05/2026' } })).status).toBe(400);
+    const ok = await api.request('PUT', `/api/salary-input/approve/${id}`, { as: 'fin1', body: { effectiveFrom: '2026-05-15' } });
+    expect(ok.status).toBe(200);
+    const may = S.plantRows(db, e).find((x) => x.effective_from === '2026-05-15');
+    expect(S.flags(may)).toEqual({ pf: 0, esi: 0, lwf: 0 });
+    for (const m of [6, 7, 8]) {
+      const after = S.computePlant(db, e, m, 2026);
+      expect({ pf: after.pf_employee, esi: after.esi_employee }).toEqual({ pf: before[m].pf_employee, esi: before[m].esi_employee });
+      expect(after.net_salary).toBeCloseTo(before[m].net_salary, 2);
+    }
+    const sep = S.computePlant(db, e, 9, 2026);
+    expect(sep.esi_employee).toBeGreaterThan(0);
+    expect(sep.pf_employee).toBeGreaterThan(0);
+  });
+});
+
+describe('salaryComputation.js 301–308 auto-create lists lwf', () => {
+  test('employee with gross and no structure → auto-created row carries the master flags incl. LWF', () => {
+    const e = S.plant(db, { code: 'W134', gross_salary: 14000 });
+    db.prepare('UPDATE employees SET lwf_applicable = 1, esi_applicable = 1 WHERE id = ?').run(e.id);
+    S.plantMonth(db, e, 9, 2026);
+    S.computePlant(db, e, 9, 2026);
+    const rows = S.plantRows(db, e);
+    expect(rows.map((r) => [r.effective_from, S.flags(r)])).toEqual([['2025-01-01', { pf: 0, esi: 1, lwf: 1 }]]);
+  });
+
+  test('a brand-new employee (trigger → 0) → auto-created row 0/0/0 on the DEFAULT 1 table', () => {
+    const e = S.plant(db, { code: 'W135', gross_salary: 14000 });
+    S.plantMonth(db, e, 9, 2026);
+    const sc = S.computePlant(db, e, 9, 2026);
+    expect(S.plantRows(db, e).map(S.flags)).toEqual([{ pf: 0, esi: 0, lwf: 0 }]);
+    expect(sc).toMatchObject({ pf_employee: 0, esi_employee: 0 });
+  });
+});
