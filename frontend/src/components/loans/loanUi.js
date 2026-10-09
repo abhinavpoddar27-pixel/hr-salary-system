@@ -42,7 +42,36 @@ export const KIND_LABEL = { defer: 'Defer', restructure: 'Restructure', write_of
 
 export const ORIGIN_LABEL = {
   schedule: 'Schedule', shortfall: 'Shortfall', no_salary: 'No salary', held: 'Held',
-  deferred: 'Deferred', restructure: 'Restructure',
+  deferred: 'Deferred', restructure: 'Restructure', reversal: 'Reversal',
+}
+
+/** Loans PR-6: opposite entries for a posted deduction (loan_adjustments.kind). */
+export const ADJUSTMENT_KIND = { reversal: 'Admin reversal', unborne: 'Pay could not bear it' }
+
+const TRIGGER_LABEL = { manual: 'Manual', auto: 'Automatic', catch_up: 'Catch-up at start-up' }
+export const triggerLabel = (t) => TRIGGER_LABEL[t] || t || '—'
+
+/**
+ * Loan close readiness codes (services/loans/close.js closeReadiness) in plain
+ * English. `m` = the month label, `r` = the readiness object.
+ */
+export function closeReadinessText(r, m) {
+  if (!r) return ''
+  switch (r.code) {
+    case 'NOT_NEEDED': return `Nothing to close for ${m}: no loan deduction or instalment falls in this month.`
+    case 'STAGE7_NOT_COMPUTED': return `Plant salary (Stage 7) for ${m} is not computed yet. The close waits for it.`
+    case 'EARLIER_MONTH_OPEN': return 'An earlier month is still open. Months close oldest first.'
+    case 'MONTH_NOT_ENDED': return `${m} has not ended yet (IST). A month can be closed once it is over.`
+    case 'ALREADY_CLOSED': return `${m} is already closed.`
+    case 'SALES_CLOSE_NOT_WIRED': return 'The sales loan close arrives with Loans PR-8.'
+    default: return r.message || r.code || ''
+  }
+}
+
+/** A user limited to some companies (auth returns ['*'] for all companies). */
+export function companyRestricted(user) {
+  const ac = user?.allowedCompanies
+  return Array.isArray(ac) && ac.length > 0 && !ac.includes('*')
 }
 
 export const LIVE_STATES = ['active', 'recover_at_exit']
@@ -61,6 +90,8 @@ export function loanCaps(user) {
     canRaise: ['hr', 'finance'].includes(role),          // admin: ADMIN_CANNOT_RAISE
     canDecide: role === 'admin',
     canPay: ['finance', 'admin'].includes(role),
+    canClose: ['finance', 'admin'].includes(role),       // run the loan close early (SPEC §7)
+    canReverse: role === 'admin',                        // reverse a posted deduction (SPEC §7)
   }
 }
 

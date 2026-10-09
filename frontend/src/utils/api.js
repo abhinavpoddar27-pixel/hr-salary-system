@@ -179,6 +179,11 @@ export const requestLoanChange = (id, data) => api.post(`/loans/${id}/requests`,
 export const approveLoanChange = (rid, data) => api.post(`/loans/requests/${rid}/approve`, data)
 export const rejectLoanChange = (rid, data) => api.post(`/loans/requests/${rid}/reject`, data)
 export const withdrawLoanChange = (rid, data) => api.post(`/loans/requests/${rid}/withdraw`, data)
+// Loans PR-6b: the monthly loan close (plant) and the admin reversal of a posted deduction.
+export const getLoanClosePreview = (month, year) => api.get('/loans/close/preview', { params: { month, year }, ...fresh })
+export const runLoanClose = (month, year) => api.post('/loans/close', { month, year })
+export const getLoanCloses = () => api.get('/loans/closes', fresh)
+export const reverseLoanDeduction = (id, reason) => api.post(`/loans/deductions/${id}/reverse`, { reason })
 export const getAlerts = (month, year, unread, opts = {}) => api.get('/analytics/alerts', { params: { month, year, ...(unread ? { unread: 'true' } : {}), ...opts } })
 export const generateAlerts = (month, year) => api.post('/analytics/alerts/generate', { month, year })
 export const markAlertRead = (id) => api.put(`/analytics/alerts/${id}/read`)
