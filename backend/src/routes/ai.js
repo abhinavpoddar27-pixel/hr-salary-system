@@ -366,10 +366,10 @@ router.post('/explain-salary', async (req, res) => {
 
   const loans = db.prepare(`
     SELECT l.*,
-      (SELECT SUM(emi_amount) FROM loan_repayments
-        WHERE loan_id = l.id AND month = ? AND year = ? AND deducted_from_salary = 1) AS emi_this_month
+      (SELECT SUM(amount) FROM loan_deductions
+        WHERE loan_id = l.id AND month = ? AND year = ? AND state IN ('provisional', 'posted')) AS emi_this_month
     FROM loans l
-    WHERE l.employee_code = ? AND l.status IN ('Active', 'active')
+    WHERE l.employee_code = ? AND l.borrower_type = 'plant' AND l.status IN ('active', 'recover_at_exit')
   `).all(monthInt, yearInt, employee_code);
 
   const corrections = db.prepare(`

@@ -6,23 +6,24 @@ after a context compaction or a new session there is a file to read and build fr
 ## RESUME (read this first)
 
 - **As of:** 2026-10-09.
-- **Current state:** P1 (#48), P2 (#49), P3 (#50), Loans PR-0 (#51) and Loans PR-1 (#52) are merged.
+- **Current state:** P1 (#48), P2 (#49), P3 (#50), Loans PR-0 (#51), PR-1 (#52) and PR-2 (#53) are merged.
   PR-1 is verified on production: 6 tables, `loan_repayments` is a view, 17 flag + `loan%` keys, loans = 0,
-  drift still the 1 known row. Loans PR-2 (engine) is open on `feat/loans-pr2`, waiting for review.
-- **Next PR:** Loans PR-3 (API), branch `feat/loans-pr3`, after PR-2 is merged. Read "Carried to PR-3" below first.
+  drift still the 1 known row. Loans PR-3 (API) is open on `feat/loans-pr3`, waiting for review.
+- **Next PR:** Loans PR-4 (screens), branch `feat/loans-pr4`, after PR-3 is merged and its check below passes.
+  PR-4 rebuilds `frontend/src/utils/api.js` L157–170 and `Loans.jsx` on the PR-3 API (list in "Loans PR-3" below).
 - **Blockers:**
-  - Loans PR-2 review and merge (no post-merge check: nothing calls the engine yet).
+  - Loans PR-3 review and merge, then the "Loans PR-3 check" below.
   - Finance is checking the 35 re-held rows that were released to be paid, against what was
     actually paid. (There are 54 re-held rows in all: 35 released to be paid, 17 with notes
     saying already paid outside the app, 2 with nothing payable.)
   - HR is confirming the 98 Active employees who carry an exit date.
-- **Do not create a loan through the old `POST /api/loans`:** it fails against the new schema (raw SQLite
-  400) until PR-3 rebuilds the routes on `services/loans/`.
+- **Disbursement is switched OFF** (`policy_config.loans_disbursement_enabled = '0'`, Loans PR-3). Loans can be
+  raised, approved, rejected and cancelled, but no money can be recorded as paid out until the cutover step below.
 - **HR data gap that will block borrowers (production, 9 Oct 2026):** 148 Active plant employees have no
   date of joining (47 Permanent, 11 SILP, 3 Worker) and 23 Active Permanent have no gross. The engine
   refuses them (`SERVICE_UNKNOWN`, `GROSS_UNKNOWN`) and does not guess. HR should backfill before the pilot.
 - **Waiting on the owner:**
-  1. Review and merge Loans PR-2.
+  1. Review and merge Loans PR-3.
   2. The accounts Excel of the 10–30 running loans (needed for PR-10).
   3. Labour consultant: what the 50% cap is measured on; whether the 2-working-day exit rule
      applies (SPEC §12, Q1–Q2).
@@ -47,8 +48,8 @@ after a context compaction or a new session there is a file to read and build fr
 | P3 | `fix/retire-manual-deductions-endpoint` | Merged | #50 | 2026-10-09 | planner |
 | Loans PR-0 | `docs/loans-spec` | Merged | #51 | 2026-10-09 | n/a (docs only) |
 | Loans PR-1 | `feat/loans-pr1` | Merged | #52 | 2026-10-09 | verified (planner) |
-| Loans PR-2 | `feat/loans-pr2` | Open | see GitHub | — | none (engine not called yet) |
-| Loans PR-3 | `feat/loans-pr3` | Not started | — | — | — |
+| Loans PR-2 | `feat/loans-pr2` | Merged | #53 | 2026-10-09 | none (engine not called yet) |
+| Loans PR-3 | `feat/loans-pr3` | Open | see GitHub | — | "Loans PR-3 check" below |
 | Loans PR-4 | `feat/loans-pr4` | Not started | — | — | — |
 | Loans PR-5 | `feat/loans-pr5` | Not started | — | — | — |
 | Loans PR-6 | `feat/loans-pr6` | Not started | — | — | — |
@@ -119,7 +120,7 @@ Then checks 1–3 below (drift = the 1 known row; component-short = the 5 known 
     `EARNED_BASE_DEFINITION` and read only through `earnedBase()`. If the labour consultant (SPEC §12 Q1)
     redefines the cap base, change that table and nothing else.
 
-### Carried to PR-3
+### Carried to PR-3 (all done in Loans PR-3 — see its rulings below)
 
 - **Pending-request storage.** Defer, restructure and write-off requests need somewhere to wait for the
   admin. `loan_events` has no payload column, so PR-3 decides storage (probably a small `loan_requests`
@@ -130,6 +131,74 @@ Then checks 1–3 below (drift = the 1 known row; component-short = the 5 known 
   because that throws at load without `JWT_SECRET`.
 - Map engine refusal codes to HTTP statuses: `ROLE_NOT_ALLOWED` / `SELF_*` → 403; `*_NOT_FOUND` → 404;
   `NOT_ELIGIBLE` and the rest → 400; `CONCURRENT_CHANGE` → 409.
+
+## Loans PR-3 rulings (coordinator, 9 Oct 2026)
+
+Plan approved with a wider file list: `schema.js` (`loan_requests` inside `loansSchemaV2Ddl` + one seed line),
+`ai.js`, `config/schemaReference.js`, the `sqlConsole.js` snippet, `loanService.js` deleted, small engine edits
+(`requests.js` new; `cancelLoan`; `validatePolicyValue`; `approved → rejected`), `permissions.js`.
+
+- **A. Disbursement gate.** `policy_config.loans_disbursement_enabled`, seeded `'0'` (INSERT OR IGNORE). While it
+  is not exactly `'1'`, `POST /api/loans/:id/disburse` and the approval of a restructure **top-up** refuse with
+  **409 `DISBURSEMENT_DISABLED`**. `PUT /api/loans/policy` cannot set it (`POLICY_KEY_LOCKED`); it is not one of
+  the 16 editable keys. Raise / approve / reject / cancel / change requests all stay allowed.
+- **B. The admin cannot raise.** `POST /api/loans` and `POST /api/loans/:id/requests` by an admin →
+  **403 `ADMIN_CANNOT_RAISE`, "HR raises loans; admin approves"**. Enforced in the route and in
+  `requests.js requestChange`; the engine's `checkActor('request')` still lists admin (PR-2 tests, PR-10 import), so
+  the self-approval guard stays as the backstop.
+- Q1 `loan_requests` lives in `schema.js` inside `loansSchemaV2Ddl` (re-asserted every boot once migrated).
+- Q2 one pending change request per loan (partial unique index → 409 `REQUEST_ALREADY_PENDING`).
+- Q3 admin cancel of an approved-not-disbursed loan → status `rejected`, event `cancelled`, decision reason
+  "Cancelled after approval: …". No `cancelled` state (CHECK). A requester cannot withdraw a requested loan.
+- Q4 signed agreement = `agreementRef`, free text 3–200 characters, stored in `agreement_file_path`; required before
+  disbursement and for a top-up. **No file upload** — storage is decided with the DMS question before PR-4.
+- Q5 a top-up's mode / reference / date / agreementRef come in the admin's approve call.
+- Q6 sales borrowers refused (`SALES_LOANS_NOT_YET_ENABLED`) until PR-8.
+- Q8 `/deductions`, `/monthly-recovery/:m/:y` → 410, replaced by `GET /due`. Q9 `PUT /:id/approve|reject` kept,
+  `PUT /:id/close` → 410 (with `process-deductions`, `recover`, `skip`).
+- Q10 `GET/PUT /policy` in PR-3 (admin writes; one `audit_log` row per changed key). Q11 reads: admin, hr,
+  finance, viewer; supervisor / employee 403. Q12 the requester may withdraw their own pending change request.
+  Q13 receipts never pass `allowProvisional` (PR-6 decides). Q14 `users.allowed_companies` honoured.
+  Q15 notifications: admin on every new loan / change request (URGENT for Emergency / medical); finance + hr on
+  approvals; hr on rejection / cancel. Written directly to `notifications` (the scheduler helper de-duplicates
+  across roles).
+
+### Cutover and SOP items from Loans PR-3
+
+- **Cutover (after PR-6 is merged and verified, never before):** the owner switches disbursement on with one
+  deliberate write: `UPDATE policy_config SET value = '1' WHERE key = 'loans_disbursement_enabled'` — through the
+  SQL Console write flow (preview → confirm), handed over in the seven-field form. There is no screen for it.
+- **SOP:** HR (or finance) raises every loan and every defer / restructure / write-off request. The admin only
+  approves or rejects, and cannot raise — so nothing ever waits on an approver who does not exist.
+- **SOP:** the person who requested a loan cannot record its disbursement (finance must be a different user).
+- **SOP:** the signed agreement's reference (DMS number or physical file number) is entered at disbursement.
+
+### For PR-4 (screens): what PR-3 broke on purpose
+
+`frontend/src/utils/api.js` L157–170 → `pages/Loans.jsx`:
+- `createLoan` sends the old body (`principalAmount`, `tenureMonths`, `loanType: 'Personal Loan'`) → 400. New body:
+  `{employeeCode, company, loanType, principal, tenure, reason}` (plant only).
+- `approveLoan` / `rejectLoan` keep their paths (admin only; reject needs `reason`).
+- `closeLoan`, `processLoanDeductions`, `recoverLoanInstallment`, `skipLoanInstallment`, `getLoanDeductions`,
+  `getMonthlyLoanRecovery` → 410. Replacements: write-off request, loan close (PR-6), `POST /:id/receipts`,
+  defer request, `GET /due`.
+- `getLoans` / `getLoanStats` / `getLoanTypes` → 200 with new shapes (lower-case states; stats keys changed).
+- `Employees.jsx` Loans tab still renders (`paidEmis`, `totalRecovered` kept; badges go grey for lower-case states).
+  Mark Left dialog text ("close all active loans") is stale → PR-7.
+- New for the screens: `GET /queue`, `GET /:id` (with `approvalCheck`, `reconciliation`), `GET /:id/statement`,
+  `POST /eligibility`, `POST /:id/disburse|receipts|cancel|requests`, `POST /requests/:rid/approve|reject|withdraw`,
+  `GET|PUT /policy`. Hide raise buttons for the admin (`ADMIN_CANNOT_RAISE`) and the disburse button while
+  `stats.disbursementEnabled` is false.
+
+### Loans PR-3 check (read-only, after deploy)
+
+```sql
+SELECT name, type FROM sqlite_master WHERE name IN ('loan_requests', 'uniq_loan_requests_one_pending');  -- table, index
+SELECT value FROM policy_config WHERE key = 'loans_disbursement_enabled';                                -- '0'
+SELECT COUNT(*) FROM policy_config WHERE key = 'migration_loans_schema_v2_done' OR key LIKE 'loan%';     -- 18 (17 + gate)
+SELECT (SELECT COUNT(*) FROM loans), (SELECT COUNT(*) FROM loan_requests);                              -- 0, 0
+```
+Then drift check 1 (still the 1 known row). No salary code changed.
 
 ### Notes for PR-5 / PR-6
 
@@ -221,4 +290,6 @@ FROM sales_salary_computations WHERE month = ? AND year = ?;
 | 2026-10-09 | Loans PR-1 | Schema + Mark Left built | 2 commits; suite 421 → 453, 3 clean runs. Deploy simulation (origin/main schema → new code) rebuilds cleanly; real Stage 7 with a live loan: loan_recovery 0, drift 0, component-short 0. |
 | 2026-10-09 | Loans PR-1 | Review fix: Mark Left guard | Loan block runs only when `migration_loans_schema_v2_done` is set; otherwise skip + warn + audit remark, Mark Left still 200. New test proves 500 → 200. Suite 454. |
 | 2026-10-09 | Loans PR-2 | Plan approved | 13 rulings recorded above. Production read-only: 148 Active plant without DOJ, 23 Active Permanent without gross, 190 Active plant rows typed Sales, 73 Contract with is_contractor = 0, 2 Worker with is_contractor = 1. |
+| 2026-10-09 | Loans PR-3 | Plan approved | Rulings A (disbursement gate) and B (admin cannot raise) added; Q1–Q16 defaults approved. |
+| 2026-10-09 | Loans PR-3 | API built | `routes/loans.js` on the engine, `requests.js`, `loan_requests`, gate; `loanService.js` deleted. Suite 588 → 667 (31 suites). HTTP simulation on the real server: 55/55. |
 | 2026-10-09 | Loans PR-2 | Engine built | `services/loans/` (15 files), 7 new suites, simulation script. Suite 454 → 588 (3 clean runs). Simulation: 13 loans × 12 months reconcile exactly, exit 0. |

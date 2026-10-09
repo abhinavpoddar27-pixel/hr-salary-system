@@ -3501,6 +3501,30 @@ If description and screenshot are incoherent or unrelated, set summary_confidenc
       BEFORE DELETE ON loan_events
       BEGIN SELECT RAISE(ABORT, 'loan_events is append-only'); END;
 
+    -- Loans PR-3: defer / restructure / write-off requests waiting for the
+    -- admin. Lives in this DDL so the "already migrated" branch below creates
+    -- it on an existing database too (IF NOT EXISTS). One pending per loan.
+    CREATE TABLE IF NOT EXISTS loan_requests (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      loan_id INTEGER NOT NULL REFERENCES loans(id),
+      kind TEXT NOT NULL CHECK (kind IN ('defer','restructure','write_off')),
+      status TEXT NOT NULL DEFAULT 'pending'
+        CHECK (status IN ('pending','approved','rejected','withdrawn')),
+      payload TEXT NOT NULL DEFAULT '{}',
+      reason TEXT NOT NULL CHECK (length(trim(reason)) > 0),
+      requested_by TEXT NOT NULL,
+      requested_by_role TEXT NOT NULL,
+      requested_at TEXT NOT NULL DEFAULT (datetime('now')),
+      decided_by TEXT,
+      decided_at TEXT,
+      decision_reason TEXT,
+      result TEXT,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+    CREATE UNIQUE INDEX IF NOT EXISTS uniq_loan_requests_one_pending ON loan_requests(loan_id) WHERE status = 'pending';
+    CREATE INDEX IF NOT EXISTS idx_loan_requests_status ON loan_requests(status, requested_at);
+
     CREATE INDEX IF NOT EXISTS idx_loans_employee ON loans(employee_code, borrower_type);
     CREATE INDEX IF NOT EXISTS idx_loans_status ON loans(status);
     CREATE INDEX IF NOT EXISTS idx_loans_company_status ON loans(company, status);
@@ -3595,6 +3619,9 @@ If description and screenshot are incoherent or unrelated, set summary_confidenc
   insertPolicyIfMissing.run('loan_agreement_required', 'true', 'A scanned signed agreement is required before disbursement');
   insertPolicyIfMissing.run('loan_interest_rate', '0', 'Interest rate, % (interest-free only in v1)');
   insertPolicyIfMissing.run('loan_perquisite_threshold', '20000', 'Perquisite reporting threshold, ₹ aggregate (pending CA)');
+  // Loans PR-3 gate: no disbursement until Stage 7 (PR-5) + loan close (PR-6) can recover it.
+  // Switched to '1' deliberately at cutover; PUT /api/loans/policy cannot change it.
+  insertPolicyIfMissing.run('loans_disbursement_enabled', '0', 'Loan disbursement gate: 0 = disbursement refused (until PR-5/PR-6 are live); 1 = allowed. Switched on at cutover only');
 
   console.log('✅ Database schema initialized');
 }

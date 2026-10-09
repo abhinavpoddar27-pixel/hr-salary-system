@@ -17,7 +17,7 @@ const LOAN_STATES = Object.freeze(['requested', 'approved', 'rejected', 'active'
 
 const LOAN_TRANSITIONS = Object.freeze({
   requested: ['approved', 'rejected'],
-  approved: ['active'],
+  approved: ['active', 'rejected'],   // rejected = admin cancel before disbursement (Loans PR-3)
   active: ['completed', 'recover_at_exit', 'written_off'],
   recover_at_exit: ['settled_at_exit'],
   rejected: [],
@@ -61,6 +61,7 @@ const ACTION_ROLES = Object.freeze({
   request: ['hr', 'finance', 'admin'],
   approve: ['admin'],
   reject: ['admin'],
+  cancel: ['admin'],                          // approved-not-disbursed → rejected (Loans PR-3)
   disburse: ['finance', 'admin'],
   receipt: ['finance', 'admin'],
   request_change: ['hr', 'finance', 'admin'], // defer, restructure, write-off requests

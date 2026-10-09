@@ -119,7 +119,15 @@ router.get('/leave-history', requireEmployee, (req, res) => {
 router.get('/loans', requireEmployee, (req, res) => {
   const db = getDb();
   try {
-    const loans = db.prepare(`SELECT * FROM loans WHERE employee_code = ? AND status != 'Closed' ORDER BY created_at DESC`)
+    // Loans PR-3 (D12): the old filter (`!= 'Closed'`) showed Rejected loans. New state names are
+    // lower-case; rejected (incl. cancelled-after-approval) is hidden. Plant borrowers only — portal
+    // users are plant employees. Explicit columns: no agreement reference, no internal reasons.
+    const loans = db.prepare(`
+      SELECT id, loan_type, principal_amount, tenure_months, emi_amount, status, requested_at,
+             disbursed_amount, disbursed_on, first_emi_month, first_emi_year, remaining_balance
+        FROM loans
+       WHERE employee_code = ? AND borrower_type = 'plant' AND status != 'rejected'
+       ORDER BY requested_at DESC, id DESC`)
       .all(req.user.employee_code);
     res.json({ success: true, data: loans });
   } catch {

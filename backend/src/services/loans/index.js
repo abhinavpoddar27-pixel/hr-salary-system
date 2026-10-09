@@ -13,6 +13,7 @@ module.exports = {
   ...require('./ledger'),
   ...require('./receipts'),
   ...require('./changes'),
+  ...require('./requests'),
   ...require('./reconcile'),
   money: require('./money'),
   months: require('./months'),
