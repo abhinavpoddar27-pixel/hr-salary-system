@@ -6,21 +6,23 @@ after a context compaction or a new session there is a file to read and build fr
 ## RESUME (read this first)
 
 - **As of:** 2026-10-09.
-- **Current state:** P1 (#48), P2 (#49), P3 (#50) and Loans PR-0 (#51) are merged (main at `b738bea`).
-  Loans PR-1 (schema rebuild + Mark Left) is open on `feat/loans-pr1`, waiting for review.
-- **Next PR:** Loans PR-2 (engine), branch `feat/loans-pr2`, after PR-1 is merged and its
-  post-merge check passes.
+- **Current state:** P1 (#48), P2 (#49), P3 (#50), Loans PR-0 (#51) and Loans PR-1 (#52) are merged.
+  PR-1 is verified on production: 6 tables, `loan_repayments` is a view, 17 flag + `loan%` keys, loans = 0,
+  drift still the 1 known row. Loans PR-2 (engine) is open on `feat/loans-pr2`, waiting for review.
+- **Next PR:** Loans PR-3 (API), branch `feat/loans-pr3`, after PR-2 is merged. Read "Carried to PR-3" below first.
 - **Blockers:**
-  - Loans PR-1 review, merge and post-merge check (below, "Loans PR-1 check").
+  - Loans PR-2 review and merge (no post-merge check: nothing calls the engine yet).
   - Finance is checking the 35 re-held rows that were released to be paid, against what was
     actually paid. (There are 54 re-held rows in all: 35 released to be paid, 17 with notes
     saying already paid outside the app, 2 with nothing payable.)
   - HR is confirming the 98 Active employees who carry an exit date.
-- **Do not create a loan through the old `POST /api/loans` before PR-1 deploys:** a row in the old
-  table makes the rebuild refuse. Mark Left still works (it skips the loan block when the migration
-  flag is unset and says so in its audit remark), but that leaver's loans are not flagged.
+- **Do not create a loan through the old `POST /api/loans`:** it fails against the new schema (raw SQLite
+  400) until PR-3 rebuilds the routes on `services/loans/`.
+- **HR data gap that will block borrowers (production, 9 Oct 2026):** 148 Active plant employees have no
+  date of joining (47 Permanent, 11 SILP, 3 Worker) and 23 Active Permanent have no gross. The engine
+  refuses them (`SERVICE_UNKNOWN`, `GROSS_UNKNOWN`) and does not guess. HR should backfill before the pilot.
 - **Waiting on the owner:**
-  1. Review and merge Loans PR-1.
+  1. Review and merge Loans PR-2.
   2. The accounts Excel of the 10–30 running loans (needed for PR-10).
   3. Labour consultant: what the 50% cap is measured on; whether the 2-working-day exit rule
      applies (SPEC §12, Q1–Q2).
@@ -44,8 +46,8 @@ after a context compaction or a new session there is a file to read and build fr
 | P2 | `fix/stage6-no-reactivate-leavers` | Merged | #49 | 2026-10-09 | planner |
 | P3 | `fix/retire-manual-deductions-endpoint` | Merged | #50 | 2026-10-09 | planner |
 | Loans PR-0 | `docs/loans-spec` | Merged | #51 | 2026-10-09 | n/a (docs only) |
-| Loans PR-1 | `feat/loans-pr1` | Open | see GitHub | — | "Loans PR-1 check" below |
-| Loans PR-2 | `feat/loans-pr2` | Not started | — | — | — |
+| Loans PR-1 | `feat/loans-pr1` | Merged | #52 | 2026-10-09 | verified (planner) |
+| Loans PR-2 | `feat/loans-pr2` | Open | see GitHub | — | none (engine not called yet) |
 | Loans PR-3 | `feat/loans-pr3` | Not started | — | — | — |
 | Loans PR-4 | `feat/loans-pr4` | Not started | — | — | — |
 | Loans PR-5 | `feat/loans-pr5` | Not started | — | — | — |
@@ -90,6 +92,56 @@ SELECT COUNT(*) FROM policy_config
 SELECT (SELECT COUNT(*) FROM loans), (SELECT COUNT(*) FROM loan_repayments);  -- 0, 0
 ```
 Then checks 1–3 below (drift = the 1 known row; component-short = the 5 known rows).
+
+## Loans PR-2 rulings (coordinator, 9 Oct 2026)
+
+1. Ledger functions in PR-2 are **building blocks only** (`recordProvisional`, `clearProvisional`,
+   `postDeduction`, `moveInstalmentToEnd`). PR-5 / PR-6 own the loops, salary reads, closes, sweep and cron.
+2. First EMI month = the month after the disbursement month, skipping any month already closed for that
+   payroll. Later on request; never earlier.
+3. Extension limit = instalments added automatically (origin shortfall / no_salary / held) since the latest
+   restructure; approved defers do not count. At 3, nothing is added: the amount stays in the balance as
+   "uncovered", an `extension_limit_reached` event is written and a structured alert
+   (`type: 'loan_extension_limit_reached'`, `audience: 'finance'`, loan, employee, company, uncovered amount)
+   is returned for PR-6 to notify. A receipt clears the uncovered amount first; a restructure folds it in.
+4. Refuse if the employment type contains "contract" OR `is_contractor = 1`.
+5. Missing DOJ / gross → `SERVICE_UNKNOWN` / `GROSS_UNKNOWN`; no guessing.
+6. Top-up: recorded when the admin approves the restructure, with its own mode, reference, date and a fresh
+   signed agreement; `disbursed_amount` and the balance rise; `principal_amount` keeps the original.
+7. Receipt numbers `LR/<Indian FY>/<5-digit serial>`, e.g. `LR/2026-27/00001`.
+8. Disbursement by the loan's requester is refused; a receipt by the requester is allowed with a warning.
+9. `loanService.js` is left untouched in PR-2.
+10. No `schema.js` edit in PR-2. Defer / restructure / write-off functions take both requester and approver.
+11. Instalment rows are written at disbursement; approval stores the EMI and returns a preview.
+12. No withdrawal state for an approved-not-disbursed loan in PR-2 (PR-3 item below).
+13. Earned base (what the 50% cap is measured on) = plant `gross_earned − ot_pay − holiday_duty_pay`, sales
+    `gross_earned`. **Dependency:** it is defined only in `services/loans/headroom.js`
+    `EARNED_BASE_DEFINITION` and read only through `earnedBase()`. If the labour consultant (SPEC §12 Q1)
+    redefines the cap base, change that table and nothing else.
+
+### Carried to PR-3
+
+- **Pending-request storage.** Defer, restructure and write-off requests need somewhere to wait for the
+  admin. `loan_events` has no payload column, so PR-3 decides storage (probably a small `loan_requests`
+  table, which means a `schema.js` edit and a plan for it).
+- **Cancel an approved-not-disbursed loan:** admin only, with a reason and a `loan_events` row.
+- Delete `loanService.js` and rebuild `routes/loans.js` on `services/loans/`.
+- Routes pass `normalizeRole(req.user.role)` into the engine. The engine must not require `routes/auth.js`,
+  because that throws at load without `JWT_SECRET`.
+- Map engine refusal codes to HTTP statuses: `ROLE_NOT_ALLOWED` / `SELF_*` → 403; `*_NOT_FOUND` → 404;
+  `NOT_ELIGIBLE` and the rest → 400; `CONCURRENT_CHANGE` → 409.
+
+### Notes for PR-5 / PR-6
+
+- Stage 7 uses `planLoanDeduction()` + `computeHeadroom()` + `earnedBase()` / `priorDeductions()`, then
+  `recordProvisional()` per loan + month + payroll. A posted month returns `POSTED_FROZEN` with the posted
+  amount, which the re-run must deduct exactly.
+- An employee skipped on a re-run → `clearProvisional()` (the row becomes `reversed`).
+- The close must **insert its `loan_closes` row before posting**: the engine never places a new last
+  instalment in a month that is already closed, so writing the row first puts shortfalls after month M.
+- No salary row in a computed payroll → `moveInstalmentToEnd(reason 'no_salary')`. Held past the wait →
+  `moveInstalmentToEnd(reason 'held')`, which returns `staleDeductions` (the salary row is then stale, K28).
+- Every mutator returns `alerts[]`; PR-6 sends them.
 
 ## Post-merge checks
 
@@ -168,3 +220,5 @@ FROM sales_salary_computations WHERE month = ? AND year = ?;
 | 2026-10-09 | Loans PR-1 | Rebased onto `b738bea` | #48–#51 merged; line numbers unchanged in schema.js / employees.js. Baseline 19 suites / 421 tests. |
 | 2026-10-09 | Loans PR-1 | Schema + Mark Left built | 2 commits; suite 421 → 453, 3 clean runs. Deploy simulation (origin/main schema → new code) rebuilds cleanly; real Stage 7 with a live loan: loan_recovery 0, drift 0, component-short 0. |
 | 2026-10-09 | Loans PR-1 | Review fix: Mark Left guard | Loan block runs only when `migration_loans_schema_v2_done` is set; otherwise skip + warn + audit remark, Mark Left still 200. New test proves 500 → 200. Suite 454. |
+| 2026-10-09 | Loans PR-2 | Plan approved | 13 rulings recorded above. Production read-only: 148 Active plant without DOJ, 23 Active Permanent without gross, 190 Active plant rows typed Sales, 73 Contract with is_contractor = 0, 2 Worker with is_contractor = 1. |
+| 2026-10-09 | Loans PR-2 | Engine built | `services/loans/` (15 files), 7 new suites, simulation script. Suite 454 → 588 (3 clean runs). Simulation: 13 loans × 12 months reconcile exactly, exit 0. |
