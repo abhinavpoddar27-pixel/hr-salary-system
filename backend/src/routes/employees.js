@@ -8,7 +8,15 @@ const { safeTrigger, queueLeaveRecalc } = require('../services/leaveTriggers');
 const { computeClEntitlement } = require('../services/phase5Features');
 const { getPolicyNumber } = require('../services/leaveEngine');
 const { setLeaveBalance } = require('../services/leaveBalanceGuard');
-const { requireHrOrAdmin } = require('../middleware/roles');
+const { requireHrOrAdmin, requireAdmin } = require('../middleware/roles');
+const { carryFlags } = require('../services/statutoryFlags');
+
+// Statutory flags PR-1 (R10): PF / ESI / LWF change only through the audited
+// statutory upload (/api/statutory-flags). Every writer in this file ignores
+// them in request bodies and says so in `ignoredFields`; structure inserts
+// carry the flags in force at their own date (carryFlags), never a default.
+const STATUTORY_FLAG_FIELDS = ['pf_applicable', 'esi_applicable', 'lwf_applicable'];
+const ignoredFlagFields = (body) => STATUTORY_FLAG_FIELDS.filter((f) => body && body[f] !== undefined);
 
 // ── Salary structure sync helper ──────────────────────────────────
 // Single source of truth for keeping `salary_structures` in sync with
@@ -24,14 +32,16 @@ const { requireHrOrAdmin } = require('../middleware/roles');
 //   - Scales ALL monetary components (basic, da, hra, conveyance,
 //     special_allowance, other_allowances) proportionally so their sum
 //     tracks the new gross — never leaves stale da/conv/other values.
-//   - Propagates pf_applicable / esi_applicable / pt_applicable when
-//     explicitly provided (so the employees table and salary_structures
-//     agree on eligibility flags).
-//   - Creates a salary_structures row if none exists.
-//   - No-op if gross is 0 or null AND no flag updates requested.
+//   - Propagates pt_applicable when explicitly provided. PF / ESI / LWF are
+//     NOT synced any more (statutory flags PR-1, R10): they change only via
+//     the statutory upload; a pf/esi/lwf key passed here is ignored and the
+//     row's flags are never rewritten.
+//   - Creates a salary_structures row if none exists (flags from carryFlags:
+//     with no structure that is 0/0/0).
+//   - No-op if gross is 0 or null AND no pt update requested.
 //
 // Call with: syncSalaryStructureFromEmployee(db, employeeId, {
-//   gross_salary, pf_applicable, esi_applicable, pt_applicable
+//   gross_salary, pt_applicable
 // }).
 function syncSalaryStructureFromEmployee(db, employeeId, updates = {}) {
   if (!employeeId) return { synced: false, reason: 'no employee id' };
@@ -39,12 +49,10 @@ function syncSalaryStructureFromEmployee(db, employeeId, updates = {}) {
   const hasGrossUpdate = updates.gross_salary !== undefined && updates.gross_salary !== null;
   const gross = hasGrossUpdate ? parseFloat(updates.gross_salary) || 0 : null;
 
-  const hasPfUpdate = updates.pf_applicable !== undefined;
-  const hasEsiUpdate = updates.esi_applicable !== undefined;
   const hasPtUpdate = updates.pt_applicable !== undefined;
 
-  // Nothing to sync
-  if (!hasGrossUpdate && !hasPfUpdate && !hasEsiUpdate && !hasPtUpdate) {
+  // Nothing to sync (pf/esi/lwf keys are ignored — statutory upload only)
+  if (!hasGrossUpdate && !hasPtUpdate) {
     return { synced: false, reason: 'no tracked fields in update' };
   }
 
@@ -57,8 +65,6 @@ function syncSalaryStructureFromEmployee(db, employeeId, updates = {}) {
   if (!emp) return { synced: false, reason: 'employee not found' };
 
   const resolvedGross = hasGrossUpdate ? gross : (existing?.gross_salary || emp.gross_salary || 0);
-  const pfApp = hasPfUpdate ? (updates.pf_applicable ? 1 : 0) : (existing?.pf_applicable ?? emp.pf_applicable ?? 0);
-  const esiApp = hasEsiUpdate ? (updates.esi_applicable ? 1 : 0) : (existing?.esi_applicable ?? emp.esi_applicable ?? 0);
   const ptApp = hasPtUpdate ? (updates.pt_applicable ? 1 : 0) : (existing?.pt_applicable ?? emp.pt_applicable ?? 1);
 
   if (existing) {
@@ -117,12 +123,12 @@ function syncSalaryStructureFromEmployee(db, employeeId, updates = {}) {
         gross_salary = ?, basic = ?, da = ?, hra = ?, conveyance = ?,
         special_allowance = ?, other_allowances = ?,
         basic_percent = ?, hra_percent = ?, da_percent = ?,
-        pf_applicable = ?, esi_applicable = ?, pt_applicable = ?,
+        pt_applicable = ?,
         updated_at = datetime('now')
       WHERE id = ?`).run(
         resolvedGross, basic, da, hra, conveyance, specialAllow, otherAllow,
         basicPct || 50, hraPct || 20, daPct || 0,
-        pfApp, esiApp, ptApp,
+        ptApp,
         existing.id
       );
     return { synced: true, action: 'updated', id: existing.id, gross: resolvedGross };
@@ -135,11 +141,12 @@ function syncSalaryStructureFromEmployee(db, employeeId, updates = {}) {
   const hraPct = 20;
   const basic = Math.round(resolvedGross * basicPct / 100 * 100) / 100;
   const hra = Math.round(resolvedGross * hraPct / 100 * 100) / 100;
+  const carried = carryFlags(db, 'plant', employeeId, '2025-01-01');
   const result = db.prepare(`INSERT INTO salary_structures
       (employee_id, effective_from, gross_salary, basic, da, hra, conveyance, special_allowance, other_allowances,
-       basic_percent, hra_percent, da_percent, pf_applicable, esi_applicable, pt_applicable, pf_wage_ceiling)
-      VALUES (?, '2025-01-01', ?, ?, 0, ?, 0, 0, 0, ?, ?, 0, ?, ?, ?, 15000)`).run(
-        employeeId, resolvedGross, basic, hra, basicPct, hraPct, pfApp, esiApp, ptApp
+       basic_percent, hra_percent, da_percent, pf_applicable, esi_applicable, lwf_applicable, pt_applicable, pf_wage_ceiling)
+      VALUES (?, '2025-01-01', ?, ?, 0, ?, 0, 0, 0, ?, ?, 0, ?, ?, ?, ?, 15000)`).run(
+        employeeId, resolvedGross, basic, hra, basicPct, hraPct, carried.pf, carried.esi, carried.lwf, ptApp
       );
   return { synced: true, action: 'created', id: result.lastInsertRowid, gross: resolvedGross };
 }
@@ -297,7 +304,8 @@ router.post('/', (req, res) => {
 
   // Insert salary structure if provided
   if (basic > 0) {
-    db.prepare(`INSERT INTO salary_structures (employee_id, effective_from, basic, da, hra, conveyance, other_allowances) VALUES (?, date('now'), ?, ?, ?, ?, ?)`).run(empId, basic || 0, da || 0, hra || 0, conveyance || 0, otherAllowances || 0);
+    // New employee → statutory flags start off (explicit: live DEFAULT is 1, L3).
+    db.prepare(`INSERT INTO salary_structures (employee_id, effective_from, basic, da, hra, conveyance, other_allowances, pf_applicable, esi_applicable, lwf_applicable) VALUES (?, date('now'), ?, ?, ?, ?, ?, 0, 0, 0)`).run(empId, basic || 0, da || 0, hra || 0, conveyance || 0, otherAllowances || 0);
   }
 
   // Initialize leave balances for current year (CL + EL only — SL abolished Apr 2026).
@@ -316,7 +324,8 @@ router.post('/', (req, res) => {
     employeeCodes: [code], reason: 'employee_created', actor: req.user?.username || 'hr',
   }));
 
-  res.json({ success: true, id: empId, message: 'Employee created' });
+  const ignoredFields = ignoredFlagFields(req.body);
+  res.json({ success: true, id: empId, message: 'Employee created', ...(ignoredFields.length ? { ignoredFields } : {}) });
 });
 
 /**
@@ -396,9 +405,9 @@ router.put('/:code', (req, res) => {
     'bank_account', 'account_number', 'ifsc', 'ifsc_code', 'bank_name',
     'pf_number', 'uan', 'esi_number', 'aadhar', 'pan', 'phone', 'email',
     'gross_salary', 'status', 'is_data_complete', 'is_contractor',
-    // Statutory flags — must also propagate into salary_structures via
-    // syncSalaryStructureFromEmployee() below so computations agree.
-    'pf_applicable', 'esi_applicable', 'pt_applicable',
+    // pt only — PF / ESI / LWF change through the statutory upload (R10);
+    // they are ignored here and listed in the response's ignoredFields.
+    'pt_applicable',
     // Enhanced fields
     'blood_group', 'emergency_contact_name', 'emergency_contact_phone',
     'address_current', 'address_permanent', 'marital_status', 'spouse_name',
@@ -429,7 +438,8 @@ router.put('/:code', (req, res) => {
     params.push(shouldBeContractor);
   }
 
-  if (setClauses.length === 0) return res.json({ success: true, message: 'No updates' });
+  const ignoredFields = ignoredFlagFields(updates);
+  if (setClauses.length === 0) return res.json({ success: true, message: 'No updates', ...(ignoredFields.length ? { ignoredFields } : {}) });
 
   // ── Late Coming Phase 1: Audit trail for shift assignment changes ──
   // When an HR user changes an employee's shift via the Employee Master form,
@@ -470,13 +480,9 @@ router.put('/:code', (req, res) => {
   // (see employee 60052 bug, April 2026). Uses existing percentages —
   // never hardcodes 50/20 that would trash custom ratios.
   if (updates.gross_salary !== undefined
-      || updates.pf_applicable !== undefined
-      || updates.esi_applicable !== undefined
       || updates.pt_applicable !== undefined) {
     syncSalaryStructureFromEmployee(db, emp.id, {
       gross_salary: updates.gross_salary,
-      pf_applicable: updates.pf_applicable,
-      esi_applicable: updates.esi_applicable,
       pt_applicable: updates.pt_applicable
     });
   }
@@ -488,8 +494,10 @@ router.put('/:code', (req, res) => {
       db.prepare('UPDATE salary_structures SET basic = ?, da = ?, hra = ?, conveyance = ?, other_allowances = ? WHERE id = ?')
         .run(updates.basic || 0, updates.da || 0, updates.hra || 0, updates.conveyance || 0, updates.otherAllowances || 0, existing.id);
     } else {
-      db.prepare('INSERT INTO salary_structures (employee_id, effective_from, basic, da, hra, conveyance, other_allowances) VALUES (?, date(\'now\'), ?, ?, ?, ?, ?)')
-        .run(emp.id, updates.basic || 0, updates.da || 0, updates.hra || 0, updates.conveyance || 0, updates.otherAllowances || 0);
+      const today = new Date().toISOString().slice(0, 10);
+      const carried = carryFlags(db, 'plant', emp.id, today);
+      db.prepare('INSERT INTO salary_structures (employee_id, effective_from, basic, da, hra, conveyance, other_allowances, pf_applicable, esi_applicable, lwf_applicable) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
+        .run(emp.id, today, updates.basic || 0, updates.da || 0, updates.hra || 0, updates.conveyance || 0, updates.otherAllowances || 0, carried.pf, carried.esi, carried.lwf);
     }
   }
 
@@ -509,7 +517,7 @@ router.put('/:code', (req, res) => {
     }));
   }
 
-  res.json({ success: true, message: 'Employee updated' });
+  res.json({ success: true, message: 'Employee updated', ...(ignoredFields.length ? { ignoredFields } : {}) });
 });
 
 // GET leave balances
@@ -548,7 +556,8 @@ router.put('/:code/leaves', requireHrOrAdmin, (req, res) => {
 
 // UPDATE salary structure (dedicated endpoint)
 // When gross_salary changes, route through salary_change_requests for finance approval.
-// Non-salary fields (banking, statutory IDs, flags) are always applied immediately.
+// Non-salary fields (banking, statutory IDs, pt) are always applied immediately.
+// PF / ESI / LWF flags in the body are ignored (statutory upload only, R10).
 router.put('/:code/salary', requireHrOrAdmin, (req, res) => {
   const db = getDb();
   const emp = db.prepare('SELECT * FROM employees WHERE code = ?').get(req.params.code);
@@ -564,10 +573,13 @@ router.put('/:code/salary', requireHrOrAdmin, (req, res) => {
   const newGross = parseFloat(gross_salary) || 0;
   const currentGross = parseFloat(emp.gross_salary) || 0;
 
+  const ignoredFields = ignoredFlagFields(req.body);
+  const withIgnored = (body) => (ignoredFields.length ? { ...body, ignoredFields } : body);
+
   // Always apply banking / statutory ID fields immediately (no approval needed)
   db.prepare(`UPDATE employees SET
     uan = ?, esi_number = ?, bank_account = ?, bank_name = ?, ifsc = ?,
-    pf_applicable = ?, esi_applicable = ?, pt_applicable = ?,
+    pt_applicable = ?,
     updated_at = datetime('now')
     WHERE code = ?`
   ).run(
@@ -576,16 +588,14 @@ router.put('/:code/salary', requireHrOrAdmin, (req, res) => {
     account_number !== undefined ? account_number || null : emp.bank_account,
     bank_name !== undefined ? bank_name || null : emp.bank_name,
     ifsc_code !== undefined ? ifsc_code || null : emp.ifsc,
-    pf_applicable !== undefined ? (pf_applicable ? 1 : 0) : (emp.pf_applicable ?? 0),
-    esi_applicable !== undefined ? (esi_applicable ? 1 : 0) : (emp.esi_applicable ?? 0),
     pt_applicable !== undefined ? (pt_applicable ? 1 : 0) : (emp.pt_applicable ?? 1),
     req.params.code
   );
 
-  // Sync statutory flags to salary_structures (pf/esi/pt only — NOT gross)
-  if (pf_applicable !== undefined || esi_applicable !== undefined || pt_applicable !== undefined) {
+  // Sync pt to salary_structures (NOT gross, NOT pf/esi/lwf)
+  if (pt_applicable !== undefined) {
     try {
-      syncSalaryStructureFromEmployee(db, emp.id, { pf_applicable, esi_applicable, pt_applicable });
+      syncSalaryStructureFromEmployee(db, emp.id, { pt_applicable });
     } catch (e) { /* silent */ }
   }
 
@@ -609,8 +619,8 @@ router.put('/:code/salary', requireHrOrAdmin, (req, res) => {
       basic_percent:    basicPct,
       hra_percent:      hraPct,
       da_percent:       daPct,
-      pf_applicable:    pf_applicable !== undefined ? (pf_applicable ? 1 : 0) : (emp.pf_applicable ?? 0),
-      esi_applicable:   esi_applicable !== undefined ? (esi_applicable ? 1 : 0) : (emp.esi_applicable ?? 0),
+      // no pf/esi/lwf here: the approval carries the flags in force at its
+      // effective date (salary-input.js approve, structureForDate)
       pt_applicable:    pt_applicable !== undefined ? (pt_applicable ? 1 : 0) : (emp.pt_applicable ?? 1),
       pf_wage_ceiling:  pf_wage_ceiling || 15000
     };
@@ -625,11 +635,11 @@ router.put('/:code/salary', requireHrOrAdmin, (req, res) => {
     ).get(req.params.code);
 
     if (existingPending) {
-      return res.json({
+      return res.json(withIgnored({
         success: true,
         pendingApproval: true,
         message: 'A salary change request is already pending finance approval for this employee.'
-      });
+      }));
     }
 
     db.prepare(`
@@ -645,11 +655,11 @@ router.put('/:code/salary', requireHrOrAdmin, (req, res) => {
       'Salary structure change via Employee Master'
     );
 
-    return res.json({
+    return res.json(withIgnored({
       success: true,
       pendingApproval: true,
       message: 'Salary change submitted for finance approval. Current salary unchanged until approved.'
-    });
+    }));
   }
 
   // ── Gross is NOT changing — allow direct component/percentage updates ─
@@ -673,32 +683,30 @@ router.put('/:code/salary', requireHrOrAdmin, (req, res) => {
       db.prepare(`UPDATE salary_structures SET
         gross_salary=?, basic=?, da=?, hra=?, special_allowance=?, other_allowances=?,
         basic_percent=?, hra_percent=?, da_percent=?,
-        pf_applicable=?, esi_applicable=?, pt_applicable=?, pf_wage_ceiling=?,
+        pt_applicable=?, pf_wage_ceiling=?,
         updated_at=datetime('now')
         WHERE id=?`).run(
           newGross, basic, da, hra, specialAllow, otherAllow,
           basicPct, hraPct, daPct,
-          pf_applicable !== undefined ? (pf_applicable ? 1 : 0) : (emp.pf_applicable ?? 0),
-          esi_applicable !== undefined ? (esi_applicable ? 1 : 0) : (emp.esi_applicable ?? 0),
           pt_applicable !== undefined ? (pt_applicable ? 1 : 0) : (emp.pt_applicable ?? 1),
           pf_wage_ceiling || 15000, existing.id
       );
     } else {
+      const carried = carryFlags(db, 'plant', emp.id, '2025-01-01');
       db.prepare(`INSERT INTO salary_structures
         (employee_id, effective_from, gross_salary, basic, da, hra, special_allowance, other_allowances,
-         basic_percent, hra_percent, da_percent, pf_applicable, esi_applicable, pt_applicable, pf_wage_ceiling)
-        VALUES (?, '2025-01-01', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
+         basic_percent, hra_percent, da_percent, pf_applicable, esi_applicable, lwf_applicable, pt_applicable, pf_wage_ceiling)
+        VALUES (?, '2025-01-01', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
           emp.id, newGross, basic, da, hra, specialAllow, otherAllow,
           basicPct, hraPct, daPct,
-          pf_applicable !== undefined ? (pf_applicable ? 1 : 0) : 1,
-          esi_applicable !== undefined ? (esi_applicable ? 1 : 0) : 1,
+          carried.pf, carried.esi, carried.lwf,
           pt_applicable !== undefined ? (pt_applicable ? 1 : 0) : 1,
           pf_wage_ceiling || 15000
       );
     }
   }
 
-  res.json({ success: true, message: 'Salary structure updated' });
+  res.json(withIgnored({ success: true, message: 'Salary structure updated' }));
 });
 
 // MARK EMPLOYEE AS LEFT
@@ -862,7 +870,7 @@ router.delete('/documents/:id', (req, res) => {
  * Bulk import employees from master-data-extracted.json format
  * Accepts: { employees: [...] } matching the extraction script output
  */
-router.post('/bulk-import', (req, res) => {
+router.post('/bulk-import', requireAdmin, (req, res) => {
   const db = getDb();
   const { employees: empList } = req.body;
 
@@ -905,8 +913,8 @@ router.post('/bulk-import', (req, res) => {
       ifsc = COALESCE(NULLIF(excluded.ifsc, ''), employees.ifsc),
       ifsc_code = COALESCE(NULLIF(excluded.ifsc_code, ''), employees.ifsc_code),
       gross_salary = CASE WHEN excluded.gross_salary > 0 THEN excluded.gross_salary ELSE employees.gross_salary END,
-      pf_applicable = excluded.pf_applicable,
-      esi_applicable = excluded.esi_applicable,
+      -- pf/esi/lwf are NOT updated on conflict (statutory upload only, R10);
+      -- a new row gets 0 from the employees_statutory_default_off trigger.
       -- Preserve manually marked Left/Inactive/Exited status on bulk re-import
       status = CASE
         WHEN employees.status IN ('Left', 'Inactive', 'Exited') AND employees.auto_inactive = 0 THEN employees.status
@@ -921,8 +929,8 @@ router.post('/bulk-import', (req, res) => {
       employee_id, effective_from, gross_salary,
       basic, da, hra, conveyance, special_allowance, other_allowances,
       basic_percent, hra_percent, da_percent,
-      pf_applicable, esi_applicable, pt_applicable, pf_wage_ceiling
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      pf_applicable, esi_applicable, lwf_applicable, pt_applicable, pf_wage_ceiling
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, 0, ?, ?)
   `);
 
   // CL per year comes from policy_config.cl_entitlement_base and is pro-rated by
@@ -935,6 +943,7 @@ router.post('/bulk-import', (req, res) => {
 
   let inserted = 0, updated = 0, salaryCreated = 0, errors = 0;
   const errorDetails = [];
+  const ignoredFields = [...new Set(empList.flatMap((e) => ignoredFlagFields(e)))];
 
   const txn = db.transaction(() => {
     for (const emp of empList) {
@@ -944,8 +953,9 @@ router.post('/bulk-import', (req, res) => {
 
         const gross = emp.gross_salary || 0;
         const basic = emp.basic || 0;
-        const pfApplicable = emp.pf_applicable !== undefined ? emp.pf_applicable : 0;
-        const esiApplicable = emp.esi_applicable !== undefined ? emp.esi_applicable : 0;
+        // pf/esi from the import file are ignored (statutory upload only, R10)
+        const pfApplicable = 0;
+        const esiApplicable = 0;
         const ptApplicable = gross >= 15000 ? 1 : 0;
 
         const basicPct = gross > 0 ? Math.round(basic / gross * 100) : 50;
@@ -984,12 +994,10 @@ router.post('/bulk-import', (req, res) => {
               empRow.id, effectiveFrom, gross,
               basic, 0, emp.hra || 0, emp.conv || 0, specialAllowance, emp.cca || 0,
               basicPct, hraPct, 0,
-              pfApplicable, esiApplicable, ptApplicable, 15000
+              ptApplicable, 15000
             );
             salaryCreated++;
           } else if (Math.abs((existingSalary.gross_salary || 0) - gross) > 1
-                     || (existingSalary.pf_applicable ?? 0) !== (pfApplicable ?? 0)
-                     || (existingSalary.esi_applicable ?? 0) !== (esiApplicable ?? 0)
                      || (existingSalary.pt_applicable ?? 1) !== (ptApplicable ?? 1)) {
             // Existing structure drifted from the incoming import values —
             // repair it in the same transaction. Without this, bulk re-imports
@@ -997,8 +1005,6 @@ router.post('/bulk-import', (req, res) => {
             // employees.gross_salary shows the new value (the 60052 bug).
             syncSalaryStructureFromEmployee(db, empRow.id, {
               gross_salary: gross,
-              pf_applicable: pfApplicable,
-              esi_applicable: esiApplicable,
               pt_applicable: ptApplicable
             });
           }
@@ -1025,6 +1031,7 @@ router.post('/bulk-import', (req, res) => {
 
   res.json({
     success: true,
+    ...(ignoredFields.length ? { ignoredFields } : {}),
     results: {
       inserted, updated, salaryCreated, errors,
       errorDetails: errorDetails.length > 0 ? errorDetails : undefined,
@@ -1057,7 +1064,7 @@ router.post('/bulk-set-contractor', (req, res) => {
  *   - employees.pf_applicable / esi_applicable / pt_applicable disagree with struct
  *   - employment_type='Contract' / 'Contractor' but is_contractor=0 (and vice versa)
  */
-router.get('/admin/integrity-check', (req, res) => {
+router.get('/admin/integrity-check', requireAdmin, (req, res) => {
   const db = getDb();
 
   // 1. Gross salary mismatches
@@ -1142,7 +1149,7 @@ router.get('/admin/integrity-check', (req, res) => {
  * Body: { dryRun: boolean } — if true, reports what WOULD change without
  * writing. Defaults to false.
  */
-router.post('/admin/integrity-fix', (req, res) => {
+router.post('/admin/integrity-fix', requireAdmin, (req, res) => {
   const db = getDb();
   const dryRun = !!req.body?.dryRun;
 
@@ -1169,23 +1176,39 @@ router.post('/admin/integrity-fix', (req, res) => {
       )
   `).all();
 
+  // Statutory flags PR-1 (R10): only gross (and pt) is repaired. A PF/ESI
+  // mismatch is reported but never written — flags change only through the
+  // statutory upload. A row whose only difference is a flag is left alone.
+  const needsGrossFix = (row) => !row.ss_id || Math.abs((row.employee_gross || 0) - (row.struct_gross || 0)) > 1;
+  const flagMismatch = (row) => (row.e_pf || 0) !== (row.ss_pf || 0) || (row.e_esi || 0) !== (row.ss_esi || 0);
+
   const actions = [];
   if (!dryRun) {
     const txn = db.transaction(() => {
       for (const row of mismatches) {
+        if (!needsGrossFix(row) && (row.e_pt ?? 1) === (row.ss_pt ?? 1)) {
+          actions.push({
+            code: row.code, name: row.name,
+            before: { gross: row.struct_gross, pf: row.ss_pf, esi: row.ss_esi, pt: row.ss_pt },
+            after: { gross: row.struct_gross, pf: row.ss_pf, esi: row.ss_esi, pt: row.ss_pt },
+            action: 'skipped', reason: 'flag mismatch reported only — change flags via Statutory Flags',
+            flagMismatch: true,
+          });
+          continue;
+        }
         const result = syncSalaryStructureFromEmployee(db, row.id, {
           gross_salary: row.employee_gross,
-          pf_applicable: row.e_pf,
-          esi_applicable: row.e_esi,
           pt_applicable: row.e_pt
         });
+        const afterRow = db.prepare('SELECT gross_salary, pf_applicable, esi_applicable, pt_applicable FROM salary_structures WHERE employee_id = ? ORDER BY effective_from DESC LIMIT 1').get(row.id) || {};
         actions.push({
           code: row.code,
           name: row.name,
           before: { gross: row.struct_gross, pf: row.ss_pf, esi: row.ss_esi, pt: row.ss_pt },
-          after: { gross: row.employee_gross, pf: row.e_pf, esi: row.e_esi, pt: row.e_pt },
+          after: { gross: afterRow.gross_salary ?? row.employee_gross, pf: afterRow.pf_applicable ?? 0, esi: afterRow.esi_applicable ?? 0, pt: afterRow.pt_applicable ?? row.e_pt },
           action: result.action || 'skipped',
-          reason: result.reason || null
+          reason: result.reason || null,
+          flagMismatch: flagMismatch(row),
         });
       }
     });
@@ -1196,8 +1219,9 @@ router.post('/admin/integrity-fix', (req, res) => {
         code: row.code,
         name: row.name,
         before: { gross: row.struct_gross, pf: row.ss_pf, esi: row.ss_esi, pt: row.ss_pt },
-        after: { gross: row.employee_gross, pf: row.e_pf, esi: row.e_esi, pt: row.e_pt },
-        action: row.ss_id ? 'would-update' : 'would-create'
+        after: { gross: needsGrossFix(row) ? row.employee_gross : row.struct_gross, pf: row.ss_pf, esi: row.ss_esi, pt: row.e_pt },
+        action: !needsGrossFix(row) && (row.e_pt ?? 1) === (row.ss_pt ?? 1) ? 'skipped' : (row.ss_id ? 'would-update' : 'would-create'),
+        flagMismatch: flagMismatch(row),
       });
     }
   }
