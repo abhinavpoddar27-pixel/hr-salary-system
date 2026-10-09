@@ -5,12 +5,13 @@ after a context compaction or a new session there is a file to read and build fr
 
 ## RESUME (read this first)
 
-- **As of:** 2026-10-09.
-- **Current state:** P1–P3 and Loans PR-0 … PR-3 (#48–#54) are merged. PR-3 verified on production (loan_requests +
-  index, gate '0', 18 keys, loans 0, drift = 1 known row). Loans PR-4 (screens) is open on `feat/loans-pr4`, waiting for review.
-- **Next PR:** Loans PR-5 (plant Stage 7), branch `feat/loans-pr5`, after PR-4 is merged and checked on Railway preview.
+- **As of:** 2026-10-10.
+- **Current state:** P1–P3 and Loans PR-0 … PR-4 (#48–#54, #56) are merged. PR-3 verified on production (loan_requests +
+  index, gate '0', 18 keys, loans 0, drift = 1 known row). Loans PR-5 (plant Stage 7) is open on `feat/loans-pr5`,
+  waiting for review.
+- **Next PR:** Loans PR-6 (loan close, held sweep, cron), branch `feat/loans-pr6`, after PR-5 is merged and checked.
 - **Blockers:**
-  - Loans PR-4 review and merge, then a browser look on Railway (the screens in `screens/pr4/`).
+  - Loans PR-5 review and merge, then the post-merge checks below (drift + components unchanged; nil loan impact).
   - Finance is checking the 35 re-held rows that were released to be paid, against what was
     actually paid. (There are 54 re-held rows in all: 35 released to be paid, 17 with notes
     saying already paid outside the app, 2 with nothing payable.)
@@ -48,8 +49,8 @@ after a context compaction or a new session there is a file to read and build fr
 | Loans PR-1 | `feat/loans-pr1` | Merged | #52 | 2026-10-09 | verified (planner) |
 | Loans PR-2 | `feat/loans-pr2` | Merged | #53 | 2026-10-09 | none (engine not called yet) |
 | Loans PR-3 | `feat/loans-pr3` | Merged | #54 | 2026-10-09 | verified (planner) |
-| Loans PR-4 | `feat/loans-pr4` | Open | see GitHub | — | browser look on Railway preview |
-| Loans PR-5 | `feat/loans-pr5` | Not started | — | — | — |
+| Loans PR-4 | `feat/loans-pr4` | Merged | #56 | 2026-10-10 | browser look on Railway preview |
+| Loans PR-5 | `feat/loans-pr5` | Open | see GitHub | — | checks 1–3 below; loans still 0 |
 | Loans PR-6 | `feat/loans-pr6` | Not started | — | — | — |
 | Loans PR-7 | `feat/loans-pr7` | Not started | — | — | — |
 | Loans PR-8 | `feat/loans-pr8` | Not started | — | — | — |
@@ -219,6 +220,32 @@ Then drift check 1 (still the 1 known row). No salary code changed.
   `moveInstalmentToEnd(reason 'held')`, which returns `staleDeductions` (the salary row is then stale, K28).
 - Every mutator returns `alerts[]`; PR-6 sends them.
 
+## Loans PR-5 rulings (planner, 10 Oct 2026)
+
+- **Q1:** plant earned base for the 50% cap = `gross_earned` (`minus: []`). Plant `gross_earned` never contained OT or
+  holiday duty (production Jan–Sep 2026: 428 / 428 such rows), so the PR-2 formula subtracted them twice. Own commit;
+  it also corrects the PR-4 approval screen's 3-month load %.
+- **Q2:** diff, not clear-then-rewrite: same end state, and a re-run writes no loan events (tested: event count stable).
+- **Q3:** an employee Stage 7 skips on a re-run keeps its old salary row (Stage 7 has never deleted one); its provisional
+  loan rows are reversed and the row is reported in `loans.staleRows` + `console.warn LOAN STALE ROW <code> <M>/<Y>`.
+- **Q4–Q15 defaults:** posted month frozen at the posted amount + `unborne` alert (opposite entry is PR-6); held salary
+  recorded provisional like any other (PR-6 reads `salary_held` at close); actor `system`; only the instalment due exactly
+  in M (lowest sequence); amount also capped at `remaining_balance`; frozen first, then oldest loan id; match by employee
+  code only; schema not migrated → ₹0 + warning, any other loan error fails that employee; `recover_at_exit` loans deduct
+  only their due instalment (exit recovery is PR-7); a failing employee keeps its previous salary row and provisional rows
+  (savepoint); orphan sweep every run; run id = requestId or `stage7-<ISO>`.
+- **Open (SPEC K8):** matching by code only means an employee with salary rows in two companies in one month would show
+  the loan on both payslips while the ledger holds one row. 0 cases Jan–Sep 2026; worth a guard before go-live.
+
+### For PR-6 (loan close)
+
+- Stage 7 leaves exactly one `loan_deductions` row per loan + month + payroll; post only `state = 'provisional'`
+  rows whose `run_id` is from the latest Stage 7 run of that month (K29).
+- `planStage7Loans` returns `alerts` of type `loan_posted_unborne`; PR-6 owns the opposite entry and the notification.
+- A ₹0 provisional row (no headroom) is deliberate: posting it defers the whole instalment (D-5).
+- Simulation: `node backend/scripts/loans-stage7-simulation.js` (exit 0 = all checks pass);
+  `--dump <file>` writes the no-loan month for an origin/main vs branch byte comparison.
+
 ## Post-merge checks
 
 Run after every PR that touches salary, and after every deploy. Both queries are read-only;
@@ -301,3 +328,4 @@ FROM sales_salary_computations WHERE month = ? AND year = ?;
 | 2026-10-09 | Loans PR-3 | API built | `routes/loans.js` on the engine, `requests.js`, `loan_requests`, gate; `loanService.js` deleted. Suite 588 → 667 (31 suites). HTTP simulation on the real server: 55/55. |
 | 2026-10-09 | Loans PR-4 | Screens built | Frontend only. Dist on main = fresh build (0 diffs). Browser check 63/63 (scratch DB, real logins, gate 0 then 1). Self-debug: 5-second GET cache made mutations look ignored → loan reads send `Cache-Control: no-cache`. Backend 31/667. |
 | 2026-10-09 | Loans PR-2 | Engine built | `services/loans/` (15 files), 7 new suites, simulation script. Suite 454 → 588 (3 clean runs). Simulation: 13 loans × 12 months reconcile exactly, exit 0. |
+| 2026-10-10 | Loans PR-5 | Built | Q1 earned-base fix, per-employee savepoint, Stage 7 loan step (`services/loans/stage7.js`), simulation. Suite 692 → 713 (36 suites). No-loan simulation dump byte-identical on origin/main and the branch (210 rows); full mode (5 loans, re-run, reimport) all checks pass, drift 0, component-short 0. |
