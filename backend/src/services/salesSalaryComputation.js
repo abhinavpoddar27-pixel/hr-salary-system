@@ -78,6 +78,12 @@ function getDeclaredTds(db, employeeCode, month, year) {
   } catch (e) { return 0; }
 }
 
+/** Net rounded to the paisa; floored at ₹0 only when the row carries a loan deduction (K22, PR-8 Q1). */
+function salesNetWithLoanFloor(rawNet, loanRecovery) {
+  const net = Math.round(rawNet * 100) / 100;
+  return Number(loanRecovery || 0) > 0 ? Math.max(0, net) : net;
+}
+
 // ── Calendar helpers ──────────────────────────────────────────────────
 function daysInMonth(month, year) {
   return new Date(year, month, 0).getDate();
@@ -308,9 +314,12 @@ function computeSalesEmployee(db, { salesEmployee, monthlyInputRow, cycleStart, 
   ) * 100) / 100;
 
   // ── Step 7 — Net salary ──
-  const netSalary = Math.round((
-    grossEarned + diwaliBonus + incentiveAmount - totalDeductions
-  ) * 100) / 100;
+  // Loans PR-8 (K22, planner ruling Q1): ₹0 floor only on a row that carries a
+  // loan deduction. Under the cap's headroom a live loan can never take net
+  // below ₹0, so this bites only for a posted month of a loan no longer live
+  // that pay can no longer bear (Stage 7 alerts finance). A row with NO loan is
+  // left exactly as before — even a negative one (HR master data to fix).
+  const netSalary = salesNetWithLoanFloor(grossEarned + diwaliBonus + incentiveAmount - totalDeductions, loanRecovery);
 
   // ── Step 8 — Assemble the compute object ──
   const sundayRuleTrace = JSON.stringify({
@@ -568,4 +577,5 @@ module.exports = {
   saveSalesSalaryComputation,
   generateSalesPayslipData,
   countGazettedHolidaysInCycle,
+  salesNetWithLoanFloor,
 };

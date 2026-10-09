@@ -201,3 +201,29 @@ describe('a posted month is frozen (K2) — sales', () => {
     expectClean();
   });
 });
+
+describe('₹0 net floor only on rows carrying a loan (K22, ruling Q1)', () => {
+  test('a no-loan row whose deductions exceed earnings keeps its negative net (unchanged behaviour)', async () => {
+    const c = code();
+    S.addRep(db, { code: c });
+    S.setUpload(db, { month: 3, year: 2027, rows: [{ code: c, days: 31 }] });
+    await compute(3, 2027);
+    db.prepare('UPDATE sales_salary_computations SET other_deductions = 21000 WHERE employee_code = ? AND month = 3 AND year = 2027').run(c);
+    await compute(3, 2027);
+    expect(S.salaryRow(db, c, 3, 2027)).toMatchObject({ loan_recovery: 0, total_deductions: 21000, net_salary: -1000 });
+  });
+
+  test('a posted month of a COMPLETED loan that pay can no longer bear: deducted in full, net floored at ₹0', async () => {
+    const c = code();
+    S.addRep(db, { code: c, gross: 40000 });
+    const loanId = S.salesLoan(db, { code: c, principal: 10000, tenure: 1 });
+    S.setUpload(db, { month: M, year: Y, rows: [{ code: c, days: 31 }] });
+    await compute();
+    const d = ded(loanId);
+    expect(L.postDeduction(db, { deductionId: d.id }, S.SYS)).toMatchObject({ ok: true, loanStatus: 'completed' });
+    db.prepare('UPDATE sales_salary_computations SET other_deductions = 35000 WHERE employee_code = ? AND month = ? AND year = ?').run(c, M, Y);
+    await compute();
+    expect(S.salaryRow(db, c, M, Y)).toMatchObject({ loan_recovery: 10000, total_deductions: 45000, net_salary: 0 });
+    expect(db.prepare("SELECT COUNT(*) AS n FROM notifications WHERE message LIKE ?").get(`%Loan ${loanId} (${c})%still deducted in full%`).n).toBe(1);
+  });
+});
