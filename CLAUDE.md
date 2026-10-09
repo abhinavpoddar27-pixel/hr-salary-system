@@ -16,9 +16,9 @@
 - **employees.js Mark Left:** no longer closes loans. Open plant loans (`borrower_type='plant'`): active →
   `recover_at_exit`; requested/approved keep status; all get `exit_flag=1` + one `loan_events` + one audit row.
   No balance/instalment moves. PR-7 owns the actual recovery.
-- **Fragile:** if the rebuild ever refuses (someone creates a loan through the OLD `POST /api/loans` before
-  deploy), Mark Left 500s for everyone (it queries `borrower_type`). Prod had 0/0 on 9 Oct; check right before merge.
-- **Verified:** suite 421 → 453 (3 clean runs); deploy simulation (origin/main schema → new code) rebuilds,
+- **Fragile:** Mark Left runs its loan block only when `migration_loans_schema_v2_done` is set; if the rebuild
+  refused, it skips loans, warns, notes it in the audit remark and still succeeds — loans then go unflagged.
+- **Verified:** suite 421 → 454 (3 clean runs); deploy simulation (origin/main schema → new code) rebuilds,
   FK check 0, integrity ok; real Stage 7 with a live loan → loan_recovery 0, drift 0, component-short 0, totals
   identical to a no-loan DB. **Not tested:** the refusal path on production; the old `POST /api/loans` create
   now fails with a raw SQLite 400 until PR-3 (accepted); Mark Left still has no role guard (P4).

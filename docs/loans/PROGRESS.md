@@ -17,7 +17,8 @@ after a context compaction or a new session there is a file to read and build fr
     saying already paid outside the app, 2 with nothing payable.)
   - HR is confirming the 98 Active employees who carry an exit date.
 - **Do not create a loan through the old `POST /api/loans` before PR-1 deploys:** a row in the old
-  table makes the rebuild refuse, and then Mark Left fails for everyone.
+  table makes the rebuild refuse. Mark Left still works (it skips the loan block when the migration
+  flag is unset and says so in its audit remark), but that leaver's loans are not flagged.
 - **Waiting on the owner:**
   1. Review and merge Loans PR-1.
   2. The accounts Excel of the 10–30 running loans (needed for PR-10).
@@ -166,3 +167,4 @@ FROM sales_salary_computations WHERE month = ? AND year = ?;
 | 2026-10-09 | Loans PR-1 | Plan approved | Production read-only: loans 0, loan_repayments 0, no indexes, no loan policy keys. 11 rulings recorded above. |
 | 2026-10-09 | Loans PR-1 | Rebased onto `b738bea` | #48–#51 merged; line numbers unchanged in schema.js / employees.js. Baseline 19 suites / 421 tests. |
 | 2026-10-09 | Loans PR-1 | Schema + Mark Left built | 2 commits; suite 421 → 453, 3 clean runs. Deploy simulation (origin/main schema → new code) rebuilds cleanly; real Stage 7 with a live loan: loan_recovery 0, drift 0, component-short 0. |
+| 2026-10-09 | Loans PR-1 | Review fix: Mark Left guard | Loan block runs only when `migration_loans_schema_v2_done` is set; otherwise skip + warn + audit remark, Mark Left still 200. New test proves 500 → 200. Suite 454. |

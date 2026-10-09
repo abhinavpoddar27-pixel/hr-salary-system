@@ -714,6 +714,13 @@ router.put('/:code/mark-left', (req, res) => {
 
   const { logAudit } = require('../database/db');
 
+  // Loans PR-1: the loan block below needs the rebuilt loan schema. If that
+  // migration refused (old loan tables not empty), skip the loan block rather
+  // than fail Mark Left for everyone; the audit remark records the skip.
+  const loansSchemaReady = !!db.prepare(
+    "SELECT 1 FROM policy_config WHERE key = 'migration_loans_schema_v2_done' AND value = '1'"
+  ).get();
+
   const txn = db.transaction(() => {
     // 1. Set status = 'Left', is_active = 0, date_of_exit
     // Also set inactive_since (for reactivation cutoff) and auto_inactive = 0
@@ -736,11 +743,14 @@ router.put('/:code/mark-left', (req, res) => {
     //    loan keeps its status and only gets the exit flag (the admin decides it).
     //    The flag lives on the loan, so a later Stage 6 reactivation cannot undo
     //    it. borrower_type = 'plant' keeps a sales loan with the same code untouched.
-    const exitLoans = db.prepare(`
+    const exitLoans = loansSchemaReady ? db.prepare(`
       SELECT id, status, remaining_balance FROM loans
        WHERE borrower_type = 'plant' AND employee_code = ?
          AND status IN ('requested', 'approved', 'active') AND exit_flag = 0
-    `).all(code);
+    `).all(code) : [];
+    if (!loansSchemaReady) {
+      console.warn(`[mark-left] ${code}: loan schema not migrated (migration_loans_schema_v2_done unset) — loans not flagged`);
+    }
     for (const loan of exitLoans) {
       const toState = loan.status === 'active' ? 'recover_at_exit' : loan.status;
       db.prepare(`
@@ -758,7 +768,7 @@ router.put('/:code/mark-left', (req, res) => {
     }
 
     // 3. Audit log
-    logAudit('employees', emp.id, 'status', emp.status, 'Left', 'employee_master', `Marked as Left by ${markedBy}. Reason: ${reason || 'Not specified'}. ${exitLoans.length} loan(s) flagged for exit recovery.`, req.user?.username);
+    logAudit('employees', emp.id, 'status', emp.status, 'Left', 'employee_master', `Marked as Left by ${markedBy}. Reason: ${reason || 'Not specified'}. ${loansSchemaReady ? `${exitLoans.length} loan(s) flagged for exit recovery.` : 'loan schema not migrated — loans not flagged.'}`, req.user?.username);
   });
 
   txn();
