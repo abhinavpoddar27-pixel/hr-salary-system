@@ -813,12 +813,12 @@ function initSchema(db) {
     }
   }
 
-  // PF/ESI: disabled by default — set all existing records to 0 unless explicitly set via master import
-  // This runs idempotently on every startup but only affects defaults
-  db.prepare("UPDATE employees SET pf_applicable = 0 WHERE pf_applicable = 1 AND (uan IS NULL OR uan = '') AND (pf_number IS NULL OR pf_number = '')").run();
-  db.prepare("UPDATE employees SET esi_applicable = 0 WHERE esi_applicable = 1 AND (esi_number IS NULL OR esi_number = '')").run();
-  db.prepare("UPDATE salary_structures SET pf_applicable = 0 WHERE pf_applicable = 1 AND employee_id IN (SELECT id FROM employees WHERE (uan IS NULL OR uan = '') AND (pf_number IS NULL OR pf_number = ''))").run();
-  db.prepare("UPDATE salary_structures SET esi_applicable = 0 WHERE esi_applicable = 1 AND employee_id IN (SELECT id FROM employees WHERE (esi_number IS NULL OR esi_number = ''))").run();
+  // Statutory flags PR-1 (Oct 2026): the startup PF/ESI reset that used to sit
+  // here was removed (L2). It zeroed PF/ESI on every boot for anyone without a
+  // UAN/PF/ESI number, which would wipe the audited statutory upload (plant ESI
+  // numbers do not exist). New employees start with flags off via the
+  // employees_statutory_default_off trigger instead; flags change only through
+  // the statutory upload (services/statutoryFlags.js).
 
   // users: RBAC company access
   safeAddColumn('users', 'allowed_companies', "TEXT DEFAULT '*'");

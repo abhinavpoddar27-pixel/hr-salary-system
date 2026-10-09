@@ -47,6 +47,45 @@ describe('T8a — schema additions are present and idempotent', () => {
   });
 });
 
+describe('T8 — no startup reset (L2), on the production-shaped DEFAULT 1 tables', () => {
+  test('withLiveDefaults reproduces production defaults and keeps the trigger', () => {
+    const db = S.withLiveDefaults(S.newDb());
+    expect(String(S.dflt(db, 'employees', 'pf_applicable'))).toBe('1');
+    expect(String(S.dflt(db, 'employees', 'esi_applicable'))).toBe('1');
+    expect(String(S.dflt(db, 'salary_structures', 'pf_applicable'))).toBe('1');
+    expect(String(S.dflt(db, 'salary_structures', 'esi_applicable'))).toBe('1');
+    expect(String(S.dflt(db, 'employees', 'lwf_applicable'))).toBe('0');
+    const trg = db.prepare("SELECT COUNT(*) AS c FROM sqlite_master WHERE type='trigger' AND name='employees_statutory_default_off'").get().c;
+    expect(trg).toBe(1);
+    // the omitted-flag insert (L3) lands at 0 via the trigger
+    db.prepare("INSERT INTO employees (code, name, company) VALUES ('T8X', 'X', ?)").run(S.COMPANY);
+    expect(db.prepare("SELECT pf_applicable p, esi_applicable e, lwf_applicable l FROM employees WHERE code='T8X'").get())
+      .toEqual({ p: 0, e: 0, l: 0 });
+  });
+
+  test('initSchema twice → uploaded flags (no ESI/UAN/PF numbers) stay ON in master and structures', () => {
+    const db = S.withLiveDefaults(S.newDb());
+    const a = S.plant(db, { esi: 1, lwf: 1 });               // ESI without an ESI number (plant reality)
+    const b = S.plant(db, { pf: 1, esi: 1, lwf: 1 });        // PF without UAN / PF number
+    S.plantStructure(db, a, '2026-09-01', { esi: 1, lwf: 1 });
+    S.plantStructure(db, b, '2026-09-01', { pf: 1, esi: 1, lwf: 1 });
+    S.silently(() => require('../database/schema').initSchema(db));
+    S.silently(() => require('../database/schema').initSchema(db));
+    expect(S.flags(S.master(db, a))).toEqual({ pf: 0, esi: 1, lwf: 1 });
+    expect(S.flags(S.master(db, b))).toEqual({ pf: 1, esi: 1, lwf: 1 });
+    expect(S.flags(S.plantRows(db, a)[0])).toEqual({ pf: 0, esi: 1, lwf: 1 });
+    expect(S.flags(S.plantRows(db, b)[0])).toEqual({ pf: 1, esi: 1, lwf: 1 });
+  });
+
+  test('schema.js no longer contains any of the four reset UPDATEs', () => {
+    const src = require('fs').readFileSync(require.resolve('../database/schema'), 'utf8');
+    expect(src).not.toMatch(/UPDATE employees SET pf_applicable = 0 WHERE pf_applicable = 1/);
+    expect(src).not.toMatch(/UPDATE employees SET esi_applicable = 0 WHERE esi_applicable = 1/);
+    expect(src).not.toMatch(/UPDATE salary_structures SET pf_applicable = 0 WHERE pf_applicable = 1/);
+    expect(src).not.toMatch(/UPDATE salary_structures SET esi_applicable = 0 WHERE esi_applicable = 1/);
+  });
+});
+
 describe('T13 — new-employee flags-off trigger', () => {
   test('a plain insert that asks for flags ON lands with PF/ESI/LWF 0', () => {
     const db = S.newDb();

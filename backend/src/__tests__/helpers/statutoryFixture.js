@@ -21,6 +21,35 @@ function newDb() {
   return db;
 }
 
+/**
+ * Production's `employees` and `salary_structures` have pf_applicable /
+ * esi_applicable DEFAULT 1 (PRAGMA-verified; schema.js text says 0 — L3).
+ * Rebuild both tables from their own sqlite_master SQL with DEFAULT 1, copy the
+ * rows, then run initSchema again (re-creates the trigger and indexes), so a
+ * test sees exactly what an insert that omits the flags does in production.
+ */
+function withLiveDefaults(db) {
+  db.pragma('foreign_keys = OFF');
+  for (const t of ['employees', 'salary_structures']) {
+    const { sql } = db.prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name = ?").get(t);
+    let live = sql
+      .replace(/pf_applicable INTEGER DEFAULT 0/, 'pf_applicable INTEGER DEFAULT 1')
+      .replace(/esi_applicable INTEGER DEFAULT 0/, 'esi_applicable INTEGER DEFAULT 1');
+    if (live === sql) throw new Error(`withLiveDefaults: no DEFAULT 0 flags found on ${t}`);
+    live = live.replace(new RegExp(`CREATE TABLE ("?)${t}\\1`), `CREATE TABLE ${t}__live`);
+    db.exec(live);
+    const names = db.prepare(`PRAGMA table_info(${t})`).all().map((c) => c.name).join(', ');
+    db.exec(`INSERT INTO ${t}__live (${names}) SELECT ${names} FROM ${t}`);
+    db.exec(`DROP TABLE ${t}`);
+    db.exec(`ALTER TABLE ${t}__live RENAME TO ${t}`);
+  }
+  db.pragma('foreign_keys = ON');
+  silently(() => initSchema(db));
+  return db;
+}
+
+const dflt = (db, t, col) => db.prepare(`PRAGMA table_info(${t})`).all().find((c) => c.name === col).dflt_value;
+
 let seq = 1;
 
 /** Plant employee. The trigger sets flags to 0 on insert; pass flags to switch them on afterwards. */
@@ -94,6 +123,6 @@ function counts(db) {
 }
 
 module.exports = {
-  COMPANY, OTHER_COMPANY, silently, newDb, plant, plantStructure, salesEmp, salesStructure,
+  COMPANY, OTHER_COMPANY, silently, newDb, withLiveDefaults, dflt, plant, plantStructure, salesEmp, salesStructure,
   plantRows, salesRows, master, salesMaster, flags, counts,
 };
