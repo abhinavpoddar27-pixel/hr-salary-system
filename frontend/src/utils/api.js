@@ -662,4 +662,22 @@ export const salesTaDaNeftDownloadUrl = ({ month, year, company, mode } = {}) =>
 export const salesTaDaNeftPreview = ({ month, year, company, mode } = {}) =>
   api.get('/sales/ta-da/export/neft', { params: { month, year, company, mode } })
 
+// ── Statutory flags (PR-1) — admin-only audited upload. The only way PF / ESI /
+// LWF flags change (R10). Batch reads skip the 5 s browser cache (N7).
+const statutoryForm = (file, scope, effectiveMonth, expectedSha256) => {
+  const fd = new FormData()
+  fd.append('file', file)
+  fd.append('scope', scope)
+  fd.append('effectiveMonth', effectiveMonth)
+  if (expectedSha256) fd.append('expectedSha256', expectedSha256)
+  return fd
+}
+export const statutoryFlagsPreview = (file, scope, effectiveMonth) =>
+  api.post('/statutory-flags/preview', statutoryForm(file, scope, effectiveMonth), { headers: { 'Content-Type': 'multipart/form-data' } })
+export const statutoryFlagsApply = (file, scope, effectiveMonth, expectedSha256) =>
+  api.post('/statutory-flags/apply', statutoryForm(file, scope, effectiveMonth, expectedSha256), { headers: { 'Content-Type': 'multipart/form-data' } })
+export const statutoryFlagsBatches = () => api.get('/statutory-flags/batches', { headers: { 'Cache-Control': 'no-cache' } })
+export const statutoryFlagsUndoFile = (batchId) =>
+  api.get(`/statutory-flags/batches/${batchId}/undo-file`, { responseType: 'blob', headers: { 'Cache-Control': 'no-cache' } })
+
 export default api

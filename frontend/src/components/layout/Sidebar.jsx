@@ -180,6 +180,7 @@ const nav = [
   { label: 'SQL Console', icon: '🛠', to: '/admin/sql-console', adminOnly: true },
   { label: 'Bug Reports', icon: '🐞', to: '/admin/bug-reports', adminOnly: true },
   { label: 'Record History', icon: '🕰', to: '/admin/record-history', adminOnly: true },
+  { label: 'Statutory Flags', icon: '🧾', to: '/admin/statutory-flags', adminOnly: true },
   {
     label: 'Settings', icon: '⚙️', to: '/settings', adminOnly: true,
     children: [
