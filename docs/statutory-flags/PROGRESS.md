@@ -20,12 +20,13 @@
 - STEP 4 — 867c515 `feat(statutory): apply with freeze/effective rows and undo file`. applyFlagChanges (immediate txn; batch row first; re-plan inside; freeze S copy of latest w/ its own flags; E rows updated in place or copy of forE; later rows updated; master flags + numbers; audit on the passed handle with stage statutory_upload remark batch:<id>), buildUndoWorkbook, listBatches, sha256. 19 new tests: T1, T2, T3 (×2: only 2026-08-24 / only 2026-09-06 — real Stage 7, August byte-identical), T4, T5 (+numbers), T6 (×3), T10a (+missing batch), T14 (×2), T16, T17, row-error isolation, master-only diff, audit rows. Decision D-1 below.
 - STEP 5 — 2207bf4 `feat(statutory): /api/statutory-flags preview/apply/batches`. Router-level requireAdmin; multer memoryStorage 2 MB, .xlsx/.xls/.csv; preview returns plan + sha256 + canApply; apply requires expectedSha256 (409 HASH_MISMATCH / DUPLICATE_BATCH, 400 BLOCKED); GET /batches and undo-file send Cache-Control no-store (N7). server.js: one mount line after contractor-report (line 232). statutoryFlagsApi.test.js 12 tests via jwtApiHarness (real requireAuth + JWTs): 401 ×4, hr/finance/viewer 403 ×4 each with counts unchanged, admin preview/apply/dup/batches/undo, .txt 400, >2 MB 400, bad scope/month/column 400, BLOCKED 400. server.js boots on a temp DATA_DIR with the mount present.
 - STEP 6 — 4a4c71b `fix(statutory): employee master writers preserve flags (R10)`. employees.js: sync helper no longer reads/writes pf/esi (pt + gross only); its create path takes flags from carryFlags and lists lwf; POST / structure insert explicit 0,0,0; PUT /:code drops pf/esi from allowedFields, sync gets gross+pt only, basic/da insert uses carryFlags; PUT /:code/salary master UPDATE + same-gross UPDATE stop writing pf/esi, newStructure JSON drops pf/esi, INSERT (was DEFAULT 1) uses carryFlags + lwf; bulk-import requireAdmin, ON CONFLICT no longer sets pf/esi, insertSalary 0,0,0 + lwf, drift-repair sync gross+pt only, file pf/esi ignored; integrity-check/fix requireAdmin, fix syncs gross(+pt) only, flag-only mismatch → 'skipped' + flagMismatch:true. Every response that saw pf/esi/lwf in the body returns ignoredFields. statutoryWriters.test.js 17 tests (T9a ×9, C4 ×2, T8b ×2 on withLiveDefaults, guards ×3 roles + 1): 14 of 17 FAIL on the pre-STEP-6 employees.js (verified by swapping the file).
+- STEP 7 — f1450bf `fix(statutory): salary approval carries in-force flags; auto-create lists lwf`. salary-input.js: approve validates effectiveFrom ^\d{4}-\d{2}-\d{2}$ (else 400); INSERT carries pf/esi/lwf/pt + basic/da/hra_percent + pf_wage_ceiling from structureForDate(effectiveFrom) read inside the txn (JSON flags ignored); master UPDATE writes gross only; request-change strips pf/esi/lwf from newStructure and returns ignoredFields. salaryComputation.js 303–307 only (auto-create lists lwf_applicable from employee.lwf_applicable). UPSERT counts BEFORE and AFTER: plant 56 cols / 56 placeholders / 56 params / 53 SET; sales 45/45/45/42 (unchanged). Tests: T9b ×3, T11b (May 15 back-dated approval; June–Aug unchanged, Sep ON; 2026-5-15 and 15/05/2026 → 400), auto-create ×2, T12 statutoryLoans.test.js (PR-6 shape: Aug posted at the real loan close → August re-run byte-identical, ledger untouched, 0 loan_adjustments; Sep PF+ESI on, loan capped by the headroom, identity holds, reconcile ok). 5 of 7 new tests FAIL on the pre-STEP-7 files (swap-verified).
 
 ## LAST STEP
-STEP 6 — 4a4c71b `fix(statutory): employee master writers preserve flags (R10)`. employees.js: sync helper no longer reads/writes pf/esi (pt + gross only); its create path takes flags from carryFlags and lists lwf; POST / structure insert explicit 0,0,0; PUT /:code drops pf/esi from allowedFields, sync gets gross+pt only, basic/da insert uses carryFlags; PUT /:code/salary master UPDATE + same-gross UPDATE stop writing pf/esi, newStructure JSON drops pf/esi, INSERT (was DEFAULT 1) uses carryFlags + lwf; bulk-import requireAdmin, ON CONFLICT no longer sets pf/esi, insertSalary 0,0,0 + lwf, drift-repair sync gross+pt only, file pf/esi ignored; integrity-check/fix requireAdmin, fix syncs gross(+pt) only, flag-only mismatch → 'skipped' + flagMismatch:true. Every response that saw pf/esi/lwf in the body returns ignoredFields. statutoryWriters.test.js 17 tests (T9a ×9, C4 ×2, T8b ×2 on withLiveDefaults, guards ×3 roles + 1): 14 of 17 FAIL on the pre-STEP-6 employees.js (verified by swapping the file).
+STEP 7 — f1450bf `fix(statutory): salary approval carries in-force flags; auto-create lists lwf`. salary-input.js: approve validates effectiveFrom ^\d{4}-\d{2}-\d{2}$ (else 400); INSERT carries pf/esi/lwf/pt + basic/da/hra_percent + pf_wage_ceiling from structureForDate(effectiveFrom) read inside the txn (JSON flags ignored); master UPDATE writes gross only; request-change strips pf/esi/lwf from newStructure and returns ignoredFields. salaryComputation.js 303–307 only (auto-create lists lwf_applicable from employee.lwf_applicable). UPSERT counts BEFORE and AFTER: plant 56 cols / 56 placeholders / 56 params / 53 SET; sales 45/45/45/42 (unchanged). Tests: T9b ×3, T11b (May 15 back-dated approval; June–Aug unchanged, Sep ON; 2026-5-15 and 15/05/2026 → 400), auto-create ×2, T12 statutoryLoans.test.js (PR-6 shape: Aug posted at the real loan close → August re-run byte-identical, ledger untouched, 0 loan_adjustments; Sep PF+ESI on, loan capped by the headroom, identity holds, reconcile ok). 5 of 7 new tests FAIL on the pre-STEP-7 files (swap-verified).
 
 ## NEXT STEP
-STEP 7: salary-input.js approve (effectiveFrom ^\d{4}-\d{2}-\d{2}$ else 400; INSERT carries pf/esi/lwf/pt + 3 percents + pf_wage_ceiling from structureForDate(effectiveFrom), ignores JSON flags; master UPDATE gross only; request-change strips flags + ignoredFields) + salaryComputation.js 301–308 auto-create lists lwf. Print UPSERT counts before/after (56/56/56/53, 45/45/45/42). Tests T9b, T11b, T12 (loans, PR-6 shape).
+STEP 8: sales writers — sales.js UPDATABLE_FIELDS (PUT /employees/:code skips pf/esi/lwf, ignoredFields), POST /employees adds lwf to master + structure insert/SET, versionSalesStructureForGross flags from carryFlags(F) + lwf in INSERT/SET, POST /employees/:code/structures validates YYYY-MM, ignores body flags, flags from carryFlags(effective_from); schema.js sales backfill INSERT adds lwf_applicable=0. Tests T9c, T11, T18 (C3).
 
 ## OWNER RULINGS ADDED DURING THE BUILD
 (record date + ruling; BUILD_PLAN §1 holds the original set)
@@ -57,6 +58,9 @@ STEP 7: salary-input.js approve (effectiveFrom ^\d{4}-\d{2}-\d{2}$ else 400; INS
 - backend/src/__tests__/statutoryFlagsApi.test.js (new, STEP 5)
 - backend/src/routes/employees.js (STEP 6)
 - backend/src/__tests__/statutoryWriters.test.js (new, STEP 6)
+- backend/src/routes/salary-input.js (STEP 7)
+- backend/src/services/salaryComputation.js (STEP 7, lines 303–307 only)
+- backend/src/__tests__/statutoryLoans.test.js (new, STEP 7)
 
 ## FRAGILE-FILE EDITS (before / after)
 - STEP 1 schema.js — BEFORE (lines 2214–2218 on d1ad7bf):
@@ -80,6 +84,26 @@ STEP 7: salary-input.js approve (effectiveFrom ^\d{4}-\d{2}-\d{2}$ else 400; INS
     db.prepare("UPDATE salary_structures SET pf_applicable = 0 WHERE pf_applicable = 1 AND employee_id IN (SELECT id FROM employees WHERE (uan IS NULL OR uan = '') AND (pf_number IS NULL OR pf_number = ''))").run();
     db.prepare("UPDATE salary_structures SET esi_applicable = 0 WHERE esi_applicable = 1 AND employee_id IN (SELECT id FROM employees WHERE (esi_number IS NULL OR esi_number = ''))").run();
   AFTER: a 6-line comment only (reset removed (L2); trigger + upload now own the flags). No other line edited.
+- STEP 7 salaryComputation.js — BEFORE (lines 301–308 on d1ad7bf):
+        db.prepare(`INSERT OR REPLACE INTO salary_structures
+          (employee_id, effective_from, gross_salary, basic, da, hra, special_allowance, other_allowances,
+           basic_percent, hra_percent, da_percent, pf_applicable, esi_applicable, pt_applicable, pf_wage_ceiling)
+          VALUES (?, '2025-01-01', ?, ?, 0, ?, 0, 0, ?, ?, 0, ?, ?, ?, 15000)`).run(
+            employee.id, gross, basic, hra,
+            basicPct, hraPct,
+            employee.pf_applicable || 0, employee.esi_applicable || 0, employee.pt_applicable ?? 1
+        );
+  AFTER:
+        db.prepare(`INSERT OR REPLACE INTO salary_structures
+          (employee_id, effective_from, gross_salary, basic, da, hra, special_allowance, other_allowances,
+           basic_percent, hra_percent, da_percent, pf_applicable, esi_applicable, lwf_applicable, pt_applicable, pf_wage_ceiling)
+          VALUES (?, '2025-01-01', ?, ?, 0, ?, 0, 0, ?, ?, 0, ?, ?, ?, ?, 15000)`).run(
+            employee.id, gross, basic, hra,
+            basicPct, hraPct,
+            employee.pf_applicable || 0, employee.esi_applicable || 0, employee.lwf_applicable || 0, employee.pt_applicable ?? 1
+        );
+  (git diff -U0: hunks @@ -303,2 +303,2 @@ and @@ -307 +307 @@ only.)
+  UPSERT (saveSalaryComputation / saveSalesSalaryComputation) not touched: before = after = plant 56/56/56/53, sales 45/45/45/42.
 
 ## TEST STATUS
 Baseline on d1ad7bf (rebased PR-1 branch, 10 Oct 2026): 42 suites / 769 tests, 0 failures, 2 clean runs.
@@ -91,3 +115,4 @@ After STEP 3: 44 / 799, 0 failures.
 After STEP 4: 44 / 818, 0 failures.
 After STEP 5: 45 / 830, 0 failures.
 After STEP 6: 46 / 847, 0 failures.
+After STEP 7: 47 / 854, 0 failures.
