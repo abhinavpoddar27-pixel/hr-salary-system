@@ -119,4 +119,47 @@ function consolidateForExit(db, loanId, actor) {
   });
 }
 
-module.exports = { consolidateForExit, finalMonthOf, isFinalMonthPast };
+/** recover_at_exit loans of a payroll whose final month is m. */
+function exitLoansForMonth(db, payroll, m) {
+  return db.prepare("SELECT * FROM loans WHERE borrower_type = ? AND status = 'recover_at_exit' ORDER BY id").all(payroll)
+    .filter((l) => compareMonth(finalMonthOf(l), m) === 0);
+}
+
+/** Σ provisional deductions of a loan (paise): a held salary waiting to post. */
+function heldPendingPaise(db, loanId) {
+  return db.prepare("SELECT amount FROM loan_deductions WHERE loan_id = ? AND state = 'provisional'").all(loanId)
+    .reduce((s, r) => s + toPaise(r.amount), 0);
+}
+
+/**
+ * Close readiness (non-blocking, planner ruling): exit loans whose final payroll
+ * is month m and whose final-month deduction is below the outstanding due in
+ * it. `computedBeforeExit`: Stage 7 for m last wrote the row before the
+ * borrower was marked Left — re-run Stage 7 for the employee before the close
+ * if the final salary has not been paid yet.
+ */
+function exitFinalPayrollWarnings(db, payroll, m) {
+  const out = [];
+  for (const loan of exitLoansForMonth(db, payroll, m)) {
+    const ins = db.prepare(`SELECT * FROM loan_instalments WHERE loan_id = ? AND due_month = ? AND due_year = ? AND status IN ('scheduled','provisional')
+                             ORDER BY CASE status WHEN 'provisional' THEN 0 ELSE 1 END, sequence LIMIT 1`).get(loan.id, m.month, m.year);
+    if (!ins) continue;
+    const ded = db.prepare("SELECT * FROM loan_deductions WHERE loan_id = ? AND month = ? AND year = ? AND payroll = ? AND state = 'provisional'")
+      .get(loan.id, m.month, m.year, payroll);
+    const deducted = ded ? toPaise(ded.amount) : 0;
+    const due = toPaise(ins.amount_due);
+    if (deducted >= due) continue;
+    const computedBeforeExit = !!(ded && loan.exit_flagged_at && String(ded.updated_at) < String(loan.exit_flagged_at));
+    out.push({
+      code: 'EXIT_FINAL_PAYROLL_SHORT', loanId: loan.id, employeeCode: loan.employee_code, finalMonth: m,
+      deducted: toRupees(deducted), dueInFinalPayroll: toRupees(due), expectedResidual: toRupees(due - deducted), computedBeforeExit,
+      message: `${loan.employee_code} loan ${loan.id}: the final payroll ${monthLabel(m)} recovers ₹${toRupees(deducted)} of ₹${toRupees(due)}; ₹${toRupees(due - deducted)} will be an exit residual`
+        + (computedBeforeExit ? ` — Stage 7 for ${monthLabel(m)} ran before the borrower was marked Left: re-run Stage 7 for ${loan.employee_code} before the close if the final salary has not been paid yet` : ''),
+    });
+  }
+  return out;
+}
+
+module.exports = {
+  consolidateForExit, finalMonthOf, isFinalMonthPast, exitLoansForMonth, heldPendingPaise, exitFinalPayrollWarnings,
+};
