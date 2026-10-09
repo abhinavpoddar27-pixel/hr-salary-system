@@ -58,9 +58,11 @@ function SalaryModal({ employee, onClose }) {
     da_percent: emp.salary_structures?.da_percent || 0,
     special_allowance_percent: emp.salary_structures?.special_allowance_percent || 0,
     other_allowance: emp.salary_structures?.other_allowance || 0,
-    pf_applicable: emp.salary_structures?.pf_applicable ?? 1,
-    esi_applicable: emp.salary_structures?.esi_applicable ?? 1,
-    pt_applicable: emp.salary_structures?.pt_applicable ?? 1,
+    // PF / ESI / LWF are NOT in the form (statutory flags PR-1, R10): they are
+    // shown read-only from the live employee record below and change only via
+    // Admin → Statutory Flags. (The old `emp.salary_structures?.…` read never
+    // matched the API's `salaryStructure` key and defaulted PF/ESI to 1 — L4.)
+    pt_applicable: emp.salaryStructure?.pt_applicable ?? emp.pt_applicable ?? 1,
     pf_wage_ceiling: emp.salary_structures?.pf_wage_ceiling || 15000,
     uan: emp.uan || '',
     esi_number: emp.esi_number || '',
@@ -145,14 +147,15 @@ function SalaryModal({ employee, onClose }) {
             </div>
           </div>
 
-          {/* Applicability */}
-          <div className="flex gap-4">
-            {[['pf_applicable', 'PF'], ['esi_applicable', 'ESI']].map(([k, label]) => (
-              <label key={k} className="flex items-center gap-2 text-sm cursor-pointer">
-                <input type="checkbox" checked={!!form[k]} onChange={e => setForm(f => ({ ...f, [k]: e.target.checked ? 1 : 0 }))} className="rounded" />
+          {/* Applicability — PF / ESI / LWF read-only, rendered live from emp.* */}
+          <div className="flex flex-wrap items-center gap-4">
+            {[['pf_applicable', 'PF'], ['esi_applicable', 'ESI'], ['lwf_applicable', 'LWF']].map(([k, label]) => (
+              <label key={k} className="flex items-center gap-2 text-sm cursor-not-allowed" data-testid={`ro-${k}`}>
+                <input type="checkbox" checked={!!emp[k]} readOnly disabled className="rounded" />
                 {label} Applicable
               </label>
             ))}
+            <Link to="/admin/statutory-flags" className="text-xs text-blue-700 hover:underline">Change via Statutory Flags</Link>
             <label className="flex items-center gap-2 text-sm cursor-not-allowed opacity-50">
               <input type="checkbox" checked={!!form.pt_applicable} onChange={e => setForm(f => ({ ...f, pt_applicable: e.target.checked ? 1 : 0 }))} className="rounded" disabled />
               PT Applicable <span className="text-[10px] text-slate-400">(Currently disabled)</span>

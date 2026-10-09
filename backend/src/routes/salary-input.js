@@ -21,7 +21,7 @@ router.get('/all', (req, res) => {
     SELECT e.id, e.code, e.name, e.department, e.designation, e.company,
            e.date_of_joining, e.status,
            ss.basic, ss.da, ss.hra, ss.conveyance, ss.other_allowances,
-           ss.pf_applicable, ss.esi_applicable, ss.effective_from,
+           ss.pf_applicable, ss.esi_applicable, ss.lwf_applicable, ss.effective_from,
            (COALESCE(ss.basic,0) + COALESCE(ss.da,0) + COALESCE(ss.hra,0) +
             COALESCE(ss.conveyance,0) + COALESCE(ss.other_allowances,0)) as gross_salary
     FROM employees e

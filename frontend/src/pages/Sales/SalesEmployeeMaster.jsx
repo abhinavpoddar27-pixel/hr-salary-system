@@ -1,4 +1,5 @@
 import React, { useState, useMemo } from 'react'
+import { Link } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import toast from 'react-hot-toast'
 import clsx from 'clsx'
@@ -128,7 +129,9 @@ function emptyForm(defaultCompany = '') {
     working_hours: '',
     aadhaar: '', pan: '', dob: '', doj: '', contact: '', personal_contact: '',
     gross_salary: '',
-    pf_applicable: 0, esi_applicable: 0, pt_applicable: 0,
+    // PF / ESI / LWF are not in the form (statutory flags PR-1, R10): new
+    // employees start with them off and they change only via Statutory Flags.
+    pt_applicable: 0,
     bank_name: '', account_no: '', ifsc: '',
     status: 'Active'
   }
@@ -164,9 +167,11 @@ function EmployeeForm({ initial, isEdit, onSubmit, onCancel, submitting }) {
     // Coerce numbers + booleans
     const payload = { ...form }
     payload.gross_salary = payload.gross_salary === '' ? 0 : parseFloat(payload.gross_salary) || 0
-    payload.pf_applicable = payload.pf_applicable ? 1 : 0
-    payload.esi_applicable = payload.esi_applicable ? 1 : 0
     payload.pt_applicable = payload.pt_applicable ? 1 : 0
+    // never send statutory flags (the edit form is pre-filled from the row, which has them)
+    delete payload.pf_applicable
+    delete payload.esi_applicable
+    delete payload.lwf_applicable
     if (isEdit) {
       delete payload.code
       delete payload.company
@@ -245,9 +250,13 @@ function EmployeeForm({ initial, isEdit, onSubmit, onCancel, submitting }) {
         <div className="grid grid-cols-2 gap-3">
           <div>{lbl('Gross Monthly (₹)')}<input type="number" value={form.gross_salary} onChange={e => set('gross_salary', e.target.value)} className="w-full border border-slate-300 rounded-lg px-2 py-1.5 text-sm" /></div>
           <div className="flex items-end gap-4 pb-1">
-            <label className="flex items-center gap-1 text-xs text-slate-700"><input type="checkbox" checked={!!form.pf_applicable} onChange={e => set('pf_applicable', e.target.checked ? 1 : 0)} /> PF</label>
-            <label className="flex items-center gap-1 text-xs text-slate-700"><input type="checkbox" checked={!!form.esi_applicable} onChange={e => set('esi_applicable', e.target.checked ? 1 : 0)} /> ESI</label>
+            <label className="flex items-center gap-1 text-xs text-slate-500 cursor-not-allowed" data-testid="ro-pf"><input type="checkbox" checked={!!initial?.pf_applicable} readOnly disabled /> PF</label>
+            <label className="flex items-center gap-1 text-xs text-slate-500 cursor-not-allowed" data-testid="ro-esi"><input type="checkbox" checked={!!initial?.esi_applicable} readOnly disabled /> ESI</label>
+            <label className="flex items-center gap-1 text-xs text-slate-500 cursor-not-allowed" data-testid="ro-lwf"><input type="checkbox" checked={!!initial?.lwf_applicable} readOnly disabled /> LWF</label>
             <label className="flex items-center gap-1 text-xs text-slate-700"><input type="checkbox" checked={!!form.pt_applicable} onChange={e => set('pt_applicable', e.target.checked ? 1 : 0)} /> PT</label>
+          </div>
+          <div className="col-span-2 text-[11px] text-slate-500">
+            PF / ESI / LWF are read-only here{isEdit ? '' : ' (a new employee starts with them off)'} — <Link to="/admin/statutory-flags" className="text-blue-700 hover:underline">change via Statutory Flags</Link>.
           </div>
         </div>
       </section>
