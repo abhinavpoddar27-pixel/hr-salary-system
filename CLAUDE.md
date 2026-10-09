@@ -1,3 +1,25 @@
+## Last Session — 2026-10-09 (Loans PR-0)
+**Loans PR-0: loan management build spec. Branch `docs/loans-spec`. Docs only, NOT merged.**
+Not the same as the leave-safety "PR-0" below: always write "Loans PR-n".
+- **Read first:** `docs/loans/SPEC.md` is the build spec every loan PR is held to
+  (decisions D-1…D-28, policy defaults, architecture rules, data model, roles,
+  PR-0…PR-10 + PR-F with acceptance tests, risks K1–K37, open questions).
+  `docs/loans/PROGRESS.md` holds the RESUME block, the PR table and the post-merge checks.
+- **The one rule:** Stage 7 records only a *provisional* loan deduction, keyed by
+  loan + month + payroll. Balances move only at the monthly **loan close** (the 13th IST,
+  after payroll is computed), never at payroll finalise.
+- **Who does what:** the admin approves every loan, defer, restructure and write-off.
+  Finance records disbursements and receipts only. HR raises loans. Nobody approves their own
+  request, and there is no backup approver.
+- **Loan module today:** 0 loans have ever been created and it is unsafe to switch on.
+  D1 drops the EMI on a Stage 7 re-run, D2 means payroll never moves the balance,
+  and D3's cash-repayment button always fails. Do NOT create a loan until PR-5 + PR-6.
+- **Phase 0 first:** P1 #48, P2 #49 and P3 #50 must merge before Loans PR-1.
+- **Not tested:** nothing to test (no code). The baselines for the post-merge checks were
+  confirmed read-only on production: drift = 1 known row (2/2026); component-short = 5 rows.
+
+---
+
 ## Last Session — 2026-09-19 (later)
 
 **PR-0: leave safety floor + CI truth. Branch `fix/leave-safety-and-ci`, 10 commits, NOT merged.**
