@@ -423,7 +423,17 @@ router.get('/:id', allow(READ_ROLES), handle((req, res) => {
     requests: L.listRequests(db, { loanId: loan.id }),
     reconciliation: loan.disbursed_amount !== null ? L.reconcileLoan(db, loan.id) : null,
     approvalCheck: null,
+    deductions: [],
+    adjustments: [],
   };
+  // Loans PR-6b (read-only): payroll deductions with their opposite entries, so the
+  // admin can pick one to reverse. Effective posted = amount − Σ adjustments.
+  const hasAdj = !!db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'loan_adjustments'").get();
+  data.adjustments = hasAdj ? db.prepare('SELECT * FROM loan_adjustments WHERE loan_id = ? ORDER BY id').all(loan.id) : [];
+  data.deductions = db.prepare('SELECT * FROM loan_deductions WHERE loan_id = ? ORDER BY year, month, id').all(loan.id).map((d) => {
+    const adj = data.adjustments.filter((a) => a.deduction_id === d.id).reduce((s, a) => s + toPaise(a.amount), 0);
+    return { ...d, adjusted: toRupees(adj), effective_posted: d.state === 'posted' ? toRupees(toPaise(d.amount) - adj) : 0 };
+  });
   if (loan.status === 'requested') {
     // The admin's approval screen: eligibility re-run, last 3 months of deductions, warnings.
     const facts = L.loadBorrowerFacts(db, { borrowerType: loan.borrower_type, employeeCode: loan.employee_code, company: loan.company, excludeLoanId: loan.id });
