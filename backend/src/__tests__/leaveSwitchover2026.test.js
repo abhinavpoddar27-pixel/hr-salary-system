@@ -174,6 +174,8 @@ describe('apply', () => {
     const p2 = previewSwitchover(db);
     expect(p2.already_applied).toBe(true);
     expect(p2.totals).toMatchObject({ retyped: 0, policy_changed: 0, offsets: 0, cl_openings_changed: 0 });
+    expect(p2.retype.skipped.filter((x) => x.reason === 'Already Permanent').map((x) => x.code).sort())
+      .toEqual(['14686', '17575', '18989', '19954', '23700']);
     cleanup();
   });
 

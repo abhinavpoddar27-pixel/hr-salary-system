@@ -282,7 +282,7 @@ export default function LeaveAutomationTab({ year, status }) {
             <table className="table-compact w-full text-xs">
               <thead>
                 <tr>
-                  <th>Code</th><th>Month</th><th className="text-center">EL days</th><th>How given</th><th>Remark</th><th />
+                  <th>Code</th><th>Month</th><th>Type</th><th className="text-center">Days</th><th>How given</th><th>Remark</th><th />
                 </tr>
               </thead>
               <tbody>
@@ -290,6 +290,7 @@ export default function LeaveAutomationTab({ year, status }) {
                   <tr key={g.id}>
                     <td className="font-mono">{g.employee_code}</td>
                     <td>{g.month}/{g.year}</td>
+                    <td>{g.leave_type || 'EL'}</td>
                     <td className="text-center">{g.days}</td>
                     <td>{String(g.mode).replace(/_/g, ' ')}</td>
                     <td className="text-slate-500">{g.remark || '—'}</td>
@@ -530,7 +531,7 @@ export default function LeaveAutomationTab({ year, status }) {
                             ? <span className="badge-green text-[10px]">accepted</span>
                             : <span className="badge text-[10px] bg-red-100 text-red-700">rejected</span>}
                         </td>
-                        <td className="text-slate-500">{r.accepted ? `${r.days} day(s), ${String(r.mode).replace(/_/g, ' ')}` : r.reason}</td>
+                        <td className="text-slate-500">{r.accepted ? `${r.leave_type || 'EL'} ${r.days} day(s), ${String(r.mode).replace(/_/g, ' ')}` : r.reason}</td>
                       </tr>
                     ))}
                   </tbody>

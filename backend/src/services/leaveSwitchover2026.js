@@ -85,12 +85,15 @@ function retype(db, log) {
   const changed = [];
   const skipped = [];
   for (const { code, old_type: oldType } of RETYPE_LIST) {
-    const rows = db.prepare('SELECT COUNT(*) AS c FROM employees WHERE code = ?').get(code).c;
-    const e = find.get(code);
+    const e = find.get(code); // employees.code is UNIQUE
     if (!e) { skipped.push({ code, reason: 'No employee with that code' }); continue; }
-    if (rows > 1) { skipped.push({ code, reason: `${rows} employee rows share this code` }); continue; }
     if (e.status !== 'Active') {
       skipped.push({ code, name: e.name, status: e.status, current_type: e.employment_type, reason: `Status is ${e.status}, not Active` });
+      continue;
+    }
+    if (norm(e.employment_type) === 'permanent') {
+      // Typically: the switchover has already been applied.
+      skipped.push({ code, name: e.name, status: e.status, current_type: e.employment_type, reason: 'Already Permanent' });
       continue;
     }
     if (norm(e.employment_type) !== norm(oldType)) {

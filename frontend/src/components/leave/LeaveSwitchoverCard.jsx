@@ -58,6 +58,7 @@ export default function LeaveSwitchoverCard() {
   const [typed, setTyped] = useState('')
   const [note, setNote] = useState('')
   const [applied, setApplied] = useState(null)
+  const [backupPath, setBackupPath] = useState(null)
 
   const preview = useQuery({
     queryKey: ['leave-switchover-2026-preview'],
@@ -72,6 +73,7 @@ export default function LeaveSwitchoverCard() {
     mutationFn: () => applyLeaveSwitchover({ confirm: typed.trim(), note: note.trim() || undefined }),
     onSuccess: (res) => {
       setApplied(res.data)
+      setBackupPath(res.data.backup_path)
       setApplyOpen(false)
       setTyped('')
       setNote('')
@@ -109,7 +111,8 @@ export default function LeaveSwitchoverCard() {
           </p>
         </div>
         <div className="flex gap-2">
-          <button className="btn-ghost text-sm" onClick={() => (requested ? preview.refetch() : setRequested(true))}
+          <button className="btn-ghost text-sm"
+            onClick={() => { setApplied(null); if (requested) preview.refetch(); else setRequested(true) }}
             disabled={preview.isFetching}>
             {preview.isFetching ? 'Previewing…' : 'Preview'}
           </button>
@@ -130,7 +133,7 @@ export default function LeaveSwitchoverCard() {
         <div className="mt-3 text-sm bg-green-50 border border-green-200 rounded-lg p-3 text-green-800">
           <div className="font-medium">
             Applied{data?.applied_at ? ` on ${fmtIstDateTime(data.applied_at)}` : ''}.
-            {applied?.backup_path && <span className="font-normal"> Backup: <span className="font-mono text-xs">{applied.backup_path}</span></span>}
+            {backupPath && <span className="font-normal"> Backup: <span className="font-mono text-xs">{backupPath}</span></span>}
           </div>
           <div className="mt-1">Next: Preview EL recompute &rarr; Apply in this tab, then turn Automation ON.</div>
         </div>
@@ -178,12 +181,12 @@ export default function LeaveSwitchoverCard() {
             </div>
           </div>
 
-          {(data.double_count_flags?.length > 0 || data.retype.skipped.length > 0 || t.category_revert_risk > 0) && (
+          {(data.double_count_flags?.length > 0 || data.retype.skipped.some((s) => !(done && s.reason === 'Already Permanent')) || t.category_revert_risk > 0) && (
             <div className="text-xs bg-amber-50 border border-amber-200 rounded-lg p-3 text-amber-800 space-y-1">
               {data.double_count_flags.map((f) => (
                 <div key={`${f.code}-${f.month}`}><span className="font-mono">{f.code}</span>: {f.text}</div>
               ))}
-              {data.retype.skipped.map((s) => (
+              {data.retype.skipped.filter((s) => !(done && s.reason === 'Already Permanent')).map((s) => (
                 <div key={s.code}><span className="font-mono">{s.code}</span> not retyped: {s.reason}</div>
               ))}
               {t.category_revert_risk > 0 && (

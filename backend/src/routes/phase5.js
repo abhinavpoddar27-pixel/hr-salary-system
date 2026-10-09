@@ -592,7 +592,7 @@ router.delete('/leave-external-grants/:id', requireAdmin, (req, res) => {
   db.prepare('UPDATE leave_external_grants SET is_active = 0 WHERE id = ?').run(id);
   try {
     logAudit('leave_external_grants', id, 'is_active', '1', '0', 'leave_automation',
-      `Removed ${row.days} EL day(s) for ${row.employee_code} ${row.month}/${row.year}`,
+      `Removed ${row.days} ${row.leave_type || 'EL'} day(s) for ${row.employee_code} ${row.month}/${row.year}`,
       req.user?.username || 'admin');
   } catch { /* best effort */ }
   res.json({ success: true, id });
