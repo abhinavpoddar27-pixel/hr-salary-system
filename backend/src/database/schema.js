@@ -2215,6 +2215,53 @@ If description and screenshot are incoherent or unrelated, set summary_confidenc
   safeCreateIndex('CREATE INDEX IF NOT EXISTS idx_sales_employees_status ON sales_employees(status)');
   safeCreateIndex('CREATE INDEX IF NOT EXISTS idx_sales_salary_structures_emp ON sales_salary_structures(employee_id, effective_from)');
 
+  // ── Statutory flags PR-1 (Oct 2026) — additive ─────────────────────────
+  // LWF flag on all four flag-carrying tables, ESI/UAN numbers on the sales
+  // master, the audited upload batch table, and a trigger that starts every
+  // NEW plant employee with PF/ESI/LWF off. Flags change only through the
+  // statutory upload (services/statutoryFlags.js) from now on (ruling R10).
+  safeAddColumn('employees', 'lwf_applicable', 'INTEGER DEFAULT 0');
+  safeAddColumn('salary_structures', 'lwf_applicable', 'INTEGER DEFAULT 0');
+  safeAddColumn('sales_employees', 'lwf_applicable', 'INTEGER DEFAULT 0');
+  safeAddColumn('sales_salary_structures', 'lwf_applicable', 'INTEGER DEFAULT 0');
+  safeAddColumn('sales_employees', 'esi_number', 'TEXT');
+  safeAddColumn('sales_employees', 'uan', 'TEXT');
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS statutory_flag_batches (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      scope TEXT NOT NULL CHECK(scope IN ('plant','sales')),
+      effective_month TEXT NOT NULL,
+      file_name TEXT,
+      file_sha256 TEXT NOT NULL,
+      row_count INTEGER DEFAULT 0,
+      changed_count INTEGER DEFAULT 0,
+      status TEXT NOT NULL DEFAULT 'applying',
+      applied_by TEXT,
+      applied_at TEXT DEFAULT (datetime('now')),
+      summary_json TEXT,
+      undo_json TEXT
+    );
+  `);
+  safeCreateIndex(`CREATE UNIQUE INDEX IF NOT EXISTS uniq_statutory_flag_batches_applied
+    ON statutory_flag_batches(scope, effective_month, file_sha256) WHERE status = 'applied'`);
+  // The trigger reads lwf_applicable, so it must come AFTER the column above
+  // (wrong order makes every employee insert fail). DROP + CREATE keeps the
+  // body current on databases that already have an older copy (L13 lesson).
+  // It fires on a plain INSERT only; an UPSERT's conflict branch is an UPDATE
+  // and keeps the existing flags (N3).
+  try {
+    db.exec(`
+      DROP TRIGGER IF EXISTS employees_statutory_default_off;
+      CREATE TRIGGER employees_statutory_default_off
+        AFTER INSERT ON employees FOR EACH ROW
+        BEGIN
+          UPDATE employees SET pf_applicable = 0, esi_applicable = 0, lwf_applicable = 0 WHERE id = NEW.id;
+        END;
+    `);
+  } catch (e) {
+    console.error('[MIGRATION] statutory flags: employees_statutory_default_off trigger failed:', e.message);
+  }
+
   // ── Sales Salary Module — Phase 2 (holidays + upload + monthly input) ─
   // sales_holidays is separate from plant `holidays` so sales can have a
   // different calendar per state (applicable_states JSON). sales_uploads
