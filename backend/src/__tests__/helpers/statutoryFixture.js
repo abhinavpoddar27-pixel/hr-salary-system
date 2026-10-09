@@ -4,6 +4,7 @@
  * employees, ESI numbers or UANs).
  */
 const Database = require('better-sqlite3');
+const XLSX = require('xlsx');
 const { initSchema } = require('../../database/schema');
 
 const COMPANY = 'Indriyan Beverages Pvt Ltd';
@@ -122,7 +123,22 @@ function counts(db) {
   };
 }
 
+// ── Upload files (synthetic) ───────────────────────────────────────────────
+const PLANT_HDR = ['code', 'name', 'type', 'esi_applicable', 'pf_applicable', 'lwf_applicable', 'esi_number', 'uan', 'note'];
+const SALES_HDR = ['code', 'company', 'name', 'esi_applicable', 'pf_applicable', 'lwf_applicable', 'esi_number', 'uan', 'note'];
+function xlsxBuf(aoa) {
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(aoa), 'flags');
+  return XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' });
+}
+const yn = (v) => (v === 1 || v === true ? 'Y' : v === 0 || v === false ? 'N' : v);
+const prow = (code, esi, pf, lwf, extra = {}) => [code, 'SYNTH', 'Worker', yn(esi), yn(pf), yn(lwf), extra.esi_number ?? '', extra.uan ?? '', ''];
+const srow = (code, company, esi, pf, lwf, extra = {}) => [code, company, 'SYNTH', yn(esi), yn(pf), yn(lwf), extra.esi_number ?? '', extra.uan ?? '', ''];
+const plantFile = (...rows) => xlsxBuf([PLANT_HDR, ...rows]);
+const salesFile = (...rows) => xlsxBuf([SALES_HDR, ...rows]);
+
 module.exports = {
+  PLANT_HDR, SALES_HDR, xlsxBuf, prow, srow, plantFile, salesFile,
   COMPANY, OTHER_COMPANY, silently, newDb, withLiveDefaults, dflt, plant, plantStructure, salesEmp, salesStructure,
   plantRows, salesRows, master, salesMaster, flags, counts,
 };
