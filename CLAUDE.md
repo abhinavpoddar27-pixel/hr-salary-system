@@ -1,3 +1,27 @@
+## Last Session — 2026-10-09 (Loans PR-2)
+**Loans PR-2: the loan engine. Branch `feat/loans-pr2`, NOT merged.** Spec: `docs/loans/SPEC.md`; rulings in `docs/loans/PROGRESS.md`.
+- **New, route-free:** `backend/src/services/loans/` — money (integer paise), months, policy (16 `loan_*` keys, never throws),
+  schedule (EMI = ⌈P÷n⌉ to the rupee, last = remainder; `TENURE_TOO_LONG_FOR_AMOUNT`; first EMI month = month after
+  disbursement, skipping closed months), eligibility, headroom, states (state tables + maker-checker), events, lifecycle
+  (request/approve/reject/disburse/flagForExit), ledger, receipts, changes (defer/restructure/write-off), reconcile.
+  Façade `services/loans/index.js`. Nothing calls it yet: PR-3 (API), PR-5 (Stage 7), PR-6 (close) will.
+- **Ledger functions are building blocks only** (`recordProvisional`, `clearProvisional`, `postDeduction`,
+  `moveInstalmentToEnd`): no loops, no salary reads, no `loan_closes` rows, no notifications. Extension-limit alerts are
+  returned as structured objects for PR-6 to send.
+- **No schema change, no salary-table write** (a test snapshots the salary tables around a full loan life).
+- **Fragile:** "earned base" for the 50% cap lives ONLY in `headroom.js` `EARNED_BASE_DEFINITION` (pending consultant Q1).
+  Functions return `{ok:false, code}`, never throw a class (jest-realm lesson). They write `audit_log` on the passed db
+  handle, not `db.js logAudit`. They do not require `routes/auth.js` (throws without `JWT_SECRET`): callers pass a
+  normalised role. Instalments are written at disbursement, not approval. A new last instalment never lands in a
+  closed month, so PR-6 must insert its `loan_closes` row before posting. Top-up dates live in the event reason as
+  `[disbursed_on=…]`.
+- **Old path untouched:** `loanService.js` / `routes/loans.js` stay broken against the new schema until PR-3 deletes them.
+- **Verified:** suite 454 → 588 (22 → 29 suites, 3 clean runs). `node backend/scripts/loans-engine-simulation.js` runs
+  13 loans × 12 months (normal, re-run, shortfall, held, no salary, receipt, defer, restructure, exit, write-off, extension
+  limit, sales, emergency 3×). Reconciliation is exact to the paisa every month, re-runs are identical, exit 0.
+- **Not tested:** real Stage 7 / close (PR-5/6), cross-process races, statement month for a write-off (uses the real
+  timestamp), production data (no loans exist).
+
 ## Last Session — 2026-10-09 (Loans PR-1)
 **Loans PR-1: loan schema rebuild + Mark Left. Branch `feat/loans-pr1`, NOT merged.** Spec: `docs/loans/SPEC.md` §6.
 - **schema.js:** old `loans`/`loan_repayments` CREATEs removed from the base block. One guarded block before
