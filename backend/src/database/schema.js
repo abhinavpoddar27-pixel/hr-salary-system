@@ -2990,8 +2990,8 @@ If description and screenshot are incoherent or unrelated, set summary_confidenc
       const upsertStruct = db.prepare(`
         INSERT INTO sales_salary_structures
           (employee_id, effective_from, basic, hra, cca, conveyance,
-           gross_salary, pf_applicable, esi_applicable, pt_applicable, created_by)
-        VALUES (?, ?, ?, 0, 0, 0, ?, ?, ?, ?, ?)
+           gross_salary, pf_applicable, esi_applicable, lwf_applicable, pt_applicable, created_by)
+        VALUES (?, ?, ?, 0, 0, 0, ?, ?, ?, 0, ?, ?)
         ON CONFLICT(employee_id, effective_from) DO UPDATE SET
           basic           = excluded.basic,
           hra             = excluded.hra,

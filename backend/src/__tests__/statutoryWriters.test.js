@@ -307,3 +307,110 @@ describe('salaryComputation.js 301–308 auto-create lists lwf', () => {
     expect(sc).toMatchObject({ pf_employee: 0, esi_employee: 0 });
   });
 });
+
+// ═══════════════════════════════ STEP 8 — sales writers ═══════════════════════════════
+
+const salesSnap = (e) => ({
+  master: S.flags(S.salesMaster(db, e)),
+  rows: S.salesRows(db, e).map((r) => ({ d: r.effective_from, ...S.flags(r) })),
+});
+
+function uploadedSales(code, over = {}) {
+  const e = S.salesEmp(db, { code, gross_salary: over.gross ?? 18000 });
+  S.salesStructure(db, e, over.from ?? '2025-01', { gross_salary: over.gross ?? 18000 });
+  const r = S.applyFile(db, 'sales', S.salesFile(S.srow(code, S.COMPANY, 1, 0, 1)));
+  if (!r.ok) throw new Error(JSON.stringify(r));
+  return e;
+}
+const co = encodeURIComponent(S.COMPANY);
+
+describe('T9c — sales master writers keep the uploaded flags', () => {
+  test('PUT /sales/employees/:code with flags + gross change → new 2026-10 version carries the in-force flags; master flags unchanged; ignoredFields', async () => {
+    const e = uploadedSales('Z201');
+    const r = await api.request('PUT', `/api/sales/employees/Z201?company=${co}`, { as: 'hr1', body: {
+      gross_salary: 19000, pf_applicable: 1, esi_applicable: 0, lwf_applicable: 0, effective_from: '2026-10',
+    } });
+    expect(r.status).toBe(200);
+    expect(r.body.ignoredFields).toEqual(['pf_applicable', 'esi_applicable', 'lwf_applicable']);
+    expect(S.flags(S.salesMaster(db, e))).toEqual({ pf: 0, esi: 1, lwf: 1 });
+    const rows = S.salesRows(db, e);
+    expect(rows.find((x) => x.effective_from === '2026-10')).toMatchObject({ gross_salary: 19000, pf_applicable: 0, esi_applicable: 1, lwf_applicable: 1, effective_to: null });
+  });
+
+  test('PUT with only flags → No updates, nothing changed', async () => {
+    const e = uploadedSales('Z202');
+    const before = salesSnap(e);
+    const r = await api.request('PUT', `/api/sales/employees/Z202?company=${co}`, { as: 'hr1', body: { esi_applicable: 0 } });
+    expect(r.body).toMatchObject({ success: true, message: 'No updates', ignoredFields: ['esi_applicable'] });
+    expect(salesSnap(e)).toEqual(before);
+  });
+
+  test('POST /sales/employees (create) may set flags incl. LWF on master + structure', async () => {
+    const r = await api.request('POST', '/api/sales/employees', { as: 'hr1', body: {
+      name: 'NEW SALES', company: S.COMPANY, bank_name: 'B', account_no: '1', ifsc: 'X', gross_salary: 15000, doj: '2026-10-01',
+      esi_applicable: 1, lwf_applicable: 1,
+    } });
+    expect(r.status).toBe(201);
+    const e = { id: r.body.data.id };
+    expect(salesSnap(e)).toEqual({ master: { pf: 0, esi: 1, lwf: 1 }, rows: [{ d: '2026-10', pf: 0, esi: 1, lwf: 1 }] });
+  });
+
+  test('POST /sales/employees (create) without flags → all 0', async () => {
+    const r = await api.request('POST', '/api/sales/employees', { as: 'hr1', body: {
+      name: 'NEW SALES 2', company: S.COMPANY, bank_name: 'B', account_no: '2', ifsc: 'X', gross_salary: 15000, doj: '2026-10-01',
+    } });
+    const e = { id: r.body.data.id };
+    expect(salesSnap(e)).toEqual({ master: { pf: 0, esi: 0, lwf: 0 }, rows: [{ d: '2026-10', pf: 0, esi: 0, lwf: 0 }] });
+  });
+});
+
+describe('T11 — back-dated sales gross edit after the upload', () => {
+  test('PUT /sales/employees/:code gross change effective_from=2026-05 → May–Aug recompute unchanged, Sep keeps the new flags', async () => {
+    const e = S.salesEmp(db, { code: 'Z210', gross_salary: 18000 });
+    S.salesStructure(db, e, '2025-01', { gross_salary: 18000 });
+    const before = {};
+    for (const m of [5, 6, 7, 8]) before[m] = S.computeSales(db, e, m, 2026);
+    expect(S.applyFile(db, 'sales', S.salesFile(S.srow('Z210', S.COMPANY, 1, 0, 1))).ok).toBe(true);
+    const r = await api.request('PUT', `/api/sales/employees/Z210?company=${co}`, { as: 'hr1', body: { gross_salary: 18500, effective_from: '2026-05' } });
+    expect(r.status).toBe(200);
+    const may = S.salesRows(db, e).find((x) => x.effective_from === '2026-05');
+    expect(S.flags(may)).toEqual({ pf: 0, esi: 0, lwf: 0 });
+    for (const m of [5, 6, 7, 8]) {
+      const after = S.computeSales(db, e, m, 2026);
+      expect(after.esi_employee).toBe(before[m].esi_employee);
+      expect(after.pf_employee).toBe(before[m].pf_employee);
+      expect(after.gross_monthly).toBe(18500); // the arrears edit itself still applies
+    }
+    const sep = S.computeSales(db, e, 9, 2026);
+    expect(sep.esi_employee).toBeGreaterThan(0);
+    expect(SF.carryFlags(db, 'sales', e.id, '2026-09')).toEqual({ pf: 0, esi: 1, lwf: 1 });
+  });
+});
+
+describe('T18 (C3) — POST /sales/employees/:code/structures (the dynamic-insert exemption)', () => {
+  test('after an upload, body flags 1/1 at 2026-05 → stored flags = in force at 2026-05 (0/0/0); ignoredFields', async () => {
+    const e = uploadedSales('Z220');
+    const r = await api.request('POST', `/api/sales/employees/Z220/structures?company=${co}`, { as: 'hr1', body: {
+      effective_from: '2026-05', basic: 9000, gross_salary: 18000, pf_applicable: 1, esi_applicable: 1,
+    } });
+    expect(r.status).toBe(201);
+    expect(r.body.ignoredFields).toEqual(['pf_applicable', 'esi_applicable']);
+    expect(r.body.data).toMatchObject({ effective_from: '2026-05', pf_applicable: 0, esi_applicable: 0, lwf_applicable: 0 });
+  });
+
+  test('at 2026-11 (after E) → stored flags = the uploaded ones', async () => {
+    uploadedSales('Z221');
+    const r = await api.request('POST', `/api/sales/employees/Z221/structures?company=${co}`, { as: 'hr1', body: {
+      effective_from: '2026-11', basic: 9000, gross_salary: 18000, esi_applicable: 0,
+    } });
+    expect(r.body.data).toMatchObject({ pf_applicable: 0, esi_applicable: 1, lwf_applicable: 1 });
+  });
+
+  test('2026-5 and 2026-05-01 → 400', async () => {
+    uploadedSales('Z222');
+    for (const bad of ['2026-5', '2026-05-01', '2026-13']) {
+      const r = await api.request('POST', `/api/sales/employees/Z222/structures?company=${co}`, { as: 'hr1', body: { effective_from: bad, basic: 1 } });
+      expect(r.status).toBe(400);
+    }
+  });
+});
