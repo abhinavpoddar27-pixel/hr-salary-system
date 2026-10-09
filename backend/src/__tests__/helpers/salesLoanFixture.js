@@ -68,4 +68,42 @@ const SALES_SHORT_SQL = `SELECT COUNT(*) AS n FROM sales_salary_computations
   WHERE ABS(total_deductions - (COALESCE(pf_employee,0) + COALESCE(esi_employee,0) + COALESCE(professional_tax,0) + COALESCE(tds,0)
         + COALESCE(advance_recovery,0) + COALESCE(loan_recovery,0) + COALESCE(other_deductions,0))) > 0.005`;
 
-module.exports = { L, IND, ALI, HR, ADMIN, FIN, SYS, addRep, setUpload, salesLoan, salaryRow, SALES_DRIFT_SQL, SALES_SHORT_SQL };
+/**
+ * Direct (no-HTTP) sales Stage 7 for one company-month on a bare database —
+ * the same steps as POST /api/sales/compute (per-employee transaction, compute,
+ * save + loan step, then the not-paid sweep and the upload stamp). Used by the
+ * close / exit suites that need a fresh database per test; the route itself is
+ * driven over HTTP in loansSalesStage7.test.js and the simulation.
+ */
+function computeSalesMonth(db, { month, year, company = IND, runId = 'sales-run' }) {
+  const { computeSalesEmployee, saveSalesSalaryComputation } = require('../../services/salesSalaryComputation');
+  const { deriveCycle } = require('../../services/cycleUtil');
+  const { clearSalesNotComputed } = require('../../services/loans/stage7');
+  const cyc = deriveCycle(month, year);
+  const upload = db.prepare('SELECT * FROM sales_uploads WHERE month = ? AND year = ? AND company = ? AND is_active = 1').get(month, year, company);
+  if (!upload) throw new Error('no active upload');
+  const rows = db.prepare(`SELECT i.*, e.id AS sales_employee_id FROM sales_monthly_input i
+                            LEFT JOIN sales_employees e ON e.code = i.employee_code AND e.company = i.company
+                            WHERE i.upload_id = ? AND i.employee_code IS NOT NULL`).all(upload.id);
+  const out = { computed: [], excluded: [], errors: [] };
+  const { log, warn } = console;
+  console.log = () => {}; console.warn = () => {};
+  try {
+    for (const row of rows) {
+      const emp = db.prepare('SELECT * FROM sales_employees WHERE id = ?').get(row.sales_employee_id);
+      try {
+        db.transaction(() => {
+          const comp = computeSalesEmployee(db, { salesEmployee: emp, monthlyInputRow: row, cycleStart: cyc.start, cycleEnd: cyc.end, month, year, company, user: 'hr1' });
+          if (!comp.success) { (comp.excluded ? out.excluded : out.errors).push(row.employee_code); return; }
+          saveSalesSalaryComputation(db, comp, { runId });
+          out.computed.push(row.employee_code);
+        })();
+      } catch (e) { out.errors.push(row.employee_code); }
+    }
+    out.loans = db.transaction(() => clearSalesNotComputed(db, { month, year, company, keepCodes: [...out.computed, ...out.errors] }))();
+  } finally { console.log = log; console.warn = warn; }
+  db.prepare("UPDATE sales_uploads SET status = 'computed' WHERE id = ?").run(upload.id);
+  return out;
+}
+
+module.exports = { L, IND, ALI, HR, ADMIN, FIN, SYS, addRep, setUpload, salesLoan, salaryRow, computeSalesMonth, SALES_DRIFT_SQL, SALES_SHORT_SQL };
