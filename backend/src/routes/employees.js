@@ -724,6 +724,7 @@ router.put('/:code/mark-left', (req, res) => {
   const { consolidateForExit } = require('../services/loans/exit');
   const { notifyAlerts } = require('../services/loans/notify');
   const exitAlerts = [];
+  const loanSummary = [];   // Loans PR-7: what each flagged loan now owes (the Mark Left dialog, PR-6b)
 
   const txn = db.transaction(() => {
     // 1. Set status = 'Left', is_active = 0, date_of_exit
@@ -773,10 +774,13 @@ router.put('/:code/mark-left', (req, res) => {
       // Loans PR-7: the whole outstanding falls due in the final payroll (the
       // month of the exit date); if that month's loan close has already run,
       // the outstanding is the exit residual (receipt or write-off) at once.
-      if (toState === 'recover_at_exit') {
-        const exit = consolidateForExit(db, loan.id, { username: markedBy });
-        exitAlerts.push(...exit.alerts);
-      }
+      const exit = toState === 'recover_at_exit' ? consolidateForExit(db, loan.id, { username: markedBy }) : null;
+      if (exit) exitAlerts.push(...exit.alerts);
+      loanSummary.push({
+        loanId: loan.id, status: toState, outstanding: toState === 'recover_at_exit' ? loan.remaining_balance : 0,
+        finalMonth: exit ? exit.finalMonth : null, finalMonthPast: exit ? exit.finalMonthPast : null,
+        dueInFinalPayroll: exit ? exit.dueInFinalPayroll : 0, residual: exit ? exit.residual : 0,
+      });
     }
 
     // 3. Audit log
@@ -785,7 +789,7 @@ router.put('/:code/mark-left', (req, res) => {
 
   txn();
   notifyAlerts(db, exitAlerts);   // after the commit, best effort (never throws)
-  res.json({ success: true, message: `Employee ${code} marked as Left. ${emp.name} removed from active roster.` });
+  res.json({ success: true, message: `Employee ${code} marked as Left. ${emp.name} removed from active roster.`, loans: loanSummary });
 });
 
 // GET departments list

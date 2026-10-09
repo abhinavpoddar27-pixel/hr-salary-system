@@ -131,3 +131,26 @@ test('the old loan tables are never written (the legacy view would refuse)', asy
   expect((await markLeft('ML06')).status).toBe(200);
   expect(db.prepare("SELECT type FROM sqlite_master WHERE name = 'loan_repayments'").get().type).toBe('view');
 });
+
+test('Loans PR-7: the response lists each flagged loan — due in the final payroll, or the residual when that month is already closed', async () => {
+  addEmployee('ML07');
+  const open = addLoan('ML07');
+  addInstalments(open);                                                   // Oct / Nov / Dec 2026, ₹2,000 each
+  const req = addLoan('ML07', { status: 'requested' });
+  const res = await markLeft('ML07', { date_of_leaving: '2026-11-15', reason: 'Resigned' });
+  expect(res.status).toBe(200);
+  expect(res.body.loans).toEqual([
+    { loanId: open, status: 'recover_at_exit', outstanding: 6000, finalMonth: { month: 11, year: 2026 }, finalMonthPast: false, dueInFinalPayroll: 4000, residual: 0 },
+    { loanId: req, status: 'requested', outstanding: 0, finalMonth: null, finalMonthPast: null, dueInFinalPayroll: 0, residual: 0 },
+  ]);
+
+  // Mark Left after the final month's loan close: the outstanding is the residual at once, finance is told.
+  addEmployee('ML08');
+  const late = addLoan('ML08');
+  addInstalments(late);
+  db.prepare("INSERT INTO loan_closes (month, year, payroll, run_by, trigger_kind) VALUES (10, 2026, 'plant', 'system', 'test')").run();
+  const r2 = await markLeft('ML08', { date_of_leaving: '2026-10-10', reason: 'Absconded' });
+  expect(r2.body.loans).toEqual([{ loanId: late, status: 'recover_at_exit', outstanding: 6000, finalMonth: { month: 10, year: 2026 }, finalMonthPast: true, dueInFinalPayroll: 0, residual: 4000 }]);
+  const n = db.prepare("SELECT role_target, message FROM notifications WHERE type = 'LOAN_EXIT_RESIDUAL'").all();
+  expect(n).toEqual([{ role_target: 'finance', message: expect.stringMatching(/exit residual now ₹4000/) }]);
+});
