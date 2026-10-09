@@ -383,3 +383,11 @@ describe('held final salary (ruling Q-B: the 60-day wait stays)', () => {
     db.close();
   });
 });
+
+test('the exit simulation script passes (5 leavers over 5 months, and --empty)', () => {
+  const { execFileSync } = require('child_process');
+  const path = require('path');
+  const script = path.join(__dirname, '..', '..', 'scripts', 'loans-exit-simulation.js');
+  expect(execFileSync(process.execPath, [script], { encoding: 'utf8' })).toMatch(/drift 0; component-short 0[\s\S]*PASS/);
+  expect(execFileSync(process.execPath, [script, '--empty'], { encoding: 'utf8' })).toMatch(/tables changed: 0; drift 0; component-short 0\nPASS/);
+}, 120000);
