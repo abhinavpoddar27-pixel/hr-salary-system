@@ -315,6 +315,12 @@ export const getCorrectionHistory = (code, month, year) => api.get(`/finance-aud
 export const getCorrectionsSummary = (month, year) => api.get('/finance-audit/corrections-summary', { params: { month, year } })
 export const getCorrectionReasons = () => api.get('/finance-audit/reasons')
 export const applyLeaveCorrection = (data) => api.post('/finance-audit/corrections/apply-leave', data)
+// Stage 6 leave requests: HR raises (apply-leave as hr), finance approves or rejects.
+// no-cache: server.js lets the browser keep GETs 5s, which hid a just-withdrawn request.
+export const getLeaveRequests = (params) => api.get('/finance-audit/leave-requests', { params, ...fresh })
+export const approveLeaveRequest = (id, data = {}) => api.post(`/finance-audit/leave-requests/${id}/approve`, data)
+export const rejectLeaveRequest = (id, reason) => api.post(`/finance-audit/leave-requests/${id}/reject`, { reason })
+export const withdrawLeaveRequest = (id) => api.post(`/finance-audit/leave-requests/${id}/withdraw`)
 export const markPresentCorrection = (data) => api.post('/finance-audit/corrections/mark-present', data)
 export const getManualAttendanceFlags = (params) => api.get('/finance-audit/manual-flags', { params })
 export const verifyManualFlag = (id, data) => api.put(`/finance-audit/manual-flags/${id}/verify`, data)
