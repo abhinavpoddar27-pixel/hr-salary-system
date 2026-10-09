@@ -44,7 +44,8 @@ const INSTALMENT_TRANSITIONS = Object.freeze({
 
 /** Instalment origins added automatically at the end; these count toward the extension limit (D-19). */
 const AUTO_EXTENSION_ORIGINS = Object.freeze(['shortfall', 'no_salary', 'held']);
-const INSTALMENT_ORIGINS = Object.freeze(['schedule', 'shortfall', 'no_salary', 'held', 'deferred', 'restructure']);
+// 'reversal' (Loans PR-6): an admin reversal returns a posted amount to the schedule; not an automatic extension.
+const INSTALMENT_ORIGINS = Object.freeze(['schedule', 'shortfall', 'no_salary', 'held', 'deferred', 'restructure', 'reversal']);
 
 function canTransition(kind, from, to) {
   const table = kind === 'instalment' ? INSTALMENT_TRANSITIONS : LOAN_TRANSITIONS;
@@ -68,6 +69,8 @@ const ACTION_ROLES = Object.freeze({
   approve_change: ['admin'],
   post: ['finance', 'admin', 'system'],       // ledger primitives (PR-5 / PR-6 callers)
   flag_exit: ['hr', 'admin', 'system'],
+  close: ['finance', 'admin', 'system'],      // monthly loan close + held sweep (Loans PR-6)
+  reverse_posted: ['admin'],                  // opposite entry for a posted deduction (Loans PR-6)
 });
 
 /** Actions where the actor may never be the person who raised the request. */
