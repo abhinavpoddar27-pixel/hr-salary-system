@@ -371,7 +371,7 @@ router.post('/leave-recompute/apply', requireAdmin, (req, res) => {
   }
 });
 
-// ── External EL grants (given outside the system) ────────────────────────────
+// ── External EL / CL grants (given outside the system) ───────────────────────
 
 const GRANT_MODES = {
   'leave taken': 'leave_taken',
@@ -381,6 +381,29 @@ const GRANT_MODES = {
   paid_salary: 'paid_salary',
   paid_cash: 'paid_cash',
 };
+
+const GRANT_LEAVE_TYPES = ['EL', 'CL'];
+
+/**
+ * Two rows with the same (code, year, month, leave type, mode) in one sheet
+ * would collide on the table's UNIQUE key and fail the whole insert. Reject
+ * every repeat after the first, per row, so the dry run shows it too.
+ */
+function rejectInSheetDuplicates(checked) {
+  const seen = new Map();
+  return checked.map((r) => {
+    if (!r.accepted) return r;
+    const key = [r.employee_code, r.year, r.month, r.leave_type, r.mode].join('|');
+    if (seen.has(key)) {
+      return {
+        row: r.row, employee_code: r.employee_code, accepted: false,
+        reason: `Duplicate of row ${seen.get(key)} in this sheet (same code, year, month, leave type and how given)`,
+      };
+    }
+    seen.set(key, r.row);
+    return r;
+  });
+}
 
 function normaliseHeader(h) {
   return String(h || '').trim().toLowerCase().replace(/\s+/g, ' ');
@@ -415,24 +438,32 @@ function validateGrantRow(db, row, index) {
   if (!year || year < 2000 || year > 2100) return rejected('Year is missing or out of range');
   if (!month || month < 1 || month > 12) return rejected('Month must be 1-12');
 
-  const days = parseFloat(row['el days']);
-  if (!Number.isFinite(days) || days <= 0) return rejected('EL Days must be a positive number');
+  // R-E (switchover 2026): optional Leave Type (EL default, CL allowed) and a
+  // Days column. `EL Days` stays accepted as the legacy header.
+  const rawType = String(row['leave type'] ?? '').trim().toUpperCase();
+  const leaveType = rawType === '' ? 'EL' : rawType;
+  if (!GRANT_LEAVE_TYPES.includes(leaveType)) return rejected("Leave Type must be 'EL' or 'CL' (blank means EL)");
+
+  const rawDays = String(row.days ?? '').trim() !== '' ? row.days : row['el days'];
+  const days = parseFloat(rawDays);
+  if (!Number.isFinite(days) || days <= 0) return rejected('Days must be a positive number');
 
   const mode = GRANT_MODES[normaliseHeader(row['how given'])];
   if (!mode) return rejected("How Given must be 'Leave taken', 'Paid in salary' or 'Paid in cash'");
+  if (leaveType === 'CL' && mode !== 'leave_taken') return rejected("CL can only be 'Leave taken'");
 
   const paidMonth = parseInt(row['paid in salary month'], 10) || null;
   const paidYear = parseInt(row['paid in salary year'], 10) || null;
 
   const dupe = db.prepare(`
     SELECT id FROM leave_external_grants
-    WHERE employee_code = ? AND year = ? AND month = ? AND leave_type = 'EL' AND mode = ?
-  `).get(code, year, month, mode);
+    WHERE employee_code = ? AND year = ? AND month = ? AND leave_type = ? AND mode = ?
+  `).get(code, year, month, leaveType, mode);
   if (dupe) return rejected(`Already recorded (grant #${dupe.id}) — delete it first to replace`);
 
   return {
     row: index + 2, employee_code: code, accepted: true,
-    employee_id: emp.id, year, month, days, mode,
+    employee_id: emp.id, year, month, leave_type: leaveType, days, mode,
     paid_month: paidMonth, paid_year: paidYear,
     remark: String(row.remark || '').trim() || null,
   };
@@ -451,7 +482,7 @@ router.post('/leave-external-grants/upload', requireAdmin, grantsUpload.single('
     const rows = readGrantRows(req.file);
     if (!rows.length) return res.status(400).json({ success: false, error: 'The sheet has no data rows' });
 
-    const checked = rows.map((r, i) => validateGrantRow(db, r, i));
+    const checked = rejectInSheetDuplicates(rows.map((r, i) => validateGrantRow(db, r, i)));
     const accepted = checked.filter((r) => r.accepted);
     const rejected = checked.filter((r) => !r.accepted);
 
@@ -468,11 +499,11 @@ router.post('/leave-external-grants/upload', requireAdmin, grantsUpload.single('
       INSERT INTO leave_external_grants
         (employee_code, employee_id, year, month, leave_type, days, mode,
          paid_month, paid_year, remark, source_file, uploaded_by)
-      VALUES (?, ?, ?, ?, 'EL', ?, ?, ?, ?, ?, ?, ?)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
     const txn = db.transaction(() => {
       for (const r of accepted) {
-        ins.run(r.employee_code, r.employee_id, r.year, r.month, r.days, r.mode,
+        ins.run(r.employee_code, r.employee_id, r.year, r.month, r.leave_type, r.days, r.mode,
           r.paid_month, r.paid_year, r.remark, req.file.originalname, actor);
       }
       // Uploading the list is itself the acknowledgement that unblocks apply.

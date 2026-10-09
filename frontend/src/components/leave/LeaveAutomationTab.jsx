@@ -239,7 +239,7 @@ export default function LeaveAutomationTab({ year, status }) {
             Preview EL recompute
           </button>
           <button className="btn-ghost text-sm" onClick={() => setUploadOpen(true)}>
-            Upload EL-given list
+            Upload leave-given list (EL / CL)
           </button>
           <button
             className="btn-ghost text-sm"
@@ -470,12 +470,14 @@ export default function LeaveAutomationTab({ year, status }) {
 
       {/* ── Upload modal ───────────────────────────────────────────────── */}
       <Modal open={uploadOpen} onClose={() => { setUploadOpen(false); setDryRunResult(null); setPendingFile(null) }}
-        title="Upload EL given outside the system" size="lg">
+        title="Upload leave (EL / CL) given outside the system" size="lg">
         <div className="p-4 space-y-4">
           <p className="text-sm text-slate-600">
-            One row per grant. Columns: Employee Code, Employee Name, Company, Year, Month, EL Days,
-            How Given (Leave taken / Paid in salary / Paid in cash), Paid In Salary Month,
-            Paid In Salary Year, Remark.
+            One row per grant. Columns: Employee Code, Employee Name, Company, Year, Month,
+            Leave Type (EL or CL; blank means EL), Days (the older &ldquo;EL Days&rdquo; header still works),
+            How Given (Leave taken / Paid in salary / Paid in cash &mdash; CL can only be Leave taken),
+            Paid In Salary Month, Paid In Salary Year, Remark. CL taken outside the app counts as CL
+            used, never as days worked; EL taken counts as days worked.
           </p>
 
           <div
