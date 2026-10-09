@@ -22,6 +22,8 @@ from the Held register (it filters `hold_released != 1`) and excluded from NEFT 
   green. HTTP simulation with the real payroll + reports routers 16/16 (9/16 on origin/main), drift 0.
 - **Not tested:** frontend (unchanged); production data — the effect appears only on the next re-run.
 
+## Last Session — 2026-10-09 (P2)
+
 **Stage 6 stops reactivating leavers. Branch `fix/stage6-no-reactivate-leavers`, NOT merged.**
 
 `recompute.js recomputeDays` flipped every `Left` employee with ANY attendance row in the
