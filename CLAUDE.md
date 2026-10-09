@@ -1,3 +1,27 @@
+## Last Session — 2026-10-09 (Loans PR-3)
+**Loans PR-3: the loan API on the engine. Branch `feat/loans-pr3`, NOT merged.** Rulings: `docs/loans/PROGRESS.md`.
+- **`routes/loans.js` rewritten** on `services/loans/`; `loanService.js` deleted. Every route has its own role guard
+  and the engine re-checks: HR/finance raise; admin approves/rejects/cancels loans and change requests (never own);
+  finance/admin disburse + record numbered receipts; viewer reads; supervisor/employee 403. Codes → 403/404/409/400.
+- **Ruling A — disbursement gate:** `policy_config.loans_disbursement_enabled` seeded `'0'`. Disburse and a
+  restructure top-up → 409 `DISBURSEMENT_DISABLED` until it is exactly `'1'`. `PUT /policy` cannot set it
+  (`POLICY_KEY_LOCKED`). Switched on only at cutover, after PR-6.
+- **Ruling B — admin cannot raise** a loan or a change request: 403 `ADMIN_CANNOT_RAISE` ("HR raises loans; admin
+  approves"). In the route and `requests.js`; engine `checkActor('request')` still lists admin (PR-2 tests, PR-10).
+- **New:** `services/loans/requests.js` + `loan_requests` table (inside `loansSchemaV2Ddl`, so an already-migrated DB
+  gets it on boot; one pending per loan). A request is dry-run through the engine in a rolled-back transaction;
+  approval re-runs it on current state in one transaction (refusal → request stays pending). `cancelLoan`
+  (approved → `rejected` + `cancelled` event). `validatePolicyValue` for `PUT /policy`.
+- **Retired → 410:** process-deductions, `/:id/recover`, `/:id/skip`, `PUT /:id/close`, `/deductions`, `/monthly-recovery`.
+- **Also:** portal hides rejected loans + returns fewer columns; `ai.js` reads `loan_deductions`; schemaReference and
+  the sqlConsole snippet use the new tables; `permissions.js` gives finance + viewer the `loans` page.
+- **Fragile:** notifications are inserted directly (scheduler helper de-dups across roles). Signed agreement is a
+  text reference (3–200 chars), no upload. Sales borrowers refused until PR-8. Maker-checker is by username.
+- **Verified:** suite 588 → 667 (31 suites); `loansApi.test.js` drives the router through the REAL `requireAuth`
+  with real JWTs (every endpoint × 6 roles + 401s). `backend/scripts/loans-api-simulation.sh` boots `server.js`,
+  real logins: 55/55. No salary table written; drift 0.
+- **Not tested:** frontend (old Loans.jsx calls break by design — PR-4); cross-process races; file upload.
+
 ## Last Session — 2026-10-09 (Loans PR-2)
 **Loans PR-2: the loan engine. Branch `feat/loans-pr2`, NOT merged.** Spec: `docs/loans/SPEC.md`; rulings in `docs/loans/PROGRESS.md`.
 - **New, route-free:** `backend/src/services/loans/` — money (integer paise), months, policy (16 `loan_*` keys, never throws),
