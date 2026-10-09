@@ -328,8 +328,8 @@ describe('finance apply-leave rewrite (defect h)', () => {
   const post = (body, role = 'finance') =>
     api.request('POST', '/api/finance-audit/corrections/apply-leave', { body, role });
 
-  test('HR cannot reach it; finance and admin can', async () => {
-    expect((await post({}, 'hr')).status).toBe(403);
+  test('viewer cannot reach it; HR, finance and admin can (HR raises a request — see leaveRequestApproval.test.js)', async () => {
+    expect((await post({}, 'hr')).status).toBe(400); // past the gate, missing fields
     expect((await post({}, 'viewer')).status).toBe(403);
     expect((await post({}, 'finance')).status).toBe(400); // past the gate, missing fields
   });
