@@ -2429,6 +2429,7 @@ const {
   generateSalesPayslipData,
 } = require('../services/salesSalaryComputation');
 const { deriveCycle } = require('../services/cycleUtil');
+const { clearSalesNotComputed } = require('../services/loans/stage7');
 
 const {
   generateSalesExcel,
@@ -2674,6 +2675,9 @@ router.post('/compute', (req, res) => {
   const excluded = [];
   const errors = [];
   const finalizedRecomputeWarnings = [];
+  // Loans PR-8: one run id for the provisional loan rows this compute writes.
+  const loanRunId = req.requestId || `sales-${new Date().toISOString()}`;
+  const loanTotals = { recorded: 0, cleared: 0, adjusted: 0 };
 
   for (const row of rows) {
     if (!row.sales_employee_id) {
@@ -2701,7 +2705,12 @@ router.post('/compute', (req, res) => {
           else errors.push({ employee_code: row.employee_code, error: comp.error });
           return;
         }
-        saveSalesSalaryComputation(db, comp);
+        saveSalesSalaryComputation(db, comp, { runId: loanRunId });
+        if (comp.loanApplied) {
+          loanTotals.recorded += comp.loanApplied.recorded || 0;
+          loanTotals.cleared += comp.loanApplied.cleared || 0;
+          loanTotals.adjusted += comp.loanApplied.adjusted || 0;
+        }
 
         // Flag recomputes that silently change money on a locked row.
         if (prev && ['finalized', 'paid'].includes(prev.status) &&
@@ -2728,6 +2737,21 @@ router.post('/compute', (req, res) => {
       if (perErr.stack) console.error(perErr.stack.split('\n').slice(0, 5).join('\n'));
       errors.push({ employee_code: row.employee_code, error: perErr.message });
     }
+  }
+
+  // Loans PR-8 (ruling Q7, mirrors plant PR-5 Q3): provisional sales loan rows of
+  // employees this run did not pay (excluded, or not in the active upload) are
+  // reversed. Employees whose compute failed keep their previous rows. Salary rows
+  // the run did not compute are never rewritten — reported as stale instead.
+  let loanSweep = { cleared: 0, staleRows: [] };
+  try {
+    const keepCodes = [...results.map((r) => r.employee_code), ...errors.map((e) => e.employee_code)];
+    loanSweep = db.transaction(() => clearSalesNotComputed(db, {
+      month, year, company, keepCodes, reason: `sales compute ${loanRunId}: not paid this run (excluded or not in the active upload)`,
+    }))();
+  } catch (loanErr) {
+    console.error(`[sales-compute] loan sweep ${month}/${year} ${company}: ${loanErr.message}`);
+    errors.push({ employee_code: null, error: `loan sweep: ${loanErr.message}` });
   }
 
   // Stamp the winning upload as the active pointer + status='computed'.
@@ -2782,6 +2806,11 @@ router.post('/compute', (req, res) => {
       excluded,
       errors,
       finalizedRecomputeWarnings,
+      loans: {
+        runId: loanRunId, ...loanTotals,
+        cleared: loanTotals.cleared + loanSweep.cleared,
+        staleRows: loanSweep.staleRows,
+      },
     },
     taDaSummary,
   });

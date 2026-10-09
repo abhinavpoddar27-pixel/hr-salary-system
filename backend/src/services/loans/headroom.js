@@ -13,8 +13,8 @@
  * │ plant gross_earned already EXCLUDES ot_pay and holiday_duty_pay, see      │
  * │ salaryComputation.js "GROSS EARNED = BASE SALARY ONLY"; Loans PR-5 fixed  │
  * │ the PR-2 version that subtracted them a second time); sales =             │
- * │ gross_earned (OT, incentive and Diwali sit outside it). The sales mapping │
- * │ is provisional until PR-8.                                                │
+ * │ gross_earned (OT, incentive and Diwali sit outside it). Sales mapping     │
+ * │ confirmed by Loans PR-8 (Stage 7 sales reads it).                         │
  * └───────────────────────────────────────────────────────────────────────────┘
  */
 const { toPaise } = require('./money');

@@ -13,9 +13,11 @@
  *
  * Plant tables reused (no sales-specific tables for these yet):
  *   - salary_advances        — shared advance table
- *   - loan_repayments        — shared loan repayments
  *   - tax_declarations       — shared tax declarations
  *   - policy_config          — rates, ceilings, PF ceiling
+ * Loan EMI (Loans PR-8): services/loans/stage7.js — the LAST deduction, within
+ *   the cap's headroom, matched on code + the loan's company; its provisional
+ *   ledger row is written right after the salary row is saved.
  *
  * UPSERT completeness (load-bearing — see CLAUDE.md):
  *   Every mutable column on sales_salary_computations MUST appear as
@@ -29,6 +31,7 @@
 
 const { calculateSundayCredit } = require('./sundayRule');
 const { cycleLengthDays, countSundaysInCycle, dateInCycle } = require('./cycleUtil');
+const { planStage7Loans, applyStage7Loans } = require('./loans/stage7');
 
 const DIVISOR_MODE_SUPPORTED = new Set(['calendar']);
 
@@ -54,17 +57,6 @@ function getAdvanceRecovery(db, employeeCode, month, year) {
          AND status = 'Paid' AND recovered = 0
     `).all(employeeCode, month, year);
     return rows.reduce((s, r) => s + (r.requested_amount || 0), 0);
-  } catch (e) { return 0; }
-}
-
-function getLoanRecovery(db, employeeCode, month, year) {
-  try {
-    const row = db.prepare(`
-      SELECT COALESCE(SUM(emi_amount), 0) AS emi
-        FROM loan_repayments
-       WHERE employee_code = ? AND month = ? AND year = ? AND status = 'Pending'
-    `).get(employeeCode, month, year);
-    return row ? (row.emi || 0) : 0;
   } catch (e) { return 0; }
 }
 
@@ -294,7 +286,19 @@ function computeSalesEmployee(db, { salesEmployee, monthlyInputRow, cycleStart, 
 
   const tds = getDeclaredTds(db, salesEmployee.code, month, year);
   const advanceRecovery = getAdvanceRecovery(db, salesEmployee.code, month, year);
-  const loanRecovery = getLoanRecovery(db, salesEmployee.code, month, year);
+  // Loan EMI (Loans PR-8) — LAST deduction (D-12), within the room left under the
+  // cap after every deduction above it (D-11; sales earned base = gross_earned).
+  // Read-only here; the provisional ledger row is written after the save.
+  const loanPlan = planStage7Loans(db, {
+    employeeCode: salesEmployee.code, month, year, payroll: 'sales', company,
+    salary: {
+      gross_earned: grossEarned, pf_employee: pfEmployee, esi_employee: esiEmployee,
+      professional_tax: professionalTax, tds, advance_recovery: advanceRecovery,
+      diwali_recovery: diwaliRecovery, other_deductions: otherDeductions,
+    },
+  });
+  for (const w of loanPlan.warnings) console.warn(`${RID} ${salesEmployee.code} ${month}/${year}: ${w}`);
+  const loanRecovery = loanPlan.totalRupees;
 
   // Q5 reversal: total_deductions = PF_e + ESI_e + PT + TDS + advance + loan + other
   // (diwali_recovery term removed — Diwali is now only a bonus in Step 7).
@@ -371,13 +375,15 @@ function computeSalesEmployee(db, { salesEmployee, monthlyInputRow, cycleStart, 
     payslip_generated_at: preservedPayslipGeneratedAt,
     // Carry forward the previous netSalary for the frontend "finalized recompute warning"
     _prevNetSalary: prev ? undefined : null, // set after the fact if you want to detect drift
+    // Loans PR-8: not a column — saveSalesSalaryComputation writes it to the loan ledger.
+    _loanPlan: loanPlan,
   };
 }
 
 // ══════════════════════════════════════════════════════════════════════
 // saveSalesSalaryComputation — full-column UPSERT
 // ══════════════════════════════════════════════════════════════════════
-function saveSalesSalaryComputation(db, comp) {
+function saveSalesSalaryComputation(db, comp, { runId = null } = {}) {
   const info = db.prepare(`
     INSERT INTO sales_salary_computations (
       employee_code, month, year, company,
@@ -466,6 +472,15 @@ function saveSalesSalaryComputation(db, comp) {
     comp.computed_by, comp.finalized_at, comp.finalized_by,
     comp.neft_exported_at, comp.payslip_generated_at
   );
+
+  // Loans PR-8: this month's provisional loan deduction(s), AFTER the salary row —
+  // keyed loan + month + payroll, never the row id. Not wrapped in try/catch on
+  // purpose: a ledger refusal throws and the caller's per-employee transaction
+  // rolls the salary row back with it, so the payslip and the ledger never disagree.
+  comp.loanApplied = applyStage7Loans(db, {
+    employeeCode: comp.employee_code, month: comp.month, year: comp.year, payroll: 'sales',
+    company: comp.company, plan: comp._loanPlan, runId,
+  });
 
   // Return the row id (on update, need to SELECT since lastInsertRowid=0)
   const row = db.prepare(
