@@ -178,7 +178,10 @@ export default function Loans() {
                         <td className="text-xs text-slate-400">{l.id}</td>
                         <td>
                           <div className="text-sm font-medium">{l.employee_name || l.employee_code}</div>
-                          <div className="text-[11px] text-slate-400 font-mono">{l.employee_code}{l.department ? ` · ${l.department}` : ''}</div>
+                          <div className="text-[11px] text-slate-400 font-mono">
+                            {l.employee_code}{l.department ? ` · ${l.department}` : ''}
+                            {l.borrower_type === 'sales' && <span className="ml-1 font-sans font-semibold px-1 rounded bg-violet-100 text-violet-700">Sales</span>}
+                          </div>
                         </td>
                         <td className="text-xs">{l.company}</td>
                         <td className="text-xs">{l.loan_type}{l.exit_flag === 1 && <span className="ml-1 text-[10px] font-bold text-orange-700">EXIT</span>}</td>

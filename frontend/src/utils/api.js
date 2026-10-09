@@ -167,6 +167,8 @@ export const getLoanPolicy = () => api.get('/loans/policy', fresh)
 export const updateLoanPolicy = (values, reason) => api.put('/loans/policy', { values, reason })
 export const checkLoanEligibility = (data) => api.post('/loans/eligibility', data)
 export const createLoan = (data) => api.post('/loans', data)
+// Loans PR-8: one borrower search across the plant and sales masters
+export const searchLoanBorrowers = (q) => api.get('/loans/borrowers', { params: { q }, ...fresh })
 export const getLoan = (id) => api.get(`/loans/${id}`, fresh)
 export const getLoanStatement = (id) => api.get(`/loans/${id}/statement`, fresh)
 export const getEmployeeLoans = (code) => api.get(`/loans/employee/${encodeURIComponent(code)}`, fresh)
