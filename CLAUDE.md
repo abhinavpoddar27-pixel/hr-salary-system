@@ -1,3 +1,23 @@
+## Last Session — 2026-10-09 (Loans PR-4)
+**Loans PR-4: loan screens on the PR-3 API. Branch `feat/loans-pr4`, NOT merged.** Frontend only; no backend file changed.
+- **Rebuilt `pages/Loans.jsx`** (tiles, gate banner, tabs `?tab=queue|loans|due|settings`) + **new `/loans/:id`** (`pages/LoanDetail.jsx`)
+  + `components/loans/*`: request form (plant search, explicit company, live `POST /eligibility` panel, engine schedule
+  preview, submit only when eligible), approval queue (urgent first; change requests decided inline), detail (approval
+  panel w/ 3-month deduction history, reconciliation badge, schedule, receipts, requests, event trail, print statement),
+  due-this-month, settings (admin edits 16 keys w/ reason; gate key always read-only). `utils/api.js` loan block replaced.
+- **Role rule in the UI:** a button the server refuses for the role is HIDDEN (admin has no raise buttons — ADMIN_CANNOT_RAISE);
+  a button the role may use but the state blocks is DISABLED with the reason (gate off, own request, own disbursement, exit flag).
+- **Sidebar:** Loans child gets `loansRead` (admin/hr/finance/viewer) in BOTH the item check and the child filter; admin-only
+  pending badge. **Employees.jsx:** Loans tab only (lower-case state badges, balance, link) + Mark Left text corrected
+  ("Open loans will be flagged for recovery from the final salary; nothing is closed.").
+- **Fragile:** server.js sends `Cache-Control: private, max-age=5` on every GET, so a refetch right after a mutation got the
+  browser's stale copy (approve looked like it did nothing). Loan reads send `Cache-Control: no-cache` (`fresh` in api.js).
+  Keep it. `LOAN_COMPANIES` in `loanUi.js` mirrors `policy.js VALID_COMPANIES` by hand. Statement = print window (no PII).
+- **Verified:** dist on main = fresh build of main (0 diffs). `backend/scripts/loans-ui-browser-check.py` (scratch DB, real
+  logins hr/admin/finance/viewer, gate '0' then '1' in the temp DB only): 63/63, 0 page errors, 0 API 4xx/5xx. Backend 31/667.
+  Screens in `docs/loans/screens/pr4/`.
+- **Not tested:** Railway preview; Safari/Firefox (`no-cache` request header); other roles' allowed_companies subsets; mobile widths.
+
 ## Last Session — 2026-10-09 (Loans PR-3)
 **Loans PR-3: the loan API on the engine. Branch `feat/loans-pr3`, NOT merged.** Rulings: `docs/loans/PROGRESS.md`.
 - **`routes/loans.js` rewritten** on `services/loans/`; `loanService.js` deleted. Every route has its own role guard

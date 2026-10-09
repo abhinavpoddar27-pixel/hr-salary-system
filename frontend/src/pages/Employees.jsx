@@ -1,6 +1,6 @@
 import React, { useState, useRef } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { useNavigate } from 'react-router-dom'
+import { useNavigate, Link } from 'react-router-dom'
 import toast from 'react-hot-toast'
 import * as XLSX from 'xlsx'
 import { getEmployees, getEmployee, createEmployee, updateEmployee, updateSalaryStructure, getLeaveBalances, updateLeaveBalance, getEmployeeDocuments, uploadEmployeeDocument, deleteEmployeeDocument, getEmployeeLoans, markEmployeeLeft, getShifts, bulkAssignShift, getLateComingEmployeeHistory, getDepartments } from '../utils/api'
@@ -14,6 +14,7 @@ import clsx from 'clsx'
 import useExpandableRows from '../hooks/useExpandableRows'
 import DrillDownRow, { DrillDownChevron } from '../components/ui/DrillDownRow'
 import EmployeeQuickView from '../components/ui/EmployeeQuickView'
+import { LOAN_STATE, stateCls, stateLabel } from '../components/loans/loanUi'
 
 // Late Coming Phase 1 follow-up: the shifts table still contains legacy
 // DAY/NIGHT/GEN/DUBLE rows because historical attendance records reference
@@ -703,31 +704,32 @@ function EmployeeProfileModal({ employee, onClose }) {
             {loans.length === 0 ? (
               <div className="text-center py-6 text-slate-400 text-sm">No loans found</div>
             ) : (
-              <table className="w-full text-sm">
+              <table className="w-full text-sm" data-testid="employee-loans">
                 <thead>
                   <tr className="border-b text-xs text-slate-500">
+                    <th className="py-1 text-left">Loan</th>
                     <th className="py-1 text-left">Type</th>
                     <th className="py-1 text-right">Principal</th>
                     <th className="py-1 text-right"><Abbr code="EMI">EMI</Abbr></th>
-                    <th className="py-1 text-center">Tenure</th>
+                    <th className="py-1 text-center">EMIs paid</th>
                     <th className="py-1 text-right">Recovered</th>
+                    <th className="py-1 text-right">Balance</th>
                     <th className="py-1">Status</th>
                   </tr>
                 </thead>
                 <tbody>
                   {loans.map(l => (
                     <tr key={l.id} className="border-b border-slate-100">
+                      <td className="py-1.5"><Link to={`/loans/${l.id}`} className="text-blue-700 hover:underline">#{l.id}</Link></td>
                       <td className="py-1.5 font-medium">{l.loan_type}</td>
                       <td className="py-1.5 text-right font-mono">{fmtINR(l.principal_amount)}</td>
                       <td className="py-1.5 text-right font-mono">{fmtINR(l.emi_amount)}</td>
-                      <td className="py-1.5 text-center">{l.tenure_months}m ({l.paidEmis || 0}/{l.tenure_months})</td>
-                      <td className="py-1.5 text-right font-mono text-green-600">{fmtINR(l.totalRecovered || 0)}</td>
+                      <td className="py-1.5 text-center">{l.paidEmis || 0}/{l.tenure_months}</td>
+                      <td className="py-1.5 text-right font-mono text-green-600"
+                        title={`Payroll ${fmtINR(l.recoveredByPayroll || 0)} · cash ${fmtINR(l.recoveredByCash || 0)}`}>{fmtINR(l.totalRecovered || 0)}</td>
+                      <td className="py-1.5 text-right font-mono">{l.disbursed_amount !== null && l.disbursed_amount !== undefined ? fmtINR(l.remaining_balance) : '—'}</td>
                       <td className="py-1.5">
-                        <span className={clsx('text-xs px-2 py-0.5 rounded-full',
-                          l.status === 'Active' ? 'bg-green-100 text-green-700' :
-                          l.status === 'Completed' ? 'bg-blue-100 text-blue-700' :
-                          'bg-slate-100 text-slate-600'
-                        )}>{l.status}</span>
+                        <span className={clsx('text-xs px-2 py-0.5 rounded-full', stateCls(LOAN_STATE, l.status))}>{stateLabel(LOAN_STATE, l.status)}</span>
                       </td>
                     </tr>
                   ))}
@@ -769,7 +771,7 @@ function MarkLeftModal({ employee, onClose }) {
         </div>
         <div className="p-5 space-y-4">
           <div className="bg-red-50 border border-red-200 rounded-lg p-3 text-sm text-red-700">
-            This will deactivate the employee and close all active loans.
+            This will deactivate the employee. Open loans will be flagged for recovery from the final salary; nothing is closed.
           </div>
           <div>
             <label className="label">Date of Leaving</label>

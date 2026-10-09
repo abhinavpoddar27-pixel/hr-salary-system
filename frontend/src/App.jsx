@@ -38,6 +38,7 @@ const PayableOT = React.lazy(() => import('./pages/PayableOT'))
 const SalaryInput = React.lazy(() => import('./pages/SalaryInput'))
 const DailyMIS = React.lazy(() => import('./pages/DailyMIS'))
 const Loans = React.lazy(() => import('./pages/Loans'))
+const LoanDetail = React.lazy(() => import('./pages/LoanDetail'))
 const LeaveManagement = React.lazy(() => import('./pages/LeaveManagement'))
 const FinanceAudit = React.lazy(() => import('./pages/FinanceAudit'))
 const FinanceVerification = React.lazy(() => import('./pages/FinanceVerification'))
@@ -186,6 +187,7 @@ export default function App() {
           <Route path="/salary-input" element={<RequireAuth><Layout title="Salary Input & Changes"><SalaryInput /></Layout></RequireAuth>} />
           <Route path="/daily-mis" element={<RequireAuth><Layout title="Daily MIS"><DailyMIS /></Layout></RequireAuth>} />
           <Route path="/loans" element={<RequireAuth><Layout title="Loan Management"><Loans /></Layout></RequireAuth>} />
+          <Route path="/loans/:id" element={<RequireAuth><Layout title="Loan Management"><LoanDetail /></Layout></RequireAuth>} />
           <Route path="/leave-management" element={<RequireAuth><Layout title="Leave Management"><LeaveManagement /></Layout></RequireAuth>} />
           <Route path="/workforce/contractor-report" element={<RequireAuth><Layout title="Contractor Report"><ContractorReport /></Layout></RequireAuth>} />
           <Route path="/workforce/*" element={<RequireAuth><Layout title="Workforce Analytics"><WorkforceAnalytics /></Layout></RequireAuth>} />

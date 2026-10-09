@@ -6,13 +6,11 @@ after a context compaction or a new session there is a file to read and build fr
 ## RESUME (read this first)
 
 - **As of:** 2026-10-09.
-- **Current state:** P1 (#48), P2 (#49), P3 (#50), Loans PR-0 (#51), PR-1 (#52) and PR-2 (#53) are merged.
-  PR-1 is verified on production: 6 tables, `loan_repayments` is a view, 17 flag + `loan%` keys, loans = 0,
-  drift still the 1 known row. Loans PR-3 (API) is open on `feat/loans-pr3`, waiting for review.
-- **Next PR:** Loans PR-4 (screens), branch `feat/loans-pr4`, after PR-3 is merged and its check below passes.
-  PR-4 rebuilds `frontend/src/utils/api.js` L157–170 and `Loans.jsx` on the PR-3 API (list in "Loans PR-3" below).
+- **Current state:** P1–P3 and Loans PR-0 … PR-3 (#48–#54) are merged. PR-3 verified on production (loan_requests +
+  index, gate '0', 18 keys, loans 0, drift = 1 known row). Loans PR-4 (screens) is open on `feat/loans-pr4`, waiting for review.
+- **Next PR:** Loans PR-5 (plant Stage 7), branch `feat/loans-pr5`, after PR-4 is merged and checked on Railway preview.
 - **Blockers:**
-  - Loans PR-3 review and merge, then the "Loans PR-3 check" below.
+  - Loans PR-4 review and merge, then a browser look on Railway (the screens in `screens/pr4/`).
   - Finance is checking the 35 re-held rows that were released to be paid, against what was
     actually paid. (There are 54 re-held rows in all: 35 released to be paid, 17 with notes
     saying already paid outside the app, 2 with nothing payable.)
@@ -23,7 +21,7 @@ after a context compaction or a new session there is a file to read and build fr
   date of joining (47 Permanent, 11 SILP, 3 Worker) and 23 Active Permanent have no gross. The engine
   refuses them (`SERVICE_UNKNOWN`, `GROSS_UNKNOWN`) and does not guess. HR should backfill before the pilot.
 - **Waiting on the owner:**
-  1. Review and merge Loans PR-3.
+  1. Review and merge Loans PR-4.
   2. The accounts Excel of the 10–30 running loans (needed for PR-10).
   3. Labour consultant: what the 50% cap is measured on; whether the 2-working-day exit rule
      applies (SPEC §12, Q1–Q2).
@@ -49,8 +47,8 @@ after a context compaction or a new session there is a file to read and build fr
 | Loans PR-0 | `docs/loans-spec` | Merged | #51 | 2026-10-09 | n/a (docs only) |
 | Loans PR-1 | `feat/loans-pr1` | Merged | #52 | 2026-10-09 | verified (planner) |
 | Loans PR-2 | `feat/loans-pr2` | Merged | #53 | 2026-10-09 | none (engine not called yet) |
-| Loans PR-3 | `feat/loans-pr3` | Open | see GitHub | — | "Loans PR-3 check" below |
-| Loans PR-4 | `feat/loans-pr4` | Not started | — | — | — |
+| Loans PR-3 | `feat/loans-pr3` | Merged | #54 | 2026-10-09 | verified (planner) |
+| Loans PR-4 | `feat/loans-pr4` | Open | see GitHub | — | browser look on Railway preview |
 | Loans PR-5 | `feat/loans-pr5` | Not started | — | — | — |
 | Loans PR-6 | `feat/loans-pr6` | Not started | — | — | — |
 | Loans PR-7 | `feat/loans-pr7` | Not started | — | — | — |
@@ -190,6 +188,15 @@ Plan approved with a wider file list: `schema.js` (`loan_requests` inside `loans
   `GET|PUT /policy`. Hide raise buttons for the admin (`ADMIN_CANNOT_RAISE`) and the disburse button while
   `stats.disbursementEnabled` is false.
 
+## Loans PR-4 rulings (coordinator, 9 Oct 2026)
+
+Plan approved with defaults Q1–Q10, Q12: detail is a route `/loans/:id`; `/due` names joined on screen; no Held tile until
+PR-6; approval history shown as averages + load % (per-month table would need a backend addition); `LOAN_COMPANIES` mirrors
+`VALID_COMPANIES`; modes = Bank transfer / Cheque / Cash (payout), Cash / Bank transfer / Cheque / UPI (receipt); agreement is
+a text reference; admin raise buttons hidden; `loansRead` + admin badge in the sidebar; the Playwright check is committed;
+optional later first-EMI month at disbursement. **Q11 changed:** the Mark Left dialog text is fixed in PR-4 (text only).
+Screens for the owner: `docs/loans/screens/pr4/`. Repeat the browser check: `python3 backend/scripts/loans-ui-browser-check.py`.
+
 ### Loans PR-3 check (read-only, after deploy)
 
 ```sql
@@ -292,4 +299,5 @@ FROM sales_salary_computations WHERE month = ? AND year = ?;
 | 2026-10-09 | Loans PR-2 | Plan approved | 13 rulings recorded above. Production read-only: 148 Active plant without DOJ, 23 Active Permanent without gross, 190 Active plant rows typed Sales, 73 Contract with is_contractor = 0, 2 Worker with is_contractor = 1. |
 | 2026-10-09 | Loans PR-3 | Plan approved | Rulings A (disbursement gate) and B (admin cannot raise) added; Q1–Q16 defaults approved. |
 | 2026-10-09 | Loans PR-3 | API built | `routes/loans.js` on the engine, `requests.js`, `loan_requests`, gate; `loanService.js` deleted. Suite 588 → 667 (31 suites). HTTP simulation on the real server: 55/55. |
+| 2026-10-09 | Loans PR-4 | Screens built | Frontend only. Dist on main = fresh build (0 diffs). Browser check 63/63 (scratch DB, real logins, gate 0 then 1). Self-debug: 5-second GET cache made mutations look ignored → loan reads send `Cache-Control: no-cache`. Backend 31/667. |
 | 2026-10-09 | Loans PR-2 | Engine built | `services/loans/` (15 files), 7 new suites, simulation script. Suite 454 → 588 (3 clean runs). Simulation: 13 loans × 12 months reconcile exactly, exit 0. |
