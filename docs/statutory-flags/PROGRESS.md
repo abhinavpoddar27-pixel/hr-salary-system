@@ -8,15 +8,15 @@
 4. Continue from NEXT STEP. Update this file after every small step (state, done, next) and commit it.
 
 ## PR STATUS
-- PR-1 feat/statutory-flags — NOT STARTED
+- PR-1 feat/statutory-flags — PLANNED (IMPL_PR1.md), build not started
 - PR-2 feat/lwf-deduction — NOT STARTED
 - PR-3 feat/statutory-filing — NOT STARTED
 
 ## LAST STEP
-T0 done locally (10 Oct 2026, cloud workspace): plan pack committed on feat/statutory-flags from origin/main 1d4221c. Not pushed (repo public).
+PR-1 plan written: docs/statutory-flags/IMPL_PR1.md (separate planning agent on base 1d4221c, reviewed by the chat; binding REVIEW CORRECTIONS C1–C6 at the end of the file; errata E1–E15, new landmines N1–N11).
 
 ## NEXT STEP
-Planning session for PR-1 (PROMPT_PLAN.md). Base moved from ae4830f to 1d4221c (loans PR-3..5, leave switchover): re-verify every BUILD_PLAN line reference.
+Build session for PR-1 (PROMPT_BUILD.md Phase 0): rebase onto latest origin/main (was d1ad7bf), print FILES / DO NOT MODIFY / STEPS, stop for go.
 
 ## OWNER RULINGS ADDED DURING THE BUILD
 (record date + ruling; BUILD_PLAN §1 holds the original set)
