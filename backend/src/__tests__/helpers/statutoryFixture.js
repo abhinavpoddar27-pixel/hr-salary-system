@@ -123,6 +123,53 @@ function counts(db) {
   };
 }
 
+// ── Compute helpers (real Stage 7 / sales compute on the fixture DB) ───────
+const VOLATILE = new Set(['id', 'computed_at', 'created_at', 'updated_at', 'ai_explanation', 'ai_explanation_at', 'finalised_at']);
+const strip = (r) => (r ? Object.fromEntries(Object.entries(r).filter(([k]) => !VOLATILE.has(k))
+  .map(([k, v]) => [k, k === 'sunday_rule_trace' && typeof v === 'string' ? v.replace(/"computedAt":"[^"]*"/, '"computedAt":"-"') : v])) : r);
+
+/** Day-calc row for a plant month (enough present days to be paid, no hold). */
+function plantMonth(db, emp, month, year, days = 26) {
+  const dim = new Date(Date.UTC(year, month, 0)).getUTCDate();
+  db.prepare(`
+    INSERT INTO day_calculations (employee_code, month, year, company, days_present, total_payable_days, paid_sundays, days_absent)
+    VALUES (?, ?, ?, ?, ?, ?, ?, 0)
+    ON CONFLICT DO NOTHING
+  `).run(emp.code, month, year, emp.company, days, dim, dim - days);
+}
+
+/** Plant Stage 7 for one employee-month; returns the saved salary row (volatile columns stripped). */
+function computePlant(db, emp, month, year) {
+  const { computeEmployeeSalary, saveSalaryComputation } = require('../../services/salaryComputation');
+  const e = db.prepare('SELECT * FROM employees WHERE id = ?').get(emp.id);
+  const c = silently(() => computeEmployeeSalary(db, e, month, year, emp.company, 'statutory-test'));
+  if (!c.success) throw new Error(`plant compute failed: ${c.reason || c.error}`);
+  silently(() => saveSalaryComputation(db, c));
+  return strip(db.prepare('SELECT * FROM salary_computations WHERE employee_code = ? AND month = ? AND year = ?').get(emp.code, month, year));
+}
+
+function computeSales(db, emp, month, year, daysGiven = 24) {
+  const { computeSalesEmployee, saveSalesSalaryComputation } = require('../../services/salesSalaryComputation');
+  const { deriveCycle } = require('../../services/cycleUtil');
+  const cy = deriveCycle(month, year);
+  const e = db.prepare('SELECT * FROM sales_employees WHERE id = ?').get(emp.id);
+  const c = silently(() => computeSalesEmployee(db, {
+    salesEmployee: e, monthlyInputRow: { sheet_days_given: daysGiven }, cycleStart: cy.start, cycleEnd: cy.end,
+    month, year, company: emp.company, requestId: 'statutory-test', user: 'test',
+  }));
+  if (!c.success) throw new Error(`sales compute failed: ${c.reason || c.error}`);
+  silently(() => saveSalesSalaryComputation(db, c));
+  return strip(db.prepare('SELECT * FROM sales_salary_computations WHERE employee_code = ? AND month = ? AND year = ? AND company = ?').get(emp.code, month, year, emp.company));
+}
+
+/** Parse + apply a file the way the route does (sha of the buffer). */
+function applyFile(db, scope, buffer, effectiveMonth = '2026-09', user = 'boss') {
+  const SF = require('../../services/statutoryFlags');
+  const parsed = SF.parseFlagFile(buffer, scope);
+  if (!parsed.ok) throw new Error(`parse failed: ${parsed.errors.join('; ')}`);
+  return SF.applyFlagChanges(db, { scope, effectiveMonth, rows: parsed.rows, user, fileName: 't.xlsx', sha256: SF.sha256(buffer) });
+}
+
 // ── Upload files (synthetic) ───────────────────────────────────────────────
 const PLANT_HDR = ['code', 'name', 'type', 'esi_applicable', 'pf_applicable', 'lwf_applicable', 'esi_number', 'uan', 'note'];
 const SALES_HDR = ['code', 'company', 'name', 'esi_applicable', 'pf_applicable', 'lwf_applicable', 'esi_number', 'uan', 'note'];
@@ -139,6 +186,7 @@ const salesFile = (...rows) => xlsxBuf([SALES_HDR, ...rows]);
 
 module.exports = {
   PLANT_HDR, SALES_HDR, xlsxBuf, prow, srow, plantFile, salesFile,
+  strip, plantMonth, computePlant, computeSales, applyFile,
   COMPANY, OTHER_COMPANY, silently, newDb, withLiveDefaults, dflt, plant, plantStructure, salesEmp, salesStructure,
   plantRows, salesRows, master, salesMaster, flags, counts,
 };

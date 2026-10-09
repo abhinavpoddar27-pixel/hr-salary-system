@@ -314,9 +314,244 @@ function totalsOf(rows) {
   return t;
 }
 
+// ── Apply (write half) ─────────────────────────────────────────────────────
+
+const crypto = require('crypto');
+function sha256(buffer) {
+  return crypto.createHash('sha256').update(buffer).digest('hex');
+}
+
+const COPY_SKIP = new Set(['id', 'created_at', 'updated_at']);
+
+/**
+ * Insert a full copy of `src` dated `effectiveFrom` (L9: every column from
+ * PRAGMA table_info except id/created_at/updated_at), with `flags` applied.
+ * Sales copies are open (`effective_to` NULL). These two INSERTs are the only
+ * structure inserts with a dynamic column list in this file; the writer guard
+ * test pins them by their literal text.
+ */
+function copyStructure(db, scope, src, effectiveFrom, flags, batchId) {
+  const { struct } = scopeTables(scope);
+  const cols = db.prepare(`PRAGMA table_info(${struct})`).all().map((c) => c.name).filter((c) => !COPY_SKIP.has(c));
+  const vals = cols.map((c) => {
+    if (c === 'effective_from') return effectiveFrom;
+    if (c === 'effective_to') return null;
+    if (c === 'created_by') return `statutory_upload batch:${batchId}`;
+    if (c === 'pf_applicable') return flags.pf ? 1 : 0;
+    if (c === 'esi_applicable') return flags.esi ? 1 : 0;
+    if (c === 'lwf_applicable') return flags.lwf ? 1 : 0;
+    return src[c] === undefined ? null : src[c];
+  });
+  const placeholders = cols.map(() => '?').join(', ');
+  const info = scope === SALES
+    ? db.prepare(`INSERT INTO sales_salary_structures (${cols.join(', ')}) VALUES (${placeholders})`).run(...vals)
+    : db.prepare(`INSERT INTO salary_structures (${cols.join(', ')}) VALUES (${placeholders})`).run(...vals);
+  return Number(info.lastInsertRowid);
+}
+
+function setRowFlags(db, scope, rowId, flags) {
+  const { struct } = scopeTables(scope);
+  const extra = scope === SALES ? '' : ", updated_at = datetime('now')";
+  db.prepare(`UPDATE ${struct} SET pf_applicable = ?, esi_applicable = ?, lwf_applicable = ?${extra} WHERE id = ?`)
+    .run(flags.pf ? 1 : 0, flags.esi ? 1 : 0, flags.lwf ? 1 : 0, rowId);
+}
+
+function makeAudit(db, batchId, user) {
+  const stmt = db.prepare(`
+    INSERT INTO audit_log (table_name, record_id, field_name, old_value, new_value, changed_by, stage, remark, employee_code, action_type)
+    VALUES (?, ?, ?, ?, ?, ?, 'statutory_upload', ?, ?, ?)
+  `);
+  return (table, recordId, field, oldV, newV, code, actionType) =>
+    stmt.run(table, recordId, field, String(oldV ?? ''), String(newV ?? ''), user, `batch:${batchId}`, code, actionType);
+}
+
+function findAppliedBatch(db, scope, effectiveMonth, sha) {
+  return db.prepare(`SELECT id FROM statutory_flag_batches WHERE scope = ? AND effective_month = ? AND file_sha256 = ? AND status = 'applied'`)
+    .get(scope, effectiveMonth, sha) || null;
+}
+
+/**
+ * applyFlagChanges(db, {scope, effectiveMonth, rows, user, fileName, sha256, expectedSha256})
+ * One IMMEDIATE transaction. The batch row is inserted first ('applying'),
+ * the plan is rebuilt inside the transaction (the preview is never trusted),
+ * then for every changed employee:
+ *   1. read `latest` (compute's fallback row) and `forE` before any write;
+ *   2. FREEZE — no row dated <= S → insert a full copy of `latest` dated S
+ *      with latest's own (pre-write) flags;
+ *   3. rows dated exactly E → update their flags; else insert a full copy of
+ *      `forE` dated E with the new flags (sales effective_to NULL);
+ *   4. update the flags on every row dated after E;
+ *   5. master flags, and numbers when non-blank and valid;
+ *   6. audit rows on this handle.
+ * Steps 2–4 run only when a structure row actually needs new flags (a
+ * master-only difference never touches structures).
+ * Returns {ok, status?, code?, error?, batchId, summary}.
+ */
+function applyFlagChanges(db, { scope, effectiveMonth, rows, user, fileName, sha256: sha, expectedSha256 }) {
+  if (!sha) return { ok: false, status: 400, code: 'NO_HASH', error: 'File hash missing' };
+  if (expectedSha256 && expectedSha256 !== sha) {
+    return { ok: false, status: 409, code: 'HASH_MISMATCH', error: 'The file differs from the one previewed — preview it again' };
+  }
+  const dup = findAppliedBatch(db, scope, effectiveMonth, sha);
+  if (dup) return { ok: false, status: 409, code: 'DUPLICATE_BATCH', batchId: dup.id, error: `This file was already applied for ${scope} ${effectiveMonth} (batch ${dup.id})` };
+
+  const actor = user || 'admin';
+  const run = db.transaction(() => {
+    if (findAppliedBatch(db, scope, effectiveMonth, sha)) {
+      const e = new Error('duplicate'); e.code = 'DUPLICATE_BATCH'; throw e;
+    }
+    const batchId = Number(db.prepare(`
+      INSERT INTO statutory_flag_batches (scope, effective_month, file_name, file_sha256, row_count, status, applied_by)
+      VALUES (?, ?, ?, ?, ?, 'applying', ?)
+    `).run(scope, effectiveMonth, fileName || null, sha, (rows || []).length, actor).lastInsertRowid);
+
+    const plan = planFlagChanges(db, { scope, effectiveMonth, rows });
+    if (!plan.ok) { const e = new Error('blocked'); e.code = 'BLOCKED'; e.blocking = plan.blocking; throw e; }
+
+    const { master, struct } = scopeTables(scope);
+    const { S, E } = plan.keys;
+    const audit = makeAudit(db, batchId, actor);
+    const undoRows = [];
+    const counts = { employees: 0, flagEmployees: 0, numberEmployees: 0, freezeRows: 0, effectiveRows: 0, rowsUpdatedAtE: 0, laterRowsUpdated: 0 };
+
+    for (const p of plan.rows) {
+      if (!p.matched || p.error || !p.changed) continue;
+      counts.employees++;
+      const emp = db.prepare(`SELECT * FROM ${master} WHERE id = ?`).get(p.employeeId);
+      const all = db.prepare(`SELECT * FROM ${struct} WHERE employee_id = ? ORDER BY effective_from, id`).all(emp.id);
+      const latest = latestStructure(db, scope, emp.id);          // 1. before any write
+      const forE = structureForDate(db, scope, emp.id, E);
+      const undo = {
+        code: emp.code, company: emp.company, name: emp.name,
+        master: flagsOf(emp), beforeE: flagsOf(forE),
+        numbers: { esi_number: emp.esi_number || null, uan: emp.uan || null },
+        structures: all.map((r) => ({ id: r.id, effective_from: r.effective_from, ...flagsOf(r) })),
+        inserted: [],
+      };
+
+      if (p.flagChanged) {
+        counts.flagEmployees++;
+        const structNeedsChange = !sameFlags(flagsOf(forE), p.after)
+          || all.some((r) => r.effective_from >= E && !sameFlags(flagsOf(r), p.after));
+        if (structNeedsChange) {
+          // 2. freeze
+          if (!all.some((r) => r.effective_from <= S)) {
+            const id = copyStructure(db, scope, latest, S, flagsOf(latest), batchId);
+            counts.freezeRows++;
+            undo.inserted.push({ id, effective_from: S, kind: 'freeze' });
+            audit(struct, id, 'structure_row', '', `freeze ${S} = copy of #${latest.id} (${latest.effective_from}), flags unchanged`, emp.code, 'statutory_freeze_row');
+          }
+          // 3. effective row at E
+          const atE = all.filter((r) => r.effective_from === E);
+          if (atE.length) {
+            for (const r of atE) {
+              if (sameFlags(flagsOf(r), p.after)) continue;
+              setRowFlags(db, scope, r.id, p.after);
+              counts.rowsUpdatedAtE++;
+              for (const k of FLAG_KEYS) if ((r[FLAG_COL[k]] ? 1 : 0) !== p.after[k]) audit(struct, r.id, FLAG_COL[k], r[FLAG_COL[k]] ? 1 : 0, p.after[k], emp.code, 'statutory_flag_change');
+            }
+          } else {
+            const id = copyStructure(db, scope, forE, E, p.after, batchId);
+            counts.effectiveRows++;
+            undo.inserted.push({ id, effective_from: E, kind: 'effective' });
+            audit(struct, id, 'structure_row', '', `effective ${E} = copy of #${forE.id} (${forE.effective_from}), flags esi=${p.after.esi} pf=${p.after.pf} lwf=${p.after.lwf}`, emp.code, 'statutory_effective_row');
+          }
+          // 4. every later row
+          for (const r of all.filter((x) => x.effective_from > E)) {
+            if (sameFlags(flagsOf(r), p.after)) continue;
+            setRowFlags(db, scope, r.id, p.after);
+            counts.laterRowsUpdated++;
+            for (const k of FLAG_KEYS) if ((r[FLAG_COL[k]] ? 1 : 0) !== p.after[k]) audit(struct, r.id, FLAG_COL[k], r[FLAG_COL[k]] ? 1 : 0, p.after[k], emp.code, 'statutory_flag_change');
+          }
+        }
+        // 5a. master flags
+        const before = flagsOf(emp);
+        if (!sameFlags(before, p.after)) {
+          if (scope === SALES) {
+            db.prepare(`UPDATE sales_employees SET pf_applicable = ?, esi_applicable = ?, lwf_applicable = ?, updated_at = datetime('now'), updated_by = ? WHERE id = ?`)
+              .run(p.after.pf, p.after.esi, p.after.lwf, actor, emp.id);
+          } else {
+            db.prepare(`UPDATE employees SET pf_applicable = ?, esi_applicable = ?, lwf_applicable = ?, updated_at = datetime('now') WHERE id = ?`)
+              .run(p.after.pf, p.after.esi, p.after.lwf, emp.id);
+          }
+          for (const k of FLAG_KEYS) if (before[k] !== p.after[k]) audit(master, emp.id, FLAG_COL[k], before[k], p.after[k], emp.code, 'statutory_flag_change');
+        }
+      }
+      // 5b. numbers (non-blank, valid, not used elsewhere — decided by the planner)
+      if (p.numberChanged) {
+        counts.numberEmployees++;
+        for (const col of ['esi_number', 'uan']) {
+          const v = p.numbers[col];
+          if (!v) continue;
+          db.prepare(`UPDATE ${master} SET ${col} = ? WHERE id = ?`).run(v, emp.id);
+          audit(master, emp.id, col, emp[col] || '', v, emp.code, 'statutory_number_change');
+        }
+      }
+      undoRows.push(undo);
+    }
+
+    const summary = { totals: plan.totals, counts, keys: { S, E } };
+    const undoJson = { scope, effectiveMonth, batchId, rows: undoRows };
+    db.prepare(`UPDATE statutory_flag_batches SET status = 'applied', changed_count = ?, summary_json = ?, undo_json = ? WHERE id = ?`)
+      .run(counts.employees, JSON.stringify(summary), JSON.stringify(undoJson), batchId);
+    return { batchId, summary };
+  });
+
+  try {
+    const out = run.immediate();
+    return { ok: true, ...out };
+  } catch (e) {
+    if (e.code === 'BLOCKED') return { ok: false, status: 400, code: 'BLOCKED', error: 'The file cannot be applied', blocking: e.blocking };
+    if (e.code === 'DUPLICATE_BATCH' || /UNIQUE constraint failed: statutory_flag_batches/.test(e.message)) {
+      return { ok: false, status: 409, code: 'DUPLICATE_BATCH', error: `This file was already applied for ${scope} ${effectiveMonth}` };
+    }
+    throw e;
+  }
+}
+
+/**
+ * The before-values of an applied batch, in the upload layout, as an .xlsx
+ * buffer (never written to disk — N9: it holds names). Flags are the ones
+ * that were in force at the effective month (what compute used). Number
+ * columns are left blank: blank means "unchanged", so numbers the batch added
+ * stay. Re-applying it restores the flags from E onward; the freeze and
+ * effective rows stay (carrying the original flags again).
+ */
+function buildUndoWorkbook(db, batchId) {
+  const b = db.prepare('SELECT * FROM statutory_flag_batches WHERE id = ?').get(batchId);
+  if (!b) return { ok: false, status: 404, error: 'Batch not found' };
+  if (b.status !== 'applied' || !b.undo_json) return { ok: false, status: 409, error: `Batch ${batchId} is '${b.status}' — nothing to undo` };
+  const u = JSON.parse(b.undo_json);
+  const yn = (v) => (v ? 'Y' : 'N');
+  const note = `undo of batch ${b.id}`;
+  const aoa = b.scope === SALES
+    ? [['code', 'company', 'name', 'esi_applicable', 'pf_applicable', 'lwf_applicable', 'esi_number', 'uan', 'note']]
+    : [['code', 'name', 'type', 'esi_applicable', 'pf_applicable', 'lwf_applicable', 'esi_number', 'uan', 'note']];
+  for (const r of u.rows) {
+    const f = r.beforeE;
+    if (b.scope === SALES) aoa.push([r.code, r.company, r.name, yn(f.esi), yn(f.pf), yn(f.lwf), '', '', note]);
+    else aoa.push([r.code, r.name, '', yn(f.esi), yn(f.pf), yn(f.lwf), '', '', note]);
+  }
+  const wb = XLSX.utils.book_new();
+  const ws = XLSX.utils.aoa_to_sheet(aoa);
+  // codes as text so leading zeros / long codes survive a round trip
+  for (let i = 2; i <= aoa.length; i++) { const c = ws[`A${i}`]; if (c) { c.t = 's'; c.v = String(c.v); } }
+  XLSX.utils.book_append_sheet(wb, ws, 'flags');
+  const buffer = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' });
+  return { ok: true, buffer, fileName: `statutory_flags_undo_${b.scope}_${b.effective_month}_batch${b.id}.xlsx`, rows: u.rows.length, scope: b.scope, effectiveMonth: b.effective_month };
+}
+
+function listBatches(db, { limit = 50 } = {}) {
+  return db.prepare(`
+    SELECT id, scope, effective_month, file_name, file_sha256, row_count, changed_count, status, applied_by, applied_at, summary_json
+      FROM statutory_flag_batches ORDER BY id DESC LIMIT ?
+  `).all(limit).map((r) => ({ ...r, summary: r.summary_json ? JSON.parse(r.summary_json) : null, summary_json: undefined }));
+}
+
 module.exports = {
   PLANT, SALES, FLAG_KEYS, FLAG_COL, ESI_THRESHOLD,
   normaliseHeader, parseYesNo, parseFlagFile, planFlagChanges,
+  applyFlagChanges, buildUndoWorkbook, listBatches, sha256,
   structureForDate, carryFlags, latestStructure, keysFor, monthKey, scopeTables,
   // internals exposed for tests and the write half
   _internal: { flagsOf, sameFlags, matchEmployee, DATE_RE, MONTH_RE },

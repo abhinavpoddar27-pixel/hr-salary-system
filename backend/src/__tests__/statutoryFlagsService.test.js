@@ -214,3 +214,295 @@ describe('planFlagChanges', () => {
   });
 });
 
+
+// ════════════════════════════ STEP 4 — apply + undo ════════════════════════════
+
+const apply = (db, buf, scope = 'plant', month = '2026-09') => S.applyFile(db, scope, buf, month);
+const rowAt = (rows, d) => rows.filter((r) => r.effective_from === d);
+const SALARY_COLS_EQ = (a, b) => expect(a).toEqual(b);
+
+describe('T1 — single 2025-01-01 row', () => {
+  test('apply Sep → a 2026-09-01 row identical except flags; Aug old flags, Sep/Oct new', () => {
+    const db = S.newDb();
+    const e = S.plant(db);
+    S.plantStructure(db, e, '2025-01-01', { gross_salary: 15000, basic: 7000, da: 500, hra: 3000, conveyance: 1200, other_allowances: 3300 });
+    const r = apply(db, S.plantFile(S.prow(e.code, 1, 1, 1)));
+    expect(r.ok).toBe(true);
+    const rows = S.plantRows(db, e);
+    // freeze row at S too: no row was dated <= 2000-01-01 (see T14)
+    expect(rows.map((x) => x.effective_from)).toEqual(['2000-01-01', '2025-01-01', '2026-09-01']);
+    const [frz, old, neu] = rows;
+    expect(S.flags(frz)).toEqual({ pf: 0, esi: 0, lwf: 0 });
+    const strip = (x) => { const { id, effective_from, created_at, updated_at, pf_applicable, esi_applicable, lwf_applicable, ...rest } = x; return rest; };
+    expect(strip(neu)).toEqual(strip(old));
+    expect(S.flags(old)).toEqual({ pf: 0, esi: 0, lwf: 0 });
+    expect(S.flags(neu)).toEqual({ pf: 1, esi: 1, lwf: 1 });
+    expect(SF.carryFlags(db, 'plant', e.id, '2026-08-01')).toEqual({ pf: 0, esi: 0, lwf: 0 });
+    expect(SF.carryFlags(db, 'plant', e.id, '2026-09-01')).toEqual({ pf: 1, esi: 1, lwf: 1 });
+    expect(SF.carryFlags(db, 'plant', e.id, '2026-10-01')).toEqual({ pf: 1, esi: 1, lwf: 1 });
+    expect(S.flags(S.master(db, e))).toEqual({ pf: 1, esi: 1, lwf: 1 });
+  });
+});
+
+describe('T14 / freeze rule', () => {
+  test('a row already <= S (2000-01-01) → no freeze row', () => {
+    const db = S.newDb();
+    const e = S.plant(db);
+    S.plantStructure(db, e, '1946-06-01');
+    apply(db, S.plantFile(S.prow(e.code, 1, 0, 1)));
+    expect(S.plantRows(db, e).map((x) => x.effective_from)).toEqual(['1946-06-01', '2026-09-01']);
+  });
+
+  test('a 2025-01-01 row (not <= S) → in-effect rows earlier than E stay served by themselves; freeze row added at S', () => {
+    const db = S.newDb();
+    const e = S.plant(db);
+    S.plantStructure(db, e, '2025-01-01');
+    apply(db, S.plantFile(S.prow(e.code, 1, 0, 1)));
+    // freeze is added because no row <= 2000-01-01 existed
+    const rows = S.plantRows(db, e).map((x) => x.effective_from);
+    expect(rows).toEqual(['2000-01-01', '2025-01-01', '2026-09-01']);
+  });
+});
+
+describe('T2 — exact E rows updated in place, later rows too', () => {
+  test('two 2026-09-01 rows + a 2026-10-15 row', () => {
+    const db = S.newDb();
+    const e = S.plant(db);
+    S.plantStructure(db, e, '2025-01-01');
+    S.plantStructure(db, e, '2026-09-01');
+    S.plantStructure(db, e, '2026-09-01');
+    S.plantStructure(db, e, '2026-10-15');
+    const r = apply(db, S.plantFile(S.prow(e.code, 1, 0, 1)));
+    expect(r.ok).toBe(true);
+    const rows = S.plantRows(db, e);
+    expect(rowAt(rows, '2026-09-01').map(S.flags)).toEqual([{ pf: 0, esi: 1, lwf: 1 }, { pf: 0, esi: 1, lwf: 1 }]);
+    expect(S.flags(rowAt(rows, '2026-10-15')[0])).toEqual({ pf: 0, esi: 1, lwf: 1 });
+    expect(S.flags(rowAt(rows, '2025-01-01')[0])).toEqual({ pf: 0, esi: 0, lwf: 0 });
+    expect(r.summary.counts).toMatchObject({ rowsUpdatedAtE: 2, laterRowsUpdated: 1, effectiveRows: 0 });
+  });
+});
+
+describe('T3 — fallback months recompute identically', () => {
+  for (const only of ['2026-08-24', '2026-09-06']) {
+    test(`only a ${only} row + an August pay row → August byte-identical, September carries flags`, () => {
+      const db = S.newDb();
+      const e = S.plant(db, { gross_salary: 15000 });
+      S.plantStructure(db, e, only, { gross_salary: 15000, basic: 7500, hra: 3000, conveyance: 0, other_allowances: 4500 });
+      S.plantMonth(db, e, 8, 2026);
+      S.plantMonth(db, e, 9, 2026);
+      const augBefore = S.computePlant(db, e, 8, 2026);
+      expect(augBefore.esi_employee).toBe(0);
+      apply(db, S.plantFile(S.prow(e.code, 1, 1, 1)));
+      const augAfter = S.computePlant(db, e, 8, 2026);
+      SALARY_COLS_EQ(augAfter, augBefore);
+      const sep = S.computePlant(db, e, 9, 2026);
+      expect(sep.esi_employee).toBeGreaterThan(0);
+      expect(sep.pf_employee).toBeGreaterThan(0);
+      expect(Math.abs(sep.net_salary - (sep.gross_earned - sep.total_deductions))).toBeLessThanOrEqual(1);
+      // freeze row exists with the old flags, a copy of the only row
+      const rows = S.plantRows(db, e);
+      expect(S.flags(rowAt(rows, '2000-01-01')[0])).toEqual({ pf: 0, esi: 0, lwf: 0 });
+    });
+  }
+});
+
+describe('T4 — copy at E comes from the April row, the 09-06 row keeps serving October', () => {
+  test('rows 2026-04-22 + 2026-09-06', () => {
+    const db = S.newDb();
+    const e = S.plant(db);
+    S.plantStructure(db, e, '2026-04-22', { basic: 7001 });
+    S.plantStructure(db, e, '2026-09-06', { basic: 7002 });
+    apply(db, S.plantFile(S.prow(e.code, 1, 0, 1)));
+    const rows = S.plantRows(db, e);
+    expect(rows.map((x) => x.effective_from)).toEqual(['2000-01-01', '2026-04-22', '2026-09-01', '2026-09-06']);
+    expect(rowAt(rows, '2026-09-01')[0].basic).toBe(7001);
+    expect(rowAt(rows, '2000-01-01')[0].basic).toBe(7002); // freeze = copy of latest (the fallback row)
+    expect(SF.structureForDate(db, 'plant', e.id, '2026-09-01').basic).toBe(7001);
+    expect(SF.structureForDate(db, 'plant', e.id, '2026-10-01').basic).toBe(7002);
+    expect(SF.carryFlags(db, 'plant', e.id, '2026-09-01')).toEqual({ pf: 0, esi: 1, lwf: 1 });
+    expect(SF.carryFlags(db, 'plant', e.id, '2026-10-01')).toEqual({ pf: 0, esi: 1, lwf: 1 });
+    expect(SF.carryFlags(db, 'plant', e.id, '2026-03-01')).toEqual({ pf: 0, esi: 0, lwf: 0 }); // fallback → freeze
+    expect(SF.structureForDate(db, 'plant', e.id, '2026-03-01').basic).toBe(7002);           // same components as before
+  });
+});
+
+describe('T5 — sales', () => {
+  test('exact 2026-09 row updated in place; otherwise copy with effective_to NULL; fallback-served April recomputes identically', () => {
+    const db = S.newDb();
+    const a = S.salesEmp(db, { code: 'Z101' });
+    S.salesStructure(db, a, '2026-09', {});
+    const b = S.salesEmp(db, { code: 'Z102', gross_salary: 18000 });
+    S.salesStructure(db, b, '2026-05', { effective_to: '2026-08' });   // closed row: April is served by fallback
+    const aprBefore = S.computeSales(db, b, 4, 2026);
+    const r = apply(db, S.salesFile(S.srow('Z101', S.COMPANY, 1, 0, 1), S.srow('Z102', S.COMPANY, 1, 0, 1)), 'sales');
+    expect(r.ok).toBe(true);
+    const ra = S.salesRows(db, a);
+    expect(ra.map((x) => x.effective_from)).toEqual(['2000-01', '2026-09']);
+    expect(S.flags(rowAt(ra, '2026-09')[0])).toEqual({ pf: 0, esi: 1, lwf: 1 });
+    const rb = S.salesRows(db, b);
+    expect(rb.map((x) => x.effective_from)).toEqual(['2000-01', '2026-05', '2026-09']);
+    expect(rowAt(rb, '2026-09')[0].effective_to).toBeNull();
+    expect(rowAt(rb, '2000-01')[0].effective_to).toBeNull();
+    expect(rowAt(rb, '2026-05')[0].effective_to).toBe('2026-08');
+    expect(S.computeSales(db, b, 4, 2026)).toEqual(aprBefore);
+    const sep = S.computeSales(db, b, 9, 2026);
+    expect(sep.esi_employee).toBeGreaterThan(0);
+    expect(S.flags(S.salesMaster(db, b))).toEqual({ pf: 0, esi: 1, lwf: 1 });
+  });
+
+  test('sales numbers written to the master', () => {
+    const db = S.newDb();
+    const a = S.salesEmp(db, { code: 'Z103' });
+    S.salesStructure(db, a, '2025-01');
+    apply(db, S.salesFile(S.srow('Z103', S.COMPANY, 1, 0, 1, { esi_number: '2000000001', uan: '200000000001' })), 'sales');
+    expect(S.salesMaster(db, a)).toMatchObject({ esi_number: '2000000001', uan: '200000000001' });
+  });
+});
+
+describe('T16 — S157 shape (closed row + later open row)', () => {
+  test('2026-01 closed 2026-09 + 2026-10 open → E copy from the 2026-01 row with effective_to NULL; 2026-10 updated', () => {
+    const db = S.newDb();
+    const e = S.salesEmp(db, { code: 'Z157' });
+    S.salesStructure(db, e, '2026-01', { effective_to: '2026-09', basic: 9001 });
+    S.salesStructure(db, e, '2026-10', { basic: 9002 });
+    apply(db, S.salesFile(S.srow('Z157', S.COMPANY, 1, 0, 1)), 'sales');
+    const rows = S.salesRows(db, e);
+    expect(rows.map((x) => x.effective_from)).toEqual(['2000-01', '2026-01', '2026-09', '2026-10']);
+    const e9 = rowAt(rows, '2026-09')[0];
+    expect(e9).toMatchObject({ basic: 9001, effective_to: null, esi_applicable: 1, lwf_applicable: 1 });
+    expect(S.flags(rowAt(rows, '2026-10')[0])).toEqual({ pf: 0, esi: 1, lwf: 1 });
+    expect(rowAt(rows, '2000-01')[0]).toMatchObject({ basic: 9002, esi_applicable: 0 }); // freeze = latest
+  });
+});
+
+describe('T6 — re-apply, hash, malformed date', () => {
+  test('second apply of the same file → 409 duplicate; a different file with the same content → 0 changes, 0 inserts', () => {
+    const db = S.newDb();
+    const e = S.plant(db);
+    S.plantStructure(db, e, '2025-01-01');
+    const buf = S.plantFile(S.prow(e.code, 1, 0, 1, { uan: '300000000001' }));
+    expect(apply(db, buf).ok).toBe(true);
+    const counts = S.counts(db);
+    const again = apply(db, buf);
+    expect(again).toMatchObject({ ok: false, status: 409, code: 'DUPLICATE_BATCH' });
+    // same rows, different bytes (a note) → a new batch that changes nothing
+    const buf2 = S.xlsxBuf([S.PLANT_HDR, [e.code, 'SYNTH', 'Worker', 'Y', 'N', 'Y', '', '300000000001', 'second']]);
+    const r2 = apply(db, buf2);
+    expect(r2.ok).toBe(true);
+    expect(r2.summary.counts).toMatchObject({ employees: 0, freezeRows: 0, effectiveRows: 0 });
+    expect(S.counts(db)).toEqual(counts);
+  });
+
+  test('expectedSha256 differs → 409 HASH_MISMATCH, nothing written', () => {
+    const db = S.newDb();
+    const e = S.plant(db);
+    S.plantStructure(db, e, '2025-01-01');
+    const buf = S.plantFile(S.prow(e.code, 1, 0, 1));
+    const parsed = SF.parseFlagFile(buf, 'plant');
+    const before = S.counts(db);
+    const r = SF.applyFlagChanges(db, { scope: 'plant', effectiveMonth: '2026-09', rows: parsed.rows, user: 'x', sha256: SF.sha256(buf), expectedSha256: 'deadbeef' });
+    expect(r).toMatchObject({ ok: false, status: 409, code: 'HASH_MISMATCH' });
+    expect(S.counts(db)).toEqual(before);
+    expect(db.prepare('SELECT COUNT(*) c FROM statutory_flag_batches').get().c).toBe(0);
+  });
+
+  test('malformed structure date → blocking, row counts in all 4 tables unchanged, no batch row left', () => {
+    const db = S.newDb();
+    const ok = S.plant(db); S.plantStructure(db, ok, '2025-01-01');
+    const bad = S.plant(db); S.plantStructure(db, bad, '01-09-2026');
+    const before = S.counts(db);
+    const snap = JSON.stringify([S.master(db, ok), S.plantRows(db, ok)]);
+    const r = apply(db, S.plantFile(S.prow(ok.code, 1, 0, 1), S.prow(bad.code, 1, 0, 1)));
+    expect(r).toMatchObject({ ok: false, status: 400, code: 'BLOCKED' });
+    expect(S.counts(db)).toEqual(before);
+    expect(JSON.stringify([S.master(db, ok), S.plantRows(db, ok)])).toBe(snap);
+    expect(db.prepare('SELECT COUNT(*) c FROM statutory_flag_batches').get().c).toBe(0);
+  });
+});
+
+describe('T17 — duplicate date at latest → blocking error', () => {
+  test('nothing written', () => {
+    const db = S.newDb();
+    const e = S.plant(db);
+    S.plantStructure(db, e, '2026-08-24'); S.plantStructure(db, e, '2026-08-24');
+    const before = S.counts(db);
+    expect(apply(db, S.plantFile(S.prow(e.code, 1, 0, 1)))).toMatchObject({ ok: false, code: 'BLOCKED' });
+    expect(S.counts(db)).toEqual(before);
+  });
+});
+
+describe('row errors do not block the rest', () => {
+  test('unmatched + no-structure rows skipped; others applied', () => {
+    const db = S.newDb();
+    const a = S.plant(db); S.plantStructure(db, a, '2025-01-01');
+    const nos = S.plant(db);
+    const r = apply(db, S.plantFile(S.prow(a.code, 1, 0, 1), S.prow('NOPE9', 1, 0, 1), S.prow(nos.code, 1, 1, 1)));
+    expect(r.ok).toBe(true);
+    expect(r.summary.counts.employees).toBe(1);
+    expect(S.flags(S.master(db, nos))).toEqual({ pf: 0, esi: 0, lwf: 0 });
+    expect(S.plantRows(db, nos)).toEqual([]);
+  });
+
+  test('a master-only difference never touches structures', () => {
+    const db = S.newDb();
+    const e = S.plant(db); // master 0/0/0
+    S.plantStructure(db, e, '2025-01-01', { esi: 1, lwf: 1 });
+    const r = apply(db, S.plantFile(S.prow(e.code, 1, 0, 1)));
+    expect(r.summary.counts).toMatchObject({ employees: 1, freezeRows: 0, effectiveRows: 0 });
+    expect(S.plantRows(db, e).length).toBe(1);
+    expect(S.flags(S.master(db, e))).toEqual({ pf: 0, esi: 1, lwf: 1 });
+  });
+});
+
+describe('audit + batch rows', () => {
+  test('audit on the passed handle: one per changed field + one per inserted row; batch applied with summary + undo', () => {
+    const db = S.newDb();
+    const e = S.plant(db);
+    S.plantStructure(db, e, '2025-01-01');
+    const r = apply(db, S.plantFile(S.prow(e.code, 1, 0, 1, { esi_number: '4000000001' })));
+    const audit = db.prepare("SELECT * FROM audit_log WHERE stage = 'statutory_upload' ORDER BY id").all();
+    expect(audit.every((a) => a.remark === `batch:${r.batchId}` && a.changed_by === 'boss' && a.employee_code === e.code)).toBe(true);
+    const kinds = audit.map((a) => `${a.table_name}:${a.field_name}:${a.action_type}`);
+    expect(kinds).toEqual([
+      'salary_structures:structure_row:statutory_freeze_row',
+      'salary_structures:structure_row:statutory_effective_row',
+      'employees:esi_applicable:statutory_flag_change',
+      'employees:lwf_applicable:statutory_flag_change',
+      'employees:esi_number:statutory_number_change',
+    ]);
+    const b = db.prepare('SELECT * FROM statutory_flag_batches WHERE id = ?').get(r.batchId);
+    expect(b).toMatchObject({ status: 'applied', scope: 'plant', effective_month: '2026-09', changed_count: 1, row_count: 1 });
+    expect(JSON.parse(b.undo_json).rows[0]).toMatchObject({ code: e.code, beforeE: { esi: 0, pf: 0, lwf: 0 } });
+  });
+});
+
+describe('T10a — undo workbook', () => {
+  test('re-applying the undo file restores the original flags from E on; freeze/E rows remain; earlier months unchanged', () => {
+    const db = S.newDb();
+    const e = S.plant(db, { gross_salary: 15000 });
+    S.plantStructure(db, e, '2026-08-24', { gross_salary: 15000 });
+    S.plantStructure(db, e, '2026-10-15', { gross_salary: 15000 });
+    S.plantMonth(db, e, 8, 2026);
+    const aug0 = S.computePlant(db, e, 8, 2026);
+    const r = apply(db, S.plantFile(S.prow(e.code, 1, 1, 1, { uan: '500000000001' })));
+    const u = SF.buildUndoWorkbook(db, r.batchId);
+    expect(u.ok).toBe(true);
+    expect(u.fileName).toMatch(/undo_plant_2026-09_batch/);
+    const parsed = SF.parseFlagFile(u.buffer, 'plant');
+    expect(parsed.ok).toBe(true);
+    expect(parsed.rows[0]).toMatchObject({ code: e.code, esi: 0, pf: 0, lwf: 0, uan: '' });
+    const ru = S.applyFile(db, 'plant', u.buffer);
+    expect(ru.ok).toBe(true);
+    const rows = S.plantRows(db, e);
+    expect(rows.map((x) => x.effective_from)).toEqual(['2000-01-01', '2026-08-24', '2026-09-01', '2026-10-15']);
+    expect(rows.map(S.flags).every((f) => f.pf === 0 && f.esi === 0 && f.lwf === 0)).toBe(true);
+    expect(S.flags(S.master(db, e))).toEqual({ pf: 0, esi: 0, lwf: 0 });
+    expect(S.master(db, e).uan).toBe('500000000001'); // blank = unchanged
+    expect(S.computePlant(db, e, 8, 2026)).toEqual(aug0);
+  });
+
+  test('undo of a missing / non-applied batch → error', () => {
+    const db = S.newDb();
+    expect(SF.buildUndoWorkbook(db, 99)).toMatchObject({ ok: false, status: 404 });
+  });
+});
