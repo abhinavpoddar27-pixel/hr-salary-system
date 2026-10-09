@@ -26,9 +26,11 @@
  *     dayCalculation.js:437 already folds approved comp-off into days_present.
  *   • EL: nothing accrues until `el_eligibility_days` (180) days worked in the
  *     same calendar year. At or above it,
- *     earned = floor(days_worked_ytd / el_days_per_leave) × el_accrual_rate.
+ *     earned = floor(days_worked_ytd / el_days_per_leave) × el_accrual_rate
+ *     (21 days per EL after the 2026 switchover, read from policy_config).
  *   • CL: a single yearly opening from computeClEntitlement(), pro-rated by
- *     joining month off `cl_entitlement_base` (7). No monthly accrual.
+ *     joining quarter off `cl_entitlement_base` (4 after the 2026 switchover).
+ *     No monthly accrual. CL taken outside the app is CL used, never days worked.
  *   • CL and EL both lapse on 31 Dec. No carry-forward, no encashment.
  */
 
@@ -296,7 +298,9 @@ function computeLeavePlan(db, { year, employeeCodes = null } = {}) {
       for (const row of extStmt.all(emp.code, yr, m)) {
         const t = LEAVE_TYPES.includes(row.leave_type) ? row.leave_type : 'EL';
         ext[t] += Number(row.days) || 0;
-        if (row.mode === 'leave_taken') extWorked += Number(row.days) || 0;
+        // R-D (switchover 2026): only EL taken outside the app counts as days
+        // worked. CL taken outside is CL used, never days worked.
+        if (t === 'EL' && row.mode === 'leave_taken') extWorked += Number(row.days) || 0;
       }
 
       let elUsed = 0;

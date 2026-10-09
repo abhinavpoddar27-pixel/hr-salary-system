@@ -211,6 +211,31 @@ describe('leaveEngine — adjustments, external grants, employee selection', () 
     db.close();
   });
 
+  test('CL taken outside the app is CL used, never days worked (R-D)', () => {
+    const db = F.newDb();
+    const cl = F.addEmployee(db, { code: 'X003' });
+    const both = F.addEmployee(db, { code: 'X004' });
+    F.addWorkedMonth(db, cl, 7, YEAR, 20);
+    F.addWorkedMonth(db, both, 7, YEAR, 20);
+    F.addExternalGrant(db, cl, { month: 7, leave_type: 'CL', days: 4, mode: 'leave_taken' });
+    F.addExternalGrant(db, both, { month: 7, leave_type: 'CL', days: 4, mode: 'leave_taken' });
+    F.addExternalGrant(db, both, { month: 7, leave_type: 'EL', days: 5, mode: 'leave_taken' });
+
+    const plan = computeLeavePlan(db, { year: YEAR });
+    const a = who(plan, 'X003');
+    expect(a.days_worked_ytd).toBe(20);
+    expect(a.cl.external).toBe(4);
+    expect(a.el.external).toBe(0);
+    expect(a.cl.new_balance).toBe(a.cl.opening - 4);
+    const b = who(plan, 'X004');
+    expect(b.days_worked_ytd).toBe(25); // 20 + EL 5, the 4 CL adds nothing
+    expect(b.cl.external).toBe(4);
+    expect(b.el.external).toBe(5);
+    const julLedger = plan.ledger.find((r) => r.employee_code === 'X004' && r.month === 7 && r.leave_type === 'EL');
+    expect(julLedger.paid_days_this_month).toBe(25);
+    db.close();
+  });
+
   test("an employee stored with company 'null' or blank still earns (defect e)", () => {
     const db = F.newDb();
     const nullCo = F.addEmployee(db, { code: 'C001', company: 'null' });
