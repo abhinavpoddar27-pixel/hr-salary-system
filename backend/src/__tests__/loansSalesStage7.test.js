@@ -40,9 +40,11 @@ async function compute(month = M, year = Y, company = IND) {
 }
 const ded = (loanId, month = M, year = Y) => db.prepare("SELECT * FROM loan_deductions WHERE loan_id = ? AND month = ? AND year = ? AND payroll = 'sales'").get(loanId, month, year);
 const eventCount = () => db.prepare('SELECT COUNT(*) AS n FROM loan_events').get().n;
-function expectClean() {
-  expect(db.prepare(S.SALES_DRIFT_SQL).get().n).toBe(0);
-  expect(db.prepare(S.SALES_SHORT_SQL).get().n).toBe(0);
+/** Drift + component checks; `only` limits them to one rep (the floor test leaves one deliberate floored row). */
+function expectClean(only = null) {
+  const f = only ? ` AND employee_code = '${only}'` : '';
+  expect(db.prepare(S.SALES_DRIFT_SQL + f).get().n).toBe(0);
+  expect(db.prepare(S.SALES_SHORT_SQL + f).get().n).toBe(0);
 }
 
 describe('the sales loan step', () => {
@@ -225,5 +227,82 @@ describe('₹0 net floor only on rows carrying a loan (K22, ruling Q1)', () => {
     await compute();
     expect(S.salaryRow(db, c, M, Y)).toMatchObject({ loan_recovery: 10000, total_deductions: 45000, net_salary: 0 });
     expect(db.prepare("SELECT COUNT(*) AS n FROM notifications WHERE message LIKE ?").get(`%Loan ${loanId} (${c})%still deducted in full%`).n).toBe(1);
+  });
+});
+
+describe('HR edits re-run the engine (K30)', () => {
+  const put = (id, body) => api.request('PUT', `/api/sales/salary/${id}`, { as: 'hr1', body });
+
+  test('other deductions up → the loan falls to the headroom left; down → back up; ledger follows', async () => {
+    const c = code();
+    S.addRep(db, { code: c, company: ALI });
+    const loanId = S.salesLoan(db, { code: c, company: ALI });
+    S.setUpload(db, { month: 12, year: Y, company: ALI, rows: [{ code: c, days: 31 }] });
+    await compute(12, Y, ALI);
+    const row = S.salaryRow(db, c, 12, Y, ALI);
+    expect(row.loan_recovery).toBe(3334);
+    let r = await put(row.id, { other_deductions: 9000 });
+    expect(r.status).toBe(200);
+    expect(r.body.data).toMatchObject({ other_deductions: 9000, loan_recovery: 1000, total_deductions: 10000, net_salary: 10000 });
+    expect(ded(loanId, 12).amount).toBe(1000);
+    r = await put(row.id, { other_deductions: 500 });
+    expect(r.body.data).toMatchObject({ loan_recovery: 3334, total_deductions: 3834, net_salary: 16166 });
+    expect(ded(loanId, 12).amount).toBe(3334);
+    // incentive sits outside the earned base: no change to the loan
+    r = await put(row.id, { incentive_amount: 2500 });
+    expect(r.body.data).toMatchObject({ loan_recovery: 3334, net_salary: 18666 });
+    expectClean(c);
+    const audit = db.prepare("SELECT remark FROM audit_log WHERE table_name = 'sales_salary_computations' AND record_id = ? AND action_type = 'manual_override' ORDER BY id").all(row.id);
+    expect(audit[0].remark).toMatch(/loan 3334 → 1000/);
+  });
+
+  test('a no-loan row edits exactly as before (no loan_recovery write, same totals)', async () => {
+    const c = code();
+    S.addRep(db, { code: c, company: ALI });
+    S.setUpload(db, { month: 12, year: Y, company: ALI, rows: [{ code: c, days: 31 }] });
+    await compute(12, Y, ALI);
+    const row = S.salaryRow(db, c, 12, Y, ALI);
+    const r = await put(row.id, { other_deductions: 25000 });
+    expect(r.body.data).toMatchObject({ loan_recovery: 0, total_deductions: 25000, net_salary: -5000 }); // no floor without a loan (Q1)
+  });
+});
+
+describe('Hold and a posted loan (K31) / release after the held move (K28)', () => {
+  const status = (id, to) => api.request('PUT', `/api/sales/salary/${id}/status`, { as: 'hr1', body: { status: to } });
+
+  test('before posting a row may go to Hold; after posting → 409 LOAN_POSTED_NO_HOLD; register flags it', async () => {
+    const c = code();
+    S.addRep(db, { code: c, company: ALI });
+    const loanId = S.salesLoan(db, { code: c, company: ALI });
+    S.setUpload(db, { month: 1, year: 2027, company: ALI, rows: [{ code: c, days: 31 }] });
+    await compute(1, 2027, ALI);
+    const row = S.salaryRow(db, c, 1, 2027, ALI);
+    expect((await status(row.id, 'hold')).status).toBe(200);
+    expect((await status(row.id, 'computed')).status).toBe(200);
+    expect(L.postDeduction(db, { deductionId: ded(loanId, 1, 2027).id }, S.SYS).ok).toBe(true);
+    const r = await status(row.id, 'hold');
+    expect([r.status, r.body.code]).toEqual([409, 'LOAN_POSTED_NO_HOLD']);
+    expect(S.salaryRow(db, c, 1, 2027, ALI).status).toBe('computed');
+    const reg = await api.request('GET', `/api/sales/salary-register?month=1&year=2027&company=${encodeURIComponent(ALI)}`, { as: 'hr1' });
+    expect(reg.body.data.rows.find((x) => x.employee_code === c).loan_posted).toBe(1);
+    expect((await status(row.id, 'reviewed')).status).toBe(200); // other moves unaffected
+  });
+
+  test('release refused while the held-move marker disagrees with the row; allowed after the re-run', async () => {
+    const c = code();
+    S.addRep(db, { code: c, company: ALI });
+    const loanId = S.salesLoan(db, { code: c, company: ALI });
+    S.setUpload(db, { month: 2, year: 2027, company: ALI, rows: [{ code: c, days: 31 }] });
+    S.setUpload(db, { month: M, year: Y, company: ALI, rows: [{ code: c, days: 31 }] });
+    await compute(M, Y, ALI);
+    const row = S.salaryRow(db, c, M, Y, ALI);
+    expect((await status(row.id, 'hold')).status).toBe(200);
+    const insNov = db.prepare('SELECT * FROM loan_instalments WHERE loan_id = ? AND due_month = ? AND due_year = ?').get(loanId, M, Y);
+    expect(L.moveInstalmentToEnd(db, { instalmentId: insNov.id, reason: 'held' }, S.SYS).ok).toBe(true);
+    const r = await status(row.id, 'computed');
+    expect([r.status, r.body.code]).toEqual([409, 'LOAN_ROW_STALE']);
+    await compute(M, Y, ALI); // the re-run: Nov no longer carries this loan
+    expect(S.salaryRow(db, c, M, Y, ALI)).toMatchObject({ loan_recovery: 0, status: 'hold' });
+    expect((await status(row.id, 'computed')).status).toBe(200);
   });
 });

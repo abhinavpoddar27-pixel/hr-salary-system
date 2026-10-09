@@ -2427,9 +2427,11 @@ const {
   computeSalesEmployee,
   saveSalesSalaryComputation,
   generateSalesPayslipData,
+  salesNetWithLoanFloor,
 } = require('../services/salesSalaryComputation');
 const { deriveCycle } = require('../services/cycleUtil');
-const { clearSalesNotComputed } = require('../services/loans/stage7');
+const { clearSalesNotComputed, planStage7Loans, applyStage7Loans } = require('../services/loans/stage7');
+const { loanHoldReleaseCheck, salesPostedLoanPaise, salesLoanPostedCodes } = require('../services/loans/close');
 
 const {
   generateSalesExcel,
@@ -2848,6 +2850,10 @@ router.get('/salary-register', (req, res) => {
   const round2 = (n) => Math.round(n * 100) / 100;
   Object.keys(totals).forEach(k => totals[k] = round2(totals[k]));
 
+  // Loans PR-8 (K31): flag rows carrying a posted loan deduction — they cannot go to Hold.
+  const loanPosted = salesLoanPostedCodes(db, { month, year, company });
+  for (const r of rows) r.loan_posted = loanPosted.has(r.employee_code) ? 1 : 0;
+
   res.json({ success: true, data: { rows, totals, count: rows.length } });
 });
 
@@ -2891,28 +2897,54 @@ router.put('/salary/:id', (req, res) => {
   const incentive   = updates.incentive_amount ?? existing.incentive_amount ?? 0;
   const diwaliBonus = updates.diwali_bonus     ?? existing.diwali_bonus     ?? 0;
   const otherDed    = updates.other_deductions ?? existing.other_deductions ?? 0;
-
-  // Rebuild total_deductions from the non-editable components + other_deductions.
-  // (diwali_recovery is 0 per Q5 reversal — not in the sum.)
-  const fixedDeductions =
-    (existing.pf_employee || 0) + (existing.esi_employee || 0) +
-    (existing.professional_tax || 0) + (existing.tds || 0) +
-    (existing.advance_recovery || 0) + (existing.loan_recovery || 0);
-  const newTotalDed = Math.round((fixedDeductions + otherDed) * 100) / 100;
-  const newNetSalary = Math.round(((existing.gross_earned || 0) + diwaliBonus + incentive - newTotalDed) * 100) / 100;
+  // Loans PR-8 (K30): a money edit re-runs the loan engine — the loan is the LAST
+  // deduction and takes only the headroom left after the edited figures.
+  const moneyChanged = ['incentive_amount', 'diwali_bonus', 'other_deductions'].some((k) => updates[k] !== undefined);
+  let newTotalDed;
+  let newNetSalary;
+  let loanRecovery = existing.loan_recovery || 0;
 
   const perTxn = db.transaction(() => {
+    let loanPlan = null;
+    if (moneyChanged) {
+      loanPlan = planStage7Loans(db, {
+        employeeCode: existing.employee_code, month: existing.month, year: existing.year, payroll: 'sales', company: existing.company,
+        salary: {
+          gross_earned: existing.gross_earned, pf_employee: existing.pf_employee, esi_employee: existing.esi_employee,
+          professional_tax: existing.professional_tax, tds: existing.tds, advance_recovery: existing.advance_recovery,
+          diwali_recovery: 0, other_deductions: otherDed,
+        },
+      });
+      if (!loanPlan.skipped) loanRecovery = loanPlan.totalRupees;
+    }
+    // Rebuild total_deductions from the non-editable components + loan + other_deductions.
+    // (diwali_recovery is 0 per Q5 reversal — not in the sum.)
+    const fixedDeductions =
+      (existing.pf_employee || 0) + (existing.esi_employee || 0) +
+      (existing.professional_tax || 0) + (existing.tds || 0) +
+      (existing.advance_recovery || 0) + loanRecovery;
+    newTotalDed = Math.round((fixedDeductions + otherDed) * 100) / 100;
+    newNetSalary = salesNetWithLoanFloor((existing.gross_earned || 0) + diwaliBonus + incentive - newTotalDed, loanRecovery);
+
     const sets = [];
     const params = [];
     for (const [k, v] of Object.entries(updates)) {
       sets.push(`${k} = ?`);
       params.push(v);
     }
+    if (moneyChanged) { sets.push('loan_recovery = ?'); params.push(loanRecovery); }
     sets.push('total_deductions = ?'); params.push(newTotalDed);
     sets.push('net_salary = ?');       params.push(newNetSalary);
     params.push(id);
 
     db.prepare(`UPDATE sales_salary_computations SET ${sets.join(', ')} WHERE id = ?`).run(...params);
+    if (loanPlan) {
+      // Throws on a ledger refusal → the whole edit rolls back (payslip = ledger).
+      applyStage7Loans(db, {
+        employeeCode: existing.employee_code, month: existing.month, year: existing.year, payroll: 'sales',
+        company: existing.company, plan: loanPlan, runId: `sales-edit-${id}-${new Date().toISOString()}`,
+      });
+    }
 
     writeAuditP2(db, 'sales_salary_computations', {
       recordId: id, field: Object.keys(updates).join(','),
@@ -2924,10 +2956,16 @@ router.put('/salary/:id', (req, res) => {
       }),
       newVal: JSON.stringify(updates),
       user, actionType: 'manual_override', empCode: existing.employee_code,
-      remark: `HR override: net ${existing.net_salary} → ${newNetSalary}`,
+      remark: `HR override: net ${existing.net_salary} → ${newNetSalary}`
+        + (moneyChanged && loanRecovery !== (existing.loan_recovery || 0) ? `; loan ${existing.loan_recovery || 0} → ${loanRecovery} (re-planned within headroom)` : ''),
     });
   });
-  perTxn();
+  try {
+    perTxn();
+  } catch (e) {
+    console.error(`[sales/salary/${id}] edit failed: ${e.message}`);
+    return res.status(500).json({ success: false, error: `Edit not saved: ${e.message}` });
+  }
 
   const updated = db.prepare('SELECT * FROM sales_salary_computations WHERE id = ?').get(id);
   res.json({ success: true, data: updated });
@@ -2958,6 +2996,24 @@ router.put('/salary/:id/status', (req, res) => {
       success: false,
       error: `Invalid transition: ${existing.status} → ${next}. Allowed from ${existing.status}: ${allowed.join(', ') || '(terminal)'}`,
     });
+  }
+
+  // Loans PR-8 (K31): a row whose loan deduction is posted (balance already moved)
+  // cannot be held — the payslip and the loan ledger would disagree.
+  if (next === 'hold' && existing.status !== 'hold') {
+    const posted = salesPostedLoanPaise(db, { employeeCode: existing.employee_code, month: existing.month, year: existing.year, company: existing.company });
+    if (posted > 0) {
+      return res.status(409).json({
+        success: false, code: 'LOAN_POSTED_NO_HOLD',
+        error: `Cannot hold: this row carries a loan EMI of ₹${(posted / 100).toFixed(2)} already posted at the loan close. Pay the salary, or ask the admin to reverse the posted deduction first.`,
+      });
+    }
+  }
+  // Loans PR-8 (K28): releasing a hold whose instalment moved to the end (held
+  // past the wait) is refused until this employee is recomputed.
+  if (existing.status === 'hold' && next !== 'hold') {
+    const g = loanHoldReleaseCheck(db, existing.employee_code, existing.month, existing.year, { payroll: 'sales', company: existing.company });
+    if (!g.ok) return res.status(409).json({ success: false, code: g.code, error: g.message });
   }
 
   // Phase 4 guardrail: cannot flip to paid until the NEFT file has been

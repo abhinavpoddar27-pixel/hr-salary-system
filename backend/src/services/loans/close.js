@@ -576,7 +576,32 @@ function loanHoldReleaseCheck(db, employeeCode, month, year, { payroll = 'plant'
   }
 }
 
+/**
+ * Sales (Loans PR-8, K31): effective posted loan deductions (paise) of one sales
+ * salary row — code + month + company. > 0 means the row may not move to Hold.
+ * 0 before the loan tables exist.
+ */
+function salesPostedLoanPaise(db, { employeeCode, month, year, company }) {
+  if (!loansReady(db)) return 0;
+  return db.prepare(`SELECT * FROM loan_deductions WHERE payroll = 'sales' AND state = 'posted'
+                       AND employee_code = ? AND month = ? AND year = ? AND company = ?`)
+    .all(String(employeeCode), Number(month), Number(year), String(company || '').trim())
+    .reduce((s, d) => s + effectivePostedPaise(db, d), 0);
+}
+
+/** Sales register (Loans PR-8): codes of a company-month whose row carries a posted loan deduction. */
+function salesLoanPostedCodes(db, { month, year, company }) {
+  if (!loansReady(db)) return new Set();
+  const out = new Set();
+  for (const d of db.prepare(`SELECT * FROM loan_deductions WHERE payroll = 'sales' AND state = 'posted' AND month = ? AND year = ? AND company = ?`)
+    .all(Number(month), Number(year), String(company || '').trim())) {
+    if (effectivePostedPaise(db, d) > 0) out.add(d.employee_code);
+  }
+  return out;
+}
+
 module.exports = {
+  salesPostedLoanPaise, salesLoanPostedCodes,
   dueCloseMonth, istToday, isNeeded, neededUnclosedMonths, checkPayslipLedger, closeReadiness, previewClose,
   runLoanClose, runHeldSweep, runCatchUp, runDailyLoanJobs, reverseDeduction, loanHoldReleaseCheck,
   CLOSE_ACTOR: SYSTEM,
