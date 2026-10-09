@@ -1,3 +1,28 @@
+## Last Session — 2026-10-09 (Loans PR-1)
+**Loans PR-1: loan schema rebuild + Mark Left. Branch `feat/loans-pr1`, NOT merged.** Spec: `docs/loans/SPEC.md` §6.
+- **schema.js:** old `loans`/`loan_repayments` CREATEs removed from the base block. One guarded block before
+  "schema initialized" creates `loans`, `loan_instalments`, `loan_deductions`, `loan_receipts`, `loan_closes`,
+  `loan_events` + 10 indexes; gated by `policy_config.migration_loans_schema_v2_done`. Old-shape tables are
+  dropped ONLY if both are empty (one txn, FK off/restored); a row in either → `REFUSING TO REBUILD`, no DDL,
+  flag unset, retries every boot. 16 `loan_*` policy keys (SPEC §4), INSERT OR IGNORE.
+- **`loan_repayments` is now a VIEW that always returns 0 rows** (old 13 columns). Old readers (Stage 7
+  `getLoanDeductions`, sales `getLoanRecovery`, loanService, loans.js, ai.js, portal) run and see ₹0; writes
+  fail. A future migration must `DROP VIEW`, not `DROP TABLE`. Readers move off it in PR-2/3/5/8 (ai.js,
+  schemaReference.js, sqlConsole snippet → PR-3).
+- **Ledger rules baked in:** `loan_events` append-only (2 triggers). Deduction `reversed` = a provisional row
+  superseded before the close only; a posted row is never edited, its correction is a new opposite entry
+  (PR-6). UNIQUE(loan, sequence), UNIQUE(loan, month, year, payroll) — no salary row id —, UNIQUE close per
+  month+year+payroll, UNIQUE receipt_no. States are CHECKed; `origin`/type/mode/event are free text.
+- **employees.js Mark Left:** no longer closes loans. Open plant loans (`borrower_type='plant'`): active →
+  `recover_at_exit`; requested/approved keep status; all get `exit_flag=1` + one `loan_events` + one audit row.
+  No balance/instalment moves. PR-7 owns the actual recovery.
+- **Fragile:** if the rebuild ever refuses (someone creates a loan through the OLD `POST /api/loans` before
+  deploy), Mark Left 500s for everyone (it queries `borrower_type`). Prod had 0/0 on 9 Oct; check right before merge.
+- **Verified:** suite 421 → 453 (3 clean runs); deploy simulation (origin/main schema → new code) rebuilds,
+  FK check 0, integrity ok; real Stage 7 with a live loan → loan_recovery 0, drift 0, component-short 0, totals
+  identical to a no-loan DB. **Not tested:** the refusal path on production; the old `POST /api/loans` create
+  now fails with a raw SQLite 400 until PR-3 (accepted); Mark Left still has no role guard (P4).
+
 ## Last Session — 2026-10-09 (Loans PR-0)
 **Loans PR-0: loan management build spec. Branch `docs/loans-spec`. Docs only, NOT merged.**
 Not the same as the leave-safety "PR-0" below: always write "Loans PR-n".
