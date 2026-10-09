@@ -362,6 +362,8 @@ app.listen(PORT, () => {
   try { require('./src/services/bugReportResurrect').resurrectStuckRows(); } catch (e) { console.error('Bug report resurrect init failed:', e.message); }
   // Start drift monitor (read-only invariant checks — env-gated; inert by default)
   try { require('./src/services/driftMonitor').registerCron(db); } catch (e) { console.error('Drift monitor init failed:', e.message); }
+  // Loans PR-6: daily loan close + held sweep, 00:45 UTC = 06:15 IST; also runs once now (catch-up). Empty ledger → writes nothing.
+  try { require('./src/services/loans/closeScheduler').startLoanCloseScheduler(db); } catch (e) { console.error('Loan close scheduler init failed:', e.message); }
 });
 
 module.exports = app;

@@ -177,7 +177,15 @@ function postDeduction(db, { deductionId, closeId = null }, actor) {
  * or `held` (still held the set days after close). A provisional deduction on it
  * is reversed and returned in staleDeductions (the salary row is then stale, K28).
  */
-function moveInstalmentToEnd(db, { instalmentId, reason }, actor) {
+/**
+ * reversal_reason of a provisional row reversed because its instalment, held
+ * past the wait, moved to the end. It is the loan-side "salary row stale"
+ * marker (Loans PR-6, K28): the salary row still shows the amount until Stage 7
+ * is re-run, and the hold-release guard reads it (close.js loanHoldReleaseCheck).
+ */
+const HELD_MOVE_REVERSAL_REASON = 'instalment moved to the end (held)';
+
+function moveInstalmentToEnd(db, { instalmentId, reason, note = null }, actor) {
   const gate = checkActor('post', actor);
   if (!gate.ok) return gate;
   if (!['no_salary', 'held'].includes(reason)) return fail('REASON_INVALID', 'reason must be no_salary or held');
@@ -190,16 +198,16 @@ function moveInstalmentToEnd(db, { instalmentId, reason }, actor) {
     const stale = [];
     if (ins.status === 'provisional') {
       for (const row of db.prepare("SELECT * FROM loan_deductions WHERE instalment_id = ? AND state = 'provisional'").all(ins.id)) {
-        reverseProvisionalRow(db, loan, row, gate.actor, `instalment moved to the end (${reason})`);
+        reverseProvisionalRow(db, loan, row, gate.actor, reason === 'held' ? HELD_MOVE_REVERSAL_REASON : `instalment moved to the end (${reason})`);
         stale.push({ deductionId: row.id, payroll: row.payroll, month: row.month, year: row.year, employeeCode: row.employee_code, company: row.company });
       }
     }
     const r = db.prepare("UPDATE loan_instalments SET status = 'deferred', updated_at = datetime('now') WHERE id = ? AND status IN ('scheduled','provisional')").run(ins.id);
     if (r.changes !== 1) return fail('CONCURRENT_CHANGE', 'the instalment changed underneath');
-    writeEvent(db, { loan, instalmentId: ins.id, event: 'moved_to_end', fromState: ins.status, toState: 'deferred', amountPaise: toPaise(ins.amount_due), actor: gate.actor, reason, field: 'instalment_status' });
+    writeEvent(db, { loan, instalmentId: ins.id, event: 'moved_to_end', fromState: ins.status, toState: 'deferred', amountPaise: toPaise(ins.amount_due), actor: gate.actor, reason: note ? `${reason}: ${note}` : reason, field: 'instalment_status' });
     const a = appendInstalment(db, loan, { amountPaise: toPaise(ins.amount_due), origin: reason, sourceInstalmentId: ins.id, actor: gate.actor, reason: `${ins.due_month}/${ins.due_year}` });
     return { ok: true, added: a.added, alerts: a.alert ? [a.alert] : [], staleDeductions: stale };
   });
 }
 
-module.exports = { recordProvisional, clearProvisional, postDeduction, moveInstalmentToEnd, getInstalment };
+module.exports = { recordProvisional, clearProvisional, postDeduction, moveInstalmentToEnd, getInstalment, HELD_MOVE_REVERSAL_REASON };

@@ -9,8 +9,11 @@
  *                    other deduction is known (the loan is LAST, D-12). Works out
  *                    the amount per live loan: min(due, headroom under the cap,
  *                    balance). A month already posted is frozen (K2): exactly the
- *                    posted amount, with any part the headroom can no longer
- *                    carry reported as an `unborne` alert for PR-6.
+ *                    effective posted amount (posted − opposite entries). If the
+ *                    headroom can no longer carry it (PR-6, owner ruling Q3), a
+ *                    live loan deducts only what fits and the plan asks apply to
+ *                    move the rest (`moveUnbornePaise`); a loan that is no longer
+ *                    live still deducts in full and finance is alerted.
  *  applyStage7Loans  Called by saveSalaryComputation AFTER the salary row is
  *                    written. recordProvisional per loan (keyed loan + month +
  *                    payroll — never the salary row id, so re-runs and reimports
@@ -19,7 +22,10 @@
  *                    what changed is written, so a re-run writes no events.
  *                    THROWS on any ledger refusal: the caller's per-employee
  *                    savepoint then rolls back the salary row with it, so the
- *                    payslip and the loan ledger never disagree.
+ *                    payslip and the loan ledger never disagree. The unborne
+ *                    part of a frozen month becomes an opposite entry here, in
+ *                    the same savepoint (adjustments.js), so payslip = ledger.
+ *                    K8: refuses if the employee-month has two salary rows.
  *  clearStage7Loans  An employee Stage 7 did not pay this run (excluded / zero
  *                    attendance): their provisional rows are reversed (K29).
  *  clearOrphanProvisional  Provisional rows for the month with no salary row at
@@ -34,6 +40,8 @@ const { readLoanPolicy } = require('./policy');
 const { earnedBase, priorDeductions, computeHeadroom, planLoanDeduction } = require('./headroom');
 const { LIVE_LOAN_STATES } = require('./states');
 const { recordProvisional, clearProvisional } = require('./ledger');
+const { effectivePostedPaise, writeAdjustment } = require('./adjustments');
+const { notifyAlerts } = require('./notify');
 
 const SYSTEM = Object.freeze({ username: 'system', role: 'system' });
 const LIVE_SQL = LIVE_LOAN_STATES.map((s) => `'${s}'`).join(',');
@@ -66,7 +74,14 @@ function planStage7Loans(db, { employeeCode, month, year, payroll = 'plant', sal
   }
   const loans = db.prepare(`SELECT * FROM loans WHERE employee_code = ? AND borrower_type = ? AND status IN (${LIVE_SQL}) ORDER BY id`)
     .all(String(employeeCode), payroll);
-  if (loans.length === 0) return empty();
+  // Posted months are read from the ledger whatever the loan's status now (Loans
+  // PR-6): the close that posts a last instalment completes the loan, and a
+  // later re-run of that month must still deduct exactly the posted amount.
+  const postedRows = db.prepare(`SELECT ld.*, l.status AS loan_status FROM loan_deductions ld JOIN loans l ON l.id = ld.loan_id
+                                  WHERE ld.employee_code = ? AND ld.month = ? AND ld.year = ? AND ld.payroll = ? AND ld.state = 'posted'
+                                    AND l.borrower_type = ? ORDER BY ld.loan_id`)
+    .all(String(employeeCode), month, year, payroll, payroll);
+  if (loans.length === 0 && postedRows.length === 0) return empty();
 
   const capPct = readLoanPolicy(db).deductionCapPct;
   const headroomPaise = computeHeadroom({
@@ -77,23 +92,30 @@ function planStage7Loans(db, { employeeCode, month, year, payroll = 'plant', sal
   const alerts = [];
 
   // 1. Months already posted at a loan close are frozen (K2): deduct exactly that.
-  const postedStmt = db.prepare("SELECT * FROM loan_deductions WHERE loan_id = ? AND month = ? AND year = ? AND payroll = ? AND state = 'posted'");
   const frozenIds = new Set();
-  for (const loan of loans) {
-    const posted = postedStmt.get(loan.id, month, year, payroll);
-    if (!posted) continue;
-    const p = planLoanDeduction({ duePaise: 0, headroomPaise: room, postedPaise: toPaise(posted.amount) });
-    frozenIds.add(loan.id);
-    items.push({ loanId: loan.id, instalmentId: posted.instalment_id, duePaise: p.deductPaise, amountPaise: p.deductPaise, shortfallPaise: 0, unbornePaise: p.unbornePaise, frozen: true });
+  for (const posted of postedRows) {
+    const effPaise = effectivePostedPaise(db, posted);
+    const live = LIVE_LOAN_STATES.includes(posted.loan_status);
+    const p = planLoanDeduction({ duePaise: 0, headroomPaise: room, postedPaise: effPaise });
+    // Live loan: deduct what still fits; the rest becomes an opposite entry in apply (ruling Q3).
+    const moveUnbornePaise = live ? p.unbornePaise : 0;
+    const amountPaise = p.deductPaise - moveUnbornePaise;
+    frozenIds.add(posted.loan_id);
+    items.push({
+      loanId: posted.loan_id, instalmentId: posted.instalment_id, deductionId: posted.id, duePaise: effPaise, amountPaise,
+      shortfallPaise: 0, unbornePaise: p.unbornePaise, moveUnbornePaise, frozen: true,
+    });
     if (p.unbornePaise > 0) {
       alerts.push({
-        type: 'loan_posted_unborne', severity: 'action_required', audience: 'finance',
-        loanId: loan.id, employeeCode: loan.employee_code, payroll, month, year,
-        postedAmount: toRupees(p.deductPaise), unborneAmount: toRupees(p.unbornePaise),
-        message: `Loan ${loan.id} (${loan.employee_code}) ${month}/${year}: posted ₹${toRupees(p.deductPaise)} no longer fits the cap by ₹${toRupees(p.unbornePaise)}; it is still deducted in full until the loan close moves the unborne part (PR-6).`,
+        type: live ? 'loan_posted_unborne_moved' : 'loan_posted_unborne', severity: 'action_required', audience: 'finance',
+        loanId: posted.loan_id, employeeCode: posted.employee_code, payroll, month, year,
+        postedAmount: toRupees(effPaise), unborneAmount: toRupees(p.unbornePaise), deductedAmount: toRupees(amountPaise),
+        message: live
+          ? `Loan ${posted.loan_id} (${posted.employee_code}) ${month}/${year}: posted ₹${toRupees(effPaise)} no longer fits the cap; ₹${toRupees(amountPaise)} is deducted and ₹${toRupees(p.unbornePaise)} moves to a new last instalment (opposite entry).`
+          : `Loan ${posted.loan_id} (${posted.employee_code}) ${month}/${year}: posted ₹${toRupees(effPaise)} no longer fits the cap by ₹${toRupees(p.unbornePaise)}; the loan is ${posted.loan_status}, so it is still deducted in full. Finance must review.`,
       });
     }
-    room = Math.max(0, room - p.deductPaise);
+    room = Math.max(0, room - amountPaise);
   }
 
   // 2. The instalment due this month, oldest loan first, inside what room is left.
@@ -125,10 +147,32 @@ function refuse(what, r) {
  */
 function applyStage7Loans(db, { employeeCode, month, year, payroll = 'plant', company, plan, runId = null }) {
   assertPayroll(payroll);
-  if (!plan || plan.skipped || !loansReady(db)) return { recorded: 0, cleared: 0 };
+  if (!plan || plan.skipped || !loansReady(db)) return { recorded: 0, cleared: 0, adjusted: 0 };
+  // K8 (Loans PR-6): the ledger holds one deduction per loan + month + payroll, so
+  // two salary rows for one employee-month would show the loan twice. The plant
+  // table is unique on (employee_code, month, year), so this cannot happen while
+  // that key exists; if it ever does, this employee fails in its savepoint.
+  if (plan.items.length > 0) {
+    const rows = db.prepare('SELECT COUNT(*) AS n FROM salary_computations WHERE employee_code = ? AND month = ? AND year = ?')
+      .get(String(employeeCode), month, year).n;
+    if (rows > 1) throw new Error(`loan step refused: LOAN_TWO_SALARY_ROWS — ${employeeCode} has ${rows} salary rows for ${month}/${year}; a loan is deducted once only (K8)`);
+  }
   let recorded = 0;
+  let adjusted = 0;
   for (const item of plan.items) {
-    if (item.frozen) continue; // posted: never rewritten (K2)
+    if (item.frozen) {
+      // posted: never rewritten (K2). The part pay can no longer bear → opposite entry.
+      if (item.moveUnbornePaise > 0) {
+        const a = writeAdjustment(db, {
+          deductionId: item.deductionId, kind: 'unborne', amountPaise: item.moveUnbornePaise,
+          reason: `Stage 7${runId ? ` ${runId}` : ''}: pay no longer bears ₹${toRupees(item.moveUnbornePaise)} of the posted ${month}/${year} amount`,
+        }, SYSTEM);
+        if (!a.ok) throw refuse(`opposite entry on loan ${item.loanId} ${month}/${year}`, a);
+        adjusted += 1;
+        plan.alerts.push(...a.alerts);
+      }
+      continue;
+    }
     const r = recordProvisional(db, {
       loanId: item.loanId, instalmentId: item.instalmentId, payroll, month, year, company,
       amount: toRupees(item.amountPaise), runId,
@@ -147,7 +191,10 @@ function applyStage7Loans(db, { employeeCode, month, year, payroll = 'plant', co
     if (!r.ok) throw refuse(`clearing loan ${s.loan_id} ${month}/${year}`, r);
     if (r.changed) cleared += 1;
   }
-  return { recorded, cleared };
+  // Finance is flagged (SPEC §5.2 r7) — both kinds of unborne alert, de-duplicated per
+  // day. Inside the savepoint: rolls back with the employee.
+  if (plan.alerts.length) notifyAlerts(db, plan.alerts);
+  return { recorded, cleared, adjusted };
 }
 
 /** Reverses every provisional row of one employee + month (Stage 7 did not pay them this run). */
@@ -182,4 +229,4 @@ function clearOrphanProvisional(db, { month, year, payroll = 'plant', reason }) 
   return { cleared: rows.length, rows: rows.map((r) => ({ loanId: r.loan_id, employeeCode: r.employee_code })) };
 }
 
-module.exports = { planStage7Loans, applyStage7Loans, clearStage7Loans, clearOrphanProvisional, STAGE7_ACTOR: SYSTEM };
+module.exports = { planStage7Loans, applyStage7Loans, clearStage7Loans, clearOrphanProvisional, loansReady, STAGE7_ACTOR: SYSTEM };

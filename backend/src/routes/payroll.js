@@ -540,6 +540,14 @@ router.put('/salary/:code/hold-release', requireFinanceOrAdmin, async (req, res)
     return res.status(400).json({ success: false, error: 'Salary is not currently held' });
   }
 
+  // Loans PR-6 (K28): a held month whose loan instalment moved to the end (held
+  // past the wait) still shows that loan on this salary row until Stage 7 is
+  // re-run for the employee. Refuse the release until then. No loan rows → no-op.
+  const loanStale = require('../services/loans/close').loanHoldReleaseCheck(db, code, month, year);
+  if (!loanStale.ok) {
+    return res.status(409).json({ success: false, code: loanStale.code, error: loanStale.message });
+  }
+
   // Phase 2b: write the audit row FIRST via protectedWrite. If the invariant
   // fires (duplicate release attempt for the same emp/month/year) or the
   // function throws, we exit BEFORE mutating salary_computations — no orphan

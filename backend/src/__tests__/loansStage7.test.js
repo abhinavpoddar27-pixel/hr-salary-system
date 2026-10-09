@@ -390,7 +390,7 @@ describe('employees Stage 7 no longer pays this month (K29)', () => {
 });
 
 describe('a month already posted is frozen (K2)', () => {
-  test('a re-run deducts exactly the posted amount and reports the unborne part; the ledger is untouched', () => {
+  test('a re-run whose pay still bears it deducts exactly the posted amount; the ledger is untouched', () => {
     const db = F.newDb();
     const { loanId, emp } = LF.activeLoan(db);
     worked(db, emp);
@@ -398,15 +398,122 @@ describe('a month already posted is frozen (K2)', () => {
     const p = L.postDeduction(db, { deductionId: deductions(db, loanId)[0].id }, SYS);
     expect(p.ok).toBe(true);
     const ledger = { d: deductions(db, loanId), i: LF.instalments(db, loanId), l: LF.loan(db, loanId), ev: eventCount(db) };
-    advance(db, emp.code, 7666.66);              // room now 1,000
+    advance(db, emp.code, 3000);                 // room now 5,666.66 — still bears ₹3,334
     const out = stage7(db, 'run-2');
     expect(salary(db, emp.code).loan_recovery).toBe(3334);
-    expect(out.loans.alerts).toEqual([expect.objectContaining({ type: 'loan_posted_unborne', loanId, postedAmount: 3334, unborneAmount: 2334, audience: 'finance' })]);
+    expect(out.loans.alerts).toEqual([]);
     expect(deductions(db, loanId)).toEqual(ledger.d);
     expect(LF.instalments(db, loanId)).toEqual(ledger.i);
     expect(LF.loan(db, loanId)).toEqual(ledger.l);
     expect(eventCount(db)).toBe(ledger.ev);
     expectClean(db);
+    db.close();
+  });
+
+  // Loans PR-6 (owner ruling Q3): the unborne part is no longer deducted in full and
+  // left for the close; it becomes an opposite entry in the same savepoint.
+  test('a re-run that can no longer bear it deducts what fits and moves the rest by an opposite entry; payslip = ledger', () => {
+    const db = F.newDb();
+    const { loanId, emp } = LF.activeLoan(db);
+    worked(db, emp);
+    stage7(db);
+    const p = L.postDeduction(db, { deductionId: deductions(db, loanId)[0].id }, SYS);
+    expect(p.ok).toBe(true);
+    const before = deductions(db, loanId);
+    advance(db, emp.code, 7666.66);              // room now 1,000
+    const out = stage7(db, 'run-2');
+    expect(salary(db, emp.code).loan_recovery).toBe(1000);
+    expect(out.loans.alerts).toEqual([expect.objectContaining({ type: 'loan_posted_unborne_moved', loanId, postedAmount: 3334, unborneAmount: 2334, deductedAmount: 1000, audience: 'finance' })]);
+    expect(deductions(db, loanId)).toEqual(before);                 // the posted row is never edited
+    const adj = db.prepare('SELECT * FROM loan_adjustments WHERE loan_id = ?').all(loanId);
+    expect(adj).toEqual([expect.objectContaining({ kind: 'unborne', amount: 2334, actor: 'system', deduction_id: before[0].id })]);
+    expect(LF.loan(db, loanId).remaining_balance).toBe(9000);       // 6,666 + 2,334
+    const added = LF.instalments(db, loanId).find((i) => i.id === adj[0].added_instalment_id);
+    expect(added).toMatchObject({ origin: 'shortfall', amount_due: 2334, status: 'scheduled' });
+    expect(L.effectivePostedPaise(db, before[0])).toBe(100000);
+    expect(L.reconcileLoan(db, loanId).problems).toEqual([]);
+    expect(db.prepare("SELECT COUNT(*) AS n FROM notifications WHERE type = 'LOAN_POSTED_UNBORNE_MOVED' AND role_target = 'finance'").get().n).toBe(1);
+    // idempotent: the same pay again writes nothing
+    const ev = eventCount(db);
+    const out3 = stage7(db, 'run-3');
+    expect(out3.loans.alerts).toEqual([]);
+    expect(salary(db, emp.code).loan_recovery).toBe(1000);
+    expect(eventCount(db)).toBe(ev);
+    expect(db.prepare('SELECT COUNT(*) AS n FROM loan_adjustments').get().n).toBe(1);
+    // more pay later never raises it back
+    db.prepare('DELETE FROM salary_advances WHERE employee_code = ?').run(emp.code);
+    stage7(db, 'run-4');
+    expect(salary(db, emp.code).loan_recovery).toBe(1000);
+    expectClean(db);
+    db.close();
+  });
+
+  test('a loan no longer live keeps the full posted amount and alerts finance (no ledger change)', () => {
+    const db = F.newDb();
+    const { loanId, emp } = LF.activeLoan(db, { principal: 3000, tenure: 1 });
+    worked(db, emp);
+    stage7(db);
+    L.postDeduction(db, { deductionId: deductions(db, loanId)[0].id }, SYS);
+    expect(LF.loan(db, loanId).status).toBe('completed');
+    advance(db, emp.code, 7666.66);              // room now 1,000
+    const out = stage7(db, 'run-2');
+    expect(salary(db, emp.code).loan_recovery).toBe(3000);
+    expect(out.loans.alerts).toEqual([expect.objectContaining({ type: 'loan_posted_unborne', unborneAmount: 2000 })]);
+    expect(db.prepare("SELECT COUNT(*) AS n FROM notifications WHERE type = 'LOAN_POSTED_UNBORNE' AND role_target = 'finance'").get().n).toBe(1);
+    expect(db.prepare('SELECT COUNT(*) AS n FROM loan_adjustments').get().n).toBe(0);
+    expect(L.reconcileLoan(db, loanId).problems).toEqual([]);
+    expectClean(db);
+    db.close();
+  });
+});
+
+describe('a posted month of a loan that is no longer live (Loans PR-6)', () => {
+  test('the close completes the loan; a later re-run of that month still deducts exactly the posted amount', () => {
+    const db = F.newDb();
+    const { loanId, emp } = LF.activeLoan(db, { principal: 3000, tenure: 1 });
+    worked(db, emp);
+    stage7(db);
+    const p = L.postDeduction(db, { deductionId: deductions(db, loanId)[0].id }, SYS);
+    expect(p.ok).toBe(true);
+    expect(LF.loan(db, loanId)).toMatchObject({ status: 'completed', remaining_balance: 0 });
+    const events = eventCount(db);
+    const out = stage7(db, 'run-2');
+    expect(out.errors).toEqual([]);
+    expect(salary(db, emp.code).loan_recovery).toBe(3000);   // was ₹0 before the fix: payslip ≠ ledger
+    expect(deductions(db, loanId)).toEqual([expect.objectContaining({ state: 'posted', amount: 3000 })]);
+    expect(eventCount(db)).toBe(events);
+    expect(L.reconcileLoan(db, loanId).ok).toBe(true);
+    expectClean(db);
+    db.close();
+  });
+});
+
+describe('K8: one employee-month, one loan deduction (Loans PR-6)', () => {
+  test('the plant salary table admits one row per employee-month, whatever the company', () => {
+    const db = F.newDb();
+    const { loanId, emp } = LF.activeLoan(db);
+    worked(db, emp);
+    stage7(db);
+    expect(() => db.prepare(`INSERT INTO salary_computations (employee_code, month, year, company) VALUES (?, ?, ?, ?)`)
+      .run(emp.code, M, Y, LF.OTHER_COMPANY)).toThrow(/UNIQUE/);
+    expect(deductions(db, loanId)).toHaveLength(1);
+    db.close();
+  });
+
+  test('if two salary rows ever exist, the loan step refuses and writes nothing', () => {
+    const db = F.newDb();
+    const { loanId, emp } = LF.activeLoan(db);
+    // A database that lost the unique key (hand-built): two rows, two companies.
+    db.exec('ALTER TABLE salary_computations RENAME TO salary_computations_real');
+    db.exec('CREATE TABLE salary_computations (employee_code TEXT, month INTEGER, year INTEGER, company TEXT, loan_recovery REAL)');
+    db.prepare('INSERT INTO salary_computations VALUES (?, ?, ?, ?, 3334)').run(emp.code, M, Y, LF.COMPANY);
+    db.prepare('INSERT INTO salary_computations VALUES (?, ?, ?, ?, 3334)').run(emp.code, M, Y, LF.OTHER_COMPANY);
+    const ins = LF.instalments(db, loanId)[0];
+    const plan = { items: [{ loanId, instalmentId: ins.id, amountPaise: 333400, frozen: false }], alerts: [] };
+    const { applyStage7Loans } = require('../services/loans/stage7');
+    expect(() => applyStage7Loans(db, { employeeCode: emp.code, month: M, year: Y, company: LF.COMPANY, plan, runId: 'k8' }))
+      .toThrow(/LOAN_TWO_SALARY_ROWS/);
+    expect(deductions(db, loanId)).toHaveLength(0);
     db.close();
   });
 });

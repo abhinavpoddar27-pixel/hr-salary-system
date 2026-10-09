@@ -3525,6 +3525,32 @@ If description and screenshot are incoherent or unrelated, set summary_confidenc
     CREATE UNIQUE INDEX IF NOT EXISTS uniq_loan_requests_one_pending ON loan_requests(loan_id) WHERE status = 'pending';
     CREATE INDEX IF NOT EXISTS idx_loan_requests_status ON loan_requests(status, requested_at);
 
+    -- Loans PR-6: opposite entries for a POSTED deduction (a posted row is
+    -- never edited). Effective posted = loan_deductions.amount − Σ amount here.
+    -- kind 'unborne' = the part a Stage 7 re-run can no longer bear; 'reversal'
+    -- = an admin reversal. Each returns its amount to the balance and the
+    -- schedule (added_instalment_id; NULL at the extension limit). Append-only.
+    CREATE TABLE IF NOT EXISTS loan_adjustments (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      loan_id INTEGER NOT NULL REFERENCES loans(id),
+      deduction_id INTEGER NOT NULL REFERENCES loan_deductions(id),
+      instalment_id INTEGER REFERENCES loan_instalments(id),
+      kind TEXT NOT NULL CHECK (kind IN ('unborne','reversal')),
+      amount REAL NOT NULL CHECK (amount > 0),
+      reason TEXT NOT NULL CHECK (length(trim(reason)) > 0),
+      actor TEXT NOT NULL,
+      added_instalment_id INTEGER REFERENCES loan_instalments(id),
+      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+    CREATE INDEX IF NOT EXISTS idx_loan_adjustments_deduction ON loan_adjustments(deduction_id);
+    CREATE INDEX IF NOT EXISTS idx_loan_adjustments_loan ON loan_adjustments(loan_id);
+    CREATE TRIGGER IF NOT EXISTS loan_adjustments_no_update
+      BEFORE UPDATE ON loan_adjustments
+      BEGIN SELECT RAISE(ABORT, 'loan_adjustments is append-only'); END;
+    CREATE TRIGGER IF NOT EXISTS loan_adjustments_no_delete
+      BEFORE DELETE ON loan_adjustments
+      BEGIN SELECT RAISE(ABORT, 'loan_adjustments is append-only'); END;
+
     CREATE INDEX IF NOT EXISTS idx_loans_employee ON loans(employee_code, borrower_type);
     CREATE INDEX IF NOT EXISTS idx_loans_status ON loans(status);
     CREATE INDEX IF NOT EXISTS idx_loans_company_status ON loans(company, status);

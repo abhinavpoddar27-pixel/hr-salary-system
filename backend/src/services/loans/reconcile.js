@@ -2,13 +2,22 @@
  * Loans engine — reconciliation, statement, TDS list (Loans PR-2,
  * docs/loans/SPEC.md §5.2 r13, K34, K35, D-7). Read-only.
  *
- *   disbursed − posted − receipts − written off = balance      (to the paisa)
+ *   disbursed − (posted − adjusted) − receipts − written off = balance   (to the paisa)
+ *   (adjusted = Σ loan_adjustments, the opposite entries of Loans PR-6)
  *   open instalments (scheduled + provisional) + uncovered = balance, uncovered ≥ 0
  *   Σ posted loan_deductions = Σ posted instalment amounts
  */
 const { toPaise, toRupees } = require('./money');
 const { monthIndex, fromIndex, dateToMonth, monthLabel } = require('./months');
 const { getLoan, getInstalments, openPaise } = require('./common');
+
+/** Opposite entries of one loan (Loans PR-6); [] before the table exists. */
+function adjustmentsOf(db, loanId) {
+  const t = db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'loan_adjustments'").get();
+  if (!t) return [];
+  return db.prepare(`SELECT a.amount, d.month, d.year FROM loan_adjustments a
+                       JOIN loan_deductions d ON d.id = a.deduction_id WHERE a.loan_id = ?`).all(loanId);
+}
 
 function sumPaise(rows, field) {
   return rows.reduce((s, r) => s + toPaise(r[field] || 0), 0);
@@ -23,18 +32,20 @@ function reconcileLoan(db, loanId) {
   const receipts = sumPaise(db.prepare('SELECT amount FROM loan_receipts WHERE loan_id = ?').all(loanId), 'amount');
   const writtenOff = toPaise(loan.written_off_amount || 0);
   const balance = toPaise(loan.remaining_balance || 0);
-  const expected = disbursed - posted - receipts - writtenOff;
+  const adjusted = sumPaise(adjustmentsOf(db, loanId), 'amount');
+  const expected = disbursed - (posted - adjusted) - receipts - writtenOff;
   const open = openPaise(instalments);
   const uncovered = balance - open;
   const deductionsPosted = sumPaise(db.prepare("SELECT amount FROM loan_deductions WHERE loan_id = ? AND state = 'posted'").all(loanId), 'amount');
   const problems = [];
-  if (expected !== balance) problems.push(`balance ₹${toRupees(balance)} ≠ disbursed − posted − receipts − written off = ₹${toRupees(expected)}`);
+  if (expected !== balance) problems.push(`balance ₹${toRupees(balance)} ≠ disbursed − (posted − adjusted) − receipts − written off = ₹${toRupees(expected)}`);
+  if (adjusted > posted) problems.push(`adjustments ₹${toRupees(adjusted)} exceed the posted total ₹${toRupees(posted)}`);
   if (uncovered < 0) problems.push(`open instalments ₹${toRupees(open)} exceed the balance ₹${toRupees(balance)}`);
   if (deductionsPosted !== posted) problems.push(`posted deductions ₹${toRupees(deductionsPosted)} ≠ posted instalments ₹${toRupees(posted)}`);
   if (balance === 0 && ['active', 'recover_at_exit'].includes(loan.status)) problems.push(`balance is ₹0 but the loan is still ${loan.status}`);
   return {
     ok: problems.length === 0, loanId, status: loan.status,
-    disbursed: toRupees(disbursed), posted: toRupees(posted), receipts: toRupees(receipts), writtenOff: toRupees(writtenOff),
+    disbursed: toRupees(disbursed), posted: toRupees(posted), adjusted: toRupees(adjusted), receipts: toRupees(receipts), writtenOff: toRupees(writtenOff),
     expectedBalance: toRupees(expected), balance: toRupees(balance),
     openInstalments: toRupees(open), uncovered: toRupees(Math.max(0, uncovered)),
     problems,
@@ -80,6 +91,10 @@ function loanStatement(db, loanId) {
   }
   for (const i of getInstalments(db, loanId).filter((x) => (x.status === 'posted' || x.status === 'deferred') && toPaise(x.posted_amount || 0) > 0)) {
     bucket({ month: i.due_month, year: i.due_year }).recovered += toPaise(i.posted_amount);
+  }
+  // An opposite entry lowers what was recovered in the deduction's own month.
+  for (const a of adjustmentsOf(db, loanId)) {
+    bucket({ month: a.month, year: a.year }).recovered -= toPaise(a.amount);
   }
   for (const r of db.prepare('SELECT amount, receipt_date FROM loan_receipts WHERE loan_id = ?').all(loanId)) {
     bucket(dateToMonth(r.receipt_date)).cash += toPaise(r.amount);
