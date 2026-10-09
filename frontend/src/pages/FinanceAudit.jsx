@@ -4,7 +4,8 @@ import { useSearchParams, useNavigate } from 'react-router-dom'
 import { getFinanceReport, submitDayCorrection, getCorrectionHistory, getCorrectionsSummary, getManualAttendanceFlags, verifyManualFlag,
   getSalaryManualFlags, approveManualFlag, bulkApproveFlags, getReadinessCheck, getVarianceReport, getStatutoryCrosscheck,
   getFinancePendingDeductions, reviewLateDeduction, bulkReviewLateDeductions, getLateComingDeductions,
-  getCompOffPending, getCompOffList, reviewCompOff, bulkReviewCompOff } from '../utils/api'
+  getCompOffPending, getCompOffList, reviewCompOff, bulkReviewCompOff,
+  getLeaveRequests, approveLeaveRequest, rejectLeaveRequest } from '../utils/api'
 import { useAppStore } from '../store/appStore'
 import DateSelector from '../components/common/DateSelector'
 import useDateSelector from '../hooks/useDateSelector'
@@ -1314,6 +1315,14 @@ export default function FinanceAudit() {
   })
   const pendingCompOffCount = (compOffPendingRes?.data?.data || []).length
 
+  // Stage 6 leave requests waiting for finance
+  const { data: leaveReqPendingRes } = useQuery({
+    queryKey: ['leave-requests', 'pending', month, year, selectedCompany],
+    queryFn: () => getLeaveRequests({ month, year, company: selectedCompany || undefined, status: 'pending' }),
+    retry: 0, staleTime: 30000
+  })
+  const pendingLeaveReqCount = leaveReqPendingRes?.data?.pending_count || 0
+
   const tabs = [
     { id: 'readiness', label: 'Readiness' },
     { id: 'interventions', label: 'Manual Interventions', badge: pendingFlagCount },
@@ -1324,6 +1333,7 @@ export default function FinanceAudit() {
     { id: 'late-coming', label: 'Late Coming', badge: pendingLateCount },
     { id: 'early-exit', label: 'Early Exit', badge: pendingEarlyExitCount },
     { id: 'comp-off', label: 'Comp Off / OD', badge: pendingCompOffCount },
+    { id: 'leave-requests', label: 'Leave Requests', badge: pendingLeaveReqCount },
     ...(isAdmin ? [{ id: 'corrections', label: 'Corrections Summary' }] : [])
   ]
 
@@ -1362,6 +1372,7 @@ export default function FinanceAudit() {
         {activeTab === 'late-coming' && <LateComingAuditTab />}
         {activeTab === 'early-exit' && <FinanceEarlyExitApprovals month={month} year={year} />}
         {activeTab === 'comp-off' && <CompOffAuditTab />}
+        {activeTab === 'leave-requests' && <LeaveRequestsTab month={month} year={year} />}
         {activeTab === 'corrections' && isAdmin && <CorrectionsSummaryTab />}
       </div>
     </ErrorBoundary>
@@ -1395,6 +1406,160 @@ function MiniStat({ label, value, sub, color = 'slate' }) {
 // ═══════════════════════════════════════════════════════════
 // COMP OFF / OD AUDIT TAB (Phase 4)
 // ═══════════════════════════════════════════════════════════
+// ═══════════════════════════════════════════════════════════
+// LEAVE REQUESTS TAB — raised by HR from Stage 6, decided here.
+// Approving runs the same correction finance used to apply directly: the
+// absent day becomes CL/EL/LWP, the balance is debited and Stage 6 is
+// requeued. Salary moves only when Stage 7 is computed again.
+// ═══════════════════════════════════════════════════════════
+function LeaveRequestsTab({ month, year }) {
+  // month/year come from the page's DateSelector as props: a second
+  // useDateSelector here kept its own first value and did not follow it.
+  const qc = useQueryClient()
+  const { selectedCompany } = useAppStore()
+  const [rejectFor, setRejectFor] = useState(null)
+  const [rejectReason, setRejectReason] = useState('')
+
+  const { data: res, isLoading } = useQuery({
+    queryKey: ['leave-requests', 'all', month, year, selectedCompany],
+    queryFn: () => getLeaveRequests({ month, year, company: selectedCompany || undefined, status: 'all' }),
+    retry: 0, staleTime: 15000
+  })
+  const rows = res?.data?.data || []
+  const pending = rows.filter(r => r.status === 'Pending Finance')
+  const decided = rows.filter(r => r.status !== 'Pending Finance')
+
+  const refresh = () => {
+    qc.invalidateQueries({ queryKey: ['leave-requests'] })
+    qc.invalidateQueries({ queryKey: ['readiness'] })
+  }
+  const approveMut = useMutation({
+    mutationFn: (id) => approveLeaveRequest(id),
+    onSuccess: (r) => { toast.success(`${r?.data?.message || 'Approved'}. Re-run Stage 7 to pay it.`, { duration: 6000 }); refresh() },
+    onError: (e) => { toast.error(e?.response?.data?.error || 'Could not approve'); refresh() }
+  })
+  const rejectMut = useMutation({
+    mutationFn: ({ id, reason }) => rejectLeaveRequest(id, reason),
+    onSuccess: () => { toast.success('Request rejected'); setRejectFor(null); setRejectReason(''); refresh() },
+    onError: (e) => { toast.error(e?.response?.data?.error || 'Could not reject'); refresh() }
+  })
+
+  const statusTone = {
+    Approved: 'bg-green-100 text-green-700',
+    Rejected: 'bg-red-100 text-red-700',
+    Cancelled: 'bg-slate-100 text-slate-500',
+  }
+
+  return (
+    <div className="space-y-4 pb-24">{/* room above the floating bottom-right buttons */}
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+        <div className="card p-3"><div className="text-xs text-slate-500">Waiting for you</div><div className="text-2xl font-bold text-amber-600">{pending.length}</div></div>
+        <div className="card p-3"><div className="text-xs text-slate-500">Approved</div><div className="text-2xl font-bold text-green-600">{decided.filter(r => r.status === 'Approved').length}</div></div>
+        <div className="card p-3"><div className="text-xs text-slate-500">Rejected</div><div className="text-2xl font-bold text-red-600">{decided.filter(r => r.status === 'Rejected').length}</div></div>
+        <div className="card p-3"><div className="text-xs text-slate-500">Withdrawn</div><div className="text-2xl font-bold text-slate-500">{decided.filter(r => r.status === 'Cancelled').length}</div></div>
+      </div>
+
+      <div className="card overflow-x-auto">
+        <div className="px-4 py-3 border-b border-slate-100">
+          <h3 className="font-semibold text-slate-700">Leave requests from Stage 6</h3>
+          <p className="text-xs text-slate-500">HR asked to mark these absent days as leave. Nothing changes until you approve. The person who raised a request cannot approve it.</p>
+        </div>
+        {isLoading ? (
+          <div className="p-6 text-sm text-slate-400">Loading…</div>
+        ) : pending.length === 0 ? (
+          <div className="p-6 text-sm text-slate-400">No leave requests waiting for {monthYearLabel(month, year)}.</div>
+        ) : (
+          <table className="table-compact w-full min-w-[900px]">
+            <thead>
+              <tr>
+                <th>Employee</th><th>Date</th><th>Type</th><th>Day now</th><th>Balance now</th><th>Reason</th><th>Raised by</th><th className="text-right">Action</th>
+              </tr>
+            </thead>
+            <tbody>
+              {pending.map(r => {
+                const short = r.leave_type !== 'LWP' && Number(r.current_balance ?? 0) < 1
+                const notAbsent = r.day_status && r.day_status !== 'A'
+                return (
+                  <tr key={r.id} data-testid={`leave-req-${r.id}`}>
+                    <td>
+                      <div className="font-medium text-sm">{r.employee_name || r.employee_code}</div>
+                      <div className="text-xs text-slate-400 font-mono">{r.employee_code} · {r.department || '—'}</div>
+                    </td>
+                    <td className="whitespace-nowrap">{r.date}</td>
+                    <td><span className="font-semibold">{r.leave_type}</span></td>
+                    <td className={clsx(notAbsent ? 'text-red-600 font-medium' : 'text-slate-600')}>{r.day_status || '—'}{notAbsent ? ' (no longer absent)' : ''}</td>
+                    <td className={clsx(short ? 'text-red-600 font-medium' : 'text-slate-700')}>{r.leave_type === 'LWP' ? '—' : (r.current_balance ?? 0)}{short ? ' (insufficient)' : ''}</td>
+                    <td className="max-w-[220px] text-xs text-slate-600">{r.reason}</td>
+                    <td className="text-xs text-slate-500 whitespace-nowrap">{r.requested_by}<br />{r.applied_at}</td>
+                    <td className="text-right whitespace-nowrap">
+                      <button
+                        onClick={() => approveMut.mutate(r.id)}
+                        disabled={!r.can_decide || approveMut.isPending || short || notAbsent}
+                        title={!r.can_decide ? 'You raised this request — someone else must approve it' : short ? 'Balance is insufficient' : notAbsent ? 'The day is no longer absent — reject it' : ''}
+                        className="text-xs px-2 py-1 rounded bg-green-600 text-white hover:bg-green-700 disabled:opacity-40 disabled:cursor-not-allowed mr-1"
+                      >Approve</button>
+                      <button
+                        onClick={() => { setRejectFor(r); setRejectReason('') }}
+                        disabled={!r.can_decide || rejectMut.isPending}
+                        title={!r.can_decide ? 'You raised this request — withdraw it from Stage 6 instead' : ''}
+                        className="text-xs px-2 py-1 rounded bg-red-50 text-red-700 border border-red-200 hover:bg-red-100 disabled:opacity-40 disabled:cursor-not-allowed"
+                      >Reject</button>
+                    </td>
+                  </tr>
+                )
+              })}
+            </tbody>
+          </table>
+        )}
+      </div>
+
+      {decided.length > 0 && (
+        <div className="card overflow-x-auto">
+          <div className="px-4 py-3 border-b border-slate-100"><h3 className="font-semibold text-slate-700">Decided this month</h3></div>
+          <table className="table-compact w-full min-w-[800px]">
+            <thead><tr><th>Employee</th><th>Date</th><th>Type</th><th>Outcome</th><th>Raised by</th><th>Decided by</th><th>Note</th></tr></thead>
+            <tbody>
+              {decided.map(r => (
+                <tr key={r.id}>
+                  <td><span className="font-medium text-sm">{r.employee_name || r.employee_code}</span> <span className="text-xs text-slate-400 font-mono">{r.employee_code}</span></td>
+                  <td>{r.date}</td>
+                  <td>{r.leave_type}</td>
+                  <td><span className={clsx('text-[11px] px-1.5 py-0.5 rounded', statusTone[r.status] || 'bg-slate-100')}>{r.status === 'Cancelled' ? 'Withdrawn' : r.status}</span></td>
+                  <td className="text-xs">{r.requested_by}</td>
+                  <td className="text-xs">{r.decided_by}<br /><span className="text-slate-400">{r.decided_at}</span></td>
+                  <td className="text-xs text-slate-600">{r.rejection_reason || ''}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      {rejectFor && (
+        <Modal open onClose={() => setRejectFor(null)} title={`Reject leave request: ${rejectFor.employee_code}`} size="sm">
+          <div className="p-4 space-y-3">
+            <div className="text-sm text-slate-600">{rejectFor.leave_type} on {rejectFor.date}, raised by {rejectFor.requested_by}. The day stays absent.</div>
+            <textarea
+              value={rejectReason}
+              onChange={e => setRejectReason(e.target.value)}
+              className="input w-full h-20"
+              placeholder="Why it is rejected (HR sees this)"
+            />
+            <div className="flex justify-end gap-2">
+              <button onClick={() => setRejectFor(null)} className="btn-ghost px-4 py-2 text-sm">Cancel</button>
+              <button
+                onClick={() => rejectMut.mutate({ id: rejectFor.id, reason: rejectReason })}
+                disabled={rejectReason.trim().length < 3 || rejectMut.isPending}
+                className="btn-primary px-4 py-2 text-sm bg-red-600 hover:bg-red-700 disabled:opacity-50"
+              >{rejectMut.isPending ? 'Rejecting…' : 'Confirm reject'}</button>
+            </div>
+          </div>
+        </Modal>
+      )}
+    </div>
+  )
+}
+
 function CompOffAuditTab() {
   const qc = useQueryClient()
   const { month, year } = useDateSelector({ mode: 'month', syncToStore: true })

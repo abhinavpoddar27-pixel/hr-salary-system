@@ -1,3 +1,26 @@
+## Last Session — 2026-10-10 (HR raises Stage 6 leave, finance approves)
+**Branch `feat/hr-leave-request-finance-approval`, NOT merged.** Built on PR #60 (merge #60 first). No schema change.
+- **Why:** the Stage 6 "Apply Leave" button showed for HR but `POST /finance-audit/corrections/apply-leave` was
+  finance/admin only → HR got 403. Owner: HR applies, finance approves.
+- **Flow:** HR call → `leave_applications` row, status **`'Pending Finance'`** (not `'Pending'`, so
+  `PUT /api/leaves/:id/approve` can never approve it), day stays `A`, no balance move, Stage 6 ignores it (reads
+  `'Approved'` only). Requester = `audit_log` row `action_type='leave_request_raised'`. Finance/admin call → unchanged
+  instant apply. New: `GET /finance-audit/leave-requests`, `POST /leave-requests/:id/{approve,reject,withdraw}`.
+  Approve runs the same transaction as the direct path (`executeLeaveCorrection`): attendance A→type (re-checked in the
+  UPDATE), app → Approved (`WHERE status='Pending Finance'`), floor-guarded debit, audit, Stage 6 requeued. Maker-checker
+  by username. Reject needs a reason. Withdraw = requester or admin. Pending days count against the balance at request
+  time. Readiness check warns `LEAVE_REQUESTS_PENDING`. Notifications to finance (raised) and HR (decided).
+- **UI:** Stage 6 modal says "goes to finance", button "Send to finance" for HR, "⏳ N with finance" row chip, withdraw in
+  the modal. Finance Audit → new **Leave Requests** tab (badge, approve/reject, decided-this-month table). Leave
+  Management colours `Pending Finance`. `getLeaveRequests` sends `no-cache` (server.js 5s GET cache hid a withdrawal).
+- **Fragile:** routes live at `/leave-requests`, NOT `/corrections/leave-requests` — `GET /corrections/:code` swallows it.
+  The tab takes month/year as props: a second `useDateSelector` inside a tab keeps its first month and ignores the page's
+  picker (LateComingAuditTab looks like it has this; unverified). Salary still moves only on a Stage 7 re-run.
+- **Verified:** suite 713 → 729 (37 suites); `leaveRequestApproval.test.js` 16 incl. Stage 6 ignores pending, +1 payable
+  after approval. Chromium, scratch DB, real logins hr → finance: request leaves day A/balance 10; approve → EL, EL 10→9,
+  payable 29→30; reject keeps A; Stage 7 T100 ₹26,000 vs control ₹25,133.34; withdraw clears the chip; 0 page errors, 0 4xx/5xx.
+- **Not tested:** Railway; two finance users racing one request (the `WHERE status` guard is the protection).
+
 ## Last Session — 2026-10-10 (Stage 6 leave window showed 0 balance)
 **Branch `fix/stage6-leave-balance-display`, NOT merged (PR #60).** Frontend only (`pages/DayCalculation.jsx`).
 - **Bug:** Stage 6 → "Apply Leave" window read `cl_balance`/`cl` from `GET /leaves/balances/:code`, which returns

@@ -15,7 +15,7 @@ const express = require('express');
 const router = express.Router();
 const { getDb, logAudit } = require('../database/db');
 const { safeTrigger, queueLeaveRecalc, checkAutoStage6, isMonthFinalized } = require('../services/leaveTriggers');
-const { requireFinanceOrAdmin } = require('../middleware/roles');
+const { requireFinanceOrAdmin, roleIn } = require('../middleware/roles');
 const { adjustLeaveBalance } = require('../services/leaveBalanceGuard');
 const { syncSalaryStructureFromEmployee } = require('./employees');
 
@@ -548,113 +548,233 @@ router.get('/corrections-summary', (req, res) => {
 });
 
 // ─────────────────────────────────────────────────────────
-// POST /api/finance-audit/corrections/apply-leave
-// Apply leave to an absent day (convert A → CL/EL/SL)
+// Leave on an absent day (A → CL / EL / LWP)
+//
+// Two paths, one write:
+//   • HR raises a REQUEST from Stage 6. It is stored as a leave application
+//     with status 'Pending Finance' and changes nothing else — the day stays
+//     absent, no balance moves, Stage 6 ignores it (it reads 'Approved' only).
+//   • Finance or admin APPROVES it (or applies directly). Only then does the
+//     correction run: attendance A → leave type, application → Approved,
+//     balance debited through the floor guard, audit row, Stage 6 requeued.
+//
+// 'Pending Finance' is deliberately not 'Pending': PUT /api/leaves/:id/approve
+// only approves 'Pending' rows, so HR cannot approve its own request from the
+// Leave Management screen. The requester is the audit_log row written when the
+// request is raised (action_type 'leave_request_raised'); it is what the
+// maker-checker check reads.
 // ─────────────────────────────────────────────────────────
-router.post('/corrections/apply-leave', requireFinanceOrAdmin, (req, res) => {
+const LEAVE_REQUEST_STATUS = 'Pending Finance';
+const LEAVE_TYPES = ['CL', 'EL', 'LWP'];
+
+function requireHrFinanceOrAdmin(req, res, next) {
+  if (roleIn(req, 'admin', 'hr', 'finance')) return next();
+  return res.status(403).json({ success: false, error: 'HR, finance or admin access required' });
+}
+
+function leaveRequestRequester(db, applicationId) {
+  return db.prepare(`
+    SELECT changed_by FROM audit_log
+    WHERE table_name = 'leave_applications' AND record_id = ? AND action_type = 'leave_request_raised'
+    ORDER BY id DESC LIMIT 1
+  `).get(applicationId)?.changed_by || null;
+}
+
+function notifySafe(roleTarget, type, message, link) {
   try {
-    const db = getDb();
-    const { employee_code, date, leave_type, month, year, reason,
-      allow_negative: allowNegative, negative_reason: negativeReason } = req.body;
-    const username = req.user?.username || 'Unknown';
+    require('../services/monthEndScheduler').createNotification(roleTarget, type, message, link);
+  } catch (e) { /* a notification must never fail the request */ }
+}
 
-    if (!employee_code || !date || !leave_type || !month || !year || !reason) {
-      return res.status(400).json({ success: false, error: 'Missing required fields: employee_code, date, leave_type, month, year, reason' });
-    }
-    if (!String(reason).trim()) {
-      return res.status(400).json({ success: false, error: 'A reason is required' });
-    }
+/**
+ * Shared validation for a one-day leave correction. Returns { error, status }
+ * or { emp, m, y, attendanceRecord }.
+ */
+function validateLeaveCorrection(db, { employee_code, date, leave_type, month, year, reason }) {
+  if (!employee_code || !date || !leave_type || !month || !year || !reason) {
+    return { status: 400, error: 'Missing required fields: employee_code, date, leave_type, month, year, reason' };
+  }
+  if (!String(reason).trim()) return { status: 400, error: 'A reason is required' };
+  if (!LEAVE_TYPES.includes(leave_type)) {
+    return { status: 400, error: 'Invalid leave_type. Must be CL or EL. SL is no longer supported.' };
+  }
+  const m = parseInt(month);
+  const y = parseInt(year);
 
-    const validLeaveTypes = ['CL', 'EL', 'LWP'];
-    if (!validLeaveTypes.includes(leave_type)) {
-      return res.status(400).json({ success: false, error: 'Invalid leave_type. Must be CL or EL. SL is no longer supported.' });
-    }
+  const emp = db.prepare('SELECT id, name, company FROM employees WHERE code = ?').get(employee_code);
+  if (!emp) return { status: 404, error: 'Employee not found' };
 
-    const m = parseInt(month);
-    const y = parseInt(year);
+  // Finalized months are closed. A correction that would move one is refused
+  // rather than silently changing a month payroll has already paid.
+  if (isMonthFinalized(db, emp.company, m, y)) {
+    return { status: 400, error: `Cannot apply leave for a finalized month (${m}/${y}). Raise it with payroll instead.` };
+  }
 
-    const emp = db.prepare('SELECT id, name, company FROM employees WHERE code = ?').get(employee_code);
-    if (!emp) return res.status(404).json({ success: false, error: 'Employee not found' });
+  const attendanceRecord = db.prepare(
+    'SELECT id, status_final FROM attendance_processed WHERE employee_code = ? AND date = ? AND status_final = ?'
+  ).get(employee_code, date, 'A');
+  if (!attendanceRecord) {
+    return { status: 404, error: `No absent record found for ${employee_code} on ${date}` };
+  }
+  return { emp, m, y, attendanceRecord };
+}
 
-    // Finalized months are closed. A correction that would move one is refused
-    // here rather than silently changing a month payroll has already paid.
-    if (isMonthFinalized(db, emp.company, m, y)) {
-      return res.status(400).json({
-        success: false,
-        error: `Cannot apply leave for a finalized month (${m}/${y}). Raise it with payroll instead.`
-      });
-    }
+/**
+ * The correction itself, in one transaction. With `applicationId` it approves
+ * an existing 'Pending Finance' request; without it, it inserts an application
+ * already approved (finance/admin direct path — unchanged behaviour).
+ * Returns { ok:true, applicationId, newBalance } or { ok:false, floor } /
+ * { ok:false, gone:true } when the request was decided meanwhile.
+ */
+function executeLeaveCorrection(db, {
+  emp, employee_code, date, leave_type, reason, y, attendanceId,
+  username, role, allowNegative, negativeReason, applicationId = null, hrRemark,
+}) {
+  const currentBalance = Number(db.prepare(
+    'SELECT balance FROM leave_balances WHERE employee_id = ? AND year = ? AND leave_type = ?'
+  ).get(emp.id, y, leave_type)?.balance) || 0;
 
-    // Read for the response only. The floor itself is enforced inside the
-    // transaction below, by the UPDATE's own WHERE clause — see
-    // services/leaveBalanceGuard.js. Reading the balance out here and acting on
-    // it later is check-then-act, which is exactly how 23725 reached -5 EL
-    // through six one-day debits in four minutes.
-    const currentBalance = Number(db.prepare(
-      'SELECT balance FROM leave_balances WHERE employee_id = ? AND year = ? AND leave_type = ?'
-    ).get(emp.id, y, leave_type)?.balance) || 0;
+  let appId = applicationId;
+  let newBalance = currentBalance;
+  let floorRejection = null;
+  let gone = false;
+  const txn = db.transaction(() => {
+    // Re-checked inside the transaction: the day must still be absent.
+    const att = db.prepare(
+      'UPDATE attendance_processed SET status_final = ?, correction_source = ?, correction_remark = ? WHERE id = ? AND status_final = ?'
+    ).run(leave_type, 'leave_correction', `${reason} [by ${username}]`, attendanceId, 'A');
+    if (att.changes !== 1) { gone = true; throw new Error('LEAVE_DAY_NOT_ABSENT'); }
 
-    const attendanceRecord = db.prepare(
-      'SELECT id FROM attendance_processed WHERE employee_code = ? AND date = ? AND status_final = ?'
-    ).get(employee_code, date, 'A');
-    if (!attendanceRecord) {
-      return res.status(404).json({ success: false, error: `No absent record found for ${employee_code} on ${date}` });
-    }
-
-    // Everything below is one leave application, approved on the spot, plus the
-    // attendance correction it explains. day_calculations is NOT hand-patched
-    // any more — Stage 6 recomputes it from the application, so a later re-run
-    // can no longer put the day back to absent while the balance stays debited.
-    let applicationId;
-    let newBalance = currentBalance;
-    let floorRejection = null;
-    const applyLeave = db.transaction(() => {
-      db.prepare(
-        'UPDATE attendance_processed SET status_final = ?, correction_source = ?, correction_remark = ? WHERE id = ?'
-      ).run(leave_type, 'leave_correction', `${reason} [by ${username}]`, attendanceRecord.id);
-
-      applicationId = db.prepare(`
+    if (appId) {
+      const upd = db.prepare(`
+        UPDATE leave_applications SET status = 'Approved', approved_by = ?, approved_at = datetime('now')
+        WHERE id = ? AND status = ?
+      `).run(username, appId, LEAVE_REQUEST_STATUS);
+      if (upd.changes !== 1) { gone = true; throw new Error('LEAVE_REQUEST_ALREADY_DECIDED'); }
+    } else {
+      appId = db.prepare(`
         INSERT INTO leave_applications
           (employee_id, employee_code, leave_type, start_date, end_date, days, reason,
            hr_remark, status, approved_by, approved_at)
         VALUES (?, ?, ?, ?, ?, 1, ?, ?, 'Approved', ?, datetime('now'))
       `).run(emp.id, employee_code, leave_type, date, date,
-        reason, `Finance correction by ${username}`, username).lastInsertRowid;
+        reason, hrRemark || `Finance correction by ${username}`, username).lastInsertRowid;
+    }
 
+    if (leave_type !== 'LWP') {
+      // The floor lives in the UPDATE's WHERE clause (services/leaveBalanceGuard.js);
+      // below zero only for an admin who supplied a reason.
+      const moved = adjustLeaveBalance(db, {
+        employeeId: emp.id, employeeCode: employee_code, year: y,
+        leaveType: leave_type, delta: -1, usedDelta: 1, ensureRow: true,
+        allowNegative: Boolean(allowNegative),
+        reason: negativeReason || reason,
+        role, username,
+      });
+      if (!moved.ok) { floorRejection = moved; throw new Error('LEAVE_FLOOR_REJECTED'); }
+      newBalance = moved.newBalance;
+    }
+
+    db.prepare(`
+      INSERT INTO audit_log (table_name, record_id, field_name, old_value, new_value, changed_by, stage, remark, employee_code, action_type)
+      VALUES ('attendance_processed', ?, 'status', 'A', ?, ?, 'correction', ?, ?, 'leave_correction')
+    `).run(attendanceId, leave_type, username, reason, employee_code);
+  });
+  try {
+    txn();
+  } catch (e) {
+    if (floorRejection) return { ok: false, floor: floorRejection };
+    if (gone) return { ok: false, gone: true };
+    throw e;
+  }
+  return { ok: true, applicationId: appId, newBalance };
+}
+
+// ─────────────────────────────────────────────────────────
+// POST /api/finance-audit/corrections/apply-leave
+//   HR            → raises a request for finance (nothing changes yet)
+//   finance/admin → applies it at once (unchanged)
+// ─────────────────────────────────────────────────────────
+router.post('/corrections/apply-leave', requireHrFinanceOrAdmin, (req, res) => {
+  try {
+    const db = getDb();
+    const { employee_code, date, leave_type, reason,
+      allow_negative: allowNegative, negative_reason: negativeReason } = req.body;
+    const username = req.user?.username || 'Unknown';
+
+    const v = validateLeaveCorrection(db, req.body);
+    if (v.error) return res.status(v.status).json({ success: false, error: v.error });
+    const { emp, m, y, attendanceRecord } = v;
+
+    // ── HR: raise a request ───────────────────────────────
+    if (!roleIn(req, 'admin', 'finance')) {
+      const dup = db.prepare(`
+        SELECT id FROM leave_applications
+        WHERE employee_code = ? AND status = ? AND start_date <= ? AND end_date >= ?
+      `).get(employee_code, LEAVE_REQUEST_STATUS, date, date);
+      if (dup) {
+        return res.status(409).json({ success: false, error: `A request for ${employee_code} on ${date} is already waiting for finance`, request_id: dup.id });
+      }
+
+      // Early answer only — finance's approval is what enforces the floor. Days
+      // already requested and not yet decided count against the balance, so two
+      // requests cannot both be raised against one remaining day.
       if (leave_type !== 'LWP') {
-        // Was: an UPDATE with no predicate, and an INSERT that hard-coded
-        // balance = -1 when no row existed. Both now go through the guard,
-        // which carries the floor in SQL and can only write below zero for an
-        // admin who supplied a reason.
-        const moved = adjustLeaveBalance(db, {
-          employeeId: emp.id, employeeCode: employee_code, year: y,
-          leaveType: leave_type, delta: -1, usedDelta: 1, ensureRow: true,
-          allowNegative: Boolean(allowNegative),
-          reason: negativeReason || reason,
-          role: req.user?.role, username,
-        });
-        if (!moved.ok) { floorRejection = moved; throw new Error('LEAVE_FLOOR_REJECTED'); }
-        newBalance = moved.newBalance;
+        const balance = Number(db.prepare(
+          'SELECT balance FROM leave_balances WHERE employee_id = ? AND year = ? AND leave_type = ?'
+        ).get(emp.id, y, leave_type)?.balance) || 0;
+        const pending = Number(db.prepare(`
+          SELECT COALESCE(SUM(days), 0) d FROM leave_applications
+          WHERE employee_code = ? AND leave_type = ? AND status = ? AND substr(start_date, 1, 4) = ?
+        `).get(employee_code, leave_type, LEAVE_REQUEST_STATUS, String(y)).d) || 0;
+        const available = balance - pending;
+        if (available < 1) {
+          return res.status(400).json({
+            success: false,
+            error: `Cannot apply ${leave_type}: balance is ${balance}${pending ? ` with ${pending} day(s) already waiting for finance` : ''}. Use LWP, or credit the balance first.`
+          });
+        }
       }
 
-      db.prepare(`
-        INSERT INTO audit_log (table_name, record_id, field_name, old_value, new_value, changed_by, stage, remark, employee_code, action_type)
-        VALUES ('attendance_processed', ?, 'status', 'A', ?, ?, 'correction', ?, ?, 'leave_correction')
-      `).run(attendanceRecord.id, leave_type, username, reason, employee_code);
+      let requestId;
+      db.transaction(() => {
+        requestId = db.prepare(`
+          INSERT INTO leave_applications
+            (employee_id, employee_code, leave_type, start_date, end_date, days, reason, hr_remark, status)
+          VALUES (?, ?, ?, ?, ?, 1, ?, ?, ?)
+        `).run(emp.id, employee_code, leave_type, date, date, reason,
+          `Stage 6 request by ${username}`, LEAVE_REQUEST_STATUS).lastInsertRowid;
+        db.prepare(`
+          INSERT INTO audit_log (table_name, record_id, field_name, old_value, new_value, changed_by, stage, remark, employee_code, action_type)
+          VALUES ('leave_applications', ?, 'status', NULL, ?, ?, 'correction', ?, ?, 'leave_request_raised')
+        `).run(requestId, LEAVE_REQUEST_STATUS, username, `${leave_type} on ${date}: ${reason}`, employee_code);
+      })();
+
+      notifySafe('finance', 'LEAVE_REQUEST',
+        `Leave request #${requestId}: ${employee_code} ${leave_type} on ${date}, raised by ${username}`,
+        '/finance-audit?tab=leave-requests');
+
+      return res.json({
+        success: true,
+        pending: true,
+        request_id: requestId,
+        message: `Sent to finance for approval: ${employee_code} ${leave_type} on ${date}. The day stays absent until finance approves.`,
+      });
+    }
+
+    // ── Finance / admin: apply at once ────────────────────
+    const out = executeLeaveCorrection(db, {
+      emp, employee_code, date, leave_type, reason, y, attendanceId: attendanceRecord.id,
+      username, role: req.user?.role, allowNegative, negativeReason,
     });
-    try {
-      applyLeave();
-    } catch (e) {
-      // The floor declined, so the whole correction rolled back — the
-      // attendance row and the leave application go with it. Response shape and
-      // status code are unchanged from the pre-guard version.
-      if (floorRejection) {
-        return res.status(400).json({
-          success: false,
-          error: `Cannot apply ${leave_type}: balance is ${floorRejection.available}. Use LWP, or credit the balance first.`
-        });
-      }
-      throw e;
+    if (!out.ok && out.floor) {
+      return res.status(400).json({
+        success: false,
+        error: `Cannot apply ${leave_type}: balance is ${out.floor.available}. Use LWP, or credit the balance first.`
+      });
+    }
+    if (!out.ok) {
+      return res.status(409).json({ success: false, error: `${employee_code} on ${date} is no longer absent` });
     }
 
     // After the commit, and never able to fail the correction.
@@ -666,13 +786,199 @@ router.post('/corrections/apply-leave', requireFinanceOrAdmin, (req, res) => {
     res.json({
       success: true,
       message: `Leave applied: ${employee_code} on ${date} changed from Absent to ${leave_type}`,
-      application_id: applicationId,
-      new_balance: newBalance,
+      application_id: out.applicationId,
+      new_balance: out.newBalance,
       recalc
     });
   } catch (err) {
     console.error('Apply leave correction error:', err.message);
     res.status(500).json({ success: false, error: 'Failed to apply leave correction: ' + err.message });
+  }
+});
+
+// ─────────────────────────────────────────────────────────
+// GET /api/finance-audit/leave-requests
+//   ?month&year[&company][&status=pending|all][&employee_code]
+// Requests raised from Stage 6 (any outcome with status=all).
+// ─────────────────────────────────────────────────────────
+router.get('/leave-requests', requireHrFinanceOrAdmin, (req, res) => {
+  try {
+    const db = getDb();
+    const { month, year, company, status = 'pending', employee_code } = req.query;
+    const where = ["al.action_type = 'leave_request_raised'", "al.table_name = 'leave_applications'"];
+    const params = [];
+    if (month && year) {
+      where.push('la.start_date LIKE ?');
+      params.push(`${parseInt(year)}-${String(parseInt(month)).padStart(2, '0')}-%`);
+    } else if (year) {
+      where.push('la.start_date LIKE ?');
+      params.push(`${parseInt(year)}-%`);
+    }
+    if (company) { where.push('e.company = ?'); params.push(company); }
+    if (employee_code) { where.push('la.employee_code = ?'); params.push(employee_code); }
+    if (status !== 'all') { where.push('la.status = ?'); params.push(LEAVE_REQUEST_STATUS); }
+
+    const rows = db.prepare(`
+      SELECT la.id, la.employee_code, e.name AS employee_name, e.department, e.company,
+             la.leave_type, la.start_date AS date, la.days, la.reason, la.status,
+             la.applied_at, la.approved_by AS decided_by, la.approved_at AS decided_at,
+             la.rejection_reason, al.changed_by AS requested_by,
+             (SELECT balance FROM leave_balances lb
+               WHERE lb.employee_id = la.employee_id AND lb.leave_type = la.leave_type
+                 AND lb.year = CAST(substr(la.start_date, 1, 4) AS INTEGER)) AS current_balance,
+             (SELECT status_final FROM attendance_processed ap
+               WHERE ap.employee_code = la.employee_code AND ap.date = la.start_date) AS day_status
+      FROM audit_log al
+      JOIN leave_applications la ON la.id = al.record_id
+      LEFT JOIN employees e ON e.code = la.employee_code
+      WHERE ${where.join(' AND ')}
+      GROUP BY la.id
+      ORDER BY la.applied_at DESC, la.id DESC
+    `).all(...params).map(r => ({ ...r, can_decide: r.status === LEAVE_REQUEST_STATUS && r.requested_by !== req.user?.username }));
+
+    res.json({ success: true, data: rows, pending_count: rows.filter(r => r.status === LEAVE_REQUEST_STATUS).length });
+  } catch (err) {
+    console.error('Leave requests list error:', err.message);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+function loadPendingRequest(db, id) {
+  const app = db.prepare('SELECT * FROM leave_applications WHERE id = ?').get(parseInt(id));
+  if (!app) return { status: 404, error: 'Leave request not found' };
+  const requester = leaveRequestRequester(db, app.id);
+  if (!requester) return { status: 404, error: 'Not a Stage 6 leave request' };
+  if (app.status !== LEAVE_REQUEST_STATUS) {
+    return { status: 409, error: `This request is already ${String(app.status).toLowerCase()}` };
+  }
+  return { app, requester };
+}
+
+// ─────────────────────────────────────────────────────────
+// POST /api/finance-audit/leave-requests/:id/approve
+// ─────────────────────────────────────────────────────────
+router.post('/leave-requests/:id/approve', requireFinanceOrAdmin, (req, res) => {
+  try {
+    const db = getDb();
+    const username = req.user?.username || 'Unknown';
+    const r = loadPendingRequest(db, req.params.id);
+    if (r.error) return res.status(r.status).json({ success: false, error: r.error });
+    const { app, requester } = r;
+    if (requester === username) {
+      return res.status(403).json({ success: false, error: 'You raised this request. Another finance user or an admin must approve it.' });
+    }
+
+    const date = app.start_date;
+    const [yy, mm] = date.split('-').map(Number);
+    const v = validateLeaveCorrection(db, {
+      employee_code: app.employee_code, date, leave_type: app.leave_type, month: mm, year: yy, reason: app.reason || 'Stage 6 request',
+    });
+    if (v.error) {
+      // The day is no longer absent, or the month closed: finance rejects instead.
+      const status = v.status === 404 && /No absent record/.test(v.error) ? 409 : v.status;
+      return res.status(status).json({ success: false, error: `${v.error}. Reject this request instead.` });
+    }
+
+    const out = executeLeaveCorrection(db, {
+      emp: v.emp, employee_code: app.employee_code, date, leave_type: app.leave_type,
+      reason: app.reason || 'Stage 6 request', y: v.y, attendanceId: v.attendanceRecord.id,
+      username, role: req.user?.role,
+      allowNegative: req.body?.allow_negative, negativeReason: req.body?.negative_reason,
+      applicationId: app.id,
+    });
+    if (!out.ok && out.floor) {
+      return res.status(400).json({
+        success: false,
+        error: `Cannot approve: ${app.leave_type} balance is ${out.floor.available}. Reject it, or credit the balance first.`
+      });
+    }
+    if (!out.ok) {
+      return res.status(409).json({ success: false, error: 'This request was decided, or the day changed, while you were looking at it. Refresh.' });
+    }
+
+    try {
+      logAudit('leave_applications', app.id, 'status', LEAVE_REQUEST_STATUS, 'Approved', 'correction',
+        `Approved by ${username}${req.body?.remark ? `: ${String(req.body.remark).slice(0, 300)}` : ''} (raised by ${requester})`, username);
+    } catch (e) { /* audit failure must not undo the approval */ }
+
+    const recalc = safeTrigger('financeAudit.approveLeaveRequest', () => queueLeaveRecalc(db, {
+      company: v.emp.company || null, month: v.m, year: v.y,
+      employeeCodes: [app.employee_code], reason: 'leave_request_approved', actor: username,
+    }));
+    notifySafe('hr', 'LEAVE_REQUEST_APPROVED',
+      `Leave request #${app.id} approved: ${app.employee_code} ${app.leave_type} on ${date}. Re-run Stage 7 to pay it.`,
+      '/pipeline/day-calc');
+
+    res.json({
+      success: true,
+      message: `Approved: ${app.employee_code} ${app.leave_type} on ${date}`,
+      application_id: app.id, new_balance: out.newBalance, recalc,
+    });
+  } catch (err) {
+    console.error('Approve leave request error:', err.message);
+    res.status(500).json({ success: false, error: 'Failed to approve: ' + err.message });
+  }
+});
+
+// ─────────────────────────────────────────────────────────
+// POST /api/finance-audit/leave-requests/:id/reject   { reason }
+// ─────────────────────────────────────────────────────────
+router.post('/leave-requests/:id/reject', requireFinanceOrAdmin, (req, res) => {
+  try {
+    const db = getDb();
+    const username = req.user?.username || 'Unknown';
+    const reason = String(req.body?.reason || '').trim();
+    if (reason.length < 3) return res.status(400).json({ success: false, error: 'A rejection reason is required' });
+    const r = loadPendingRequest(db, req.params.id);
+    if (r.error) return res.status(r.status).json({ success: false, error: r.error });
+    const { app, requester } = r;
+
+    const upd = db.prepare(`
+      UPDATE leave_applications SET status = 'Rejected', approved_by = ?, approved_at = datetime('now'), rejection_reason = ?
+      WHERE id = ? AND status = ?
+    `).run(username, reason.slice(0, 500), app.id, LEAVE_REQUEST_STATUS);
+    if (upd.changes !== 1) return res.status(409).json({ success: false, error: 'This request was already decided. Refresh.' });
+
+    try {
+      logAudit('leave_applications', app.id, 'status', LEAVE_REQUEST_STATUS, 'Rejected', 'correction',
+        `Rejected by ${username}: ${reason.slice(0, 300)} (raised by ${requester})`, username);
+    } catch (e) { /* best effort */ }
+    notifySafe('hr', 'LEAVE_REQUEST_REJECTED',
+      `Leave request #${app.id} rejected: ${app.employee_code} ${app.leave_type} on ${app.start_date} — ${reason.slice(0, 120)}`,
+      '/pipeline/day-calc');
+
+    res.json({ success: true, message: 'Request rejected. The day stays absent.' });
+  } catch (err) {
+    console.error('Reject leave request error:', err.message);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// ─────────────────────────────────────────────────────────
+// POST /api/finance-audit/leave-requests/:id/withdraw
+// The HR user who raised it (or an admin), while it is still pending.
+// ─────────────────────────────────────────────────────────
+router.post('/leave-requests/:id/withdraw', requireHrFinanceOrAdmin, (req, res) => {
+  try {
+    const db = getDb();
+    const username = req.user?.username || 'Unknown';
+    const r = loadPendingRequest(db, req.params.id);
+    if (r.error) return res.status(r.status).json({ success: false, error: r.error });
+    if (r.requester !== username && !roleIn(req, 'admin')) {
+      return res.status(403).json({ success: false, error: 'Only the person who raised this request, or an admin, can withdraw it' });
+    }
+    const upd = db.prepare(`
+      UPDATE leave_applications SET status = 'Cancelled', approved_by = ?, approved_at = datetime('now')
+      WHERE id = ? AND status = ?
+    `).run(username, r.app.id, LEAVE_REQUEST_STATUS);
+    if (upd.changes !== 1) return res.status(409).json({ success: false, error: 'This request was already decided. Refresh.' });
+    try {
+      logAudit('leave_applications', r.app.id, 'status', LEAVE_REQUEST_STATUS, 'Cancelled', 'correction', `Withdrawn by ${username}`, username);
+    } catch (e) { /* best effort */ }
+    res.json({ success: true, message: 'Request withdrawn' });
+  } catch (err) {
+    console.error('Withdraw leave request error:', err.message);
+    res.status(500).json({ success: false, error: err.message });
   }
 });
 
@@ -1273,6 +1579,25 @@ router.get('/readiness-check', (req, res) => {
       });
     } else {
       passed.push({ type: 'LATE_DEDUCTIONS_REVIEWED', severity: 'OK' });
+    }
+  } catch {}
+
+  // WARNING: leave requests raised from Stage 6 still waiting for finance.
+  // Until decided the day stays absent, so finalising pays it as LOP.
+  try {
+    const pendingLeave = db.prepare(`
+      SELECT COUNT(*) as cnt FROM leave_applications
+      WHERE status = ? AND start_date LIKE ?
+    `).get(LEAVE_REQUEST_STATUS, `${parseInt(year)}-${String(parseInt(month)).padStart(2, '0')}-%`);
+    if (pendingLeave.cnt > 0) {
+      warnings.push({
+        type: 'LEAVE_REQUESTS_PENDING',
+        count: pendingLeave.cnt,
+        severity: 'WARNING',
+        detail: `${pendingLeave.cnt} leave request(s) from Stage 6 awaiting finance approval (Finance Audit → Leave Requests)`
+      });
+    } else {
+      passed.push({ type: 'LEAVE_REQUESTS_REVIEWED', severity: 'OK' });
     }
   } catch {}
 

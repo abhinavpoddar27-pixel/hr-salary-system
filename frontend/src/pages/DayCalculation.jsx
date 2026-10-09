@@ -1,7 +1,8 @@
 import React, { useState, useMemo } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import toast from 'react-hot-toast'
-import api, { getDayCalculations, calculateDays, getEmployeeDailyAttendance, applyLeaveCorrection, getEmployeeLeaveBalance, getDayCalcStaleness } from '../utils/api'
+import api, { getDayCalculations, calculateDays, getEmployeeDailyAttendance, applyLeaveCorrection, getEmployeeLeaveBalance, getDayCalcStaleness, getLeaveRequests, withdrawLeaveRequest } from '../utils/api'
+import { normalizeRole } from '../utils/role'
 import Modal from '../components/ui/Modal'
 import { useAppStore } from '../store/appStore'
 import CompanyFilter from '../components/shared/CompanyFilter'
@@ -32,7 +33,11 @@ function DaySummaryBox({ label, value, color = 'slate', subtext }) {
 
 export default function DayCalculation() {
   const { month, year, dateProps } = useDateSelector({ mode: 'month', syncToStore: true })
-  const { selectedCompany } = useAppStore()
+  const { selectedCompany, user } = useAppStore()
+  // HR raises a leave request that finance approves; finance and admin apply
+  // directly (POST /finance-audit/corrections/apply-leave decides by role).
+  const role = normalizeRole(user?.role)
+  const canApplyDirect = role === 'admin' || role === 'finance'
   const queryClient = useQueryClient()
   const [expandedRow, setExpandedRow] = useState(null)
   const [search, setSearch] = useState('')
@@ -159,10 +164,35 @@ export default function DayCalculation() {
     EL: Number(leaveBalanceRaw.EL ?? 0),
   }
 
+  // Requests raised from this screen and still waiting for finance, per employee.
+  const { data: leaveReqRes } = useQuery({
+    queryKey: ['leave-requests', 'pending', month, year, selectedCompany],
+    queryFn: () => getLeaveRequests({ month, year, company: selectedCompany || undefined, status: 'pending' }),
+    retry: 0,
+    staleTime: 30000,
+    refetchInterval: 60000
+  })
+  const pendingByCode = useMemo(() => {
+    const map = {}
+    for (const r of leaveReqRes?.data?.data || []) (map[r.employee_code] ||= []).push(r)
+    return map
+  }, [leaveReqRes])
+
+  const withdrawMutation = useMutation({
+    mutationFn: (id) => withdrawLeaveRequest(id),
+    onSuccess: () => {
+      toast.success('Request withdrawn')
+      queryClient.invalidateQueries({ queryKey: ['leave-requests'] })
+    },
+    onError: (err) => toast.error(err.response?.data?.error || 'Could not withdraw')
+  })
+
   const leaveCorrectionMutation = useMutation({
     mutationFn: (data) => applyLeaveCorrection(data),
     onSuccess: (res) => {
-      toast.success(res?.data?.message || 'Leave correction applied')
+      if (res?.data?.pending) toast.success(res.data.message || 'Sent to finance for approval', { duration: 6000 })
+      else toast.success(res?.data?.message || 'Leave correction applied')
+      queryClient.invalidateQueries({ queryKey: ['leave-requests'] })
       setLeaveModal(null)
       setLeaveForm({ leave_type: 'CL', date: '', reason: '' })
       queryClient.invalidateQueries({ queryKey: ['day-calculations'] })
@@ -416,6 +446,14 @@ export default function DayCalculation() {
                                   Apply Leave
                                 </button>
                               )}
+                              {pendingByCode[r.employee_code]?.length > 0 && (
+                                <span
+                                  className="text-[10px] px-1.5 py-0.5 rounded bg-amber-100 text-amber-800 whitespace-nowrap"
+                                  title={pendingByCode[r.employee_code].map(p => `${p.leave_type} on ${p.date} — raised by ${p.requested_by}`).join('\n')}
+                                >
+                                  ⏳ {pendingByCode[r.employee_code].length} with finance
+                                </span>
+                              )}
                             </div>
                           </td>
                           <td className={clsx('font-medium', (r.late_count || 0) >= 5 ? 'text-red-600' : (r.late_count || 0) > 0 ? 'text-amber-600' : 'text-slate-400')}>
@@ -581,6 +619,34 @@ export default function DayCalculation() {
               )}
             </div>
 
+            {/* HR path: the request waits for finance. */}
+            {!canApplyDirect && (
+              <div className="bg-amber-50 border border-amber-200 rounded-lg p-2 text-xs text-amber-800">
+                This goes to finance for approval. The day stays absent, and no balance moves,
+                until finance approves it in Finance Audit → Leave Requests.
+              </div>
+            )}
+
+            {(pendingByCode[leaveModal.code] || []).length > 0 && (
+              <div className="border border-amber-200 rounded-lg p-2">
+                <div className="text-[10px] font-bold text-amber-700 uppercase mb-1">Waiting for finance</div>
+                {pendingByCode[leaveModal.code].map(p => (
+                  <div key={p.id} className="flex items-center justify-between text-xs py-0.5">
+                    <span>{p.leave_type} on {p.date} <span className="text-slate-400">— {p.requested_by}</span></span>
+                    {(p.requested_by === user?.username || role === 'admin') && (
+                      <button
+                        onClick={() => withdrawMutation.mutate(p.id)}
+                        disabled={withdrawMutation.isPending}
+                        className="text-[10px] px-1.5 py-0.5 rounded bg-slate-100 hover:bg-slate-200 text-slate-600"
+                      >
+                        Withdraw
+                      </button>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
+
             {/* Warning for zero balance */}
             {!balanceLoading && leaveForm.leave_type !== 'LWP' && (() => {
               const bal = leaveForm.leave_type === 'CL'
@@ -641,8 +707,9 @@ export default function DayCalculation() {
             </div>
 
             <p className="text-[11px] text-slate-500">
-              This creates an approved leave application. Day calculation picks it up from there, so the
-              day stays correct on any later re-run.
+              {canApplyDirect
+                ? 'This creates an approved leave application. Day calculation picks it up from there, so the day stays correct on any later re-run.'
+                : 'Once finance approves, the leave application becomes approved and day calculation picks it up. Salary changes after Stage 7 is computed again.'}
             </p>
 
             {/* Actions */}
@@ -653,7 +720,9 @@ export default function DayCalculation() {
                 disabled={leaveCorrectionMutation.isPending || !leaveForm.reason.trim()}
                 className="btn-primary px-4 py-2 text-sm disabled:opacity-50 disabled:cursor-not-allowed"
               >
-                {leaveCorrectionMutation.isPending ? 'Applying...' : 'Apply Leave'}
+                {leaveCorrectionMutation.isPending
+                  ? (canApplyDirect ? 'Applying...' : 'Sending...')
+                  : (canApplyDirect ? 'Apply Leave' : 'Send to finance')}
               </button>
             </div>
           </div>

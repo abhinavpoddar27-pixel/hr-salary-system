@@ -36,6 +36,7 @@ function startApi(mounts, { role = 'admin', username = 'tester', employeeCode = 
       ...current,
       ...(req.headers['x-test-role'] ? { role: req.headers['x-test-role'] } : {}),
       ...(req.headers['x-test-employee-code'] ? { employee_code: req.headers['x-test-employee-code'] } : {}),
+      ...(req.headers['x-test-username'] ? { username: req.headers['x-test-username'] } : {}),
     };
     req.requestId = 'test';
     next();
@@ -47,7 +48,7 @@ function startApi(mounts, { role = 'admin', username = 'tester', employeeCode = 
   const db = (() => { const l = console.log; console.log = () => {}; try { return getDb(); } finally { console.log = l; } })();
   const server = app.listen(0);
 
-  const request = (method, url, { body = null, role: asRole = null, raw = false, employeeCode: asEmp = null } = {}) => new Promise((resolve, reject) => {
+  const request = (method, url, { body = null, role: asRole = null, raw = false, employeeCode: asEmp = null, username: asUser = null } = {}) => new Promise((resolve, reject) => {
     const payload = body === null ? null : Buffer.from(JSON.stringify(body));
     const req = http.request({
       host: '127.0.0.1', port: server.address().port, method, path: url,
@@ -55,6 +56,7 @@ function startApi(mounts, { role = 'admin', username = 'tester', employeeCode = 
         ...(payload ? { 'Content-Type': 'application/json', 'Content-Length': payload.length } : {}),
         ...(asRole ? { 'x-test-role': asRole } : {}),
         ...(asEmp ? { 'x-test-employee-code': asEmp } : {}),
+        ...(asUser ? { 'x-test-username': asUser } : {}),
       },
     }, (res) => {
       const chunks = [];
