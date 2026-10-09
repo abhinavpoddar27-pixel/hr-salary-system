@@ -81,10 +81,13 @@ not added separately because day calculation already folds it into `days_present
 
 **Nothing accrues until 180 days worked in the same calendar year.** Below that the
 screen still shows the days worked and how many are left to go, but the earned figure
-is zero. At or above it, one earned leave day for every twenty days worked.
+is zero. At or above it, one earned leave day for every twenty-one days worked
+(`el_days_per_leave`, 21 since the 2026 switchover), rounded down. EL taken outside the
+app counts as days worked; CL taken outside the app does not.
 
-**Casual leave is 7 days a year**, less one day for every two months after February
-that the employee joined. Nov or Dec joiners get 2.
+**Casual leave is 4 days a year** (`cl_entitlement_base`), pro-rated by the quarter the
+employee joined: Jan–Mar 4, Apr–Jun 3, Jul–Sep 2, Oct–Dec 1. A joiner after the 1st
+counts from the next month; a mid-December joiner gets 0.
 
 **Both lapse on 31 December.** No carry-forward, no encashment.
 
@@ -103,10 +106,19 @@ in this order:
 
 1. **Merge and deploy.** Nothing changes yet — `leave_automation_enabled` is `false`,
    so every trigger records `skipped_disabled` and queues nothing.
-2. **Leave Management → Automation → Upload EL-given list.** The sheet the owner keeps
-   of earned leave already given outside the system. Columns: Employee Code, Employee
-   Name, Company, Year, Month, EL Days, How Given (*Leave taken* / *Paid in salary* /
-   *Paid in cash*), Paid In Salary Month, Paid In Salary Year, Remark. The upload shows
+1a. **2026 switchover (one time, Leave Management → Automation → "2026 switchover").**
+   Preview first: it shows the 98 employees to be retyped Permanent, the policy change
+   (EL 1 per 21 from 180 days, CL 4 by quarter), the three hand credits to offset, the
+   openings to reset, every employee's resulting 2026 balance, negatives and possible
+   double counts. Apply needs the phrase `SWITCHOVER 2026`; it backs the database up to
+   `<DATA_DIR>/backups/pre-leave-switchover-<time>.db` first and can only run once.
+   It does not apply balances and does not switch automation on.
+2. **Leave Management → Automation → Upload leave-given list (EL / CL).** The sheet the
+   owner keeps of leave already given outside the system. Columns: Employee Code,
+   Employee Name, Company, Year, Month, Leave Type (EL or CL, blank = EL), Days (the old
+   "EL Days" header still works), How Given (*Leave taken* / *Paid in salary* / *Paid in
+   cash*; CL can only be *Leave taken*), Paid In Salary Month, Paid In Salary Year, Remark.
+   The upload can be done before or after step 1a. The upload shows
    accept/reject per row before anything is written; commit when it looks right.
    If there is genuinely no such list, click **There is none** instead.
    Until one of those two things happens, applying a recompute is refused — by the

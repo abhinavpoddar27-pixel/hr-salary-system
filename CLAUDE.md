@@ -1,3 +1,36 @@
+## Last Session — 2026-10-09 (Leave switchover 2026)
+**Leave switchover 2026. Branch `feat/leave-switchover-2026`, NOT merged, NOT pushed by the builder.**
+Spec + rulings R-A…R-H: `docs/leave-switchover-2026/PROMPT.md`; log, decisions and prod facts: `PROGRESS.md`.
+- **CL quarterly (R-C):** `phase5Features.computeClEntitlement` = `eff>12 ? 0 : ceil(base*(13-eff)/12)`,
+  default base 4. `initCLOpening` reads `cl_entitlement_base` for both branches (no hard-coded 7).
+- **R-D:** `leaveEngine.computeLeavePlan` extWorked adds only external `leave_type='EL' AND mode='leave_taken'`.
+- **Grants upload (R-E):** optional Leave Type (EL default, CL) + Days (`EL Days` fallback); CL only
+  "Leave taken"; duplicate check keys on type; in-sheet duplicates are per-row errors (no more 500).
+- **New `services/leaveSwitchover2026.js`** + admin routes `GET/POST /api/features/leave-switchover-2026/{preview,apply}`.
+  Preview = all changes inside a txn rolled back by a sentinel throw. Apply = phrase `SWITCHOVER 2026`,
+  guard `policy_config.leave_switchover_2026_v1`, `await db.backup(<DATA_DIR>/backups/pre-leave-switchover-<ISO>.db)`
+  (abort on failure), then one txn (guard re-checked): retype the 98 (`config/leaveSwitchover2026Codes.js`,
+  test asserts == docs JSON), policy 21/180/4/4, offset Debits for txns #1/#3/#2, 2026 CL opening =
+  entitlement & EL opening = 0 on existing Active Permanent rows, audit_log per change (stage
+  `leave_switchover_2026`, written on the passed handle). Never calls `applyLeavePlan`, never touches
+  `leave_automation_enabled`, no schema change. Preview returns names (admin-only exception, owner asked).
+- **UI:** "2026 switchover" card at the top of Leave Management → Automation; Settings CL hint; dist rebuilt.
+- **Fragile:** (1) between deploy and the owner's Apply, CL is quarterly on base 7 (OI-11). (2) The 98 keep
+  `category` SILP/Worker; a bulk employee import (`employees.js:954-958`) would retype them back (OI-12;
+  preview counts them). (3) 23725/23700 August leave is in the outside-app sheet AND in `leave_correction`
+  attendance rows — counted once today, twice if August Stage 6 is re-run and counts them (OI-13; preview
+  flags `double_count_flags`, info only). (4) Offsets are Debits of 10/9/3 days; a 1-day offset would be
+  eaten by `partitionTransactions` as a finance row. (5) Soft-deleted grants still block re-upload (OI-15).
+- **Verified:** suite 588 → 613 (29 → 32 suites), 3 clean runs. `node backend/scripts/leave-switchover-simulation.js`
+  19/19 on a production-shaped fixture: 14686 EL 12/CL 4, 17575 EL 6/CL 0, 23540 EL −5/CL 0, 19954 EL 4/CL 0;
+  offsets net 0; second apply 409 with balances unchanged; Sep salary identical for 100 employees; drift 0.
+  Salary-neutral Stage 6+7 test incl. a SILP with `is_contractor=1`. DO-NOT-MODIFY files md5-identical;
+  `applyLeavePlan`/`partitionTransactions` bodies identical.
+- **Not tested:** the card in a browser (bundle grep only); real production data (fixture mirrors read-only
+  counts); concurrent applies across processes; Railway `DATA_DIR` volume write permissions for the backup.
+- **Owner next:** merge → deploy → Automation tab: switchover Preview → Apply → upload the sheet (if not done)
+  → Preview EL recompute → Apply → Automation ON.
+
 ## Last Session — 2026-10-09 (Loans PR-2)
 **Loans PR-2: the loan engine. Branch `feat/loans-pr2`, NOT merged.** Spec: `docs/loans/SPEC.md`; rulings in `docs/loans/PROGRESS.md`.
 - **New, route-free:** `backend/src/services/loans/` — money (integer paise), months, policy (16 `loan_*` keys, never throws),
