@@ -219,4 +219,38 @@ function flagForExit(db, loanId, actor, { exitDate, reason } = {}) {
   });
 }
 
-module.exports = { getLoan, inTxn, requestLoan, approveLoan, rejectLoan, cancelLoan, disburseLoan, flagForExit };
+/**
+ * Sales exit (Loans PR-8, ruling Q6): flags every open sales loan of one sales
+ * person (code + company) — the same as the plant Mark Left block. Called by the
+ * sales mark-left route and by the sales employee edit when status becomes Left
+ * or Exited, INSIDE their transaction; throws on a refusal so the status change
+ * rolls back with it. The final payroll is the sales cycle containing the exit
+ * date (common.js finalMonthOf, ruling Q4). Loan schema not migrated → skipped.
+ * @returns {{skipped:boolean, loans:Array, alerts:Array}}
+ */
+function flagSalesBorrowerForExit(db, { employeeCode, company, exitDate, reason }, actor) {
+  if (!db.prepare("SELECT 1 FROM policy_config WHERE key = 'migration_loans_schema_v2_done' AND value = '1'").get()) {
+    console.warn(`[sales mark-left] ${employeeCode}: loan schema not migrated — sales loans not flagged`);
+    return { skipped: true, loans: [], alerts: [] };
+  }
+  const open = db.prepare(`SELECT id FROM loans WHERE borrower_type = 'sales' AND employee_code = ? AND company = ?
+                              AND status IN ('requested','approved','active') AND exit_flag = 0 ORDER BY id`)
+    .all(String(employeeCode), String(company || '').trim());
+  const loans = [];
+  const alerts = [];
+  for (const { id } of open) {
+    const r = flagForExit(db, id, actor, { exitDate, reason: `Marked Left (exit ${exitDate}). ${text(reason) || 'No reason given'}` });
+    if (!r.ok) throw new Error(`sales exit: loan ${id} could not be flagged: ${r.code} — ${r.message}`);
+    const after = getLoan(db, id);
+    const x = r.exit || {};
+    loans.push({
+      loanId: id, status: r.status, outstanding: r.status === 'recover_at_exit' ? after.remaining_balance : 0,
+      finalMonth: x.finalMonth || null, finalMonthPast: r.status === 'recover_at_exit' ? !!x.finalMonthPast : null,
+      dueInFinalPayroll: x.dueInFinalPayroll || 0, residual: x.residual || 0,
+    });
+    alerts.push(...(r.alerts || []));
+  }
+  return { skipped: false, loans, alerts };
+}
+
+module.exports = { getLoan, inTxn, requestLoan, approveLoan, rejectLoan, cancelLoan, disburseLoan, flagForExit, flagSalesBorrowerForExit };

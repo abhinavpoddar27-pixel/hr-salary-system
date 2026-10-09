@@ -172,10 +172,11 @@ function listExitResiduals(db, { companies = null } = {}) {
   const loans = db.prepare("SELECT * FROM loans WHERE status = 'recover_at_exit' ORDER BY company, employee_code, id").all()
     .filter((l) => !companies || companies.includes(l.company));
   const nameOf = db.prepare('SELECT name, department FROM employees WHERE code = ?');
+  const salesNameOf = db.prepare('SELECT name FROM sales_employees WHERE code = ? AND company = ?');   // Loans PR-8
   const pending = db.prepare("SELECT kind FROM loan_requests WHERE loan_id = ? AND status = 'pending'");
   const out = { residuals: [], awaitingFinalPayroll: [] };
   for (const l of loans) {
-    const who = l.borrower_type === 'plant' ? (nameOf.get(l.employee_code) || {}) : {};
+    const who = l.borrower_type === 'plant' ? (nameOf.get(l.employee_code) || {}) : (salesNameOf.get(l.employee_code, l.company) || {});
     const F = finalMonthOf(l);
     const balance = toPaise(l.remaining_balance);
     const row = {

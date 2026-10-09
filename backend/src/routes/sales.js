@@ -13,6 +13,9 @@ const crypto = require('crypto');
 const multer = require('multer');
 const { getDb } = require('../database/db');
 const { requireHrOrAdmin, requirePermission, requireAdmin } = require('../middleware/roles');
+const { normalizeRole } = require('./auth');
+const { flagSalesBorrowerForExit } = require('../services/loans/lifecycle');
+const { notifyAlerts: notifyLoanAlerts } = require('../services/loans/notify');
 const {
   parseSalesCoordinatorFile,
   normalizeName,
@@ -1475,6 +1478,10 @@ router.put('/employees/:code', (req, res) => {
   params.push(req.params.code, company);
 
   const grossChanged = changedFields.some(c => c.field === 'gross_salary');
+  // Loans PR-8 (ruling Q6): status → Left / Exited here is an exit too (Inactive is not).
+  const EXIT_STATUSES = ['Left', 'Exited'];
+  const becameExit = body.status !== undefined && EXIT_STATUSES.includes(body.status) && !EXIT_STATUSES.includes(existing.status);
+  let loanExit = { loans: [], alerts: [] };
 
   // Resolve the structure version's effective_from (only used when gross
   // changes). Default = current calendar month, zero-padded YYYY-MM (matches
@@ -1538,6 +1545,13 @@ router.put('/employees/:code', (req, res) => {
           + `effective_from=${effectiveFrom}; prior open row closed at effective_to=${structureResult.closedPriorTo})`,
       });
     }
+
+    // Loans PR-8: the rep's open sales loans are flagged for exit recovery (code + company).
+    if (becameExit) {
+      const exitDate = (body.dol && String(body.dol).trim()) || existing.dol || new Date().toISOString().split('T')[0];
+      loanExit = flagSalesBorrowerForExit(db, { employeeCode: existing.code, company, exitDate, reason: `status ${existing.status} → ${body.status}` },
+        { username: user, role: normalizeRole(req.user?.role) });
+    }
   });
 
   try {
@@ -1545,10 +1559,11 @@ router.put('/employees/:code', (req, res) => {
   } catch (e) {
     return res.status(500).json({ success: false, error: e.message });
   }
+  notifyLoanAlerts(db, loanExit.alerts);   // after the commit, best effort
 
   const updated = db.prepare('SELECT * FROM sales_employees WHERE code = ? AND company = ?')
                     .get(req.params.code, company);
-  res.json({ success: true, data: updated, structure: structureResult });
+  res.json({ success: true, data: updated, structure: structureResult, ...(becameExit ? { loans: loanExit.loans } : {}) });
 });
 
 // ── PUT /api/sales/employees/:code/mark-left?company=X ─────────────
@@ -1570,29 +1585,45 @@ router.put('/employees/:code/mark-left', (req, res) => {
   const dol = body.dol || new Date().toISOString().split('T')[0];
   const reason = body.reason || '';
 
-  db.prepare(`
-    UPDATE sales_employees
-       SET status = 'Left',
-           dol = ?,
-           updated_by = ?,
-           updated_at = datetime('now')
-     WHERE code = ? AND company = ?
-  `).run(dol, user, req.params.code, company);
+  // Loans PR-8 (ruling Q6): the status change and the exit flag on the rep's open
+  // sales loans (code + company) commit together; the final payroll is the sales
+  // cycle containing dol (ruling Q4). Same semantics as the plant Mark Left.
+  let loanExit = { loans: [], alerts: [], skipped: false };
+  try {
+    db.transaction(() => {
+      db.prepare(`
+        UPDATE sales_employees
+           SET status = 'Left',
+               dol = ?,
+               updated_by = ?,
+               updated_at = datetime('now')
+         WHERE code = ? AND company = ?
+      `).run(dol, user, req.params.code, company);
 
-  writeAudit(db, {
-    recordId: existing.id,
-    empCode: existing.code,
-    field: 'status',
-    oldVal: existing.status,
-    newVal: 'Left',
-    user,
-    actionType: 'mark_left',
-    remark: `Marked as Left (dol=${dol})${reason ? `. Reason: ${reason}` : ''}`
-  });
+      loanExit = flagSalesBorrowerForExit(db, { employeeCode: existing.code, company, exitDate: dol, reason },
+        { username: user, role: normalizeRole(req.user?.role) });
+
+      writeAudit(db, {
+        recordId: existing.id,
+        empCode: existing.code,
+        field: 'status',
+        oldVal: existing.status,
+        newVal: 'Left',
+        user,
+        actionType: 'mark_left',
+        remark: `Marked as Left (dol=${dol})${reason ? `. Reason: ${reason}` : ''}`
+          + (loanExit.skipped ? '. loan schema not migrated — loans not flagged' : loanExit.loans.length ? `. ${loanExit.loans.length} loan(s) flagged for exit recovery` : ''),
+      });
+    })();
+  } catch (e) {
+    console.error(`[sales mark-left] ${existing.code}: ${e.message}`);
+    return res.status(500).json({ success: false, error: e.message });
+  }
+  notifyLoanAlerts(db, loanExit.alerts);   // after the commit, best effort
 
   const updated = db.prepare('SELECT * FROM sales_employees WHERE code = ? AND company = ?')
                     .get(req.params.code, company);
-  res.json({ success: true, data: updated, message: `Sales employee ${existing.code} marked as Left` });
+  res.json({ success: true, data: updated, message: `Sales employee ${existing.code} marked as Left`, loans: loanExit.loans });
 });
 
 // ── GET /api/sales/employees/:code/structures?company=X ────────────
