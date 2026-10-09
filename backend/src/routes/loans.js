@@ -38,7 +38,7 @@ const ADMIN_CANNOT_RAISE = { code: 'ADMIN_CANNOT_RAISE', error: 'HR raises loans
 
 const STATUS_403 = new Set(['ACTOR_REQUIRED', 'ROLE_NOT_ALLOWED', 'SELF_APPROVAL', 'SELF_DISBURSEMENT',
   'NOT_REQUESTER', 'ADMIN_CANNOT_RAISE', 'COMPANY_NOT_ALLOWED']);
-const STATUS_409 = new Set(['CONCURRENT_CHANGE', 'REQUEST_ALREADY_PENDING', 'REQUEST_NOT_PENDING', 'DISBURSEMENT_DISABLED']);
+const STATUS_409 = new Set(['CONCURRENT_CHANGE', 'REQUEST_ALREADY_PENDING', 'REQUEST_NOT_PENDING', 'DISBURSEMENT_DISABLED', 'ALREADY_CLOSED']);
 
 function httpStatus(code) {
   if (STATUS_403.has(code)) return 403;
@@ -359,6 +359,52 @@ router.get('/requests', allow(READ_ROLES), handle((req, res) => {
   const rows = L.listRequests(db, { status: text(req.query.status) || null, loanId: posInt(req.query.loanId) })
     .filter((r) => companyAllowed(req, r.company));
   res.json({ success: true, data: rows });
+}));
+
+// ── monthly loan close (Loans PR-6). Declared before /:id. ──────────────────
+// The close covers every company together (SPEC §5.2 r6), so a user limited to
+// some companies cannot run it or see its per-employee preview.
+
+const monthYear = (src) => {
+  const month = posInt(src.month);
+  const year = posInt(src.year);
+  return month && month <= 12 && year ? { month, year } : null;
+};
+const unrestricted = (req, res) => {
+  if (allowedCompanies(req)) { refuse(res, { code: 'COMPANY_NOT_ALLOWED', message: 'the loan close covers every company; a company-restricted user cannot run or preview it' }); return false; }
+  return true;
+};
+const payrollOf = (v) => text(v || 'plant').toLowerCase();
+
+router.get('/closes', allow(READ_ROLES), handle((req, res) => {
+  const db = getDb();
+  const rows = db.prepare('SELECT * FROM loan_closes ORDER BY year DESC, month DESC, payroll').all()
+    .map((r) => ({ ...r, notes: (() => { try { return r.notes ? JSON.parse(r.notes) : null; } catch { return r.notes; } })() }));
+  res.json({ success: true, data: rows });
+}));
+
+router.get('/close/preview', allow(READ_ROLES), handle((req, res) => {
+  if (!unrestricted(req, res)) return undefined;
+  const my = monthYear(req.query);
+  if (!my) return refuse(res, { code: 'MONTH_REQUIRED', message: 'month (1–12) and year are required' });
+  return reply(res, L.previewClose(getDb(), { payroll: payrollOf(req.query.payroll), ...my }));
+}));
+
+router.post('/close', allow(PAY_ROLES), handle((req, res) => {
+  if (!unrestricted(req, res)) return undefined;
+  const my = monthYear(req.body || {});
+  if (!my) return refuse(res, { code: 'MONTH_REQUIRED', message: 'month (1–12) and year are required' });
+  const r = L.runLoanClose(getDb(), { payroll: payrollOf((req.body || {}).payroll), ...my, trigger: 'manual', actor: req.actor });
+  return reply(res, r, 201);
+}));
+
+router.post('/deductions/:did/reverse', allow(DECIDE_ROLES), handle((req, res) => {
+  const db = getDb();
+  const id = posInt(req.params.did);
+  const row = id && db.prepare('SELECT d.id, l.company FROM loan_deductions d JOIN loans l ON l.id = d.loan_id WHERE d.id = ?').get(id);
+  if (!row) return refuse(res, { code: 'DEDUCTION_NOT_FOUND', message: `deduction ${req.params.did} not found` });
+  if (!companyAllowed(req, row.company)) return refuse(res, notAllowedCompany);
+  return reply(res, L.reverseDeduction(db, { deductionId: id, reason: (req.body || {}).reason }, req.actor));
 }));
 
 router.get('/:id', allow(READ_ROLES), handle((req, res) => {
