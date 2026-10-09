@@ -9,7 +9,9 @@ after a context compaction or a new session there is a file to read and build fr
 - **Current state:** P1–P3 and Loans PR-0 … PR-5 (#48–#54, #56, #58) are merged. PR-5 verified on production (gate '0',
   loans 0, loan_deductions 0, no salary row with loan_recovery, drift = 1 known row, component-short = 5 known rows).
   Loans PR-6 (loan close, held sweep, cron) is open on `feat/loans-pr6`, waiting for review.
-- **Next PR:** Loans PR-6b (close screen, frontend only; the planner briefs it after PR-6 merges), then PR-7 (exit).
+  Loans PR-6b (close screen, reversal, Mark Left outstanding) is built on `feat/loans-pr6b` (based on PR-6), not pushed
+  until PR-6 merges.
+- **Next PR:** Loans PR-7 (exit), in parallel on `feat/loans-pr7`.
 - **Blockers:**
   - Loans PR-6 review and merge, then the PR-6 check below (nil loan impact: the 13 Oct run writes nothing).
   - Finance is checking the 35 re-held rows that were released to be paid, against what was
@@ -52,7 +54,7 @@ after a context compaction or a new session there is a file to read and build fr
 | Loans PR-4 | `feat/loans-pr4` | Merged | #56 | 2026-10-10 | browser look on Railway preview |
 | Loans PR-5 | `feat/loans-pr5` | Merged | #58 | 2026-10-10 | verified (planner) |
 | Loans PR-6 | `feat/loans-pr6` | Open | see GitHub | — | PR-6 check below + checks 1–3 |
-| Loans PR-6b | `feat/loans-pr6b` | Not started (close screen) | — | — | — |
+| Loans PR-6b | `feat/loans-pr6b` | Built, not pushed (waits for PR-6) | — | — | browser look on Railway preview |
 | Loans PR-7 | `feat/loans-pr7` | Not started | — | — | — |
 | Loans PR-8 | `feat/loans-pr8` | Not started | — | — | — |
 | Loans PR-9 | `feat/loans-pr9` | Not started | — | — | — |
@@ -286,6 +288,18 @@ Then drift check 1 (still the 1 known row). No salary code changed.
 `NOT_NEEDED`, `STAGE7_NOT_COMPUTED`, `EARLIER_MONTH_OPEN`, `MONTH_NOT_ENDED`), `GET /api/loans/closes` (history, notes
 parsed), `POST /api/loans/deductions/:id/reverse` (admin). Company-restricted users get 403 on preview / close.
 
+## Loans PR-6b rulings (coordinator, 10 Oct 2026)
+
+- **Q1 = A:** the only backend change — `GET /api/loans/:id` also returns `deductions` (each with `adjusted` and
+  `effective_posted`) and `adjustments`. Read-only, confined to the `/:id` handler body (PR-7 adds routes above it).
+- Close screen = a "Monthly close" tab on `/loans` (`?tab=close`); HR and viewer read-only; plant payroll only.
+- Mark Left dialog shows the leaver's live loans and outstanding with the SPEC §5 r11 wording (true once PR-7 is
+  merged, which happens before any loan can exist) plus the exit-month line (marked after that month's close → the
+  whole balance is a residual for finance to collect in cash or write off).
+- Held tile on the Loans page: not done (no existing API gives a ledger-wide held count; none added).
+- `ReasonModal` gains an optional `minLength` (reversal: 10). Browser check extended (Pass 3).
+- Screens: `docs/loans/screens/pr6b/`. Repeat: `python3 backend/scripts/loans-ui-browser-check.py <dir>` (Pass 3 shots go to `<dir>/pr6b`).
+
 ### Loans PR-6 check (read-only, after deploy)
 
 ```sql
@@ -384,3 +398,4 @@ FROM sales_salary_computations WHERE month = ? AND year = ?;
 | 2026-10-09 | Loans PR-2 | Engine built | `services/loans/` (15 files), 7 new suites, simulation script. Suite 454 → 588 (3 clean runs). Simulation: 13 loans × 12 months reconcile exactly, exit 0. |
 | 2026-10-10 | Loans PR-5 | Built | Q1 earned-base fix, per-employee savepoint, Stage 7 loan step (`services/loans/stage7.js`), simulation. Suite 692 → 713 (36 suites). No-loan simulation dump byte-identical on origin/main and the branch (210 rows); full mode (5 loans, re-run, reimport) all checks pass, drift 0, component-short 0. |
 | 2026-10-10 | Loans PR-6 | Built | Loan close, sweep, daily job, opposite entries, hold-release guard, close API, drift invariants. Suite 713 → 753 (41 suites). Close simulation 7 loans × 4 months PASS; `--empty` 84 tables unchanged. |
+| 2026-10-10 | Loans PR-6b | Built | Close tab, admin reversal on the loan page, Mark Left outstanding; `GET /:id` gains `deductions` + `adjustments`. Suite 769 → 771 (42 suites). Browser check 103/103 (63 PR-4 + 40 Pass 3), 0 page errors. |
