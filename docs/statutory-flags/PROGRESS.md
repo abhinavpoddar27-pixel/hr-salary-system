@@ -13,13 +13,17 @@
 - PR-3 feat/statutory-filing — NOT STARTED
 
 ## LAST STEP
-(none)
+T0 done locally (10 Oct 2026, cloud workspace): plan pack committed on feat/statutory-flags from origin/main 1d4221c. Not pushed (repo public).
 
 ## NEXT STEP
-Planning session for PR-1 (PROMPT_PLAN.md).
+Planning session for PR-1 (PROMPT_PLAN.md). Base moved from ae4830f to 1d4221c (loans PR-3..5, leave switchover): re-verify every BUILD_PLAN line reference.
 
 ## OWNER RULINGS ADDED DURING THE BUILD
 (record date + ruling; BUILD_PLAN §1 holds the original set)
+- 10 Oct 2026 (owner): every Claude Code session runs Opus 5.5 — from a terminal: `--model claude-opus-5-5 --effort ultracode`; this replaces the `opusplan` / `opus` flags in RUNBOOK T1/T2. Resume line: `caffeinate -i claude --continue --permission-mode auto --model claude-opus-5-5 --effort ultracode`.
+- 10 Oct 2026 (owner): PR-1 is run from the claude.ai project chat's cloud Claude Code workspace: a separate planning agent, the chat's review, then a separate build agent. Plan files come from this repo or the claude.ai Project, never from ~/Downloads. The owner still merges only in the GitHub web UI.
+- 10 Oct 2026 (owner, on the planner's advice): helper agents may read, search and run tests in parallel, but STEPs stay strictly in order and only one agent edits files at a time; salaryComputation.js, schema.js and payroll.js are edited only by the main build agent.
+- 10 Oct 2026: the repo was confirmed PUBLIC (GitHub API, raw file 200). Nothing on this branch is pushed until the owner makes it private (T0 prerequisite). Build and commit locally; push is the last step.
 
 ## DECISIONS TAKEN BY CLAUDE CODE (safest option, owner to review)
 (none)
