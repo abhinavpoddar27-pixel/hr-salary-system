@@ -100,7 +100,7 @@ export default function LoanClose() {
     mutationFn: () => runLoanClose(month, year, payroll),
     onSuccess: (res) => {
       const d = res?.data?.data || {}
-      toast.success(`Closed ${payrollName} ${label}: posted ${d.posted} (${rupees(d.postedAmount)}), held ${d.held}, shortfall ${d.shortfall}, no salary ${d.noSalary}`, { duration: 6000 })
+      toast.success(`Closed ${payroll === 'sales' ? 'sales ' : ''}${label}: posted ${d.posted} (${rupees(d.postedAmount)}), held ${d.held}, shortfall ${d.shortfall}, no salary ${d.noSalary}`, { duration: 6000 })
       if (d.mismatches?.length) toast(`${d.mismatches.length} payslip/ledger mismatch(es) left provisional — ${payroll === 'sales' ? 'recompute the sales salary for those reps' : 're-run Stage 7 for those employees'}`, { icon: '⚠️', duration: 8000 })
       if (d.reconciliationOk === false) toast.error('A loan did not reconcile before this close; it is recorded in the close notes', { duration: 8000 })
       setConfirming(false)
