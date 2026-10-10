@@ -84,7 +84,7 @@ function buildWorkbook(result, run = {}) {
     { k: 'code', h: 'Code' }, { k: 'name', h: 'Name', w: 26 }, { k: 'department', h: 'Department', w: 18 }, { k: 'group', h: 'Group' },
     { k: 'worked_days', h: 'Worked days' }, { k: 'late_days', h: 'Late days' }, { k: 'early_days', h: 'Early exits' }, { k: 'late_min', h: 'Late min' },
     { k: 'early_min', h: 'Early min' }, { k: 'workdays_lost', h: 'Workdays lost' }, { k: 'newcomer', h: 'Newcomer', v: (r) => (r.newcomer ? 'yes' : '') },
-    { k: 'remeasured', h: 'Re-measured', v: (r) => (r.remeasured ? 'yes' : '') }, { k: 'hours_excused', h: 'Excused: full hours worked', v: (r) => r.hours_excused || '' }, { k: 'categories', h: 'Why selected', v: cats, w: 30 },
+    { k: 'remeasured', h: 'Re-measured', v: (r) => (r.remeasured ? 'yes' : '') }, { k: 'hours_excused', h: 'Re-measured: excused (full hours)', v: (r) => r.hours_excused || '' }, { k: 'late_full_excused', h: 'Lates not counted (full hours)', v: (r) => r.late_full_excused || '' }, { k: 'categories', h: 'Why selected', v: cats, w: 30 },
   ]), 'All with late or early');
   XLSX.utils.book_append_sheet(wb, sheet(result.shiftIssues || [], [
     { k: 'code', h: 'Code' }, { k: 'department', h: 'Department', w: 18 }, { k: 'master_shift', h: 'Master shift', w: 16 }, { k: 'used_shift', h: 'Shift used', w: 16 },
@@ -100,7 +100,7 @@ function buildWorkbook(result, run = {}) {
     { k: 'code', h: 'Code' }, { k: 'flag', h: 'Problem', w: 32 }, { k: 'rows', h: 'Rows' }, { k: 'daycalc_days', h: 'Day-calc days' }, { k: 'salary_amount', h: 'Salary deduction ₹' },
   ]), 'Payroll checks');
   const crit = Object.entries(result.criteria?.thresholds || {}).map(([k, v]) => [k, v]);
-  const cs = XLSX.utils.aoa_to_sheet([['Rule', 'Value'], ['stayed_late_mode', result.criteria?.stayed_late_mode], ['early_exit_rule', result.criteria?.early_exit_rule], ['shift_fit', result.criteria?.shift_fit ?? ''],
+  const cs = XLSX.utils.aoa_to_sheet([['Rule', 'Value'], ['stayed_late_mode', result.criteria?.stayed_late_mode], ['early_exit_rule', result.criteria?.early_exit_rule], ['shift_fit', result.criteria?.shift_fit ?? ''], ['late_full_hours', result.criteria?.late_full_hours === false ? 'off' : 'on'],
     ['loading_designation_patterns', (result.criteria?.loading_designation_patterns || []).join(', ')], ...crit,
     ...Object.entries(result.criteria?.remeasure || {}).map(([code, r]) => [`re-measure ${code}`,
       `${r.start}–${r.end}, late grace ${r.late_grace ?? 9} min, early grace ${r.early_grace ?? 15} min, stayed-late ${r.left_late || 'system'}`
@@ -153,6 +153,9 @@ function buildDocx(result, run = {}, { now = new Date() } = {}) {
   const chk = list.filter((a) => a.check_master_shift);
   const tot = result.actionTotals || {};
   const t = result.criteria?.thresholds || {};
+  const fullLate = result.criteria?.late_full_hours !== false; const fullEarly = result.criteria?.shift_fit === 'everyone';
+  const fullText = fullLate && fullEarly ? 'A late arrival or early exit is not counted on a day you still worked your full shift hours.'
+    : fullLate ? 'A late arrival is not counted on a day you still worked your full shift hours.' : '';
   const copyTo = (p) => (p.group === 'Contract' ? [para([tr(`Copy to: ${p.department || ''} contractor`, { size: 19, it: true })], { before: 120 })] : []);
   const draftMark = draft ? [para([tr('DRAFT — not finalised. Do not issue.', { bold: true, color: 'C00000', size: 20 })], { after: 80 })] : [];
 
@@ -162,7 +165,7 @@ function buildDocx(result, run = {}, { now = new Date() } = {}) {
     para([tr(`Late Coming & Early Exit – Action List, ${ML}`, { size: 30, bold: true })], { after: 60 }),
     para([tr(`Prepared ${today} · HR Department · For HR and Finance only – not for display`, { size: 18, color: '595959' })], { after: 160 }),
     para([tr(`${people(list.length)}: ${ded.length} ${ded.length === 1 ? 'gets' : 'get'} a deduction note (${days(tot.deduction_days || 0)} in total, about ${inr(tot.indicative_amount)}), ${warn.length} ${warn.length === 1 ? 'gets' : 'get'} a warning note.${chk.length ? ` ${people(chk.length)} flagged "check master shift" – confirm the shift before issuing.` : ''}`, { size: 21 })], { after: 80 }),
-    para([tr(`Deduction = workdays actually lost (late minutes + early-exit minutes ÷ shift length), rounded to the nearest ${t.rounding_step ?? 0.5} day, minimum ${t.min_deduction ?? 0.5} day. Mornings after the person stayed late the previous evening are not counted. ${relText} ₹ amounts are indicative (monthly gross ÷ days in month × days); payroll gives the final figure.`, { size: 18, color: '404040' })], { after: 120 }),
+    para([tr(`Deduction = workdays actually lost (late minutes + early-exit minutes ÷ shift length), rounded to the nearest ${t.rounding_step ?? 0.5} day, minimum ${t.min_deduction ?? 0.5} day. Mornings after the person stayed late the previous evening are not counted.${fullLate ? ` Nor are lates${fullEarly ? ' or early exits' : ''} on days the full shift was still worked.` : ''} ${relText} ₹ amounts are indicative (monthly gross ÷ days in month × days); payroll gives the final figure.`, { size: 18, color: '404040' })], { after: 120 }),
     table(['#', 'Code', 'Name', 'Department – Role', 'Late days', 'Early days', 'Time lost', 'Workdays lost', 'Action', 'Deduction', 'Indicative ₹', 'Remark'],
       list.map((p, i) => [{ v: i + 1, align: C }, { v: p.code, align: C }, { v: cleanName(p.name), bold: true }, `${p.department || ''} – ${p.designation || ''}`,
         { v: p.late_days, align: C }, { v: p.early_days, align: C }, hm(p.late_min + p.early_min), { v: Number(p.workdays_lost).toFixed(2), align: C },
@@ -193,6 +196,7 @@ function buildDocx(result, run = {}, { now = new Date() } = {}) {
     ...noticeHead('Late Coming', `The following employees came late to duty on ${t.notice_late ?? 4} or more days in ${ML}.`, [
       `Reporting ${t.late_min_minutes ?? 10} minutes or more after shift start is marked as late.`,
       'A late morning is not counted if you stayed late after your shift the previous evening.',
+      ...(fullText ? [fullText] : []),
       'Time lost by late coming and early leaving is deducted from salary, in half-day steps.',
       'Leaving before shift end without a gate pass or approved short leave is treated the same as late coming.',
     ]),
@@ -231,14 +235,14 @@ function buildDocx(result, run = {}, { now = new Date() } = {}) {
       notes.push(...head(p, i, `Warning – late coming / early leaving, ${ML}`),
         para(`Our attendance record shows that in ${ML} you ${what}. This is ${hm(p.late_min + p.early_min)} of working time.`), facts(p),
         para(p.newcomer ? 'As you have joined recently, no deduction is being made this month. Please treat this note as a first warning.' : 'No deduction is being made this month. Please treat this note as a warning.', { before: 200 }),
-        para('Any further time lost through late coming or leaving early will be deducted from your salary in half-day steps, as per company policy. A late morning is not counted if you stayed late after your shift the previous evening.'),
+        para(`Any further time lost through late coming or leaving early will be deducted from your salary in half-day steps, as per company policy. A late morning is not counted if you stayed late after your shift the previous evening.${fullText ? ` ${fullText}` : ''}`),
         para('If you need to leave early for a genuine reason, take a gate pass or approved short leave from your in-charge before leaving.'),
         ...copyTo(p), ...signature());
     } else {
       notes.push(...head(p, i, `Late coming / early leaving, ${ML} – deduction of ${days(p.deduction_days)}`),
         para(`Our attendance record shows that in ${ML} you ${what}. Together this is ${hm(p.late_min + p.early_min)} of working time, equal to ${Number(p.workdays_lost).toFixed(2)} workdays.`), facts(p),
         para([tr('As per company attendance policy, a deduction of '), tr(days(p.deduction_days), { bold: true }), tr(' will be made from your salary. Deductions are made in half-day steps, with a minimum of half a day.')], { before: 200 }),
-        para('Late mornings that followed an evening when you stayed late after your shift have not been counted.'),
+        para(`Late mornings that followed an evening when you stayed late after your shift have not been counted.${fullText ? ` Days on which you still worked your full shift hours have not been counted either.` : ''}`),
         para('Further late coming or leaving early will lead to deductions every month and may lead to stricter action. If you believe this record is wrong, meet HR within 3 working days with the reason or proof.'),
         ...copyTo(p), ...signature());
     }

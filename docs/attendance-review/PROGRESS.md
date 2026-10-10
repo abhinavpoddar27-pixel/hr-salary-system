@@ -17,7 +17,8 @@
 | PR-2 | `feat/attendance-review-tab` | Analytics tab + config editor; preview takes overrides | merged #84, live |
 | PR-3 | `feat/attendance-review-exports` | xlsx + docx exports from the stored run | merged #85, live |
 | PR-4b | `feat/attendance-review-hours-rule` | full-hours excuse on re-measure rows | merged #87, live |
-| PR-4c | `feat/attendance-review-shift-check` | automatic early-exit shift check (replaces the manual wrong-shift list) | built, tested, PR open |
+| PR-4c | `feat/attendance-review-shift-check` | automatic early-exit shift check (replaces the manual wrong-shift list) | merged #89, live |
+| PR-4d | `feat/attendance-review-full-hours-all` | plant-wide full-hours rule (lates + early exits) | built, tested, PR open |
 | PR-4 | later | write-back to `late_coming_deductions` | blocked on day-calc fix (L3) |
 
 ## PR-1 contents
@@ -37,3 +38,4 @@
 - 2026-10-10 — #84 and #85 merged; production: deploy success, endpoints 401 without login, new bundle live, drift unchanged (1 row, Feb 2026).
 - 2026-10-10 — Full-hours excuse built (engine, validation, config editor column + tolerance, Excel column + Rules sheet line, Word remark). jest 85/1378; browser check 45/45; real-punch simulation as above.
 - 2026-10-10 — OWNER RULING: the early-exit exclusion list must not be hard — the engine must recognise wrong shifts itself. Built `shift_fit` (default 'habitual'): a person with system early exits on >= 60% of Mon–Sat worked days (min 5) has an exit counted only on a day out − in < shift length − 10 min. "Check master shift" flag when short on >= 80% of those exits (flag only — a hold was tried and dropped: it also hid genuine habitual early leavers; punches cannot tell the two apart). New tab section + Excel sheet "Shift check"; manual list kept as an override, normally empty. jest 85/1380; browser check 48/48.
+- 2026-10-10 — OWNER RULING (policy A): "the policy should be smart and enable people to work properly and diligently" — for EVERYONE, a late arrival is not counted on a day the person still worked the full shift length (came late, stayed back), on top of the previous-evening stay-back rule; an early exit is not counted on a day the full shift was still worked (shift_fit default 'everyone'). Late tolerance = min(10, late threshold − 1) = 9 min so a late is only forgiven when actually made up. Rejected: minute-for-minute stay-back credit (B) — stricter than today. Sep estimate (independent SQL): lates 515 → 425, late notice 50 → 41, regular late-comers 14 → 10. jest 85/1381; browser 49/49.

@@ -58,7 +58,7 @@ describe('counting rules', () => {
 
   test('½P is a worked day at half the scheduled minutes; miss punches are not worked days', () => {
     const db = F.newDb(); F.emp(db, 'AR5'); sep(db, 'AR5');
-    F.day(db, 'AR5', '2026-10-01', { st: '½P', lm: 20 }); F.day(db, 'AR5', '2026-10-02', { mp: 1, lm: 40 });
+    F.day(db, 'AR5', '2026-10-01', { st: '½P', lm: 20, ot: '14:00' }); F.day(db, 'AR5', '2026-10-02', { mp: 1, lm: 40 });
     const r = run(db); const p = person(r, 'AR5');
     expect(p.worked_days).toBe(1); expect(p.late_days).toBe(1);
     expect(r.departments.find((d) => d.department === 'PRODUCTION').sched_min).toBe(360);
@@ -190,9 +190,12 @@ describe('exclusions, re-measure, overrides, rule switch', () => {
     F.day(db, 'ARF', '2026-10-05', { it: '08:00', ot: '18:00' });   // early 60, worked 10 h → excused
     F.day(db, 'ARF', '2026-10-06', { it: '09:00', ot: '18:00' });   // early 60, worked 9 h → counted
     const rm = (extra) => ({ remeasure: { ARF: { start: '09:00', end: '19:00', left_late: 'off', ...extra } } });
-    expect(person(run(db, { config: rm({}) }), 'ARF')).toMatchObject({ late_days: 3, early_days: 2, hours_excused: 0 });
+    const noRules = { late_full_hours: false, shift_fit: 'off' };
+    expect(person(run(db, { config: { ...rm({}), ...noRules } }), 'ARF')).toMatchObject({ late_days: 3, early_days: 2, hours_excused: 0 });
+    // plant-wide defaults (late_full_hours + shift_fit 'everyone') give the same result without the row's own tick
+    expect(person(run(db, { config: rm({}) }), 'ARF')).toMatchObject({ late_days: 1, early_days: 1, hours_excused: 3 });
     expect(person(run(db, { config: rm({ hours_complete: true }) }), 'ARF')).toMatchObject({ late_days: 1, late_min: 40, early_days: 1, early_min: 60, hours_excused: 3 });
-    expect(person(run(db, { config: rm({ hours_complete: true, hours_grace: 0 }) }), 'ARF')).toMatchObject({ late_days: 2, early_days: 1, hours_excused: 2 });
+    expect(person(run(db, { config: { ...rm({ hours_complete: true, hours_grace: 0 }), ...noRules } }), 'ARF')).toMatchObject({ late_days: 2, early_days: 1, hours_excused: 2 });
     expect(S.validateConfig(rm({ hours_complete: 'yes' }))[0]).toMatch(/hours_complete/);
     expect(S.validateConfig(rm({ hours_complete: true, hours_grace: 500 }))[0]).toMatch(/hours_grace/);
     expect(S.validateConfig(rm({ hours_complete: true, hours_grace: 10 }))).toEqual([]);
@@ -208,7 +211,8 @@ describe('exclusions, re-measure, overrides, rule switch', () => {
     F.emp(db, 'ARS3'); sep(db, 'ARS3'); F.month(db, 'ARS3', 2026, 10, 20, () => ({ em: 180 }));
     // ARS4 not habitual (3 of 20) but those days full hours (07:00–19:00) → counted under 'habitual', excused under 'everyone'.
     F.emp(db, 'ARS4'); sep(db, 'ARS4'); F.month(db, 'ARS4', 2026, 10, 20, (i) => (i < 3 ? { it: '07:00', em: 60 } : {}));
-    const r = run(db);
+    const H = { shift_fit: 'habitual' };
+    const r = run(db, { config: H });
     const sc = (c) => r.shiftCheck.find((x) => x.code === c);
     expect(r.people.find((x) => x.code === 'ARS1')).toBeUndefined();   // no counted lates/exits → not in people
     expect(sc('ARS1')).toMatchObject({ system_early: 20, excused: 20, counted: 0, habitual: true, result: 'hidden', check_master: false, avg_hours: 12 });
@@ -232,10 +236,29 @@ describe('exclusions, re-measure, overrides, rule switch', () => {
     expect(off.shiftCheck).toEqual([]);
     expect(person(off, 'ARS1')).toMatchObject({ early_days: 20 });
     expect(wkEarly(off)).toBe(20 + 20 + 20 + 3);
+    expect(run(db).criteria.shift_fit).toBe('everyone');                // the plant-wide default
     // the manual list still wins
-    const man = run(db, { config: { early_excluded_codes: ['ARS3'] } });
+    const man = run(db, { config: { ...H, early_excluded_codes: ['ARS3'] } });
     expect(man.people.find((x) => x.code === 'ARS3')).toBeUndefined(); expect(man.shiftCheck.find((x) => x.code === 'ARS3')).toBeUndefined();
     expect(S.validateConfig({ shift_fit: 'sometimes' })[0]).toMatch(/shift_fit/);
+  });
+
+  test('late not counted on a day the full shift was still worked (plant-wide); tolerance stays below the late threshold', () => {
+    const db = F.newDb(); F.emp(db, 'ARL'); sep(db, 'ARL');
+    F.day(db, 'ARL', '2026-10-01', { lm: 30, ot: '20:30' });        // 30 late, stayed 30 → full 12 h → not counted
+    F.day(db, 'ARL', '2026-10-02', { lm: 30, ot: '20:15' });        // 30 late, stayed 15 → 11 h 45 → counted
+    F.day(db, 'ARL', '2026-10-03', { lm: 10 });                     // 10 late, left on time → 11 h 50 → counted (tolerance 9 for lates)
+    F.day(db, 'ARL', '2026-10-05', { lm: 10, ot: '20:01' });        // 10 late, stayed 1 → 11 h 51 → not counted
+    F.day(db, 'ARL', '2026-10-06', { lm: 120, ot: '22:00' });       // 2 h late, stayed 2 h → not counted
+    const on = run(db); const p = person(on, 'ARL');
+    expect(p).toMatchObject({ late_days: 2, late_min: 40, late_full_excused: 3 });
+    expect(on.criteria.late_full_hours).toBe(true);
+    const off = person(run(db, { config: { late_full_hours: false } }), 'ARL');
+    expect(off).toMatchObject({ late_days: 5, late_min: 200, late_full_excused: 0 });
+    // weekly trend uses the same rule
+    const wk = (res) => res.trend.weekly.filter((w) => w.week_start >= '2026-09-28').reduce((s, w) => s + w.late_days, 0);
+    expect(wk(on)).toBe(2); expect(wk(run(db, { config: { late_full_hours: false } }))).toBe(5);
+    expect(S.validateConfig({ late_full_hours: 'yes' })[0]).toMatch(/late_full_hours/);
   });
 
   test('overrides: include adds, exclude removes, warning downgrades — each with its reason', () => {

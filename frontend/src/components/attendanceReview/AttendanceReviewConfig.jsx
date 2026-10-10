@@ -22,7 +22,7 @@ const THRESHOLD_LABELS = {
   option_c_long_minutes: 'Option C: long exit from (minutes)', option_c_short_per_half: 'Option C: short exits per ½ day',
   default_shift_hours: 'Shift hours when unknown', stayed_late_lookback_days: 'Stayed-late look-back (days before last month)',
   shift_fit_share: 'Shift check: habitual if early on share of days ≥', shift_fit_min_days: 'Shift check: needs worked days of at least',
-  shift_fit_grace: 'Shift check: full-hours tolerance (minutes)', shift_fit_confirm_share: 'Shift check: flag "check master shift" if short on share ≥',
+  shift_fit_grace: 'Full-hours tolerance (minutes; for lates kept below the late threshold)', shift_fit_confirm_share: 'Shift check: flag "check master shift" if short on share ≥',
 }
 const LISTS = [
   ['excluded_codes', 'Left out of everything — employee codes', 'e.g. senior staff; data errors until fixed'],
@@ -47,7 +47,7 @@ export default function AttendanceReviewConfig({ month, year }) {
     const c = res.config
     setForm({
       thresholds: { ...c.thresholds },
-      stayed_late_mode: c.stayed_late_mode, early_exit_rule: c.early_exit_rule, shift_fit: c.shift_fit || 'habitual',
+      stayed_late_mode: c.stayed_late_mode, early_exit_rule: c.early_exit_rule, shift_fit: c.shift_fit || 'everyone', late_full_hours: c.late_full_hours !== false,
       lists: Object.fromEntries(LISTS.map(([k]) => [k, (c[k] || []).join('\n')])),
       remeasure: Object.entries(c.remeasure || {}).map(([code, r]) => ({ code, start: r.start, end: r.end, late_grace: r.late_grace ?? 9, early_grace: r.early_grace ?? 15, left_late: r.left_late || 'system', hours_complete: r.hours_complete === true, hours_grace: r.hours_grace ?? 10 })),
     })
@@ -57,7 +57,7 @@ export default function AttendanceReviewConfig({ month, year }) {
   const save = useMutation({
     mutationFn: () => {
       const config = {
-        thresholds: form.thresholds, stayed_late_mode: form.stayed_late_mode, early_exit_rule: form.early_exit_rule, shift_fit: form.shift_fit,
+        thresholds: form.thresholds, stayed_late_mode: form.stayed_late_mode, early_exit_rule: form.early_exit_rule, shift_fit: form.shift_fit, late_full_hours: !!form.late_full_hours,
         ...Object.fromEntries(LISTS.map(([k]) => [k, toList(form.lists[k])])),
         remeasure: Object.fromEntries(form.remeasure.filter((r) => r.code.trim()).map((r) => [r.code.trim(), {
           start: r.start, end: r.end, late_grace: Number(r.late_grace), early_grace: Number(r.early_grace), left_late: r.left_late,
@@ -106,13 +106,18 @@ export default function AttendanceReviewConfig({ month, year }) {
               <option value="warning">Warning only (current)</option>
               <option value="option_c">Option C deduction (½ day per exit of 1 h+, ½ day per 3 shorter)</option>
             </select></label>
-          <label className="block"><span className="text-xs font-semibold text-slate-600">Early-exit shift check</span>
+          <label className="flex items-start gap-2 text-sm">
+            <input aria-label="Late not counted on a full-hours day" type="checkbox" className="mt-1" checked={!!form.late_full_hours}
+              onChange={(e) => setForm((f) => ({ ...f, late_full_hours: e.target.checked }))} />
+            <span><span className="text-xs font-semibold text-slate-600">Late not counted on a full-hours day</span><br />
+              <span className="text-[11px] text-slate-400">Came late but stayed back and still worked the full shift length → not counted (recommended).</span></span></label>
+          <label className="block"><span className="text-xs font-semibold text-slate-600">Early exit not counted on a full-hours day</span>
             <select aria-label="Early-exit shift check" className="input w-full" value={form.shift_fit} onChange={(e) => setForm((f) => ({ ...f, shift_fit: e.target.value }))}>
-              <option value="habitual">On — for people who leave early on most days (recommended)</option>
-              <option value="everyone">On — for everyone</option>
+              <option value="everyone">For everyone (recommended)</option>
+              <option value="habitual">Only for people who leave early on most days</option>
               <option value="off">Off — count every early exit</option>
             </select>
-            <span className="text-[11px] text-slate-400">An early exit counts only on a day the person worked less than the shift length.</span></label>
+            <span className="text-[11px] text-slate-400">Came early and still worked the full shift length → the early exit is not counted.</span></label>
         </div>
       </div>
 
@@ -121,7 +126,7 @@ export default function AttendanceReviewConfig({ month, year }) {
         <table className="text-sm">
           <thead><tr className="text-xs text-slate-500"><th className="text-left pr-2">Code</th><th className="text-left pr-2">Start</th><th className="text-left pr-2">End</th>
             <th className="text-left pr-2">Late grace</th><th className="text-left pr-2">Early grace</th><th className="text-left pr-2">Stayed-late exemption</th>
-            <th className="text-left pr-2" title="A late or early exit is not counted on a day the person still worked the full shift length (in to out)">Full hours excuse</th>
+            <th className="text-left pr-2" title="This row's own full-hours rule with its own tolerance. The plant-wide full-hours rules above apply to re-measured people too.">Own full-hours tolerance</th>
             <th className="text-left pr-2">Tolerance (min)</th><th /></tr></thead>
           <tbody>
             {form.remeasure.map((r, i) => (
