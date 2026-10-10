@@ -20,6 +20,50 @@ through `closeLeaveModal()`), Q3 (late error toast after close left as is).
 - **Found, not fixed:** (1) Q3 — if HR closes the window while a submit is in flight, a late error toast still shows; a late SUCCESS
   calls `closeLeaveModal()` and would close a window already reopened for another employee (pre-existing: old code did
   `setLeaveModal(null)` too). (2) backend `validateLeaveCorrection` error text says "Must be CL or EL" although LWP is allowed.
+## Last Session — 2026-10-11 (Attendance enforcement PR-A: Attendance Review measures on the current master shift)
+**Branch `feat/attendance-review-master-basis`, stacked on PR-1 `fix/close-legacy-late-deduction` (#101) — merge #101 first. NOT merged.**
+Plan: private project `claude/attendance-review/PLAN_enforcement_v2.md` (owner rulings B, D-12, D-13, MP-1, MP-3, MP-4).
+- **Switch:** config `assessment_basis: 'import' | 'master'` (default `import`, so saved v4 and run 1 keep their meaning) and
+  `assess_fixed_miss_punch` (default true). Rules editor: "Measure every day against" + MP-1 tick. New thresholds
+  `odd_punch_minutes` 180, `night_start_minutes` 1200, `stayed_late_minutes` 20.
+- **Engine:** the base CTE is now chosen by basis (`IMPORT_BASE` / `MASTER_BASE`) in front of the SAME person-month and weekly
+  SQL, so every rule (stay-back, full hours, loading, release days, shift check, improved/newcomer, Option C) runs unchanged on
+  both. Master: current `default_shift_id`; day on its times; night (`is_night_shift` / "Night Shift") on a 12-hour master on
+  20:00 for 12 h; an overnight master (end < start) on its own times; not assessed = no master / night on a 9–10 h master /
+  in-punch > 3 h early; half days not checked; gate pass exactly as earlyExitDetection (out ≥ end − pass → not early, else
+  minutes beyond); miss-punch days with `miss_punch_resolved` assessed on gate times; an out equal to the shift end on such a
+  day = "out not verified" (worked minutes NULL → no early exit, no full-hours or stay-back excuse). Release days detected on
+  the basis. Re-measure rows still win (and still skip miss-punch days).
+- **Output:** `criteria.assessment_basis`, `assessment.quality` (days + codes by reason; excluded codes/departments left out),
+  tab line + "What the master-shift basis left out" section, Excel Summary rows. Nothing writes payroll.
+- **Live acceptance (Sep 2026, v4 rules, SQL Console, read-only):** lates 426 vs plan 424, early exits 284 / 24,746 min exact,
+  unassessable 37 exact; engine selection on the live rows = the plan's expected action list exactly (people, deductions, days,
+  amount). MP-1 on: early +15 (+2,037 min) as planned; lates +30 (plan +27 — the 3 extra are MP-3 refusing full-hours
+  excuses on unverified outs). Import-basis September early is 284 now, not run 1's 322 — #96's sweep rewrote the flags.
+- **Fragile:** master basis applies TODAY's master to every month — a wrong master is wrong everywhere (data-quality section is
+  the guard). Per-row correlated lookups (employees, short_leaves) — check indexes before T1 runs 18 months.
+- **Verified:** new `attendanceReviewMasterBasis.test.js` 22 (all 22 fail on the old engine); jest 91 suites / 1456;
+  `scripts/attendance-review-master-basis-check.py` 26/26 (import → switch to master → action list / warnings / data quality
+  follow → MP-1 off → reload keeps the choice → phone; no payroll table written); `attendance-review-tab-check.py` 49/49.
+  **Not tested:** Railway.
+
+## Last Session — 2026-10-11 (Attendance enforcement PR-1: legacy Stage 6 late-deduction route closed)
+**Branch `fix/close-legacy-late-deduction` (on origin/main 8237205, main 18bef07 merged in), NOT merged.** Plan: private project `claude/attendance-review/PLAN_enforcement_v2.md`.
+- **Owner rulings 10 Oct:** D-1 the Attendance Review is the only place late/early deductions are decided; D-2 the August
+  legacy cuts stay as they are.
+- **Change:** `PUT /api/payroll/day-calculations/:code/late-deduction` answers 410 and writes nothing (same pattern as the
+  retired manual-deductions route; "Remove" with 0 days is refused too). Stage 6 drill-down: Apply/Remove buttons and the
+  mutation gone; a read-only note shows any stored legacy cut + remark, or "Late N times", and points to Analytics →
+  Attendance Review. `applyLateDeduction` helper removed from `utils/api.js` (no other caller). dist rebuilt.
+- **Deliberately NOT changed:** `services/recompute.js` still re-applies a stored `late_deduction_days` on a Stage 6 re-run.
+  The plan text said stop re-applying, but D-2 (later) keeps August as is — removing it would hand those days back on the
+  next August re-run. No new value can be written now, so the re-apply only ever holds old cuts. dayCalculation.js,
+  salaryComputation.js, schema.js untouched.
+- **Verified:** new `legacyLateDeductionRetired.test.js` 4 (all 4 fail on the old route); jest 88 suites / 1421;
+  `scripts/legacy-late-deduction-browser-check.py` 15/15 (hr on Stage 6: note for 9 lates, legacy 2-day cut shown read-only,
+  no panel for 2 lates, no Apply/Remove, PUT from the page → 410, all day_calculations rows byte-identical, 0 page errors).
+  **Not tested:** Railway.
+
 ## Last Session — 2026-10-10 (P1-12: Sidebar/Header hooks after early returns → layout crash on role change)
 **Branch `fix/sidebar-header-hook-order`, NOT merged.** Frontend only (`components/layout/Sidebar.jsx`, `Header.jsx`). Plan + log:
 `docs/ux-bulk/prs/P1-12/PLAN.md`, `PROGRESS.md`. Finding X-1.
@@ -211,7 +255,7 @@ Finding S-1, ruling Q12 = C (keep computed/reviewed/finalized, exclude paid, alw
   `--base` on a 96ee482 archive 5/5: no confirm, paid row in the file and re-stamped.
 - **Not tested:** Railway; real production data (Jul–Sep have 0 paid rows, so those files are byte-identical); Safari/Firefox.
 ## Last Session — 2026-10-10 (Gate pass PR-2: early exits allow for gate passes everywhere; detection fixed for night shifts)
-**Branch `fix/gate-pass-early-exit-wiring` (on origin/main 69f00a3), NOT merged.** Spec: private project `claude/gate-pass-quota/SPEC.md`.
+**Branch `fix/gate-pass-early-exit-wiring` (on origin/main 69f00a3), MERGED (#96).** Spec: private project `claude/gate-pass-quota/SPEC.md`.
 - **Found:** `services/earlyExitDetection.js` compared every punch-out with the DAY end time (night 12HR in 19:58 / out 08:09 →
   "711 min early"); ~18–25% of all `early_exit_detections` rows were such misreads (Sep 1–15: 270 of 1,472). The 1 Oct reimport
   had overwritten detection's `attendance_processed` writes with import's (correct, gate-pass-blind) values, so Attendance
@@ -236,7 +280,7 @@ Finding S-1, ruling Q12 = C (keep computed/reviewed/finalized, exclude paid, alw
   Sep values = import's. **Not tested:** Railway; a full-month replay of production rows (SQL tool shows 100 rows).
 
 ## Last Session — 2026-10-10 (Gate pass modal: name the month)
-**Branch `fix/gate-pass-month-label` (on origin/main 139faa7), NOT merged.** Frontend only (`components/GatePasses.jsx`).
+**Branch `fix/gate-pass-month-label` (on origin/main 139faa7), MERGED (#95).** Frontend only (`components/GatePasses.jsx`).
 - **Report:** hr created a September Short Leave for 19222; the modal still said "Used: nothing yet". The data was right —
   the modal opens on today's date (October) and the list follows the page's month picker (October). Nothing said which month.
 - **Fix:** label "This month" → "Allowance for <Month YYYY>" of the chosen date; "Used:" → "Used in <Month>:". A pass dated

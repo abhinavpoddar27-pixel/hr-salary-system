@@ -1,7 +1,7 @@
 import React, { useState, useMemo } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import toast from 'react-hot-toast'
-import api, { getDayCalculations, calculateDays, getEmployeeDailyAttendance, applyLeaveCorrection, getEmployeeLeaveBalance, getDayCalcStaleness, getLeaveRequests, withdrawLeaveRequest } from '../utils/api'
+import { getDayCalculations, calculateDays, getEmployeeDailyAttendance, applyLeaveCorrection, getEmployeeLeaveBalance, getDayCalcStaleness, getLeaveRequests, withdrawLeaveRequest } from '../utils/api'
 import { normalizeRole } from '../utils/role'
 import Modal from '../components/ui/Modal'
 import { useAppStore } from '../store/appStore'
@@ -137,20 +137,6 @@ export default function DayCalculation() {
     retry: 0
   })
   const staleness = stalenessRes?.data || {}
-
-  const lateDeductionMutation = useMutation({
-    mutationFn: ({ code, deductionDays, remark }) => api.put(`/payroll/day-calculations/${code}/late-deduction`, {
-      month,
-      year,
-      deductionDays,
-      remark
-    }),
-    onSuccess: (res) => {
-      toast.success(res.data.message || 'Late deduction applied')
-      refetch()
-    },
-    onError: (err) => toast.error(err.response?.data?.error || 'Failed to apply late deduction')
-  })
 
   // ── Leave Correction Modal State ──
   const [leaveModal, setLeaveModal] = useState(null) // { code, name, days_absent }
@@ -508,7 +494,6 @@ export default function DayCalculation() {
                               selectedMonth={month}
                               selectedYear={year}
                               daysInMonth={daysInMonth}
-                              lateDeductionMutation={lateDeductionMutation}
                             />
                           </DrillDownRow>
                         )}
@@ -758,7 +743,7 @@ export default function DayCalculation() {
 
 /* ─── Drill-Down Content ─────────────────────────────────────────── */
 
-function DrillDownContent({ r, selectedMonth, selectedYear, daysInMonth, lateDeductionMutation }) {
+function DrillDownContent({ r, selectedMonth, selectedYear, daysInMonth }) {
   const hasExtraDuty = (r.extra_duty_days || 0) > 0
 
   // Parse week breakdown
@@ -927,57 +912,22 @@ function DrillDownContent({ r, selectedMonth, selectedYear, daysInMonth, lateDed
         }
       />
 
-      {/* ─── Late Deduction Panel ─── */}
-      {(r.late_count || 0) >= 5 && (
-        <div className="p-3 bg-amber-50 border border-amber-200 rounded-lg">
-          <p className="text-xs font-semibold text-amber-800 mb-2">
-            ⚠ This employee was late {r.late_count} times. Apply late deduction?
-          </p>
-          <div className="flex items-center gap-3 flex-wrap">
-            <div>
-              <label className="label text-xs">Deduction (days)</label>
-              <input
-                type="number"
-                min="0"
-                max="5"
-                step="0.5"
-                defaultValue={r.late_deduction_days || 1}
-                id={`late-ded-${r.employee_code}`}
-                className="input w-20 text-xs"
-              />
-            </div>
-            <div className="flex-1">
-              <label className="label text-xs">Remark</label>
-              <input
-                type="text"
-                defaultValue={r.late_deduction_remark || `Late coming deduction for ${r.late_count} late arrivals`}
-                id={`late-remark-${r.employee_code}`}
-                className="input text-xs"
-                placeholder="Late deduction remark..."
-              />
-            </div>
-            <button
-              onClick={() => {
-                const days = parseFloat(document.getElementById(`late-ded-${r.employee_code}`).value) || 0
-                const remark = document.getElementById(`late-remark-${r.employee_code}`).value
-                lateDeductionMutation.mutate({ code: r.employee_code, deductionDays: days, remark })
-              }}
-              className="btn-primary text-xs mt-5"
-            >
-              Apply Deduction
-            </button>
-            {r.late_deduction_days > 0 && (
-              <button
-                onClick={() => lateDeductionMutation.mutate({ code: r.employee_code, deductionDays: 0, remark: '' })}
-                className="btn-secondary text-xs mt-5"
-              >
-                Remove
-              </button>
-            )}
-          </div>
-          {r.late_deduction_remark && (
-            <p className="text-xs text-amber-600 mt-1 italic">Current: {r.late_deduction_remark}</p>
+      {/* ─── Late deductions: decided in Attendance Review (legacy cut is read-only) ─── */}
+      {((r.late_deduction_days || 0) > 0 || (r.late_count || 0) >= 5) && (
+        <div className="p-3 bg-amber-50 border border-amber-200 rounded-lg" data-testid="late-deduction-readonly">
+          {(r.late_deduction_days || 0) > 0 ? (
+            <p className="text-xs text-amber-800">
+              Legacy late deduction: <span className="font-semibold">{r.late_deduction_days} day(s)</span> already cut from payable days.
+              {r.late_deduction_remark && <span className="italic"> ({r.late_deduction_remark})</span>}
+            </p>
+          ) : (
+            <p className="text-xs text-amber-800">
+              Late {r.late_count} times this month.
+            </p>
           )}
+          <p className="text-xs text-amber-700 mt-1">
+            Late and early-exit deductions are now decided in Analytics → Attendance Review and approved by finance. They can't be applied here.
+          </p>
         </div>
       )}
     </div>
