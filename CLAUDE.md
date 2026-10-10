@@ -1,3 +1,27 @@
+## Last Session — 2026-10-10 (P1-12: Sidebar/Header hooks after early returns → layout crash on role change)
+**Branch `fix/sidebar-header-hook-order`, NOT merged.** Frontend only (`components/layout/Sidebar.jsx`, `Header.jsx`). Plan + log:
+`docs/ux-bulk/prs/P1-12/PLAN.md`, `PROGRESS.md`. Finding X-1.
+- **Bug:** `NavItem` ran `React.useEffect` AFTER six role-based `return null`s; `Header` read `selectedCompany` with a hook
+  inside the conditional company-selector block. When the role or `allowedCompanies` changes IN PLACE — the `RequireAuth`
+  `/auth/me` refresh swaps the stored user without remounting the layout (stale localStorage role, admin changed the
+  user's role/companies) — the hook count changed and React threw #300/#310. Layout sits outside the page ErrorBoundary,
+  so the whole app went to the Sentry "Something went wrong" screen. Logout → login remounts Layout (no crash there).
+- **Fix:** NavItem computes `const hidden = <same 6 conditions>`, runs its hooks, then `if (hidden) return null` (useEffect
+  unchanged, planner Q1); Header's selector read lifted to the top (the two `useAppStore()` calls left as is, Q3). dist
+  rebuilt (own commit; vs a fresh 3d20021 build only the index chunk differs).
+- **Fragile:** every NavItem hook must stay ABOVE `if (hidden) return null` (comment at that line). No ESLint in the repo, so
+  `react-hooks/rules-of-hooks` catches nothing — FOLLOW-UP: add ESLint with that rule (would have caught both).
+- **Verified:** `backend/scripts/layout-hook-order-check.py` (Chromium, built dist, real admin/hr/finance + fictional
+  `test_viewer` logins, port 3112) 58/58 — per-role labels + selector, 6 in-place switches via an intercepted `/auth/me`
+  (admin→viewer, admin→hr, hr→admin, viewer→finance, all→one company ×2): no hook error, labels = target role, selector
+  right, a menu link still opens; 390px drawer; 0 page/console errors; 0 API ≥ 400 in the real-session parts. `--base` on
+  a 3d20021 worktree 15/15: all 6 switches crash (React #300/#310). Per-role labels + selector identical main vs branch.
+  jest 85 suites / 1380 before and after.
+- **Not tested:** Railway; Safari/Firefox; a chained switch in one page load (the refresh fires once per token per load —
+  one switch per load per pair, planner Q2).
+- **Found, not fixed:** the page reload sends a `session-analytics/events` beacon without a token → 401 (pre-existing).
+  NavItem `isActive` uses `item.to`, so a parent without `to` never auto-opens (pre-existing, not changed).
+
 ## Last Session — 2026-10-10 (Stage 7 register: DOJ to drill-down, smarter column widths)
 **Branch `feat/stage7-col-widths` (on origin/main b8b9759), NOT merged.** Frontend display only.
 - **What:** DOJ column removed from the register (Everything 25 → 24); date of joining (+ new-joiner holiday note) now heads the

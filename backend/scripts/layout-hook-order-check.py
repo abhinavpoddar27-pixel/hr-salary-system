@@ -168,6 +168,11 @@ try:
             check(f'{name}: labels = {bb} labels', base_labels[bb], labels(pg))
             expect_sel = comps == ['*'] or len(comps) > 1
             check(f'{name}: company selector shown = {expect_sel}', expect_sel, selector_shown(pg))
+            # user keeps working after the switch: open the last visible menu link, still no error
+            link = pg.locator('aside nav li > a').last
+            href = link.get_attribute('href'); link.click(); pg.wait_for_load_state('networkidle'); time.sleep(.5)
+            check(f'{name}: after the switch, menu link {href} opens with no error', (href, False, []),
+                  (pg.evaluate('() => location.pathname'), crashed(pg), log['errs']))
             if expect_sel:
                 pg.locator('header select').first.select_option(ONE_CO); time.sleep(.3)
                 check(f'{name}: company selector still works', ONE_CO, pg.locator('header select').first.input_value())
