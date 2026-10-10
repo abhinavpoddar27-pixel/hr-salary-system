@@ -26,4 +26,6 @@
     before the no-cache check was added). Base run on a 96ee482 archive (`git archive`, committed dist): 5/5 — Nov file
     downloads with no confirm, paid row in the file and re-stamped.
   - jest after: 82 suites / 1340 pass (baseline 81 / 1332; +8 new).
-- [ ] P1.7 self-debug, v2, CLAUDE.md Last Session, push
+- [x] P1.7 self-debug + user simulation (cancel, lost-file re-open, month with no missing bank, phone): caught 2 harness
+  bugs (company cleared at login → pick it in the page; month store rewritten → pick month in the page), 0 app bugs;
+  CLAUDE.md Last Session entry; pushed. DONE — planner opens the PR.
