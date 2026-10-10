@@ -8,8 +8,8 @@
 
 ## RESUME (5 lines — read first)
 1. Branch `feat/wide-layout`, repo `/home/claude/hr-salary-system`. Frontend display only. Owner merges via GitHub web UI.
-2. Current checkpoint: **CP-8 (push `feat/wide-layout`, verify HEAD == origin/feat/wide-layout)**.
-3. Done: CP-0…CP-7. Owner has seen the before/after renders and approved the layout (10 Oct 2026, 16:19 IST).
+2. Current checkpoint: **CP-9 (OWNER: open PR feat/wide-layout → main in GitHub web UI, merge; Railway deploys)**.
+3. Done: CP-0…CP-8 (pushed f24ea82, SHA verified via ls-remote). Owner has seen the before/after renders and approved the layout (10 Oct 2026, 16:19 IST).
 4. Checks: `npm run build --prefix frontend` → `python3 backend/scripts/wide-layout-check.py .` (must be 47/47) → `python3 backend/scripts/wide-layout-render.py . /home/claude/renders/after` (0 page errors).
 5. Never push to main. Never touch backend/, salaryComputation.js, dayCalculation.js, schema.js, payroll.js.
 
@@ -24,7 +24,7 @@
 | CP-5 | Verify: 47/47 checks (re-run independently), AFTER renders, owner review page | DONE | wide-layout-check.py 47/47; review artifact published; owner approved |
 | CP-6 | Merge origin/main (909c803, PR #77 touched LoanImport.jsx + dist) → resolve → rebuild dist on merged tree → re-run check + render | DONE | merged 02e1115 (#76 + #77) in 2b442ec; only dist conflicts (rebuilt); 47/47; render 60 PNG 0 errors |
 | CP-7 | CLAUDE.md "Last Session" entry for this work + this file marked complete; commit | DONE | CLAUDE.md top entry "Wide layout: 9 pages full width + Stage 7 register rework" |
-| CP-8 | Push `feat/wide-layout`; verify `git rev-parse HEAD` == `git rev-parse origin/feat/wide-layout` | TODO | |
+| CP-8 | Push `feat/wide-layout`; verify `git rev-parse HEAD` == `git rev-parse origin/feat/wide-layout` | DONE | pushed; local HEAD = origin f24ea82 (git ls-remote) |
 | CP-9 | Owner opens PR in GitHub UI and merges; Railway deploys | OWNER | |
 | CP-10 | Post-deploy check on production (list below) | OWNER + chat | |
 
@@ -69,3 +69,4 @@
 - 10 Oct 2026 — CP-0…CP-5 done in one chat session (Opus agents for harness + build).
 - 10 Oct 2026 16:2x IST — file rewritten as the checkpoint document; CP-6 opened (main moved to 909c803).
 - 10 Oct 2026 — CP-6 (merge 02e1115, commit 2b442ec) and CP-7 (CLAUDE.md entry) done; next CP-8.
+- 10 Oct 2026 — CP-6/CP-7 done (merged main 02e1115 = #76 + #77; 47/47; 0 page errors). CP-8 pushed f24ea82.
