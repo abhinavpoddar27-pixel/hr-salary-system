@@ -9,7 +9,8 @@ Finding S-1, ruling Q12 = C (keep computed/reviewed/finalized, exclude paid, alw
   untouched (totals pass through). `SalesSalaryCompute.jsx`: the confirm ALWAYS opens — "Download bank (NEFT) file?",
   "N people · ₹X", lines only when > 0 (not finalized / already in an earlier NEFT file / marked paid — left out (₹) /
   no bank account or IFSC — left out + the old table); no held count (ruling). `utils/api.js`: preview sends `fresh`
-  (no-cache). dist rebuilt (own commit; api.js lives in the index chunk, so most chunk hashes rotate).
+  (no-cache). Review fixes: `downloadNEFT` has a `useRef` in-flight guard (two clicks → one file); button says
+  "Download NEFT (N people)"; the duplicate "Total to export" line is gone. Low-2 (preview/download race) is in the register. dist rebuilt (own commit; api.js lives in the index chunk, so most chunk hashes rotate).
 - **Fragile:** the preview counts and the file come from one function — keep the eligibility filter in ONE query. A paid
   row keeps its original `neft_exported_at` (the paid guardrail only needs it set). A month with paid rows gets a shorter
   file and new Sr numbers. Someone paid outside the app but not marked paid is still in the file (only the "earlier NEFT
@@ -17,7 +18,7 @@ Finding S-1, ruling Q12 = C (keep computed/reviewed/finalized, exclude paid, alw
 - **Verified:** jest 81/1332 → 82/1340; new `salesNeftEligibility.test.js` 8 (6 fail on the 96ee482 service; the 2 that
   pass: no-paid byte identity, finance 403). Plant bank file md5 and a no-paid sales NEFT md5 identical 96ee482 vs branch
   on a scratch DB. `backend/scripts/sales-neft-confirm-check.py` (Chromium, built dist, hr, port 3103, fictional S9xx)
-  37/37 — counts/₹ lines exact, Cancel = no download/stamp/audit, download = 7 lines without paid/hold, only file rows
+  40/40 — counts/₹ lines exact, double click = 1 download request + 1 audit row (39/40 with the guard removed), Cancel = no download/stamp/audit, download = 7 lines without paid/hold, only file rows
   stamped, paid stamp untouched, Nov (no missing) still confirms, preview no-cache, 390px, 0 page/console errors, 0 API ≥ 400.
   `--base` on a 96ee482 archive 5/5: no confirm, paid row in the file and re-stamped.
 - **Not tested:** Railway; real production data (Jul–Sep have 0 paid rows, so those files are byte-identical); Safari/Firefox.
