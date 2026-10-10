@@ -749,6 +749,8 @@ export const attendanceReviewPreview = (month, year, releaseDays = [], overrides
   api.get(AR, { params: { month, year, releaseDays: releaseDays.join(','), ...(overrides.length ? { overrides: JSON.stringify(overrides) } : {}) }, headers: arFresh })
 export const attendanceReviewConfig = (month, year) => api.get(`${AR}/config`, { params: { month, year }, headers: arFresh })
 export const attendanceReviewSaveConfig = (effective_from, config) => api.put(`${AR}/config`, { effective_from, config })
+// Apply ticked suggestions (accept / dismiss) as one new rules version effective that month
+export const attendanceReviewApplySuggestions = (body) => api.post(`${AR}/suggestions`, body)
 export const attendanceReviewRuns = () => api.get(`${AR}/runs`, { headers: arFresh })
 export const attendanceReviewRun = (id) => api.get(`${AR}/runs/${id}`, { headers: arFresh })
 export const attendanceReviewGenerate = (body) => api.post(`${AR}/runs`, body)
