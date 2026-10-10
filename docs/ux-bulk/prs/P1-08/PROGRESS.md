@@ -23,10 +23,13 @@
 | 7 | self-debug + user simulation + v2 | done | v1 script fixes (QuickView div.grid matched first → GRID selector; accordion → case C = switch employee; Sundays render grey → weekday-aware days; calendar hides grid heading → panel anchored on view toggle). Self-debug: only caller of getAttendanceRegister is this page; editRecord carries employee_code (ap.*). Informational: calendar opened < 5 s before a save stays stale (no `fresh` on getEmployeeDailyAttendance — outside Q1, reported). No source change for v2 |
 | 8 | jest after | done | 85 suites / 1377 pass |
 | 9 | CLAUDE.md Last Session entry | done | prepended at top |
-| 10 | final push + HEAD == origin | done | this commit; verified with ls-remote |
+| 10 | final push + HEAD == origin | done | 471b1f4; verified with ls-remote |
+| 11 | Ruling: calendar read no-cache + case D2 | done | 639224c (api.js + script), dist 05f006f; old dist D2 FAIL (calendar 'A' 1 s after reopen) → new dist 34/34 twice; jest unchanged (no backend change since 85/1377) |
+| 12 | CLAUDE.md + final push | done | this commit |
 
 ## Rulings
 - Programme "go" from owner 10 Oct 2026; planner approves Phase 0.
 - Q1: YES — add `fresh` to getAttendanceRegister in utils/api.js IF the quick-save case is proven stale (script before + after).
 - Q2: INCLUDE — invalidate ['daily-attendance', code, month, year] for the edited employee in the same onSuccess.
+- Recalc invalidation extension: ACCEPTED. Calendar stale < 5 s: add `fresh` to getEmployeeDailyAttendance (ruling, step 11).
 - Miss-punch cell stays red after a generic edit → CLAUDE.md "found, not fixed".
