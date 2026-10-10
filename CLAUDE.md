@@ -1,29 +1,34 @@
 ## Last Session — 2026-10-11 (P1-25: Employee edit could change gross salary with no approval and no role check)
-**Branch `fix/employee-edit-no-direct-gross`, NOT merged. MONEY PR — independent review before PR.** Plan + log:
-`docs/ux-bulk/prs/P1-25/PLAN.md`, `PROGRESS.md`. Finding N-12 (P1-23 review). Rulings Q1–Q4 (11 Oct 2026).
+**Branch `fix/employee-edit-no-direct-gross`, NOT merged. MONEY PR — independent review done (SHIP WITH FIXES F1–F3, applied).**
+Plan + log: `docs/ux-bulk/prs/P1-25/PLAN.md`, `PROGRESS.md`. Finding N-12 (P1-23 review). Rulings Q1–Q4 (11 Oct 2026).
 - **Bug:** `PUT /api/employees/:code` had `gross_salary` in `allowedFields` and no role guard (router behind requireAuth
   only) → any logged-in role (viewer included) could move `employees.gross_salary` and rescale `salary_structures`
   (`syncSalaryStructureFromEmployee`) with no `salary_change_requests` row, no finance approval, no audit row. Stage 7 pays it.
+  The same route also wrote `basic/da/hra/conveyance/otherAllowances` straight into `salary_structures` (PF base).
 - **Fix (`routes/employees.js`, PUT /:code only):** `requireHrOrAdmin` on the route (403 before the lookup, like Mark Left;
   prod callers hr 139× / admin 5×). After the P4 exit check: a gross that differs from the stored one by > 0.01 (NULL = 0)
   or is unreadable → 400 `{code:'GROSS_CHANGE_NEEDS_APPROVAL', error:'Change salary through Salary → request a change
   (finance approves)'}`, whole edit refused, nothing written. Every role, admin included (Q4); a FIRST gross on an employee
-  with none is refused too (Q3). Re-sending the current value (incl. "15000.00") still passes. No frontend change: the Edit
-  modal never sends gross (SalaryModal → `PUT /:code/salary` → Pending request = the one path).
+  with none is refused too (Q3). A same-value resend passes and writes the STORED gross, never the sent text (F1:
+  '0x3A98', 15000.009, ''). Components (F3): a changed basic/da/hra/conveyance/otherAllowances vs the latest structure →
+  400 `SALARY_CHANGE_NEEDS_APPROVAL` (same message); a same-value resend writes the stored components, so a component left
+  out of the body keeps its value instead of becoming 0 (only when basic/da trigger the structure write).
+  **UI (F2, `Employees.jsx`):** row "Edit" and drill-down "Edit Details" only for hr/admin (`canEditEmployee`, same gate as
+  canMarkLeft). The Edit modal never sends gross or components (SalaryModal → `PUT /:code/salary` = the one path). dist rebuilt.
 - **Tests changed on purpose:** `statutoryWriters` T9a re-sends the current gross; T8b seeds 12000 then re-sends it (sync
-  create path still covered) (Q1). `markLeftRoleGuard` viewer/finance exit-via-edit → 403 instead of 400 (Q2).
+  create path still covered) (Q1); W103 re-sends zero components (insert path + flags still covered) (F3).
+  `markLeftRoleGuard` viewer/finance exit-via-edit → 403 instead of 400 (Q2).
 - **Fragile:** re-sending the SAME gross still runs `syncSalaryStructureFromEmployee` (pre-existing) — if the latest structure's
-  gross differs from `employees.gross_salary`, that resync rescales the structure to the employee gross. A new screen
-  that puts gross into the Edit modal will get a 400.
-- **Verified:** jest 92/1478 → 93/1501; new `employeeEditGrossGuard.test.js` 23 (real JWTs; 12 fail on origin/main 0ea1409:
-  hr/admin change, first gross, unreadable ×3, 0.01 boundary, finance/viewer/supervisor/employee 403, guard-before-404).
-  `node backend/scripts/employee-edit-gross-guard-check.js` (real server.js, port 3125, real logins) 22/22; `--base` on a
-  0ea1409 worktree 7/7: hr AND viewer move gross straight through, structure rescaled, no request. salaryComputation.js
-  and every DO-NOT-MODIFY file untouched (diff = employees.js + 3 tests + script).
-- **Not tested:** Railway; production data; the browser (no frontend change).
-- **Found, not fixed:** (1) finance has the `employees` page and the Edit button is not role-gated → a finance Save now
-  shows a 403 toast "HR or admin access required" (prod: finance never called this route); hide the button for finance
-  later. (2) POST /employees still accepts `gross_salary` on create with no approval (P2-11).
+  gross differs from `employees.gross_salary`, that resync rescales the structure to the employee gross. The component map
+  (`COMPONENT_KEYS`, body key → structure column) must match the structure-write block further down the handler.
+- **Verified:** jest 92/1478 → 93/1513; new `employeeEditGrossGuard.test.js` 35 (real JWTs; 12 of the first 23 fail on
+  origin/main 0ea1409; 11 of the 12 F1/F3 tests fail on the pre-review commit 5042937). `node backend/scripts/employee-edit-
+  gross-guard-check.js` (real server.js, port 3125, real logins) 26/26; `--base` on a 0ea1409 worktree 7/7: hr AND viewer move
+  gross straight through, structure rescaled, no request. Browser `backend/scripts/employee-edit-gross-guard-check.py`
+  (Chromium, built dist) 16/16: hr sees Edit + Edit Details and saves (200, gross unchanged), finance/viewer see neither,
+  0 page/console errors, 0 API ≥ 400; `--base` 1/1 (finance sees Edit). salaryComputation.js and every DO-NOT-MODIFY file untouched.
+- **Not tested:** Railway; production data; Safari/Firefox.
+- **Found, not fixed:** POST /employees still accepts `gross_salary` (and components) on create with no approval (P2-11).
 
 ## Last Session — 2026-10-11 (Attendance Review: standing leave-outs + monthly suggestions; contractor loaders)
 **Branch `feat/attendance-review-smart-leaveouts` (on origin/main bbb8a34), NOT merged.** Private plan/rulings: project `claude/attendance-review/`.

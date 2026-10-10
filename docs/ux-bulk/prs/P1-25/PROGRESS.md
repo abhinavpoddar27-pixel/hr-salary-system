@@ -4,7 +4,7 @@
 - Branch: `fix/employee-edit-no-direct-gross` (base origin/main 0ea1409). Worktree /home/claude/wt-p1-25 only.
   Never push to main; never open/merge a PR; never write to production; never kill processes you did not start.
 - Spec: `docs/ux-bulk/prs/P1-25/PROMPT.md`. Plan: `docs/ux-bulk/prs/P1-25/PLAN.md`.
-- Current phase: **Review fixes (SHIP WITH FIXES, F1–F3) in progress.** Do NOT open or merge a PR.
+- Current phase: **COMPLETE incl. review fixes F1–F3 — handed off.** Do NOT open or merge a PR.
 - Continue from the first step whose status is not `done`; never redo a done step.
 - Targets: `backend/src/routes/employees.js` PUT /:code only (+ new test, + new verify script, + test edits if Q1/Q2 OK).
   No frontend change (Edit modal never sends gross — PLAN). Server port 3125. Fictional data only (repo public).
@@ -25,7 +25,7 @@
 | 10 | F1 store the STORED gross on a same-value resend + F3 refuse changed basic/da/hra/conveyance/otherAllowances | done | Edit modal confirmed: never sends components. +12 tests (11 fail on 5042937; '15000.00 ' already OK there). statutoryWriters W103 re-sends zeros. 3 suites 97/97 |
 | 11 | F2 hide Edit / Edit Details for non hr/admin + dist (own commit) | done | canEditEmployee = hr/admin; src 1 commit, dist 6c1f9be |
 | 12 | browser check finance/viewer/hr | done | employee-edit-gross-guard-check.py 16/16 (hr Edit+Edit Details+save 200, finance/viewer hidden, 0 errors); --base on origin/main 1/1 (finance sees Edit). Node check 26/26 (+F1/F3), --base 7/7 |
-| 13 | full jest + check script + CLAUDE.md + push | todo | |
+| 13 | full jest + check script + CLAUDE.md + push | done | 93 suites / 1513 pass; CLAUDE.md entry updated; pushed |
 
 ## Rulings
 - GO 11 Oct 2026: Q1 yes (T9a resend same gross, T8b seed + resend), Q2 yes (viewer/finance → 403), Q3 yes (first gross refused), Q4 yes (admin no bypass). Review 11 Oct: F1 write stored gross; F2 hide Edit buttons for non hr/admin; F3 components same rule (code SALARY_CHANGE_NEEDS_APPROVAL). MONEY PR: stop and report after checks; planner runs independent review.
