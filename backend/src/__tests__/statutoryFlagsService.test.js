@@ -38,6 +38,23 @@ describe('parseFlagFile', () => {
     expect(bad.ok).toBe(false);
   });
 
+  test('review fix 3: sales rows for one code whose company differs only in case / spacing → blocking "repeats"; apply refused, nothing written', () => {
+    const lower = S.COMPANY.toLowerCase();
+    const spaced = `  ${S.COMPANY.replace(/ /g, '   ')} `;
+    for (const variant of [lower, spaced]) {
+      const r = SF.parseFlagFile(xlsxBuf([SALES_HDR, ['Z900', S.COMPANY, 'X', 'Y', 'N', 'Y', '', '', ''], ['Z900', variant, 'X', 'N', 'N', 'N', '', '', '']]), 'sales');
+      expect(r.ok).toBe(false);
+      expect(r.errors).toEqual([expect.stringMatching(/^Row 3: code Z900 \/ .* repeats row 2$/)]);
+    }
+    const db = S.newDb();
+    const e = S.salesEmp(db, { code: 'Z900' });
+    S.salesStructure(db, e, '2025-01');
+    const before = S.salesRows(db, e);
+    expect(() => S.applyFile(db, 'sales', S.salesFile(S.srow('Z900', S.COMPANY, 1, 0, 1), S.srow('Z900', lower, 0, 0, 0)))).toThrow(/repeats row 2/);
+    expect(S.salesRows(db, e)).toEqual(before);
+    expect(db.prepare('SELECT COUNT(*) c FROM statutory_flag_batches').get().c).toBe(0);
+  });
+
   test('unreadable Y/N value → blocking (never guessed)', () => {
     const r = parsePlant(prow('91006', 'maybe', 'N', 'Y'));
     expect(r.ok).toBe(false);

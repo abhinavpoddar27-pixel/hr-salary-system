@@ -68,6 +68,9 @@ function parseYesNo(v) {
   return null;
 }
 
+/** Company compare key: trim, collapse spaces, lower case (parser repeat check and matcher). */
+const normCompany = (c) => String(c || '').trim().replace(/\s+/g, ' ').toLowerCase();
+
 function cellText(v) {
   if (v === null || v === undefined) return '';
   if (typeof v === 'number') return Number.isInteger(v) ? v.toFixed(0) : String(v);
@@ -109,7 +112,9 @@ function parseFlagFile(buffer, scope) {
     const code = cellText(row.code);
     if (!code) return; // fully blank line
     const company = scope === SALES ? cellText(row.company) : null;
-    const key = scope === SALES ? `${code}|${company}` : code;
+    // same company normalisation as the matcher: rows that match the same
+    // employee must collide here (review fix 3)
+    const key = scope === SALES ? `${code}|${normCompany(company)}` : code;
     if (seen.has(key)) {
       errors.push(`Row ${line}: code ${code}${scope === SALES ? ` / ${company}` : ''} repeats row ${seen.get(key)}`);
       return;
@@ -197,8 +202,7 @@ function matchEmployee(db, scope, row) {
   }
   const all = db.prepare('SELECT * FROM sales_employees WHERE code = ?').all(row.code);
   // case / spacing-insensitive company compare (UNIQUE(code, company) makes this unambiguous)
-  const normCo = (c) => String(c || '').trim().replace(/\s+/g, ' ').toLowerCase();
-  const exact = all.filter((e) => normCo(e.company) === normCo(row.company));
+  const exact = all.filter((e) => normCompany(e.company) === normCompany(row.company));
   if (exact.length === 1) return { emp: exact[0] };
   if (exact.length > 1) return { error: `Ambiguous — ${exact.length} sales employees with code ${row.code} in ${row.company}` };
   if (all.length === 0) return { error: 'Unmatched code — no sales employee with this code' };
