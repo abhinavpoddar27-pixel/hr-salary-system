@@ -26,6 +26,37 @@
   approved card for ~5 s (clicking it again → 404 "already processed").
 - **Process note:** during this build a broad `pkill -f jest` was run once and may have killed other parallel builders'
   jest runs (all root) around 19:46 local — re-run their suites if a run ended abnormally.
+## Last Session — 2026-10-11 (Attendance Review: standing leave-outs + monthly suggestions; contractor loaders)
+**Branch `feat/attendance-review-smart-leaveouts` (on origin/main bbb8a34), NOT merged.** Private plan/rulings: project `claude/attendance-review/`.
+- **Owner rulings 11 Oct:** senior staff marked once per person; piece-rate crews marked once per department; contractor workers
+  with a loading designation — early exits not counted (permanent loaders still assessed); suggestions apply only on one click.
+- **Standing rules** (config, no schema change): `standing_people {code: {rule exclude|early_exempt|held, reason, source?, set_by?,
+  set_at?}}`, `standing_departments {dept: {rule exclude, reason}}`. `mergeConfig` folds the older lists in (reason "From the
+  earlier list") and DERIVES excluded_codes / excluded_departments / early_excluded_codes / held_codes, so the rest of the engine
+  is unchanged. PUT /config stores the normalised shape (`toStoredConfig`). Rules editor: tables with a reason column (reason
+  required) + "Contractor loaders may leave once dispatch is done" tick; loading patterns stay a text box.
+- **Suggestions** (`suggestions()`, returned as `result.suggestions`, shown live from the preview, never from a stored run):
+  stale_person (left / no work / would reach no list or notice in either month; NOT for a crew loader booked elsewhere; a
+  `source: master_fit` rule is retired once the master fits), stale_department, redundant_remeasure (master basis), loader_crew
+  (contract dept ≥3 people, ≥60% contract loaders), loader_outside_crew (same loading designation as 2+ of a ruled crew),
+  senior_hint (deduction + gross ≥ `senior_hint_gross` 75000), master_fit (master basis; ≥8 assessed days, late or early on ≥60%
+  counting only what is assessed for that person; another shift fits within 40 min, or the master is 90+ min off and nothing
+  fits → "create about HH:MM–HH:MM"), no_master (data fix only). Shifts compared by TIMES (production has two 09:30–18:30
+  shifts). `config.dismissed_suggestions` keeps dismissals. POST `/suggestions {month, year, accept[], dismiss[]}` → ONE new
+  version effective that month (409 if a later-effective version exists or a key is no longer shown), audit stage
+  ATTENDANCE_REVIEW_SUGGESTIONS. On the master basis the old import-basis "Shift set-up issues" section is hidden.
+- **Live replay (Sep 2026, master-fit rule on real punches):** flags the housekeeping group that works ~08:00–18:00 on 10-hour /
+  07:30 masters (create a shift), one 07:00–19:00 worker and one 10:00–19:30; people who are simply late on a right master
+  are not flagged. Exclusion impact measured: with no hand exclusions the September list grows from 10 to 17 — the extra 7 are
+  piece-rate crew members and two senior staff only.
+- **Fragile:** a dismissal is permanent per key (person/department + kind). Default `contract_loaders_early_exempt` true —
+  applies to every saved version that lacks the key. Editor save must carry `dismissed_suggestions` (it does).
+- **Verified:** new `attendanceReviewSmartLeaveouts.test.js` 22 (20 fail on the old engine/route; the duplicate-shift test fails
+  on the id-based rule); jest 92 suites / 1478; `scripts/attendance-review-suggestions-check.py` 29/29 (5 suggestions → tick →
+  Apply → v2 → panel empty → editor tables → reasonless row refused → v3 keeps dismissal → phone; no payroll write);
+  `attendance-review-tab-check.py` 49/49 (now adds a standing person instead of typing a code);
+  `attendance-review-master-basis-check.py` 26/26. **Not tested:** Railway.
+
 ## Last Session — 2026-10-11 (Attendance enforcement PR-A: Attendance Review measures on the current master shift)
 **Branch `feat/attendance-review-master-basis`, stacked on PR-1 `fix/close-legacy-late-deduction` (#101) — merge #101 first. NOT merged.**
 Plan: private project `claude/attendance-review/PLAN_enforcement_v2.md` (owner rulings B, D-12, D-13, MP-1, MP-3, MP-4).

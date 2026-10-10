@@ -43,6 +43,10 @@ const DEFAULT_CONFIG = Object.freeze({
     odd_punch_minutes: 180,        // in-punch more than this many minutes before the master start → not assessed (odd punch)
     night_start_minutes: 1200,     // night work on a 12-hour day master is measured from 20:00 (1200) for 12 hours
     stayed_late_minutes: 20,       // stayed late = out ≥ scheduled end + this many minutes (recomputed on the master)
+    // suggestions
+    senior_hint_gross: 75000,      // a person about to be deducted with gross ≥ this → suggest "senior staff — not assessed"
+    master_fit_min_days: 8,        // master-fit check needs at least this many assessed full days in the month
+    master_fit_share: 0.6,         // … late or early (raw) on at least this share of them
   }),
   // 'import' = the shift the import matched each day (is_late_arrival / is_early_departure as stored);
   // 'master' = each person's CURRENT master shift (employees.default_shift_id), measured from the punches (owner ruling 10 Oct 2026).
@@ -59,6 +63,12 @@ const DEFAULT_CONFIG = Object.freeze({
   excluded_departments: Object.freeze([]),  // left out of every output (e.g. piece-rate contractors)
   early_excluded_codes: Object.freeze([]),  // manual override: early exits not assessed (normally empty — the shift check handles wrong shifts)
   held_codes: Object.freeze([]),            // listed as held, no action / notice
+  // Standing rules (set once, carry forward until removed, each with a reason). The four lists above are DERIVED from these
+  // by mergeConfig; older configs that only have the lists are folded in with the reason "From the earlier list".
+  standing_people: Object.freeze({}),       // { code: { rule: 'exclude' | 'early_exempt' | 'held', reason, source?, set_by?, set_at? } }
+  standing_departments: Object.freeze({}),  // { department: { rule: 'exclude', reason, source?, set_by?, set_at? } } e.g. a piece-rate crew
+  contract_loaders_early_exempt: true,      // contractor workers with a loading designation: early exits not counted (owner ruling 11 Oct 2026)
+  dismissed_suggestions: Object.freeze({}), // { key: { by, at } } — a dismissed suggestion is not shown again
   remeasure: Object.freeze({}),             // { code: { start, end 'HH:MM', late_grace 9, early_grace 15, left_late 'system'|'shift'|'off', left_late_minutes 20, hours_complete false, hours_grace 10 } }
 });
 
@@ -70,19 +80,53 @@ const WORKED = "('P','WOP','½P','WO½P')";
 
 // ── config ────────────────────────────────────────────────────────────────
 
+const LEGACY_REASON = 'From the earlier list';
+const PERSON_RULES = ['exclude', 'early_exempt', 'held'];
+const DEPT_RULES = ['exclude'];
+
+/** Standing rules from a stored config: the explicit maps, plus the older code / department lists folded in. */
+function standingFrom(s) {
+  const people = {}; const depts = {};
+  const add = (map, k, rule) => { const key = String(k).trim(); if (key && !map[key]) map[key] = { rule, reason: LEGACY_REASON }; };
+  (s.excluded_codes || []).forEach((c) => add(people, c, 'exclude'));
+  (s.early_excluded_codes || []).forEach((c) => add(people, c, 'early_exempt'));
+  (s.held_codes || []).forEach((c) => add(people, c, 'held'));
+  (s.excluded_departments || []).forEach((d) => add(depts, d, 'exclude'));
+  for (const [k, v] of Object.entries(s.standing_people || {})) people[String(k).trim()] = { ...v };
+  for (const [k, v] of Object.entries(s.standing_departments || {})) depts[String(k).trim()] = { ...v };
+  return { people, depts };
+}
+
 function mergeConfig(stored) {
   const s = stored && typeof stored === 'object' ? stored : {};
+  const st = standingFrom(s);
+  const codesWith = (rule) => Object.entries(st.people).filter(([, v]) => v.rule === rule).map(([k]) => k);
   return {
     ...DEFAULT_CONFIG,
     ...s,
     thresholds: { ...DEFAULT_CONFIG.thresholds, ...(s.thresholds || {}) },
     loading_designation_patterns: s.loading_designation_patterns || [...DEFAULT_CONFIG.loading_designation_patterns],
-    excluded_codes: (s.excluded_codes || []).map(String),
-    excluded_departments: (s.excluded_departments || []).map(String),
-    early_excluded_codes: (s.early_excluded_codes || []).map(String),
-    held_codes: (s.held_codes || []).map(String),
+    standing_people: st.people,
+    standing_departments: st.depts,
+    excluded_codes: codesWith('exclude'),
+    excluded_departments: Object.entries(st.depts).filter(([, v]) => v.rule === 'exclude').map(([k]) => k),
+    early_excluded_codes: codesWith('early_exempt'),
+    held_codes: codesWith('held'),
+    contract_loaders_early_exempt: s.contract_loaders_early_exempt !== false,
+    dismissed_suggestions: { ...(s.dismissed_suggestions || {}) },
     remeasure: { ...(s.remeasure || {}) },
   };
+}
+
+/**
+ * The config to STORE once standing rules exist: the older lists are dropped (they live in standing_* now).
+ * Used by the suggestions endpoint; the rules editor sends this shape too.
+ */
+function toStoredConfig(s) {
+  const st = standingFrom(s || {});
+  const out = { ...(s || {}), standing_people: st.people, standing_departments: st.depts };
+  for (const k of ['excluded_codes', 'excluded_departments', 'early_excluded_codes', 'held_codes']) delete out[k];
+  return out;
 }
 
 const HHMM = /^([01]\d|2[0-3]):[0-5]\d$/;
@@ -110,6 +154,17 @@ function validateConfig(c) {
   if (c.late_full_hours !== undefined && typeof c.late_full_hours !== 'boolean') errs.push('late_full_hours must be true or false');
   if (c.assessment_basis !== undefined && !BASES.includes(c.assessment_basis)) errs.push('assessment_basis must be import | master');
   if (c.assess_fixed_miss_punch !== undefined && typeof c.assess_fixed_miss_punch !== 'boolean') errs.push('assess_fixed_miss_punch must be true or false');
+  if (c.contract_loaders_early_exempt !== undefined && typeof c.contract_loaders_early_exempt !== 'boolean') errs.push('contract_loaders_early_exempt must be true or false');
+  for (const [key, rules, label] of [['standing_people', PERSON_RULES, 'code'], ['standing_departments', DEPT_RULES, 'department']]) {
+    if (c[key] === undefined) continue;
+    if (!c[key] || typeof c[key] !== 'object' || Array.isArray(c[key])) { errs.push(`${key} must be an object keyed by ${label}`); continue; }
+    for (const [k, v] of Object.entries(c[key])) {
+      if (!String(k).trim()) errs.push(`${key}: empty ${label}`);
+      if (!v || !rules.includes(v.rule)) errs.push(`${key} ${k}: rule must be ${rules.join(' | ')}`);
+      if (!v || typeof v.reason !== 'string' || v.reason.trim().length < 3) errs.push(`${key} ${k}: a reason of at least 3 characters is required`);
+    }
+  }
+  if (c.dismissed_suggestions !== undefined && (!c.dismissed_suggestions || typeof c.dismissed_suggestions !== 'object' || Array.isArray(c.dismissed_suggestions))) errs.push('dismissed_suggestions must be an object');
   for (const k of ['loading_designation_patterns', 'excluded_codes', 'excluded_departments', 'early_excluded_codes', 'held_codes']) {
     if (c[k] !== undefined && !isCodeList(c[k])) errs.push(`${k} must be a list of non-empty strings`);
   }
@@ -337,6 +392,12 @@ SELECT c AS code, kind, COUNT(*) AS days FROM (
   UNION ALL SELECT c, 'miss_punch_open' FROM base WHERE substr(d,1,7) = @cur AND st IN ${WORKED} AND mp = 1
 ) GROUP BY c, kind ORDER BY kind, c`;
 
+/** Master basis: one row per worked full day with punches (day mode, or no master / odd punch) — for the master-fit check. */
+const MASTER_DAYS_SQL = MASTER_BASE.replace(/,$/, '') + `
+SELECT c AS code, mode, inm, otm, lt, er FROM m5
+WHERE substr(d,1,7) = @cur AND st IN ${WORKED} AND mp = 0 AND half = 0 AND inm IS NOT NULL AND otm IS NOT NULL
+  AND mode IN ('day', 'no_master', 'odd_punch') ORDER BY c, d`;
+
 const RELEASE_DAYS_SQL = `
 SELECT date, COUNT(*) AS worked,
   SUM(CASE WHEN COALESCE(is_early_departure,0) = 1 AND early_by_minutes > @eMin AND early_by_minutes < @eMax THEN 1 ELSE 0 END) AS early
@@ -548,10 +609,12 @@ function applyExclusions(byCode, cfg) {
   const kept = []; const excluded = []; const heldList = [];
   for (const p of byCode.values()) {
     if (exCodes.has(p.code) || exDept.has(String(p.department || '').toUpperCase())) { excluded.push(p.code); continue; }
+    // contractor loaders may leave once dispatch is done → early exits not counted (owner ruling 11 Oct 2026)
+    p.contract_loader = p.loading && p.group === 'Contract' && cfg.contract_loaders_early_exempt !== false;
     for (const m of [p.cur, p.prev]) {
       if (!m) continue;
       m.lates_counted = p.loading ? 0 : m.lates; m.late_min_counted = p.loading ? 0 : m.late_min;
-      const ee = earlyEx.has(p.code);
+      const ee = earlyEx.has(p.code) || p.contract_loader;
       const fit = !ee && shiftFitApplies(m, cfg);
       m.fit_applied = fit; m.early_raw = m.early_exits;
       m.fit_excused = fit ? m.early_exits - m.early_short : 0;
@@ -561,7 +624,7 @@ function applyExclusions(byCode, cfg) {
       m.fit_confirm_master = fit && isHabitualEarly(m, cfg.thresholds) && m.early_counted > 0
         && m.early_counted >= cfg.thresholds.shift_fit_confirm_share * m.early_raw;
     }
-    p.early_excluded = earlyEx.has(p.code);
+    p.early_excluded = earlyEx.has(p.code) || p.contract_loader;
     p.held = held.has(p.code);
     if (p.held) heldList.push(p);
     kept.push(p);
@@ -749,6 +812,223 @@ function payrollChecks(db, month, year) {
   return { month, year, rows: rows.length, flags };
 }
 
+// ── suggestions (shown on the tab; nothing changes until the admin applies them) ─────────────────────
+
+const hhmmOf = (m) => { const x = ((Math.round(m) % 1440) + 1440) % 1440; return `${pad(Math.floor(x / 60))}:${pad(x % 60)}`; };
+const median = (xs) => { const a = [...xs].sort((p, q) => p - q); const n = a.length; return n ? (n % 2 ? a[(n - 1) / 2] : (a[n / 2 - 1] + a[n / 2]) / 2) : null; };
+const round30 = (m) => Math.round(m / 30) * 30;
+
+/** Best-fitting day shift for a punch pattern: error = |start − median in| + |end − median out| (minutes). */
+function fitShift(shifts, medIn, medOut) {
+  let best = null;
+  for (const sh of shifts) {
+    const st = toMin(sh.start_time); const en = toMin(sh.end_time);
+    if (st === null || en === null || en <= st || !(sh.duration_hours > 0) || sh.duration_hours > 14) continue;  // day shifts only
+    const err = Math.abs(st - medIn) + Math.abs(en - medOut);
+    if (!best || err < best.err) best = { id: sh.id, name: sh.name, code: sh.code, start: sh.start_time, end: sh.end_time, err };
+  }
+  return best;
+}
+
+/**
+ * Suggested leave-outs and data fixes for the month. Each: { key, kind, code | department, title, evidence, action, can_apply }.
+ *  stale_person        a standing person rule that changes nothing now (left / inactive / below every notice line in both
+ *                      months) — apply removes it. Not raised for a loader of a piece-rate crew booked in another department.
+ *  stale_department    a standing department rule with nobody working in it this month or last — apply removes it
+ *  redundant_remeasure (master basis) a re-measure row with exactly the master's times — apply removes it
+ *  loader_crew         a contract department (3+ people) that is ≥ 60% contract loaders and has no rule — apply marks it piece rate
+ *  loader_outside_crew a person with the same loading designation as a ruled crew but booked elsewhere — apply leaves them out
+ *  senior_hint         a person about to be deducted with gross ≥ senior_hint_gross — apply marks "senior staff — not assessed"
+ *  master_fit          (master basis) late or early on most days and another shift fits the punches clearly better, or none
+ *                      fits — apply leaves them out until the master is fixed (the rule is offered for removal once it fits)
+ *  no_master           (master basis) worked days but no master shift — data fix only (already not assessed)
+ * Dismissed keys (config.dismissed_suggestions) are not returned.
+ */
+function suggestions(db, month, year, cfg, byCode, act) {
+  const t = cfg.thresholds; const out = [];
+  const dismissed = cfg.dismissed_suggestions || {};
+  const push = (sug) => { if (!dismissed[sug.key]) out.push(sug); };
+  const people = [...byCode.values()];
+  const sp = cfg.standing_people || {}; const sd = cfg.standing_departments || {};
+  const sdUpper = new Set(Object.keys(sd).map((d) => d.toUpperCase()));
+  const pats = cfg.loading_designation_patterns.map((x) => String(x).toUpperCase());
+  const isLoaderDes = (des) => pats.some((x) => x && String(des || '').toUpperCase().includes(x));
+  // "would this person matter" = would reach a notice line in this month or last, ignoring their standing rule
+  const matters = (p) => [p.cur, p.prev].some((m) => m && ((p.loading ? 0 : m.lates) >= t.notice_late
+    || (p.loading && p.group === 'Contract' && cfg.contract_loaders_early_exempt !== false ? 0 : (cfg.shift_fit === 'off' ? m.early_exits : m.early_short)) >= t.notice_early));
+
+  // designations used by ruled crews (2+ people) — to spot a crew member booked in another department
+  const crewDes = new Map();
+  for (const p of people) {
+    if (!p.cur || !sdUpper.has(String(p.department || '').toUpperCase()) || !isLoaderDes(p.designation)) continue;
+    const k = String(p.designation || '').trim().toUpperCase(); const e = crewDes.get(k) || { n: 0, dept: p.department }; e.n += 1; crewDes.set(k, e);
+  }
+  const loaderOutside = (p) => {
+    if (!isLoaderDes(p.designation) || sdUpper.has(String(p.department || '').toUpperCase())) return null;
+    const e = crewDes.get(String(p.designation || '').trim().toUpperCase()); return e && e.n >= 2 ? e : null;
+  };
+
+  // master fit (also used to retire a rule created "until the master is fixed")
+  const fit = new Map();
+  if (isMaster(cfg)) {
+    const shifts = db.prepare('SELECT id, name, code, start_time, end_time, duration_hours FROM shifts ORDER BY id').all();
+    const emps = new Map(db.prepare('SELECT e.code, e.default_shift_id sid FROM employees e').all().map((r) => [String(r.code), r.sid]));
+    const byId = new Map(shifts.map((sh) => [sh.id, sh]));
+    const days = new Map();
+    for (const r of db.prepare(MASTER_DAYS_SQL).all(sqlParams(month, year, cfg, [], []))) {
+      const k = String(r.code); const a = days.get(k) || []; a.push(r); days.set(k, a);
+    }
+    for (const [code, rows] of days) {
+      const ms = byId.get(emps.get(code));
+      const medIn = median(rows.map((r) => r.inm)); const medOut = median(rows.map((r) => (r.otm < r.inm ? r.otm + 1440 : r.otm)));
+      const best = fitShift(shifts, medIn, medOut);
+      const dayRows = rows.filter((r) => r.mode === 'day');
+      const lateShare = dayRows.length ? dayRows.filter((r) => r.lt >= t.late_min_minutes).length / dayRows.length : 0;
+      const earlyShare = dayRows.length ? dayRows.filter((r) => r.er > t.early_min_exclusive).length / dayRows.length : 0;
+      const masterErr = ms ? Math.abs(toMin(ms.start_time) - medIn) + Math.abs(toMin(ms.end_time) - medOut) : null;
+      fit.set(code, { rows: rows.length, dayRows: dayRows.length, medIn, medOut, best, master: ms || null, masterErr, lateShare, earlyShare });
+    }
+  }
+  const pattern = (f) => `in about ${hhmmOf(f.medIn)}, out about ${hhmmOf(f.medOut)} on ${f.rows} days`;
+  // Shifts are compared by TIMES, not id (the master can hold two shifts with the same times under different names).
+  const sameTimes = (b, m) => !!b && !!m && b.start === m.start_time && b.end === m.end_time;
+  const betterFit = (f) => f.best && f.best.err <= 40 && !sameTimes(f.best, f.master) && f.best.err < f.masterErr;
+  const noneFits = (f) => f.masterErr >= 90 && !(f.best && f.best.err <= 40);
+  // a clear mismatch only: another shift fits within 40 min, or the master is 90+ min off and nothing fits.
+  // A master that is roughly right with a late / early person is real lateness, not a set-up issue.
+  // Only what is actually assessed for the person counts: no lates for loaders; no early exits for contract loaders or an
+  // early-exit rule — a master "fix" for exits that are never counted would be noise.
+  const assessed = (code) => {
+    const p = byCode.get(code) || {}; const loader = isLoaderDes(p.designation);
+    const contractLoader = loader && p.group === 'Contract' && cfg.contract_loaders_early_exempt !== false;
+    return { late: !loader, early: !contractLoader && !(sp[code] && sp[code].rule === 'early_exempt') };
+  };
+  const misfit = (f, code) => {
+    if (!(f && f.master && f.dayRows >= t.master_fit_min_days)) return false;
+    const a = assessed(code);
+    const off = (a.late && f.lateShare >= t.master_fit_share) || (a.early && f.earlyShare >= t.master_fit_share);
+    return off && (betterFit(f) || noneFits(f));
+  };
+
+  // 1. stale person rules
+  const status = new Map();
+  const codes = Object.keys(sp);
+  if (codes.length) {
+    const st = db.prepare('SELECT status, date_of_exit FROM employees WHERE code = ? ORDER BY id LIMIT 1');
+    for (const c of codes) status.set(c, st.get(c) || null);
+  }
+  for (const [code, rule] of Object.entries(sp)) {
+    const p = byCode.get(code); const e = status.get(code);
+    const left = !e || (e.status && !/^active$/i.test(e.status)) || !!(e && e.date_of_exit);
+    const noWork = !p || (!p.cur && !p.prev);
+    let why = null;
+    if (left) why = 'no longer active in the employee master';
+    else if (noWork) why = 'no worked days this month or last';
+    else if (rule.source === 'master_fit') { const f = fit.get(code); if (f && !misfit(f, code)) why = 'the master shift now fits the punches'; }
+    else if (!loaderOutside(p) && !matters(p)) why = 'without it they would not reach any list or notice this month or last';
+    if (why) push({ key: `stale_person|${code}`, kind: 'stale_person', code, name: p?.name || null, department: p?.department || null,
+      title: `Remove the standing rule for ${code}`, evidence: `${RULE_LABEL[rule.rule]} (“${rule.reason}”) — ${why}.`, action: 'Remove the rule', can_apply: true });
+  }
+  // 2. stale department rules
+  for (const [dept, rule] of Object.entries(sd)) {
+    const any = people.some((p) => String(p.department || '').toUpperCase() === dept.toUpperCase() && (p.cur || p.prev));
+    if (!any) push({ key: `stale_department|${dept}`, kind: 'stale_department', department: dept, title: `Remove the rule for ${dept}`,
+      evidence: `“${rule.reason}” — nobody in ${dept} worked this month or last.`, action: 'Remove the rule', can_apply: true });
+  }
+  // 3. redundant re-measure rows
+  if (isMaster(cfg)) {
+    for (const [code, rm] of Object.entries(cfg.remeasure || {})) {
+      const f = fit.get(code); const ms = f?.master;
+      const sh = ms || db.prepare('SELECT s.start_time, s.end_time FROM employees e JOIN shifts s ON s.id = e.default_shift_id WHERE e.code = ? ORDER BY e.id LIMIT 1').get(code);
+      if (sh && sh.start_time === rm.start && sh.end_time === rm.end) push({ key: `redundant_remeasure|${code}`, kind: 'redundant_remeasure', code,
+        name: byCode.get(code)?.name || null, title: `Remove the re-measure row for ${code}`,
+        evidence: `It measures on ${rm.start}–${rm.end}, which is now the master shift; the master basis already does this.`, action: 'Remove the row', can_apply: true });
+    }
+  }
+  // 4. loader crews without a rule
+  const byDept = new Map();
+  for (const p of people) { if (!p.cur) continue; const k = String(p.department || ''); const a = byDept.get(k) || []; a.push(p); byDept.set(k, a); }
+  for (const [dept, ps] of byDept) {
+    if (!dept || sdUpper.has(dept.toUpperCase()) || ps.length < 3) continue;
+    const loaders = ps.filter((p) => p.group === 'Contract' && isLoaderDes(p.designation)).length;
+    if (loaders / ps.length >= 0.6) push({ key: `loader_crew|${dept}`, kind: 'loader_crew', department: dept, title: `Mark ${dept} as a piece-rate crew`,
+      evidence: `${loaders} of ${ps.length} people who worked this month are contract loaders.`, action: 'Mark piece rate — not assessed', can_apply: true,
+      rule: { scope: 'department', rule: 'exclude', reason: 'Piece-rate loading crew' } });
+  }
+  // 5. a crew's loader booked in another department
+  for (const p of people) {
+    if (!p.cur || sp[p.code]) continue; const e = loaderOutside(p); if (!e) continue;
+    push({ key: `loader_outside_crew|${p.code}`, kind: 'loader_outside_crew', code: p.code, name: p.name, department: p.department,
+      title: `${p.code}: looks like a ${e.dept} loader booked in ${p.department || '(no department)'}`,
+      evidence: `Designation “${p.designation}” is used by ${e.n} people of the ${e.dept} crew. Fix the department in the employee master; meanwhile leave out?`,
+      action: 'Leave out (piece-rate crew)', can_apply: true, rule: { scope: 'person', rule: 'exclude', reason: `Loader of the ${e.dept} crew booked in ${p.department || 'another department'}` } });
+  }
+  // 6. senior hint
+  for (const a of act.actionList) {
+    if (a.action !== 'deduction' || sp[a.code]) continue;
+    const p = byCode.get(a.code); if (!p || !(p.gross_salary >= t.senior_hint_gross)) continue;
+    push({ key: `senior_hint|${a.code}`, kind: 'senior_hint', code: a.code, name: p.name, department: p.department,
+      title: `${a.code} (${p.designation || 'no designation'}) is about to be deducted — senior staff?`,
+      evidence: `Gross ₹${Math.round(p.gross_salary).toLocaleString('en-IN')} — at or above ₹${t.senior_hint_gross.toLocaleString('en-IN')}. If their timings are not a floor obligation, leave them out.`,
+      action: 'Mark senior staff — not assessed', can_apply: true, rule: { scope: 'person', rule: 'exclude', reason: 'Senior staff' } });
+  }
+  // 7–8. master fit / no master (master basis)
+  for (const [code, f] of fit) {
+    const p = byCode.get(code); if (!p || sp[code] || cfg.excluded_departments.map((d) => d.toUpperCase()).includes(String(p.department || '').toUpperCase())) continue;
+    if (!f.master) {
+      if (f.rows < 3) continue;
+      const fits = f.best && f.best.err <= 40;
+      push({ key: `no_master|${code}`, kind: 'no_master', code, name: p.name, department: p.department, title: `${code} has no master shift`,
+        evidence: `Punches: ${pattern(f)}. ${fits ? `${f.best.name} (${f.best.start}–${f.best.end}) fits.` : `No shift fits — create one of about ${hhmmOf(round30(f.medIn))}–${hhmmOf(round30(f.medOut))}.`} Not assessed until a master is set.`,
+        action: 'Set the master in the employee profile', can_apply: false,
+        proposed: fits ? { shift: f.best.name, start: f.best.start, end: f.best.end } : { create: `${hhmmOf(round30(f.medIn))}–${hhmmOf(round30(f.medOut))}` } });
+      continue;
+    }
+    if (!misfit(f, code)) continue;
+    const fits = betterFit(f);
+    const what = assessed(code).late && f.lateShare >= t.master_fit_share ? `late on ${Math.round(f.lateShare * 100)}%` : `early on ${Math.round(f.earlyShare * 100)}%`;
+    push({ key: `master_fit|${code}`, kind: 'master_fit', code, name: p.name, department: p.department,
+      title: `${code}: master ${f.master.name} (${f.master.start_time}–${f.master.end_time}) doesn't fit the punches`,
+      evidence: `Punches: ${pattern(f)} — ${what} of days on the master. ${fits ? `${f.best.name} (${f.best.start}–${f.best.end}) fits.` : `No existing shift fits — create one of about ${hhmmOf(round30(f.medIn))}–${hhmmOf(round30(f.medOut))}.`} Fix the master; meanwhile leave out?`,
+      action: 'Leave out until the master is fixed', can_apply: true,
+      proposed: fits ? { shift: f.best.name, start: f.best.start, end: f.best.end } : { create: `${hhmmOf(round30(f.medIn))}–${hhmmOf(round30(f.medOut))}` },
+      rule: { scope: 'person', rule: 'exclude', reason: `Master shift doesn't fit the punches — fix in the employee master`, source: 'master_fit' } });
+  }
+  const order = ['senior_hint', 'master_fit', 'loader_outside_crew', 'loader_crew', 'no_master', 'redundant_remeasure', 'stale_person', 'stale_department'];
+  return out.sort((a, b) => order.indexOf(a.kind) - order.indexOf(b.kind) || String(a.code || a.department).localeCompare(String(b.code || b.department)));
+}
+
+const RULE_LABEL = { exclude: 'Not assessed', early_exempt: 'Early exits not assessed', held: 'Held' };
+
+/**
+ * Pure: applies accepted / dismissed suggestions to a STORED config and returns the new stored config.
+ * Unknown keys are reported, not applied. Older lists are folded into standing_* first (toStoredConfig).
+ */
+function applySuggestions(stored, list, { accept = [], dismiss = [], by = 'admin', at = new Date().toISOString() } = {}) {
+  const c = toStoredConfig(JSON.parse(JSON.stringify(stored || {})));
+  c.standing_people = c.standing_people || {}; c.standing_departments = c.standing_departments || {};
+  c.remeasure = c.remeasure || {}; c.dismissed_suggestions = c.dismissed_suggestions || {};
+  const byKey = new Map(list.map((s2) => [s2.key, s2]));
+  const applied = []; const unknown = [];
+  for (const key of accept) {
+    const sg = byKey.get(key);
+    if (!sg || !sg.can_apply) { unknown.push(key); continue; }
+    if (sg.kind === 'stale_person') delete c.standing_people[sg.code];
+    else if (sg.kind === 'stale_department') delete c.standing_departments[sg.department];
+    else if (sg.kind === 'redundant_remeasure') delete c.remeasure[sg.code];
+    else if (sg.rule && sg.rule.scope === 'department') c.standing_departments[sg.department] = { rule: sg.rule.rule, reason: sg.rule.reason, source: sg.kind, set_by: by, set_at: at };
+    else if (sg.rule && sg.rule.scope === 'person') c.standing_people[sg.code] = { rule: sg.rule.rule, reason: sg.rule.reason, source: sg.kind, set_by: by, set_at: at };
+    else { unknown.push(key); continue; }
+    applied.push(key);
+  }
+  for (const key of dismiss) {
+    if (!byKey.has(key)) { unknown.push(key); continue; }
+    c.dismissed_suggestions[key] = { by, at }; applied.push(key);
+  }
+  if (!Object.keys(c.remeasure).length) delete c.remeasure;
+  return { config: c, applied, unknown };
+}
+
 // ── main ──────────────────────────────────────────────────────────────────
 
 /**
@@ -800,7 +1080,7 @@ function computeAttendanceReview(db, { month, year, config, releaseDays = [], pr
     criteria: { assessment_basis: cfg.assessment_basis, assess_fixed_miss_punch: cfg.assess_fixed_miss_punch !== false,
       thresholds: cfg.thresholds, stayed_late_mode: cfg.stayed_late_mode, early_exit_rule: cfg.early_exit_rule, shift_fit: cfg.shift_fit, late_full_hours: cfg.late_full_hours !== false, loading_designation_patterns: cfg.loading_designation_patterns, remeasure: cfg.remeasure || {} },
     releaseDaysDetected: detectReleaseDays(db, month, year, cfg),
-    shiftIssues: detectShiftIssues(db, month, year).filter((r) => !cfg.excluded_codes.includes(r.code)
+    shiftIssues: isMaster(cfg) ? [] : detectShiftIssues(db, month, year).filter((r) => !cfg.excluded_codes.includes(r.code)
       && !cfg.excluded_departments.map((d) => d.toUpperCase()).includes(String(r.department || '').toUpperCase())),
     trend: { monthly, weekly }, departments, shiftCheck,
     people: peopleOut, doubleDefaulters, regular,
@@ -811,6 +1091,9 @@ function computeAttendanceReview(db, { month, year, config, releaseDays = [], pr
     noticeLate: nt.noticeLate, noticeEarly: nt.noticeEarly,
     payrollChecks: payrollChecks(db, pm.month, pm.year), gatePassCount, gatePassExcused,
     assessment: { basis: cfg.assessment_basis, quality: assessmentQuality(db, month, year, cfg) },
+    suggestions: suggestions(db, month, year, cfg, byCode, act),
+    standing: { people: Object.entries(cfg.standing_people).map(([code, v]) => ({ code, ...v, name: byCode.get(code)?.name || null, department: byCode.get(code)?.department || null })),
+      departments: Object.entries(cfg.standing_departments).map(([department, v]) => ({ department, ...v })) },
     overridesApplied: act.overridesApplied,
   };
 }
@@ -821,4 +1104,5 @@ module.exports = {
   SHIFT_ISSUES_SQL, sqlParams, inlineParams, assessmentQuality,
   isHabitualEarly, shiftFitApplies, detectReleaseDays, detectShiftIssues, loadPersonMonth, remeasureRows, buildPeople, applyExclusions, classify, actions, notices,
   roundDeduction, optionCDays, prevMonth, daysInMonth, computeAttendanceReview,
+  suggestions, applySuggestions, toStoredConfig, standingFrom, fitShift, MASTER_DAYS_SQL, LEGACY_REASON,
 };
