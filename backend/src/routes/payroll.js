@@ -833,36 +833,20 @@ router.post('/finalise', (req, res) => {
 });
 
 /**
- * PUT /api/payroll/day-calculations/:code/late-deduction
- * HR can apply late deduction for employees with >5 late days
+ * PUT /api/payroll/day-calculations/:code/late-deduction — RETIRED (Oct 2026).
+ * Cut payable days directly with no finance approval, outside the Attendance
+ * Review. Late and early-exit deductions are now decided only in Analytics →
+ * Attendance Review and reach salary through finance approval. Kept registered
+ * so a stale client gets an explicit 410 rather than a 404. Writes nothing.
+ * Values already stored in day_calculations.late_deduction_days stay as they
+ * are: services/recompute.js still re-applies them on a Stage 6 re-run, so a
+ * closed month is never silently handed back days.
  */
 router.put('/day-calculations/:code/late-deduction', (req, res) => {
-  const db = getDb();
-  const { code } = req.params;
-  const { month, year, deductionDays, remark } = req.body;
-
-  // Validate
-  if (deductionDays < 0 || deductionDays > 5) {
-    return res.status(400).json({ success: false, error: 'Deduction must be 0-5 days' });
-  }
-
-  // Update day calculation
-  const dc = db.prepare('SELECT * FROM day_calculations WHERE employee_code = ? AND month = ? AND year = ?').get(code, month, year);
-  if (!dc) return res.status(404).json({ success: false, error: 'Day calculation not found' });
-
-  const newPayable = Math.max(0, (dc.total_payable_days || 0) - deductionDays + (dc.late_deduction_days || 0));
-  const newLOP = Math.max(0, (dc.lop_days || 0) + deductionDays - (dc.late_deduction_days || 0));
-
-  db.prepare(`
-    UPDATE day_calculations SET
-      late_deduction_days = ?,
-      late_deduction_remark = ?,
-      total_payable_days = ?,
-      lop_days = ?
-    WHERE employee_code = ? AND month = ? AND year = ?
-  `).run(deductionDays, remark || `Late deduction: ${deductionDays} day(s) for ${dc.late_count || 0} late arrivals`, newPayable, newLOP, code, month, year);
-
-  res.json({ success: true, message: `Late deduction of ${deductionDays} day(s) applied for ${code}` });
+  return res.status(410).json({
+    success: false,
+    error: 'This endpoint has been retired. Late deductions are decided in Analytics → Attendance Review and approved by finance.'
+  });
 });
 
 /**

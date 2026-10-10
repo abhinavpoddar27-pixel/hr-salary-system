@@ -97,7 +97,6 @@ export const markEmployeeLeft = (code, data) => api.put(`/employees/${code}/mark
 export const calculateDays = (data) => api.post('/payroll/calculate-days', data)
 export const getDayCalculations = (params) => api.get('/payroll/day-calculations', { params })
 export const getDayCalculation = (code, month, year) => api.get(`/payroll/day-calculations/${code}`, { params: { month, year } })
-export const applyLateDeduction = (code, data) => api.put(`/payroll/day-calculations/${code}/late-deduction`, data)
 export const computeSalary = (data) => api.post('/payroll/compute-salary', data)
 export const getSalaryRegister = (month, year, company) => api.get('/payroll/salary-register', { params: { month, year, company } })
 export const getPayslip = (code, month, year) => api.get(`/payroll/payslip/${code}`, { params: { month, year } })
@@ -461,9 +460,8 @@ export const getSessionPages = (days) => api.get('/session-analytics/pages', { p
 export const getSessionErrors = (days) => api.get('/session-analytics/errors', { params: { days } })
 
 // ── Late Coming Management (Phase 1) ───────────────────
-// NOTE: the existing `applyLateDeduction` helper (line ~88) hits the Stage 6
-// day-calculations late-deduction endpoint. The new late-coming workflow uses
-// `applyLateComingDeduction` to avoid colliding with that legacy name.
+// NOTE: the legacy Stage 6 day-calculations late-deduction endpoint (and its
+// `applyLateDeduction` helper) was retired in Oct 2026 — it now answers 410.
 export const getLateComingAnalytics = (month, year, params) =>
   api.get('/late-coming/analytics', { params: { month, year, ...params } })
 export const getLateComingDeptSummary = (month, year, company) =>

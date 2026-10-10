@@ -1,5 +1,22 @@
+## Last Session — 2026-10-11 (Attendance enforcement PR-1: legacy Stage 6 late-deduction route closed)
+**Branch `fix/close-legacy-late-deduction` (on origin/main 8237205), NOT merged.** Plan: private project `claude/attendance-review/PLAN_enforcement_v2.md`.
+- **Owner rulings 10 Oct:** D-1 the Attendance Review is the only place late/early deductions are decided; D-2 the August
+  legacy cuts stay as they are.
+- **Change:** `PUT /api/payroll/day-calculations/:code/late-deduction` answers 410 and writes nothing (same pattern as the
+  retired manual-deductions route; "Remove" with 0 days is refused too). Stage 6 drill-down: Apply/Remove buttons and the
+  mutation gone; a read-only note shows any stored legacy cut + remark, or "Late N times", and points to Analytics →
+  Attendance Review. `applyLateDeduction` helper removed from `utils/api.js` (no other caller). dist rebuilt.
+- **Deliberately NOT changed:** `services/recompute.js` still re-applies a stored `late_deduction_days` on a Stage 6 re-run.
+  The plan text said stop re-applying, but D-2 (later) keeps August as is — removing it would hand those days back on the
+  next August re-run. No new value can be written now, so the re-apply only ever holds old cuts. dayCalculation.js,
+  salaryComputation.js, schema.js untouched.
+- **Verified:** new `legacyLateDeductionRetired.test.js` 4 (all 4 fail on the old route); jest 88 suites / 1421;
+  `scripts/legacy-late-deduction-browser-check.py` 15/15 (hr on Stage 6: note for 9 lates, legacy 2-day cut shown read-only,
+  no panel for 2 lates, no Apply/Remove, PUT from the page → 410, all day_calculations rows byte-identical, 0 page errors).
+  **Not tested:** Railway.
+
 ## Last Session — 2026-10-10 (Gate pass PR-2: early exits allow for gate passes everywhere; detection fixed for night shifts)
-**Branch `fix/gate-pass-early-exit-wiring` (on origin/main 69f00a3), NOT merged.** Spec: private project `claude/gate-pass-quota/SPEC.md`.
+**Branch `fix/gate-pass-early-exit-wiring` (on origin/main 69f00a3), MERGED (#96).** Spec: private project `claude/gate-pass-quota/SPEC.md`.
 - **Found:** `services/earlyExitDetection.js` compared every punch-out with the DAY end time (night 12HR in 19:58 / out 08:09 →
   "711 min early"); ~18–25% of all `early_exit_detections` rows were such misreads (Sep 1–15: 270 of 1,472). The 1 Oct reimport
   had overwritten detection's `attendance_processed` writes with import's (correct, gate-pass-blind) values, so Attendance
@@ -24,7 +41,7 @@
   Sep values = import's. **Not tested:** Railway; a full-month replay of production rows (SQL tool shows 100 rows).
 
 ## Last Session — 2026-10-10 (Gate pass modal: name the month)
-**Branch `fix/gate-pass-month-label` (on origin/main 139faa7), NOT merged.** Frontend only (`components/GatePasses.jsx`).
+**Branch `fix/gate-pass-month-label` (on origin/main 139faa7), MERGED (#95).** Frontend only (`components/GatePasses.jsx`).
 - **Report:** hr created a September Short Leave for 19222; the modal still said "Used: nothing yet". The data was right —
   the modal opens on today's date (October) and the list follows the page's month picker (October). Nothing said which month.
 - **Fix:** label "This month" → "Allowance for <Month YYYY>" of the chosen date; "Used:" → "Used in <Month>:". A pass dated
