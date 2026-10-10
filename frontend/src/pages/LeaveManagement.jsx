@@ -1,6 +1,6 @@
 import React, { useState, useMemo } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { getLeaveApplications, submitLeaveApplication, approveLeave, rejectLeave, getEmployees, getLeaveSummary, getLeaveBalancesList, getLeaveRegister, adjustLeave, getLeaveTransactions, getEmployeeLeaveBalance, getCompOffList, getCompOffPending, createCompOff, reviewCompOff, bulkReviewCompOff, deleteCompOff, getLeaveAccrualLedger, getLeaveRecomputePreview, downloadLeaveRecomputePreview, applyLeaveRecompute, getLeaveAutomationStatus, updateLeaveAutomationSettings, getLeaveChangeFlags, clearLeaveChangeFlag, uploadLeaveExternalGrants, acknowledgeNoExternalGrants, getLeaveExternalGrants, deleteLeaveExternalGrant, downloadLeaveLapseReport } from '../utils/api'
+import { getLeaveApplications, submitLeaveApplication, approveLeave, rejectLeave, cancelLeave, getEmployees, getLeaveSummary, getLeaveBalancesList, getLeaveRegister, adjustLeave, getLeaveTransactions, getEmployeeLeaveBalance, getCompOffList, getCompOffPending, createCompOff, reviewCompOff, bulkReviewCompOff, deleteCompOff, getLeaveAccrualLedger, getLeaveRecomputePreview, downloadLeaveRecomputePreview, applyLeaveRecompute, getLeaveAutomationStatus, updateLeaveAutomationSettings, getLeaveChangeFlags, clearLeaveChangeFlag, uploadLeaveExternalGrants, acknowledgeNoExternalGrants, getLeaveExternalGrants, deleteLeaveExternalGrant, downloadLeaveLapseReport } from '../utils/api'
 import EmployeeSearchSelect from '../components/shared/EmployeeSearchSelect'
 import { normalizeRole } from '../utils/role'
 import { fmtIstDateTime } from '../utils/formatters'
@@ -9,6 +9,7 @@ import { useAppStore } from '../store/appStore'
 import DateSelector from '../components/common/DateSelector'
 import useDateSelector from '../hooks/useDateSelector'
 import Modal from '../components/ui/Modal'
+import ConfirmDialog from '../components/ui/ConfirmDialog'
 import CompanyFilter from '../components/shared/CompanyFilter'
 import clsx from 'clsx'
 import toast from 'react-hot-toast'
@@ -284,6 +285,9 @@ export default function LeaveManagement() {
   const role = normalizeRole(user?.role)
   const isAdmin = role === 'admin'
   const isHrOrAdmin = role === 'hr' || role === 'admin'
+  // Owner rule (10 Oct 2026): HR raises leave, finance approves it.
+  const canApproveLeave = role === 'finance' || role === 'admin'
+  const canRejectLeave = isHrOrAdmin || role === 'finance'
   const actor = user?.username || user?.name || 'unknown'
   const queryClient = useQueryClient()
   const [mainTab, setMainTab] = useState('applications')
@@ -292,6 +296,7 @@ export default function LeaveManagement() {
   const [search, setSearch] = useState('')
   const [showApply, setShowApply] = useState(false)
   const [rejectModal, setRejectModal] = useState(null)
+  const [cancelTarget, setCancelTarget] = useState(null)
   const [rejectReason, setRejectReason] = useState('')
   const { toggle: toggleDrill, isExpanded: isDrillExpanded } = useExpandableRows()
 
@@ -428,6 +433,18 @@ export default function LeaveManagement() {
       afterLeaveChange()
     },
     onError: (err) => toast.error(err?.response?.data?.error || 'Could not reject the leave')
+  })
+
+  // Cancelling an approved CL/EL returns the days to the balance; the day count
+  // and EL for that month are recalculated (DELETE /api/leaves/:id).
+  const cancel = useMutation({
+    mutationFn: (id) => cancelLeave(id),
+    onSuccess: () => {
+      toast.success('Leave cancelled — balance returned; day calculation and EL are updating')
+      setCancelTarget(null)
+      afterLeaveChange()
+    },
+    onError: (err) => { setCancelTarget(null); toast.error(err?.response?.data?.error || 'Could not cancel the leave') }
   })
 
   const filtered = useMemo(() => {
@@ -588,24 +605,36 @@ export default function LeaveManagement() {
                         <div className="flex items-center justify-center gap-1">
                           <button
                             onClick={() => setApproveTarget(l)}
-                            disabled={approve.isPending || !isHrOrAdmin}
-                            title={isHrOrAdmin ? 'Approve this leave' : 'Only HR or an admin can approve leave'}
+                            disabled={approve.isPending || !canApproveLeave}
+                            title={canApproveLeave ? 'Approve this leave' : 'Finance approves leave — HR raises it'}
                             className="px-2 py-1 text-xs font-medium bg-green-100 text-green-700 rounded hover:bg-green-200 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                           >
                             Approve
                           </button>
                           <button
                             onClick={() => setRejectModal(l)}
-                            disabled={!isHrOrAdmin}
-                            title={isHrOrAdmin ? 'Reject this leave' : 'Only HR or an admin can reject leave'}
+                            disabled={!canRejectLeave}
+                            title={canRejectLeave ? 'Reject this leave' : 'Only HR, finance or an admin can reject leave'}
                             className="px-2 py-1 text-xs font-medium bg-red-100 text-red-700 rounded hover:bg-red-200 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                           >
                             Reject
                           </button>
                         </div>
                       )}
-                      {l.status === 'Approved' && l.approved_by && (
-                        <span className="text-xs text-slate-400">by {l.approved_by}</span>
+                      {l.status === 'Approved' && (
+                        <div className="flex items-center justify-center gap-2">
+                          {l.approved_by && <span className="text-xs text-slate-400">by {l.approved_by}</span>}
+                          {isHrOrAdmin && (
+                            <button
+                              onClick={() => setCancelTarget(l)}
+                              disabled={cancel.isPending}
+                              title="Cancel this approved leave and return the days to the balance"
+                              className="px-2 py-1 text-xs font-medium bg-slate-100 text-slate-600 rounded hover:bg-slate-200 transition-colors disabled:opacity-50"
+                            >
+                              Cancel
+                            </button>
+                          )}
+                        </div>
                       )}
                     </td>
                   </tr>
@@ -995,6 +1024,17 @@ export default function LeaveManagement() {
 
       {mainTab === 'automation' && isAdmin && (
         <LeaveAutomationTab year={year} status={automationRes?.data} />
+      )}
+
+      {cancelTarget && (
+        <ConfirmDialog
+          title="Cancel approved leave?"
+          message={`${cancelTarget.employee_name || cancelTarget.employee_code} — ${cancelTarget.days} day${cancelTarget.days === 1 ? '' : 's'} of ${cancelTarget.leave_type} (${cancelTarget.start_date}${cancelTarget.end_date && cancelTarget.end_date !== cancelTarget.start_date ? ' to ' + cancelTarget.end_date : ''}). The days go back to the ${cancelTarget.leave_type} balance and the month's day calculation is redone. Salary changes only when Stage 7 is computed again.`}
+          confirmText={cancel.isPending ? 'Cancelling…' : 'Cancel leave'}
+          cancelText="Keep it"
+          onConfirm={() => cancel.mutate(cancelTarget.id)}
+          onCancel={() => setCancelTarget(null)}
+        />
       )}
 
       {/* Approve confirmation — shows the balance before and after */}

@@ -79,7 +79,16 @@ describe('role guards', () => {
       role: 'viewer',
     });
     expect(asViewer.status).toBe(403);
-    expect((await api.request('PUT', '/api/leaves/1/approve', { role: 'finance' })).status).toBe(403);
+    expect((await api.request('PUT', '/api/leaves/1/approve', { role: 'viewer' })).status).toBe(403);
+    // Finance decides leave (owner rule, 10 Oct 2026): it passes the role gate
+    // (404 here only because application #1 does not exist) …
+    expect((await api.request('PUT', '/api/leaves/1/approve', { role: 'finance' })).status).toBe(404);
+    // … but may not move balances or raise leave.
+    expect((await api.request('POST', '/api/leaves/adjust', {
+      body: { employee_code: 'X', leave_type: 'EL', transaction_type: 'Credit', days: 5, reason: 'nope' },
+      role: 'finance',
+    })).status).toBe(403);
+    expect((await api.request('POST', '/api/leaves', { body: {}, role: 'finance' })).status).toBe(403);
   });
 });
 

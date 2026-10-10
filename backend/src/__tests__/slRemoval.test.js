@@ -190,7 +190,7 @@ describe('the write paths reject SL', () => {
     db.prepare(`INSERT INTO leave_applications (employee_id, employee_code, leave_type, start_date, end_date, days, status)
                 VALUES (?, 'SL02', 'SL', '2026-03-02', '2026-03-02', 1, 'Pending')`).run(info.lastInsertRowid);
     const id = db.prepare('SELECT id FROM leave_applications').get().id;
-    const res = await api.request('PUT', `/api/leaves/${id}/approve`, { role: 'hr' });
+    const res = await api.request('PUT', `/api/leaves/${id}/approve`, { role: 'finance' });
     expect(res.status).toBe(400);
     expect(res.body.error).toBe(SL_MSG);
     expect(db.prepare('SELECT status FROM leave_applications WHERE id = ?').get(id).status).toBe('Pending');

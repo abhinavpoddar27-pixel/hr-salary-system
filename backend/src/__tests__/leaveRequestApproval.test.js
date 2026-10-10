@@ -128,7 +128,9 @@ describe('HR raises a request', () => {
     const e = addEmployee(); setBalance(e, 'EL', 5); attend(e, 10, 'A');
     const { body } = await raise(e, 10);
     const res = await api.request('PUT', `/api/leaves/${body.request_id}/approve`, { role: 'hr', body: {} });
-    expect(res.status).toBe(404);
+    // HR may not approve leave at all since 10 Oct 2026 (403); before that the
+    // 'Pending Finance' status already kept this route from finding it (404).
+    expect(res.status).toBe(403);
     expect(appRow(body.request_id).status).toBe('Pending Finance');
     expect(dayStatus(e, 10)).toBe('A');
   });
