@@ -160,6 +160,7 @@ try:
                 check(f'{user}: drill-down colspan', '10', dd.get_attribute('colspan'))
                 tw = sec.locator('table').first.bounding_box()['width']; dw = dd.bounding_box()['width']
                 check(f'{user}: drill-down spans full table width', True, abs(tw - dw) <= 2)
+                check(f'{user}: drill-down shows the employee (TEST EMP 1)', True, dd.get_by_text('TEST EMP 1').count() > 0)
                 check(f'{user}: 0 page errors', [], errs)
                 check(f'{user}: 0 console errors', [], cons)
                 check(f'{user}: 0 API ≥ 400', [], bad)
@@ -170,6 +171,17 @@ try:
             heads, rows = table(sec)
             check('phone: T9501 Net Pay = DB', 28200, rupees(rows['T9501']['Net Pay']))
             check('phone: 0 page errors', [], errs)
+
+            print('\n— edge: empty month (August 2026, nothing computed) —')
+            pg, errs, cons, bad = login(b, 'finance', 'Finance@2025')
+            open_register(pg)  # Sep first (waits for rows), then switch to August
+            pg.locator('select').filter(has=pg.locator('option', has_text='September')).first.select_option('8')
+            pg.wait_for_load_state('networkidle'); time.sleep(1)
+            empty = pg.get_by_text('Run salary computation first', exact=True)
+            check('empty: message shown', 1, empty.count())
+            check('empty: message cell colspan', '10', empty.first.get_attribute('colspan'))
+            check('empty: 0 page errors', [], errs)
+            check('empty: 0 API ≥ 400', [], bad)
             b.close()
 finally:
     srv.terminate(); shutil.rmtree(WORK, ignore_errors=True)
