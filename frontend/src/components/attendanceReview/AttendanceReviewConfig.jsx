@@ -23,6 +23,8 @@ const THRESHOLD_LABELS = {
   default_shift_hours: 'Shift hours when unknown', stayed_late_lookback_days: 'Stayed-late look-back (days before last month)',
   shift_fit_share: 'Shift check: habitual if early on share of days ≥', shift_fit_min_days: 'Shift check: needs worked days of at least',
   shift_fit_grace: 'Full-hours tolerance (minutes; for lates kept below the late threshold)', shift_fit_confirm_share: 'Shift check: flag "check master shift" if short on share ≥',
+  odd_punch_minutes: 'Master basis: not assessed if in-punch earlier than start by (minutes)', night_start_minutes: 'Master basis: night on a 12-hour master starts at (minutes after midnight; 1200 = 20:00)',
+  stayed_late_minutes: 'Master basis: stayed late if out after shift end by (minutes)',
 }
 const LISTS = [
   ['excluded_codes', 'Left out of everything — employee codes', 'e.g. senior staff; data errors until fixed'],
@@ -48,6 +50,7 @@ export default function AttendanceReviewConfig({ month, year }) {
     setForm({
       thresholds: { ...c.thresholds },
       stayed_late_mode: c.stayed_late_mode, early_exit_rule: c.early_exit_rule, shift_fit: c.shift_fit || 'everyone', late_full_hours: c.late_full_hours !== false,
+      assessment_basis: c.assessment_basis || 'import', assess_fixed_miss_punch: c.assess_fixed_miss_punch !== false,
       lists: Object.fromEntries(LISTS.map(([k]) => [k, (c[k] || []).join('\n')])),
       remeasure: Object.entries(c.remeasure || {}).map(([code, r]) => ({ code, start: r.start, end: r.end, late_grace: r.late_grace ?? 9, early_grace: r.early_grace ?? 15, left_late: r.left_late || 'system', hours_complete: r.hours_complete === true, hours_grace: r.hours_grace ?? 10 })),
     })
@@ -58,6 +61,7 @@ export default function AttendanceReviewConfig({ month, year }) {
     mutationFn: () => {
       const config = {
         thresholds: form.thresholds, stayed_late_mode: form.stayed_late_mode, early_exit_rule: form.early_exit_rule, shift_fit: form.shift_fit, late_full_hours: !!form.late_full_hours,
+        assessment_basis: form.assessment_basis, assess_fixed_miss_punch: !!form.assess_fixed_miss_punch,
         ...Object.fromEntries(LISTS.map(([k]) => [k, toList(form.lists[k])])),
         remeasure: Object.fromEntries(form.remeasure.filter((r) => r.code.trim()).map((r) => [r.code.trim(), {
           start: r.start, end: r.end, late_grace: Number(r.late_grace), early_grace: Number(r.early_grace), left_late: r.left_late,
@@ -95,6 +99,19 @@ export default function AttendanceReviewConfig({ month, year }) {
           </label>
         ))}
         <div className="space-y-3">
+          <label className="block"><span className="text-xs font-semibold text-slate-600">Measure every day against</span>
+            <select aria-label="Assessment basis" className="input w-full" value={form.assessment_basis} onChange={(e) => setForm((f) => ({ ...f, assessment_basis: e.target.value }))}>
+              <option value="master">Each person's current master shift (recommended)</option>
+              <option value="import">The shift the import matched that day (old basis)</option>
+            </select>
+            <span className="text-[11px] text-slate-400">Master: a wrong master shift is wrong for every month — keep the masters right. People with no master are listed, not assessed.</span></label>
+          {form.assessment_basis === 'master' && (
+            <label className="flex items-start gap-2 text-sm">
+              <input aria-label="Assess fixed miss-punch days" type="checkbox" className="mt-1" checked={!!form.assess_fixed_miss_punch}
+                onChange={(e) => setForm((f) => ({ ...f, assess_fixed_miss_punch: e.target.checked }))} />
+              <span><span className="text-xs font-semibold text-slate-600">Assess miss-punch days fixed from the gate register</span><br />
+                <span className="text-[11px] text-slate-400">Uses the gate-register times. An out written as exactly the shift end is "not verified" and excuses nothing.</span></span></label>
+          )}
           <label className="block"><span className="text-xs font-semibold text-slate-600">Stayed-late exemption uses</span>
             <select aria-label="Stayed-late exemption" className="input w-full" value={form.stayed_late_mode} onChange={(e) => setForm((f) => ({ ...f, stayed_late_mode: e.target.value }))}>
               <option value="either">Previous worked day OR previous calendar day</option>

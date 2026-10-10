@@ -53,6 +53,12 @@ function buildWorkbook(result, run = {}) {
     ['Release days (not counted)', (m.release_days || []).join(', ')],
     ['Gate passes recorded', result.gatePassCount],
     ['Early exits excused by a gate pass', result.gatePassExcused ?? 0],
+    ['Measured against', result.criteria?.assessment_basis === 'master' ? "Each person's current master shift" : 'The shift the import matched (import basis)'],
+    ...(result.assessment?.quality ? [
+      ['Worked days not assessed (no master / night on a day master / odd punch)', result.assessment.quality.unassessable_days],
+      ['Miss-punch days assessed with gate-register times', result.assessment.quality.gate_register.days],
+      ['  of which out written as exactly the shift end (not verified)', result.assessment.quality.out_not_verified.days],
+    ] : []),
     [],
     ['Group', `Late % ${m.prev_ym}`, `Late % ${m.ym}`, `Early % ${m.prev_ym}`, `Early % ${m.ym}`, `Time lost % ${m.ym}`],
     ...['Company', 'Contract', 'All'].map((grp) => [grp, g(m.prev_ym, grp, 'late_pct'), g(m.ym, grp, 'late_pct'), g(m.prev_ym, grp, 'early_pct'), g(m.ym, grp, 'early_pct'), g(m.ym, grp, 'time_lost_pct')]),

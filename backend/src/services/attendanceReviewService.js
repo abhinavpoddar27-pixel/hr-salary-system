@@ -39,7 +39,17 @@ const DEFAULT_CONFIG = Object.freeze({
     shift_fit_min_days: 5,         // … with at least 5 such worked days
     shift_fit_grace: 10,           // full-hours tolerance: a day counts as "full shift worked" if out − in ≥ shift length − 10 min
     shift_fit_confirm_share: 0.8,  // habitual AND short on >= 80% of those days → flagged "check master shift" (no change to the action)
+    // master basis only (assessment_basis 'master'):
+    odd_punch_minutes: 180,        // in-punch more than this many minutes before the master start → not assessed (odd punch)
+    night_start_minutes: 1200,     // night work on a 12-hour day master is measured from 20:00 (1200) for 12 hours
+    stayed_late_minutes: 20,       // stayed late = out ≥ scheduled end + this many minutes (recomputed on the master)
   }),
+  // 'import' = the shift the import matched each day (is_late_arrival / is_early_departure as stored);
+  // 'master' = each person's CURRENT master shift (employees.default_shift_id), measured from the punches (owner ruling 10 Oct 2026).
+  assessment_basis: 'import',
+  // master basis: a miss-punch day fixed from the gate register (miss_punch_resolved) is assessed with those times (MP-1).
+  // An out typed as exactly the shift end is "out not verified": no early exit is measured from it and it excuses nothing (MP-3).
+  assess_fixed_miss_punch: true,
   stayed_late_mode: 'either',      // 'worked' | 'calendar' | 'either' (previous worked day OR previous calendar day)
   early_exit_rule: 'warning',      // 'warning' | 'option_c'
   shift_fit: 'everyone',           // early exit not counted on a full-hours day: 'everyone' | 'habitual' (only habitual early leavers) | 'off'
@@ -55,6 +65,7 @@ const DEFAULT_CONFIG = Object.freeze({
 const MODES = { worked: 0, calendar: 1, either: 2 };
 const ACTIONS = ['include', 'exclude', 'warning'];
 const SHIFT_FIT = ['habitual', 'everyone', 'off'];
+const BASES = ['import', 'master'];
 const WORKED = "('P','WOP','½P','WO½P')";
 
 // ── config ────────────────────────────────────────────────────────────────
@@ -97,6 +108,8 @@ function validateConfig(c) {
   if (c.early_exit_rule !== undefined && !['warning', 'option_c'].includes(c.early_exit_rule)) errs.push('early_exit_rule must be warning | option_c');
   if (c.shift_fit !== undefined && !SHIFT_FIT.includes(c.shift_fit)) errs.push('shift_fit must be habitual | everyone | off');
   if (c.late_full_hours !== undefined && typeof c.late_full_hours !== 'boolean') errs.push('late_full_hours must be true or false');
+  if (c.assessment_basis !== undefined && !BASES.includes(c.assessment_basis)) errs.push('assessment_basis must be import | master');
+  if (c.assess_fixed_miss_punch !== undefined && typeof c.assess_fixed_miss_punch !== 'boolean') errs.push('assess_fixed_miss_punch must be true or false');
   for (const k of ['loading_designation_patterns', 'excluded_codes', 'excluded_departments', 'early_excluded_codes', 'held_codes']) {
     if (c[k] !== undefined && !isCodeList(c[k])) errs.push(`${k} must be a list of non-empty strings`);
   }
@@ -161,20 +174,14 @@ function roundDeduction(wdl, t) {
  * Shift-check columns: ms_days (Mon–Sat worked days when @sunOff), early_short* (exits on days out − in < shift length − @fitGrace).
  * Exported so the acceptance check can run the exact same SQL through the SQL Console.
  */
-const PERSON_MONTH_SQL = `
-WITH base AS (
-  SELECT a.employee_code c, a.date d, a.status_final st, COALESCE(a.is_miss_punch,0) mp,
-         COALESCE(a.is_late_arrival,0) la, COALESCE(a.late_by_minutes,0) lm,
-         COALESCE(a.is_early_departure,0) ed, COALESCE(a.early_by_minutes,0) em,
-         COALESCE(a.is_left_late,0) ll, a.shift_detected sd, a.in_time_final it, a.out_time_final ot
-  FROM attendance_processed a WHERE a.date BETWEEN @from AND @to),
+const PERSON_MONTH_TAIL = `
 pl AS (SELECT c, d, MAX(ll) ll FROM base GROUP BY c, d),
 w AS (SELECT b.*, LAG(b.ll) OVER (PARTITION BY b.c ORDER BY b.d) pll FROM base b
       WHERE b.st IN ${WORKED} AND b.mp = 0),
 x AS (SELECT w.*, COALESCE(p.ll,0) cll, substr(w.d,1,7) ym,
              CASE WHEN w.st IN ('½P','WO½P') THEN 0.5 ELSE 1.0 END f,
-             COALESCE((SELECT s.duration_hours FROM shifts s WHERE s.name = w.sd AND s.duration_hours > 0 ORDER BY s.id LIMIT 1), @defH) h,
-             CASE WHEN (SELECT s.duration_hours FROM shifts s WHERE s.name = w.sd AND s.duration_hours > 0 LIMIT 1) IS NULL THEN 1 ELSE 0 END hmiss,
+             COALESCE(w.bh, (SELECT s.duration_hours FROM shifts s WHERE s.name = w.sd AND s.duration_hours > 0 ORDER BY s.id LIMIT 1), @defH) h,
+             CASE WHEN w.bh IS NULL AND (SELECT s.duration_hours FROM shifts s WHERE s.name = w.sd AND s.duration_hours > 0 LIMIT 1) IS NULL THEN 1 ELSE 0 END hmiss,
              strftime('%w', w.d) dow,
              CASE WHEN w.it IS NULL OR w.ot IS NULL OR length(w.it) < 5 OR length(w.ot) < 5 THEN NULL
                ELSE ((CAST(substr(w.ot,1,2) AS INTEGER)*60 + CAST(substr(w.ot,4,2) AS INTEGER))
@@ -206,18 +213,12 @@ SELECT c AS code, ym, COUNT(*) AS worked_days, SUM(f) AS worked_units, SUM(f*h*6
        SUM(CASE WHEN ise = 1 THEN COALESCE(wm,0) ELSE 0 END) AS early_wm_sum
 FROM y GROUP BY c, ym`;
 
-const WEEKLY_SQL = `
-WITH base AS (
-  SELECT a.employee_code c, a.date d, a.status_final st, COALESCE(a.is_miss_punch,0) mp,
-         COALESCE(a.is_late_arrival,0) la, COALESCE(a.late_by_minutes,0) lm,
-         COALESCE(a.is_early_departure,0) ed, COALESCE(a.early_by_minutes,0) em, COALESCE(a.is_left_late,0) ll,
-         a.shift_detected sd, a.in_time_final it, a.out_time_final ot
-  FROM attendance_processed a WHERE a.date BETWEEN @from AND @to),
+const WEEKLY_TAIL = `
 pl AS (SELECT c, d, MAX(ll) ll FROM base GROUP BY c, d),
 w AS (SELECT b.*, LAG(b.ll) OVER (PARTITION BY b.c ORDER BY b.d) pll FROM base b WHERE b.st IN ${WORKED} AND b.mp = 0),
 x AS (SELECT w.*, COALESCE(p.ll,0) cll, substr(w.d,1,7) ym,
              CASE WHEN w.st IN ('½P','WO½P') THEN 0.5 ELSE 1.0 END f,
-             COALESCE((SELECT s.duration_hours FROM shifts s WHERE s.name = w.sd AND s.duration_hours > 0 ORDER BY s.id LIMIT 1), @defH) h,
+             COALESCE(w.bh, (SELECT s.duration_hours FROM shifts s WHERE s.name = w.sd AND s.duration_hours > 0 ORDER BY s.id LIMIT 1), @defH) h,
              CASE WHEN w.it IS NULL OR w.ot IS NULL OR length(w.it) < 5 OR length(w.ot) < 5 THEN NULL
                ELSE ((CAST(substr(w.ot,1,2) AS INTEGER)*60 + CAST(substr(w.ot,4,2) AS INTEGER))
                    - (CAST(substr(w.it,1,2) AS INTEGER)*60 + CAST(substr(w.it,4,2) AS INTEGER)) + 1440) % 1440 END wm
@@ -232,6 +233,109 @@ SELECT c AS code, ym, date(d, 'weekday 1', '-7 days') AS week_start, COUNT(*) AS
   SUM(CASE WHEN ed = 1 AND em > @eMin AND em < @eMax AND (wm IS NULL OR wm < f*h*60 - @fitGrace)
        AND d NOT IN (SELECT value FROM json_each(CASE WHEN ym = @cur THEN @rel ELSE @prel END)) THEN 1 ELSE 0 END) AS early_short
 FROM x GROUP BY c, ym, week_start`;
+
+/**
+ * Day rows on the IMPORT basis: the flags the import (and early-exit detection, gate passes applied) stored on each row.
+ * Columns every basis must give: c d st mp la lm ed em ll sd it ot bh (bh = shift hours of the basis; NULL → looked up by sd).
+ */
+const IMPORT_BASE = `
+WITH base AS (
+  SELECT a.employee_code c, a.date d, a.status_final st, COALESCE(a.is_miss_punch,0) mp,
+         COALESCE(a.is_late_arrival,0) la, COALESCE(a.late_by_minutes,0) lm,
+         COALESCE(a.is_early_departure,0) ed, COALESCE(a.early_by_minutes,0) em,
+         COALESCE(a.is_left_late,0) ll, a.shift_detected sd, a.in_time_final it, a.out_time_final ot, NULL bh
+  FROM attendance_processed a WHERE a.date BETWEEN @from AND @to),`;
+
+/**
+ * Day rows on the MASTER basis (owner ruling 10 Oct 2026): every day measured on the person's CURRENT master shift
+ * (employees.default_shift_id), from the final punches. Same output columns as IMPORT_BASE, plus mode / ua / gr / onv / gpx.
+ *  mode  day    — day work on the master's start / end / length
+ *        night  — night work (is_night_shift or "Night Shift") on a 12-hour master → @nightStart for 12 h;
+ *                 or any day on an overnight master (end < start) → that master's own times
+ *        no_master | night_on_day_master | odd_punch (in > @odd min before start) → not assessed (ua)
+ *  Half days (½P / WO½P) are not assessed for late / early (already paid as half a day).
+ *  gr    a miss-punch day fixed from the gate register, assessed with those times when @fixMp = 1 (else skipped as before).
+ *  onv   gr day whose out is exactly the shift end → "out not verified": worked minutes unknown, so no early exit is
+ *        measured and the out can't excuse a late (full hours) or give a stayed-late exemption.
+ *  Gate pass (short_leaves, not cancelled, first by id): out ≥ end − pass hours → not early; earlier → only the minutes beyond.
+ */
+const MASTER_BASE = `
+WITH m0 AS (
+  SELECT a.employee_code c, a.date d, a.status_final st, COALESCE(a.is_miss_punch,0) mp0, COALESCE(a.miss_punch_resolved,0) mpr,
+         COALESCE(a.is_night_shift,0) nt, a.shift_detected sd, a.in_time_final it, a.out_time_final ot,
+         sh.start_time mst, sh.end_time men, sh.duration_hours mdur,
+         (SELECT sl.duration_hours FROM short_leaves sl WHERE sl.employee_code = a.employee_code AND sl.date = a.date
+            AND sl.cancelled_at IS NULL ORDER BY sl.id LIMIT 1) gph
+  FROM attendance_processed a
+  LEFT JOIN shifts sh ON sh.id = (SELECT e.default_shift_id FROM employees e WHERE e.code = a.employee_code ORDER BY e.id LIMIT 1)
+  WHERE a.date BETWEEN @from AND @to),
+m1 AS (SELECT m0.*,
+  CASE WHEN mp0 = 1 AND (@fixMp = 0 OR mpr = 0) THEN 1 ELSE 0 END mp,
+  CASE WHEN mp0 = 1 AND @fixMp = 1 AND mpr = 1 THEN 1 ELSE 0 END gr,
+  CASE WHEN it IS NULL OR length(it) < 5 THEN NULL ELSE CAST(substr(it,1,2) AS INTEGER)*60 + CAST(substr(it,4,2) AS INTEGER) END inm,
+  CASE WHEN ot IS NULL OR length(ot) < 5 THEN NULL ELSE CAST(substr(ot,1,2) AS INTEGER)*60 + CAST(substr(ot,4,2) AS INTEGER) END otm,
+  CASE WHEN mst IS NULL OR length(mst) < 5 THEN NULL ELSE CAST(substr(mst,1,2) AS INTEGER)*60 + CAST(substr(mst,4,2) AS INTEGER) END sm,
+  CASE WHEN men IS NULL OR length(men) < 5 THEN NULL ELSE CAST(substr(men,1,2) AS INTEGER)*60 + CAST(substr(men,4,2) AS INTEGER) END enm,
+  (nt = 1 OR sd = 'Night Shift') isn,
+  CASE WHEN st IN ('½P','WO½P') THEN 1 ELSE 0 END half
+  FROM m0),
+m2 AS (SELECT m1.*,
+  CASE WHEN sm IS NULL OR enm IS NULL OR mdur IS NULL OR mdur <= 0 THEN 'no_master'
+       WHEN enm < sm THEN 'night'
+       WHEN isn AND mdur = 12 THEN 'night'
+       WHEN isn THEN 'night_on_day_master'
+       WHEN inm IS NOT NULL AND inm < sm - @odd THEN 'odd_punch'
+       ELSE 'day' END mode,
+  CASE WHEN enm < sm THEN sm WHEN isn AND mdur = 12 THEN @nightStart ELSE sm END s0,
+  CAST(ROUND(mdur * 60) AS INTEGER) dmin
+  FROM m1),
+m3 AS (SELECT m2.*,
+  CASE WHEN mode = 'night' AND inm IS NOT NULL AND inm < 720 THEN inm + 1440 ELSE inm END inabs,
+  CASE WHEN gr = 1 AND otm IS NOT NULL AND s0 IS NOT NULL AND otm = (s0 + dmin) % 1440 THEN 1 ELSE 0 END onv,
+  CASE WHEN st IN ${WORKED} AND mp = 0 AND mode IN ('day','night') AND half = 0 AND inm IS NOT NULL AND otm IS NOT NULL THEN 1 ELSE 0 END asx
+  FROM m2),
+m4 AS (SELECT m3.*,
+  CASE WHEN inm IS NULL OR otm IS NULL OR onv = 1 THEN NULL ELSE (otm - inm + 1440) % 1440 END wmx
+  FROM m3),
+m5 AS (SELECT m4.*,
+  inabs - s0 lt,
+  CASE WHEN wmx IS NULL THEN NULL ELSE (s0 + dmin) - (inabs + wmx) END er
+  FROM m4),
+base AS (
+  SELECT c, d, st, mp,
+    CASE WHEN asx = 1 AND lt > 0 THEN 1 ELSE 0 END la,
+    CASE WHEN asx = 1 AND lt > 0 THEN lt ELSE 0 END lm,
+    CASE WHEN asx = 1 AND er IS NOT NULL AND er > 0 AND (gph IS NULL OR er > CAST(ROUND(gph * 60) AS INTEGER)) THEN 1 ELSE 0 END ed,
+    CASE WHEN asx = 1 AND er IS NOT NULL AND er > 0 THEN CASE WHEN gph IS NULL THEN er ELSE MAX(0, er - CAST(ROUND(gph * 60) AS INTEGER)) END ELSE 0 END em,
+    CASE WHEN asx = 1 AND er IS NOT NULL AND -er >= @llMin THEN 1 ELSE 0 END ll,
+    sd, it, CASE WHEN onv = 1 THEN NULL ELSE ot END ot,
+    CASE WHEN mdur > 0 THEN mdur ELSE NULL END bh,
+    mode, CASE WHEN st IN ${WORKED} AND mp = 0 AND mode NOT IN ('day','night') THEN mode END ua, gr, onv,
+    CASE WHEN asx = 1 AND er IS NOT NULL AND er > 0 AND gph IS NOT NULL THEN 1 ELSE 0 END gpx, half
+  FROM m5),`;
+
+const PERSON_MONTH_SQL = IMPORT_BASE + PERSON_MONTH_TAIL;
+const PERSON_MONTH_SQL_MASTER = MASTER_BASE + PERSON_MONTH_TAIL;
+const WEEKLY_SQL = IMPORT_BASE + WEEKLY_TAIL;
+const WEEKLY_SQL_MASTER = MASTER_BASE + WEEKLY_TAIL;
+
+/** Master basis: plant-wide release days — Mon–Sat, day-mode work, more than @share of those workers left > @eMin min early. */
+const RELEASE_DAYS_SQL_MASTER = MASTER_BASE.replace(/,$/, '') + `
+SELECT d AS date, COUNT(*) AS worked,
+  SUM(CASE WHEN ed = 1 AND em > @eMin AND em < @eMax THEN 1 ELSE 0 END) AS early
+FROM base WHERE substr(d,1,7) = @cur AND st IN ${WORKED} AND mp = 0 AND mode = 'day' AND half = 0 AND strftime('%w', d) <> '0'
+GROUP BY d HAVING early * 1.0 / worked > @share ORDER BY d`;
+
+/** Master basis: what was and wasn't assessed this month (data quality). One row per (code, kind). */
+const MASTER_QUALITY_SQL = MASTER_BASE.replace(/,$/, '') + `
+SELECT c AS code, kind, COUNT(*) AS days FROM (
+  SELECT c, ua AS kind FROM base WHERE substr(d,1,7) = @cur AND ua IS NOT NULL
+  UNION ALL SELECT c, 'half_day' FROM base WHERE substr(d,1,7) = @cur AND st IN ${WORKED} AND mp = 0 AND half = 1
+  UNION ALL SELECT c, 'gate_register' FROM base WHERE substr(d,1,7) = @cur AND st IN ${WORKED} AND gr = 1
+  UNION ALL SELECT c, 'out_not_verified' FROM base WHERE substr(d,1,7) = @cur AND st IN ${WORKED} AND onv = 1
+  UNION ALL SELECT c, 'gate_pass' FROM base WHERE substr(d,1,7) = @cur AND gpx = 1
+  UNION ALL SELECT c, 'miss_punch_open' FROM base WHERE substr(d,1,7) = @cur AND st IN ${WORKED} AND mp = 1
+) GROUP BY c, kind ORDER BY kind, c`;
 
 const RELEASE_DAYS_SQL = `
 SELECT date, COUNT(*) AS worked,
@@ -261,6 +365,8 @@ function sqlParams(month, year, cfg, releaseDays, prevReleaseDays) {
     lateMin: t.late_min_minutes, mis: t.misread_minutes, eMin: t.early_min_exclusive, eMax: t.early_max_exclusive,
     sunOff: t.early_weekdays_only ? 1 : 0, mode: MODES[cfg.stayed_late_mode] ?? 2, defH: t.default_shift_hours,
     longMin: t.option_c_long_minutes, fitGrace: t.shift_fit_grace, lateFull: cfg.late_full_hours === false ? 0 : 1,
+    // master basis only (unused by the import SQL)
+    fixMp: cfg.assess_fixed_miss_punch === false ? 0 : 1, odd: t.odd_punch_minutes, nightStart: t.night_start_minutes, llMin: t.stayed_late_minutes,
   };
 }
 
@@ -275,10 +381,37 @@ function inlineParams(sql, params) {
 
 // ── step 1–2: detection ───────────────────────────────────────────────────
 
+const isMaster = (cfg) => cfg.assessment_basis === 'master';
+
 function detectReleaseDays(db, month, year, cfg) {
   const t = cfg.thresholds;
-  return db.prepare(RELEASE_DAYS_SQL).all({ cur: ymOf(month, year), eMin: t.early_min_exclusive, eMax: t.early_max_exclusive, share: t.release_day_share })
-    .map((r) => ({ date: r.date, worked: r.worked, early: r.early, share: r2(r.early / r.worked) }));
+  const rows = isMaster(cfg)
+    ? db.prepare(RELEASE_DAYS_SQL_MASTER).all({ ...sqlParams(month, year, cfg, [], []), share: t.release_day_share })
+    : db.prepare(RELEASE_DAYS_SQL).all({ cur: ymOf(month, year), eMin: t.early_min_exclusive, eMax: t.early_max_exclusive, share: t.release_day_share });
+  return rows.map((r) => ({ date: r.date, worked: r.worked, early: r.early, share: r2(r.early / r.worked) }));
+}
+
+/**
+ * Master basis only: what the month's assessment left out or measured differently, by reason, with the codes.
+ * no_master | night_on_day_master | odd_punch = worked days not assessed; half_day = not assessed for late / early;
+ * gate_register = fixed miss-punch days assessed with gate-register times; out_not_verified = of those, out typed as the
+ * exact shift end; gate_pass = early exits reduced by a gate pass; miss_punch_open = miss-punch days still skipped.
+ * People left out of the review (excluded_codes, excluded_departments) are left out here too. Returns null on the import basis.
+ */
+function assessmentQuality(db, month, year, cfg) {
+  if (!isMaster(cfg)) return null;
+  const ex = new Set(cfg.excluded_codes); const exDept = new Set(cfg.excluded_departments.map((d) => d.toUpperCase()));
+  const all = db.prepare(MASTER_QUALITY_SQL).all(sqlParams(month, year, cfg, [], [])).map((r) => ({ ...r, code: String(r.code) }));
+  const emp = loadEmployees(db, [...new Set(all.map((r) => r.code))]);
+  const rows = all.filter((r) => !ex.has(r.code) && !exDept.has(String((emp.get(r.code) || {}).department || '').toUpperCase()));
+  const kinds = ['no_master', 'night_on_day_master', 'odd_punch', 'half_day', 'gate_register', 'out_not_verified', 'gate_pass', 'miss_punch_open'];
+  const out = {};
+  for (const k of kinds) {
+    const rs = rows.filter((r) => r.kind === k);
+    out[k] = { days: rs.reduce((a, r) => a + r.days, 0), people: rs.map((r) => ({ code: r.code, days: r.days })) };
+  }
+  out.unassessable_days = out.no_master.days + out.night_on_day_master.days + out.odd_punch.days;
+  return out;
 }
 
 function detectShiftIssues(db, month, year) {
@@ -289,7 +422,7 @@ function detectShiftIssues(db, month, year) {
 
 function loadPersonMonth(db, month, year, cfg, releaseDays, prevReleaseDays) {
   const p = sqlParams(month, year, cfg, releaseDays, prevReleaseDays);
-  return db.prepare(PERSON_MONTH_SQL).all(p).map((r) => ({ ...r, code: String(r.code) }));
+  return db.prepare(isMaster(cfg) ? PERSON_MONTH_SQL_MASTER : PERSON_MONTH_SQL).all(p).map((r) => ({ ...r, code: String(r.code) }));
 }
 
 /**
@@ -582,7 +715,7 @@ function summarise(people, cfg, cur, prev) {
 }
 
 function weeklyTrend(db, month, year, cfg, releaseDays, prevReleaseDays, peopleByCode) {
-  const rows = db.prepare(WEEKLY_SQL).all(sqlParams(month, year, cfg, releaseDays, prevReleaseDays));
+  const rows = db.prepare(isMaster(cfg) ? WEEKLY_SQL_MASTER : WEEKLY_SQL).all(sqlParams(month, year, cfg, releaseDays, prevReleaseDays));
   const wk = new Map();
   for (const r of rows) {
     const p = peopleByCode.get(String(r.code)); if (!p) continue; // excluded or unknown
@@ -664,7 +797,8 @@ function computeAttendanceReview(db, { month, year, config, releaseDays = [], pr
     meta: { month, year, ym: cur, prev_ym: prev, days_in_month: md, release_days: releaseDays, prev_release_days: prevReleaseDays,
       excluded_people: excludedCount, people_assessed: live.length, missing_shift_hours: live.filter((p) => p.cur.shift_h_missing).map((p) => p.code),
       not_in_employee_master: live.filter((p) => !p.in_employee_master).map((p) => p.code) },
-    criteria: { thresholds: cfg.thresholds, stayed_late_mode: cfg.stayed_late_mode, early_exit_rule: cfg.early_exit_rule, shift_fit: cfg.shift_fit, late_full_hours: cfg.late_full_hours !== false, loading_designation_patterns: cfg.loading_designation_patterns, remeasure: cfg.remeasure || {} },
+    criteria: { assessment_basis: cfg.assessment_basis, assess_fixed_miss_punch: cfg.assess_fixed_miss_punch !== false,
+      thresholds: cfg.thresholds, stayed_late_mode: cfg.stayed_late_mode, early_exit_rule: cfg.early_exit_rule, shift_fit: cfg.shift_fit, late_full_hours: cfg.late_full_hours !== false, loading_designation_patterns: cfg.loading_designation_patterns, remeasure: cfg.remeasure || {} },
     releaseDaysDetected: detectReleaseDays(db, month, year, cfg),
     shiftIssues: detectShiftIssues(db, month, year).filter((r) => !cfg.excluded_codes.includes(r.code)
       && !cfg.excluded_departments.map((d) => d.toUpperCase()).includes(String(r.department || '').toUpperCase())),
@@ -676,13 +810,15 @@ function computeAttendanceReview(db, { month, year, config, releaseDays = [], pr
     held: held.filter((p) => p.cur).map((p) => ({ code: p.code, name: p.name, department: p.department, late_days: p.cur.lates_counted, early_exits: p.cur.early_counted })),
     noticeLate: nt.noticeLate, noticeEarly: nt.noticeEarly,
     payrollChecks: payrollChecks(db, pm.month, pm.year), gatePassCount, gatePassExcused,
+    assessment: { basis: cfg.assessment_basis, quality: assessmentQuality(db, month, year, cfg) },
     overridesApplied: act.overridesApplied,
   };
 }
 
 module.exports = {
   DEFAULT_CONFIG, mergeConfig, validateConfig, validateOverrides, loadConfig,
-  PERSON_MONTH_SQL, WEEKLY_SQL, RELEASE_DAYS_SQL, SHIFT_ISSUES_SQL, sqlParams, inlineParams,
+  PERSON_MONTH_SQL, PERSON_MONTH_SQL_MASTER, WEEKLY_SQL, WEEKLY_SQL_MASTER, RELEASE_DAYS_SQL, RELEASE_DAYS_SQL_MASTER, MASTER_QUALITY_SQL,
+  SHIFT_ISSUES_SQL, sqlParams, inlineParams, assessmentQuality,
   isHabitualEarly, shiftFitApplies, detectReleaseDays, detectShiftIssues, loadPersonMonth, remeasureRows, buildPeople, applyExclusions, classify, actions, notices,
   roundDeduction, optionCDays, prevMonth, daysInMonth, computeAttendanceReview,
 };
