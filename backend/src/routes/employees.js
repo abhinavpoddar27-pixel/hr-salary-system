@@ -710,7 +710,9 @@ router.put('/:code/salary', requireHrOrAdmin, (req, res) => {
 });
 
 // MARK EMPLOYEE AS LEFT
-router.put('/:code/mark-left', (req, res) => {
+// hr + admin only (P4): Mark Left flags the leaver's loans for exit recovery
+// and collapses their schedules — money moves follow from it.
+router.put('/:code/mark-left', requireHrOrAdmin, (req, res) => {
   const db = getDb();
   const { code } = req.params;
   const { date_of_leaving, reason } = req.body;
