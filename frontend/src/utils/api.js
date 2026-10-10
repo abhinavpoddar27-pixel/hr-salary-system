@@ -209,13 +209,16 @@ export const getUsageLogs = (params) => api.get('/usage-logs', { params })
 export const getUsageLogsSummary = () => api.get('/usage-logs/summary')
 
 // ── Leaves ────────────────────────────────────────────
-export const getLeaveApplications = (params) => api.get('/leaves', { params })
+// Leave reads are no-cache: server.js caches GETs for 5s, so the list refetched
+// right after an approve came back stale and still said Pending.
+export const getLeaveApplications = (params) => api.get('/leaves', { params, ...fresh })
 export const submitLeaveApplication = (data) => api.post('/leaves', data)
 export const approveLeave = (id, data) => api.put(`/leaves/${id}/approve`, data)
 export const rejectLeave = (id, data) => api.put(`/leaves/${id}/reject`, data)
-export const getLeaveSummary = (params) => api.get('/leaves/summary', { params })
-export const getLeaveBalancesList = (params) => api.get('/leaves/balances', { params })
-export const getEmployeeLeaveBalance = (code) => api.get(`/leaves/balances/${code}`)
+export const getLeaveSummary = (params) => api.get('/leaves/summary', { params, ...fresh })
+export const getLeaveBalancesList = (params) => api.get('/leaves/balances', { params, ...fresh })
+// no-cache: server.js caches GETs for 5s, which showed a stale balance right after an approval.
+export const getEmployeeLeaveBalance = (code, params) => api.get(`/leaves/balances/${code}`, { ...(params ? { params } : {}), ...fresh })
 export const adjustLeave = (data) => api.post('/leaves/adjust', data)
 export const getLeaveTransactions = (code, params) => api.get(`/leaves/transactions/${code}`, { params })
 export const getLeaveRegister = (params) => api.get('/leaves/register', { params })
