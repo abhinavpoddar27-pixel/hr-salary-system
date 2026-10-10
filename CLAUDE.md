@@ -1,3 +1,47 @@
+## Last Session — 2026-10-10 (Extra duty: finance "Return to HR")
+**Branch `fix/ed-return-to-hr`, NOT merged.** Owner ruling 8 Oct 2026, built 10 Oct.
+- **Bug:** HR could not re-award extra duty for a person+date finance had rejected (7 Sep 2026: 19 rows, "power cut").
+  UNIQUE(employee_code, grant_date, month, year) keeps the rejected row; POST / 500'd until the 8 Oct deploy
+  (Sentry HR-SALARY-BACKEND-2, 20 hits on 8 Oct), then 409 "Open that row instead" — but a rejected row had no action.
+- **Fix (`routes/extraDutyGrants.js`):** `POST /:id/finance-return` + `POST /bulk-finance-return` (finance/admin, reason
+  ≥ 5 chars): APPROVED + FINANCE_REJECTED|FINANCE_FLAGGED → PENDING/UNREVIEWED, approvals cleared, `finance_notes` =
+  "Returned by finance (user): reason"; two audit rows (stage FINANCE_RETURN, old finance reason in the remark);
+  HR notification. UPDATE's WHERE re-checks state. Refused: BIOMETRIC_AUTO, PRE_BIOMETRIC_ACTIVATION (placeholder
+  attendance already reverted to A), is_processed. `PUT /:id` (hr/admin): edit duty_days (0.5/1/1.5/2), grant_type,
+  verification_source, reference_number, remarks on PENDING/UNREVIEWED rows only; audit per field (HR_EDIT).
+  POST / 409 now appends a "Return to HR" hint for manual rejected/flagged rows (AUTO-row text unchanged).
+- **UI (`ExtraDutyGrants.jsx`):** finance "↩ Return to HR" per row + bulk via checkboxes; HR "✎ Edit" on pending rows;
+  the finance note shows under Days. List/summary/finance-queue reads send `no-cache` (server 5 s GET cache). dist rebuilt.
+- **HR still cannot override a finance rejection.** Pay moves only after HR re-approves, finance approves, and
+  Stage 6 + Stage 7 are re-run (ED is read from grants with both approvals).
+- **Verified:** jest 80 suites / 1317 (new `extraDutyGrantsReturn.test.js` 33 — all fail on origin/main);
+  `backend/scripts/ed-return-simulation.py` 29/29 (real server + logins: reject → 409 hint → return → edit 0.5 →
+  approve ×2 → Stage 6 finance_ed_days 0.5, Stage 7 ed_pay ₹500 on ₹30k, control unchanged, drift 0);
+  `backend/scripts/ed-return-browser-check.py` 16/16 (Chromium, built dist), 0 page errors, 0 API 4xx/5xx.
+- **Not tested:** Railway; production rows (22 Sep 2026 FINANCE_REJECTED grants waiting for finance to return).
+- **Seen, not fixed:** `POST /:id/finance-approve` does not check finance_status, so the API (no UI) can approve a
+  rejected row directly at its old days.
+
+## Last Session — 2026-10-10 (Loans import: one-click confirm of clean rows)
+**Branch `feat/loan-import-bulk-confirm` (on origin/main 2cd0b26 = PR-10 merged), NOT merged.** Maker-checker unchanged.
+- **What:** Loans → Import batch view: HR "Confirm all clean matches (N)", finance "Confirm all balances as in the file (N)"
+  (confirm dialog, toast "Confirmed N · skipped M"). `importer.js` `bulkPlan` / `confirmCleanMatches` / `confirmFileBalances`
+  loop the EXISTING `confirmMatch` / `confirmBalance` per row inside ONE `inTxn` (plan read inside it) — same row update and
+  per-row audit as the single button, plus one summary audit row (`loan_import_bulk_match_confirmed` / `_balance_confirmed`);
+  any refusal → `BULK_CONFIRM_FAILED` (409), nothing confirmed. `batchDetail.bulk = {cleanMatches, fileBalances}` = same plan.
+  Routes `POST /api/loans/import/batches/:id/confirm-clean-matches` (hr) and `/confirm-file-balances` (finance).
+- **Clean match:** needs_match, parse 'ok', tier `code`/`exact`, exactly one candidate = the proposal, borrower Active, and
+  no flag (stored + `rowWarnings` as if confirmed) except INFO_ONLY = AGREEMENT_MISSING, SERVICE_UNKNOWN (= "NO_DOJ"),
+  LOAN_TYPE_DEFAULTED; no other live row with the same borrower. **File balance:** needs_balance (match confirmed), parse 'ok'
+  (EMI_MISSING etc. skipped), outstanding/EMI > 0, no flag except INFO_ONLY + NAME_MISMATCH/NAME_CLOSE_SPELLING (HR decided).
+  Expected on the real file (from the PR-10 rehearsal flags, NOT run): 4 of 9 clean matches; S163 skipped (EMI flags).
+- **Fragile:** INFO_ONLY lives in `importer.js` (`BULK_INFO_ONLY`) — a new info warning blocks bulk until added there. A new
+  `rowWarnings` flag blocks bulk by default (safe). Company-restricted users are refused at batch level (like batchDetail).
+- **Verified:** jest 1284 → 1299 (80 suites); `loansImportBulk.test.js` 15 (per-row result + audit identical to the single path
+  on a twin DB; trigger ABORT and IGNORE mid-loop → nothing confirmed; roles via real requireAuth/JWT; counts = action;
+  SELF_APPROVAL unchanged; approve after bulk creates loans). Browser `loans-ui-browser-check.py` 236/236 (Pass 8, 16), 0 page errors.
+- **NOT tested:** Railway; production data through the screen; two people clicking at once across processes.
+
 ## Last Session — 2026-10-10 (Loans PR-10: import of the accounts-Excel loans, + code-file + per-payroll cutover follow-ups)
 **Branch `feat/loans-pr10` (origin/main #75 merged in), PR #74 open, NOT merged.** Rulings + rehearsal: `docs/loans/PROGRESS.md` (PR-10).
 - **What:** Loans → Import. HR/finance upload the accounts Excel (template, or any layout via a column-mapping step). With a
