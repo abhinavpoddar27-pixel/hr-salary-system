@@ -13,7 +13,7 @@ calcMutation + header (plus the new check script + docs + dist).
 - [x] P0.4 PLAN.md + PROGRESS.md written, committed, pushed. **STOP — waiting for planner "go".**
 - [x] P1 calcMutation company '' + toast
 - [x] P2 note under Run button
-- [ ] P3 build dist (own commit)
+- [x] P3 build dist (own commit)
 - [ ] P4 stage6-all-companies-check.py on branch
 - [ ] P5 --base on origin/main worktree
 - [ ] P6 jest after (expect 85/1377)
