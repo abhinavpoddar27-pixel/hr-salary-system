@@ -372,7 +372,7 @@ describe('payslip ↔ ledger (K29) and reconciliation (K34, ruling Q11)', () => 
 });
 
 describe('sales (ruling Q7)', () => {
-  test('a sales loan row makes the sales part wait; the plant close goes ahead regardless', () => {
+  test('a sales loan with no computed sales payroll makes the sales part wait; the plant close goes ahead regardless', () => {
     const db = F.newDb();
     const plant = LF.activeLoan(db);
     worked(db, plant.emp, 11, 2026);
@@ -382,10 +382,11 @@ describe('sales (ruling Q7)', () => {
     const r = catchUp(db, ist(2026, 12, 13));
     expect(r.results).toEqual([
       expect.objectContaining({ payroll: 'plant', month: 11, ok: true }),
-      expect.objectContaining({ payroll: 'sales', month: 11, ok: false, code: 'SALES_CLOSE_NOT_WIRED' }),
+      expect.objectContaining({ payroll: 'sales', month: 11, ok: false, code: 'STAGE7_NOT_COMPUTED' }),
     ]);
     expect(closes(db).map((c) => c.payroll)).toEqual(['plant']);
-    expect(notes(db, 'LOAN_CLOSE_WAITING').map((n) => n.role_target).sort()).toEqual(['admin', 'finance']);
+    // Loans PR-8: SALES_CLOSE_NOT_WIRED is gone; the sales close waits like plant does (finance only).
+    expect(notes(db, 'LOAN_CLOSE_WAITING').map((n) => n.role_target)).toEqual(['finance']);
     db.close();
   });
 });

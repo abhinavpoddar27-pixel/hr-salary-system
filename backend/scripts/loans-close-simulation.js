@@ -5,6 +5,7 @@
  *
  *   node backend/scripts/loans-close-simulation.js           # 7 loans, Nov 2026 – Feb 2027
  *   node backend/scripts/loans-close-simulation.js --empty   # no loans: the daily job writes nothing
+ *   node backend/scripts/loans-close-simulation.js --keep db.sqlite   # also write the final database (Loans PR-9 reports sim)
  *
  * In-memory database built by the real initSchema(); real engine, real
  * recomputeSalary, real runDailyLoanJobs driven by an injected clock — every
@@ -29,6 +30,7 @@ const { initSchema } = require('../src/database/schema');
 const { recomputeSalary } = require('../src/services/recompute');
 
 const EMPTY = process.argv.includes('--empty');
+const KEEP = (() => { const i = process.argv.indexOf('--keep'); return i >= 0 ? process.argv[i + 1] : null; })();
 const COMPANY = 'Indriyan Beverages Pvt Ltd';
 const MONTHS = [[11, 2026], [12, 2026], [1, 2027], [2, 2027]];
 
@@ -270,5 +272,7 @@ for (const [name, id] of Object.entries(loans)) {
   console.log(`${name.padEnd(9)} loan ${id}: ${loan(name).status.padEnd(9)} disbursed ₹${r.disbursed} posted ₹${r.posted} adjusted ₹${r.adjusted} balance ₹${r.balance} uncovered ₹${r.uncovered} ${r.ok ? 'reconciles' : 'MISMATCH'}`);
 }
 console.log(`closes ${closes.length} on ${closesOn.join(', ')}; drift ${drift()}; component-short ${componentShort()}; notifications ${tableCounts().notifications}`);
+// Loans PR-9: --keep <file> writes the final database for loans-reports-simulation.js.
+if (KEEP) require('fs').writeFileSync(KEEP, db.serialize());
 if (failures.length) { console.error(`FAIL (${failures.length})\n- ${failures.slice(0, 40).join('\n- ')}`); process.exit(1); }
 console.log('PASS');

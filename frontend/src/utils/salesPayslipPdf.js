@@ -11,6 +11,8 @@
  * for the authoritative payslip.
  */
 
+import { loanBalanceRowHTML } from './payslipPdf';
+
 const MONTHS = ['', 'January', 'February', 'March', 'April', 'May', 'June',
                 'July', 'August', 'September', 'October', 'November', 'December'];
 
@@ -25,7 +27,7 @@ function fmtDOJ(iso) {
   return m ? `${m[3]}/${m[2]}/${m[1]}` : iso;
 }
 
-function generateSalesPayslipHTML(payslip) {
+export function generateSalesPayslipHTML(payslip, loanBalance = null) {
   const {
     employee, period, days, earnings, totalEarnings,
     deductions, totalDeductions, netSalary, status, bank,
@@ -132,7 +134,7 @@ function generateSalesPayslipHTML(payslip) {
 
     <div style="padding:12px;background:#e8fde8;border:2px solid #4caf50;text-align:center;font-size:16px;margin-bottom:12px;">
       <strong>Net Salary Payable: ₹${fmtINR(netSalary)}</strong>
-    </div>
+    </div>${loanBalanceRowHTML(loanBalance)}
 
     ${(bank && (bank.bank_name || bank.account_no || bank.ifsc)) ? `
     <table style="width:100%;border-collapse:collapse;font-size:10px;margin-bottom:10px;">
@@ -154,9 +156,9 @@ function generateSalesPayslipHTML(payslip) {
   </div>`;
 }
 
-export async function downloadSalesPayslipPDF(payslip) {
+export async function downloadSalesPayslipPDF(payslip, loanBalance = null) {
   const html2pdf = (await import('html2pdf.js')).default;
-  const html = generateSalesPayslipHTML(payslip);
+  const html = generateSalesPayslipHTML(payslip, loanBalance);
   const container = document.createElement('div');
   container.innerHTML = html;
   document.body.appendChild(container);

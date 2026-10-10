@@ -1,8 +1,9 @@
 // Loans PR-6b — the monthly loan close screen (SPEC §7 screen 5), on the PR-6 API:
-//   GET  /api/loans/close/preview?month&year   read roles; company-restricted users get 403
-//   POST /api/loans/close {month, year}        finance / admin; 201, 409 ALREADY_CLOSED
-//   GET  /api/loans/closes                     read roles (history, notes parsed)
-// Plant payroll only: the sales loan close arrives with Loans PR-8.
+//   GET  /api/loans/close/preview?month&year&payroll   read roles; company-restricted users get 403
+//   POST /api/loans/close {month, year, payroll}       finance / admin; 201, 409 ALREADY_CLOSED
+//   GET  /api/loans/closes                             read roles (history, notes parsed)
+// Loans PR-9: a Plant / Sales toggle. The two payrolls close separately (plant never waits
+// for sales); sales month M is the cycle 26th of M−1 to 25th of M (SPEC §5.3).
 import React, { useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import toast from 'react-hot-toast'
@@ -69,6 +70,8 @@ export default function LoanClose() {
   const [sel, setSel] = useState(previousIstMonth)
   const [confirming, setConfirming] = useState(false)
   const [open, setOpen] = useState(null)
+  const [payroll, setPayroll] = useState('plant')
+  const payrollName = payroll === 'sales' ? 'sales' : 'plant'
   const { month, year } = sel
   const label = monthLabel(month, year)
   const thisYear = Number(todayIst().slice(0, 4))
@@ -76,15 +79,17 @@ export default function LoanClose() {
   for (let y = 2026; y <= Math.max(thisYear, 2026); y++) years.push(y)
 
   const preview = useQuery({
-    queryKey: ['loan-close-preview', month, year],
-    queryFn: () => getLoanClosePreview(month, year),
+    queryKey: ['loan-close-preview', payroll, month, year],
+    queryFn: () => getLoanClosePreview(month, year, payroll),
     enabled: !restricted,
     retry: 0,
   })
   const p = preview.data?.data?.data
   const previewForbidden = restricted || preview.error?.response?.data?.code === 'COMPANY_NOT_ALLOWED'
   const due = useQuery({ queryKey: ['loans-due', month, year], queryFn: () => getLoansDue(month, year), retry: 0 })
-  const dueRows = due.data?.data?.data || []
+  // /loans/due lists both payrolls; keep this payroll's rows (borrower_type).
+  const dueRows = (due.data?.data?.data || []).filter((x) => x.borrower_type === payroll)
+  const dueOpen = dueRows.filter((x) => x.status !== 'posted').reduce((s, x) => s + Math.round(Number(x.amount_due || 0) * 100), 0) / 100
   const history = useQuery({ queryKey: ['loan-closes'], queryFn: getLoanCloses, retry: 0 })
   const closes = history.data?.data?.data || []
 
@@ -92,11 +97,11 @@ export default function LoanClose() {
     for (const k of ['loan-close-preview', 'loan-closes', 'loan-stats', 'loans', 'loan', 'loans-due', 'employee-loans']) qc.invalidateQueries({ queryKey: [k] })
   }
   const close = useMutation({
-    mutationFn: () => runLoanClose(month, year),
+    mutationFn: () => runLoanClose(month, year, payroll),
     onSuccess: (res) => {
       const d = res?.data?.data || {}
-      toast.success(`Closed ${label}: posted ${d.posted} (${rupees(d.postedAmount)}), held ${d.held}, shortfall ${d.shortfall}, no salary ${d.noSalary}`, { duration: 6000 })
-      if (d.mismatches?.length) toast(`${d.mismatches.length} payslip/ledger mismatch(es) left provisional — re-run Stage 7 for those employees`, { icon: '⚠️', duration: 8000 })
+      toast.success(`Closed ${payroll === 'sales' ? 'sales ' : ''}${label}: posted ${d.posted} (${rupees(d.postedAmount)}), held ${d.held}, shortfall ${d.shortfall}, no salary ${d.noSalary}`, { duration: 6000 })
+      if (d.mismatches?.length) toast(`${d.mismatches.length} payslip/ledger mismatch(es) left provisional — ${payroll === 'sales' ? 'recompute the sales salary for those reps' : 're-run Stage 7 for those employees'}`, { icon: '⚠️', duration: 8000 })
       if (d.reconciliationOk === false) toast.error('A loan did not reconcile before this close; it is recorded in the close notes', { duration: 8000 })
       setConfirming(false)
       refresh()
@@ -117,15 +122,25 @@ export default function LoanClose() {
       <div className="flex items-start justify-between flex-wrap gap-3">
         <div className="text-sm text-slate-600 max-w-3xl space-y-1">
           <div>
-            The loan close posts each month's payroll loan deductions to the loan balances (plant payroll; sales arrives with Loans PR-8).
+            The loan close posts each month's payroll loan deductions to the loan balances. Plant and sales payrolls close separately;
+            pick one below.{payroll === 'sales' && ' Sales month M is the cycle from the 26th of the month before to the 25th of M.'}
           </div>
           <div className="text-xs text-slate-500" data-testid="close-auto-note">
             It also runs <strong>automatically every day at 06:15 IST</strong>. From the 13th it closes last month, and any earlier open
-            month oldest first, once plant payroll (Stage 7) for that month is computed. Use <em>Close now</em> to close earlier, or after
-            fixing whatever it was waiting for.
+            month oldest first, once {payroll === 'sales' ? "that month's sales upload is computed" : 'plant payroll (Stage 7) for that month is computed'}.
+            Use <em>Close now</em> to close earlier, or after fixing whatever it was waiting for.
           </div>
         </div>
         <div className="flex items-center gap-2">
+          <div className="inline-flex rounded-lg border border-slate-200 overflow-hidden" role="group" data-testid="close-payroll">
+            {['plant', 'sales'].map((pr) => (
+              <button key={pr} type="button" data-testid={`close-payroll-${pr}`} aria-pressed={payroll === pr}
+                className={clsx('px-3 py-1.5 text-sm font-medium', payroll === pr ? 'bg-blue-600 text-white' : 'bg-white text-slate-600 hover:bg-slate-50')}
+                onClick={() => { setPayroll(pr); setConfirming(false) }}>
+                {pr === 'plant' ? 'Plant' : 'Sales'}
+              </button>
+            ))}
+          </div>
           <select className="select text-sm w-36" value={month} data-testid="close-month"
             onChange={(e) => setSel({ month: Number(e.target.value), year })}>
             {MONTH_OPTIONS.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
@@ -152,7 +167,7 @@ export default function LoanClose() {
               : r.code === 'ALREADY_CLOSED' ? 'border-blue-200 bg-blue-50 text-blue-800'
                 : 'border-amber-200 bg-amber-50 text-amber-800')}
             data-testid="close-readiness" data-code={r.ok ? 'READY' : r.code}>
-            <div className="font-semibold">{r.ok ? `${label} is ready to close.` : closeReadinessText(r, label)}</div>
+            <div className="font-semibold">{r.ok ? `${payroll === 'sales' ? 'Sales' : 'Plant'} ${label} is ready to close.` : closeReadinessText(r, label, payroll)}</div>
             {!r.ok && r.code === 'EARLIER_MONTH_OPEN' && Array.isArray(r.earlier) && (
               <div className="flex gap-2 flex-wrap items-center">
                 <span>Close first:</span>
@@ -176,7 +191,7 @@ export default function LoanClose() {
           </div>
 
           <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-7 gap-3">
-            <Tile label="Due this month" value={dueRows.length} sub={`${rupees(due.data?.data?.totalOpen || 0)} not yet posted`} tone="blue" testid="close-tile-due" />
+            <Tile label="Due this month" value={dueRows.length} sub={`${rupees(dueOpen)} not yet posted`} tone="blue" testid="close-tile-due" />
             <Tile label="Provisional" value={p.provisional.count} sub={rupees(p.provisional.amount)} tone="amber" testid="close-tile-provisional" />
             <Tile label={closedRow ? 'Would post now' : 'Would post'} value={p.wouldPost.count} sub={rupees(p.wouldPost.amount)} tone="green" testid="close-tile-post" />
             <Tile label={closedRow ? 'Still held' : 'Held'} value={p.held} sub="salary on hold — stays provisional" tone="purple" testid="close-tile-held" />
@@ -195,15 +210,16 @@ export default function LoanClose() {
             <div className="card overflow-hidden" data-testid="close-mismatches">
               <div className="px-4 py-2 border-b border-slate-100 text-sm font-semibold text-slate-700">Payslip and loan ledger disagree</div>
               <table className="table-compact w-full">
-                <thead><tr><th>Employee</th><th className="text-right">Payslip loan</th><th className="text-right">Ledger</th><th className="text-center">Salary rows</th><th>What to do</th></tr></thead>
+                <thead><tr><th>Employee</th>{payroll === 'sales' && <th>Company</th>}<th className="text-right">Payslip loan</th><th className="text-right">Ledger</th><th className="text-center">Salary rows</th><th>What to do</th></tr></thead>
                 <tbody>
                   {p.mismatches.map((x) => (
-                    <tr key={x.employeeCode}>
+                    <tr key={`${x.employeeCode}|${x.company || ''}`}>
                       <td className="font-mono text-xs">{x.employeeCode}</td>
+                      {payroll === 'sales' && <td className="text-xs">{x.company}</td>}
                       <td className="text-right font-mono">{rupees(x.payslip)}</td>
                       <td className="text-right font-mono">{rupees(x.ledger)}</td>
                       <td className="text-center">{x.salaryRows}</td>
-                      <td className="text-xs text-slate-600">Re-run Stage 7 for this employee. The close leaves the row provisional; the daily sweep posts it once they agree.</td>
+                      <td className="text-xs text-slate-600">{payroll === 'sales' ? 'Recompute the sales salary for this rep.' : 'Re-run Stage 7 for this employee.'} The close leaves the row provisional; the daily sweep posts it once they agree.</td>
                     </tr>
                   ))}
                 </tbody>
@@ -215,7 +231,7 @@ export default function LoanClose() {
             {caps.canClose ? (
               <button className="btn-primary disabled:opacity-40 disabled:cursor-not-allowed" disabled={!canRun || close.isPending}
                 data-testid="close-run" onClick={() => setConfirming(true)}>
-                {close.isPending ? 'Closing…' : `Close ${label} now`}
+                {close.isPending ? 'Closing…' : `Close ${payrollName} ${label} now`}
               </button>
             ) : (
               <span className="text-xs text-slate-500 bg-slate-100 rounded-lg px-2 py-1.5" data-testid="close-readonly">
@@ -242,7 +258,7 @@ export default function LoanClose() {
                     : closes.map((c) => (
                       <React.Fragment key={c.id}>
                         <tr data-testid={`close-row-${c.month}-${c.year}`}>
-                          <td><button className="text-blue-700 hover:underline text-sm" onClick={() => setSel({ month: c.month, year: c.year })}>{monthLabel(c.month, c.year)}</button></td>
+                          <td><button className="text-blue-700 hover:underline text-sm" onClick={() => { setSel({ month: c.month, year: c.year }); setPayroll(c.payroll === 'sales' ? 'sales' : 'plant') }}>{monthLabel(c.month, c.year)}</button></td>
                           <td className="text-xs">{c.payroll}</td>
                           <td className="text-xs whitespace-nowrap">{istDateTime(c.run_at)}</td>
                           <td className="text-xs">{c.run_by}</td>
@@ -264,7 +280,7 @@ export default function LoanClose() {
       </div>
 
       {confirming && p && (
-        <Modal title={`Close plant loans for ${label}?`} onClose={() => !close.isPending && setConfirming(false)} size="md">
+        <Modal title={`Close ${payrollName} loans for ${label}?`} onClose={() => !close.isPending && setConfirming(false)} size="md">
           <div className="space-y-3 text-sm text-slate-700" data-testid="close-confirm">
             <ul className="list-disc ml-5 space-y-1">
               <li>Posts <strong>{p.wouldPost.count}</strong> deduction{p.wouldPost.count === 1 ? '' : 's'} totalling <strong>{rupees(p.wouldPost.amount)}</strong> to the loan balances.</li>

@@ -20,6 +20,20 @@ REAL logins, on a SCRATCH database. Never point it at a real database.
     close by finance (201), a stale second tab (409), history notes, hr / viewer
     read-only, a company-restricted finance user, the admin reversal on the loan page,
     and the Mark Left dialog's outstanding. Screens go to <screenshot_dir>/pr6b/.
+  * Pass 4 (Loans PR-8) — sales borrowers. Seeds 3 sales reps, two with sales loans
+    (disbursed 15 Jun 2026 → first EMI the Jul 2026 sales cycle), runs the sales
+    Stage 7 for Jul 2026 and posts one rep's deduction. Then: the request form's one
+    search across both masters (Plant / Sales tags, a plant row typed Sales left out),
+    a sales loan raised through the form with the company locked, the Loans list
+    "Sales" tag, and the sales register's Loan column with Hold disabled on the row
+    whose loan is posted. Screens go to <screenshot_dir>/pr8/.
+  * Pass 5 (Loans PR-9) — reports, payslip balance line, sales close. No new login (the
+    limiter's 5 are used): the Reports tab's six views, the outstanding total against the
+    Loans tile and the ledger, an Excel download per view, the perquisite threshold label;
+    the Stage 7 payslip modal shows the balance line for a borrower and NOT for a
+    non-borrower (seeded); the sales payslip page likewise; the close tab's Plant / Sales
+    toggle — sales readiness, a sales close by finance (201), the history row, hr read-only.
+    Screens go to <screenshot_dir>/pr9/.
 
 Usage:  python3 backend/scripts/loans-ui-browser-check.py [screenshot_dir]
 Needs Python Playwright and Chromium (PLAYWRIGHT_BROWSERS_PATH, e.g. /opt/pw-browsers).
@@ -34,6 +48,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import urllib.parse
 import urllib.request
 from datetime import datetime, timedelta, timezone
 
@@ -42,6 +57,8 @@ from playwright.sync_api import sync_playwright
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
 OUT = os.path.abspath(sys.argv[1]) if len(sys.argv) > 1 else os.path.join(ROOT, 'screenshots')
 OUT6B = os.path.join(OUT, 'pr6b')
+OUT8 = os.path.join(OUT, 'pr8')
+OUT9 = os.path.join(OUT, 'pr9')
 PORT = int(os.environ.get('PORT', '3997'))
 BASE = f'http://127.0.0.1:{PORT}'
 COMPANY = 'Indriyan Beverages Pvt Ltd'
@@ -524,6 +541,8 @@ def run_browser(db_path, admin_loan_id):
         check('sidebar: no waiting count for hr', hr.locator('a[href="/loans"] span[title*="waiting"]').count() == 0)
 
         run_close_pass(browser, db_path, hr, admin, fin, viewer)
+        run_sales_pass(db_path, hr)
+        run_reports_pass(db_path, hr, admin, fin, viewer)
 
         browser.close()
 
@@ -743,6 +762,296 @@ def run_close_pass(browser, db_path, hr, admin, fin, viewer):
     check('Mark Left: a non-borrower shows "No open loans."', 'No open loans.' in hr.get_by_test_id('markleft-loans').inner_text())
     hr.get_by_role('button', name='Cancel', exact=True).last.click()
 
+
+
+# ── Pass 4 (Loans PR-8): sales borrowers ────────────────────────────────────
+
+SEED_SALES_JS = r"""
+// Scratch DB only. argv: ROOT DB_PATH. Sales reps, loans through the engine, a sales Stage 7 for Jul 2026.
+const [ROOT, DB] = process.argv.slice(2);
+const Database = require(`${ROOT}/backend/node_modules/better-sqlite3`);
+const db = new Database(DB);
+db.pragma('busy_timeout = 10000');
+const S = require(`${ROOT}/backend/src/__tests__/helpers/salesLoanFixture`);
+const L = require(`${ROOT}/backend/src/services/loans`);
+const COMPANY = 'Indriyan Beverages Pvt Ltd';
+const out = {};
+S.addRep(db, { code: 'S901', name: 'Mona Brar', gross: 24000 });
+S.addRep(db, { code: 'S902', name: 'Navdeep Toor', gross: 24000 });
+S.addRep(db, { code: 'S903', name: 'Ojas Bedi', gross: 24000 });
+db.prepare(`INSERT INTO employees (code, name, department, company, status, employment_type, is_contractor, gross_salary, date_of_joining)
+            VALUES ('E120', 'Ojas Salestyped', 'SALES', ?, 'Active', 'Sales', 0, 20000, '2020-01-01')`).run(COMPANY);
+for (const code of ['S901', 'S902']) out[code] = S.salesLoan(db, { code, principal: 9000, tenure: 3, disbursedOn: '2026-06-15', asOf: '2026-06-20' });
+S.setUpload(db, { month: 7, year: 2026, rows: [{ code: 'S901', days: 31 }, { code: 'S902', days: 31 }, { code: 'S903', days: 31 }] });
+S.computeSalesMonth(db, { month: 7, year: 2026, runId: 'ui-check-sales' });
+const d = db.prepare("SELECT id FROM loan_deductions WHERE payroll = 'sales' AND employee_code = 'S901' AND month = 7 AND year = 2026").get();
+const p = L.postDeduction(db, { deductionId: d.id }, { username: 'system', role: 'system' });
+if (!p.ok) throw new Error(`post: ${p.code}`);
+out.rows = db.prepare("SELECT employee_code, loan_recovery FROM sales_salary_computations WHERE month = 7 AND year = 2026 ORDER BY employee_code").all();
+process.stdout.write(JSON.stringify(out));
+"""
+
+
+def run_sales_pass(db_path, hr):
+    print('\n— Pass 4: sales borrowers (Loans PR-8) —')
+    js = os.path.join(os.path.dirname(db_path), 'seed-sales.js')
+    with open(js, 'w') as f:
+        f.write(SEED_SALES_JS)
+    seeded = json.loads(subprocess.check_output(['node', js, ROOT, db_path]).decode())
+    rows = {r['employee_code']: r['loan_recovery'] for r in seeded['rows']}
+    check('seed: sales Stage 7 Jul 2026 deducted ₹3,000 for S901 and S902, ₹0 for S903',
+          rows == {'S901': 3000, 'S902': 3000, 'S903': 0}, seeded)
+
+    # Request form: one search across both masters.
+    hr.goto(f'{BASE}/loans?tab=loans')
+    hr.get_by_test_id('new-loan').click()
+    hr.get_by_test_id('loan-emp-search').fill('Ojas')
+    hr.get_by_test_id('loan-emp-result').first.wait_for(timeout=10000)
+    res = [hr.get_by_test_id('loan-emp-result').nth(i).inner_text() for i in range(hr.get_by_test_id('loan-emp-result').count())]
+    check('request form: search finds the sales rep, tagged Sales', any('Sales' in r and 'S903' in r for r in res), res)
+    check('request form: a plant row typed Sales is left out of the search', not any('E120' in r for r in res), res)
+    hr.get_by_test_id('loan-emp-search').fill('Asha')
+    plant_row = hr.get_by_test_id('loan-emp-result').filter(has_text='E101')
+    try:
+        plant_row.first.wait_for(timeout=10000)   # the 300 ms debounce: wait for the new results
+        txt = plant_row.first.inner_text()
+    except Exception:
+        txt = ''
+    check('request form: plant employees still found, tagged Plant', 'Plant' in txt, txt)
+    hr.get_by_test_id('loan-emp-search').fill('S903')
+    hr.get_by_role('button', name='S903').first.click()
+    company = hr.get_by_test_id('loan-company')
+    check('request form: sales borrower → company locked to the sales-master company',
+          company.is_disabled() and company.input_value() == COMPANY, company.input_value())
+    hr.get_by_test_id('loan-type').select_option('Personal')
+    hr.get_by_test_id('loan-principal').fill('6000')
+    hr.get_by_test_id('loan-tenure').fill('3')
+    panel = hr.get_by_test_id('eligibility-panel')
+    ok = True
+    try:
+        panel.get_by_text('✓ Eligible').wait_for(timeout=10000)
+    except Exception:
+        ok = False
+    check('request form: sales borrower eligible (engine verdict)', ok, panel.inner_text())
+    hr.get_by_test_id('loan-reason').fill('UI check: sales loan')
+    shot(hr, '01-request-sales-borrower', out=OUT8)
+    hr.get_by_test_id('loan-submit').click()
+    hr.wait_for_url(lambda u: '/loans/' in u and '?' not in u, timeout=10000)
+    new_id = int(hr.url.rstrip('/').split('/')[-1])
+    con = sqlite3.connect(db_path, timeout=10)
+    row = con.execute('SELECT borrower_type, employee_code, company, status FROM loans WHERE id = ?', (new_id,)).fetchone()
+    con.close()
+    check('request form: the loan is raised as a sales loan for S903', row == ('sales', 'S903', COMPANY, 'requested'), row)
+
+    # Loans list: Sales tag.
+    hr.goto(f'{BASE}/loans?tab=loans')
+    lr = hr.get_by_test_id(f'loan-row-{new_id}')
+    lr.wait_for(timeout=10000)
+    check('Loans list: sales borrower row shows the "Sales" tag', 'Sales' in lr.inner_text() and 'Ojas Bedi' in lr.inner_text(), lr.inner_text())
+
+    # Sales register: Loan column, Hold disabled where the loan is posted.
+    hr.goto(f'{BASE}/sales/compute')
+    hr.locator(f'select:has(option[value="{COMPANY}"])').first.select_option(COMPANY)
+    hr.locator('select:has(option[value="2026"])').first.select_option('2026')
+    hr.locator('select:has(option[value="12"]):not(:has(option[value="2026"]))').first.select_option('7')
+    ok = True
+    try:
+        hr.get_by_test_id('sales-loan-S901').wait_for(timeout=15000)
+    except Exception:
+        ok = False
+    check('sales register: Loan column present', ok)
+    if ok:
+        c1 = hr.get_by_test_id('sales-loan-S901').inner_text()
+        c2 = hr.get_by_test_id('sales-loan-S902').inner_text()
+        check('sales register: S901 loan ₹3,000 marked posted', '3,000' in c1 and 'posted' in c1, c1)
+        check('sales register: S902 loan ₹3,000, not posted', '3,000' in c2 and 'posted' not in c2, c2)
+        r1 = hr.locator('tr', has=hr.get_by_test_id('sales-loan-S901'))
+        r2 = hr.locator('tr', has=hr.get_by_test_id('sales-loan-S902'))
+        h1 = r1.locator('option', has_text='hold')
+        h2 = r2.locator('option', has_text='hold')
+        check('sales register: "→ hold" disabled with "(loan posted)" on the posted row',
+              h1.count() == 1 and h1.is_disabled() and 'loan posted' in h1.inner_text(), h1.count() and h1.inner_text())
+        check('sales register: "→ hold" still allowed on the row whose loan is not posted',
+              h2.count() == 1 and not h2.is_disabled(), h2.count())
+        shot(hr, '02-sales-register-loan-column', out=OUT8)
+
+
+
+# ── Pass 5 (Loans PR-9): reports, payslip balance line, sales close ─────────
+
+SEED_PR9_JS = r"""
+// Scratch DB only. argv: ROOT DB_PATH. A no-loan plant employee with a Jul 2026 payslip,
+// and the expected payslip balance lines from the engine.
+const [ROOT, DB] = process.argv.slice(2);
+const Database = require(`${ROOT}/backend/node_modules/better-sqlite3`);
+const db = new Database(DB);
+db.pragma('busy_timeout = 10000');
+const L = require(`${ROOT}/backend/src/services/loans`);
+const COMPANY = 'Indriyan Beverages Pvt Ltd';
+const emp = db.prepare("SELECT id FROM employees WHERE code = 'E105'").get();
+db.prepare(`INSERT INTO day_calculations (employee_code, month, year, company, days_present, total_payable_days) VALUES ('E105', 7, 2026, ?, 27, 27)`).run(COMPANY);
+db.prepare(`INSERT INTO salary_computations (employee_id, employee_code, month, year, company, gross_salary, gross_earned, total_deductions, net_salary, basic_earned)
+            VALUES (?, 'E105', 7, 2026, ?, 20000, 20000, 0, 20000, 20000)`).run(emp.id, COMPANY);
+const out = {
+  E110: L.payslipLoanBalance(db, { payroll: 'plant', employeeCode: 'E110', month: 7, year: 2026 }),
+  E105: L.payslipLoanBalance(db, { payroll: 'plant', employeeCode: 'E105', month: 7, year: 2026 }),
+  S901: L.payslipLoanBalance(db, { payroll: 'sales', employeeCode: 'S901', company: COMPANY, month: 7, year: 2026 }),
+  S903: L.payslipLoanBalance(db, { payroll: 'sales', employeeCode: 'S903', company: COMPANY, month: 7, year: 2026 }),
+  outstanding: db.prepare("SELECT COALESCE(SUM(remaining_balance), 0) AS v FROM loans WHERE status IN ('active','recover_at_exit')").get().v,
+};
+process.stdout.write(JSON.stringify(out));
+"""
+
+
+def digits(text):
+    return ''.join(ch for ch in str(text) if ch.isdigit() or ch == '.')
+
+
+def inr(v):
+    """₹ amount as the screens print it (en-IN grouping, no decimals for whole rupees)."""
+    v = float(v)
+    whole = int(round(v)) if abs(v - round(v)) < 0.005 else None
+    s = str(whole if whole is not None else f'{v:.2f}')
+    head, _, frac = s.partition('.')
+    neg = head.startswith('-')
+    head = head.lstrip('-')
+    if len(head) > 3:
+        rest, last3 = head[:-3], head[-3:]
+        groups = []
+        while len(rest) > 2:
+            groups.insert(0, rest[-2:])
+            rest = rest[:-2]
+        if rest:
+            groups.insert(0, rest)
+        head = ','.join(groups + [last3])
+    return ('-' if neg else '') + head + (('.' + frac) if frac else '')
+
+
+def run_reports_pass(db_path, hr, admin, fin, viewer):
+    print('\n— Pass 5: reports, payslip balance line, sales close (Loans PR-9) —')
+    js = os.path.join(os.path.dirname(db_path), 'seed-pr9.js')
+    with open(js, 'w') as f:
+        f.write(SEED_PR9_JS)
+    seeded = json.loads(subprocess.check_output(['node', js, ROOT, db_path]).decode())
+    check('seed: E110 has a loan line for Jul 2026, E105 (no loan) has none',
+          seeded['E110']['show'] and not seeded['E105']['show'], {k: seeded[k]['show'] for k in ('E110', 'E105')})
+
+    # Reports tab (finance — has not touched the company filter).
+    fin.goto(f'{BASE}/loans?tab=loans')
+    fin.get_by_test_id('tile-outstanding').wait_for()
+    fin.wait_for_timeout(800)
+    tile_txt = fin.get_by_test_id('tile-outstanding').inner_text()
+    fin.goto(f'{BASE}/loans?tab=reports')
+    ok = visible(fin, 'rep-outstanding', 15000)
+    check('Reports tab: Outstanding view renders', ok)
+    total_txt = fin.get_by_test_id('rep-total-outstanding').inner_text() if ok else ''
+    check('Reports: outstanding total = the Loans "Outstanding" tile', inr(seeded['outstanding']) in tile_txt and inr(seeded['outstanding']) in total_txt,
+          [tile_txt, total_txt, seeded['outstanding']])
+    check('Reports: department table footer = the ledger total', ok and inr(seeded['outstanding']) in fin.get_by_test_id('rep-groups-total').inner_text())
+    shot(fin, '01-reports-outstanding', element='loan-reports', out=OUT9)
+    for view in ['outstanding', 'forecast', 'exceptions', 'leavers', 'perquisite', 'write-offs']:
+        fin.get_by_test_id(f'rep-view-{view}').click()
+        rendered = visible(fin, f'rep-{view}', 15000)
+        check(f'Reports: "{view}" view renders', rendered)
+        path = None
+        try:
+            with fin.expect_download(timeout=15000) as dl:
+                fin.get_by_test_id('rep-download').click()
+            path = os.path.join(os.path.dirname(db_path), dl.value.suggested_filename)
+            dl.value.save_as(path)
+        except Exception as e:
+            check(f'Reports: "{view}" Excel download', False, repr(e)[:200])
+        if path:
+            import zipfile
+            with zipfile.ZipFile(path) as z:
+                wb = z.read('xl/workbook.xml').decode()
+            want = {'outstanding': 'Outstanding register', 'forecast': 'Recovery forecast', 'exceptions': 'Exceptions',
+                    'leavers': 'Leavers with balance', 'perquisite': 'Perquisite list', 'write-offs': 'Write-offs (TDS)'}[view]
+            check(f'Reports: "{view}" Excel opens with sheet "{want}"', want in wb, os.path.basename(path))
+        if view == 'forecast':
+            chk = fin.get_by_test_id('rep-forecast-check').inner_text()
+            check('Reports: forecast total = outstanding', '=' in chk and '≠' not in chk, chk)
+            shot(fin, '02-reports-forecast', element='loan-reports', out=OUT9)
+        if view == 'perquisite':
+            t = fin.get_by_test_id('rep-perq-threshold').inner_text()
+            check('Reports: perquisite threshold ₹20,000 labelled "pending CA confirmation"', '20,000' in t and 'pending CA confirmation' in t, t)
+            shot(fin, '03-reports-perquisite', element='loan-reports', out=OUT9)
+    viewer.goto(f'{BASE}/loans?tab=reports')
+    check('Reports: viewer can read the reports', visible(viewer, 'rep-outstanding', 15000))
+
+    # Stage 7 payslip modal: line for the borrower, none for the non-borrower.
+    def stage7_payslip(code):
+        hr.goto(f'{BASE}/pipeline/salary')
+        hr.locator('select:has(option[value="2026"])').first.select_option('2026')
+        hr.locator('select:has(option[value="12"]):not(:has(option[value="2026"]))').first.select_option('7')
+        row = hr.locator('tr', has_text=code).filter(has=hr.locator('button[title="Payslip"]')).first
+        row.wait_for(timeout=15000)
+        row.locator('button[title="Payslip"]').click()
+        hr.get_by_text('Net Salary').first.wait_for(timeout=10000)
+        hr.wait_for_timeout(1500)   # the balance read is a second request
+    try:
+        stage7_payslip('E110')
+        line = hr.get_by_test_id('payslip-loan-balance')
+        want = inr(seeded['E110']['loans'][0]['outstandingAfter'])
+        check('Stage 7 payslip: borrower shows "Loan outstanding after this month\'s EMI"',
+              line.count() == 1 and "outstanding after this month's EMI" in line.inner_text() and want in line.inner_text(),
+              line.inner_text() if line.count() else 'no line')
+        shot(hr, '04-stage7-payslip-loan-line', out=OUT9)
+        hr.keyboard.press('Escape')
+        stage7_payslip('E105')
+        check('Stage 7 payslip: non-borrower shows no loan line', hr.get_by_test_id('payslip-loan-balance').count() == 0)
+        hr.keyboard.press('Escape')
+    except Exception as e:
+        check('Stage 7 payslip modal reachable', False, repr(e)[:300])
+
+    # Sales payslip page.
+    q = f'month=7&year=2026&company={urllib.parse.quote(COMPANY)}'
+    hr.goto(f'{BASE}/sales/payslip/S901?{q}')
+    hr.get_by_text('Net Salary Payable').first.wait_for(timeout=15000)
+    hr.wait_for_timeout(1500)
+    sl = hr.get_by_test_id('sales-payslip-loan-balance')
+    want = inr(seeded['S901']['loans'][0]['outstandingAfter'])
+    check('sales payslip: borrower S901 shows the loan line', sl.count() == 1 and want in sl.inner_text(), sl.inner_text() if sl.count() else 'no line')
+    shot(hr, '05-sales-payslip-loan-line', out=OUT9)
+    hr.goto(f'{BASE}/sales/payslip/S903?{q}')
+    hr.get_by_text('Net Salary Payable').first.wait_for(timeout=15000)
+    hr.wait_for_timeout(1500)
+    check('sales payslip: S903 (loan only requested) shows no loan line', hr.get_by_test_id('sales-payslip-loan-balance').count() == 0)
+
+    # Close tab: Plant / Sales toggle.
+    fin.goto(f'{BASE}/loans?tab=close')
+    fin.get_by_test_id('loan-close').wait_for()
+    fin.get_by_test_id('close-payroll-sales').click()
+    check('close tab: Sales toggle shows the sales readiness for Jul 2026 (READY)', pick_month(fin, 7, 2026, 'READY', 15000),
+          fin.get_by_test_id('close-readiness').inner_text())
+    due_txt = ''
+    for _ in range(40):   # the due list is its own request: wait for it to land
+        due_txt = tile(fin, 'close-tile-due')
+        lines = [x.strip() for x in due_txt.split('\n') if x.strip()]
+        if len(lines) > 1 and lines[1] == '2':
+            break
+        fin.wait_for_timeout(250)
+    check('close tab (sales): due tile counts only sales instalments (2 of the month\'s due rows)',
+          [x.strip() for x in due_txt.split('\n') if x.strip()][1:2] == ['2'], due_txt.replace('\n', ' | '))
+    shot(fin, '06-close-sales-ready', element='loan-close', out=OUT9)
+    fin.get_by_test_id('close-run').click()
+    title = fin.get_by_text('Close sales loans for Jul 2026?')
+    check('close tab (sales): confirm dialog names the sales payroll', title.count() >= 1)
+    fin.get_by_test_id('close-confirm-run').click()
+    check('close tab (sales): finance closes the sales month (toast)', toast(fin, 'Closed sales Jul 2026'))
+    check('close tab (sales): readiness becomes ALREADY_CLOSED', readiness_is(fin, 'ALREADY_CLOSED', 15000))
+    con = sqlite3.connect(db_path, timeout=10)
+    closes = con.execute("SELECT payroll, run_by, trigger_kind FROM loan_closes WHERE month = 7 AND year = 2026 ORDER BY payroll").fetchall()
+    con.close()
+    check('close tab (sales): a sales loan_closes row written by finance, manual', ('sales', 'finance', 'manual') in closes, closes)
+    hist = fin.get_by_test_id('close-row-7-2026')
+    check('close tab: history lists the sales close', any('sales' in hist.nth(i).inner_text() for i in range(hist.count())), hist.count())
+    fin.get_by_test_id('close-payroll-plant').click()
+    check('close tab: switching back to Plant shows plant Jul 2026 (closed in Pass 3)', readiness_is(fin, 'ALREADY_CLOSED', 15000))
+    hr.goto(f'{BASE}/loans?tab=close')
+    hr.get_by_test_id('loan-close').wait_for()
+    hr.get_by_test_id('close-payroll-sales').click()
+    check('close tab (sales): hr is read-only', visible(hr, 'close-readonly') and hr.get_by_test_id('close-run').count() == 0)
 
 if __name__ == '__main__':
     main()

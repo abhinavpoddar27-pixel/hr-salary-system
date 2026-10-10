@@ -25,9 +25,11 @@
  * An EMPTY LEDGER WRITES NOTHING (owner ruling Q5): a close is only "needed"
  * when a provisional row or an open instalment exists for that month.
  *
- * Payrolls close separately (ruling Q7): plant never waits for sales. Sales is
- * not wired until Loans PR-8; while no sales loan can exist the sales part is a
- * no-op, and if one ever does it refuses with SALES_CLOSE_NOT_WIRED.
+ * Payrolls close separately (ruling Q7): plant never waits for sales. Sales
+ * (Loans PR-8, K10): month M is ready once every company with a sales loan due
+ * or provisional in M has an ACTIVE sales upload stamped `computed` (the sales
+ * Stage 7 ran on it); a sales row on status 'hold' counts as held. A sales
+ * person is code + company, so every sales check keys on both.
  *
  * By the 13th the salary has been paid, so the close never waits for one
  * employee to be re-run: a per-employee problem is left provisional, listed and
@@ -48,7 +50,10 @@ const { notify, notifyAlerts } = require('./notify');
 const SYSTEM = Object.freeze({ username: 'system', role: 'system' });
 const PAYROLLS = Object.freeze(['plant', 'sales']);
 const LIVE_SQL = LIVE_LOAN_STATES.map((s) => `'${s}'`).join(',');
-const WAITING_CODES = new Set(['STAGE7_NOT_COMPUTED', 'EARLIER_MONTH_OPEN', 'SALES_CLOSE_NOT_WIRED']);
+const WAITING_CODES = new Set(['STAGE7_NOT_COMPUTED', 'EARLIER_MONTH_OPEN']);
+
+/** Who one salary row belongs to: plant = code; sales = code + company (Loans PR-8). */
+const personKey = (payroll, code, company) => (payroll === 'sales' ? `${code}|${String(company || '').trim()}` : String(code));
 
 const label = (m) => `${m.month}/${m.year}`;
 const rs = (paise) => `₹${toRupees(paise).toLocaleString('en-IN')}`;
@@ -105,9 +110,12 @@ function neededUnclosedMonths(db, payroll, upTo) {
  * Payslip ↔ ledger, per employee-month (K8, K19, K28, K29, §5.2 r7):
  *   Σ salary_computations.loan_recovery over ALL rows of the employee-month
  *   = Σ provisional + effective posted loan_deductions of the payroll.
- * Two salary rows (K8) also count as a mismatch. Plant only until PR-8.
+ * Two salary rows (K8) also count as a mismatch.
+ * Sales (Loans PR-8): per person = code + company — sales_salary_computations
+ * .loan_recovery of that company's row vs the sales deductions of that company.
  */
-function checkPayslipLedger(db, { payroll = 'plant', month, year, employeeCode = null }) {
+function checkPayslipLedger(db, { payroll = 'plant', month, year, employeeCode = null, company = null }) {
+  if (payroll === 'sales') return checkSalesPayslipLedger(db, { month, year, employeeCode, company });
   if (payroll !== 'plant') return { ok: true, mismatches: [], checked: 0 };
   const byCode = new Map();
   const at = (code) => {
@@ -133,6 +141,47 @@ function checkPayslipLedger(db, { payroll = 'plant', month, year, employeeCode =
   return { ok: mismatches.length === 0, mismatches, checked: byCode.size };
 }
 
+function checkSalesPayslipLedger(db, { month, year, employeeCode = null, company = null }) {
+  const by = new Map();
+  const at = (code, co) => {
+    const k = personKey('sales', code, co);
+    if (!by.has(k)) by.set(k, { employeeCode: String(code), company: String(co || '').trim(), payslipPaise: 0, ledgerPaise: 0, salaryRows: 0 });
+    return by.get(k);
+  };
+  let filter = '';
+  const args = [month, year];
+  if (employeeCode) { filter += ' AND employee_code = ?'; args.push(String(employeeCode)); }
+  if (company) { filter += ' AND company = ?'; args.push(String(company).trim()); }
+  for (const d of db.prepare(`SELECT * FROM loan_deductions WHERE payroll = 'sales' AND month = ? AND year = ? AND state IN ('provisional','posted')${filter}`).all(...args)) {
+    at(d.employee_code, d.company).ledgerPaise += d.state === 'posted' ? effectivePostedPaise(db, d) : toPaise(d.amount);
+  }
+  for (const r of db.prepare(`SELECT employee_code, company FROM sales_salary_computations WHERE month = ? AND year = ? AND COALESCE(loan_recovery, 0) <> 0${filter}`).all(...args)) {
+    at(r.employee_code, r.company);
+  }
+  const sal = db.prepare('SELECT loan_recovery FROM sales_salary_computations WHERE employee_code = ? AND month = ? AND year = ? AND company = ?');
+  for (const e of by.values()) {
+    const rows = sal.all(e.employeeCode, month, year, e.company);
+    e.salaryRows = rows.length;
+    e.payslipPaise = rows.reduce((s, r) => s + toPaise(r.loan_recovery || 0), 0);
+  }
+  const mismatches = [...by.values()].filter((e) => e.payslipPaise !== e.ledgerPaise)
+    .map((e) => ({ employeeCode: e.employeeCode, company: e.company,
+      payslip: toRupees(e.payslipPaise), ledger: toRupees(e.ledgerPaise), salaryRows: e.salaryRows }));
+  return { ok: mismatches.length === 0, mismatches, checked: by.size };
+}
+
+/** Sales readiness (K10, K27): companies with a sales loan due / provisional in m whose active upload is not computed. */
+function salesNotComputed(db, m) {
+  const companies = new Set([
+    ...db.prepare("SELECT DISTINCT company FROM loan_deductions WHERE payroll = 'sales' AND month = ? AND year = ? AND state = 'provisional'").all(m.month, m.year).map((r) => r.company),
+    ...db.prepare(`SELECT DISTINCT l.company FROM loan_instalments i JOIN loans l ON l.id = i.loan_id
+                    WHERE l.borrower_type = 'sales' AND l.status IN (${LIVE_SQL}) AND i.due_month = ? AND i.due_year = ?
+                      AND i.status IN ('scheduled','provisional')`).all(m.month, m.year).map((r) => r.company),
+  ].map((c) => String(c || '').trim()));
+  const up = db.prepare('SELECT status FROM sales_uploads WHERE month = ? AND year = ? AND company = ? AND is_active = 1 LIMIT 1');
+  return [...companies].sort().filter((c) => { const u = up.get(m.month, m.year, c); return !u || u.status !== 'computed'; });
+}
+
 /** Whole-payroll readiness of one month (§3.3 of the PR-6 plan). Never writes. */
 function closeReadiness(db, { payroll = 'plant', month, year, now = new Date() }) {
   const m = { month: Number(month), year: Number(year) };
@@ -144,9 +193,15 @@ function closeReadiness(db, { payroll = 'plant', month, year, now = new Date() }
   const t = istToday(now);
   if (compareMonth(m, { month: t.month, year: t.year }) >= 0) return fail('MONTH_NOT_ENDED', `${label(m)} has not ended yet (IST)`);
   if (!isNeeded(db, payroll, m)) return fail('NOT_NEEDED', `${payroll} ${label(m)}: nothing to close`);
-  if (payroll === 'sales') return fail('SALES_CLOSE_NOT_WIRED', `sales ${label(m)} has loan rows, but the sales loan close arrives with Loans PR-8`);
   const earlier = neededUnclosedMonths(db, payroll, addMonths(m, -1));
   if (earlier.length) return fail('EARLIER_MONTH_OPEN', `${payroll} ${earlier.map(label).join(', ')} must be closed first`, { earlier });
+  if (payroll === 'sales') {
+    const missing = salesNotComputed(db, m);
+    if (missing.length) {
+      return fail('STAGE7_NOT_COMPUTED', `sales payroll for ${label(m)} is not computed yet for ${missing.join(', ')} (needs the active upload computed)`, { companies: missing });
+    }
+    return { ok: true, warnings: exitFinalPayrollWarnings(db, payroll, m) };
+  }
   const salaryRows = db.prepare('SELECT COUNT(*) AS n FROM salary_computations WHERE month = ? AND year = ?').get(m.month, m.year).n;
   const mi = db.prepare('SELECT COUNT(*) AS total, COALESCE(SUM(CASE WHEN stage_7_done = 1 THEN 1 ELSE 0 END), 0) AS done FROM monthly_imports WHERE month = ? AND year = ?').get(m.month, m.year);
   if (salaryRows === 0 || (mi.total > 0 && mi.done < mi.total)) {
@@ -167,13 +222,19 @@ function provisionalRows(db, payroll, m) {
     .all(payroll, m.month, m.year);
 }
 
-function salaryHeld(db, code, m) {
+/** Is the employee-month's salary held? Plant: salary_held. Sales (K10): the company row on status 'hold'. */
+function salaryHeld(db, payroll, code, company, m) {
+  if (payroll === 'sales') {
+    const rows = db.prepare('SELECT status FROM sales_salary_computations WHERE employee_code = ? AND month = ? AND year = ? AND company = ?')
+      .all(code, m.month, m.year, String(company || '').trim());
+    return { exists: rows.length > 0, held: rows.some((r) => r.status === 'hold') };
+  }
   const rows = db.prepare('SELECT salary_held FROM salary_computations WHERE employee_code = ? AND month = ? AND year = ?').all(code, m.month, m.year);
   return { exists: rows.length > 0, held: rows.some((r) => r.salary_held === 1) };
 }
 
 function scheduledDue(db, payroll, m) {
-  return db.prepare(`SELECT i.*, l.employee_code FROM loan_instalments i JOIN loans l ON l.id = i.loan_id
+  return db.prepare(`SELECT i.*, l.employee_code, l.company AS loan_company FROM loan_instalments i JOIN loans l ON l.id = i.loan_id
                       WHERE l.borrower_type = ? AND l.status IN (${LIVE_SQL})
                         AND i.due_month = ? AND i.due_year = ? AND i.status = 'scheduled' ORDER BY i.loan_id, i.sequence`)
     .all(payroll, m.month, m.year);
@@ -186,7 +247,7 @@ function previewClose(db, { payroll = 'plant', month, year, now = new Date() }) 
   if (['PAYROLL_INVALID', 'MONTH_INVALID', 'NOT_MIGRATED'].includes(readiness.code)) return readiness;
   const rows = provisionalRows(db, payroll, m);
   const check = checkPayslipLedger(db, { payroll, month: m.month, year: m.year });
-  const bad = new Set(check.mismatches.map((x) => x.employeeCode));
+  const bad = new Set(check.mismatches.map((x) => personKey(payroll, x.employeeCode, x.company)));
   const out = {
     ok: true, payroll, month: m.month, year: m.year, readiness,
     close: closeRow(db, payroll, m),
@@ -197,15 +258,15 @@ function previewClose(db, { payroll = 'plant', month, year, now = new Date() }) 
   };
   let postPaise = 0;
   for (const r of rows) {
-    if (bad.has(r.employee_code)) continue;
-    const s = salaryHeld(db, r.employee_code, m);
+    if (bad.has(personKey(payroll, r.employee_code, r.company))) continue;
+    const s = salaryHeld(db, payroll, r.employee_code, r.company, m);
     if (s.held) { out.held += 1; continue; }
     const ins = db.prepare('SELECT amount_due FROM loan_instalments WHERE id = ?').get(r.instalment_id);
     if (ins && toPaise(r.amount) < toPaise(ins.amount_due)) out.shortfalls += 1;
     if (toPaise(r.amount) > 0) { out.wouldPost.count += 1; postPaise += toPaise(r.amount); }
   }
   out.wouldPost.amount = toRupees(postPaise);
-  out.noSalary = scheduledDue(db, payroll, m).filter((i) => !bad.has(i.employee_code)).length;
+  out.noSalary = scheduledDue(db, payroll, m).filter((i) => !bad.has(personKey(payroll, i.employee_code, i.loan_company))).length;
   return out;
 }
 
@@ -241,14 +302,14 @@ function runLoanClose(db, { payroll = 'plant', month, year, trigger = 'auto', ac
         throw e;
       }
       const check = checkPayslipLedger(db, { payroll, month: m.month, year: m.year });
-      const bad = new Set(check.mismatches.map((x) => x.employeeCode));
+      const bad = new Set(check.mismatches.map((x) => personKey(payroll, x.employeeCode, x.company)));
       const c = { posted: 0, postedPaise: 0, deferred: 0, held: 0, noSalary: 0, shortfall: 0, exitResidual: 0, exitResidualPaise: 0, exitHeld: 0, exitHeldPaise: 0 };
       const notes = { mismatches: check.mismatches, held: [], refusals: [], noSalary: [], warnings: ready.warnings, leftScheduled: [] };
       const alerts = [];
 
       for (const row of provisionalRows(db, payroll, m)) {
-        if (bad.has(row.employee_code)) continue;
-        const s = salaryHeld(db, row.employee_code, m);
+        if (bad.has(personKey(payroll, row.employee_code, row.company))) continue;
+        const s = salaryHeld(db, payroll, row.employee_code, row.company, m);
         if (s.held) {
           c.held += 1;
           notes.held.push({ loanId: row.loan_id, employeeCode: row.employee_code, amount: row.amount });
@@ -262,8 +323,8 @@ function runLoanClose(db, { payroll = 'plant', month, year, trigger = 'auto', ac
       }
 
       for (const ins of scheduledDue(db, payroll, m)) {
-        if (bad.has(ins.employee_code)) { notes.leftScheduled.push({ instalmentId: ins.id, loanId: ins.loan_id, employeeCode: ins.employee_code }); continue; }
-        const s = salaryHeld(db, ins.employee_code, m);
+        if (bad.has(personKey(payroll, ins.employee_code, ins.loan_company))) { notes.leftScheduled.push({ instalmentId: ins.id, loanId: ins.loan_id, employeeCode: ins.employee_code }); continue; }
+        const s = salaryHeld(db, payroll, ins.employee_code, ins.loan_company, m);
         const note = s.exists ? 'salary row exists but carried no deduction for this loan' : 'no salary row this month';
         const r = moveInstalmentToEnd(db, { instalmentId: ins.id, reason: 'no_salary', note: `${label(m)} close: ${note}` }, gate.actor);
         if (!r.ok) { notes.refusals.push({ instalmentId: ins.id, loanId: ins.loan_id, code: r.code, message: r.message }); continue; }
@@ -326,7 +387,7 @@ function runLoanClose(db, { payroll = 'plant', month, year, trigger = 'auto', ac
     + `${out.exitSummary.heldFinal ? `, held final salary ${out.exitSummary.heldFinal} (${rs(toPaise(out.exitSummary.heldFinalAmount))} pending release)` : ''}`
     + `${out.mismatches.length ? `, ${out.mismatches.length} payslip/ledger mismatch(es) left for review` : ''}${out.reconciliationOk ? '' : ' — RECONCILIATION MISMATCH (pre-existing)'}`);
   for (const x of out.mismatches) {
-    notify(db, 'finance', 'LOAN_PAYSLIP_LEDGER_MISMATCH', `${x.employeeCode} ${payroll} ${label(m)}: payslip loan ₹${x.payslip} ≠ ledger ₹${x.ledger}${x.salaryRows > 1 ? ` (${x.salaryRows} salary rows)` : ''}; left provisional — re-run Stage 7 for this employee`);
+    notify(db, 'finance', 'LOAN_PAYSLIP_LEDGER_MISMATCH', `${x.employeeCode}${x.company ? ` (${x.company})` : ''} ${payroll} ${label(m)}: payslip loan ₹${x.payslip} ≠ ledger ₹${x.ledger}${x.salaryRows > 1 ? ` (${x.salaryRows} salary rows)` : ''}; left provisional — re-run Stage 7 for this employee`);
   }
   notifyAlerts(db, out.alerts);
   console.log(`[loans-close] ${payroll} ${label(m)} closed (#${out.closeId}, ${trigger}): posted ${out.posted}, held ${out.held}, shortfall ${out.shortfall}, no salary ${out.noSalary}, mismatches ${out.mismatches.length}`);
@@ -344,26 +405,28 @@ function runHeldSweep(db, { now = new Date(), actor = SYSTEM } = {}) {
   const waitDays = readLoanPolicy(db).heldEmiWaitDays;
   const res = { ok: true, posted: 0, postedAmount: 0, moved: 0, movedRows: [], waiting: 0, mismatched: 0, noSalaryMoved: 0, errors: [], alerts: [] };
   const mismatchSeen = new Set();
-  const consistent = (code, m) => {
-    const c = checkPayslipLedger(db, { payroll: 'plant', month: m.month, year: m.year, employeeCode: code });
-    if (!c.ok && !mismatchSeen.has(`${code}|${monthIndex(m)}`)) {
-      mismatchSeen.add(`${code}|${monthIndex(m)}`);
+  // Both payrolls (Loans PR-8). A sales person is code + company.
+  const consistent = (payroll, code, company, m) => {
+    const c = checkPayslipLedger(db, { payroll, month: m.month, year: m.year, employeeCode: code, company: payroll === 'sales' ? company : null });
+    const seenKey = `${payroll}|${personKey(payroll, code, company)}|${monthIndex(m)}`;
+    if (!c.ok && !mismatchSeen.has(seenKey)) {
+      mismatchSeen.add(seenKey);
       res.mismatched += 1;
       const x = c.mismatches[0];
-      notify(db, 'finance', 'LOAN_PAYSLIP_LEDGER_MISMATCH', `${code} plant ${label(m)}: payslip loan ₹${x.payslip} ≠ ledger ₹${x.ledger}; left provisional — re-run Stage 7 for this employee`);
+      notify(db, 'finance', 'LOAN_PAYSLIP_LEDGER_MISMATCH', `${code}${payroll === 'sales' ? ` (${company})` : ''} ${payroll} ${label(m)}: payslip loan ₹${x.payslip} ≠ ledger ₹${x.ledger}; left provisional — re-run Stage 7 for this employee`);
     }
     return c.ok;
   };
 
   const rows = db.prepare(`SELECT ld.*, c.id AS close_id, c.run_at AS close_run_at FROM loan_deductions ld
                              JOIN loan_closes c ON c.payroll = ld.payroll AND c.month = ld.month AND c.year = ld.year
-                            WHERE ld.state = 'provisional' AND ld.payroll = 'plant' ORDER BY ld.year, ld.month, ld.loan_id`).all();
+                            WHERE ld.state = 'provisional' ORDER BY ld.payroll, ld.year, ld.month, ld.loan_id`).all();
   for (const row of rows) {
     const m = { month: row.month, year: row.year };
     try {
       db.transaction(() => {
-        if (!consistent(row.employee_code, m)) return;
-        const s = salaryHeld(db, row.employee_code, m);
+        if (!consistent(row.payroll, row.employee_code, row.company, m)) return;
+        const s = salaryHeld(db, row.payroll, row.employee_code, row.company, m);
         if (!s.held) {
           const r = postDeduction(db, { deductionId: row.id, closeId: row.close_id }, gate.actor);
           if (!r.ok) { res.errors.push({ deductionId: row.id, code: r.code, message: r.message }); return; }
@@ -390,15 +453,15 @@ function runHeldSweep(db, { now = new Date(), actor = SYSTEM } = {}) {
 
   // Scheduled instalments still due in a closed month (left at the close because the
   // employee's payslip disagreed with the ledger): moved once the employee is clean.
-  const left = db.prepare(`SELECT i.*, l.employee_code FROM loan_instalments i JOIN loans l ON l.id = i.loan_id
+  const left = db.prepare(`SELECT i.*, l.employee_code, l.company AS loan_company, l.borrower_type FROM loan_instalments i JOIN loans l ON l.id = i.loan_id
                              JOIN loan_closes c ON c.payroll = l.borrower_type AND c.month = i.due_month AND c.year = i.due_year
-                            WHERE l.borrower_type = 'plant' AND l.status IN (${LIVE_SQL}) AND i.status = 'scheduled'
-                            ORDER BY i.due_year, i.due_month, i.loan_id`).all();
+                            WHERE l.status IN (${LIVE_SQL}) AND i.status = 'scheduled'
+                            ORDER BY l.borrower_type, i.due_year, i.due_month, i.loan_id`).all();
   for (const ins of left) {
     const m = { month: ins.due_month, year: ins.due_year };
     try {
       db.transaction(() => {
-        if (!consistent(ins.employee_code, m)) return;
+        if (!consistent(ins.borrower_type, ins.employee_code, ins.loan_company, m)) return;
         const r = moveInstalmentToEnd(db, { instalmentId: ins.id, reason: 'no_salary', note: `after the ${label(m)} close: no deduction for this loan` }, gate.actor);
         if (!r.ok) { res.errors.push({ instalmentId: ins.id, code: r.code, message: r.message }); return; }
         res.noSalaryMoved += 1;
@@ -440,7 +503,6 @@ function runCatchUp(db, { now = new Date(), trigger = 'auto', actor = SYSTEM } =
       if (WAITING_CODES.has(r.code)) {
         console.log(`[loans-close] ${payroll} ${label(m)} waits: ${r.message}`);
         notify(db, 'finance', 'LOAN_CLOSE_WAITING', `Loan close ${payroll} ${label(m)} is waiting: ${r.message}`);
-        if (r.code === 'SALES_CLOSE_NOT_WIRED') notify(db, 'admin', 'LOAN_CLOSE_WAITING', `Loan close ${payroll} ${label(m)} is waiting: ${r.message}`);
       } else {
         console.error(`[loans-close] ${payroll} ${label(m)} not closed: ${r.code} ${r.message}`);
       }
@@ -489,16 +551,18 @@ function reverseDeduction(db, { deductionId, reason }, actor) {
  * ledger. A Stage 7 re-run of the employee makes them agree and lifts it.
  * With no loan rows this is a no-op. Never throws (fails open, logged).
  */
-function loanHoldReleaseCheck(db, employeeCode, month, year) {
+function loanHoldReleaseCheck(db, employeeCode, month, year, { payroll = 'plant', company = null } = {}) {
   try {
     if (!db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'loan_deductions'").get()) return { ok: true };
     const m = Number.parseInt(month, 10);
     const y = Number.parseInt(year, 10);
+    // Loans PR-8: a sales hold (status 'hold') is guarded the same way, per code + company.
+    const sales = payroll === 'sales';
     const marked = db.prepare(`SELECT COUNT(*) AS n FROM loan_deductions WHERE employee_code = ? AND month = ? AND year = ?
-                                 AND payroll = 'plant' AND state = 'reversed' AND reversal_reason = ?`)
-      .get(String(employeeCode), m, y, HELD_MOVE_REVERSAL_REASON).n;
+                                 AND payroll = ? AND state = 'reversed' AND reversal_reason = ?${sales ? ' AND company = ?' : ''}`)
+      .get(String(employeeCode), m, y, sales ? 'sales' : 'plant', HELD_MOVE_REVERSAL_REASON, ...(sales ? [String(company || '').trim()] : [])).n;
     if (!marked) return { ok: true };
-    const c = checkPayslipLedger(db, { payroll: 'plant', month: m, year: y, employeeCode: String(employeeCode) });
+    const c = checkPayslipLedger(db, { payroll: sales ? 'sales' : 'plant', month: m, year: y, employeeCode: String(employeeCode), company: sales ? company : null });
     if (c.ok) return { ok: true };
     const x = c.mismatches[0];
     return {
@@ -512,7 +576,32 @@ function loanHoldReleaseCheck(db, employeeCode, month, year) {
   }
 }
 
+/**
+ * Sales (Loans PR-8, K31): effective posted loan deductions (paise) of one sales
+ * salary row — code + month + company. > 0 means the row may not move to Hold.
+ * 0 before the loan tables exist.
+ */
+function salesPostedLoanPaise(db, { employeeCode, month, year, company }) {
+  if (!loansReady(db)) return 0;
+  return db.prepare(`SELECT * FROM loan_deductions WHERE payroll = 'sales' AND state = 'posted'
+                       AND employee_code = ? AND month = ? AND year = ? AND company = ?`)
+    .all(String(employeeCode), Number(month), Number(year), String(company || '').trim())
+    .reduce((s, d) => s + effectivePostedPaise(db, d), 0);
+}
+
+/** Sales register (Loans PR-8): codes of a company-month whose row carries a posted loan deduction. */
+function salesLoanPostedCodes(db, { month, year, company }) {
+  if (!loansReady(db)) return new Set();
+  const out = new Set();
+  for (const d of db.prepare(`SELECT * FROM loan_deductions WHERE payroll = 'sales' AND state = 'posted' AND month = ? AND year = ? AND company = ?`)
+    .all(Number(month), Number(year), String(company || '').trim())) {
+    if (effectivePostedPaise(db, d) > 0) out.add(d.employee_code);
+  }
+  return out;
+}
+
 module.exports = {
+  salesPostedLoanPaise, salesLoanPostedCodes,
   dueCloseMonth, istToday, isNeeded, neededUnclosedMonths, checkPayslipLedger, closeReadiness, previewClose,
   runLoanClose, runHeldSweep, runCatchUp, runDailyLoanJobs, reverseDeduction, loanHoldReleaseCheck,
   CLOSE_ACTOR: SYSTEM,

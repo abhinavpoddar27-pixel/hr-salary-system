@@ -14,6 +14,7 @@ import ApprovalQueue from '../components/loans/ApprovalQueue'
 import DueThisMonth from '../components/loans/DueThisMonth'
 import LoanPolicy from '../components/loans/LoanPolicy'
 import LoanClose from '../components/loans/LoanClose'
+import LoanReports from '../components/loans/LoanReports'
 import {
   loanCaps, LOAN_STATE, CLOSED_STATES, KIND_LABEL, stateCls, stateLabel, rupees, monthLabel, GATE_OFF_TEXT,
 } from '../components/loans/loanUi'
@@ -84,6 +85,7 @@ export default function Loans() {
     { id: 'loans', label: 'Loans', count: allLoans.length },
     { id: 'due', label: 'Due this month' },
     { id: 'close', label: 'Monthly close' },
+    { id: 'reports', label: 'Reports' },
     { id: 'settings', label: 'Settings' },
   ]
 
@@ -140,6 +142,7 @@ export default function Loans() {
       {tab === 'queue' && <ApprovalQueue caps={caps} disbursementEnabled={!!stats?.disbursementEnabled} namesByCode={namesByCode} />}
       {tab === 'due' && <DueThisMonth loansById={loansById} />}
       {tab === 'close' && <LoanClose />}
+      {tab === 'reports' && <LoanReports />}
       {tab === 'settings' && <LoanPolicy caps={caps} />}
       {tab === 'loans' && (
         <div className="space-y-3">
@@ -181,7 +184,10 @@ export default function Loans() {
                         <td className="text-xs text-slate-400">{l.id}</td>
                         <td>
                           <div className="text-sm font-medium">{l.employee_name || l.employee_code}</div>
-                          <div className="text-[11px] text-slate-400 font-mono">{l.employee_code}{l.department ? ` · ${l.department}` : ''}</div>
+                          <div className="text-[11px] text-slate-400 font-mono">
+                            {l.employee_code}{l.department ? ` · ${l.department}` : ''}
+                            {l.borrower_type === 'sales' && <span className="ml-1 font-sans font-semibold px-1 rounded bg-violet-100 text-violet-700">Sales</span>}
+                          </div>
                         </td>
                         <td className="text-xs">{l.company}</td>
                         <td className="text-xs">{l.loan_type}{l.exit_flag === 1 && <span className="ml-1 text-[10px] font-bold text-orange-700">EXIT</span>}</td>

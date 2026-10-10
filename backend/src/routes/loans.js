@@ -310,10 +310,16 @@ router.get('/due', allow(READ_ROLES), handle((req, res) => {
   return res.json({ success: true, data: rows, totalOpen: toRupees(totalOpen) });
 }));
 
-/** Request body → engine input. Sales borrowers wait for Loans PR-8 (ruling Q6). */
+/**
+ * Request body → engine input. Loans PR-8: sales borrowers are enabled; a sales
+ * borrower is code + company (sales_employees is unique on both), so the company
+ * is required up front.
+ */
 function loanInput(body = {}) {
   const borrowerType = text(body.borrowerType) || 'plant';
-  if (borrowerType === 'sales') return { ok: false, code: 'SALES_LOANS_NOT_YET_ENABLED', message: 'loans for sales staff arrive with Loans PR-8' };
+  if (borrowerType === 'sales' && !text(body.company)) {
+    return { ok: false, code: 'COMPANY_REQUIRED', message: 'a sales borrower is identified by code and company; give the company' };
+  }
   return {
     ok: true,
     input: {
@@ -328,18 +334,44 @@ router.post('/eligibility', allow(['hr', 'finance', 'admin']), handle((req, res)
   const p = loanInput(req.body || {});
   if (!p.ok) return refuse(res, p);
   if (p.input.company && !companyAllowed(req, p.input.company)) return refuse(res, notAllowedCompany);
-  const facts = L.loadBorrowerFacts(db, p.input);
+  const facts = L.loadBorrowerFacts(db, { ...p.input, asOf: todayIst() });
   const verdict = L.evaluateEligibility(facts, { ...p.input, asOf: todayIst() }, L.readLoanPolicy(db));
   const { emiPaise: _e, ...data } = verdict;
   return res.json({ success: true, data: { ...data, history: facts.history || null } });
+}));
+
+/**
+ * One borrower search across both masters (SPEC §7 screen 2; Loans PR-8). Lives
+ * here, not under /api/sales, because finance raises loans and cannot reach the
+ * sales routes. Active only. Plant rows typed "Sales" are left out: a loan on one
+ * would be deducted nowhere (SPEC §8.3) — the sales-master row is the borrower.
+ */
+router.get('/borrowers', allow(['hr', 'finance', 'admin']), handle((req, res) => {
+  const db = getDb();
+  const q = text(req.query.q);
+  if (q.length < 2) return res.json({ success: true, data: [] });
+  const like = `%${q}%`;
+  const plant = db.prepare(`SELECT code, name, company, department, employment_type FROM employees
+                             WHERE status = 'Active' AND (code LIKE ? OR name LIKE ?)
+                               AND LOWER(TRIM(COALESCE(employment_type, ''))) <> 'sales'
+                             ORDER BY name LIMIT 15`).all(like, like)
+    .map((e) => ({ borrowerType: 'plant', code: e.code, name: e.name, company: e.company || null, department: e.department || null, employmentType: e.employment_type || null }));
+  const ac = allowedCompanies(req);
+  const sales = db.prepare(`SELECT code, name, company, designation, headquarters FROM sales_employees
+                             WHERE status = 'Active' AND (code LIKE ? OR name LIKE ?)${ac ? ` AND company IN (${ac.map(() => '?').join(',')})` : ''}
+                             ORDER BY name LIMIT 15`).all(like, like, ...(ac || []))
+    .map((e) => ({ borrowerType: 'sales', code: e.code, name: e.name, company: e.company, designation: e.designation || null, headquarters: e.headquarters || null, employmentType: 'Sales' }));
+  res.json({ success: true, data: [...plant, ...sales] });
 }));
 
 router.get('/employee/:code', allow(READ_ROLES), handle((req, res) => {
   const db = getDb();
   const borrowerType = text(req.query.borrowerType) || 'plant';
   const cc = companyClause(req);
-  const loans = db.prepare(`${LIST_SQL} AND l.employee_code = ? AND l.borrower_type = ?${cc.sql} ORDER BY l.requested_at DESC, l.id DESC`)
-    .all(text(req.params.code), borrowerType, ...cc.args);
+  // Loans PR-8: a sales borrower is code + company — ?company narrows to one person.
+  const co = text(req.query.company) ? { sql: ' AND l.company = ?', args: [text(req.query.company)] } : { sql: '', args: [] };
+  const loans = db.prepare(`${LIST_SQL} AND l.employee_code = ? AND l.borrower_type = ?${co.sql}${cc.sql} ORDER BY l.requested_at DESC, l.id DESC`)
+    .all(text(req.params.code), borrowerType, ...co.args, ...cc.args);
   for (const l of loans) {
     // Recovered = posted payroll deductions + cash receipts (D12: the old tab ignored cash).
     const paid = db.prepare(`SELECT COUNT(*) AS n, COALESCE(SUM(CASE WHEN status = 'posted' THEN posted_amount ELSE 0 END), 0) AS posted
@@ -414,7 +446,72 @@ router.get('/write-offs', allow(READ_ROLES), handle((req, res) => {
   if (!['writeoff', 'final'].includes(basis)) return refuse(res, { code: 'BASIS_INVALID', message: 'basis must be writeoff or final' });
   const rows = L.writeOffsForTds(getDb(), { ...my, basis }).filter((r) => companyAllowed(req, r.company));
   const total = rows.reduce((s, r) => s + toPaise(r.amount), 0);
+  if (wantsXlsx(req)) {   // Loans PR-9: Excel of the same rows
+    const tag = `${my.year}-${String(my.month).padStart(2, '0')}`;
+    return sendXlsx(res, `Loans_write-offs_${basis}_${tag}.xlsx`, L.reportSheets('write-offs', { rows, total: toRupees(total) }));
+  }
   return res.json({ success: true, data: rows, basis, total: toRupees(total) });
+}));
+
+// ── reports and the payslip balance line (Loans PR-9). Declared before /:id. ─
+// Read roles; a company-restricted user sees only their companies' loans.
+
+const wantsXlsx = (req) => text(req.query.format).toLowerCase() === 'xlsx';
+function sendXlsx(res, filename, sheets) {
+  const buf = L.toXlsx(sheets);
+  res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+  res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+  return res.send(buf);
+}
+/** {month, year} from ?<prefix>Month & ?<prefix>Year, null when absent; false when malformed. */
+function monthParam(q, prefix) {
+  const rawM = q[`${prefix}Month`]; const rawY = q[`${prefix}Year`];
+  if ((rawM === undefined || rawM === '') && (rawY === undefined || rawY === '')) return null;
+  const month = posInt(rawM); const year = posInt(rawY);
+  return month && month <= 12 && year >= 1900 ? { month, year } : false;
+}
+
+router.get('/reports/:name', allow(READ_ROLES), handle((req, res) => {
+  const name = text(req.params.name).toLowerCase();
+  if (!Object.prototype.hasOwnProperty.call(L.REPORTS, name)) {
+    return refuse(res, { code: 'REPORT_NOT_FOUND', message: `unknown report ${name}; one of ${Object.keys(L.REPORTS).join(', ')}` });
+  }
+  // ?company= (the screen's company filter) narrows within the user's companies.
+  const ac = allowedCompanies(req);
+  const one = text(req.query.company);
+  const opts = { companies: one ? (ac ? ac.filter((c) => c === one) : [one]) : ac };
+  for (const [prefix, key] of [['from', 'from'], ['to', 'to']]) {
+    const m = monthParam(req.query, prefix);
+    if (m === false) return refuse(res, { code: 'MONTH_INVALID', message: `${prefix}Month (1–12) and ${prefix}Year are required together` });
+    if (m) opts[key] = m;
+  }
+  if (req.query.months !== undefined) opts.months = posInt(req.query.months) || 12;
+  const { ok: _ok, ...data } = L.REPORTS[name](getDb(), opts);
+  if (wantsXlsx(req)) return sendXlsx(res, `Loans_${name}_${todayIst()}.xlsx`, L.reportSheets(name, data));
+  return res.json({ success: true, data });
+}));
+
+/**
+ * "Loan outstanding after this month's EMI" for a payslip (SPEC §7 screens 8).
+ * A separate read, so the payslip itself (payroll.js / sales.js) is untouched;
+ * a non-borrower gets {show:false} and the payslip shows nothing extra.
+ */
+router.get('/payslip-balance', allow(READ_ROLES), handle((req, res) => {
+  const payroll = payrollOf(req.query.payroll);
+  if (!['plant', 'sales'].includes(payroll)) return refuse(res, { code: 'PAYROLL_INVALID', message: 'payroll must be plant or sales' });
+  const my = monthYear(req.query);
+  if (!my) return refuse(res, { code: 'MONTH_REQUIRED', message: 'month (1–12) and year are required' });
+  const employeeCode = text(req.query.employeeCode);
+  if (!employeeCode) return refuse(res, { code: 'EMPLOYEE_REQUIRED', message: 'employeeCode is required' });
+  const company = text(req.query.company) || null;
+  if (payroll === 'sales' && !company) return refuse(res, { code: 'COMPANY_REQUIRED', message: 'a sales borrower is identified by code and company; give the company' });
+  if (company && !companyAllowed(req, company)) return refuse(res, notAllowedCompany);
+  const r = L.payslipLoanBalance(getDb(), { payroll, employeeCode, company, ...my });
+  // A plant payslip is keyed by code only: keep the loans of the user's companies.
+  const loans = r.loans.filter((l) => companyAllowed(req, L.getLoan(getDb(), l.loanId).company));
+  const total = toRupees(loans.reduce((s, l) => s + toPaise(l.outstandingAfter), 0));
+  const { ok: _ok, ...data } = r;
+  return res.json({ success: true, data: { ...data, loans, total, show: loans.length > 0 } });
 }));
 
 router.post('/deductions/:did/reverse', allow(DECIDE_ROLES), handle((req, res) => {

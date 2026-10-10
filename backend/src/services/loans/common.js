@@ -2,7 +2,7 @@
  * Loans engine — shared internals (Loans PR-2). Not part of the public façade.
  */
 const { toPaise, toRupees } = require('./money');
-const { addMonths, compareMonth, dateToMonth, todayIst, monthLabel } = require('./months');
+const { addMonths, compareMonth, dateToMonth, salesCycleMonthOf, todayIst, monthLabel } = require('./months');
 const { readLoanPolicy } = require('./policy');
 const { AUTO_EXTENSION_ORIGINS, LIVE_LOAN_STATES } = require('./states');
 const { writeEvent } = require('./events');
@@ -69,18 +69,21 @@ function notBeforeOpen(db, payroll, m) {
 
 /**
  * Final month F of an exit loan (Loans PR-7): the calendar month of
- * loans.exit_date; if that is missing or unreadable, the IST month of
+ * loans.exit_date (sales, Loans PR-8: the sales cycle month of it); if that is missing or unreadable, the IST month of
  * exit_flagged_at; failing both, the current IST month. A pure function of the
  * loan row — never of employee status, so a Stage 6 reactivation cannot move it.
  */
 function finalMonthOf(loan, now = new Date()) {
-  const fromExit = dateToMonth(String((loan && loan.exit_date) || '').trim());
+  // Loans PR-8 (ruling Q4): a sales borrower's final payroll is the sales cycle
+  // that contains the date (day ≥ 26 → the next month's cycle).
+  const toMonth = loan && loan.borrower_type === 'sales' ? salesCycleMonthOf : dateToMonth;
+  const fromExit = toMonth(String((loan && loan.exit_date) || '').trim());
   if (fromExit) return fromExit;
   if (loan && loan.exit_flagged_at) {
     const d = new Date(`${String(loan.exit_flagged_at).replace(' ', 'T')}Z`);
-    if (!Number.isNaN(d.getTime())) return dateToMonth(todayIst(d));
+    if (!Number.isNaN(d.getTime())) return toMonth(todayIst(d));
   }
-  return dateToMonth(todayIst(now));
+  return toMonth(todayIst(now));
 }
 
 /**

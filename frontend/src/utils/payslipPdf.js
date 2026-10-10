@@ -222,8 +222,22 @@ function generateSalaryRegisterHTML(payslips, companyConfig, month, year) {
   return html;
 }
 
+/**
+ * Loans PR-9: "Loan outstanding after this month's EMI" (GET /api/loans/payslip-balance).
+ * Empty string unless the borrower has a loan line to show, so a payslip with no
+ * loan renders byte-for-byte as before.
+ */
+export function loanBalanceRowHTML(loanBalance) {
+  if (!loanBalance || !loanBalance.show || !Array.isArray(loanBalance.loans) || loanBalance.loans.length === 0) return '';
+  const fmtR = (v) => Number(v || 0).toLocaleString('en-IN', { minimumFractionDigits: 0, maximumFractionDigits: 2 });
+  const rows = loanBalance.loans.length === 1
+    ? `<span>Loan outstanding after this month's EMI</span><span>&#8377;${fmtR(loanBalance.loans[0].outstandingAfter)}</span>`
+    : loanBalance.loans.map((l) => `<span>Loan #${l.loanId} (${l.loanType}) outstanding after this month's EMI</span><span>&#8377;${fmtR(l.outstandingAfter)}</span>`).join('</div><div style="display:flex;justify-content:space-between;">');
+  return `<div data-loan-balance="1" style="margin-top:6px;padding:6px 12px;background:#f8fafc;border:1px solid #cbd5e1;font-size:10px;"><div style="display:flex;justify-content:space-between;">${rows}</div></div>`;
+}
+
 // Keep the individual payslip function for single-employee view
-function generatePayslipHTML(payslip, companyConfig) {
+export function generatePayslipHTML(payslip, companyConfig, loanBalance = null) {
   const emp = payslip.employee;
   const companyName = companyConfig?.company_name || emp.company || 'Company';
   const att = payslip.attendance || {};
@@ -288,7 +302,7 @@ function generatePayslipHTML(payslip, companyConfig) {
         <tbody>${deductionsRows}<tr style="background:#fde8e8;font-weight:bold;"><td style="padding:4px 8px;border:1px solid #ddd;">Total Deductions</td><td style="padding:4px 8px;border:1px solid #ddd;text-align:right;">${fmtC(payslip.totalDeductions)}</td></tr></tbody>
       </table></div>
     </div>
-    <div style="margin-top:12px;padding:10px;background:#e8fde8;border:2px solid #4caf50;text-align:center;font-size:14px;"><strong>Net Salary: ${fmtC(payslip.netSalary)}</strong></div>
+    <div style="margin-top:12px;padding:10px;background:#e8fde8;border:2px solid #4caf50;text-align:center;font-size:14px;"><strong>Net Salary: ${fmtC(payslip.netSalary)}</strong></div>${loanBalanceRowHTML(loanBalance)}
     ${((payslip.otPay || 0) > 0 || (payslip.edPay || 0) > 0 || (payslip.holidayDutyPay || 0) > 0) ? `
     <div style="margin-top:6px;padding:8px 12px;background:#f0fdf4;border:1px solid #86efac;font-size:10px;">
       ${(payslip.otPay || 0) > 0 ? `<div style="display:flex;justify-content:space-between;"><span>+ OT Pay</span><span>${fmtC(payslip.otPay)}</span></div>` : ''}
@@ -302,9 +316,9 @@ function generatePayslipHTML(payslip, companyConfig) {
   </div>`;
 }
 
-export async function downloadPayslipPDF(payslip, companyConfig) {
+export async function downloadPayslipPDF(payslip, companyConfig, loanBalance = null) {
   const html2pdf = (await import('html2pdf.js')).default;
-  const html = generatePayslipHTML(payslip, companyConfig);
+  const html = generatePayslipHTML(payslip, companyConfig, loanBalance);
   const container = document.createElement('div');
   container.innerHTML = html;
   document.body.appendChild(container);

@@ -42,7 +42,7 @@ export const KIND_LABEL = { defer: 'Defer', restructure: 'Restructure', write_of
 
 export const ORIGIN_LABEL = {
   schedule: 'Schedule', shortfall: 'Shortfall', no_salary: 'No salary', held: 'Held',
-  deferred: 'Deferred', restructure: 'Restructure', reversal: 'Reversal',
+  deferred: 'Deferred', restructure: 'Restructure', reversal: 'Reversal', exit: 'Exit (final payroll)',
 }
 
 /** Loans PR-6: opposite entries for a posted deduction (loan_adjustments.kind). */
@@ -55,11 +55,13 @@ export const triggerLabel = (t) => TRIGGER_LABEL[t] || t || '—'
  * Loan close readiness codes (services/loans/close.js closeReadiness) in plain
  * English. `m` = the month label, `r` = the readiness object.
  */
-export function closeReadinessText(r, m) {
+export function closeReadinessText(r, m, payroll = 'plant') {
   if (!r) return ''
   switch (r.code) {
-    case 'NOT_NEEDED': return `Nothing to close for ${m}: no loan deduction or instalment falls in this month.`
-    case 'STAGE7_NOT_COMPUTED': return `Plant salary (Stage 7) for ${m} is not computed yet. The close waits for it.`
+    case 'NOT_NEEDED': return `Nothing to close for ${m}: no ${payroll} loan deduction or instalment falls in this month.`
+    case 'STAGE7_NOT_COMPUTED': return payroll === 'sales'
+      ? `Sales salary for ${m} is not computed yet${Array.isArray(r.companies) && r.companies.length ? ` (${r.companies.join(', ')})` : ''}: the active sales upload must be computed. The close waits for it.`
+      : `Plant salary (Stage 7) for ${m} is not computed yet. The close waits for it.`
     case 'EARLIER_MONTH_OPEN': return 'An earlier month is still open. Months close oldest first.'
     case 'MONTH_NOT_ENDED': return `${m} has not ended yet (IST). A month can be closed once it is over.`
     case 'ALREADY_CLOSED': return `${m} is already closed.`

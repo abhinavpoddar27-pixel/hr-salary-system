@@ -1694,6 +1694,24 @@ router.get('/readiness-check', (req, res) => {
     }
   } catch {}
 
+  // WARNING: a loan close that is due but has not run (Loans PR-9). Any needed
+  // plant / sales loan close for a month up to M − 1 whose close day has passed.
+  // An empty loan ledger needs no close → nothing is added (not even to passed).
+  try {
+    const { loansReady } = require('../services/loans/stage7');
+    if (loansReady(db)) {
+      const overdue = require('../services/loans/reports').overdueCloses(db, { month: m, year: y });
+      if (overdue.length > 0) {
+        warnings.push({
+          type: 'LOAN_CLOSE_OVERDUE',
+          count: overdue.length,
+          severity: 'WARNING',
+          detail: `Loan close not run though due: ${overdue.map((o) => `${o.payroll} ${o.month}/${o.year}`).join(', ')} — Loans → Monthly close`
+        });
+      }
+    }
+  } catch {}
+
   // Score: 100 if no blockers, reduce by each
   const totalChecks = blockers.length + warnings.length + passed.length;
   const blockerWeight = 20, warningWeight = 5;

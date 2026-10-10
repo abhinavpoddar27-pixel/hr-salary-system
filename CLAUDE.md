@@ -1,3 +1,59 @@
+## Last Session — 2026-10-10 (Loans PR-9)
+**Loans PR-9: reports, payslip balance line, Finance Audit hooks, perquisite list, sales close tab. Branch `feat/loans-pr9`, NOT merged.**
+- **New `services/loans/reports.js` (read-only):** outstanding register (payroll → company → department), 12-month forecast
+  (overdue / months / later / unscheduled = outstanding), exceptions, leavers, perquisite list, `payslipLoanBalance`,
+  `loanRedFlagData`, `overdueCloses`, Excel. Routes `GET /api/loans/reports/:name[?format=xlsx&company=]`,
+  `GET /api/loans/payslip-balance`, `?format=xlsx` on `/write-offs` (JSON unchanged). Read roles; restricted users = own companies.
+- **Payslip line = separate read.** `salaryComputation.js`, `salesSalaryComputation.js`, `payroll.js`, `sales.js` byte-unchanged.
+  outstandingAfter = statement closing for M − M's EMI while provisional (= statement closing after the close).
+  PDF helpers take it as an optional arg and insert it INLINE after the Net Salary box — keep it inline, or a no-loan
+  payslip gains whitespace (`scripts/loans-payslip-html-check.mjs` guards this).
+- **Statement (ruling Q1):** sales loans bucket disbursement / top-up / receipt / write-off by SALES CYCLE month; plant unchanged.
+- **Finance Audit (warnings only):** readiness `LOAN_CLOSE_OVERDUE` (needed close ≤ M−1, past its day); red flags
+  `loan_emi_high_vs_net` (> `loan_emi_net_flag_pct`, default 30, of net after the loan), `loan_posted_unborne`,
+  `loan_exit_residual` (final month ≤ M, repeats until cleared). Plant only (Q2). No loans → nothing added anywhere.
+- **New policy key** `loan_emi_net_flag_pct` (schema.js: ONE seed line). Loan% key count 17 → 18 (+ gate = 19).
+- **Perquisite (Q4):** borrower = payroll + code + company; listed when peak (opening + paid out in month) > threshold;
+  month-end closing shown; "pending CA confirmation" on screen. **Portal view dropped (Q6):** 0 employee users, 0 portal calls.
+- **UI:** Loans → Reports tab; Stage 7 + sales payslip line; close tab Plant / Sales toggle (plant toast text unchanged).
+- **Fragile:** the perquisite "peak" is an upper bound (receipt before a top-up in one month); pre-existing stray "0" under
+  the Stage 7 payslip modal (`grossChanged || salaryHeld` renders 0) — not fixed here.
+- **Verified:** jest 972 → 1004 (60 suites, 3 clean runs). Reports sim 255/255 on the close/exit/sales sim DBs (ledger to the
+  paisa, payslip = independent replay, drift 0, component 0, sales drift 0). Payslip HTML 77/77 byte-identical without a loan.
+  Stage 7 + sales `--dump` md5-identical to origin/main. Browser 148/148 (116 + Pass 5), 0 page errors.
+- **NOT tested:** Railway preview; real CA treatment; Excel styling (plain numbers); the bulk payslip export (403 by policy).
+
+---
+
+## Last Session — 2026-10-10 (Loans PR-8)
+**Loans PR-8: sales borrowers. Branch `feat/loans-pr8` (merged with main after #63/#64), NOT merged. No schema change.**
+- **Identity:** a sales borrower is code + company (sales_employees UNIQUE on both). Stage 7, payslip↔ledger, hold
+  guards, eligibility open count and history all key on BOTH (ruling Q2) — so K8 for sales = a loan deducts only in
+  its own company's row, whatever the compute order. Plant still matches on code only.
+- **Sales Stage 7:** `salesSalaryComputation.js` dead `getLoanRecovery` (last `loan_repayments` reader) → `planStage7Loans`
+  (LAST deduction, 50% of `gross_earned` − prior); `saveSalesSalaryComputation` calls `applyStage7Loans` after the
+  UPSERT (UPSERT untouched). Compute route: rows of employees not paid this run reversed (`clearSalesNotComputed`,
+  Q7); their salary rows never rewritten → `loans.staleRows`.
+- **₹0 floor only on rows carrying a loan** (`salesNetWithLoanFloor`, Q1). No-loan rows, even negative, unchanged.
+- **Edits/hold (`sales.js`):** `PUT /salary/:id` money edits re-plan the loan (K30); → hold with a posted loan → 409
+  `LOAN_POSTED_NO_HOLD` (K31); hold release with the held-move marker → 409 `LOAN_ROW_STALE` (K28).
+- **Close:** sales ready = every company with a sales loan due/provisional in M has an ACTIVE upload stamped
+  `computed`; else `STAGE7_NOT_COMPUTED` (waits). Sales held = status `hold` (K10). Sweep covers both payrolls.
+- **Months:** sales first EMI = cycle month after the disbursement's cycle month (Q3); exit final payroll = cycle
+  containing `dol` (Q4); day ≥ 26 → next month (`months.salesCycleMonthOf`).
+- **Exit:** sales mark-left and `PUT /employees/:code` status → Left/Exited (not Inactive) flag the loans in one txn (Q6).
+- **API/UI:** `GET /api/loans/borrowers` (both masters; plant rows typed Sales left out); request form, Loans list tag,
+  sales register Loan column + Hold disabled. `frontend/dist` rebuilt once on the merged tree (own commit).
+- **Fragile:** a sales month with NO upload blocks every later sales close (Q8, no override). Stale salary rows
+  (employee dropped from the active upload) keep their loan → payslip ≠ ledger until recomputed (finance notified).
+- **Verified:** suite 972 (56 suites, 3 clean runs, after merging main up to #65; PR-8 adds 57 tests); `scripts/loans-sales-simulation.js` 7 loans × 5 sales months
+  PASS (daily reconcile, payslip = ledger, drift 0, 1125 non-borrower rows = no-loan run); `--dump` byte-identical on
+  main vs branch (232 rows incl. a negative-net row); plant stage7 `--dump` identical; plant sims PASS.
+- **Browser:** `loans-ui-browser-check.py` 116/116 (103 + Pass 4 sales, 13), 0 page errors.
+- **NOT tested:** Railway preview; real two-company sales payroll (production has one company); multi-process races.
+
+---
+
 ## Last Session — 2026-10-10 (Statutory flags PR-1)
 **Statutory flags PR-1: audited PF/ESI/LWF flag upload + every writer preserves flags. Branch `feat/statutory-flags`,
 built LOCALLY on d1ad7bf, NOT pushed (repo public — awaiting owner), NOT merged.** Plan: `docs/statutory-flags/IMPL_PR1.md`
