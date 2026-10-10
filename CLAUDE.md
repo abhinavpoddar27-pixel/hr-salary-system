@@ -1,3 +1,19 @@
+## Last Session — 2026-10-11 (P1-24: Miss Punch stray "0" next to Correct)
+**Branch `fix/misspunch-stray-zero`, NOT merged.** Frontend only (`pages/MissPunch.jsx`, 1 line). Plan + log:
+`docs/ux-bulk/prs/P1-24/PLAN.md`, `PROGRESS.md`. Finding O-3.
+- **Bug:** Action cell guard `{rec.miss_punch_resolved && (finance pending) && canFinance && …}` — `miss_punch_resolved`
+  is an INTEGER, so every unresolved row printed `0` (hr: "Correct0", finance/viewer: a lone "0").
+- **Fix:** `{!!rec.miss_punch_resolved && …}`. Logic unchanged. Every other `&&` in the file checked (PLAN §1):
+  booleans, objects, text columns or clsx args — safe. dist rebuilt (own commit; vs a fresh 18bef07 build only the
+  MissPunch chunk differs).
+- **Fragile:** any `{intColumn && …}` in JSX prints 0 — coerce with `!!` (no ESLint in the repo to catch it).
+- **Verified:** `backend/scripts/misspunch-stray-zero-check.py` (Chromium, built dist, hr + finance, fictional T2401–T2405
+  in 4 workflow states) 46/46 — no "0" text node in any Action cell or row, Correct / Re-resolve / Approve+Reject /
+  Finalised per role, hr Correct→Cancel sim, 390px, empty month, 0 page errors. `--base` on an 18bef07 worktree 6/6: the
+  "0" is there. jest 89 suites / 1430 before and after.
+- **Not tested:** Railway; Safari/Firefox; real production rows.
+- **Found, not fixed:** Stage 2 calls `GET /api/features/leave-automation/status` for every role but the route is
+  `requireHrOrAdmin` (phase5.js L614) → finance gets a 403 + console error on every Miss Punch load (pre-existing).
 ## Last Session — 2026-10-11 (P1-05: Stage 6 Apply Leave form kept the previous employee's values)
 **Branch `fix/stage6-leave-form-reset`, NOT merged.** Frontend only (`pages/DayCalculation.jsx`, Apply Leave open/close). Plan + log:
 `docs/ux-bulk/prs/P1-05/PLAN.md`, `PROGRESS.md`. Finding P-3. Rulings Q1 (reset on every open, same employee too), Q2 (success path
