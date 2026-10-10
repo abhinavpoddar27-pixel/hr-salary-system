@@ -17,6 +17,7 @@ const { checkActor } = require('./states');
 const { writeEvent } = require('./events');
 
 const { fail, text, getLoan, inTxn } = require('./common');
+const { consolidateForExit } = require('./exit');
 
 /**
  * HR (or finance / admin) raises a loan. Eligibility must pass.
@@ -194,7 +195,8 @@ function cancelLoan(db, loanId, actor, { reason } = {}) {
 /**
  * Exit flag (SPEC §5.2 r11). Same semantics as PR-1's Mark Left block in
  * employees.js: active → recover_at_exit; requested / approved keep their
- * status and only get the flag. For PR-7 to call; no balance moves.
+ * status and only get the flag. No balance moves; an active loan's schedule
+ * collapses into its final month (Loans PR-7, exit.js consolidateForExit).
  */
 function flagForExit(db, loanId, actor, { exitDate, reason } = {}) {
   const loan = getLoan(db, loanId);
@@ -211,7 +213,9 @@ function flagForExit(db, loanId, actor, { exitDate, reason } = {}) {
     `).run(toState, gate.actor.username, exitDate || null, loan.id, loan.status);
     if (r.changes !== 1) return fail('CONCURRENT_CHANGE', 'the loan changed while it was being flagged');
     writeEvent(db, { loan, event: 'borrower_left', fromState: loan.status, toState, amountPaise: toPaise(loan.remaining_balance), actor: gate.actor, reason: text(reason) || `exit ${exitDate || 'date not given'}` });
-    return { ok: true, loanId: loan.id, status: toState };
+    // Loans PR-7: the whole outstanding falls due in the final payroll.
+    const exit = consolidateForExit(db, loan.id, gate.actor);
+    return { ok: true, loanId: loan.id, status: toState, exit, alerts: exit.alerts };
   });
 }
 

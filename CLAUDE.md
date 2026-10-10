@@ -45,6 +45,54 @@ built LOCALLY on d1ad7bf, NOT pushed (repo public — awaiting owner), NOT merge
 - **Not tested:** Railway; production data (the 125/139-row files); cross-process concurrency; Safari/Firefox.
   **Not pushed: repo public — owner makes it private, then pushes and opens the PR in the GitHub UI.**
 
+## Last Session — 2026-10-10 (Loans PR-6b)
+**Loans PR-6b: close screen, admin reversal, Mark Left outstanding. Branch `feat/loans-pr6b` (based on `feat/loans-pr6`), NOT pushed/merged.**
+- **Close screen:** new `components/loans/LoanClose.jsx` = "Monthly close" tab on `/loans?tab=close` (no new route).
+  Plant only. Month picker (local state, defaults to the previous IST month), readiness codes in plain English,
+  tiles (due / provisional / would post / held / shortfalls / no salary / payslip≠ledger), mismatch table, Close
+  (finance + admin, confirm dialog) → `POST /loans/close`, history from `/loans/closes` with parsed notes.
+  HR / viewer read-only. A company-restricted user is told the close covers both companies (preview not called).
+- **Reversal:** LoanDetail "Payroll deductions" + "Opposite entries" sections; admin-only Reverse (reason ≥ 10,
+  `ReasonModal minLength`). Reconciliation line shows "(posted − opposite entries)".
+- **Only backend change:** `GET /api/loans/:id` also returns `deductions` (+ `adjusted`, `effective_posted`) and
+  `adjustments`. Read-only, inside the `/:id` handler body only (PR-7 adds routes above it — keep it that way).
+- **Mark Left dialog** (`Employees.jsx` `MarkLeftLoans`): live loans + total outstanding via `/loans/employee/:code`,
+  the final-payroll / receipt / write-off wording (PR-7's rule) and the exit-month line. Never blocks Confirm.
+- **Fragile:** the readiness text map lives in `loanUi.js closeReadinessText` — a new readiness code in `close.js`
+  falls through to the server message. `companyRestricted()` reads `allowedCompanies` (`['*']` = all).
+  PR-7 may also edit `MarkLeftModal` — expect a merge there.
+- **Verified:** jest 769 → 771 (42 suites). Browser check `backend/scripts/loans-ui-browser-check.py` 103/103
+  (Pass 3 = a real Stage 7 run for Jul 2026 seeded after boot; held + mismatch; close 201; stale tab 409;
+  admin reversal; Mark Left), 0 page errors. Screens: `docs/loans/screens/pr6b/`.
+- **NOT tested:** Railway preview; sales payroll close (PR-8); the daily 06:15 IST job from the screen's point of
+  view (only its note is shown); a restricted user's 403 from the server (the client never calls preview for them).
+- **Held tile on the Loans page: not done** (ruling: no `/stats` change).
+
+## Last Session — 2026-10-10 (Loans PR-7)
+**Loans PR-7: exit recovery. Branch `feat/loans-pr7` (on main after #61).** Backend only, no schema change, no dist.
+- **Final month F** = month of the loan's own `exit_date` (else IST month of `exit_flagged_at`) — `common.js finalMonthOf`.
+  **"F is past"** = a `loan_closes` row for F or a later month closed — `isFinalMonthPast`, the ONE helper, used everywhere.
+- **Mark Left / `flagForExit` → `exit.js consolidateForExit`:** scheduled instalments after F cancelled; ONE open
+  instalment in F holds the rest of the balance (uncovered folded in; none → new origin `exit`). F already past →
+  later instalments cancelled, the outstanding is the exit residual at once, finance alerted (LOAN_EXIT_RESIDUAL).
+- **`appendInstalment` exit branch:** for `recover_at_exit`, F open → amount added to the F instalment; F past → nothing
+  added, amount stays as residual (= reconciliation "uncovered") + alert. Exit loans never use an extension month.
+  `moveInstalmentToEnd` on an exit loan with F past → `cancelled` (ruling Q-D), not `deferred`.
+- **`stage7.js` byte-unchanged:** it already deducts min(F instalment, headroom, balance) as one provisional row.
+- **Close:** non-blocking readiness warning `EXIT_FINAL_PAYROLL_SHORT` (`computedBeforeExit` when Stage 7 for F ran
+  before Mark Left); `notes.exitResiduals`; LOAN_EXIT_FINAL_HELD for a held final salary (60-day wait kept, Q-B).
+- **API:** `GET /api/loans/exit-residuals`, `GET /api/loans/write-offs?month&year[&basis=final]` (TDS by write-off month,
+  rows carry exitDate + finalMonth, Q-A). Mark Left reply gains `loans: [...]` (additive).
+- **Fragile:** the close of F writes its `loan_closes` row first, so inside that close F is already past — that is
+  what turns the final payroll's shortfall into residual. A returning leaver's loan stays recover_at_exit (Q-C).
+  Two PR-1/PR-2 tests changed on purpose (schedule no longer untouched at Mark Left).
+- **Verified:** suite 769 → 792 (44 suites); `scripts/loans-exit-simulation.js` 5 leavers Nov 2026–Mar 2027 PASS
+  (every loan reconciles daily, drift 0, component-short 0, payslip = ledger); `--empty` 84 tables unchanged.
+- **NOT tested:** the real Mark Left HTTP route inside the simulation (engine path used; the route is jest-tested);
+  multi-process races; sales borrowers (PR-8); TDS treatment itself (CA Q4).
+
+---
+
 ## Last Session — 2026-10-10 (Loans PR-6)
 **Loans PR-6: monthly loan close, held sweep, daily job. Branch `feat/loans-pr6`, NOT merged.** First code that posts.
 - **`services/loans/close.js`:** `runLoanClose` (one payroll + month, one txn; `loan_closes` row FIRST = restart guard;

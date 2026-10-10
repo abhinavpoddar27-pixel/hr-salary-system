@@ -21,7 +21,7 @@ const { parseAmount, toPaise, toRupees } = require('./money');
 const { isValidMonth } = require('./months');
 const { checkActor, LIVE_LOAN_STATES } = require('./states');
 const { writeEvent } = require('./events');
-const { fail, text, getLoan, inTxn, appendInstalment, moveBalance, autoComplete } = require('./common');
+const { fail, text, getLoan, inTxn, appendInstalment, moveBalance, autoComplete, isFinalMonthPast } = require('./common');
 
 function getInstalment(db, id) {
   return db.prepare('SELECT * FROM loan_instalments WHERE id = ?').get(id) || null;
@@ -202,9 +202,17 @@ function moveInstalmentToEnd(db, { instalmentId, reason, note = null }, actor) {
         stale.push({ deductionId: row.id, payroll: row.payroll, month: row.month, year: row.year, employeeCode: row.employee_code, company: row.company });
       }
     }
-    const r = db.prepare("UPDATE loan_instalments SET status = 'deferred', updated_at = datetime('now') WHERE id = ? AND status IN ('scheduled','provisional')").run(ins.id);
+    // Loans PR-7 (planner ruling Q-D): an exit loan whose final payroll is closed has no
+    // "end" to move to — the instalment is cancelled and its amount stays in the balance
+    // as the exit residual (appendInstalment below adds nothing and alerts finance).
+    const exitPast = loan.status === 'recover_at_exit' && isFinalMonthPast(db, loan);
+    const toState = exitPast ? 'cancelled' : 'deferred';
+    const r = db.prepare("UPDATE loan_instalments SET status = ?, updated_at = datetime('now') WHERE id = ? AND status IN ('scheduled','provisional')").run(toState, ins.id);
     if (r.changes !== 1) return fail('CONCURRENT_CHANGE', 'the instalment changed underneath');
-    writeEvent(db, { loan, instalmentId: ins.id, event: 'moved_to_end', fromState: ins.status, toState: 'deferred', amountPaise: toPaise(ins.amount_due), actor: gate.actor, reason: note ? `${reason}: ${note}` : reason, field: 'instalment_status' });
+    writeEvent(db, {
+      loan, instalmentId: ins.id, event: exitPast ? 'instalment_cancelled' : 'moved_to_end', fromState: ins.status, toState, amountPaise: toPaise(ins.amount_due), actor: gate.actor,
+      reason: `${note ? `${reason}: ${note}` : reason}${exitPast ? ' — exit: the final payroll is closed, amount stays as exit residual' : ''}`, field: 'instalment_status',
+    });
     const a = appendInstalment(db, loan, { amountPaise: toPaise(ins.amount_due), origin: reason, sourceInstalmentId: ins.id, actor: gate.actor, reason: `${ins.due_month}/${ins.due_year}` });
     return { ok: true, added: a.added, alerts: a.alert ? [a.alert] : [], staleDeductions: stale };
   });

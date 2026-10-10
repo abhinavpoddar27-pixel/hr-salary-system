@@ -6,10 +6,14 @@ import { DISBURSE_MODES, RECEIPT_MODES, rupees, monthLabel, todayIst } from './l
 
 const agreementOk = (s) => { const t = String(s || '').trim(); return t.length >= 3 && t.length <= 200 }
 
-/** Approve / reject / cancel / decide — a reason box, required or optional. */
-export function ReasonModal({ title, message, label = 'Reason', required = true, confirmText = 'Confirm', danger = false, busy, onSubmit, onClose }) {
+/**
+ * Approve / reject / cancel / decide — a reason box, required or optional.
+ * `minLength` (Loans PR-6b, default 0): the trimmed reason must be at least this long.
+ */
+export function ReasonModal({ title, message, label = 'Reason', required = true, minLength = 0, confirmText = 'Confirm', danger = false, busy, onSubmit, onClose }) {
   const [reason, setReason] = useState('')
-  const ok = !required || reason.trim().length > 0
+  const len = reason.trim().length
+  const ok = !required || (len > 0 && len >= minLength)
   return (
     <Modal title={title} onClose={onClose} size="md">
       <div className="space-y-3" data-testid="reason-modal">
@@ -17,6 +21,11 @@ export function ReasonModal({ title, message, label = 'Reason', required = true,
         <div>
           <label className="label">{label}{required ? ' (required)' : ' (optional)'}</label>
           <textarea className="input min-h-[70px]" value={reason} onChange={(e) => setReason(e.target.value)} data-testid="reason-input" />
+          {minLength > 0 && (
+            <div className={len >= minLength ? 'text-[11px] text-slate-400' : 'text-[11px] text-amber-700'} data-testid="reason-length">
+              {len} / {minLength} characters minimum
+            </div>
+          )}
         </div>
         <div className="flex justify-end gap-2">
           <button className="btn-ghost" onClick={onClose}>Back</button>

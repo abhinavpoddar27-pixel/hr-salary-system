@@ -746,6 +746,73 @@ function EmployeeProfileModal({ employee, onClose }) {
   )
 }
 
+/**
+ * Loans PR-6b: the leaver's loans in the Mark Left dialog (SPEC §7 screen 8),
+ * read from GET /api/loans/employee/:code (plant, company-scoped). Never blocks
+ * the confirm button.
+ */
+function MarkLeftLoans({ code }) {
+  const user = useAppStore((s) => s.user)
+  const ac = user?.allowedCompanies
+  const restricted = Array.isArray(ac) && ac.length > 0 && !ac.includes('*')
+  const { data, isLoading, error } = useQuery({
+    queryKey: ['employee-loans', code],
+    queryFn: () => getEmployeeLoans(code),
+    retry: 0,
+  })
+  if (isLoading) return <div className="text-xs text-slate-400" data-testid="markleft-loans">Checking loans…</div>
+  if (error) {
+    return (
+      <div className="bg-amber-50 border border-amber-200 rounded-lg p-3 text-xs text-amber-800" data-testid="markleft-loans" data-state="error">
+        The loan balance could not be read — check the Loans page before confirming.
+      </div>
+    )
+  }
+  const loans = data?.data?.data || []
+  const live = loans.filter((l) => l.status === 'active' || l.status === 'recover_at_exit')
+  const unpaid = loans.filter((l) => l.status === 'requested' || l.status === 'approved')
+  const total = live.reduce((s, l) => s + Math.round(Number(l.remaining_balance || 0) * 100), 0) / 100
+  if (!live.length && !unpaid.length) {
+    return <div className="text-xs text-slate-500" data-testid="markleft-loans" data-state="none">No open loans.{restricted ? ' (Only loans of your companies are shown.)' : ''}</div>
+  }
+  return (
+    <div className="border border-slate-200 rounded-lg p-3 space-y-2 text-sm" data-testid="markleft-loans" data-state="loans">
+      {live.length > 0 && (
+        <>
+          <table className="w-full text-xs">
+            <thead><tr className="text-slate-500 border-b"><th className="text-left py-1">Loan</th><th className="text-left py-1">Type</th><th className="text-right py-1">EMI</th><th className="text-right py-1">Balance</th></tr></thead>
+            <tbody>
+              {live.map((l) => (
+                <tr key={l.id} className="border-b border-slate-100">
+                  <td className="py-1"><Link to={`/loans/${l.id}`} className="text-blue-700 hover:underline">#{l.id}</Link></td>
+                  <td className="py-1">{l.loan_type}</td>
+                  <td className="py-1 text-right font-mono">{fmtINR(l.emi_amount)}</td>
+                  <td className="py-1 text-right font-mono">{fmtINR(l.remaining_balance)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          <div className="font-semibold text-slate-800" data-testid="markleft-outstanding">Outstanding loan balance: {fmtINR(total)}</div>
+          <div className="text-xs text-slate-600">
+            The outstanding falls due from the final monthly payroll; any remainder is settled by cash receipt or an admin-approved write-off.
+          </div>
+          <div className="text-xs text-amber-700">
+            Mark Left in the exit month — if it is marked after that month's loan close, the whole balance becomes a residual for finance to collect in cash or write off.
+          </div>
+          <div className="text-[11px] text-slate-400">
+            Balance as of the last loan close: this month's payroll deduction moves it at the next close.{restricted ? ' Only loans of your companies are shown.' : ''}
+          </div>
+        </>
+      )}
+      {unpaid.length > 0 && (
+        <div className="text-xs text-slate-600">
+          {unpaid.length} loan{unpaid.length === 1 ? '' : 's'} not yet paid out ({unpaid.map((l) => `#${l.id} ${stateLabel(LOAN_STATE, l.status).toLowerCase()}`).join(', ')}) will be flagged and cannot be disbursed.
+        </div>
+      )}
+    </div>
+  )
+}
+
 function MarkLeftModal({ employee, onClose }) {
   const qc = useQueryClient()
   const [dateOfLeaving, setDateOfLeaving] = useState(new Date().toISOString().split('T')[0])
@@ -757,6 +824,8 @@ function MarkLeftModal({ employee, onClose }) {
       toast.success(`${employee.name} marked as left`)
       qc.invalidateQueries({ queryKey: ['employees'] })
       qc.refetchQueries({ queryKey: ['employees'] })
+      qc.invalidateQueries({ queryKey: ['employee-loans'] })
+      qc.invalidateQueries({ queryKey: ['loans'] })
       onClose()
     },
     onError: (err) => {
@@ -776,6 +845,7 @@ function MarkLeftModal({ employee, onClose }) {
           <div className="bg-red-50 border border-red-200 rounded-lg p-3 text-sm text-red-700">
             This will deactivate the employee. Open loans will be flagged for recovery from the final salary; nothing is closed.
           </div>
+          <MarkLeftLoans code={employee.code} />
           <div>
             <label className="label">Date of Leaving</label>
             <input type="date" value={dateOfLeaving} onChange={e => setDateOfLeaving(e.target.value)} className="input" />

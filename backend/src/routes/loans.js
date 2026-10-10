@@ -398,6 +398,25 @@ router.post('/close', allow(PAY_ROLES), handle((req, res) => {
   return reply(res, r, 201);
 }));
 
+// ── exit recovery (Loans PR-7). Declared before /:id. ────────────────────────
+
+/** Exit residuals (receipt or write-off) and loans still waiting for their final payroll. */
+router.get('/exit-residuals', allow(READ_ROLES), handle((req, res) => {
+  const data = L.listExitResiduals(getDb(), { companies: allowedCompanies(req) });
+  res.json({ success: true, data });
+}));
+
+/** Write-offs for TDS (ruling Q-A): by write-off month (IST); basis=final lists by the final payroll month. */
+router.get('/write-offs', allow(READ_ROLES), handle((req, res) => {
+  const my = monthYear(req.query);
+  if (!my) return refuse(res, { code: 'MONTH_REQUIRED', message: 'month (1–12) and year are required' });
+  const basis = text(req.query.basis || 'writeoff').toLowerCase();
+  if (!['writeoff', 'final'].includes(basis)) return refuse(res, { code: 'BASIS_INVALID', message: 'basis must be writeoff or final' });
+  const rows = L.writeOffsForTds(getDb(), { ...my, basis }).filter((r) => companyAllowed(req, r.company));
+  const total = rows.reduce((s, r) => s + toPaise(r.amount), 0);
+  return res.json({ success: true, data: rows, basis, total: toRupees(total) });
+}));
+
 router.post('/deductions/:did/reverse', allow(DECIDE_ROLES), handle((req, res) => {
   const db = getDb();
   const id = posInt(req.params.did);
@@ -423,7 +442,17 @@ router.get('/:id', allow(READ_ROLES), handle((req, res) => {
     requests: L.listRequests(db, { loanId: loan.id }),
     reconciliation: loan.disbursed_amount !== null ? L.reconcileLoan(db, loan.id) : null,
     approvalCheck: null,
+    deductions: [],
+    adjustments: [],
   };
+  // Loans PR-6b (read-only): payroll deductions with their opposite entries, so the
+  // admin can pick one to reverse. Effective posted = amount − Σ adjustments.
+  const hasAdj = !!db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'loan_adjustments'").get();
+  data.adjustments = hasAdj ? db.prepare('SELECT * FROM loan_adjustments WHERE loan_id = ? ORDER BY id').all(loan.id) : [];
+  data.deductions = db.prepare('SELECT * FROM loan_deductions WHERE loan_id = ? ORDER BY year, month, id').all(loan.id).map((d) => {
+    const adj = data.adjustments.filter((a) => a.deduction_id === d.id).reduce((s, a) => s + toPaise(a.amount), 0);
+    return { ...d, adjusted: toRupees(adj), effective_posted: d.state === 'posted' ? toRupees(toPaise(d.amount) - adj) : 0 };
+  });
   if (loan.status === 'requested') {
     // The admin's approval screen: eligibility re-run, last 3 months of deductions, warnings.
     const facts = L.loadBorrowerFacts(db, { borrowerType: loan.borrower_type, employeeCode: loan.employee_code, company: loan.company, excludeLoanId: loan.id });

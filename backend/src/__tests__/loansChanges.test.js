@@ -156,8 +156,10 @@ describe('restructure', () => {
     expect(L.restructureLoan(db, { ...base, newTenure: 6 }, FIN).code).toBe('ROLE_NOT_ALLOWED');
     expect(L.restructureLoan(db, { ...base, requestedBy: ADMIN, newTenure: 6 }, ADMIN).code).toBe('SELF_APPROVAL');
     L.flagForExit(db, loanId, SYS);
+    // Loans PR-7: the flag itself collapses the schedule into the final month; the refused restructure changes nothing more.
+    const atExit = shape(loanId);
     expect(L.restructureLoan(db, { ...base, newTenure: 6 }, ADMIN, { asOf: ASOF }).code).toBe('RESTRUCTURE_AT_EXIT_NOT_ALLOWED');
-    expect(shape(loanId).every(([s]) => s === 'scheduled')).toBe(true);
+    expect(shape(loanId)).toEqual(atExit);
   });
 });
 
