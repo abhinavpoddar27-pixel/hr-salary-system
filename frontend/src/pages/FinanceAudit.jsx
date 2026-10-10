@@ -601,7 +601,7 @@ const FLAG_TYPE_CONFIG = {
 // ═══════════════════════════════════════════════════════════
 // READINESS DASHBOARD TAB
 // ═══════════════════════════════════════════════════════════
-function ReadinessTab() {
+function ReadinessTab({ onTab, navigate }) {
   const { month, year } = useDateSelector({ mode: 'month', syncToStore: true })
   const { data: res } = useQuery({ queryKey: ['readiness', month, year], queryFn: () => getReadinessCheck(month, year), retry: 0 })
   const check = res?.data?.data
@@ -630,8 +630,8 @@ function ReadinessTab() {
           <h4 className="text-sm font-semibold text-red-700 mb-2">Blockers</h4>
           <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
             {check.blockers.map((b, i) => {
-              const action = b.type === 'UNAPPROVED_MANUAL_FLAGS' ? () => setActiveTab('interventions')
-                : b.type.includes('HELD') ? () => navigate(`/finance-verify?tab=redflags&filter=salary_held`)
+              const action = b.type === 'UNAPPROVED_MANUAL_FLAGS' ? () => onTab('interventions')
+                : b.type.includes('HELD') ? () => navigate(`/finance-verification?tab=redflags&filter=salary_held`)
                 : b.type.includes('SALARY') ? () => navigate('/pipeline/salary')
                 : null;
               return (
@@ -1364,7 +1364,7 @@ export default function FinanceAudit() {
           ))}
         </div>
 
-        {activeTab === 'readiness' && <ReadinessTab />}
+        {activeTab === 'readiness' && <ReadinessTab onTab={setActiveTab} navigate={navigate} />}
         {activeTab === 'interventions' && <ManualInterventionsTab />}
         {activeTab === 'variance' && <VarianceTab />}
         {activeTab === 'statutory' && <StatutoryTab />}
