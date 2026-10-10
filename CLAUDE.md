@@ -19,7 +19,7 @@
   sales register Loan column + Hold disabled. `frontend/dist` rebuilt once on the merged tree (own commit).
 - **Fragile:** a sales month with NO upload blocks every later sales close (Q8, no override). Stale salary rows
   (employee dropped from the active upload) keep their loan → payslip ≠ ledger until recomputed (finance notified).
-- **Verified:** suite 851 (49 suites, 3 clean runs, after merging main); `scripts/loans-sales-simulation.js` 7 loans × 5 sales months
+- **Verified:** suite 972 (56 suites, 3 clean runs, after merging main up to #65; PR-8 adds 57 tests); `scripts/loans-sales-simulation.js` 7 loans × 5 sales months
   PASS (daily reconcile, payslip = ledger, drift 0, 1125 non-borrower rows = no-loan run); `--dump` byte-identical on
   main vs branch (232 rows incl. a negative-net row); plant stage7 `--dump` identical; plant sims PASS.
 - **Browser:** `loans-ui-browser-check.py` 116/116 (103 + Pass 4 sales, 13), 0 page errors.
