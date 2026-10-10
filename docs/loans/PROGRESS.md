@@ -9,9 +9,10 @@ after a context compaction or a new session there is a file to read and build fr
 - **Current state:** P1–P3 and Loans PR-0 … PR-6 (#48–#54, #56, #58, #61) are merged. PR-5 verified on production (gate '0',
   loans 0, loan_deductions 0, no salary row with loan_recovery, drift = 1 known row, component-short = 5 known rows).
   Loans PR-7 (exit recovery, #63) and Loans PR-6b (close screen, reversal, Mark Left outstanding, #64) are merged
-  (10 Oct 2026). Loans PR-8 (sales borrowers, #66) is merged. Loans PR-9 (reports, payslip balance line, Finance Audit
-  hooks, perquisite list, sales close tab) is open on `feat/loans-pr9`, waiting for review.
-- **Next PR:** plant go-live after PR-9; sales go-live after PR-8 + PR-9; then PR-10 (old loans, cutover).
+  (10 Oct 2026). Loans PR-8 (sales borrowers, #66) and Loans PR-9 (reports, payslip balance line, Finance Audit hooks,
+  #67) are merged. Loans PR-10 (import of the accounts-Excel loans) is open on `feat/loans-pr10`, waiting for review.
+- **Next:** plant go-live; sales go-live; cutover = the accounts Excel through Loans → Import (PR-10) in the payroll month
+  after the pilot, then accounts confirms in writing that the manual EMI cut on the bank payment stopped.
 - **Blockers:**
   - The PR-6 check below (nil loan impact: the 13 Oct run writes nothing); then the PR-7 check.
   - Finance is checking the 35 re-held rows that were released to be paid, against what was
@@ -25,7 +26,8 @@ after a context compaction or a new session there is a file to read and build fr
   refuses them (`SERVICE_UNKNOWN`, `GROSS_UNKNOWN`) and does not guess. HR should backfill before the pilot.
 - **Waiting on the owner:**
   1. Review and merge Loans PR-4.
-  2. The accounts Excel of the 10–30 running loans (needed for PR-10).
+  2. The accounts Excel of the 10–30 running loans — the PR-10 import tool is built against our template; any
+     header layout works through the mapping step.
   3. Labour consultant: what the 50% cap is measured on; whether the 2-working-day exit rule
      applies (SPEC §12, Q1–Q2).
   4. CA: the ₹20,000 perquisite threshold; TDS on write-offs (Q3–Q4).
@@ -58,7 +60,7 @@ after a context compaction or a new session there is a file to read and build fr
 | Loans PR-7 | `feat/loans-pr7` | Merged | #63 | 2026-10-10 | verified (planner) |
 | Loans PR-8 | `feat/loans-pr8` | Merged | #66 | 2026-10-10 | PR-8 check below + checks 1–3 |
 | Loans PR-9 | `feat/loans-pr9` | Open | see GitHub | — | PR-9 check below + checks 1–3 |
-| Loans PR-10 | `feat/loans-pr10` | Not started | — | — | — |
+| Loans PR-10 | `feat/loans-pr10` | Open | see GitHub | — | PR-10 check below + checks 1–3 |
 | PR-F | `feat/loans-prF` | Not started (after pilot) | — | — | — |
 
 Milestones: **plant pilot** after PR-7 · **plant go-live** after PR-9 · **sales go-live** after
@@ -420,6 +422,37 @@ Finance Audit readiness for 9/2026 → no `LOAN_CLOSE_OVERDUE`; red flags for 9/
 Repeat the PR-9 checks: `node backend/scripts/loans-payslip-html-check.mjs`; the three simulations with `--keep` then
 `node backend/scripts/loans-reports-simulation.js <dbs>`; `python3 backend/scripts/loans-ui-browser-check.py <dir>` (Pass 5 → `<dir>/pr9`).
 
+## Loans PR-10 rulings (coordinator, 10 Oct 2026 — plan approved)
+
+- Two new tables inside `loansSchemaV2Ddl`: `loan_import_batches`, `loan_import_rows` (`loans` not altered). Partial unique
+  indexes: the live file hash, and the imported row key (`borrower|code|company|loan date|original principal|agreement`).
+- **Q1** import allowed while `loans_disbursement_enabled = '0'` (no money moves). **Q2** earliest cutover month = after the
+  latest loan close of each payroll in the batch, and never before the current IST month − 1.
+- **Q3** a non-Active borrower is refused; a name found only on a Left / Inactive person goes to "Left — settle outside the
+  app" (out of the import, listed). **Q4** no agreement reference → allowed, warning `AGREEMENT_MISSING`.
+- **Q5** `disbursed_by` = the finance user who confirmed that row's balance. **Q6** approval blocked until every row is decided
+  (confirmed by HR and finance, or excluded; no-match / Left / invalid / duplicate rows are out automatically).
+- **Q7** finance may correct outstanding / EMI with a mandatory note (5+ chars), audited; the Excel values stay on the row.
+- **Q8** a second loan for the same person → allowed, warning. **Q9** contract workers → imported with a warning (D-17 governs
+  new loans only). **Q10** engine `checkActor('request')` keeps admin (the import uses its own `import_*` actions).
+- **Q11** imported loans count in the perquisite / outstanding reports and are labelled "Opening balance (import)"
+  (`disbursedAs`, `openingImported`). **Q12** frontend + dist in the PR.
+- Dates: Indian day-first only; a text date that cannot be read that way (e.g. 02/13/2026, a 2-digit year) → row invalid.
+- An imported loan: `active`, principal = disbursed = balance = confirmed outstanding, `disbursement_mode 'Opening balance
+  (import)'`, `disbursed_on` = last payroll date of M−1 (plant: month end; sales: the 25th) so `firstEmiMonth` = M, schedule
+  outstanding ÷ EMI (last = remainder), one `imported` loan event (never `disbursed`). Reconciled inside the transaction.
+
+### Loans PR-10 check (read-only, after deploy)
+
+```sql
+SELECT name FROM sqlite_master WHERE name IN ('loan_import_batches','loan_import_rows',
+  'uniq_loan_import_batches_live_file','uniq_loan_import_rows_imported_key','idx_loan_import_rows_batch');   -- 5
+SELECT (SELECT COUNT(*) FROM loan_import_batches), (SELECT COUNT(*) FROM loan_import_rows), (SELECT COUNT(*) FROM loans);  -- 0, 0, 0
+SELECT value FROM policy_config WHERE key = 'loans_disbursement_enabled';                                  -- '0' (unchanged)
+```
+Then checks 1–3 below (no salary code changed). At cutover, after the import: the batch's cutover check (Loans → Import →
+batch → Excel) is signed against the bank file — every row without a flag, or each flag explained.
+
 ## Post-merge checks
 
 Run after every PR that touches salary, and after every deploy. Both queries are read-only;
@@ -512,4 +545,5 @@ FROM sales_salary_computations WHERE month = ? AND year = ?;
 | 2026-10-10 | Loans PR-7 | Built | Exit recovery: schedule collapses into the final month at Mark Left; residual after it; exit-residual and write-off (TDS) endpoints; Mark Left reply summary. Merged origin/main (#61). Suite 769 → 792 (44 suites). Exit simulation 5 leavers × 5 months PASS (reconciles daily, drift 0, component-short 0, payslip = ledger); `--empty` 84 tables unchanged. |
 | 2026-10-10 | Loans PR-6b | Built | Close tab, admin reversal on the loan page, Mark Left outstanding; `GET /:id` gains `deductions` + `adjustments`. Suite 769 → 771 (42 suites). Browser check 103/103 (63 PR-4 + 40 Pass 3), 0 page errors. |
 | 2026-10-10 | Loans PR-8 | Built | Sales borrowers: eligibility (structure gross, company-scoped), cycle first EMI, borrower search; sales Stage 7 within headroom matched on code + company; loan-only ₹0 floor; K30 edits, K31 hold block, K28 release guard; sales close / sweep / payslip check; sales exit hook. Suite 792 → 849 (49 suites, 3 clean runs). `loans-sales-simulation.js` 7 loans × 5 sales months PASS; `--dump` byte-identical vs PR-7 base and vs main after #63/#64 (232 rows); `--empty` writes nothing. Merged main (up to #65): suite 972 / 56; dist rebuilt on the merged tree; browser check 116/116 (Pass 4 sales, 13), 0 page errors. |
+| 2026-10-10 | Loans PR-10 | Built | Import engine + API + Import tab. Suite 1004 → 1077 (64 suites) before the merge of main (#68–#70); 1120 / 68 after, 3 clean runs. Simulation: 25-row file through HTTP → 22 loans, 3 out; plant Stage 7 + sales compute + close for Nov and Dec 2026 reconcile to the paisa, payslip = ledger, drift 0 (plant + sales), component-short 0; non-borrowers identical to `--empty`. Browser 176/176 (Pass 6, 38). Production read-only: 18 shared names / 39 people in the Asian Lakto + unknown-company plant pool (3 still shared within a department), 7 / 14 in the Indriyan sales master; every Active Indriyan plant row is typed Sales or Contract. |
 | 2026-10-10 | Loans PR-9 | Built | Reports service + API (register, forecast, exceptions, leavers, perquisite, Excel), payslip balance line (separate read, plant + sales), Finance Audit readiness warning + 3 plant red flags, `loan_emi_net_flag_pct`, sales statement by cycle month, Reports tab, sales close toggle. Suite 972 → 1004 (60 suites, 3 clean runs). Reports sim 255/255; payslip HTML 77/77 byte-identical without a loan; Stage 7 + sales `--dump` md5-identical to main; browser 148/148 (Pass 5, 32), 0 page errors. Portal unused in production → no portal view (Q6). |
