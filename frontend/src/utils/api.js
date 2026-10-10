@@ -242,6 +242,8 @@ export const getLeaveApplications = (params) => api.get('/leaves', { params, ...
 export const submitLeaveApplication = (data) => api.post('/leaves', data)
 export const approveLeave = (id, data) => api.put(`/leaves/${id}/approve`, data)
 export const rejectLeave = (id, data) => api.put(`/leaves/${id}/reject`, data)
+// Cancels a Pending or Approved application; an approved CL/EL is credited back.
+export const cancelLeave = (id) => api.delete(`/leaves/${id}`)
 export const getLeaveSummary = (params) => api.get('/leaves/summary', { params, ...fresh })
 export const getLeaveBalancesList = (params) => api.get('/leaves/balances', { params, ...fresh })
 // no-cache: server.js caches GETs for 5s, which showed a stale balance right after an approval.
