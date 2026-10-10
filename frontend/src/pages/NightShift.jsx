@@ -15,6 +15,7 @@ import clsx from 'clsx'
 import useExpandableRows from '../hooks/useExpandableRows'
 import DrillDownRow, { DrillDownChevron } from '../components/ui/DrillDownRow'
 import EmployeeQuickView from '../components/ui/EmployeeQuickView'
+import ConfirmDialog from '../components/ui/ConfirmDialog'
 
 function ConfidenceBadge({ confidence }) {
   if (confidence === 'high') return <span className="badge-green">High ✓ Auto-paired</span>
@@ -27,6 +28,7 @@ export default function NightShift() {
   const { selectedCompany } = useAppStore()
   const [filter, setFilter] = useState('all')
   const [calendarEmployee, setCalendarEmployee] = useState(null)
+  const [rejectTarget, setRejectTarget] = useState(null)
   const { toggle, isExpanded } = useExpandableRows()
 
   const { data: res, isLoading, refetch } = useQuery({
@@ -191,11 +193,11 @@ export default function NightShift() {
                         {!pair.is_rejected && !pair.is_confirmed && (
                           <div className="flex gap-1">
                             <button onClick={() => confirmMutation.mutate(pair.id)} className="btn-success text-xs px-2 py-1">✓ Confirm</button>
-                            <button onClick={() => rejectMutation.mutate(pair.id)} className="btn-danger text-xs px-2 py-1">✕</button>
+                            <button onClick={(e) => { e.stopPropagation(); setRejectTarget(pair) }} className="btn-danger text-xs px-2 py-1" aria-label="Reject pairing" title="Reject pairing">✕</button>
                           </div>
                         )}
                         {pair.is_confirmed && pair.confidence !== 'high' && (
-                          <button onClick={() => rejectMutation.mutate(pair.id)} className="text-xs text-red-400 hover:text-red-600">Undo</button>
+                          <button onClick={(e) => { e.stopPropagation(); setRejectTarget(pair) }} className="text-xs text-red-400 hover:text-red-600" aria-label="Reject pairing" title="Reject pairing">Reject pairing</button>
                         )}
                       </td>
                       <td>
@@ -245,6 +247,17 @@ export default function NightShift() {
               <p className="text-sm text-green-600">{summary.total} night shifts paired. Proceed to Stage 5.</p>
             </div>
           </div>
+        )}
+
+        {rejectTarget && (
+          <ConfirmDialog
+            title="Reject this night-shift pairing?"
+            message={`${rejectTarget.employee_name || rejectTarget.employee_code} (${rejectTarget.employee_code}) — IN ${fmtDate(rejectTarget.in_date)} ${rejectTarget.in_time || ''}, OUT ${fmtDate(rejectTarget.out_date)} ${rejectTarget.out_time || ''}.${rejectTarget.is_confirmed ? ' This pair was confirmed earlier.' : ''} These two punches will no longer count as one night shift. ${fmtDate(rejectTarget.in_date)} goes back to Miss Punches as "Missing OUT" and must be fixed again; the ${fmtDate(rejectTarget.out_date)} punch stands on its own. This cannot be undone here.`}
+            confirmText={rejectMutation.isPending ? 'Rejecting…' : 'Reject pairing'}
+            cancelText="Keep pairing"
+            onConfirm={() => { if (!rejectMutation.isPending) rejectMutation.mutate(rejectTarget.id, { onSettled: () => setRejectTarget(null) }) }}
+            onCancel={() => setRejectTarget(null)}
+          />
         )}
 
         <AbbreviationLegend keys={['P', 'A', 'WO', 'WOP', '½P', 'Dept', 'Hrs', 'Emp', 'Att']} />
