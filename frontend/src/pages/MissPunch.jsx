@@ -100,7 +100,7 @@ export default function MissPunch() {
   const [finRejectId, setFinRejectId] = useState(null)
   const [finRejectReason, setFinRejectReason] = useState('')
 
-  const { data: res, isLoading, refetch } = useQuery({
+  const { data: res, isLoading, isError, refetch } = useQuery({
     queryKey: ['miss-punches', month, year, filterDept, filterType, filterState, selectedCompany],
     queryFn: () => getMissPunches({ month: month, year: year, department: filterDept, state: filterState, company: selectedCompany }),
     retry: 0
@@ -213,7 +213,14 @@ export default function MissPunch() {
     setBulkModal(true)
   }
 
-  const pendingCount = records.filter(r => !r.miss_punch_resolved).length
+  // "All resolved" is a month-level claim, so it reads the server summary (whole month, any status
+  // chip), never the rows of the current filter (P1-09). summary.pending = every row with
+  // miss_punch_resolved = 0, which includes finance-rejected rows waiting for HR to re-resolve
+  // (summary.hrPending leaves those out). The summary follows the department filter, so the banner
+  // is hidden while one is set.
+  const summaryLoaded = !isError && !!res?.data?.summary
+  const outstanding = (summary.pending || 0) + (summary.financePending || 0)
+  const allResolved = summaryLoaded && (summary.total || 0) > 0 && outstanding === 0 && !filterDept
   const resolvedCount = records.filter(r => r.miss_punch_resolved).length
   const progress = records.length > 0 ? Math.round(resolvedCount / records.length * 100) : 0
 
@@ -277,7 +284,7 @@ export default function MissPunch() {
         <div className="card p-5">
           <div className="flex items-center justify-between mb-2">
             <span className="text-sm font-semibold text-slate-700">Resolution Progress</span>
-            <span className="text-sm text-slate-500">{resolvedCount} of {records.length} resolved</span>
+            <span className="text-sm text-slate-500">{resolvedCount} of {records.length} resolved{filterState !== 'all' ? ' (this filter)' : ''}</span>
           </div>
           <div className="w-full bg-slate-100 rounded-full h-3 overflow-hidden">
             <div className="bg-gradient-to-r from-emerald-400 to-emerald-500 h-3 rounded-full transition-all duration-500" style={{ width: `${progress}%` }} />
@@ -578,7 +585,7 @@ export default function MissPunch() {
         </div>
 
         {/* Proceed button */}
-        {pendingCount === 0 && records.length > 0 && (
+        {allResolved && (
           <div className="card p-5 bg-emerald-50/80 border-emerald-200 flex items-center justify-between animate-slide-up">
             <div className="flex items-center gap-3">
               <span className="text-3xl">✅</span>
