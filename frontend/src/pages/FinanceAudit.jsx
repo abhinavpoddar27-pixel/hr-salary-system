@@ -327,6 +327,7 @@ function CorrectionDetail({ code, row }) {
             <div><span className="text-slate-400">Net Salary:</span> <span className="font-semibold text-green-700">{fmtINR(row.netSalary)}</span></div>
             <div><span className="text-slate-400">PF:</span> <span className="font-semibold text-red-600">-{fmtINR(row.pfEmployee)}</span></div>
             <div><span className="text-slate-400">ESI:</span> <span className="font-semibold text-red-600">-{fmtINR(row.esiEmployee)}</span></div>
+            {(row.lwfEmployee || 0) > 0 && <div><span className="text-slate-400">LWF:</span> <span className="font-semibold text-red-600">-{fmtINR(row.lwfEmployee)}</span> <span className="text-slate-400">(employer {fmtINR(row.lwfEmployer || 0)})</span></div>}
             {row.prevNet && <div><span className="text-slate-400">Prev Net:</span> <span className="font-semibold">{fmtINR(row.prevNet)}</span></div>}
           </div>
         </div>

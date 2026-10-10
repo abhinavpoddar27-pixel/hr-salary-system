@@ -50,7 +50,7 @@ function generateSalaryRegisterHTML(payslips, companyConfig, month, year) {
       advance: ps.deductions?.find(d => d.label?.includes('Advance'))?.amount || 0,
       pf: ps.deductions?.find(d => d.label?.includes('PF') && !d.label?.includes('Employer'))?.amount || 0,
       esi: ps.deductions?.find(d => d.label?.includes('ESI') && !d.label?.includes('Employer'))?.amount || 0,
-      wlf: 0,
+      wlf: ps.deductions?.find(d => d.label?.includes('LWF'))?.amount || 0,
       tds: ps.deductions?.find(d => d.label?.includes('TDS'))?.amount || 0,
       pt: ps.deductions?.find(d => d.label?.includes('Professional'))?.amount || 0,
       lateDed: ps.deductions?.find(d => d.label?.includes('LOP') || d.label?.includes('Late'))?.amount || 0,
@@ -312,7 +312,7 @@ export function generatePayslipHTML(payslip, companyConfig, loanBalance = null) 
         <span>TAKE HOME</span><span>${fmtC(payslip.takeHome || payslip.totalPayable || payslip.netSalary)}</span>
       </div>
     </div>` : ''}
-    <div style="margin-top:8px;font-size:9px;color:#666;"><p>Employer PF: ${fmtC(payslip.pfEmployer)} | Employer ESI: ${fmtC(payslip.esiEmployer)}</p></div>
+    <div style="margin-top:8px;font-size:9px;color:#666;"><p>Employer PF: ${fmtC(payslip.pfEmployer)} | Employer ESI: ${fmtC(payslip.esiEmployer)}${(payslip.lwfEmployer || 0) > 0 ? ` | Employer LWF: ${fmtC(payslip.lwfEmployer)}` : ''}</p></div>
   </div>`;
 }
 
