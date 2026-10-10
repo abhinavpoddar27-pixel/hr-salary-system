@@ -168,7 +168,7 @@ export default function LoanDetail() {
   const rec = loan.reconciliation
 
   return (
-    <div className="p-4 md:p-6 space-y-4 max-w-screen-xl animate-fade-in" data-testid="loan-detail">
+    <div className="p-4 md:p-6 space-y-4 w-full min-w-0 animate-fade-in" data-testid="loan-detail">
       <div className="flex items-start justify-between flex-wrap gap-3">
         <div>
           <button onClick={() => navigate('/loans')} className="text-xs text-blue-700 hover:underline">← Loans</button>

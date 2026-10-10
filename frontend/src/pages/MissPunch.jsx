@@ -57,7 +57,7 @@ function EditRow({ record, onSave, onCancel }) {
           </div>
           <div className="flex-1">
             <label className="label">Remark</label>
-            <input type="text" value={remark} onChange={e => setRemark(e.target.value)} placeholder="Add remark..." className="input w-full" />
+            <input type="text" value={remark} onChange={e => setRemark(e.target.value)} placeholder="Add remark..." className="input w-full max-w-xl" />
           </div>
           <div>
             <label className="label flex items-center gap-1.5 cursor-pointer">
@@ -221,7 +221,7 @@ export default function MissPunch() {
     <div className="animate-fade-in">
       <PipelineProgress stageStatus={{ 1: 'done', 2: 'active' }} />
 
-      <div className="p-6 space-y-5 max-w-screen-xl">
+      <div className="p-6 space-y-5 w-full min-w-0">
         <div className="flex items-start justify-between">
           <div>
             <h2 className="section-title">Stage 2: Miss Punch Detection & Rectification</h2>

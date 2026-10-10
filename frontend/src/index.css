@@ -310,3 +310,48 @@
 /* ── Utility: hide scrollbar but keep scroll ──────── */
 .scrollbar-hide::-webkit-scrollbar { display: none; }
 .scrollbar-hide { -ms-overflow-style: none; scrollbar-width: none; }
+
+/* ── Stage 7 salary register (.salreg) — scoped density + pinning ──────
+   Display only. Global .table-compact is untouched; these rules sit after
+   the Tailwind layers so they win for this one table. Pinned cells need
+   SOLID backgrounds (the shared table uses translucent ones). */
+.salreg { border-collapse: separate; border-spacing: 0; }
+.salreg th, .salreg td { padding: 6px 8px; vertical-align: middle; }
+.salreg th { white-space: nowrap; font-size: 10px; }
+.salreg tr.drill-down-row > td { padding: 0; }
+/* .table-compact td sets a colour that beats text-* utilities on a <td>, so zero
+   amounts / '—' cells get their mute shade from these two classes instead. */
+.salreg.table-compact td.salreg-mute { color: #cbd5e1; }      /* slate-300 */
+.salreg.table-compact td.salreg-mute-soft { color: #94a3b8; } /* slate-400 */
+.salreg thead { position: static; }
+.salreg thead th { position: sticky; top: 0; z-index: 20; background: #f8fafc; }
+.salreg tfoot td {
+  position: sticky; bottom: 0; z-index: 20;
+  background: #f1f5f9; border-top: 1px solid #cbd5e1; border-bottom: 0;
+  font-size: 11px; color: #334155;
+}
+.salreg.table-compact tbody tr > td.pin { background: #ffffff; }
+.salreg.table-compact tbody tr:nth-child(even) > td.pin { background: #fcfdfe; }
+.salreg.table-compact tbody tr.row-changed > td.pin { background: #f8fbff; }
+.salreg.table-compact tbody tr.row-held > td.pin { background: #fffcf2; }
+.salreg.table-compact tbody tr.row-expanded > td.pin { background: #f3f8ff; }
+.salreg.table-compact tbody tr:hover > td.pin { background: #f5f9ff; }
+.salreg.table-compact tbody tr > td.pin.pin-net { background: #f8fafc; }
+.salreg.table-compact tbody tr > td.pin.pin-take { background: #ecfdf5; }
+.salreg.table-compact thead th.pin-net { background: #f1f5f9; }
+.salreg.table-compact thead th.pin-take { background: #e7f8ef; }
+.salreg tfoot td.pin-net { background: #e8edf3; }
+.salreg tfoot td.pin-take { background: #d1fae5; }
+@media (min-width: 768px) {
+  .salreg td.pin, .salreg th.pin { position: sticky; z-index: 1; }
+  .salreg .pin { width: var(--pin-w); min-width: var(--pin-w); max-width: var(--pin-w); }
+  .salreg .pin-l { left: var(--pin-off); }
+  .salreg .pin-r { right: var(--pin-off); }
+  .salreg thead th.pin, .salreg tfoot td.pin { z-index: 30; }
+  .salreg .pin-edge-r { box-shadow: 6px 0 6px -6px rgba(15, 23, 42, 0.25); }
+  .salreg .pin-edge-l { box-shadow: -6px 0 6px -6px rgba(15, 23, 42, 0.25); }
+  .salreg tbody tr.row-held > td.pin-l { box-shadow: inset 3px 0 0 #f59e0b, 6px 0 6px -6px rgba(15, 23, 42, 0.25); }
+}
+@media (max-width: 767.98px) {
+  .salreg tbody tr.row-held > td.pin-l { box-shadow: inset 3px 0 0 #f59e0b; }
+}
