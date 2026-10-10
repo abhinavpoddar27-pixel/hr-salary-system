@@ -52,12 +52,13 @@
 - PR-2 STEP 4 — a90f488 `feat(lwf): LWF on the plant payslip, register totals, finance report, AI prompt`. generatePayslipData: 'LWF (Employee)' deductions line (after Early Exit; filtered when 0) + lwfEmployer; payroll.js /salary-register totals totalLWFEmployee/totalLWFEmployer only (no other payroll.js line in this step); financeAudit.js /report SELECT + row map (re-located by anchor: main changed this file); ai.js prompt line + `lwf` summary key; schemaReference.js. lwfOutputs.test.js O1 ×3 (payslip unit + GET /payslip/:code) + O5 ×2 (/finance-audit/report, /salary-register totals incl. held) via real JWT auth — 5/5 fail on the previous sources (swap-verified).
 - PR-2 STEP 5 — e4e48ad `feat(lwf): LWF columns in the payroll register and salary slip summary Excel`. payroll.js — ONLY the two Excel handlers. BEFORE/AFTER: register HEADERS `… 'ESI(EE)', 'ESI(ER)', 'PT', 'TDS', …` (37) → `… 'ESI(EE)', 'ESI(ER)', 'LWF(EE)', 'LWF(ER)', 'PT', 'TDS', …` (39); NUM_COLS = HEADERS.length (comment 37 → 39); data row + totals row + `!cols` (+2 × wch 8 after the four PF/ESI widths) at the same position; SUMMARY sheet + 'LWF (Employee)' / 'LWF (Employer)' rows; CTC label/amount + LWF(ER). Slip summary: inline 19-element header + `SUMMARY_COLS = 19` → `SUMMARY_HEADER` (20, 'LWF' after 'ESI') + `SUMMARY_COLS = SUMMARY_HEADER.length`; data row / reducer `lwf` / totals / `!cols` (+1 × wch 8); `CAUTION_COLS = [15, 16, 17]` → `['TOT DED','NET PAYABLE','TAKE HOME'].map(h => SUMMARY_HEADER.indexOf(h))` = [16, 17, 18] (L15). O3 ×2 in lwfOutputs.test.js (header = data = totals = `!cols` = 39 / 20, every post-insert column still aligned with the DB row, LWF 5/20 and totals 10/40, CTC, held-row comments on exactly cols 16/17/18) — both fail on the pre-STEP-5 payroll.js. Test note: SheetJS only reads `!cols` back with `cellStyles: true`.
 - PR-2 STEP 6 — 13d1e35 `feat(lwf): LWF column + totals in Stage 7; employer LWF on payslip`. SalaryComputation.jsx: LWF th/td after ESI (sortable, '—' when 0, employer share in tooltip), tfoot total, drill-down 'LWF (Emp)'/'LWF (Empr)', payslip modal '| Employer LWF' only when > 0. DrillDownRow colSpan 22 → 25 = real body-row cell count (rows had 24 cells before LWF; header + tfoot had 23 — D-8). payslipPdf.js: `wlf` from the 'LWF' deductions line; employer line + '| Employer LWF' only when > 0. FinanceAudit.jsx: LWF line in the report row detail when > 0. dist rebuilt + committed in the same commit. Proof: bundle grep 'LWF (Emp)', 'LWF (Empr)', 'lwf_employee', colSpan:25 (SalaryComputation-D-Vfju47.js); 'Employer LWF' + includes("LWF") (payslipPdf-CnuA1dGI.js); lwfEmployee (FinanceAudit-DEqbdIQB.js). Payslip HTML byte check vs origin/main (backend/scripts/loans-payslip-html-check.mjs, run from a scratchpad copy because the script assumes a pre-PR-9 base that lacks the export; base import path also made `.js`): 77/77 — a payslip without LWF renders byte-identical HTML; a flagged one shows both lines.
+- PR-2 STEP 7 — b702d50 `docs(lwf): component check includes LWF`. Clean `rm -rf frontend/dist && npm run build` reproduces the committed dist byte-identically (git status clean → no dist commit). VERIFY.sql + V11 (10 components + lwf_employee within ₹1; expect only the 5 known capped rows) + V12 (September LWF rule; expect 0 rows). docs/loans/PROGRESS.md §2: both sums + COALESCE(lwf_employee,0) (N2) + note (sim scripts' componentShort stays 10-component; their employees are unflagged). V11/V12 run on the C4 sim DB — see C4.
 
 ## LAST STEP
-PR-2 STEP 6 (plant UI + dist) — 13d1e35.
+PR-2 STEP 7 (dist check + docs) — b702d50.
 
 ## NEXT STEP
-PR-2 STEP 7 — clean rebuild reproduces dist byte-identically; VERIFY.sql V11 + docs/loans/PROGRESS.md §2 SQL. Then C3 (--dump byte-identical vs 66c6a08), C4 sim, full jest ×2, CLAUDE.md entry.
+C3 — git worktree at 66c6a08, loans-stage7-simulation.js --dump in both trees, compare ignoring lwf_employee/lwf_employer (0 on the branch); then C4 sim, full jest ×2, CLAUDE.md entry.
 
 ## OWNER RULINGS ADDED DURING THE BUILD
 (record date + ruling; BUILD_PLAN §1 holds the original set)
@@ -125,6 +126,7 @@ PR-2 STEP 7 — clean rebuild reproduces dist byte-identically; VERIFY.sql V11 +
 - PR-2 STEP 4: salaryComputation.js (generatePayslipData), routes/payroll.js (/salary-register totals), routes/financeAudit.js (/report), routes/ai.js, config/schemaReference.js, __tests__/lwfOutputs.test.js (new)
 - PR-2 STEP 5: routes/payroll.js (two Excel handlers), __tests__/lwfOutputs.test.js (O3)
 - PR-2 STEP 6: frontend/src/pages/SalaryComputation.jsx, frontend/src/utils/payslipPdf.js, frontend/src/pages/FinanceAudit.jsx, frontend/dist
+- PR-2 STEP 7: docs/statutory-flags/VERIFY.sql (V11, V12), docs/loans/PROGRESS.md (§2)
 
 ## FRAGILE-FILE EDITS (before / after)
 - PR-2 STEP 2 salaryComputation.js (lines on 66c6a08 = 8b9561d, file unchanged on main) —
@@ -237,3 +239,4 @@ PR-2 STEP 2: lwfPlant 18/18, T12 green; full suite 62 / 1029, 0 failures (= base
 PR-2 STEP 4: lwfOutputs 5/5; suites touching STEP 4 files 8 / 142 green.
 PR-2 STEP 5: lwfOutputs 7/7 (+ holdReleaseRoute, manualDeductionsRetired green).
 PR-2 STEP 6: npm run build OK; payslip HTML byte check 77/77.
+PR-2 STEP 7: dist clean rebuild byte-identical.
