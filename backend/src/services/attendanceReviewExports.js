@@ -67,6 +67,7 @@ function buildWorkbook(result, run = {}) {
     { k: 'lm_late', h: 'Last month late', v: (r) => r.last_month?.late_days ?? 'new' }, { k: 'lm_early', h: 'Last month early', v: (r) => r.last_month?.early_days ?? 'new' },
     { k: 'categories', h: 'Why', v: cats, w: 30 }, { k: 'action', h: 'Action' }, { k: 'deduction_days', h: 'Deduction days' },
     { k: 'indicative_amount', h: 'Indicative ₹' }, { k: 'override', h: 'Override', v: (r) => (r.override ? `${r.override.action}: ${r.override.reason}` : ''), w: 30 },
+    { k: 'shift', h: 'Shift check', v: (r) => (r.check_master_shift ? 'check master shift' : ''), w: 20 },
   ]), 'Action list');
   XLSX.utils.book_append_sheet(wb, sheet(result.earlyExitWarnings || [], [
     { k: 'code', h: 'Code' }, { k: 'name', h: 'Name', w: 26 }, { k: 'department', h: 'Department', w: 18 }, { k: 'early_exits', h: 'Early exits' },
@@ -83,18 +84,27 @@ function buildWorkbook(result, run = {}) {
     { k: 'code', h: 'Code' }, { k: 'name', h: 'Name', w: 26 }, { k: 'department', h: 'Department', w: 18 }, { k: 'group', h: 'Group' },
     { k: 'worked_days', h: 'Worked days' }, { k: 'late_days', h: 'Late days' }, { k: 'early_days', h: 'Early exits' }, { k: 'late_min', h: 'Late min' },
     { k: 'early_min', h: 'Early min' }, { k: 'workdays_lost', h: 'Workdays lost' }, { k: 'newcomer', h: 'Newcomer', v: (r) => (r.newcomer ? 'yes' : '') },
-    { k: 'remeasured', h: 'Re-measured', v: (r) => (r.remeasured ? 'yes' : '') }, { k: 'categories', h: 'Why selected', v: cats, w: 30 },
+    { k: 'remeasured', h: 'Re-measured', v: (r) => (r.remeasured ? 'yes' : '') }, { k: 'hours_excused', h: 'Excused: full hours worked', v: (r) => r.hours_excused || '' }, { k: 'categories', h: 'Why selected', v: cats, w: 30 },
   ]), 'All with late or early');
   XLSX.utils.book_append_sheet(wb, sheet(result.shiftIssues || [], [
     { k: 'code', h: 'Code' }, { k: 'department', h: 'Department', w: 18 }, { k: 'master_shift', h: 'Master shift', w: 16 }, { k: 'used_shift', h: 'Shift used', w: 16 },
     { k: 'days', h: 'Days' }, { k: 'min_in', h: 'Min in' }, { k: 'max_in', h: 'Max in' }, { k: 'min_out', h: 'Min out' }, { k: 'max_out', h: 'Max out' }, { k: 'late', h: 'Late' }, { k: 'early', h: 'Early' },
   ]), 'Shift issues');
+  XLSX.utils.book_append_sheet(wb, sheet(result.shiftCheck || [], [
+    { k: 'code', h: 'Code' }, { k: 'name', h: 'Name', w: 26 }, { k: 'department', h: 'Department', w: 18 }, { k: 'shift_h', h: 'Shift h' },
+    { k: 'ms_days', h: 'Worked (Mon–Sat)' }, { k: 'system_early', h: 'System early exits' }, { k: 'excused', h: 'Full hours – not counted' },
+    { k: 'counted', h: 'Counted' }, { k: 'avg_hours', h: 'Avg hours those days' },
+    { k: 'result', h: 'Result', w: 30, v: (r) => (r.check_master ? 'Check master shift' : { hidden: 'Not shown – full hours worked', shown: 'Shown – short of shift hours', below_threshold: 'Below warning threshold' }[r.result]) },
+  ]), 'Shift check');
   XLSX.utils.book_append_sheet(wb, sheet(result.payrollChecks?.flags || [], [
     { k: 'code', h: 'Code' }, { k: 'flag', h: 'Problem', w: 32 }, { k: 'rows', h: 'Rows' }, { k: 'daycalc_days', h: 'Day-calc days' }, { k: 'salary_amount', h: 'Salary deduction ₹' },
   ]), 'Payroll checks');
   const crit = Object.entries(result.criteria?.thresholds || {}).map(([k, v]) => [k, v]);
-  const cs = XLSX.utils.aoa_to_sheet([['Rule', 'Value'], ['stayed_late_mode', result.criteria?.stayed_late_mode], ['early_exit_rule', result.criteria?.early_exit_rule],
+  const cs = XLSX.utils.aoa_to_sheet([['Rule', 'Value'], ['stayed_late_mode', result.criteria?.stayed_late_mode], ['early_exit_rule', result.criteria?.early_exit_rule], ['shift_fit', result.criteria?.shift_fit ?? ''],
     ['loading_designation_patterns', (result.criteria?.loading_designation_patterns || []).join(', ')], ...crit,
+    ...Object.entries(result.criteria?.remeasure || {}).map(([code, r]) => [`re-measure ${code}`,
+      `${r.start}–${r.end}, late grace ${r.late_grace ?? 9} min, early grace ${r.early_grace ?? 15} min, stayed-late ${r.left_late || 'system'}`
+      + (r.hours_complete ? `, full shift hours excuse a late or early exit (tolerance ${r.hours_grace ?? 10} min)` : '')]),
     ...(result.overridesApplied || []).map((o) => [`override ${o.code}`, `${o.action}: ${o.reason} → ${o.effect}`])]);
   cs['!cols'] = [{ wch: 30 }, { wch: 60 }];
   XLSX.utils.book_append_sheet(wb, cs, 'Rules used');
@@ -140,6 +150,7 @@ function buildDocx(result, run = {}, { now = new Date() } = {}) {
   const relText = rel.length ? `Plant-wide early-release days (${rel.join(', ')}) are not counted.` : '';
   const list = result.actionList || []; const ew = result.earlyExitWarnings || [];
   const ded = list.filter((a) => a.action === 'deduction'); const warn = list.filter((a) => a.action !== 'deduction');
+  const chk = list.filter((a) => a.check_master_shift);
   const tot = result.actionTotals || {};
   const t = result.criteria?.thresholds || {};
   const copyTo = (p) => (p.group === 'Contract' ? [para([tr(`Copy to: ${p.department || ''} contractor`, { size: 19, it: true })], { before: 120 })] : []);
@@ -150,14 +161,14 @@ function buildDocx(result, run = {}, { now = new Date() } = {}) {
     ...draftMark,
     para([tr(`Late Coming & Early Exit – Action List, ${ML}`, { size: 30, bold: true })], { after: 60 }),
     para([tr(`Prepared ${today} · HR Department · For HR and Finance only – not for display`, { size: 18, color: '595959' })], { after: 160 }),
-    para([tr(`${people(list.length)}: ${ded.length} ${ded.length === 1 ? 'gets' : 'get'} a deduction note (${days(tot.deduction_days || 0)} in total, about ${inr(tot.indicative_amount)}), ${warn.length} ${warn.length === 1 ? 'gets' : 'get'} a warning note.`, { size: 21 })], { after: 80 }),
+    para([tr(`${people(list.length)}: ${ded.length} ${ded.length === 1 ? 'gets' : 'get'} a deduction note (${days(tot.deduction_days || 0)} in total, about ${inr(tot.indicative_amount)}), ${warn.length} ${warn.length === 1 ? 'gets' : 'get'} a warning note.${chk.length ? ` ${people(chk.length)} flagged "check master shift" – confirm the shift before issuing.` : ''}`, { size: 21 })], { after: 80 }),
     para([tr(`Deduction = workdays actually lost (late minutes + early-exit minutes ÷ shift length), rounded to the nearest ${t.rounding_step ?? 0.5} day, minimum ${t.min_deduction ?? 0.5} day. Mornings after the person stayed late the previous evening are not counted. ${relText} ₹ amounts are indicative (monthly gross ÷ days in month × days); payroll gives the final figure.`, { size: 18, color: '404040' })], { after: 120 }),
     table(['#', 'Code', 'Name', 'Department – Role', 'Late days', 'Early days', 'Time lost', 'Workdays lost', 'Action', 'Deduction', 'Indicative ₹', 'Remark'],
       list.map((p, i) => [{ v: i + 1, align: C }, { v: p.code, align: C }, { v: cleanName(p.name), bold: true }, `${p.department || ''} – ${p.designation || ''}`,
         { v: p.late_days, align: C }, { v: p.early_days, align: C }, hm(p.late_min + p.early_min), { v: Number(p.workdays_lost).toFixed(2), align: C },
         { v: p.action === 'deduction' ? 'Deduction note' : (p.newcomer ? 'Warning note (newcomer)' : 'Warning note'), fill: p.action === 'deduction' ? 'FCE4D6' : 'FFF2CC' },
         { v: p.deduction_days ? days(p.deduction_days) : '—', align: C, bold: true }, { v: p.indicative_amount ? inr(p.indicative_amount) : '—', align: R },
-        p.override ? `Override: ${p.override.reason}` : (p.remeasured ? 'Re-measured on the master shift' : '')])
+        p.override ? `Override: ${p.override.reason}` : p.check_master_shift ? 'Check master shift: leaves early almost daily, short of shift hours' : (p.remeasured ? `Re-measured on the master shift${p.hours_excused ? `; ${days(p.hours_excused)} not counted (full shift hours worked)` : ''}` : '')])
         .concat([['', '', { v: 'TOTAL', bold: true }, '', '', '', '', '', '', { v: days(tot.deduction_days || 0), align: C, bold: true }, { v: inr(tot.indicative_amount), align: R, bold: true }, '']]),
       [380, 680, 1750, 2750, 600, 600, 1150, 950, 1300, 950, 1050, 3450], 15, true),
     para([tr(`Early-exit ${optionC ? 'deductions and warnings' : 'warning notes'} (${people(ew.length)})`, { size: 24, bold: true })], { before: 240, after: 60 }),

@@ -38,14 +38,14 @@ def weekdays(y, m):
 
 def seed():
     c = sqlite3.connect(DB)
-    for n in range(1, 8):
+    for n in range(1, 9):
         c.execute("INSERT INTO employees(code,name,department,designation,company,status,employment_type,gross_salary,date_of_joining) "
                   "VALUES(?,?,'TEST DEPT','OPERATOR',?,'Active','Permanent',31000,'2024-01-01')", (f'T700{n}', f'TEST EMP {n}', C))
-    def day(code, iso, lm=0, em=0):
+    def day(code, iso, lm=0, em=0, it='08:00', ot='20:00'):
         c.execute("INSERT INTO attendance_processed(employee_code,date,status_original,status_final,in_time_final,out_time_final,shift_detected,"
                   "is_late_arrival,late_by_minutes,is_early_departure,early_by_minutes,is_left_late,month,year,company) "
-                  "VALUES(?,?,'P','P','08:00','20:00','12-Hour Shift',?,?,?,?,0,?,?,?)",
-                  (code, iso, 1 if lm else 0, lm, 1 if em else 0, em, int(iso[5:7]), int(iso[:4]), C))
+                  "VALUES(?,?,'P','P',?,?,'12-Hour Shift',?,?,?,?,0,?,?,?)",
+                  (code, iso, it, ot, 1 if lm else 0, lm, 1 if em else 0, em, int(iso[5:7]), int(iso[:4]), C))
     for i, iso in enumerate(weekdays(2026, 9)[:20]):
         day('T7001', iso, lm=40 if i < 10 else 0)
         for code in ('T7003', 'T7004', 'T7005', 'T7006', 'T7007'): day(code, iso, lm=60 if code == 'T7004' and i < 12 else 0)
@@ -56,6 +56,7 @@ def seed():
         day('T7003', iso, em=30 if i in (0, 1, 2, 8, 9) else 0)
         day('T7004', iso, lm=60 if i < 12 else 0, em=120 if rel else 0)
         for code in ('T7005', 'T7006', 'T7007'): day(code, iso, em=120 if rel else 0)
+        day('T7008', iso, em=60, it='07:00', ot='19:00')   # wrong shift: 'early' daily but full 12 h → shift check hides it
     c.commit(); c.close()
 
 
@@ -121,11 +122,17 @@ try:
         t4 = pg.locator('[data-section="Action list"] tbody tr', has_text='T7004').inner_text()
         check('edge: unticked → T7004 workdays lost 1.17 (release-day exit now counted)', True, '1.17' in t4)
         rel.check(); pg.wait_for_load_state('networkidle'); time.sleep(1)
+        sc = pg.locator('[data-section="Shift check — early exits (automatic)"]')
+        sc.locator('button').first.click(); time.sleep(.4)
+        row8 = sc.locator('tbody tr', has_text='T7008')
+        check('shift check lists T7008 as not shown (full hours worked)', True, row8.count() == 1 and 'Not shown' in row8.inner_text())
+        check('T7008 not on early-exit warnings or action list', False, 'T7008' in action_codes(pg) or pg.locator('[data-section="Early-exit warnings"] tbody tr', has_text='T7008').count() > 0)
 
         print('\n— admin: rules & exclusions —')
         pg.get_by_role('button', name='Rules & exclusions').click(); time.sleep(.8)
         cfg = pg.get_by_test_id('ar-config')
         check('config shows built-in defaults', True, cfg.get_by_text('built-in defaults').count() == 1)
+        check('shift check defaults to habitual', 'habitual', cfg.get_by_label('Early-exit shift check').input_value())
         cfg.get_by_label('Left out of everything — employee codes').fill('T7004')
         cfg.get_by_label('Effective from').fill('2026-10')
         cfg.get_by_role('button', name='Save as new version').click(); time.sleep(1.5)
@@ -137,6 +144,19 @@ try:
         cfg.get_by_label('act_workdays').fill('')
         cfg.get_by_role('button', name='Save as new version').click(); time.sleep(1.2)
         check('edge: blank threshold refused (still version 1)', True, cfg.get_by_text('version 1, effective 2026-10').count() == 1)
+        # full-hours excuse on a re-measure row: tolerance box only enabled when ticked; saved and read back
+        cfg.get_by_label('act_workdays').fill('0.9')
+        cfg.get_by_role('button', name='+ add re-measure').click()
+        cfg.get_by_label('Re-measure code').fill('T7005')
+        tol = cfg.get_by_label('Full hours tolerance')
+        check('full-hours tolerance disabled until ticked', True, tol.is_disabled())
+        cfg.get_by_label('Full hours excuse').check()
+        check('full-hours tolerance enabled once ticked, default 10', ['enabled', '10'], ['enabled' if tol.is_enabled() else 'disabled', tol.input_value()])
+        tol.fill('5')
+        cfg.get_by_role('button', name='Save as new version').click(); time.sleep(1.5)
+        check('re-measure with full-hours rule saved as version 2', True, cfg.get_by_text('version 2, effective 2026-10').count() == 1)
+        check('full-hours rule read back (ticked, 5 min)', [True, '5'], [cfg.get_by_label('Full hours excuse').is_checked(), cfg.get_by_label('Full hours tolerance').input_value()])
+        check('action list unchanged by the re-measure row', ['T7001', 'T7002'], action_codes(pg))
         pg.get_by_role('button', name='Hide rules & exclusions').click(); time.sleep(.3)
 
         print('\n— admin: generate draft, override, finalise —')
