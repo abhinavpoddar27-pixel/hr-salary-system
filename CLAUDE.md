@@ -13,7 +13,8 @@ built LOCALLY on d1ad7bf, NOT pushed (repo public — awaiting owner), NOT merge
   own flags, E row (exact rows updated, else copy of the in-force row with new flags, sales effective_to NULL), later rows
   updated, master flags + valid numbers, audit on the passed handle (stage `statutory_upload`, remark `batch:<id>`).
   Preview returns the planned freeze/effective/at-E/later row counts (= apply counts) for the RUNBOOK V10 check.
-  Undo file = before-values (flags in force at E) in the upload layout; blank numbers = unchanged.
+  Undo file = flags in force at E before the batch, in the upload layout; blank numbers = unchanged. NOT a full
+  restore: a later row whose flags differed before the batch ends at the E value; added numbers + extra rows stay.
 - **R10 single path:** employees.js (sync helper no longer touches pf/esi; POST/PUT/salary/bulk-import/integrity) ,
   salary-input.js approve (flags + pt + percents + pf_wage_ceiling from the row in force at effectiveFrom; YYYY-MM-DD
   validated; master gross only), salaryComputation.js 303–307 (auto-create lists lwf — ONLY change in that file),
@@ -35,6 +36,12 @@ built LOCALLY on d1ad7bf, NOT pushed (repo public — awaiting owner), NOT merge
   readers 3/3, guard flags every site PR-1 fixed on d1ad7bf). Deploy sim: old-schema DB + new boot ×2 → flags intact.
   `docs/statutory-flags/sim/run.py` (real server + logins + Chromium, synthetic throwaway DB): 58/58 — August
   byte-identical after the upload (plant + sales), Sep flags on, re-apply 0 changes, undo restores, drift 0 both.
+- **Independent review fixes (10 Oct, SHIP WITH FIXES):** (1) a structure write dated before an existing row → 409
+  STRUCTURE_DATED_LATER, nothing written (sales PUT gross / POST /structures, plant approve); same date → that row
+  updated in place, keeps its flags (planner ruling, owner to confirm). (2) An ESI number / UAN repeated in one file
+  is written for none. (3) Parser repeat check uses the matcher's company normalisation. (4) Undo wording fixed.
+  Suite 49 / 886, sim 68/68. Found, not fixed: plant compute reads gross from employees.gross_salary for EVERY month,
+  so an approval re-grosses earlier months on a re-run (pre-existing; OPEN_ITEMS).
 - **Not tested:** Railway; production data (the 125/139-row files); cross-process concurrency; Safari/Firefox.
   **Not pushed: repo public — owner makes it private, then pushes and opens the PR in the GitHub UI.**
 
