@@ -1,4 +1,5 @@
 import React, { useState, useMemo } from 'react'
+import { Link } from 'react-router-dom'
 import { useQuery, useMutation } from '@tanstack/react-query'
 import toast from 'react-hot-toast'
 import { fmtINR } from '../utils/formatters'
@@ -24,7 +25,9 @@ export default function SalaryInput() {
   const canFinance = canFinanceFn(user)
   const [filterDept, setFilterDept] = useState('')
   const [editEmployee, setEditEmployee] = useState(null)
-  const [editForm, setEditForm] = useState({ basic: 0, da: 0, hra: 0, conveyance: 0, other_allowances: 0, pf_applicable: 1, esi_applicable: 1 })
+  // PF / ESI / LWF are not part of a salary change (statutory flags PR-1, R10):
+  // the approval carries the flags in force; they change only via Statutory Flags.
+  const [editForm, setEditForm] = useState({ basic: 0, da: 0, hra: 0, conveyance: 0, other_allowances: 0 })
   const [reason, setReason] = useState('')
   const [tab, setTab] = useState('employees') // employees | pending | history
   // Reject-reason modal state for the new gated reject endpoint
@@ -100,8 +103,6 @@ export default function SalaryInput() {
       hra: emp.hra || 0,
       conveyance: emp.conveyance || 0,
       other_allowances: emp.other_allowances || 0,
-      pf_applicable: emp.pf_applicable ?? 1,
-      esi_applicable: emp.esi_applicable ?? 1,
     })
     setReason('')
   }
@@ -354,15 +355,20 @@ export default function SalaryInput() {
                   </div>
                 ))}
               </div>
-              <div className="flex gap-4">
-                <label className="flex items-center gap-2 text-sm">
-                  <input type="checkbox" checked={!!editForm.pf_applicable} onChange={e => setEditForm(prev => ({ ...prev, pf_applicable: e.target.checked ? 1 : 0 }))} className="rounded" />
+              <div className="flex flex-wrap items-center gap-4">
+                <label className="flex items-center gap-2 text-sm cursor-not-allowed" data-testid="ro-pf">
+                  <input type="checkbox" checked={!!editEmployee?.pf_applicable} readOnly disabled className="rounded" />
                   <Abbr code="PF">PF</Abbr> Applicable
                 </label>
-                <label className="flex items-center gap-2 text-sm">
-                  <input type="checkbox" checked={!!editForm.esi_applicable} onChange={e => setEditForm(prev => ({ ...prev, esi_applicable: e.target.checked ? 1 : 0 }))} className="rounded" />
+                <label className="flex items-center gap-2 text-sm cursor-not-allowed" data-testid="ro-esi">
+                  <input type="checkbox" checked={!!editEmployee?.esi_applicable} readOnly disabled className="rounded" />
                   <Abbr code="ESI">ESI</Abbr> Applicable
                 </label>
+                <label className="flex items-center gap-2 text-sm cursor-not-allowed" data-testid="ro-lwf">
+                  <input type="checkbox" checked={!!editEmployee?.lwf_applicable} readOnly disabled className="rounded" />
+                  LWF Applicable
+                </label>
+                <Link to="/admin/statutory-flags" className="text-xs text-blue-700 hover:underline">Change via Statutory Flags</Link>
               </div>
               <div className="bg-blue-50 p-3 rounded-xl border border-blue-200">
                 <span className="text-sm text-blue-700">New Gross: </span>

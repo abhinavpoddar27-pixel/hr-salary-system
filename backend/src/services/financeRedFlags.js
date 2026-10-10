@@ -88,16 +88,24 @@ function detectRedFlags(db, month, year) {
   } catch {}
 
   // 6. compliance_gap (WARNING)
+  // Reads the structure IN FORCE for the month (compute's lookup), not the
+  // latest row — after a statutory upload the latest row carries the new flags,
+  // which would flag every earlier month as "applicable but ₹0" (L19). ESI is
+  // only owed while monthly gross <= ₹21,000 (R1), so no flag above that.
   try {
     const rows = db.prepare(`
       SELECT sc.employee_code, e.name, e.department, sc.pf_employee, sc.esi_employee,
         ss.pf_applicable, ss.esi_applicable
       FROM salary_computations sc
       LEFT JOIN employees e ON sc.employee_code = e.code
-      LEFT JOIN salary_structures ss ON ss.employee_id = e.id
+      LEFT JOIN salary_structures ss ON ss.id = COALESCE(
+        (SELECT x.id FROM salary_structures x WHERE x.employee_id = e.id AND x.effective_from <= printf('%04d-%02d-01', sc.year, sc.month)
+          ORDER BY x.effective_from DESC, x.id DESC LIMIT 1),
+        (SELECT x.id FROM salary_structures x WHERE x.employee_id = e.id ORDER BY x.effective_from DESC, x.id DESC LIMIT 1)
+      )
       WHERE sc.month = ? AND sc.year = ?
-      AND ((ss.pf_applicable = 1 AND sc.pf_employee = 0) OR (ss.esi_applicable = 1 AND sc.esi_employee = 0))
-      AND ss.id = (SELECT id FROM salary_structures WHERE employee_id = e.id ORDER BY effective_from DESC LIMIT 1)
+      AND ((ss.pf_applicable = 1 AND sc.pf_employee = 0)
+           OR (ss.esi_applicable = 1 AND sc.esi_employee = 0 AND sc.gross_salary <= 21000))
     `).all(month, year);
     for (const r of rows) {
       const gap = r.pf_applicable && !r.pf_employee ? 'PF' : 'ESI';
