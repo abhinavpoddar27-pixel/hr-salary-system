@@ -14,7 +14,8 @@ independently, and keep the tracker current. You do not improvise scope: the mas
 3. Repo `docs/ux-bulk/PROMPT_TEMPLATE.md` — the builder prompt skeleton.
 4. Project docs for detail and history: `claude/ux-audit-10Oct2026.md`, `claude/bulk-entry-ideation-10Oct2026.md`,
    `claude/bulk-pr1-plan.md`, `claude/HANDOFF_wide_layout_10Oct2026.md`, `HANDOFF_attendance_review_10Oct2026.md`.
-   Project file `claude/ux-bulk/REGISTER.xlsx` (findings + PR status sheet).
+   Optional: the register spreadsheet `REGISTER_ux_bulk_10Oct2026.xlsx` if it is in the Project files (a sortable copy of
+   MASTER_PLAN §5.2 + §9; the plan stays the source of truth — keep status in PROGRESS.md).
 5. Repo `CLAUDE.md` — top 3 "Last Session" entries (what changed most recently, what is fragile).
 6. Your memory notes for this project (ways-of-working, overview) — they hold the bug workflow, fragile-file list,
    prompt standards and my standing preferences.

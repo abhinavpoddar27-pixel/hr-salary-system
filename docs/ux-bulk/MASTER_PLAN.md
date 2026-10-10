@@ -1,7 +1,7 @@
 # MASTER PLAN — UI/UX improvement + Bulk input (HR Salary System)
 **Version:** v1 · **Written:** Sat 10 Oct 2026, ~19:00 IST · **Base:** `origin/main a5aec9a` (after #78 wide layout, #79 ED finance-review UX)
 **Owner:** Abhinav Poddar (sole decision-maker) · **Planner:** the new Claude chat · **Builder:** Claude Code agent sessions
-**Companion files:** `docs/ux-bulk/PROGRESS.md` (live tracker + RESUME block) · `docs/ux-bulk/PROMPT_TEMPLATE.md` (builder prompt skeleton) · `docs/ux-bulk/REGISTER.xlsx` is in the Claude Project only (`claude/ux-bulk/REGISTER.xlsx`)
+**Companion files:** `docs/ux-bulk/PROGRESS.md` (live tracker + RESUME block) · `docs/ux-bulk/PROMPT_TEMPLATE.md` (builder prompt skeleton) · register spreadsheet `REGISTER_ux_bulk_10Oct2026.xlsx` (sent in chat; Abhinav may add it to the Project files) is a sortable copy of §5.2 + §9 — this file stays the source of truth
 **Repo is PUBLIC.** This file and everything committed must carry **no employee names, codes, bank/PAN data or per-person money**. Aggregates only. Personal data lives in the private Claude Project or the database.
 
 Tags used everywhere: **FACT** (checked in code or production, read-only) · **INFERENCE** (reasoned, not proven) · **OPINION** (recommendation) · **[V]** re-verified by hand · **[A]** found by an audit agent in code, not re-checked.
