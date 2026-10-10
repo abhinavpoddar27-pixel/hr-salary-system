@@ -346,15 +346,15 @@ export default function SalaryComputation() {
     foot: (rows) => sumOf(rows, r => r[field]) || '—',
   })
   const REG_COLS = [
-    { key: 'emp', label: 'Emp', sort: 'employee_name', views: R, pin: 'l', w: 280, edge: 'r',
+    { key: 'emp', label: 'Emp', sort: 'employee_name', views: R, pin: 'l', w: 232, edge: 'r',
       render: (s, expanded) => (
         <div className="flex items-start gap-1.5 min-w-0">
           <span className="pt-px"><DrillDownChevron isExpanded={expanded} /></span>
           <div className="min-w-0 flex-1 flex flex-wrap items-center gap-x-1.5 gap-y-0.5">
-            <span className="font-medium text-[12px] text-slate-800 truncate max-w-[150px]" title={s.employee_name || s.employee_code}>{s.employee_name || s.employee_code}</span>
+            <span className="font-medium text-[12px] text-slate-800 truncate max-w-[140px]" title={s.employee_name || s.employee_code}>{s.employee_name || s.employee_code}</span>
             <span className="text-[10px] text-slate-400 font-mono shrink-0">{s.employee_code}</span>
             {s.gross_changed ? (
-              <span className={clsx(pill, 'max-w-[150px] bg-blue-50 text-blue-700 border-blue-200')} title={`Gross changed: ${fmtINR(s.prev_month_gross)} → ${fmtINR(s.gross_salary)}`}>
+              <span className={clsx(pill, 'max-w-[190px] bg-blue-50 text-blue-700 border-blue-200')} title={`Gross changed: ${fmtINR(s.prev_month_gross)} → ${fmtINR(s.gross_salary)}`}>
                 Gross {fmtINR(s.prev_month_gross)} → {fmtINR(s.gross_salary)}
               </span>
             ) : null}
@@ -362,18 +362,18 @@ export default function SalaryComputation() {
               <span className={clsx(pill, 'bg-orange-50 text-orange-700 border-orange-200')} title="Returning — was previously marked as Left">Returning</span>
             ) : null}
             {isNewJoinerForPeriod(s) ? (
-              <span className={clsx(pill, 'max-w-[150px] bg-emerald-50 text-emerald-700 border-emerald-200')}
+              <span className={clsx(pill, 'max-w-[190px] bg-emerald-50 text-emerald-700 border-emerald-200')}
                 title={`New Joiner — DOJ ${fmtDOJ(s.date_of_joining)}${s.holidays_before_doj > 0 ? ` (${s.holidays_before_doj} holiday${s.holidays_before_doj > 1 ? 's' : ''} excluded)` : ''}`}>
                 New Joiner {fmtDOJ(s.date_of_joining)}{s.holidays_before_doj > 0 && ` (${s.holidays_before_doj} hol. excl.)`}
               </span>
             ) : null}
             {s.salary_held ? (
-              <span className={clsx(pill, 'max-w-[170px] bg-red-50 text-red-700 border-red-200')} title={`Held: ${s.hold_reason || ''}`} data-testid="held-reason">
+              <span className={clsx(pill, 'max-w-[190px] bg-red-50 text-red-700 border-red-200')} title={`Held: ${s.hold_reason || ''}`} data-testid="held-reason">
                 Held: {s.hold_reason}
               </span>
             ) : null}
             {s.finance_remark && !s.salary_held ? (
-              <span className={clsx(pill, 'max-w-[170px] bg-yellow-50 text-yellow-700 border-yellow-200')} title={s.finance_remark}>{s.finance_remark}</span>
+              <span className={clsx(pill, 'max-w-[190px] bg-yellow-50 text-yellow-700 border-yellow-200')} title={s.finance_remark}>{s.finance_remark}</span>
             ) : null}
           </div>
         </div>
@@ -382,15 +382,12 @@ export default function SalaryComputation() {
     },
     { key: 'dept', label: 'Dept', sort: 'department', views: R, tdCls: () => 'text-slate-500',
       render: (s) => (
-        <div className="flex items-center gap-1 min-w-0 max-w-[200px]">
+        <div className="flex items-center gap-1 min-w-0 max-w-[140px] min-[1900px]:max-w-[260px]">
           <span className="truncate" title={s.department || ''}>{s.department}</span>
           {isCont(s) ? <span className="shrink-0 text-[9px] px-1 py-0.5 rounded bg-amber-100 text-amber-700">CONT</span> : null}
         </div>
       ),
     },
-    { key: 'doj', label: 'DOJ', sort: 'date_of_joining', title: 'Date of Joining', views: A,
-      tdCls: () => 'text-slate-500 font-mono text-[10px] whitespace-nowrap', tdTitle: (s) => s.date_of_joining || '',
-      render: (s) => fmtDOJ(s.date_of_joining) },
     { key: 'days', label: 'Days', sort: 'payable_days', views: R, thCls: 'text-center',
       tdCls: () => 'text-center font-mono whitespace-nowrap',
       render: (s) => (
@@ -476,20 +473,20 @@ export default function SalaryComputation() {
       tdCls: (s) => clsx('font-mono whitespace-nowrap', muted(s.total_deductions, 'text-red-600'), s.salary_held && 'cell-caution'),
       tdTitle: heldTitle, render: (s) => fmtINR(s.total_deductions),
       footCls: 'font-mono whitespace-nowrap text-red-600', foot: (rows) => fmtINR(sumOf(rows, r => r.total_deductions)) },
-    { key: 'net', label: 'Net', sort: 'net_salary', views: R, pin: 'r', right: 328, w: 96, edge: 'l', pinCls: 'pin-net',
+    { key: 'net', label: 'Net', sort: 'net_salary', views: R, pin: 'r', w: 92, edge: 'l', pinCls: 'pin-net',
       title: 'Net = Gross Earned − Deductions (base only, no OT)', thCls: 'text-slate-600',
       tdCls: (s) => clsx('font-mono whitespace-nowrap', muted(s.net_salary, 'text-slate-700'), s.salary_held && 'cell-caution'),
       tdTitle: heldTitle, render: (s) => fmtINR(s.net_salary),
       footCls: 'font-mono whitespace-nowrap text-slate-700', footTitle: 'Held salaries are not included',
       foot: (rows) => fmtINR(sumOf(rows.filter(r => !r.salary_held), r => r.net_salary)) },
-    { key: 'take', label: 'Take Home', sort: 'take_home', views: R, pin: 'r', right: 224, w: 104, pinCls: 'pin-take',
+    { key: 'take', label: 'Take Home', sort: 'take_home', views: R, pin: 'r', w: 96, pinCls: 'pin-take',
       title: 'Take Home = Net + OT + Holiday Duty + ED (actual amount paid)', thCls: 'text-emerald-700',
       tdCls: (s) => clsx('font-bold font-mono whitespace-nowrap', muted(takeHomeOf(s), 'text-emerald-700'), s.salary_held && 'cell-caution'),
       tdTitle: heldTitle, render: (s) => fmtINR(takeHomeOf(s)),
       footCls: 'font-mono whitespace-nowrap text-emerald-700',
       footTitle: 'Held salaries are not included — equals the Take Home card when the filter is All',
       foot: (rows) => fmtINR(sumOf(rows.filter(r => !r.salary_held), takeHomeOf)) },
-    { key: 'status', label: '', views: R, pin: 'r', right: 104, w: 120,
+    { key: 'status', label: '', views: R, pin: 'r', w: 124,
       render: (s) => (
         s.is_finalised ? (
           <span className="badge-green text-xs">Final</span>
@@ -524,12 +521,9 @@ export default function SalaryComputation() {
           <span className="badge-yellow text-xs">Draft</span>
         )
       ) },
-    { key: 'actions', label: '', views: R, pin: 'r', right: 0, w: 104,
+    { key: 'actions', label: '', views: R, pin: 'r', w: 72,
       render: (s) => (
         <div className="flex items-center gap-0.5 whitespace-nowrap">
-          <button onClick={() => setShowDetails(showDetails === s.employee_code ? null : s.employee_code)} className="btn-ghost text-xs px-1 py-0.5 text-blue-600">
-            {showDetails === s.employee_code ? '▲' : '▼'}
-          </button>
           <button onClick={() => setPayslipEmployee(s.employee_code)} className="btn-ghost text-xs px-1 py-0.5 text-slate-500" title="Payslip">
             Slip
           </button>
@@ -542,6 +536,15 @@ export default function SalaryComputation() {
         </div>
       ) },
   ]
+  // Right-pinned offsets are summed from the widths of the pinned columns to
+  // their right, so changing one pinned width can never leave a gap/overlap.
+  {
+    let off = 0
+    for (let i = REG_COLS.length - 1; i >= 0; i--) {
+      const c = REG_COLS[i]
+      if (c.pin === 'r') { c.right = off; off += c.w }
+    }
+  }
   const regVisible = REG_COLS.filter(c => c.views.includes(regView))
   const pinProps = (c, part, extra) => ({
     className: clsx(
@@ -1007,6 +1010,13 @@ export default function SalaryComputation() {
                             <EmployeeQuickView
                               employeeCode={s.employee_code}
                               contextContent={
+                                <>
+                                <div className="mb-2 flex flex-wrap gap-x-4 gap-y-1 text-xs text-slate-600" data-testid="drilldown-doj">
+                                  <span>Date of joining: <strong className="font-mono text-slate-800">{fmtDOJ(s.date_of_joining)}</strong></span>
+                                  {isNewJoinerForPeriod(s) && (
+                                    <span className="text-emerald-700">New joiner this month{s.holidays_before_doj > 0 ? ` — ${s.holidays_before_doj} holiday${s.holidays_before_doj > 1 ? 's' : ''} before joining not paid` : ''}</span>
+                                  )}
+                                </div>
                                 <div className="grid grid-cols-2 gap-4 text-xs">
                                   <div>
                                     <p className="font-semibold mb-1 text-slate-600">Earnings</p>
@@ -1052,6 +1062,7 @@ export default function SalaryComputation() {
                                     )}
                                   </div>
                                 </div>
+                                </>
                               }
                             />
                             </div>

@@ -17,9 +17,10 @@ const fs = require('fs');
 const path = require('path');
 const S = require(path.join(__dirname, '..', 'src', 'services', 'attendanceReviewService'));
 
-const ROW_COLS = ['code', 'ym', 'worked_days', 'worked_units', 'sched_min', 'shift_h', 'shift_h_missing', 'late_raw', 'late_excused', 'lates', 'late_min',
-  'early_exits', 'early_min', 'early_long', 'department', 'designation', 'is_contractor', 'employment_type'];
-const NUM = new Set(ROW_COLS.slice(2, 14).concat(['is_contractor']));
+const SQL_COLS = ['code', 'ym', 'worked_days', 'worked_units', 'sched_min', 'shift_h', 'shift_h_missing', 'late_raw', 'late_excused', 'lates', 'late_min',
+  'early_exits', 'early_min', 'early_long', 'ms_days', 'early_short', 'early_short_min', 'early_short_long', 'early_wm_sum'];
+const ROW_COLS = [...SQL_COLS, 'department', 'designation', 'is_contractor', 'employment_type'];
+const NUM = new Set(SQL_COLS.slice(2).concat(['is_contractor']));
 
 function arg(name) { const i = process.argv.indexOf(name); return i > 0 ? process.argv[i + 1] : null; }
 const release = (arg('--release') || '').split(',').filter(Boolean);
@@ -29,7 +30,7 @@ function printSql(month, year, cfgPath) {
   const cfg = S.mergeConfig(readJson(cfgPath));
   const p = S.sqlParams(month, year, cfg, release, []);
   const inner = S.inlineParams(S.PERSON_MONTH_SQL, p);
-  const cols = ROW_COLS.slice(0, 14).map((c) => `COALESCE(q.${c},'')`).join("||'|'||");
+  const cols = SQL_COLS.map((c) => `COALESCE(q.${c},'')`).join("||'|'||");
   console.log('-- 1) person-month rows (page with LIMIT/OFFSET if needed)');
   console.log(`SELECT ${cols}||'|'||COALESCE(REPLACE(e.department,'|','/'),'')||'|'||COALESCE(REPLACE(e.designation,'|','/'),'')||'|'||COALESCE(e.is_contractor,0)||'|'||COALESCE(e.employment_type,'') AS r
 FROM (${inner.trim()}) q LEFT JOIN employees e ON e.id = (SELECT MIN(id) FROM employees WHERE code = q.code) ORDER BY q.code, q.ym;`);
