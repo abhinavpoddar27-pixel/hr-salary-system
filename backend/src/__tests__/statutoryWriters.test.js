@@ -270,31 +270,75 @@ describe('T9b — salary approval carries the in-force flags', () => {
   });
 });
 
-describe('T11b — back-dated plant approval does not leak the new flags into earlier months', () => {
-  test('effectiveFrom 2026-05-15 after the upload → May–Aug compute unchanged, Sep still ON; bad format → 400', async () => {
+const approve = (id, effectiveFrom) => api.request('PUT', `/api/salary-input/approve/${id}`, { as: 'fin1', body: { effectiveFrom } });
+const auditCount = (code) => db.prepare('SELECT COUNT(*) c FROM audit_log WHERE employee_code = ?').get(code).c;
+const NEW_SPLIT = { gross_salary: 18000, basic: 12000, hra: 3600, other_allowances: 2400 };
+
+describe('T11b — plant approval after the upload: back-dated refused, same-date in place, later-dated new row (10 Oct 2026 ruling)', () => {
+  test('effectiveFrom before the 2026-09-01 row → 409, nothing written (master + request included), May–Oct byte-identical; bad format → 400', async () => {
     const e = S.plant(db, { code: 'W133', gross_salary: 15000 });
     S.plantStructure(db, e, '2025-01-01', { gross_salary: 15000 });
-    for (const m of [5, 6, 7, 8, 9]) S.plantMonth(db, e, m, 2026);
-    const before = {};
-    for (const m of [5, 6, 7, 8]) before[m] = S.computePlant(db, e, m, 2026);
+    for (const m of [5, 6, 7, 8, 9, 10]) S.plantMonth(db, e, m, 2026);
     expect(S.applyFile(db, 'plant', S.plantFile(S.prow('W133', 1, 1, 1))).ok).toBe(true);
-    // gross unchanged so the comparison isolates the flags
-    const id = pendingRequest('W133', { gross_salary: 15000, basic: 7500, hra: 3000, other_allowances: 4500, pf_applicable: 1, esi_applicable: 1 });
-    const bad = await api.request('PUT', `/api/salary-input/approve/${id}`, { as: 'fin1', body: { effectiveFrom: '2026-5-15' } });
-    expect(bad.status).toBe(400);
-    expect((await api.request('PUT', `/api/salary-input/approve/${id}`, { as: 'fin1', body: { effectiveFrom: '15/05/2026' } })).status).toBe(400);
-    const ok = await api.request('PUT', `/api/salary-input/approve/${id}`, { as: 'fin1', body: { effectiveFrom: '2026-05-15' } });
-    expect(ok.status).toBe(200);
-    const may = S.plantRows(db, e).find((x) => x.effective_from === '2026-05-15');
-    expect(S.flags(may)).toEqual({ pf: 0, esi: 0, lwf: 0 });
-    for (const m of [6, 7, 8]) {
-      const after = S.computePlant(db, e, m, 2026);
-      expect({ pf: after.pf_employee, esi: after.esi_employee }).toEqual({ pf: before[m].pf_employee, esi: before[m].esi_employee });
-      expect(after.net_salary).toBeCloseTo(before[m].net_salary, 2);
+    const months = {};
+    for (const m of [5, 6, 7, 8, 9, 10]) months[m] = S.computePlant(db, e, m, 2026);
+    const rows = S.plantRows(db, e); const mst = S.master(db, e); const audits = auditCount('W133');
+    const id = pendingRequest('W133', NEW_SPLIT);
+    expect((await approve(id, '2026-5-15')).status).toBe(400);
+    expect((await approve(id, '15/05/2026')).status).toBe(400);
+    for (const d of ['2026-05-15', '2026-06-01', '2026-08-31']) {
+      const r = await approve(id, d);
+      expect(r.status).toBe(409);
+      expect(r.body).toMatchObject({ success: false, code: 'STRUCTURE_DATED_LATER', latestDate: '2026-09-01',
+        error: 'A salary structure dated 2026-09-01 already exists; date this change on or after 2026-09-01.' });
     }
+    expect(S.plantRows(db, e)).toEqual(rows);
+    expect(S.master(db, e)).toEqual(mst);
+    expect(auditCount('W133')).toBe(audits);
+    expect(db.prepare('SELECT status FROM salary_change_requests WHERE id = ?').get(id).status).toBe('Pending');
+    for (const m of [5, 6, 7, 8, 9, 10]) expect(S.computePlant(db, e, m, 2026)).toEqual(months[m]);
+  });
+
+  // Plant compute takes the stated gross from employees.gross_salary for every
+  // month (salaryComputation.js 'Priority: employees.gross_salary'), so an
+  // approval re-grosses earlier months on a re-run — pre-existing, not touched
+  // here. These two tests pin the structure rows and the flag-driven amounts.
+  test('effectiveFrom 2026-09-01 (= the upload row) → one row at that date, updated in place: components new, flags/pt/percents kept; September pays the new gross + split; earlier rows untouched, August PF/ESI unchanged', async () => {
+    const e = S.plant(db, { code: 'W136', gross_salary: 15000 });
+    S.plantStructure(db, e, '2025-01-01', { gross_salary: 15000, pt: 1, basic_percent: 47, pf_wage_ceiling: 15000 });
+    for (const m of [8, 9]) S.plantMonth(db, e, m, 2026);
+    expect(S.applyFile(db, 'plant', S.plantFile(S.prow('W136', 1, 1, 1))).ok).toBe(true);
+    const aug = S.computePlant(db, e, 8, 2026);
+    const earlier = S.plantRows(db, e).filter((x) => x.effective_from < '2026-09-01');
+    const n = S.plantRows(db, e).length;
+    const sepRow = S.plantRows(db, e).find((x) => x.effective_from === '2026-09-01');
+    const r = await approve(pendingRequest('W136', NEW_SPLIT), '2026-09-01');
+    expect(r.status).toBe(200);
+    const at = S.plantRows(db, e).filter((x) => x.effective_from === '2026-09-01');
+    expect(at).toHaveLength(1);
+    expect(S.plantRows(db, e)).toHaveLength(n);
+    expect(at[0]).toMatchObject({ id: sepRow.id, gross_salary: 18000, basic: 12000, da: 0, hra: 3600, conveyance: 0, special_allowance: 0, other_allowances: 2400,
+      pf_applicable: 1, esi_applicable: 1, lwf_applicable: 1, pt_applicable: sepRow.pt_applicable, basic_percent: sepRow.basic_percent, pf_wage_ceiling: sepRow.pf_wage_ceiling });
+    expect(S.master(db, e)).toMatchObject({ gross_salary: 18000, pf_applicable: 1, esi_applicable: 1, lwf_applicable: 1 });
     const sep = S.computePlant(db, e, 9, 2026);
+    expect(sep).toMatchObject({ gross_salary: 18000, basic_earned: 12000, hra_earned: 3600, pf_employee: 1440 });
     expect(sep.esi_employee).toBeGreaterThan(0);
-    expect(sep.pf_employee).toBeGreaterThan(0);
+    expect(S.plantRows(db, e).filter((x) => x.effective_from < '2026-09-01')).toEqual(earlier);
+    const aug2 = S.computePlant(db, e, 8, 2026);
+    expect({ pf: aug2.pf_employee, esi: aug2.esi_employee }).toEqual({ pf: aug.pf_employee, esi: aug.esi_employee });
+  });
+
+  test('effectiveFrom 2026-10-01 (after every row) → a new row with the in-force flags; October pays the new gross + split; the 2026-09-01 row untouched', async () => {
+    const e = S.plant(db, { code: 'W137', gross_salary: 15000 });
+    S.plantStructure(db, e, '2025-01-01', { gross_salary: 15000 });
+    for (const m of [9, 10]) S.plantMonth(db, e, m, 2026);
+    expect(S.applyFile(db, 'plant', S.plantFile(S.prow('W137', 1, 1, 1))).ok).toBe(true);
+    const sepRow = S.plantRows(db, e).find((x) => x.effective_from === '2026-09-01');
+    const r = await approve(pendingRequest('W137', NEW_SPLIT), '2026-10-01');
+    expect(r.status).toBe(200);
+    expect(S.plantRows(db, e).find((x) => x.effective_from === '2026-10-01')).toMatchObject({ gross_salary: 18000, basic: 12000, pf_applicable: 1, esi_applicable: 1, lwf_applicable: 1 });
+    expect(S.computePlant(db, e, 10, 2026)).toMatchObject({ gross_salary: 18000, basic_earned: 12000, hra_earned: 3600, pf_employee: 1440 });
+    expect(S.plantRows(db, e).find((x) => x.effective_from === '2026-09-01')).toEqual(sepRow);
   });
 });
 
@@ -373,38 +417,100 @@ describe('T9c — sales master writers keep the uploaded flags', () => {
   });
 });
 
-describe('T11 — back-dated sales gross edit after the upload', () => {
-  test('PUT /sales/employees/:code gross change effective_from=2026-05 → May–Aug recompute unchanged, Sep keeps the new flags', async () => {
+const salesAudits = (code) => db.prepare('SELECT COUNT(*) c FROM audit_log WHERE employee_code = ?').get(code).c;
+const putGross = (code, gross, from) => api.request('PUT', `/api/sales/employees/${code}?company=${co}`, { as: 'hr1', body: { gross_salary: gross, effective_from: from } });
+
+describe('T11 — sales gross edit after the upload: back-dated refused, same-date in place, later-dated new version (10 Oct 2026 ruling)', () => {
+  test('effective_from before the 2026-09 row → 409, nothing written (master + audit included), May–Oct byte-identical', async () => {
     const e = S.salesEmp(db, { code: 'Z210', gross_salary: 18000 });
     S.salesStructure(db, e, '2025-01', { gross_salary: 18000 });
-    const before = {};
-    for (const m of [5, 6, 7, 8]) before[m] = S.computeSales(db, e, m, 2026);
     expect(S.applyFile(db, 'sales', S.salesFile(S.srow('Z210', S.COMPANY, 1, 0, 1))).ok).toBe(true);
-    const r = await api.request('PUT', `/api/sales/employees/Z210?company=${co}`, { as: 'hr1', body: { gross_salary: 18500, effective_from: '2026-05' } });
-    expect(r.status).toBe(200);
-    const may = S.salesRows(db, e).find((x) => x.effective_from === '2026-05');
-    expect(S.flags(may)).toEqual({ pf: 0, esi: 0, lwf: 0 });
-    for (const m of [5, 6, 7, 8]) {
-      const after = S.computeSales(db, e, m, 2026);
-      expect(after.esi_employee).toBe(before[m].esi_employee);
-      expect(after.pf_employee).toBe(before[m].pf_employee);
-      expect(after.gross_monthly).toBe(18500); // the arrears edit itself still applies
+    const months = {};
+    for (const m of [5, 6, 7, 8, 9, 10]) months[m] = S.computeSales(db, e, m, 2026);
+    const rows = S.salesRows(db, e); const mst = S.salesMaster(db, e); const audits = salesAudits('Z210');
+    for (const f of ['2026-05', '2026-08']) {
+      const r = await putGross('Z210', 18500, f);
+      expect(r.status).toBe(409);
+      expect(r.body).toMatchObject({ success: false, code: 'STRUCTURE_DATED_LATER', latestDate: '2026-09',
+        error: 'A salary structure dated 2026-09 already exists; date this change on or after 2026-09.' });
     }
+    expect(S.salesRows(db, e)).toEqual(rows);
+    expect(S.salesMaster(db, e)).toEqual(mst);
+    expect(salesAudits('Z210')).toBe(audits);
+    for (const m of [5, 6, 7, 8, 9, 10]) expect(S.computeSales(db, e, m, 2026)).toEqual(months[m]);
+  });
+
+  test('effective_from 2026-09 (= the upload row) → that row updated in place (ON CONFLICT): gross + basic new, other components and flags kept; September pays the new gross + split; August byte-identical', async () => {
+    const e = S.salesEmp(db, { code: 'Z211', gross_salary: 18000 });
+    S.salesStructure(db, e, '2025-01', { gross_salary: 18000 });
+    expect(S.applyFile(db, 'sales', S.salesFile(S.srow('Z211', S.COMPANY, 1, 0, 1))).ok).toBe(true);
+    const aug = S.computeSales(db, e, 8, 2026);
+    const n = S.salesRows(db, e).length;
+    const sepRow = S.salesRows(db, e).find((x) => x.effective_from === '2026-09');
+    const r = await putGross('Z211', 20000, '2026-09');
+    expect(r.status).toBe(200);
+    const at = S.salesRows(db, e).filter((x) => x.effective_from === '2026-09');
+    expect(at).toHaveLength(1);
+    expect(S.salesRows(db, e)).toHaveLength(n);
+    const basic = 20000 - (sepRow.hra + sepRow.cca + sepRow.conveyance);
+    expect(at[0]).toMatchObject({ id: sepRow.id, gross_salary: 20000, basic, hra: sepRow.hra, cca: sepRow.cca, conveyance: sepRow.conveyance,
+      pf_applicable: 0, esi_applicable: 1, lwf_applicable: 1, effective_to: null });
     const sep = S.computeSales(db, e, 9, 2026);
+    expect(sep).toMatchObject({ gross_monthly: 20000, basic_monthly: basic, hra_monthly: sepRow.hra, cca_monthly: sepRow.cca, conveyance_monthly: sepRow.conveyance });
     expect(sep.esi_employee).toBeGreaterThan(0);
-    expect(SF.carryFlags(db, 'sales', e.id, '2026-09')).toEqual({ pf: 0, esi: 1, lwf: 1 });
+    expect(S.computeSales(db, e, 8, 2026)).toEqual(aug);
+  });
+
+  test('effective_from 2026-10 (after every row) → a new version with the in-force flags; October pays the new gross + split; September byte-identical', async () => {
+    const e = S.salesEmp(db, { code: 'Z212', gross_salary: 18000 });
+    S.salesStructure(db, e, '2025-01', { gross_salary: 18000 });
+    expect(S.applyFile(db, 'sales', S.salesFile(S.srow('Z212', S.COMPANY, 1, 0, 1))).ok).toBe(true);
+    const sep = S.computeSales(db, e, 9, 2026);
+    expect((await putGross('Z212', 20000, '2026-10')).status).toBe(200);
+    const oct = S.salesRows(db, e).find((x) => x.effective_from === '2026-10');
+    expect(oct).toMatchObject({ gross_salary: 20000, pf_applicable: 0, esi_applicable: 1, lwf_applicable: 1 });
+    expect(S.computeSales(db, e, 10, 2026)).toMatchObject({ gross_monthly: 20000, basic_monthly: oct.basic, hra_monthly: oct.hra });
+    expect(S.computeSales(db, e, 9, 2026)).toEqual(sep);
   });
 });
 
 describe('T18 (C3) — POST /sales/employees/:code/structures (the dynamic-insert exemption)', () => {
-  test('after an upload, body flags 1/1 at 2026-05 → stored flags = in force at 2026-05 (0/0/0); ignoredFields', async () => {
-    const e = uploadedSales('Z220');
+  test('no later row: body flags pf=1 esi=0 at 2026-05 → stored flags = in force at 2026-05 (esi on from 2025-01), not the body; ignoredFields', async () => {
+    const e = S.salesEmp(db, { code: 'Z220' });
+    S.salesStructure(db, e, '2025-01', { esi: 1 });
     const r = await api.request('POST', `/api/sales/employees/Z220/structures?company=${co}`, { as: 'hr1', body: {
-      effective_from: '2026-05', basic: 9000, gross_salary: 18000, pf_applicable: 1, esi_applicable: 1,
+      effective_from: '2026-05', basic: 9000, gross_salary: 18000, pf_applicable: 1, esi_applicable: 0,
     } });
     expect(r.status).toBe(201);
     expect(r.body.ignoredFields).toEqual(['pf_applicable', 'esi_applicable']);
-    expect(r.body.data).toMatchObject({ effective_from: '2026-05', pf_applicable: 0, esi_applicable: 0, lwf_applicable: 0 });
+    expect(r.body.data).toMatchObject({ effective_from: '2026-05', pf_applicable: 0, esi_applicable: 1, lwf_applicable: 0 });
+  });
+
+  test('after an upload, 2026-05 (before the 2026-09 row) → 409, nothing written', async () => {
+    const e = uploadedSales('Z223');
+    const rows = S.salesRows(db, e);
+    const r = await api.request('POST', `/api/sales/employees/Z223/structures?company=${co}`, { as: 'hr1', body: {
+      effective_from: '2026-05', basic: 9000, gross_salary: 18000, pf_applicable: 1,
+    } });
+    expect(r.status).toBe(409);
+    expect(r.body).toMatchObject({ code: 'STRUCTURE_DATED_LATER', latestDate: '2026-09', ignoredFields: ['pf_applicable'],
+      error: 'A salary structure dated 2026-09 already exists; date this change on or after 2026-09.' });
+    expect(S.salesRows(db, e)).toEqual(rows);
+  });
+
+  test('same date as an existing row (2026-09) → that row updated in place, keeps its own flags; 200 updatedInPlace', async () => {
+    const e = uploadedSales('Z224');
+    const before = S.salesRows(db, e);
+    const sepRow = before.find((x) => x.effective_from === '2026-09');
+    const r = await api.request('POST', `/api/sales/employees/Z224/structures?company=${co}`, { as: 'hr1', body: {
+      effective_from: '2026-09', basic: 11000, gross_salary: 20000, esi_applicable: 0, lwf_applicable: 0,
+    } });
+    expect(r.status).toBe(200);
+    expect(r.body).toMatchObject({ updatedInPlace: true, ignoredFields: ['esi_applicable', 'lwf_applicable'] });
+    const after = S.salesRows(db, e);
+    expect(after).toHaveLength(before.length);
+    expect(after.find((x) => x.effective_from === '2026-09')).toMatchObject({ id: sepRow.id, basic: 11000, gross_salary: 20000, hra: sepRow.hra,
+      pf_applicable: 0, esi_applicable: 1, lwf_applicable: 1 });
   });
 
   test('at 2026-11 (after E) → stored flags = the uploaded ones', async () => {

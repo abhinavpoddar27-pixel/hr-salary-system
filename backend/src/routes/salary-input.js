@@ -2,7 +2,7 @@ const express = require('express');
 const router = express.Router();
 const { getDb } = require('../database/db');
 const { requireHrOrAdmin, requireFinanceOrAdmin } = require('../middleware/roles');
-const { structureForDate } = require('../services/statutoryFlags');
+const { structureForDate, structureDatedAfter } = require('../services/statutoryFlags');
 
 // Statutory flags PR-1 (R10): PF / ESI / LWF change only through the statutory
 // upload. A salary change request never carries them; approval copies them
@@ -171,28 +171,47 @@ router.put('/approve/:id', requireFinanceOrAdmin, (req, res) => {
                 || (newBasic + newDa + newHra + newConv + newOther + newSpecial);
 
   const txn = db.transaction(() => {
-    // Flags, pt, the three percent columns and pf_wage_ceiling come from the
-    // row compute uses at the new row's own date (in force, else latest) —
-    // never from the request JSON and never a default. Read inside the
-    // transaction, before the insert.
-    const inForce = structureForDate(db, 'plant', emp.id, effectiveFrom) || {};
-    const carry = (col, dflt) => (inForce[col] === undefined || inForce[col] === null ? dflt : inForce[col]);
+    // A row dated after effectiveFrom would shadow the new one from its date
+    // on (compute reads the row in force) — refuse, nothing written, request
+    // stays Pending (10 Oct 2026 ruling, statutory flags PR-1 review).
+    const later = structureDatedAfter(db, 'plant', emp.id, effectiveFrom);
+    if (later) { const err = new Error(later.error); err.statutory = later; throw err; }
 
-    // Insert new salary structure WITH gross_salary so the latest-by-
-    // effective_from lookup returns a consistent figure.
-    db.prepare(`
-      INSERT INTO salary_structures (
-        employee_id, gross_salary, basic, da, hra, conveyance, special_allowance, other_allowances,
-        basic_percent, da_percent, hra_percent,
-        pf_applicable, esi_applicable, lwf_applicable, pt_applicable, pf_wage_ceiling, effective_from
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `).run(
-      emp.id, newGross, newBasic, newDa, newHra, newConv, newSpecial, newOther,
-      carry('basic_percent', 50), carry('da_percent', 0), carry('hra_percent', 20),
-      carry('pf_applicable', 0) ? 1 : 0, carry('esi_applicable', 0) ? 1 : 0, carry('lwf_applicable', 0) ? 1 : 0,
-      carry('pt_applicable', 1) ? 1 : 0, carry('pf_wage_ceiling', 15000),
-      effectiveFrom
-    );
+    const sameDate = db.prepare('SELECT id FROM salary_structures WHERE employee_id = ? AND effective_from = ?').all(emp.id, effectiveFrom);
+    if (sameDate.length) {
+      // A row already dated effectiveFrom: update its gross + components in
+      // place. It keeps its own flags, pt, percents and pf_wage_ceiling — a
+      // same-date twin would tie, and plant compute has no id tie-break.
+      db.prepare(`
+        UPDATE salary_structures SET
+          gross_salary = ?, basic = ?, da = ?, hra = ?, conveyance = ?, special_allowance = ?, other_allowances = ?,
+          updated_at = datetime('now')
+        WHERE employee_id = ? AND effective_from = ?
+      `).run(newGross, newBasic, newDa, newHra, newConv, newSpecial, newOther, emp.id, effectiveFrom);
+    } else {
+      // Flags, pt, the three percent columns and pf_wage_ceiling come from the
+      // row compute uses at the new row's own date (in force, else latest) —
+      // never from the request JSON and never a default. Read inside the
+      // transaction, before the insert.
+      const inForce = structureForDate(db, 'plant', emp.id, effectiveFrom) || {};
+      const carry = (col, dflt) => (inForce[col] === undefined || inForce[col] === null ? dflt : inForce[col]);
+
+      // Insert new salary structure WITH gross_salary so the latest-by-
+      // effective_from lookup returns a consistent figure.
+      db.prepare(`
+        INSERT INTO salary_structures (
+          employee_id, gross_salary, basic, da, hra, conveyance, special_allowance, other_allowances,
+          basic_percent, da_percent, hra_percent,
+          pf_applicable, esi_applicable, lwf_applicable, pt_applicable, pf_wage_ceiling, effective_from
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(
+        emp.id, newGross, newBasic, newDa, newHra, newConv, newSpecial, newOther,
+        carry('basic_percent', 50), carry('da_percent', 0), carry('hra_percent', 20),
+        carry('pf_applicable', 0) ? 1 : 0, carry('esi_applicable', 0) ? 1 : 0, carry('lwf_applicable', 0) ? 1 : 0,
+        carry('pt_applicable', 1) ? 1 : 0, carry('pf_wage_ceiling', 15000),
+        effectiveFrom
+      );
+    }
 
     // Sync employees.gross_salary so the master row agrees with the
     // just-approved structure. Flags are not touched (statutory upload only).
@@ -207,7 +226,12 @@ router.put('/approve/:id', requireFinanceOrAdmin, (req, res) => {
       WHERE id = ?
     `).run(approvedBy, id);
   });
-  txn();
+  try {
+    txn();
+  } catch (e) {
+    if (e.statutory) return res.status(e.statutory.status).json({ success: false, error: e.statutory.error, code: e.statutory.code, latestDate: e.statutory.latestDate });
+    throw e;
+  }
 
   res.json({ success: true, message: 'Salary change approved and applied' });
 });

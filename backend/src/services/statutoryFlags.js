@@ -165,6 +165,26 @@ function latestStructure(db, scope, empId) {
   return db.prepare(`SELECT * FROM ${struct} WHERE employee_id = ? ORDER BY effective_from DESC, id DESC LIMIT 1`).get(empId) || null;
 }
 
+/**
+ * A writer that adds a structure row for an existing employee dated `date`
+ * (plant 'YYYY-MM-DD', sales 'YYYY-MM') must not be shadowed by a later row:
+ * compute reads the row in force, so from that later date on the old
+ * components would be paid while the master shows the new salary.
+ * 10 Oct 2026 ruling (planner, after independent review): such a write is
+ * refused (409) and nothing is written; a row dated exactly `date` is updated
+ * in place and keeps its own flags. Returns null when no row is dated after
+ * `date`, else { status, code, latestDate, error }.
+ */
+function structureDatedAfter(db, scope, empId, date) {
+  const { struct } = scopeTables(scope);
+  const r = db.prepare(`SELECT effective_from FROM ${struct} WHERE employee_id = ? AND effective_from > ? ORDER BY effective_from DESC LIMIT 1`).get(empId, date);
+  if (!r) return null;
+  return {
+    status: 409, code: 'STRUCTURE_DATED_LATER', latestDate: r.effective_from,
+    error: `A salary structure dated ${r.effective_from} already exists; date this change on or after ${r.effective_from}.`,
+  };
+}
+
 const flagsOf = (r) => ({ esi: r.esi_applicable ? 1 : 0, pf: r.pf_applicable ? 1 : 0, lwf: r.lwf_applicable ? 1 : 0 });
 const sameFlags = (a, b) => FLAG_KEYS.every((k) => (a[k] ? 1 : 0) === (b[k] ? 1 : 0));
 
@@ -568,7 +588,7 @@ module.exports = {
   PLANT, SALES, FLAG_KEYS, FLAG_COL, ESI_THRESHOLD,
   normaliseHeader, parseYesNo, parseFlagFile, planFlagChanges,
   applyFlagChanges, buildUndoWorkbook, listBatches, sha256,
-  structureForDate, carryFlags, latestStructure, keysFor, monthKey, scopeTables,
+  structureForDate, carryFlags, latestStructure, structureDatedAfter, keysFor, monthKey, scopeTables,
   // internals exposed for tests and the write half
   _internal: { flagsOf, sameFlags, matchEmployee, DATE_RE, MONTH_RE },
 };

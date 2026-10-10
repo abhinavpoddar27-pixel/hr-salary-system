@@ -1112,7 +1112,7 @@ const UPDATABLE_FIELDS = [
 // statutory upload. PUT /employees/:code ignores them (returns ignoredFields);
 // POST /employees (create) may still set them on the new employee (§4.4).
 const STATUTORY_FLAG_FIELDS = ['pf_applicable', 'esi_applicable', 'lwf_applicable'];
-const { carryFlags } = require('../services/statutoryFlags');
+const { carryFlags, structureDatedAfter } = require('../services/statutoryFlags');
 
 const VALID_STATUSES = ['Active', 'Inactive', 'Left', 'Exited'];
 
@@ -1166,7 +1166,14 @@ function prevMonthYYYYMM(yyyymm) {
 // row is closed (effective_to = month before F) for history hygiene —
 // getLatestStructure keys on effective_from alone, so the new row already
 // wins; closing is descriptive only. Must run inside a db.transaction().
+// A row dated after F would shadow this one from its date on (compute reads
+// the row in force), so that case throws (err.statutory → 409) and the caller's
+// transaction rolls back, master included. A row dated exactly F is updated in
+// place by the ON CONFLICT below; its flags are the ones carryFlags reads at F,
+// i.e. that row's own (10 Oct 2026 ruling, statutory flags PR-1 review).
 function versionSalesStructureForGross(db, { employeeId, newGross, effectiveFrom, user }) {
+  const later = structureDatedAfter(db, 'sales', employeeId, effectiveFrom);
+  if (later) { const err = new Error(later.error); err.statutory = later; throw err; }
   const grossNum = Math.round((Number(newGross) || 0) * 100) / 100;
 
   // Carry components + flags forward from the current (most-recent) row.
@@ -1560,6 +1567,7 @@ router.put('/employees/:code', (req, res) => {
   try {
     applyUpdate();
   } catch (e) {
+    if (e.statutory) return res.status(e.statutory.status).json({ success: false, error: e.statutory.error, code: e.statutory.code, latestDate: e.statutory.latestDate });
     return res.status(500).json({ success: false, error: e.message });
   }
 
@@ -1629,8 +1637,11 @@ router.get('/employees/:code/structures', (req, res) => {
 });
 
 // ── POST /api/sales/employees/:code/structures?company=X ───────────
-// Phase 1: insert only. No supersede semantics (effective_to not auto-set
-// on prior row). Phase 3 will layer the effective-from supersede logic.
+// Inserts a version at effective_from. No supersede semantics (effective_to
+// not auto-set on prior row). Statutory flags PR-1 review (10 Oct 2026
+// ruling): a row dated after effective_from → 409, nothing written; a row
+// dated exactly effective_from → the supplied columns are updated in place on
+// that row and it keeps its own flags (200, updatedInPlace).
 router.post('/employees/:code/structures', (req, res) => {
   const company = requireCompany(req, res);
   if (!company) return;
@@ -1654,19 +1665,36 @@ router.post('/employees/:code/structures', (req, res) => {
   // Statutory flags PR-1 (R10): body flags are ignored; the new row carries
   // the flags in force at its own effective month (compute's lookup).
   const ignoredFields = STATUTORY_FLAG_FIELDS.filter((f) => body[f] !== undefined);
+  const withIgnored = (b) => (ignoredFields.length ? { ...b, ignoredFields } : b);
+
+  const later = structureDatedAfter(db, 'sales', emp.id, effectiveFrom);
+  if (later) return res.status(later.status).json(withIgnored({ success: false, error: later.error, code: later.code, latestDate: later.latestDate }));
+
+  const optional = [
+    'effective_to', 'basic', 'hra', 'cca', 'conveyance', 'gross_salary',
+    'pt_applicable',
+    'pf_wage_ceiling_override', 'notes'
+  ];
+  const supplied = optional.filter((f) => body[f] !== undefined);
+
+  const sameDate = db.prepare('SELECT id FROM sales_salary_structures WHERE employee_id = ? AND effective_from = ?').get(emp.id, effectiveFrom);
+  if (sameDate) {
+    // In place: only the supplied columns; this row keeps its own flags.
+    if (supplied.length) {
+      db.prepare(`UPDATE sales_salary_structures SET ${supplied.map((f) => `${f} = ?`).join(', ')} WHERE id = ?`)
+        .run(...supplied.map((f) => body[f]), sameDate.id);
+    }
+    const row = db.prepare('SELECT * FROM sales_salary_structures WHERE id = ?').get(sameDate.id);
+    return res.json(withIgnored({ success: true, data: row, updatedInPlace: true }));
+  }
+
   const carried = carryFlags(db, 'sales', emp.id, effectiveFrom);
 
   // Only include columns the caller actually supplied so SQLite DEFAULT
   // values apply for omitted fields — flags always listed (carried).
   const cols = ['employee_id', 'created_by', 'effective_from', 'pf_applicable', 'esi_applicable', 'lwf_applicable'];
   const values = [emp.id, user, effectiveFrom, carried.pf, carried.esi, carried.lwf];
-  const optional = [
-    'effective_to', 'basic', 'hra', 'cca', 'conveyance', 'gross_salary',
-    'pt_applicable',
-    'pf_wage_ceiling_override', 'notes'
-  ];
-  for (const f of optional) {
-    if (body[f] === undefined) continue;
+  for (const f of supplied) {
     cols.push(f);
     values.push(body[f]);
   }
