@@ -4,7 +4,7 @@
 - Branch: `fix/employee-edit-no-direct-gross` (base origin/main 0ea1409). Worktree /home/claude/wt-p1-25 only.
   Never push to main; never open/merge a PR; never write to production; never kill processes you did not start.
 - Spec: `docs/ux-bulk/prs/P1-25/PROMPT.md`. Plan: `docs/ux-bulk/prs/P1-25/PLAN.md`.
-- Current phase: **COMPLETE — handed off; waiting for the planner's independent review.** Do NOT open or merge a PR.
+- Current phase: **Review fixes (SHIP WITH FIXES, F1–F3) in progress.** Do NOT open or merge a PR.
 - Continue from the first step whose status is not `done`; never redo a done step.
 - Targets: `backend/src/routes/employees.js` PUT /:code only (+ new test, + new verify script, + test edits if Q1/Q2 OK).
   No frontend change (Edit modal never sends gross — PLAN). Server port 3125. Fictional data only (repo public).
@@ -21,7 +21,11 @@
 | 6 | verify script (port 3125) + `--base` on origin/main worktree | done | backend/scripts/employee-edit-gross-guard-check.js 22/22; --base on 0ea1409 worktree 7/7 (hr AND viewer move gross via PUT /:code, structure rescaled, no request; finance edit 200) |
 | 7 | self-debug + user-simulation pass; git diff --stat (salaryComputation.js untouched) | done | diff vs origin/main in backend+frontend = employees.js + 3 test files (+ script); no DO-NOT-MODIFY file, no frontend. User sim = exact Edit-modal body as hr/admin → 200. Found: finance sees the Edit button (page permission) → Save now 403 toast |
 | 8 | CLAUDE.md Last Session entry | done | prepended at top |
-| 9 | final push, HEAD == origin | done | this commit; verified with git ls-remote |
+| 9 | final push, HEAD == origin | done | 17004c4 |
+| 10 | F1 store the STORED gross on a same-value resend + F3 refuse changed basic/da/hra/conveyance/otherAllowances | done | Edit modal confirmed: never sends components. +12 tests (11 fail on 5042937; '15000.00 ' already OK there). statutoryWriters W103 re-sends zeros. 3 suites 97/97 |
+| 11 | F2 hide Edit / Edit Details for non hr/admin + dist (own commit) | todo | |
+| 12 | browser check finance/viewer/hr | todo | |
+| 13 | full jest + check script + CLAUDE.md + push | todo | |
 
 ## Rulings
-- GO 11 Oct 2026: Q1 yes (T9a resend same gross, T8b seed + resend), Q2 yes (viewer/finance → 403), Q3 yes (first gross refused), Q4 yes (admin no bypass). MONEY PR: stop and report after checks; planner runs independent review.
+- GO 11 Oct 2026: Q1 yes (T9a resend same gross, T8b seed + resend), Q2 yes (viewer/finance → 403), Q3 yes (first gross refused), Q4 yes (admin no bypass). Review 11 Oct: F1 write stored gross; F2 hide Edit buttons for non hr/admin; F3 components same rule (code SALARY_CHANGE_NEEDS_APPROVAL). MONEY PR: stop and report after checks; planner runs independent review.

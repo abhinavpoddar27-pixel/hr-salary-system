@@ -130,6 +130,63 @@ describe('ordinary edits still work', () => {
   });
 });
 
+describe('review F1 — a same-value gross writes the STORED value, not the sent text', () => {
+  test.each([['0x3A98'], [15000.009], ['15000.00 ']])('%p passes the check but the stored gross and structure stay exactly as they were', async (g) => {
+    const code = nextCode();
+    const id = addEmployee(code);
+    const beforeStructs = structs(id);
+    const r = await put(code, 'hr1', { gross_salary: g, name: 'RENAMED' });
+    expect(r.status).toBe(200);
+    const row = db.prepare('SELECT gross_salary, typeof(gross_salary) AS t, name FROM employees WHERE code = ?').get(code);
+    expect(row).toEqual({ gross_salary: 15000, t: 'real', name: 'RENAMED' });
+    expect(structs(id).map(s => [s.gross_salary, s.basic, s.hra])).toEqual(beforeStructs.map(s => [s.gross_salary, s.basic, s.hra]));
+  });
+
+  test("'' on an employee with no gross → stays NULL", async () => {
+    const code = nextCode();
+    addEmployee(code, null);
+    expect((await put(code, 'hr1', { gross_salary: '', name: 'RENAMED' })).status).toBe(200);
+    expect(db.prepare('SELECT gross_salary FROM employees WHERE code = ?').get(code).gross_salary).toBeNull();
+  });
+});
+
+describe('review F3 — salary components on PUT /:code follow the same rule', () => {
+  const compRow = (id) => db.prepare('SELECT basic, da, hra, conveyance, other_allowances FROM salary_structures WHERE employee_id = ? ORDER BY id DESC').get(id);
+
+  test.each([
+    [{ basic: 9000 }], [{ da: 500 }], [{ basic: 7500, hra: 4000 }], [{ basic: 7500, conveyance: 100 }],
+    [{ basic: 7500, otherAllowances: 50 }], [{ basic: 'abc' }],
+  ])('changed component %p → 400 SALARY_CHANGE_NEEDS_APPROVAL, nothing written', async (body) => {
+    const code = nextCode();
+    const id = addEmployee(code);
+    const before = snap(code, id);
+    const r = await put(code, 'boss', { name: 'RENAMED', ...body });
+    expect(r.status).toBe(400);
+    expect(r.body).toMatchObject({ success: false, code: 'SALARY_CHANGE_NEEDS_APPROVAL' });
+    expect(r.body.error).toMatch(/request a change/);
+    expect(snap(code, id)).toEqual(before);
+  });
+
+  test('same values re-sent (basic only, as a string) → 200; other components keep their values, not 0', async () => {
+    const code = nextCode();
+    const id = addEmployee(code);   // basic 7500, hra 3000
+    const before = compRow(id);
+    const r = await put(code, 'hr1', { name: 'RENAMED', basic: '7500.00' });
+    expect(r.status).toBe(200);
+    expect(compRow(id)).toEqual(before);
+    expect(before).toMatchObject({ basic: 7500, hra: 3000 });
+  });
+
+  test('employee with no structure: zeros re-sent → 200 (insert path), a non-zero basic → 400', async () => {
+    const code = nextCode();
+    const id = addEmployee(code, null);
+    expect((await put(code, 'hr1', { name: 'X', basic: 8000 })).status).toBe(400);
+    expect(structs(id)).toEqual([]);
+    expect((await put(code, 'hr1', { name: 'X', basic: 0, da: 0 })).status).toBe(200);
+    expect(compRow(id)).toMatchObject({ basic: 0, da: 0, hra: 0 });
+  });
+});
+
 describe('PUT /:code is hr + admin only', () => {
   test.each(['fin1', 'view1', 'sup1', 'emp1'])('%s plain name edit → 403, nothing written', async (who) => {
     const code = nextCode();

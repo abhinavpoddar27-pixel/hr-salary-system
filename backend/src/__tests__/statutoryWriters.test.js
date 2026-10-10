@@ -69,7 +69,10 @@ describe('T9a — plant master writers keep the uploaded flags', () => {
   test('PUT /employees/:code basic/da on an employee with no structure → inserted row carries the in-force flags (0 when none), not DEFAULT 1', async () => {
     const e = S.plant(db, { code: 'W103' });
     // basic/da alone hit the pre-existing "No updates" early return (not in allowedFields) — send a name too
-    await api.request('PUT', '/api/employees/W103', { as: 'boss', body: { name: 'SYNTH', basic: 8000, da: 0, hra: 2000 } });
+    // P1-25 (F3): a CHANGED component is refused on PUT /:code, so the same (0) values are re-sent —
+    // the insert path still runs and must carry the flags.
+    const r = await api.request('PUT', '/api/employees/W103', { as: 'boss', body: { name: 'SYNTH', basic: 0, da: 0, hra: 0 } });
+    expect(r.status).toBe(200);
     const rows = S.plantRows(db, e);
     expect(rows.length).toBe(1);
     expect(S.flags(rows[0])).toEqual({ pf: 0, esi: 0, lwf: 0 });
