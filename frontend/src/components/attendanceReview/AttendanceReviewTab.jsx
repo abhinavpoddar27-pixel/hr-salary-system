@@ -50,11 +50,11 @@ function Section({ title, count, defaultOpen = true, children, note }) {
 
 const QUALITY_ROWS = [
   ['no_master', 'No master shift — not assessed', 'Set the shift in the employee master.'],
-  ['night_on_day_master', 'Night work on a 9 / 10-hour master — not assessed', 'Night duty is only measured for 12-hour or night masters.'],
-  ['odd_punch', 'In-punch hours before the shift — not assessed', 'Usually a wrong master shift or a stray punch.'],
+  ['night_on_day_master', 'Night work on a 9 / 10-hour master — not assessed', 'Only 12-hour or night masters are measured at night.'],
+  ['odd_punch', 'In-punch hours before the shift — not assessed', 'Usually a wrong master or a stray punch.'],
   ['half_day', 'Half days — not checked for late / early', 'Already paid as half a day.'],
   ['gate_register', 'Miss-punch days fixed from the gate register — assessed with those times', ''],
-  ['out_not_verified', 'Of those, out written as exactly the shift end — "out not verified"', 'No early exit measured; the out excuses nothing. Ask the gate to write the real time.'],
+  ['out_not_verified', 'Of those, out written as exactly the shift end — "out not verified"', 'No early exit measured; excuses nothing. Gate must write the real time.'],
   ['gate_pass', 'Early exits reduced by a gate pass', ''],
   ['miss_punch_open', 'Miss-punch days not yet fixed — skipped', ''],
 ]
