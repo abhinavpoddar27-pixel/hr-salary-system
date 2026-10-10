@@ -3,7 +3,7 @@
 ## RESUME (re-read after any compaction)
 - Branch: `fix/stage5-grid-refresh` (base origin/main 2d96842). Never push to main; no PR open/merge.
 - Spec: `docs/ux-bulk/prs/P1-08/PROMPT.md`. Plan: `docs/ux-bulk/prs/P1-08/PLAN.md`.
-- Current phase: **BUILD (planner GO 10 Oct 2026).**
+- Current phase: **COMPLETE — handed off.** Do NOT open or merge a PR. Nothing to redo.
 - Continue from the first step whose status is not `done`. Never redo a done step.
 - Work only in /home/claude/wt-p1-08; other builders use other worktrees — never touch them. Server port 3108 only.
 - Only `frontend/src/pages/AttendanceRegister.jsx` (updateMutation + recalcMutation) may change in frontend/src
@@ -20,10 +20,10 @@
 | 4 | check script written | done | backend/scripts/stage5-grid-refresh-check.py — cases A–F, fictional T9801/T9802, weekday-aware days, port 3108 |
 | 5 | script on branch dist (incl. fast-save / 5 s cache case) | done | invalidate-only build: 30/31 — B FAILS (quick save 1.0 s after grid GET → cell stale: browser served the max-age=5 copy). Q1 proven → `fresh` added → **31/31** (A–F, 0 page/console errors, 0 API ≥ 400) |
 | 6 | `--base` on origin/main dist (worktree /tmp) | done | /tmp/p108-main @2d96842, fresh build: 5/5 — PUT 200, DB = P, cell still A after 3 s, P only after reload |
-| 7 | self-debug + user simulation + v2 | pending | |
-| 8 | jest after | pending | |
-| 9 | CLAUDE.md Last Session entry | pending | |
-| 10 | final push + HEAD == origin | pending | |
+| 7 | self-debug + user simulation + v2 | done | v1 script fixes (QuickView div.grid matched first → GRID selector; accordion → case C = switch employee; Sundays render grey → weekday-aware days; calendar hides grid heading → panel anchored on view toggle). Self-debug: only caller of getAttendanceRegister is this page; editRecord carries employee_code (ap.*). Informational: calendar opened < 5 s before a save stays stale (no `fresh` on getEmployeeDailyAttendance — outside Q1, reported). No source change for v2 |
+| 8 | jest after | done | 85 suites / 1377 pass |
+| 9 | CLAUDE.md Last Session entry | done | prepended at top |
+| 10 | final push + HEAD == origin | done | this commit; verified with ls-remote |
 
 ## Rulings
 - Programme "go" from owner 10 Oct 2026; planner approves Phase 0.
