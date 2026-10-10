@@ -12,7 +12,7 @@
 | # | Step | Status | Result / sha |
 |---|---|---|---|
 | 0 | Phase 0 plan + progress | done | 619e28d |
-| 1 | Source edit (FinanceAudit.jsx: props + Q1 path) | pending | |
+| 1 | Source edit (FinanceAudit.jsx: props + Q1 path) | done | 4 lines (+4/−4); e7b4aea |
 | 2 | dist rebuild (own commit) | pending | |
 | 3 | jest before/after | pending | |
 | 4 | check script written | pending | |
