@@ -49,4 +49,8 @@
 - Salary approvals write structure rows dated the approval day (e.g. 2026-09-06, 2026-09-11); plant compute
   only uses a row from the month after (`<= YYYY-MM-01`). Gross still comes from `employees.gross_salary`, but
   component splits lag a month. Pre-existing.
+- Plant compute takes the stated gross from `employees.gross_salary` for every month it computes (salaryComputation.js
+  'Priority: employees.gross_salary'), so after any approved gross change a re-run of an EARLIER month is paid at the
+  new gross (components re-scaled). Seen while testing review fix 1 (10 Oct 2026). Pre-existing; money logic in a
+  DO-NOT-MODIFY file, not touched. Owner: decide whether a historical re-run should read the dated structure's gross.
 - PF scope widening (EPF ceiling ₹25,000 from 17 Sep 2026, S.O. 5109(E)) — owner chose to keep the 6.

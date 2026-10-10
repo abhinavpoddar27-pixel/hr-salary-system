@@ -195,6 +195,12 @@ describe('C1b — R10: flags are assigned only on the pinned allowlist', () => {
     const sales = FILES.find((f) => f.rel === 'routes/sales.js').src;
     const put = sales.slice(sales.indexOf("router.put('/employees/:code',"), sales.indexOf("router.put('/employees/:code/mark-left'"));
     expect(put).toMatch(/if \(STATUTORY_FLAG_FIELDS\.includes\(field\)\) continue;/);
+    // POST /employees/:code/structures builds both its INSERT column list and its
+    // same-date in-place UPDATE SET (review fix 1) from `optional` — no flag there.
+    const post = sales.slice(sales.indexOf("router.post('/employees/:code/structures',"));
+    const optional = post.match(/const optional = \[([\s\S]*?)\];/)[1];
+    for (const c of FLAG_COLS) expect(optional.includes(`'${c}'`)).toBe(false);
+    expect(post).toMatch(/UPDATE sales_salary_structures SET \$\{supplied\.map/);
   });
 
   test('the scanner would catch a stray writer (self-check)', () => {
