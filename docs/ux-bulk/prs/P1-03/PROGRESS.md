@@ -29,3 +29,9 @@
 - [x] P1.7 self-debug + user simulation (cancel, lost-file re-open, month with no missing bank, phone): caught 2 harness
   bugs (company cleared at login → pick it in the page; month store rewritten → pick month in the page), 0 app bugs;
   CLAUDE.md Last Session entry; pushed. DONE — planner opens the PR.
+
+## Review fixes (reviewer: SHIP with Low-1 + Low-3; Low-2 preview/download race → register, NOT done here)
+- [x] R1 Low-1: `useRef` in-flight guard in `downloadNEFT` (early return if running; cleared in finally)
+- [x] R2 Low-3: button "Download NEFT (N people)"; duplicate "Total to export: ₹…" line removed
+- [ ] R3 dist rebuilt (own commit)
+- [ ] R4 browser check + double-click check (exactly 1 audit row), jest new file, push

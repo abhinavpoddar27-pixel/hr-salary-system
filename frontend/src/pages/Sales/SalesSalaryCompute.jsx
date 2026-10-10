@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react'
+import React, { useState, useMemo, useRef } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import toast from 'react-hot-toast'
@@ -117,6 +117,7 @@ export default function SalesSalaryCompute() {
   const [confirmRecompute, setConfirmRecompute] = useState(false)
   const [neftPreview, setNeftPreview] = useState(null)   // { missing, totals, filename } before download
   const [exportBusy, setExportBusy] = useState(false)
+  const neftInFlight = useRef(false)   // P1-03 review Low-1: one bank file per click, never two
   const [lastExcluded, setLastExcluded] = useState([])    // Phase 5 Bug A: surface excluded[] from compute response
   const [readinessExpanded, setReadinessExpanded] = useState(false)
 
@@ -241,6 +242,8 @@ export default function SalesSalaryCompute() {
   }
 
   const downloadNEFT = async () => {
+    if (neftInFlight.current) return
+    neftInFlight.current = true
     setExportBusy(true)
     try {
       const resp = await salesExportNEFT({
@@ -253,6 +256,7 @@ export default function SalesSalaryCompute() {
     } catch (err) {
       toast.error(err?.response?.data?.error || 'NEFT download failed')
     } finally {
+      neftInFlight.current = false
       setExportBusy(false)
     }
   }
@@ -676,7 +680,6 @@ export default function SalesSalaryCompute() {
               )}
               <div className="text-sm bg-slate-50 border border-slate-200 rounded p-3">
                 <div><strong>File:</strong> <span className="font-mono text-xs">{neftPreview.filename}</span></div>
-                <div><strong>Total to export:</strong> ₹{fmtINR(neftPreview.totals?.totalAmount)}</div>
               </div>
             </div>
             <div className="px-5 py-3 border-t border-slate-200 flex items-center justify-end gap-2">
@@ -689,7 +692,7 @@ export default function SalesSalaryCompute() {
                 onClick={downloadNEFT}
                 disabled={exportBusy || (neftPreview.totals?.count || 0) === 0}
                 className="px-3 py-1.5 text-sm rounded-lg bg-indigo-600 hover:bg-indigo-700 disabled:bg-slate-300 text-white">
-                {exportBusy ? 'Downloading…' : `Download NEFT (${neftPreview.totals?.count || 0} rows)`}
+                {exportBusy ? 'Downloading…' : `Download NEFT (${neftPreview.totals?.count || 0} people)`}
               </button>
             </div>
           </div>
