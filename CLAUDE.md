@@ -1,3 +1,30 @@
+## Last Session — 2026-10-10 (Statutory flags PR-2: plant LWF)
+**Plant LWF ₹5 employee / ₹20 employer per month. Branch `feat/lwf-deduction` (origin/main 66c6a08 merged in),
+NOT pushed, NOT merged.** Plan: `docs/statutory-flags/IMPL_PR2.md` (REVIEW CORRECTIONS C1–C5 binding); log + decisions D-7/D-8:
+`docs/statutory-flags/PROGRESS.md`. **Plant only (C1)** — sales compute/save/exports/UI are PR-2b (`feat/lwf-sales`, before 25 Oct).
+- **Rule (R7):** charged when the in-force structure row (the one compute already picks, fallback included) has
+  `lwf_applicable = 1` AND `gross_earned > 0`. Contractors on the list and held salaries are charged. Unflagged → 0/0, nothing else moves.
+- **Schema (additive):** `lwf_employee`, `lwf_employer REAL DEFAULT 0` on `salary_computations` + `sales_salary_computations`;
+  policy keys `lwf_employee_amount '5'`, `lwf_employer_amount '20'` (insert-if-missing, NOT force-reset; garbage/negative → 5/20);
+  AI-cache trigger DROP + CREATE in one transaction with the 29 old columns + the two LWF columns (L13).
+- **Compute (`salaryComputation.js`):** LWF after the ESI block and BEFORE `planStage7Loans`; `lwf_employee` passed in the
+  loan salary object; `+ lwfEmployee` in `totalDeductions` before the cap. UPSERT 56/56/56/53 → 58/58/58/55.
+  `loans/headroom.js`: `'lwf_employee'` in BOTH plant + sales PRIOR_DEDUCTION_COMPONENTS (loan stays last; sales inert until PR-2b).
+- **Outputs:** payslip line 'LWF (Employee)' + `lwfEmployer`; `/salary-register` totals; finance-audit `/report`; ai.js prompt;
+  register Excel 37 → 39 cols (LWF(EE)/LWF(ER) after ESI(ER); SUMMARY rows; CTC + LWF(ER)); slip Excel SUMMARY 19 → 20
+  (`SUMMARY_HEADER` drives SUMMARY_COLS and `CAUTION_COLS` = [16,17,18]); Stage 7 LWF column/tfoot/drill-down; dist rebuilt.
+- **Fragile:** (1) the employee LWF must stay in BOTH `total_deductions` and `headroom.js` or payslip and ledger disagree (N1).
+  (2) Employer LWF prints on payslips only when > 0 so unflagged payslips stay byte-identical (D-8). (3) Stage 7 table:
+  header/body/tfoot/DrillDownRow are all 25 cells now — a new column must touch all four. (4) If the deductions cap fires,
+  `lwf_employee` stays 5 while the total is capped (N5, same class as the 5 known capped rows). (5) VERIFY V11 = 10 components +
+  LWF; the loans §2 SQL gained the LWF term; `backend/scripts` componentShort stays 10-component (sim employees unflagged).
+- **Verified:** jest 60/1004 → 63/1036, two clean runs; new tests fail on the old code (schema 7/7, plant 14/18, outputs 7/7).
+  C3: `loans-stage7-simulation.js --dump` on a 66c6a08 worktree vs branch: 210 rows, 0 differences (LWF 0); sales sim
+  `--dump` 232 rows, 0 differences. C4 `docs/statutory-flags/sim/run_pr2.py` (real server, logins, upload, Stage 6/7, Excel):
+  25/25 — 8 flagged → 40/160, zero-gross 0, held + contractor charged, August byte-identical, drift/V11/V12 0; same flow on
+  66c6a08: every unflagged row identical, flagged rows differ only by ₹5. Payslip HTML check vs main 77/77.
+- **Not tested:** Railway; production data; a browser pass of the Stage 7 column (bundle grep only); sales LWF (PR-2b).
+
 ## Last Session — 2026-10-10 (Loans PR-9)
 **Loans PR-9: reports, payslip balance line, Finance Audit hooks, perquisite list, sales close tab. Branch `feat/loans-pr9`, NOT merged.**
 - **New `services/loans/reports.js` (read-only):** outstanding register (payroll → company → department), 12-month forecast

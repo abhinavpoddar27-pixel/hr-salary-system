@@ -9,7 +9,7 @@
 
 ## PR STATUS
 - PR-1 feat/statutory-flags — DONE: merged as PR #65 (merge 8b9561d, head a577c73), deployed; production post-merge checks passed 10 Oct 09:06 IST. Owner applies T4 (plant) / T5 (sales) on the live page.
-- PR-2 feat/lwf-deduction — PLANNED, BUILDING. Plan `docs/statutory-flags/IMPL_PR2.md` (REVIEW CORRECTIONS C1–C5 binding). Scope = PLANT LWF only (C1): schema (both tables' columns, policy keys, AI trigger), plant Stage 7 + loan headroom, plant payslip/readers/Excel/UI. Base 8b9561d. Owner releases plant September salaries today.
+- PR-2 feat/lwf-deduction — BUILT locally (plant LWF, C1): STEPs 1, 2, 4, 5, 6, 7 + C3 + C4 done; suite 63 / 1036; NOT pushed (coordinator pushes). Plan `docs/statutory-flags/IMPL_PR2.md`. Base 8b9561d + origin/main 66c6a08 merged (4363d64).
 - PR-2b feat/lwf-sales — NOT STARTED. Sales LWF compute/save/rebuild/totals/export/UI (IMPL_PR2 C1). Before the 25 Oct sales close.
 - PR-3 feat/statutory-filing — NOT STARTED
 
@@ -54,12 +54,14 @@
 - PR-2 STEP 6 — 13d1e35 `feat(lwf): LWF column + totals in Stage 7; employer LWF on payslip`. SalaryComputation.jsx: LWF th/td after ESI (sortable, '—' when 0, employer share in tooltip), tfoot total, drill-down 'LWF (Emp)'/'LWF (Empr)', payslip modal '| Employer LWF' only when > 0. DrillDownRow colSpan 22 → 25 = real body-row cell count (rows had 24 cells before LWF; header + tfoot had 23 — D-8). payslipPdf.js: `wlf` from the 'LWF' deductions line; employer line + '| Employer LWF' only when > 0. FinanceAudit.jsx: LWF line in the report row detail when > 0. dist rebuilt + committed in the same commit. Proof: bundle grep 'LWF (Emp)', 'LWF (Empr)', 'lwf_employee', colSpan:25 (SalaryComputation-D-Vfju47.js); 'Employer LWF' + includes("LWF") (payslipPdf-CnuA1dGI.js); lwfEmployee (FinanceAudit-DEqbdIQB.js). Payslip HTML byte check vs origin/main (backend/scripts/loans-payslip-html-check.mjs, run from a scratchpad copy because the script assumes a pre-PR-9 base that lacks the export; base import path also made `.js`): 77/77 — a payslip without LWF renders byte-identical HTML; a flagged one shows both lines.
 - PR-2 STEP 7 — b702d50 `docs(lwf): component check includes LWF`. Clean `rm -rf frontend/dist && npm run build` reproduces the committed dist byte-identically (git status clean → no dist commit). VERIFY.sql + V11 (10 components + lwf_employee within ₹1; expect only the 5 known capped rows) + V12 (September LWF rule; expect 0 rows). docs/loans/PROGRESS.md §2: both sums + COALESCE(lwf_employee,0) (N2) + note (sim scripts' componentShort stays 10-component; their employees are unflagged). V11/V12 run on the C4 sim DB — see C4.
 - PR-2 C3 (byte-identical for the unflagged, mandatory) — `git worktree add <scratch>/base 66c6a08` (backend/node_modules symlinked); `node backend/scripts/loans-stage7-simulation.js --dump` in both trees (script options unchanged on main): 210 rows each, python3 comparison ignoring lwf_employee/lwf_employer → **0 differences**; lwf_* = 0 on every branch row; drift 0, component-short 0 both. Extra (headroom.js sales array): `loans-sales-simulation.js --dump` both trees → 232 rows, **0 differences**, lwf_* all 0. Full-mode stage7 simulation on the branch (5 loans, re-run, reimport): ALL CHECKS PASSED, drift 0, component-short 0.
+- PR-2 C4 (simulation) — 62d9318 `test(lwf): PR-2 simulation - synthetic mirror of the plant September run`. docs/statutory-flags/sim/run_pr2.py + seed_pr2.js (PR-1 harness pattern: real server.js on a throwaway DATA_DIR, real logins, real upload preview → apply effective 2026-09, real Stage 6/7 over HTTP, HTTP outputs; no browser). Branch 25/25: N = 8 flagged with pay (incl. held F08, contractor F07) → 40 / 160; Z01 flagged zero-gross → row saved, 0/0; Z02 flagged, no Sep attendance → no row; U01–U05 unflagged 0/0; August re-run after the upload byte-identical; V5 drift / V11 / V12 (SQL read from VERIFY.sql) 0 rows; payslip, register totals (finance login), finance report, register Excel (39), slip Excel (20, held comments on 16/17/18). `--base` on the 66c6a08 worktree: 8/8; dump comparison → every unflagged row identical in every column (Aug + Sep, 6 Sep + 15 Aug rows), flagged Sep rows differ ONLY in total_deductions +5 and net_salary / total_payable / take_home −5.
+- PR-2 FINAL — full jest twice: 63 / 1036, 0 failures (baseline after merging main 60 / 1004; +3 suites / +32 tests). node --check clean on the 7 touched backend files. DO-NOT-MODIFY diff vs 66c6a08: 0 files (dayCalculation, statutoryFlags service/route, stage7, recompute, exportFormats, all PR-2b sales files, scripts, structure writers). UPSERT plant 58/58/58/55, sales 45/45/45/42. CLAUDE.md Section 0 entry prepended. NOT pushed (the coordinator pushes, C5).
 
 ## LAST STEP
-PR-2 C3 byte-identical check — 0 differences (plant 210, sales 232).
+PR-2 built: STEPs 1, 2, 4, 5, 6, 7 + C3 + C4 + CLAUDE.md. Local only, not pushed.
 
 ## NEXT STEP
-C4 — synthetic mirror of today's plant run on a throwaway DB; full jest ×2; CLAUDE.md entry.
+Coordinator: review, push feat/lwf-deduction, owner opens the PR in the GitHub UI and merges; deploy; then the owner computes plant September (VERIFY V4/V5/V11/V12 after Stage 7). PR-2b (sales LWF) before the 25 Oct sales close. Do NOT recompute sales September (D3).
 
 ## OWNER RULINGS ADDED DURING THE BUILD
 (record date + ruling; BUILD_PLAN §1 holds the original set)
@@ -128,6 +130,7 @@ C4 — synthetic mirror of today's plant run on a throwaway DB; full jest ×2; C
 - PR-2 STEP 5: routes/payroll.js (two Excel handlers), __tests__/lwfOutputs.test.js (O3)
 - PR-2 STEP 6: frontend/src/pages/SalaryComputation.jsx, frontend/src/utils/payslipPdf.js, frontend/src/pages/FinanceAudit.jsx, frontend/dist
 - PR-2 STEP 7: docs/statutory-flags/VERIFY.sql (V11, V12), docs/loans/PROGRESS.md (§2)
+- PR-2 C4: docs/statutory-flags/sim/run_pr2.py, seed_pr2.js (new); CLAUDE.md (Section 0 entry)
 
 ## FRAGILE-FILE EDITS (before / after)
 - PR-2 STEP 2 salaryComputation.js (lines on 66c6a08 = 8b9561d, file unchanged on main) —
@@ -241,3 +244,4 @@ PR-2 STEP 4: lwfOutputs 5/5; suites touching STEP 4 files 8 / 142 green.
 PR-2 STEP 5: lwfOutputs 7/7 (+ holdReleaseRoute, manualDeductionsRetired green).
 PR-2 STEP 6: npm run build OK; payslip HTML byte check 77/77.
 PR-2 STEP 7: dist clean rebuild byte-identical.
+PR-2 C4 sim: branch 25/25, base 8/8 + dump comparison clean. PR-2 final: 63 / 1036, 0 failures, 2 clean runs.
