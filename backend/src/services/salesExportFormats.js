@@ -17,6 +17,11 @@
  */
 
 const XLSX = require('xlsx');
+// Statutory flags PR-3 (generateSalesESIFile): the upload's own ESI number rule and flag
+// reader, the plant file's `missing` helpers, the sales cycle.
+const { carryFlags, monthKey, ESI_NUMBER_RE } = require('./statutoryFlags');
+const { missingRow, missingTotals } = require('./exportFormats');
+const { deriveCycle } = require('./cycleUtil');
 
 const MONTHS_SHORT = ['', 'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 
@@ -57,7 +62,7 @@ function generateSalesExcel(db, month, year, company) {
     'Total Days', 'Calendar Days', 'Earned Ratio',
     'Basic (Monthly)', 'HRA (Monthly)', 'CCA (Monthly)', 'Conveyance (Monthly)', 'Gross (Monthly)',
     'Basic (Earned)', 'HRA (Earned)', 'CCA (Earned)', 'Conveyance (Earned)', 'Gross (Earned)',
-    'PF Employee', 'ESI Employee', 'PT', 'TDS', 'Advance Recovery', 'Loan Recovery',
+    'PF Employee', 'ESI Employee', 'LWF Employee', 'PT', 'TDS', 'Advance Recovery', 'Loan Recovery',
     'Other Deductions', 'Total Deductions',
     'Diwali Bonus', 'Incentive', 'Net Salary',
     'Status', 'Bank Name', 'Account Number', 'IFSC',
@@ -69,6 +74,7 @@ function generateSalesExcel(db, month, year, company) {
   const totals = {
     gross_earned: 0, total_deductions: 0, net_salary: 0,
     incentive_amount: 0, diwali_bonus: 0,
+    lwf_employee: 0, lwf_employer: 0,
   };
 
   for (const r of rows) {
@@ -98,6 +104,7 @@ function generateSalesExcel(db, month, year, company) {
       round2(r.gross_earned),
       round2(r.pf_employee),
       round2(r.esi_employee),
+      round2(r.lwf_employee),
       round2(r.professional_tax),
       round2(r.tds),
       round2(r.advance_recovery),
@@ -118,6 +125,8 @@ function generateSalesExcel(db, month, year, company) {
     totals.net_salary += r.net_salary || 0;
     totals.incentive_amount += r.incentive_amount || 0;
     totals.diwali_bonus += r.diwali_bonus || 0;
+    totals.lwf_employee += r.lwf_employee || 0;
+    totals.lwf_employer += r.lwf_employer || 0;
   }
 
   Object.keys(totals).forEach(k => { totals[k] = round2(totals[k]); });
@@ -134,7 +143,7 @@ function generateSalesExcel(db, month, year, company) {
     { wch: 10 }, { wch: 10 }, { wch: 10 }, { wch: 10 }, { wch: 10 }, { wch: 10 }, { wch: 10 },
     { wch: 12 }, { wch: 12 }, { wch: 10 }, { wch: 12 }, { wch: 12 },
     { wch: 12 }, { wch: 12 }, { wch: 10 }, { wch: 12 }, { wch: 12 },
-    { wch: 10 }, { wch: 10 }, { wch: 8 }, { wch: 10 }, { wch: 12 }, { wch: 12 },
+    { wch: 10 }, { wch: 10 }, { wch: 8 }, { wch: 8 }, { wch: 10 }, { wch: 12 }, { wch: 12 },
     { wch: 14 }, { wch: 14 },
     { wch: 12 }, { wch: 10 }, { wch: 12 },
     { wch: 10 }, { wch: 18 }, { wch: 18 }, { wch: 12 },
@@ -374,9 +383,75 @@ function generateSalesTaDaNEFT(db, month, year, company, mode) {
   };
 }
 
+// ══════════════════════════════════════════════════════════════════════
+// generateSalesESIFile — ESI contribution file (statutory flags PR-3)
+// The plant generateESIFile line (IP | NAME | days | wages | IP contribution |
+// reason) and the same `missing` rule: no valid 10-digit IP number → listed
+// with what was due, never written. Sales specifics: days = total_days,
+// wages = gross_earned (the sales ESI base, E2); reason 1 = DOJ inside the
+// sales cycle (cycle_start_date..cycle_end_date, deriveCycle when NULL).
+// Rows: every contribution row, plus an employee whose in-force structure has
+// ESI on with gross_monthly ≤ the ESI threshold even when the month earned 0
+// (an IP still listed with 0 days, D-F6). The flag is read at file time; a
+// row with a contribution is always kept (N4). Hold rows are included.
+// Read-only: stamps nothing.
+// ══════════════════════════════════════════════════════════════════════
+function generateSalesESIFile(db, month, year, company) {
+  const thrRow = db.prepare("SELECT value FROM policy_config WHERE key = 'esi_threshold'").get();
+  const thrNum = thrRow ? parseFloat(thrRow.value) : NaN;
+  const threshold = Number.isFinite(thrNum) ? thrNum : 21000;   // as compute's getPolicyNumber
+  const key = monthKey('sales', `${year}-${String(month).padStart(2, '0')}`);
+  const cycle = deriveCycle(month, year);
+
+  const rows = db.prepare(`
+    SELECT c.employee_code, c.company, c.status, c.total_days, c.gross_monthly, c.gross_earned,
+           c.esi_employee, c.esi_employer, c.cycle_start_date, c.cycle_end_date,
+           e.id AS employee_id, e.name AS employee_name, e.esi_number, e.doj
+      FROM sales_salary_computations c
+ LEFT JOIN sales_employees e
+        ON e.code = c.employee_code AND e.company = c.company
+     WHERE c.month = ? AND c.year = ? AND c.company = ?
+  ORDER BY e.name ASC, c.employee_code ASC
+  `).all(month, year, company);
+
+  const employees = rows.filter((r) => (r.esi_employee || 0) + (r.esi_employer || 0) > 0
+    || (r.employee_id != null && carryFlags(db, 'sales', r.employee_id, key).esi === 1 && (r.gross_monthly || 0) <= threshold));
+
+  const lines = [];
+  const written = [];
+  const missing = [];
+  for (const r of employees) {
+    const ipNumber = (r.esi_number || '').replace(/\s/g, '');
+    if (!ESI_NUMBER_RE.test(ipNumber)) { missing.push(missingRow(r, r.esi_employee, r.esi_employer, ipNumber)); continue; }
+    written.push(r);
+    const name = (r.employee_name || '').toUpperCase().replace(/\|/g, ' ');
+    const start = r.cycle_start_date || cycle.start;
+    const end = r.cycle_end_date || cycle.end;
+    const doj = String(r.doj || '').slice(0, 10);
+    const reasonCode = /^\d{4}-\d{2}-\d{2}$/.test(doj) && doj >= start && doj <= end ? 1 : 0;
+    lines.push([ipNumber, name, Math.round(r.total_days || 0), Math.round(r.gross_earned || 0), Math.round(r.esi_employee || 0), reasonCode].join('|'));
+  }
+
+  return {
+    content: lines.join('\n'),
+    // the filename goes into a header: anything outside [A-Za-z0-9_.-] is dropped (N6)
+    filename: `Sales_ESI_${MONTHS_SHORT[month]}_${year}_${underscoreCompany(company).replace(/[^A-Za-z0-9_.-]/g, '')}.txt`,
+    employees: written,
+    missing,
+    totals: {
+      count: written.length,
+      totalWages: written.reduce((s, r) => s + Math.round(r.gross_earned || 0), 0),
+      totalEEESI: written.reduce((s, r) => s + Math.round(r.esi_employee || 0), 0),
+      totalERESI: written.reduce((s, r) => s + Math.round(r.esi_employer || 0), 0),
+      ...missingTotals(missing),
+    },
+  };
+}
+
 module.exports = {
   generateSalesExcel,
   generateSalesNEFT,
   generateSalesTaDaExcel,
   generateSalesTaDaNEFT,
+  generateSalesESIFile,
 };

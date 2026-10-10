@@ -2,14 +2,26 @@ const express = require('express');
 const router = express.Router();
 const XLSX = require('xlsx');
 const { getDb } = require('../database/db');
-const { generatePFECR, generateESIFile, generateBankFile } = require('../services/exportFormats');
+const { generatePFECR, generateESIFile, generateBankFile, missingCodesHeader } = require('../services/exportFormats');
+const { buildLwfRegister, lwfRegisterWorkbook } = require('../services/lwfRegister');
 
-// Role gate — HR / finance / admin may read the leave register.
+// Role gate — HR / finance / admin may read the leave register and (statutory flags PR-3,
+// owner ruling C4) every report here that serves UANs, ESI numbers or bank accounts:
+// /pf-statement, /esi-statement, /bank-transfer, /pf-ecr, /esi-contribution,
+// /bank-salary-file, /audit-trail (old/new field values), GET /company-config, /lwf-register.
 function requireHrFinanceOrAdmin(req, res, next) {
   const role = req.user?.role;
   if (role !== 'hr' && role !== 'finance' && role !== 'admin') {
     return res.status(403).json({ success: false, error: 'HR, finance, or admin access required' });
   }
+  next();
+}
+
+// Admin only (PR-3 review, D-16) — same raw-role check as above (JWT roles are normalised at login).
+// Kept local: importing middleware/roles pulls routes/auth → middleware/auth, which throws at load
+// without JWT_SECRET, and this router is also loaded standalone (docs/statutory-flags/sim/filing_identity.js).
+function requireAdmin(req, res, next) {
+  if (req.user?.role !== 'admin') return res.status(403).json({ success: false, error: 'Admin access required' });
   next();
 }
 
@@ -119,7 +131,7 @@ router.get('/overtime', (req, res) => {
 });
 
 // GET PF monthly statement
-router.get('/pf-statement', (req, res) => {
+router.get('/pf-statement', requireHrFinanceOrAdmin, (req, res) => {
   const db = getDb();
   const { month, year } = req.query;
 
@@ -148,7 +160,7 @@ router.get('/pf-statement', (req, res) => {
 });
 
 // GET ESI statement
-router.get('/esi-statement', (req, res) => {
+router.get('/esi-statement', requireHrFinanceOrAdmin, (req, res) => {
   const db = getDb();
   const { month, year } = req.query;
 
@@ -175,7 +187,7 @@ router.get('/esi-statement', (req, res) => {
 });
 
 // GET bank transfer sheet (NEFT)
-router.get('/bank-transfer', (req, res) => {
+router.get('/bank-transfer', requireHrFinanceOrAdmin, (req, res) => {
   const db = getDb();
   const { month, year, company } = req.query;
 
@@ -221,7 +233,7 @@ router.get('/headcount', (req, res) => {
 });
 
 // GET audit trail
-router.get('/audit-trail', (req, res) => {
+router.get('/audit-trail', requireHrFinanceOrAdmin, (req, res) => {
   const db = getDb();
   const { month, year, employeeCode, stage } = req.query;
 
@@ -240,12 +252,13 @@ router.get('/audit-trail', (req, res) => {
 });
 
 // GET PF ECR file (EPFO format)
-router.get('/pf-ecr', (req, res) => {
+router.get('/pf-ecr', requireHrFinanceOrAdmin, (req, res) => {
   const db = getDb();
   const { month, year, company, download } = req.query;
   if (!month || !year) return res.status(400).json({ success: false, error: 'month and year required' });
 
   const result = generatePFECR(db, parseInt(month), parseInt(year), company);
+  if (result.missing.length > 0) res.setHeader('X-Missing-UAN', missingCodesHeader(result.missing));
 
   if (download === 'true') {
     res.setHeader('Content-Type', 'text/plain');
@@ -253,16 +266,17 @@ router.get('/pf-ecr', (req, res) => {
     return res.send(result.content);
   }
 
-  res.json({ success: true, data: result.employees, totals: result.totals, filename: result.filename, month, year });
+  res.json({ success: true, data: result.employees, missing: result.missing, totals: result.totals, filename: result.filename, month, year });
 });
 
 // GET ESI contribution file (ESIC format)
-router.get('/esi-contribution', (req, res) => {
+router.get('/esi-contribution', requireHrFinanceOrAdmin, (req, res) => {
   const db = getDb();
   const { month, year, company, download } = req.query;
   if (!month || !year) return res.status(400).json({ success: false, error: 'month and year required' });
 
   const result = generateESIFile(db, parseInt(month), parseInt(year), company);
+  if (result.missing.length > 0) res.setHeader('X-Missing-ESI-Number', missingCodesHeader(result.missing));
 
   if (download === 'true') {
     res.setHeader('Content-Type', 'text/plain');
@@ -270,11 +284,11 @@ router.get('/esi-contribution', (req, res) => {
     return res.send(result.content);
   }
 
-  res.json({ success: true, data: result.employees, totals: result.totals, filename: result.filename, month, year });
+  res.json({ success: true, data: result.employees, missing: result.missing, totals: result.totals, filename: result.filename, month, year });
 });
 
 // GET bank salary upload file (PNB/generic CSV format)
-router.get('/bank-salary-file', (req, res) => {
+router.get('/bank-salary-file', requireHrFinanceOrAdmin, (req, res) => {
   const db = getDb();
   const { month, year, company, download } = req.query;
   if (!month || !year) return res.status(400).json({ success: false, error: 'month and year required' });
@@ -297,8 +311,28 @@ router.get('/bank-salary-file', (req, res) => {
   });
 });
 
+// GET LWF register (statutory flags PR-3) — plant + sales rows carrying LWF for the month, company
+// subtotals and a total, for the Punjab LWF remittance. Read-only.
+// ?month&year[&company][&download=xlsx]
+router.get('/lwf-register', requireHrFinanceOrAdmin, (req, res) => {
+  const month = parseInt(req.query.month, 10);
+  const year = parseInt(req.query.year, 10);
+  if (!month || month < 1 || month > 12 || !year) {
+    return res.status(400).json({ success: false, error: 'month (1–12) and year required' });
+  }
+  const company = String(req.query.company || '').trim() || null;
+  const reg = buildLwfRegister(getDb(), { month, year, company });
+  if (req.query.download === 'xlsx') {
+    const { buffer, filename } = lwfRegisterWorkbook(reg);
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+    return res.end(buffer);
+  }
+  res.json({ success: true, data: reg.rows, subtotals: reg.subtotals, totals: reg.totals, filename: reg.filename, month, year });
+});
+
 // GET company config (for export headers, PF/ESI codes)
-router.get('/company-config', (req, res) => {
+router.get('/company-config', requireHrFinanceOrAdmin, (req, res) => {
   const db = getDb();
   const { company } = req.query;
 
@@ -311,8 +345,10 @@ router.get('/company-config', (req, res) => {
   res.json({ success: true, data: configs });
 });
 
-// PUT company config
-router.put('/company-config/:id', (req, res) => {
+// PUT company config — admin only (statutory flags PR-3 review, D-16): these values head the
+// filing files (PF establishment / ESI codes, PAN / TAN, company bank account). No screen edits
+// them today; the company master in Settings (POST /settings/companies) is admin-only too.
+router.put('/company-config/:id', requireAdmin, (req, res) => {
   const db = getDb();
   const { id } = req.params;
   const fields = ['short_name', 'pf_establishment_code', 'esi_code', 'address_line1', 'address_line2',

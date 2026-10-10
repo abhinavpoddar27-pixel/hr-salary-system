@@ -20,6 +20,64 @@
 
 ---
 
+---
+
+## Last Session — 2026-10-10 (Statutory flags PR-3: filing files)
+**ECR / ESI files leave out rows without a valid UAN / ESI number and say who; sales ESI file; sales master ESI no. / UAN;
+LWF register; filing reports hr/finance/admin only. Branch `feat/statutory-filing` on origin/feat/lwf-sales dcad556 (PR #73
+open), NOT pushed.** Plan `docs/statutory-flags/IMPL_PR3.md` (C1–C7 binding); log + D-11…D-15: `docs/statutory-flags/PROGRESS.md`.
+- **Plant files (`exportFormats.js`):** UAN not 12 digits / ESI no. not 10 (spaces stripped) → row NOT written, listed in
+  `missing` {code, name, ee, er, none|malformed}; totals = written rows + missingCount/EE/ER. Line builders, SQL, order,
+  filenames and `generateBankFile` byte-unchanged (C2). `/pf-ecr`, `/esi-contribution` send `X-Missing-UAN` /
+  `X-Missing-ESI-Number` (codes sanitised) on JSON + download. **Rule: file only when missing = 0 (RUNBOOK T7).**
+- **C4 (`reports.js`):** `requireHrFinanceOrAdmin` on pf-ecr, esi-contribution, bank-salary-file, pf-statement, esi-statement,
+  bank-transfer, audit-trail, GET company-config, new lwf-register. Reports.jsx shows other roles a plain message.
+- **Sales:** `generateSalesESIFile` + `GET /api/sales/export/esi-contribution` (registered BEFORE `router.use(requireHrOrAdmin)`
+  with its own hr/finance/admin check — D-11; read-only). Master POST/PUT take `esi_number`/`uan` via `checkStatutoryNumbers`
+  (the upload's exported ESI_NUMBER_RE / UAN_RE / numberInUse; only a CHANGED value is checked — N2; 400 / 409 heldBy).
+- **LWF register (`services/lwfRegister.js`, Reports tab):** plant + sales LWF rows, company subtotals, total; plant rows
+  `capped`/`shortfall` (V11 sum − total) — the LWF due is listed even when the cap fired (M2).
+- **UI:** sales master inputs + "ESI no. missing" badge; `SalesEsiExportButton` (preview → "NOT in the file" modal → download);
+  Reports ECR/ESI missing panel + confirm + header re-check; LWF tab. Previews/downloads + sales master list send `fresh` (N7).
+- **Fragile:** (1) the PUT loop line `if (STATUTORY_FLAG_FIELDS.includes(field)) continue;` must stay verbatim (guard).
+  (2) Header filenames drop chars outside [A-Za-z0-9_.-] — an odd company name made setHeader throw (500). (3) The formats
+  themselves are PR-3b (ECR `#~#`, NCP undercount, ESIC template / reason codes) — due before 15 Nov. (4) VERIFY V15 (capped
+  LWF) / V16 (fix list) are new; PR-2b owns V13/V14.
+- **Verified:** jest 65/1076 → 69/1121 (after the review fixes + merge), two clean runs; new tests fail on dcad556 (plant 6/7, C4 11/12, sales 6/6, numbers
+  8/8 + F12 4/4). `sim/filing_identity.js` vs a dcad556 worktree: run 1 106/106 identical, run 2 79/79 (base − branch = the bad
+  rows = missing = header). Guard unedited 9/9. `sim/run_pr3.py` (real server + Chromium): 51/51. Clean dist rebuild identical.
+- **Review fixes:** PUT company-config admin only (D-16). **Not done:** PR-3b formats; Railway; production data.
+
+## Last Session — 2026-10-10 (Statutory flags PR-2b: sales LWF)
+**Sales LWF ₹5 employee / ₹20 employer per month. Branch `feat/lwf-sales` on origin/main ad96604 (no drift),
+NOT pushed, NOT merged.** Plan: `docs/statutory-flags/IMPL_PR2b.md` (REVIEW CORRECTIONS C1–C5 binding); log + decision D-9:
+`docs/statutory-flags/PROGRESS.md`. No schema change (columns + policy keys came with PR-2). Plant untouched.
+- **Rule (R7):** charged when the in-force sales structure (the row `getLatestStructure` picks, fallback included) has
+  `lwf_applicable = 1` AND `gross_earned > 0`. Held rows charged. Unflagged → 0/0, nothing else moves. Amounts via
+  `getPolicyNumber` (`'0'` → 0; garbage / negative / missing → 5/20, same as plant).
+- **Compute (`salesSalaryComputation.js`):** LWF after the ESI block; `lwf_employee` in the loan salary object (headroom.js
+  already lists it); `+ lwfEmployee` in total_deductions; identity `net = gross_earned + diwali_bonus + incentive − total`
+  unchanged (₹0 floor still only with a loan). UPSERT 45/45/45/42 → 47/47/47/44 (LWF appended last in all four lists).
+- **`sales.js` (3 hunks only):** `/salary-register` totals lwf_employee/lwf_employer; PUT `/salary/:id` loan salary object
+  + rebuild both carry `existing.lwf_employee`. **Outputs:** payslip line 'LWF (Employee)' + API-only `lwfEmployer` (E6);
+  sales register Excel 38 → 39 ('LWF Employee' at index 25, `!cols` 39, JSON totals); register UI LWF column + tfoot
+  (header = body = tfoot = 21); dist rebuilt.
+- **Fragile:** (1) sales LWF lives in FOUR places — compute total, compute loan object, PUT rebuild, PUT loan object (N1);
+  dropping the PUT loan term makes an edit re-plan the loan ₹5 above the cap (1000 vs 995, total 10005). (2) Any sales
+  compute rewrites every row of the active upload incl. finalized / paid / NEFT-exported ones (N2, N4): a September re-run
+  needs D3 first. (3) `paid` is terminal — no Other Deductions on paid rows (N3). (4) A tiny-gross flagged row with no
+  loan can go negative by ₹5 (N5, pinned by a test). (5) VERIFY V13 (sales components) / V14 (sales LWF rule, literal
+  October) are new; V12 now reads the policy amounts.
+- **Verified:** jest 64/1047 → 65/1076, two clean runs; lwfSales.test.js 29 (15 fail on the old compute file, 3 of 5 Q6 on
+  the old sales.js, O2/O4 3/3 on the old files). C3: `loans-sales-simulation.js --dump` 232 rows and
+  `loans-stage7-simulation.js --dump` 210 rows md5-identical on an ad96604 worktree and the branch. C4
+  `docs/statutory-flags/sim/run_pr2b.py`: 54/54 (6 flagged → 30/120 Sep + Oct, Aug byte-identical, 6A shape: paid + NEFT
+  row kept, warning −5, holds charged, V8/V13/V14 0 rows); `--base` 23/23; `--compare`: 18 unflagged rows identical,
+  12 flagged rows differ only by LWF. Clean dist rebuild byte-identical. Payslip HTML check (scratch copy) 107/107.
+- **Not tested:** Railway; production data (run V13 on production BEFORE deploy as the baseline); a browser pass of the
+  register column (bundle grep only). Do NOT recompute sales September until D3 is answered.
+
+
 ## Last Session — 2026-10-10 (Leave Management: employee search + Apply Leave never saved)
 **Branch `fix/leave-employee-search`, NOT merged.** Frontend only; no backend file changed.
 - **Ask:** type-to-search employee instead of a 300-row dropdown. New `components/shared/EmployeeSearchSelect.jsx`

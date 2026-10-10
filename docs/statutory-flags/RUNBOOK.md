@@ -131,9 +131,35 @@ Verify: `git log --oneline -1` shows the merge of the previous PR. Return: the S
   owner's choice. Chat then compares every row's
   net with the register's NET PAID (target: all within ₹1) and runs V7 + V8.
 - 6B (bank paid the app NEFT file): do not recompute September sales. Decide recovery separately.
+- Guard (PR-2b review, 10 Oct): any sales September recompute — 6A or a stray click — now also charges LWF ₹5 on the
+  139 flagged and ESI on the 57, on rows already NEFT-exported (187 of 230 on 10 Oct). Those rows are `computed`/`hold`,
+  not finalized/paid, so `finalizedRecomputeWarnings` stays EMPTY — do not rely on it. Before clicking: chat takes a
+  snapshot of every September net (code, net, neft_exported_at); after: chat diffs it. In 6A the drop is intended
+  (the register already deducted it); in 6B do not recompute at all. Never regenerate the September NEFT file.
 - Return: "sales 6A done" or "6B".
 
 ## T7 — Filing (after PR-3)
 - September (due 15 Oct 2026): file from the manual registers as usual (OPEN_ITEMS D5).
-- From October: ESI contribution files (plant + sales) and PF ECR from the Reports pages; the `missing`
-  list names everyone still without an ESI number / UAN.
+- **Rule: missing rows that carry a contribution (EE + ER > 0) must be 0 before filing; ₹0 rows are informational.**
+  A row without a valid identifier (UAN = 12 digits, ESI number = 10 digits, spaces ignored) is LEFT OUT of the file —
+  the portal never sees that contribution. The app shows who: an amber "NOT in the file" list with the EE / ER amounts,
+  a confirm before the download (only when someone with a contribution is missing), and the `X-Missing-UAN` /
+  `X-Missing-ESI-Number` header on the download (it names every missing row, ₹0 ones included). A ₹0 row — only the
+  sales ESI file has them: a rep with ESI on and no wages this cycle — is marked "₹0 due (informational)"; nothing is
+  owed for it, so it does not block filing (VERIFY V16 does not count it either). Fix the numbers, download again, and
+  file only when no row with a contribution is missing. PR-3b (OPEN_ITEMS) changes the line formats before the October filing (15 Nov) — until it lands,
+  check the files against the portal's template before uploading.
+- Where the files are (HR / finance / admin only — a viewer sees "HR, finance or admin only"):
+  - Plant PF ECR: Reports → **PF ECR File** → Download ECR (.txt) (`ECR_<Mon>_<YYYY>.txt`).
+  - Plant ESI: Reports → **ESI Contribution File** → Download ESI File (.txt) (`ESI_<Mon>_<YYYY>.txt`).
+    Both follow the company picked at the top (blank = both companies).
+  - Sales ESI: Sales → Salary Compute (the register) → **Export ESI** (`Sales_ESI_<Mon>_<YYYY>_<Company>.txt`); read-only,
+    stamps nothing. Finance gets it through the API only (`GET /api/sales/export/esi-contribution`) — the sales pages
+    are HR / admin. Sales has no ECR (sales PF is 0).
+  - LWF (Punjab remittance): Reports → **LWF Register** → Download (.xlsx) — plant + sales, company subtotals, total;
+    a plant row marked "Capped" still shows the ₹5 / ₹20 due (the shortfall is an employer cost, VERIFY V15).
+- Fix list: VERIFY V16 (rows with PF but no 12-digit UAN / ESI but no 10-digit ESI number, per payroll / month / company)
+  — run it on production before PR-3 deploys (a previously written non-12-digit UAN is now left out) and before each
+  filing. Plant numbers: re-upload the plant statutory file with the `esi_number` / `uan` columns (T4). Sales numbers:
+  Sales Employee Master → Edit → ESI number / UAN (same rules as the upload; a number already used by another sales
+  employee is refused), or the sales statutory file (T5).

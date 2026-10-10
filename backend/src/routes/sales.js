@@ -1096,6 +1096,46 @@ router.get('/ta-da/export/payslip/:code',
     }
   });
 
+// ── GET /api/sales/export/esi-contribution?month&year&company[&download=true] ──
+// Statutory flags PR-3: the sales ESI contribution file (generateSalesESIFile).
+// HR / finance / admin (owner ruling C4, same as the plant filing downloads), so it is
+// registered here — before router.use(requireHrOrAdmin) — with its own role check,
+// like the TA/DA exports above. Read-only: stamps nothing. Rows without a valid ESI
+// number are left out of the file, listed in `missing` and named in X-Missing-ESI-Number.
+router.get('/export/esi-contribution',
+  (req, res, next) => {
+    const r = normalizeRole(req.user?.role);
+    if (r === 'admin' || r === 'hr' || r === 'finance') return next();
+    return res.status(403).json({ success: false, error: 'HR, finance, or admin access required' });
+  },
+  (req, res) => {
+    const month = parseInt(req.query.month, 10);
+    const year = parseInt(req.query.year, 10);
+    const company = (req.query.company || '').trim();
+    const download = req.query.download === 'true';
+    if (!month || month < 1 || month > 12 || !year || !company) {
+      return res.status(400).json({ success: false, error: 'month (1–12), year, and company query params are required' });
+    }
+    const { generateSalesESIFile } = require('../services/salesExportFormats');
+    const { missingCodesHeader } = require('../services/exportFormats');
+    let result;
+    try {
+      result = generateSalesESIFile(getDb(), month, year, company);
+    } catch (e) {
+      return res.status(500).json({ success: false, error: `ESI file generation failed: ${e.message}` });
+    }
+    if (result.missing.length > 0) res.setHeader('X-Missing-ESI-Number', missingCodesHeader(result.missing));
+    if (download) {
+      res.setHeader('Content-Type', 'text/plain');
+      res.setHeader('Content-Disposition', `attachment; filename="${result.filename}"`);
+      return res.send(result.content);
+    }
+    res.json({
+      success: true,
+      data: { filename: result.filename, employees: result.employees, missing: result.missing, totals: result.totals },
+    });
+  });
+
 router.use(requireHrOrAdmin);
 
 const IMMUTABLE_FIELDS = new Set(['id', 'code', 'company', 'created_at', 'created_by']);
@@ -1107,6 +1147,7 @@ const UPDATABLE_FIELDS = [
   'designation', 'punch_no', 'working_hours',
   'gross_salary', 'pf_applicable', 'esi_applicable', 'lwf_applicable', 'pt_applicable',
   'bank_name', 'account_no', 'ifsc',
+  'esi_number', 'uan',
   'status',
   'predecessor_type', 'predecessor_id', 'predecessor_code'
 ];
@@ -1115,9 +1156,36 @@ const UPDATABLE_FIELDS = [
 // statutory upload. PUT /employees/:code ignores them (returns ignoredFields);
 // POST /employees (create) may still set them on the new employee (§4.4).
 const STATUTORY_FLAG_FIELDS = ['pf_applicable', 'esi_applicable', 'lwf_applicable'];
-const { carryFlags, structureDatedAfter } = require('../services/statutoryFlags');
+const { carryFlags, structureDatedAfter, ESI_NUMBER_RE, UAN_RE, numberInUse } = require('../services/statutoryFlags');
 // A structure row's effective_from taken from a request: YYYY-MM, month 01–12 only.
 const SALES_MONTH_RE = /^\d{4}-(0[1-9]|1[0-2])$/;
+
+// Statutory flags PR-3: the master's ESI number / UAN follow the statutory upload's rules
+// (ESI_NUMBER_RE, UAN_RE, numberInUse — exported from the service, not copied): spaces
+// stripped, '' → NULL, 10 / 12 digits, not held by another sales employee (any company,
+// N3). Checked only when the value CHANGES (normalised), so a legacy bad value never
+// blocks an unrelated edit (N2) — an unchanged value is dropped from the body. Runs before
+// any write; normalises body in place. Returns null, or { status, body } to send.
+function checkStatutoryNumbers(db, body, existing) {
+  const norm = (v) => (v === undefined ? undefined : (v === null ? null : (String(v).replace(/\s+/g, '') || null)));
+  const RULES = [
+    ['esi_number', ESI_NUMBER_RE, 'INVALID_ESI_NUMBER', 'ESI number must be 10 digits (spaces are ignored)', 'ESI number'],
+    ['uan', UAN_RE, 'INVALID_UAN', 'UAN must be 12 digits (spaces are ignored)', 'UAN'],
+  ];
+  for (const [col, re, code, message, label] of RULES) {
+    const v = norm(body[col]);
+    if (v === undefined) continue;
+    if (existing && v === norm(existing[col] ?? null)) { delete body[col]; continue; }
+    body[col] = v;
+    if (v === null) continue;
+    if (!re.test(v)) return { status: 400, body: { success: false, code, field: col, error: message } };
+    const heldBy = numberInUse(db, 'sales', col, v, existing?.id ?? -1);
+    if (heldBy) {
+      return { status: 409, body: { success: false, code: 'NUMBER_IN_USE', field: col, heldBy, error: `${label} ${v} is already used by sales employee ${heldBy}` } };
+    }
+  }
+  return null;
+}
 
 const VALID_STATUSES = ['Active', 'Inactive', 'Left', 'Exited'];
 
@@ -1349,6 +1417,10 @@ router.post('/employees', (req, res) => {
     return res.status(400).json({ success: false, error: 'doj must be YYYY-MM-DD with month 01–12 (it dates the salary structure)' });
   }
 
+  // PR-3: ESI number / UAN under the statutory upload's rules — before anything is written.
+  const numberRefusal = checkStatutoryNumbers(db, body, null);
+  if (numberRefusal) return res.status(numberRefusal.status).json(numberRefusal.body);
+
   const explicitCode = body.code && String(body.code).trim() !== ''
     ? String(body.code).trim()
     : null;
@@ -1484,6 +1556,10 @@ router.put('/employees/:code', (req, res) => {
   if (body.status !== undefined && !VALID_STATUSES.includes(body.status)) {
     return res.status(400).json({ success: false, error: `Invalid status. Must be one of: ${VALID_STATUSES.join(', ')}` });
   }
+
+  // PR-3: ESI number / UAN under the statutory upload's rules (only when changed) — before any write.
+  const numberRefusal = checkStatutoryNumbers(db, body, existing);
+  if (numberRefusal) return res.status(numberRefusal.status).json(numberRefusal.body);
 
   const setClauses = [];
   const params = [];
@@ -2940,7 +3016,9 @@ router.get('/salary-register', (req, res) => {
     net_salary: acc.net_salary + (r.net_salary || 0),
     incentive_amount: acc.incentive_amount + (r.incentive_amount || 0),
     diwali_bonus: acc.diwali_bonus + (r.diwali_bonus || 0),
-  }), { gross_earned: 0, total_deductions: 0, net_salary: 0, incentive_amount: 0, diwali_bonus: 0 });
+    lwf_employee: acc.lwf_employee + (r.lwf_employee || 0),
+    lwf_employer: acc.lwf_employer + (r.lwf_employer || 0),
+  }), { gross_earned: 0, total_deductions: 0, net_salary: 0, incentive_amount: 0, diwali_bonus: 0, lwf_employee: 0, lwf_employer: 0 });
 
   const round2 = (n) => Math.round(n * 100) / 100;
   Object.keys(totals).forEach(k => totals[k] = round2(totals[k]));
@@ -3007,17 +3085,17 @@ router.put('/salary/:id', (req, res) => {
         salary: {
           gross_earned: existing.gross_earned, pf_employee: existing.pf_employee, esi_employee: existing.esi_employee,
           professional_tax: existing.professional_tax, tds: existing.tds, advance_recovery: existing.advance_recovery,
-          diwali_recovery: 0, other_deductions: otherDed,
+          diwali_recovery: 0, other_deductions: otherDed, lwf_employee: existing.lwf_employee || 0,
         },
       });
       if (!loanPlan.skipped) loanRecovery = loanPlan.totalRupees;
     }
-    // Rebuild total_deductions from the non-editable components + loan + other_deductions.
-    // (diwali_recovery is 0 per Q5 reversal — not in the sum.)
+    // Rebuild total_deductions from the non-editable components (incl. LWF(EE), statutory
+    // flags PR-2b) + loan + other_deductions. (diwali_recovery is 0 per Q5 reversal — not in the sum.)
     const fixedDeductions =
       (existing.pf_employee || 0) + (existing.esi_employee || 0) +
       (existing.professional_tax || 0) + (existing.tds || 0) +
-      (existing.advance_recovery || 0) + loanRecovery;
+      (existing.advance_recovery || 0) + (existing.lwf_employee || 0) + loanRecovery;
     newTotalDed = Math.round((fixedDeductions + otherDed) * 100) / 100;
     newNetSalary = salesNetWithLoanFloor((existing.gross_earned || 0) + diwaliBonus + incentive - newTotalDed, loanRecovery);
 
