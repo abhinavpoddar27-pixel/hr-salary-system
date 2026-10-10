@@ -81,10 +81,46 @@ router.put('/config', (req, res) => {
   if (errs.length) return res.status(400).json({ success: false, error: 'Invalid config', details: errs });
   const db = getDb();
   const prev = svc.loadConfig(db, ef);
-  const json = JSON.stringify(config);
+  const json = JSON.stringify(svc.toStoredConfig(config));   // older code / department lists are kept as standing rules
   const info = db.prepare('INSERT INTO attendance_review_config (effective_from, config_json, updated_by) VALUES (?, ?, ?)').run(ef, json, user(req));
   logAudit('attendance_review_config', info.lastInsertRowid, 'config_json', prev.source ? `v${prev.source.id}` : 'defaults', json, 'ATTENDANCE_REVIEW_CONFIG', `effective ${ef}`, user(req));
   res.json({ success: true, data: { id: info.lastInsertRowid, effective_from: ef } });
+});
+
+// POST /suggestions { month, year, accept:[key], dismiss:[key], releaseDays?, overrides? }
+// Applies the month's suggestions as ONE new rules version effective that month. Refused (409) when a later-effective version
+// exists, so a change for September never silently loses to (or overrides) an October version. Nothing payroll is written.
+router.post('/suggestions', (req, res) => {
+  const body = req.body || {};
+  const my = parseMonth(body); if (!my) return res.status(400).json({ success: false, error: 'month and year required' });
+  const accept = Array.isArray(body.accept) ? body.accept.map(String) : [];
+  const dismiss = Array.isArray(body.dismiss) ? body.dismiss.map(String) : [];
+  if (!accept.length && !dismiss.length) return res.status(400).json({ success: false, error: 'Nothing to apply — tick a suggestion first' });
+  const both = accept.filter((k) => dismiss.includes(k));
+  if (both.length) return res.status(400).json({ success: false, error: `Accepted and dismissed at once: ${both.join(', ')}` });
+  const rd = parseReleaseDays(body.releaseDays, my.month, my.year); if (rd.error) return res.status(400).json({ success: false, error: rd.error });
+  const db = getDb();
+  const ym = `${my.year}-${String(my.month).padStart(2, '0')}`;
+  const later = db.prepare('SELECT id, effective_from FROM attendance_review_config WHERE effective_from > ? ORDER BY effective_from LIMIT 1').get(ym);
+  if (later) return res.status(409).json({ success: false, error: `A later rules version (v${later.id}, effective ${later.effective_from}) exists — open that month to apply suggestions` });
+  try {
+    const row = db.prepare('SELECT id, config_json FROM attendance_review_config WHERE effective_from <= ? ORDER BY effective_from DESC, id DESC LIMIT 1').get(ym);
+    let stored = {}; if (row) { try { stored = JSON.parse(row.config_json); } catch { stored = {}; } }
+    const { config } = svc.loadConfig(db, ym);
+    const result = svc.computeAttendanceReview(db, { ...my, config, releaseDays: rd.list, prevReleaseDays: prevReleaseDays(db, my.month, my.year), overrides: [] });
+    const out = svc.applySuggestions(stored, result.suggestions, { accept, dismiss, by: user(req) });
+    if (out.unknown.length) return res.status(409).json({ success: false, error: 'Some suggestions are no longer shown (already applied or changed) — refresh and try again', details: out.unknown });
+    const errs = svc.validateConfig(out.config);
+    if (errs.length) return res.status(400).json({ success: false, error: 'Invalid config', details: errs });
+    const json = JSON.stringify(out.config);
+    const info = db.prepare('INSERT INTO attendance_review_config (effective_from, config_json, updated_by) VALUES (?, ?, ?)').run(ym, json, user(req));
+    logAudit('attendance_review_config', info.lastInsertRowid, 'config_json', row ? `v${row.id}` : 'defaults', json, 'ATTENDANCE_REVIEW_SUGGESTIONS',
+      `effective ${ym}; accepted ${accept.join(', ') || '-'}; dismissed ${dismiss.join(', ') || '-'}`, user(req));
+    res.json({ success: true, data: { id: info.lastInsertRowid, effective_from: ym, accepted: accept.length, dismissed: dismiss.length } });
+  } catch (err) {
+    console.error('Attendance review suggestions error:', err.message);
+    res.status(500).json({ success: false, error: 'Failed to apply suggestions: ' + err.message });
+  }
 });
 
 // POST /runs { month, year, releaseDays[], overrides[] } — create or regenerate the month's DRAFT

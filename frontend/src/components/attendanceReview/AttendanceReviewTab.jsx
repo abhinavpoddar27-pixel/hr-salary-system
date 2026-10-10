@@ -5,7 +5,7 @@ import toast from 'react-hot-toast'
 import clsx from 'clsx'
 import {
   attendanceReviewPreview, attendanceReviewRuns, attendanceReviewRun,
-  attendanceReviewGenerate, attendanceReviewFinalise, attendanceReviewExport,
+  attendanceReviewGenerate, attendanceReviewFinalise, attendanceReviewExport, attendanceReviewApplySuggestions,
 } from '../../utils/api'
 import AttendanceReviewConfig from './AttendanceReviewConfig'
 
@@ -67,6 +67,61 @@ function QualitySection({ q }) {
       note="Count = worked days that could not be assessed (no master, night on a day master, odd punch). Other rows are for information.">
       <Table rows={rows} cols={[{ k: 'label', h: 'What' }, { k: 'days', h: 'Days', right: true }, { k: 'people', h: 'People', right: true },
         { k: 'codes', h: 'Codes (days)' }, { k: 'hint', h: 'Note' }]} />
+    </Section>
+  )
+}
+
+const SUG_KIND = {
+  senior_hint: 'Senior staff?', master_fit: 'Master shift', loader_outside_crew: 'Crew loader elsewhere', loader_crew: 'Piece-rate crew?',
+  no_master: 'No master shift', redundant_remeasure: 'Re-measure no longer needed', stale_person: 'Rule no longer needed', stale_department: 'Rule no longer needed',
+}
+
+/** Suggested leave-outs and data fixes: tick Accept or Dismiss, then Apply → one new rules version for this month. */
+function SuggestionsSection({ list, month, year, releaseDays, onApplied, readOnly }) {
+  const [pick, setPick] = useState({})   // key → 'accept' | 'dismiss'
+  useEffect(() => { setPick({}) }, [month, year, list])
+  const set = (k, v) => setPick((p) => { const n = { ...p }; if (n[k] === v) delete n[k]; else n[k] = v; return n })
+  const accept = Object.keys(pick).filter((k) => pick[k] === 'accept'); const dismiss = Object.keys(pick).filter((k) => pick[k] === 'dismiss')
+  const apply = useMutation({
+    mutationFn: () => attendanceReviewApplySuggestions({ month, year, accept, dismiss, releaseDays }),
+    onSuccess: (r) => { toast.success(`Saved as rules version ${r.data.data.id}, effective ${r.data.data.effective_from}`); setPick({}); onApplied() },
+    onError: (e) => toast.error(e.response?.data?.error || 'Could not apply', { duration: 8000 }),
+  })
+  return (
+    <Section title="Suggestions — leave out or fix" count={list.length} defaultOpen={list.length > 0}
+      note="Found from this month's punches and the masters. Nothing changes until you tick and Apply; accepted rules stay for later months until removed, dismissed ones are not shown again.">
+      {list.length === 0 ? <p className="px-4 py-3 text-sm text-slate-500">Nothing to suggest this month.</p> : (
+        <div className="divide-y divide-slate-100" data-testid="ar-suggestions">
+          {list.map((s) => (
+            <div key={s.key} className="px-4 py-3 flex flex-col md:flex-row md:items-start gap-2" data-key={s.key}>
+              <div className="flex-1 min-w-0">
+                <div className="text-xs font-semibold text-slate-500 uppercase">{SUG_KIND[s.kind] || s.kind}</div>
+                <div className="text-sm font-medium text-slate-800">{s.title}{s.name ? <span className="text-slate-500 font-normal"> · {s.name}</span> : null}</div>
+                <div className="text-xs text-slate-600 mt-0.5">{s.evidence}</div>
+              </div>
+              {!readOnly && (
+                <div className="flex gap-3 shrink-0 text-sm">
+                  {s.can_apply && (
+                    <label className="flex items-center gap-1"><input type="checkbox" aria-label={`Accept ${s.key}`} checked={pick[s.key] === 'accept'} onChange={() => set(s.key, 'accept')} />
+                      <span>{s.action}</span></label>
+                  )}
+                  {!s.can_apply && <span className="text-xs text-slate-500 self-center">{s.action}</span>}
+                  <label className="flex items-center gap-1"><input type="checkbox" aria-label={`Dismiss ${s.key}`} checked={pick[s.key] === 'dismiss'} onChange={() => set(s.key, 'dismiss')} />
+                    <span className="text-slate-500">Dismiss</span></label>
+                </div>
+              )}
+            </div>
+          ))}
+          {!readOnly && (
+            <div className="px-4 py-3 flex items-center gap-3">
+              <button type="button" className="btn-primary text-sm" disabled={!(accept.length + dismiss.length) || apply.isPending} onClick={() => apply.mutate()}>
+                {apply.isPending ? 'Applying…' : `Apply ${accept.length + dismiss.length || ''} ${accept.length + dismiss.length === 1 ? 'change' : 'changes'}`}
+              </button>
+              <span className="text-xs text-slate-500">{accept.length} accepted · {dismiss.length} dismissed — saved as one new rules version effective {year}-{String(month).padStart(2, '0')}.</span>
+            </div>
+          )}
+        </div>
+      )}
     </Section>
   )
 }
@@ -365,6 +420,10 @@ export default function AttendanceReviewTab({ selectedMonth, selectedYear }) {
             </div>
           )}
 
+          {!isFinal && preview?.suggestions && (
+            <SuggestionsSection list={preview.suggestions} month={month} year={year} releaseDays={previewDays} readOnly={false}
+              onApplied={() => { qc.invalidateQueries({ queryKey: ['ar-preview'] }); qc.invalidateQueries({ queryKey: ['ar-config'] }) }} />
+          )}
           {data.assessment?.quality && <QualitySection q={data.assessment.quality} />}
 
           <Section title="Trend vs last month">
@@ -453,14 +512,14 @@ export default function AttendanceReviewTab({ selectedMonth, selectedYear }) {
             ]} />
           </Section>
 
-          <Section title="Shift set-up issues (fix in the employee master)" count={data.shiftIssues?.length} defaultOpen={false}
+          {data.criteria?.assessment_basis !== 'master' && <Section title="Shift set-up issues (fix in the employee master)" count={data.shiftIssues?.length} defaultOpen={false}
             note="Shift used by the system differs from the master, or 80%+ of days read late or early. Check each before acting on its numbers.">
             <Table rows={data.shiftIssues} cols={[
               { k: 'code', h: 'Code' }, { k: 'department', h: 'Department' }, { k: 'master_shift', h: 'Master shift' }, { k: 'used_shift', h: 'Shift used' },
               { k: 'days', h: 'Days', right: true }, { k: 'in', h: 'In range', v: (r) => `${r.min_in || '—'}–${r.max_in || '—'}` },
               { k: 'out', h: 'Out range', v: (r) => `${r.min_out || '—'}–${r.max_out || '—'}` }, { k: 'late', h: 'Late', right: true }, { k: 'early', h: 'Early', right: true },
             ]} />
-          </Section>
+          </Section>}
 
           <Section title="Last month's late-coming deductions vs payroll" count={data.payrollChecks?.flags?.length} defaultOpen={false}
             note={`${num(data.payrollChecks?.rows)} deduction rows checked for ${MONTHS[(data.payrollChecks?.month || 1) - 1]} ${data.payrollChecks?.year || ''}. For finance to correct.`}>
