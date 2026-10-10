@@ -582,6 +582,14 @@ function computeEmployeeSalary(db, employee, month, year, company, requestId = '
     esiEmployer = Math.round(grossEarned * esiEmprRate * 100) / 100;
   }
 
+  // ─── LWF (statutory flags PR-2, R7): ₹5 EE / ₹20 ER per month ───
+  // Flag from the in-force structure; only when earned gross > 0; NOT contractor-gated;
+  // a held salary is still charged. getPolicyValue may return a string (L12).
+  const lwfAmt = (k, d) => { const v = parseFloat(getPolicyValue(db, k, d)); return Number.isFinite(v) && v >= 0 ? v : d; };
+  const lwfOn = !!salStruct.lwf_applicable && grossEarned > 0;
+  const lwfEmployee = lwfOn ? Math.round(lwfAmt('lwf_employee_amount', 5) * 100) / 100 : 0;
+  const lwfEmployer = lwfOn ? Math.round(lwfAmt('lwf_employer_amount', 20) * 100) / 100 : 0;
+
   console.log(`${RID} ${employee.code}: PF=${pfEmployee} ESI=${esiEmployee} grossEarned=${grossEarned}`);
 
   // ─── Professional Tax ───
@@ -688,13 +696,13 @@ function computeEmployeeSalary(db, employee, month, year, company, requestId = '
       gross_earned: grossEarned, ot_pay: otPay, holiday_duty_pay: holidayDutyPay,
       pf_employee: pfEmployee, esi_employee: esiEmployee, professional_tax: professionalTax, tds,
       advance_recovery: advanceRecovery, lop_deduction: lopDeduction, other_deductions: otherDeductions,
-      late_coming_deduction: lateComingDeduction, early_exit_deduction: earlyExitDeduction,
+      late_coming_deduction: lateComingDeduction, early_exit_deduction: earlyExitDeduction, lwf_employee: lwfEmployee,
     },
   });
   const loanRecovery = loanPlan.totalRupees;
 
   // ─── Total Deductions & Net ───
-  let totalDeductions = pfEmployee + esiEmployee + professionalTax + tds + advanceRecovery + lopDeduction + otherDeductions + loanRecovery + lateComingDeduction + earlyExitDeduction;
+  let totalDeductions = pfEmployee + esiEmployee + professionalTax + tds + advanceRecovery + lopDeduction + otherDeductions + loanRecovery + lateComingDeduction + earlyExitDeduction + lwfEmployee;
   let salaryWarning = '';
 
   // Cap deductions at gross earned — net salary must never go negative
@@ -804,7 +812,7 @@ function computeEmployeeSalary(db, employee, month, year, company, requestId = '
     edDays, edPay, takeHome,
     pfWages, esiWages, eps,
     pfEmployee, pfEmployer,
-    esiEmployee, esiEmployer,
+    esiEmployee, esiEmployer, lwfEmployee, lwfEmployer,
     professionalTax, tds,
     advanceRecovery, lopDeduction, otherDeductions,
     loanRecovery, loanPlan,
@@ -862,6 +870,7 @@ function saveSalaryComputation(db, comp) {
       ed_days, ed_pay, take_home,
       late_coming_deduction,
       early_exit_deduction,
+      lwf_employee, lwf_employer,
       cl_days, el_days, lwp_days, od_days, short_leave_days, uninformed_absent_days
     ) VALUES (
       ?, ?, ?, ?, ?, ?, ?,
@@ -876,6 +885,7 @@ function saveSalaryComputation(db, comp) {
       ?, ?, ?,
       ?,
       ?,
+      ?, ?,
       ?, ?, ?, ?, ?, ?
     )
     ON CONFLICT(employee_code, month, year) DO UPDATE SET
@@ -925,6 +935,8 @@ function saveSalaryComputation(db, comp) {
       take_home = excluded.take_home,
       late_coming_deduction = excluded.late_coming_deduction,
       early_exit_deduction = excluded.early_exit_deduction,
+      lwf_employee = excluded.lwf_employee,
+      lwf_employer = excluded.lwf_employer,
       cl_days = excluded.cl_days,
       el_days = excluded.el_days,
       lwp_days = excluded.lwp_days,
@@ -947,6 +959,7 @@ function saveSalaryComputation(db, comp) {
     comp.edDays || 0, comp.edPay || 0, comp.takeHome || 0,
     comp.lateComingDeduction || 0,
     comp.earlyExitDeduction || 0,
+    comp.lwfEmployee || 0, comp.lwfEmployer || 0,
     comp.clDays || 0, comp.elDays || 0, comp.lwpDays || 0,
     comp.odDays || 0, comp.shortLeaveDays || 0, comp.uninformedAbsentDays || 0
   );
@@ -1137,6 +1150,7 @@ function generatePayslipData(db, employeeCode, month, year) {
       { label: 'LOP Deduction', amount: comp.lop_deduction },
       { label: 'Late Coming Deduction', amount: comp.late_coming_deduction || 0 },
       { label: 'Early Exit Deduction', amount: comp.early_exit_deduction || 0 },
+      { label: 'LWF (Employee)', amount: comp.lwf_employee || 0 },
       { label: 'Other Deductions', amount: comp.other_deductions }
     ].filter(d => d.amount > 0),
     grossEarned: comp.gross_earned,
@@ -1144,6 +1158,7 @@ function generatePayslipData(db, employeeCode, month, year) {
     netSalary: comp.net_salary,
     pfEmployer: comp.pf_employer,
     esiEmployer: comp.esi_employer,
+    lwfEmployer: comp.lwf_employer || 0,
     grossChanged: comp.gross_changed,
     salaryHeld: comp.salary_held,
     holdReason: comp.hold_reason,

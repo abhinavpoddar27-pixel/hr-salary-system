@@ -1704,32 +1704,47 @@ function initSchema(db) {
   // salary_computations: add early_exit_deduction column
   safeAddColumn('salary_computations', 'early_exit_deduction', 'REAL DEFAULT 0');
 
+  // Statutory flags PR-2 (R7): Punjab LWF per month — employee share is a
+  // deduction (inside total_deductions), employer share is a cost. Amounts are
+  // admin-editable policy keys, insert-if-missing only (never force-reset).
+  safeAddColumn('salary_computations', 'lwf_employee', 'REAL DEFAULT 0');
+  safeAddColumn('salary_computations', 'lwf_employer', 'REAL DEFAULT 0');
+  insertPolicyIfMissing.run('lwf_employee_amount', '5', 'Punjab LWF employee per month (₹) — R7');
+  insertPolicyIfMissing.run('lwf_employer_amount', '20', 'Punjab LWF employer per month (₹) — R7');
+
   // Salary Explainer cache (April 2026) — persists the AI-generated narrative
   // so repeat lookups return instantly without a second Anthropic round-trip.
   // The trigger below nulls both columns whenever any salary column changes,
   // so presence of ai_explanation is a sufficient freshness check.
   safeAddColumn('salary_computations', 'ai_explanation', 'TEXT');
   safeAddColumn('salary_computations', 'ai_explanation_at', 'TEXT');
+  // DROP + CREATE (not IF NOT EXISTS) so an existing DB picks up a changed
+  // column list (statutory flags PR-2 added lwf_employee, lwf_employer — L13).
+  // One transaction: a failed CREATE never leaves the cache without its trigger.
   try {
-    db.exec(`
-      CREATE TRIGGER IF NOT EXISTS invalidate_salary_ai_cache
-      AFTER UPDATE OF
-        payable_days, gross_salary, basic_earned, da_earned, hra_earned,
-        conveyance_earned, other_allowances_earned, ot_pay, gross_earned,
-        pf_employee, esi_employee, professional_tax, tds, advance_recovery,
-        loan_recovery, lop_deduction, other_deductions, total_deductions,
-        net_salary, late_coming_deduction, early_exit_deduction,
-        ed_pay, ed_days, holiday_duty_pay, take_home, total_payable,
-        salary_held, hold_reason, gross_changed
-      ON salary_computations
-      FOR EACH ROW
-      WHEN NEW.ai_explanation IS NOT NULL
-      BEGIN
-        UPDATE salary_computations
-        SET ai_explanation = NULL, ai_explanation_at = NULL
-        WHERE id = NEW.id;
-      END;
-    `);
+    db.transaction(() => {
+      db.exec('DROP TRIGGER IF EXISTS invalidate_salary_ai_cache;');
+      db.exec(`
+        CREATE TRIGGER invalidate_salary_ai_cache
+        AFTER UPDATE OF
+          payable_days, gross_salary, basic_earned, da_earned, hra_earned,
+          conveyance_earned, other_allowances_earned, ot_pay, gross_earned,
+          pf_employee, esi_employee, professional_tax, tds, advance_recovery,
+          loan_recovery, lop_deduction, other_deductions, total_deductions,
+          net_salary, late_coming_deduction, early_exit_deduction,
+          ed_pay, ed_days, holiday_duty_pay, take_home, total_payable,
+          salary_held, hold_reason, gross_changed,
+          lwf_employee, lwf_employer
+        ON salary_computations
+        FOR EACH ROW
+        WHEN NEW.ai_explanation IS NOT NULL
+        BEGIN
+          UPDATE salary_computations
+          SET ai_explanation = NULL, ai_explanation_at = NULL
+          WHERE id = NEW.id;
+        END;
+      `);
+    })();
   } catch (e) {
     console.warn('[schema] Could not create invalidate_salary_ai_cache trigger:', e.message);
   }
@@ -2560,6 +2575,11 @@ If description and screenshot are incoherent or unrelated, set summary_confidenc
   // WHICH cycle the row represents (cycle-ending month). Backfill below.
   safeAddColumn('sales_salary_computations', 'cycle_start_date', 'TEXT');
   safeAddColumn('sales_salary_computations', 'cycle_end_date', 'TEXT');
+
+  // Statutory flags PR-2: LWF columns on the sales output too (stay 0 until
+  // the sales compute writes them — PR-2b).
+  safeAddColumn('sales_salary_computations', 'lwf_employee', 'REAL DEFAULT 0');
+  safeAddColumn('sales_salary_computations', 'lwf_employer', 'REAL DEFAULT 0');
 
   // ── Sales TA/DA Module — Phase 1 Schema (April 2026) ─────────────────
   // TA/DA (Travel/Dearness Allowance) is a parallel payable stream for

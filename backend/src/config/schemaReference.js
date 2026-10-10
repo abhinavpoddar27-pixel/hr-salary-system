@@ -15,7 +15,7 @@ employees (employee master — ~300 rows)
   code TEXT UNIQUE, name TEXT, father_name TEXT, department TEXT, designation TEXT,
   company TEXT, employment_type TEXT ('Permanent'/'Contractor'), date_of_joining TEXT,
   date_of_exit TEXT, status TEXT ('Active'/'Left'/'Inactive'), gross_salary REAL,
-  pf_applicable INTEGER, esi_applicable INTEGER, weekly_off_day INTEGER (0=Sun..6=Sat),
+  pf_applicable INTEGER, esi_applicable INTEGER, lwf_applicable INTEGER, weekly_off_day INTEGER (0=Sun..6=Sat),
   shift_code TEXT, bank_name TEXT, account_number TEXT, ifsc_code TEXT,
   pf_number TEXT, uan TEXT, esi_number TEXT, aadhaar_masked TEXT, pan TEXT
 
@@ -24,7 +24,7 @@ salary_structures (versioned salary breakdown per employee)
   gross_salary REAL, basic REAL, da REAL, hra REAL, conveyance REAL,
   special_allowance REAL, other_allowances REAL,
   basic_percent REAL, da_percent REAL, hra_percent REAL,
-  pf_applicable INTEGER, esi_applicable INTEGER
+  pf_applicable INTEGER, esi_applicable INTEGER, lwf_applicable INTEGER
 
 day_calculations (Stage 6 output — one row per employee per month)
   employee_code TEXT, month INTEGER, year INTEGER, company TEXT,
@@ -53,6 +53,7 @@ salary_computations (Stage 7 output — one row per employee per month)
   total_deductions REAL, net_salary REAL,
   is_finalised INTEGER, salary_held INTEGER, hold_reason TEXT,
   late_coming_deduction REAL, early_exit_deduction REAL,
+  lwf_employee REAL, lwf_employer REAL,
   cl_days REAL, el_days REAL, lwp_days REAL, od_days REAL,
   short_leave_days REAL, uninformed_absent_days REAL (all display-only — pay flows through payable_days),
   UNIQUE(employee_code, month, year, company)
