@@ -31,6 +31,9 @@ function DaySummaryBox({ label, value, color = 'slate', subtext }) {
   )
 }
 
+// Initial value of the Stage 6 Apply Leave form (module-level so it is one stable object).
+const EMPTY_LEAVE_FORM = { leave_type: 'CL', date: '', reason: '' }
+
 export default function DayCalculation() {
   const { month, year, dateProps } = useDateSelector({ mode: 'month', syncToStore: true })
   const { selectedCompany, user } = useAppStore()
@@ -137,7 +140,18 @@ export default function DayCalculation() {
 
   // ── Leave Correction Modal State ──
   const [leaveModal, setLeaveModal] = useState(null) // { code, name, days_absent }
-  const [leaveForm, setLeaveForm] = useState({ leave_type: 'CL', date: '', reason: '' })
+  const [leaveForm, setLeaveForm] = useState(EMPTY_LEAVE_FORM)
+  // The form is reset on every open AND every close (Cancel / ✕ / Esc / backdrop /
+  // after submit). Before, it was reset only after a successful submit, so the next
+  // employee's window showed the previous employee's date, type and reason.
+  function openLeaveModal(target) {
+    setLeaveForm(EMPTY_LEAVE_FORM)
+    setLeaveModal(target)
+  }
+  function closeLeaveModal() {
+    setLeaveModal(null)
+    setLeaveForm(EMPTY_LEAVE_FORM)
+  }
 
   const { data: leaveBalanceRes, isLoading: balanceLoading } = useQuery({
     queryKey: ['leave-balance', leaveModal?.code],
@@ -183,8 +197,7 @@ export default function DayCalculation() {
       if (res?.data?.pending) toast.success(res.data.message || 'Sent to finance for approval', { duration: 6000 })
       else toast.success(res?.data?.message || 'Leave correction applied')
       queryClient.invalidateQueries({ queryKey: ['leave-requests'] })
-      setLeaveModal(null)
-      setLeaveForm({ leave_type: 'CL', date: '', reason: '' })
+      closeLeaveModal()
       queryClient.invalidateQueries({ queryKey: ['day-calculations'] })
       queryClient.invalidateQueries({ queryKey: ['leave-balance'] })
     },
@@ -436,7 +449,7 @@ export default function DayCalculation() {
                               {r.days_absent}
                               {r.days_absent > 0 && (
                                 <button
-                                  onClick={(e) => { e.stopPropagation(); setLeaveModal({ code: r.employee_code, name: r.employee_name || r.employee_code, days_absent: r.days_absent }) }}
+                                  onClick={(e) => { e.stopPropagation(); openLeaveModal({ code: r.employee_code, name: r.employee_name || r.employee_code, days_absent: r.days_absent }) }}
                                   className="text-[10px] px-1.5 py-0.5 rounded bg-orange-100 text-orange-700 hover:bg-orange-200 transition-colors whitespace-nowrap"
                                   title="Apply CL, EL or LWP to absent days"
                                 >
@@ -572,7 +585,7 @@ export default function DayCalculation() {
 
       {/* ── Leave Correction Modal ── */}
       {leaveModal && (
-        <Modal open onClose={() => setLeaveModal(null)} title={`Apply Leave: ${leaveModal.name}`} size="md">
+        <Modal open onClose={closeLeaveModal} title={`Apply Leave: ${leaveModal.name}`} size="md">
           <div className="p-4 space-y-4">
             {/* Employee info */}
             <div className="bg-slate-50 rounded-lg p-3 flex items-center justify-between">
@@ -710,7 +723,7 @@ export default function DayCalculation() {
 
             {/* Actions */}
             <div className="flex justify-end gap-2 pt-2">
-              <button onClick={() => setLeaveModal(null)} className="btn-ghost px-4 py-2 text-sm">Cancel</button>
+              <button onClick={closeLeaveModal} className="btn-ghost px-4 py-2 text-sm">Cancel</button>
               <button
                 onClick={handleSubmitLeaveCorrection}
                 disabled={leaveCorrectionMutation.isPending || !leaveForm.reason.trim()}
