@@ -11,7 +11,7 @@
 - PR-1 feat/statutory-flags — DONE: merged #65 (8b9561d). T4/T5 applied 10 Oct 10:59 IST (batches 1 and 2): V1 24/6/118, V6 57/0/139, V10 248/270.
 - PR-2 feat/lwf-deduction — DONE: merged #70 (ad96604) 11:11 IST. Plant September recomputed 11:17 IST: LWF 113 / ₹565 / ₹2,260; ESI 23 / ₹2,469.06 / ₹10,699.18; PF 6 / ₹9,762.86. V3/V5/V12 0 rows; V11 only the 5 known March–May rows. Against the snapshot: 113 rows exactly −₹5, 98 identical.
 - PR-2b feat/lwf-sales — BUILT locally (base ad96604, no drift): STEPs 0–5 + C3 + C4 + CLAUDE.md; suite 65 / 1076 twice; NOT pushed (the chat reviews and pushes). Plan `docs/statutory-flags/IMPL_PR2b.md`. Live before HR computes October sales (close 25 Oct).
-- PR-3 feat/statutory-filing — NOT STARTED
+- PR-3 feat/statutory-filing — BUILDING (base origin/feat/lwf-sales dcad556 = PR #73, still open). Plan `docs/statutory-flags/IMPL_PR3.md` (REVIEW CORRECTIONS C1–C7 binding). Not pushed (the chat reviews and pushes).
 
 ## STEPS DONE
 - Phase 0 — dd1d849 (rebased on d1ad7bf; baseline 42/769 green)
@@ -73,11 +73,19 @@
 - PR-2b C4 (simulation) — `python3 docs/statutory-flags/sim/run_pr2b.py <repo>`: real server.js on a throwaway DATA_DIR (sales bootstrap skipped), real logins, sales compute over HTTP Aug + Sep BEFORE the upload; Sep holds (F04, U03), NEFT export (download), F05 → reviewed → finalized → paid; the real sales statutory upload (preview → apply, 2026-09: LWF Y for F01–F06/Z01/Z02, ESI Y for F02/U01); Aug re-run, Sep re-run (6A shape), Oct (first live month); HR edits; payslip; register totals; Excel. **Branch 54/54**: N = 6 flagged with pay → 30 / 120 in Sep and Oct; Z01 (0 days) row saved 0/0; Z02 (zero-gross) excluded; Aug re-run byte-identical; F05 paid + NEFT kept, net −5, `finalizedRecomputeWarnings` = [F05 paid −5] only; every NEFT stamp kept; F04 held charged; U02/U03 identical in every column; LWF-only reps differ only in lwf_*/total/net; F02 / U01 only add the ESI lines; F06 loan 3334 unchanged where the cap does not bind; edits F06 other 9000 → loan 995 / total 10000 (ledger 995), F01 → 105, U02 → 100, paid Sep row → 409; Oct compute after the edits reproduces the edited rows; payslip F01 LWF 5 + lwfEmployer 20, U02 no line; register + Excel JSON totals 30 / 120; Excel 39 everywhere, LWF at 25; V8 (Aug/Sep/Oct) / V13 / V14 (as written for Oct + rewritten for Sep) 0 rows. **`--base` on ad96604: 23/23**; `--compare branch base`: **18 unflagged rows identical in every column, 12 flagged rows differ only by the LWF lines** (total +5 / net −5; F06 Oct: loan 1000 → 995 with total and net equal). Negative control: a 1-paisa change on an unflagged row and an ESI change on a flagged row are both reported. Payslip HTML: scratch copy of `backend/scripts/loans-payslip-html-check.mjs` vs ad96604 + 2 sales LWF fixtures → **107/107** (the LWF line renders once with 5.00; no employer LWF printed; unflagged payslips byte-identical — renderers unchanged).
 - PR-2b FINAL — full jest twice: **65 suites / 1076 tests, 0 failures** (baseline 64 / 1047; + lwfSales.test.js 29). `node --check` clean: salesSalaryComputation.js, sales.js, salesExportFormats.js. DO-NOT-MODIFY diff vs ad96604: 0 files (dayCalculation, salaryComputation, schema, payroll, loans/*, recompute, statutory flags service/route/guard, exportFormats, settings, employeeProfileService, EmployeeQuickView, sales/plant payslip renderers, cycleUtil, sundayRule, driftMonitor, TA/DA, backend/scripts). No xlsx/csv/db in the diff. sales.js: the 3 planned hunks only. UPSERT sales 47/47/47/44, plant 58/58/58/55. CLAUDE.md Section 0 entry prepended. Code head before this PROGRESS commit: 87d4f08.
 
+- PR-3 PHASE 0 + STEP 0 — `git fetch origin`: PR #73 (feat/lwf-sales, dcad556) still OPEN (GitHub REST: merged=false) → C1: branch
+  `feat/statutory-filing` from `origin/feat/lwf-sales` dcad556 (upstream unset; never pushed). Drift: origin/main moved ad96604 → 3a7630f
+  (#71 leave employee search: `frontend/src/components/shared/EmployeeSearchSelect.jsx`, `pages/LeaveManagement.jsx`, `utils/api.js` +11 lines,
+  `frontend/dist`). None of PR-3's backend FILES / DO NOT MODIFY files moved. `utils/api.js` + `frontend/dist` are on PR-3's FILES list → they
+  merge (api.js) / rebuild (dist) when #73 and PR-3 land on main; nothing to do on this branch. Baseline jest on dcad556: **65 suites / 1076
+  tests**, 0 failures. Base worktree `<scratch>/base` moved to dcad556 (backend + frontend node_modules symlinked) for filing_identity.js.
+  Plan copied to `docs/statutory-flags/IMPL_PR3.md`.
+
 ## LAST STEP
-PR-2b built: STEPs 0–5 + C3 + C4 + CLAUDE.md. Local only, not pushed.
+PR-3 STEP 0 (plan copied, PR-3 BUILDING, Phase 0 recorded).
 
 ## NEXT STEP
-chat: independent review, push, PR. Before deploy: run VERIFY V13 on production as the baseline (expect 0 rows). After deploy, the first live sales month is October (cycle 26 Sep–25 Oct): compute, then V8 / V13 / V14. Keep: do NOT recompute sales September until D3 is answered (6A would rewrite the 187 NEFT-exported + hold rows; RISKS in IMPL_PR2b).
+PR-3 STEP 1 (export ESI/UAN rules). Carried from PR-2b: run VERIFY V13 on production before PR-2b deploys; do NOT recompute sales September until D3 is answered.
 
 ## OWNER RULINGS ADDED DURING THE BUILD
 (record date + ruling; BUILD_PLAN §1 holds the original set)
@@ -283,3 +291,4 @@ PR-2b STEP 3: lwfSales 29/29 (O2/O4 3/3 fail on the pre-step files); loansSales*
 PR-2b STEP 4: npm run build OK; clean rebuild byte-identical.
 PR-2b C3: sales + plant --dump md5 = base. C4 sim: branch 54/54, base 23/23, compare clean. Payslip HTML 107/107.
 PR-2b final: 65 / 1076, 0 failures, 2 clean runs.
+PR-3 baseline on dcad556 (origin/feat/lwf-sales): 65 / 1076, 0 failures.
