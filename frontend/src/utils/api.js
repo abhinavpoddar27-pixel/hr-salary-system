@@ -182,10 +182,17 @@ export const approveLoanChange = (rid, data) => api.post(`/loans/requests/${rid}
 export const rejectLoanChange = (rid, data) => api.post(`/loans/requests/${rid}/reject`, data)
 export const withdrawLoanChange = (rid, data) => api.post(`/loans/requests/${rid}/withdraw`, data)
 // Loans PR-6b: the monthly loan close (plant) and the admin reversal of a posted deduction.
-export const getLoanClosePreview = (month, year) => api.get('/loans/close/preview', { params: { month, year }, ...fresh })
-export const runLoanClose = (month, year) => api.post('/loans/close', { month, year })
+// Loans PR-9: payroll 'plant' (default — existing callers unchanged) or 'sales'.
+export const getLoanClosePreview = (month, year, payroll = 'plant') => api.get('/loans/close/preview', { params: { month, year, payroll }, ...fresh })
+export const runLoanClose = (month, year, payroll = 'plant') => api.post('/loans/close', { month, year, payroll })
 export const getLoanCloses = () => api.get('/loans/closes', fresh)
 export const reverseLoanDeduction = (id, reason) => api.post(`/loans/deductions/${id}/reverse`, { reason })
+// Loans PR-9: reports (JSON + Excel), the payslip balance line, the TDS write-off list.
+export const getLoanReport = (name, params) => api.get(`/loans/reports/${name}`, { params, ...fresh })
+export const downloadLoanReport = (name, params) => api.get(`/loans/reports/${name}`, { params: { ...params, format: 'xlsx' }, responseType: 'blob' })
+export const getLoanWriteOffs = (params) => api.get('/loans/write-offs', { params, ...fresh })
+export const downloadLoanWriteOffs = (params) => api.get('/loans/write-offs', { params: { ...params, format: 'xlsx' }, responseType: 'blob' })
+export const getLoanPayslipBalance = (params) => api.get('/loans/payslip-balance', { params, ...fresh })
 export const getAlerts = (month, year, unread, opts = {}) => api.get('/analytics/alerts', { params: { month, year, ...(unread ? { unread: 'true' } : {}), ...opts } })
 export const generateAlerts = (month, year) => api.post('/analytics/alerts/generate', { month, year })
 export const markAlertRead = (id) => api.put(`/analytics/alerts/${id}/read`)
