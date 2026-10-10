@@ -18,6 +18,9 @@ import DrillDownRow, { DrillDownChevron } from '../components/ui/DrillDownRow'
 import EmployeeQuickView from '../components/ui/EmployeeQuickView'
 import GatePasses from '../components/GatePasses'
 
+// A leave rejection must say why (P1-06). UI rule only — the route accepts any text.
+const REJECT_REASON_MIN = 5
+
 const STATUS_COLORS = {
   Pending: 'bg-amber-100 text-amber-700',
   'Pending Finance': 'bg-orange-100 text-orange-700',
@@ -425,7 +428,9 @@ export default function LeaveManagement() {
   })
 
   const reject = useMutation({
-    mutationFn: ({ id, reason }) => rejectLeave(id, { rejection_reason: reason, rejected_by: actor }),
+    // The route reads `reason` (and takes the rejecter from the login). It used to
+    // get `rejection_reason`, so every rejection was stored with an empty reason.
+    mutationFn: ({ id, reason }) => rejectLeave(id, { reason: String(reason || '').trim() }),
     onSuccess: () => {
       toast.success('Leave rejected — day calculation and EL are updating')
       setRejectModal(null)
@@ -596,6 +601,11 @@ export default function LeaveManagement() {
                       <span className={clsx('px-2 py-0.5 rounded-full text-xs font-semibold', STATUS_COLORS[l.status] || 'bg-slate-100 text-slate-600')}>
                         {l.status}
                       </span>
+                      {l.status === 'Rejected' && (
+                        <div className="mt-1 text-xs text-red-600 max-w-48 truncate" title={l.rejection_reason || 'No reason recorded'} data-testid="rejection-reason">
+                          {l.approved_by ? `by ${l.approved_by}: ` : ''}{l.rejection_reason || '—'}
+                        </div>
+                      )}
                     </td>
                     <td className="text-xs text-slate-500">
                       {l.applied_at ? new Date(l.applied_at).toLocaleDateString('en-IN', { day: '2-digit', month: 'short' }) : '-'}
@@ -652,6 +662,9 @@ export default function LeaveManagement() {
                               <div><span className="text-slate-400">Days:</span> <span className="font-medium">{l.days}</span></div>
                               <div className="col-span-2"><span className="text-slate-400">Reason:</span> <span>{l.reason || '-'}</span></div>
                               <div><span className="text-slate-400">Status:</span> <span className="font-medium">{l.status}</span></div>
+                              {l.status === 'Rejected' && (
+                                <div className="col-span-2" data-testid="rejection-reason-detail"><span className="text-slate-400">Rejection reason:</span> <span className="text-red-700 whitespace-pre-wrap break-words">{l.rejection_reason || '—'}</span>{l.approved_by ? <span className="text-slate-400"> (rejected by {l.approved_by})</span> : null}</div>
+                              )}
                               <div><span className="text-slate-400">Applied:</span> <span>{l.applied_at ? new Date(l.applied_at).toLocaleDateString('en-IN') : '-'}</span></div>
                             </div>
                           </div>
@@ -678,15 +691,18 @@ export default function LeaveManagement() {
               Reject leave for <span className="font-semibold">{rejectModal.employee_name || rejectModal.employee_code}</span>?
             </p>
             <div>
-              <label className="block text-sm font-medium text-slate-700 mb-1">Reason for Rejection</label>
+              <label className="block text-sm font-medium text-slate-700 mb-1">Reason for rejection (required)</label>
               <textarea className="input w-full" rows={3} value={rejectReason} onChange={e => setRejectReason(e.target.value)} placeholder="Enter reason..." />
+              <p className={clsx('text-xs mt-1', rejectReason.trim().length >= REJECT_REASON_MIN ? 'text-slate-400' : 'text-amber-600')}>
+                At least {REJECT_REASON_MIN} characters — it is saved with the leave and shown on the list. ({rejectReason.trim().length}/{REJECT_REASON_MIN})
+              </p>
             </div>
             <div className="flex justify-end gap-3">
               <button className="btn btn-secondary" onClick={() => { setRejectModal(null); setRejectReason('') }}>Cancel</button>
               <button
                 className="btn bg-red-600 text-white hover:bg-red-700"
-                disabled={reject.isPending}
-                onClick={() => reject.mutate({ id: rejectModal.id, reason: rejectReason })}
+                disabled={reject.isPending || rejectReason.trim().length < REJECT_REASON_MIN}
+                onClick={() => { if (rejectReason.trim().length >= REJECT_REASON_MIN) reject.mutate({ id: rejectModal.id, reason: rejectReason }) }}
               >
                 {reject.isPending ? 'Rejecting...' : 'Confirm Reject'}
               </button>
