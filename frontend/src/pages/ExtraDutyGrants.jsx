@@ -4,7 +4,7 @@ import {
   getExtraDutyGrants, getExtraDutyGrantsSummary, createExtraDutyGrant,
   approveExtraDutyGrant, rejectExtraDutyGrant,
   financeApproveGrant, financeFlagGrant, financeRejectGrant, bulkFinanceApproveGrants,
-  getFinanceReviewQueue
+  getFinanceReviewQueue, financeReturnGrant, bulkFinanceReturnGrants, updateExtraDutyGrant
 } from '../utils/api'
 import { useAppStore } from '../store/appStore'
 import DateSelector from '../components/common/DateSelector'
@@ -14,6 +14,16 @@ import Modal from '../components/ui/Modal'
 import { normalizeRole, canHR as canHRFn, canFinance as canFinanceFn } from '../utils/role'
 import clsx from 'clsx'
 import toast from 'react-hot-toast'
+
+// Finance can send a rejected/flagged grant back to HR for correction
+// (owner ruling 8 Oct 2026). Pre-biometric grants are excluded server-side too.
+const isReturnable = (g) => g.status === 'APPROVED'
+  && (g.finance_status === 'FINANCE_REJECTED' || g.finance_status === 'FINANCE_FLAGGED')
+  && g.grant_type !== 'PRE_BIOMETRIC_ACTIVATION' && !g.is_processed
+const isHrEditable = (g) => g.status === 'PENDING' && g.finance_status === 'UNREVIEWED'
+  && g.grant_type !== 'PRE_BIOMETRIC_ACTIVATION' && !g.is_processed
+const returnedNote = (g) => (g.status === 'PENDING' && typeof g.finance_notes === 'string'
+  && g.finance_notes.startsWith('Returned by finance')) ? g.finance_notes : ''
 
 function KPI({ label, value, color = 'blue' }) {
   const colors = { blue: 'text-blue-700', green: 'text-green-700', red: 'text-red-700', amber: 'text-amber-700', purple: 'text-purple-700', indigo: 'text-indigo-700' }
@@ -58,6 +68,10 @@ export default function ExtraDutyGrants() {
   const [finRejectId, setFinRejectId] = useState(null)
   const [finRejectReason, setFinRejectReason] = useState('')
   const [selectedIds, setSelectedIds] = useState([])
+  const [returnIds, setReturnIds] = useState(null)
+  const [returnReason, setReturnReason] = useState('')
+  const [editGrant, setEditGrant] = useState(null)
+  const [editForm, setEditForm] = useState({})
   const qc = useQueryClient()
 
   const { data: sumRes } = useQuery({ queryKey: ['edg-summary', month, year], queryFn: () => getExtraDutyGrantsSummary(month, year), retry: 0 })
@@ -70,6 +84,9 @@ export default function ExtraDutyGrants() {
     () => grants.filter(g => g.status === 'APPROVED' && g.finance_status === 'UNREVIEWED').map(g => g.id),
     [grants]
   )
+  const returnableIds = useMemo(() => grants.filter(isReturnable).map(g => g.id), [grants])
+  const selectedApproveIds = selectedIds.filter(id => bulkEligibleIds.includes(id))
+  const selectedReturnIds = selectedIds.filter(id => returnableIds.includes(id))
   const allSelected = bulkEligibleIds.length > 0 && bulkEligibleIds.every(id => selectedIds.includes(id))
   const toggleSelectAll = () => setSelectedIds(allSelected ? [] : bulkEligibleIds)
   const toggleSelect = (id) => setSelectedIds(prev => prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id])
@@ -86,6 +103,24 @@ export default function ExtraDutyGrants() {
     mutationFn: ({ id, reason }) => financeRejectGrant(id, reason),
     onSuccess: () => { qc.invalidateQueries({ queryKey: ['edg-list'] }); qc.invalidateQueries({ queryKey: ['edg-summary'] }); setFinRejectId(null); setFinRejectReason(''); toast.success('Finance rejected') }
   })
+  const finReturnMut = useMutation({
+    mutationFn: ({ ids, reason }) => ids.length === 1 ? financeReturnGrant(ids[0], reason) : bulkFinanceReturnGrants(ids, reason),
+    onSuccess: (res, { ids }) => {
+      qc.invalidateQueries({ queryKey: ['edg-list'] }); qc.invalidateQueries({ queryKey: ['edg-summary'] })
+      setReturnIds(null); setReturnReason(''); setSelectedIds([])
+      const n = ids.length === 1 ? 1 : (res?.data?.count || 0)
+      const skipped = res?.data?.skipped?.length || 0
+      toast.success(`${n} grant${n === 1 ? '' : 's'} returned to HR for correction` + (skipped ? ` (${skipped} skipped)` : ''))
+    }
+  })
+  const editMut = useMutation({
+    mutationFn: ({ id, data }) => updateExtraDutyGrant(id, data),
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ['edg-list'] }); qc.invalidateQueries({ queryKey: ['edg-summary'] }); setEditGrant(null); toast.success('Grant updated — approve it to send it back to finance') }
+  })
+  const openEdit = (g) => {
+    setEditGrant(g)
+    setEditForm({ duty_days: g.duty_days, grant_type: g.grant_type, verification_source: g.verification_source, reference_number: g.reference_number || '', remarks: g.remarks || '' })
+  }
   const bulkFinApproveMut = useMutation({
     mutationFn: (ids) => bulkFinanceApproveGrants(ids),
     onSuccess: (res) => { qc.invalidateQueries({ queryKey: ['edg-list'] }); qc.invalidateQueries({ queryKey: ['edg-summary'] }); setSelectedIds([]); toast.success(`${res?.data?.count || 0} grants approved`) }
@@ -150,11 +185,17 @@ export default function ExtraDutyGrants() {
           ))}
         </div>
         <div className="ml-auto flex gap-2">
-          {showSelectColumn && selectedIds.length > 0 && (
-            <button onClick={() => bulkFinApproveMut.mutate(selectedIds)}
+          {showSelectColumn && selectedApproveIds.length > 0 && (
+            <button onClick={() => bulkFinApproveMut.mutate(selectedApproveIds)}
               disabled={bulkFinApproveMut.isPending}
               className="btn-primary text-sm">
-              {bulkFinApproveMut.isPending ? 'Approving...' : `Bulk Approve (${selectedIds.length})`}
+              {bulkFinApproveMut.isPending ? 'Approving...' : `Bulk Approve (${selectedApproveIds.length})`}
+            </button>
+          )}
+          {showSelectColumn && selectedReturnIds.length > 0 && (
+            <button onClick={() => { setReturnIds(selectedReturnIds); setReturnReason('') }}
+              className="btn-secondary text-sm">
+              {`↩ Return to HR (${selectedReturnIds.length})`}
             </button>
           )}
           {canHR && <button onClick={() => setShowCreate(true)} className="btn-primary text-sm">+ New Grant</button>}
@@ -188,12 +229,14 @@ export default function ExtraDutyGrants() {
           <tbody>
             {grants.map(g => {
               const bulkEligible = g.status === 'APPROVED' && g.finance_status === 'UNREVIEWED'
+              const returnable = isReturnable(g)
+              const note = returnedNote(g)
               return (
                 <tr key={g.id} className={g.finance_status === 'FINANCE_FLAGGED' ? 'bg-amber-50' : ''}>
                   {showSelectColumn && (
                     <td>
                       <input type="checkbox"
-                        disabled={!bulkEligible}
+                        disabled={!bulkEligible && !returnable}
                         checked={selectedIds.includes(g.id)}
                         onChange={() => toggleSelect(g.id)} />
                     </td>
@@ -202,7 +245,7 @@ export default function ExtraDutyGrants() {
                   <td className="text-slate-500">{g.department}</td>
                   <td className="font-mono">{g.grant_date}</td>
                   <td className="text-xs">{g.grant_type?.replace(/_/g, ' ')}</td>
-                  <td className="text-center font-mono">{g.duty_days}</td>
+                  <td className="text-center font-mono">{g.duty_days}{note && <div className="text-[10px] text-amber-700 font-sans text-left max-w-[220px] whitespace-normal" title={note}>↩ {note}</div>}</td>
                   <td className="text-xs">{g.verification_source}</td>
                   <td><span className={clsx('text-[10px] px-1.5 py-0.5 rounded-full', hrBadge[g.status])}>{g.status}</span></td>
                   <td><span className={clsx('text-[10px] px-1.5 py-0.5 rounded-full', finBadge[g.finance_status])}>{g.finance_status?.replace('FINANCE_', '')}</span></td>
@@ -212,6 +255,9 @@ export default function ExtraDutyGrants() {
                         <button onClick={() => approveMut.mutate(g.id)} className="text-green-600 hover:bg-green-50 px-1.5 py-0.5 rounded text-[10px] font-medium">Approve</button>
                         <button onClick={() => { setRejectId(g.id); setRejectReason('') }} className="text-red-600 hover:bg-red-50 px-1.5 py-0.5 rounded text-[10px] font-medium">Reject</button>
                       </>}
+                      {canHR && isHrEditable(g) && (
+                        <button onClick={() => openEdit(g)} className="text-blue-600 hover:bg-blue-50 px-1.5 py-0.5 rounded text-[10px] font-medium">✎ Edit</button>
+                      )}
                       {canFinance && g.status === 'APPROVED' && g.finance_status === 'UNREVIEWED' && <>
                         <button onClick={() => finApproveMut.mutate(g.id)} className="text-green-600 hover:bg-green-50 px-1.5 py-0.5 rounded text-[10px] font-medium">✓ Approve</button>
                         <button onClick={() => { setFlagId(g.id); setFlagReason(''); setFlagNotes('') }} className="text-amber-600 hover:bg-amber-50 px-1.5 py-0.5 rounded text-[10px] font-medium">⚑ Flag</button>
@@ -221,6 +267,9 @@ export default function ExtraDutyGrants() {
                         <button onClick={() => finApproveMut.mutate(g.id)} className="text-green-600 hover:bg-green-50 px-1.5 py-0.5 rounded text-[10px] font-medium">✓ Approve</button>
                         <button onClick={() => { setFinRejectId(g.id); setFinRejectReason('') }} className="text-red-600 hover:bg-red-50 px-1.5 py-0.5 rounded text-[10px] font-medium">✕ Reject</button>
                       </>}
+                      {canFinance && returnable && (
+                        <button onClick={() => { setReturnIds([g.id]); setReturnReason('') }} className="text-indigo-600 hover:bg-indigo-50 px-1.5 py-0.5 rounded text-[10px] font-medium" title="Send back to HR to correct and resubmit">↩ Return to HR</button>
+                      )}
                     </div>
                   </td>
                 </tr>
@@ -286,6 +335,44 @@ export default function ExtraDutyGrants() {
               className="btn-warning w-full">
               {finFlagMut.isPending ? 'Flagging...' : 'Flag for Review'}
             </button>
+          </div>
+        </Modal>
+      )}
+
+      {/* Finance Return-to-HR Modal */}
+      {returnIds && (
+        <Modal onClose={() => setReturnIds(null)} title={returnIds.length === 1 ? 'Return Grant to HR' : `Return ${returnIds.length} Grants to HR`}>
+          <div className="space-y-3">
+            <p className="text-xs text-slate-600">The grant goes back to HR as pending. HR corrects it (e.g. the number of days) and approves it again, then it comes back to you for review. The earlier rejection stays in the audit trail.</p>
+            <textarea value={returnReason} onChange={e => setReturnReason(e.target.value)}
+              className="input w-full h-20" placeholder="What should HR correct? (required, e.g. 'Power cut — give 0.5 day, not 1')" />
+            <button onClick={() => finReturnMut.mutate({ ids: returnIds, reason: returnReason.trim() })}
+              disabled={returnReason.trim().length < 5 || finReturnMut.isPending}
+              className="btn-primary w-full">
+              {finReturnMut.isPending ? 'Returning...' : 'Return to HR'}
+            </button>
+          </div>
+        </Modal>
+      )}
+
+      {/* HR Edit Modal */}
+      {editGrant && (
+        <Modal onClose={() => setEditGrant(null)} title={`Edit Grant — ${editGrant.employee_name || editGrant.employee_code} (${editGrant.grant_date})`}>
+          <div className="space-y-3">
+            {returnedNote(editGrant) && <div className="rounded border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900">↩ {returnedNote(editGrant)}</div>}
+            <div className="grid grid-cols-2 gap-3">
+              <div><label className="label">Duty Days</label>
+                <select value={String(editForm.duty_days)} onChange={e => setEditForm(f => ({ ...f, duty_days: parseFloat(e.target.value) }))} className="input">
+                  {['0.5', '1', '1.5', '2'].map(v => <option key={v} value={v}>{v}</option>)}
+                </select></div>
+              <div><label className="label">Type</label><select value={editForm.grant_type} onChange={e => setEditForm(f => ({ ...f, grant_type: e.target.value }))} className="input"><option value="OVERNIGHT_STAY">Overnight Stay</option><option value="EXTENDED_SHIFT">Extended Shift</option><option value="OTHER">Other</option></select></div>
+              <div><label className="label">Verification Source</label><select value={editForm.verification_source} onChange={e => setEditForm(f => ({ ...f, verification_source: e.target.value }))} className="input">
+                {Array.from(new Set(['Gate Register', 'Production Office', 'Supervisor Confirmed', 'Other', editForm.verification_source].filter(Boolean))).map(v => <option key={v}>{v}</option>)}
+              </select></div>
+              <div><label className="label">Reference #</label><input value={editForm.reference_number} onChange={e => setEditForm(f => ({ ...f, reference_number: e.target.value }))} className="input" /></div>
+            </div>
+            <div><label className="label">Remarks</label><textarea value={editForm.remarks} onChange={e => setEditForm(f => ({ ...f, remarks: e.target.value }))} className="input w-full h-16" /></div>
+            <button onClick={() => editMut.mutate({ id: editGrant.id, data: editForm })} disabled={editMut.isPending} className="btn-primary w-full">{editMut.isPending ? 'Saving...' : 'Save'}</button>
           </div>
         </Modal>
       )}

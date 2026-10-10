@@ -32,6 +32,83 @@ function archiveRejection(db, rejectionType, sourceTable, grant, reason, user) {
   }
 }
 
+// ─── Return for correction (owner ruling 8 Oct 2026) ───────
+// Only finance may reopen a finance-rejected (or flagged) grant. "Return to
+// HR" sends it back as PENDING / UNREVIEWED with finance's note; HR corrects
+// it (PUT /:id) and approves it again; finance re-reviews. HR can never
+// override a finance rejection on its own. The old rejection stays in
+// audit_log and in the finance_rejections archive.
+const RETURNABLE_FINANCE_STATUSES = ['FINANCE_REJECTED', 'FINANCE_FLAGGED'];
+const RETURNED_NOTE_PREFIX = 'Returned by finance';
+
+// Extra text for the POST / 409 when HR re-enters a date finance already
+// turned down: tells HR the one way forward instead of a dead end.
+function returnHint(row) {
+  if (!row || row.verification_source === 'BIOMETRIC_AUTO' || row.status !== 'APPROVED') return '';
+  if (row.finance_status === 'FINANCE_REJECTED') {
+    return ' Finance rejected it — ask finance to use "Return to HR" on that row; then correct it and approve it again.';
+  }
+  if (row.finance_status === 'FINANCE_FLAGGED') {
+    return ' Finance flagged it — finance can approve it or use "Return to HR" so you can correct it.';
+  }
+  return '';
+}
+
+// Returns { ok: true, grant } or { ok: false, status, error }.
+// Caller supplies the transaction; the UPDATE's WHERE re-checks the state so
+// a concurrent approve/return can't be overwritten.
+function returnGrantToHr(db, id, reason, user) {
+  const grant = db.prepare('SELECT * FROM extra_duty_grants WHERE id = ?').get(id);
+  if (!grant) return { ok: false, status: 404, error: 'Grant not found' };
+  if (grant.verification_source === 'BIOMETRIC_AUTO') {
+    return { ok: false, status: 409, error: 'System-generated entries cannot be returned to HR.' };
+  }
+  if (grant.status !== 'APPROVED' || !RETURNABLE_FINANCE_STATUSES.includes(grant.finance_status)) {
+    return { ok: false, status: 409, error: `Only finance-rejected or flagged grants can be returned (this one is ${grant.status} / ${grant.finance_status}).` };
+  }
+  if (grant.is_processed) {
+    return { ok: false, status: 409, error: 'This grant is already processed into salary and cannot be returned.' };
+  }
+  if (grant.grant_type === 'PRE_BIOMETRIC_ACTIVATION') {
+    // A PBA grant owns a placeholder attendance row (rejection already turned
+    // it back to 'A'); reopening it would need that row rebuilt. Not handled.
+    return { ok: false, status: 409, error: 'Pre-biometric grants cannot be returned to HR. Ask the admin.' };
+  }
+
+  const note = `${RETURNED_NOTE_PREFIX} (${user}): ${reason}`;
+  const info = db.prepare(`
+    UPDATE extra_duty_grants
+    SET status = 'PENDING', finance_status = 'UNREVIEWED',
+        approved_by = NULL, approved_at = NULL,
+        finance_flag_reason = NULL, finance_notes = ?,
+        finance_reviewed_by = NULL, finance_reviewed_at = NULL
+    WHERE id = ? AND status = 'APPROVED' AND finance_status IN ('FINANCE_REJECTED', 'FINANCE_FLAGGED')
+      AND COALESCE(is_processed, 0) = 0
+  `).run(note, id);
+  if (info.changes !== 1) {
+    return { ok: false, status: 409, error: 'Grant changed while returning it — refresh and try again.' };
+  }
+
+  // Old reason kept in the audit trail (ruling: "old reason kept in audit").
+  logAudit('extra_duty_grants', id, 'finance_status', grant.finance_status, 'UNREVIEWED', 'FINANCE_RETURN',
+    `${grant.employee_code} ${grant.grant_date}: ${grant.duty_days} day(s) returned to HR. ` +
+    `Previous finance reason: "${grant.finance_flag_reason || ''}" (by ${grant.finance_reviewed_by || '?'} at ${grant.finance_reviewed_at || '?'}). ` +
+    `Return reason: "${reason}"`, user);
+  logAudit('extra_duty_grants', id, 'status', 'APPROVED', 'PENDING', 'FINANCE_RETURN',
+    `${grant.employee_code} ${grant.grant_date}: HR approval (by ${grant.approved_by || '?'}) cleared by return to HR`, user);
+  return { ok: true, grant };
+}
+
+function notifyReturned(count, sample) {
+  try {
+    const { createNotification } = require('../services/monthEndScheduler');
+    const msg = count === 1
+      ? `Finance returned the extra duty grant for ${sample.employee_code} (${sample.grant_date}) for correction`
+      : `Finance returned ${count} extra duty grants for correction`;
+    createNotification('hr', 'ED_GRANT_RETURNED', msg, '/extra-duty-grants');
+  } catch (e) {}
+}
+
 // GET / — List grants
 router.get('/', (req, res) => {
   const db = getDb();
@@ -94,7 +171,8 @@ router.post('/', requireHrOrAdmin, (req, res) => {
   ).get(employee_code, grant_date, month, year);
   const conflict = (row) => res.status(409).json({
     success: false,
-    error: `A grant already exists for this employee on ${grant_date} (status: ${row.status}, finance: ${row.finance_status}, source: ${row.verification_source}). Open that row instead.`,
+    error: `A grant already exists for this employee on ${grant_date} (status: ${row.status}, finance: ${row.finance_status}, source: ${row.verification_source}). Open that row instead.`
+      + returnHint(row),
     grant_id: row.id
   });
 
@@ -454,6 +532,92 @@ router.post('/bulk-finance-approve', requireFinanceOrAdmin, (req, res) => {
   });
   txn();
   res.json({ success: true, count });
+});
+
+// POST /:id/finance-return — finance sends a rejected/flagged grant back to HR
+router.post('/:id/finance-return', requireFinanceOrAdmin, (req, res) => {
+  const db = getDb();
+  const reason = String(req.body?.return_reason || '').trim();
+  if (reason.length < 5) return res.status(400).json({ success: false, error: 'Return reason required (at least 5 characters)' });
+  const user = req.user?.username || 'finance';
+  const result = db.transaction(() => returnGrantToHr(db, Number(req.params.id), reason, user)).immediate();
+  if (!result.ok) return res.status(result.status).json({ success: false, error: result.error });
+  notifyReturned(1, result.grant);
+  res.json({ success: true });
+});
+
+// POST /bulk-finance-return — same, for several grants with one reason.
+// Each grant is checked on its own; ineligible ones are reported, not fatal.
+router.post('/bulk-finance-return', requireFinanceOrAdmin, (req, res) => {
+  const db = getDb();
+  const reason = String(req.body?.return_reason || '').trim();
+  const ids = Array.isArray(req.body?.ids) ? req.body.ids.map(Number).filter(Number.isInteger) : [];
+  if (reason.length < 5) return res.status(400).json({ success: false, error: 'Return reason required (at least 5 characters)' });
+  if (ids.length === 0) return res.status(400).json({ success: false, error: 'No grants selected' });
+  const user = req.user?.username || 'finance';
+  const returned = [];
+  const skipped = [];
+  db.transaction(() => {
+    for (const id of ids) {
+      const r = returnGrantToHr(db, id, reason, user);
+      if (r.ok) returned.push(r.grant); else skipped.push({ id, error: r.error });
+    }
+  }).immediate();
+  if (returned.length) notifyReturned(returned.length, returned[0]);
+  res.json({ success: true, count: returned.length, skipped });
+});
+
+// PUT /:id — HR corrects a PENDING grant (typically one finance returned)
+// before approving it again. Only HR-entered, unreviewed, unprocessed rows.
+const EDITABLE_GRANT_TYPES = ['OVERNIGHT_STAY', 'EXTENDED_SHIFT', 'OTHER'];
+router.put('/:id', requireHrOrAdmin, (req, res) => {
+  const db = getDb();
+  const grant = db.prepare('SELECT * FROM extra_duty_grants WHERE id = ?').get(req.params.id);
+  if (!grant) return res.status(404).json({ success: false, error: 'Grant not found' });
+  if (grant.status !== 'PENDING' || grant.finance_status !== 'UNREVIEWED' || grant.is_processed) {
+    return res.status(409).json({ success: false, error: `Only pending grants can be edited (this one is ${grant.status} / ${grant.finance_status}).` });
+  }
+  if (grant.verification_source === 'BIOMETRIC_AUTO' || grant.grant_type === 'PRE_BIOMETRIC_ACTIVATION') {
+    return res.status(409).json({ success: false, error: 'This kind of grant cannot be edited here.' });
+  }
+
+  const b = req.body || {};
+  const next = {};
+  if (b.duty_days !== undefined) {
+    const d = Number(b.duty_days);
+    if (!(d > 0 && d <= 2 && Number.isInteger(d * 2))) {
+      return res.status(400).json({ success: false, error: 'duty_days must be 0.5, 1, 1.5 or 2' });
+    }
+    next.duty_days = d;
+  }
+  if (b.grant_type !== undefined) {
+    if (!EDITABLE_GRANT_TYPES.includes(b.grant_type)) return res.status(400).json({ success: false, error: 'Invalid grant type' });
+    next.grant_type = b.grant_type;
+  }
+  if (b.verification_source !== undefined) {
+    const v = String(b.verification_source).trim();
+    if (!v || v === 'BIOMETRIC_AUTO') return res.status(400).json({ success: false, error: 'Verification source required' });
+    next.verification_source = v;
+  }
+  if (b.reference_number !== undefined) next.reference_number = String(b.reference_number ?? '');
+  if (b.remarks !== undefined) next.remarks = String(b.remarks ?? '');
+
+  const changed = Object.keys(next).filter(k => String(next[k]) !== String(grant[k] ?? ''));
+  if (changed.length === 0) return res.json({ success: true, changed: [] });
+
+  const user = req.user?.username || 'hr';
+  db.transaction(() => {
+    const sets = changed.map(k => `${k} = ?`).join(', ');
+    const info = db.prepare(`UPDATE extra_duty_grants SET ${sets}
+      WHERE id = ? AND status = 'PENDING' AND finance_status = 'UNREVIEWED'`)
+      .run(...changed.map(k => next[k]), grant.id);
+    if (info.changes !== 1) throw Object.assign(new Error('Grant changed while saving — refresh and try again.'), { status: 409 });
+    for (const k of changed) {
+      logAudit('extra_duty_grants', grant.id, k, grant[k] ?? '', next[k], 'HR_EDIT',
+        `${grant.employee_code} ${grant.grant_date}: ${k} corrected`, user);
+    }
+  }).immediate();
+  res.json({ success: true, changed });
 });
 
 // ─── GET /finance-rejections ───────────────────────────────

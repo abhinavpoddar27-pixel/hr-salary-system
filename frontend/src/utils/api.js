@@ -398,8 +398,8 @@ export const submitFinanceSignoff = (data) => api.post('/finance-verify/signoff'
 export const getFinanceSignoffStatus = (month, year) => api.get('/finance-verify/signoff-status', { params: { month, year } })
 
 // ── Extra Duty Grants ────────────────────────────────────
-export const getExtraDutyGrants = (month, year, params) => api.get('/extra-duty-grants', { params: { month, year, ...params } })
-export const getExtraDutyGrantsSummary = (month, year) => api.get('/extra-duty-grants/summary', { params: { month, year } })
+export const getExtraDutyGrants = (month, year, params) => api.get('/extra-duty-grants', { params: { month, year, ...params }, ...fresh })
+export const getExtraDutyGrantsSummary = (month, year) => api.get('/extra-duty-grants/summary', { params: { month, year }, ...fresh })
 export const createExtraDutyGrant = (data) => api.post('/extra-duty-grants', data)
 export const createPBAGrant = (data) => api.post('/extra-duty-grants/pba', data)
 export const approveExtraDutyGrant = (id) => api.post(`/extra-duty-grants/${id}/approve`)
@@ -408,7 +408,10 @@ export const financeApproveGrant = (id) => api.post(`/extra-duty-grants/${id}/fi
 export const financeFlagGrant = (id, reason, notes) => api.post(`/extra-duty-grants/${id}/finance-flag`, { finance_flag_reason: reason, finance_notes: notes })
 export const financeRejectGrant = (id, reason) => api.post(`/extra-duty-grants/${id}/finance-reject`, { finance_flag_reason: reason })
 export const bulkFinanceApproveGrants = (ids) => api.post('/extra-duty-grants/bulk-finance-approve', { ids })
-export const getFinanceReviewQueue = (month, year) => api.get('/extra-duty-grants/finance-review', { params: { month, year } })
+export const financeReturnGrant = (id, reason) => api.post(`/extra-duty-grants/${id}/finance-return`, { return_reason: reason })
+export const bulkFinanceReturnGrants = (ids, reason) => api.post('/extra-duty-grants/bulk-finance-return', { ids, return_reason: reason })
+export const updateExtraDutyGrant = (id, data) => api.put(`/extra-duty-grants/${id}`, data)
+export const getFinanceReviewQueue = (month, year) => api.get('/extra-duty-grants/finance-review', { params: { month, year }, ...fresh })
 
 // ── Miss Punch Finance Review (April 2026) ─────────────
 // HR resolves miss punches in Stage 2; finance must approve the

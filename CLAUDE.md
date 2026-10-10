@@ -1,3 +1,27 @@
+## Last Session — 2026-10-10 (Extra duty: finance "Return to HR")
+**Branch `fix/ed-return-to-hr`, NOT merged.** Owner ruling 8 Oct 2026, built 10 Oct.
+- **Bug:** HR could not re-award extra duty for a person+date finance had rejected (7 Sep 2026: 19 rows, "power cut").
+  UNIQUE(employee_code, grant_date, month, year) keeps the rejected row; POST / 500'd until the 8 Oct deploy
+  (Sentry HR-SALARY-BACKEND-2, 20 hits on 8 Oct), then 409 "Open that row instead" — but a rejected row had no action.
+- **Fix (`routes/extraDutyGrants.js`):** `POST /:id/finance-return` + `POST /bulk-finance-return` (finance/admin, reason
+  ≥ 5 chars): APPROVED + FINANCE_REJECTED|FINANCE_FLAGGED → PENDING/UNREVIEWED, approvals cleared, `finance_notes` =
+  "Returned by finance (user): reason"; two audit rows (stage FINANCE_RETURN, old finance reason in the remark);
+  HR notification. UPDATE's WHERE re-checks state. Refused: BIOMETRIC_AUTO, PRE_BIOMETRIC_ACTIVATION (placeholder
+  attendance already reverted to A), is_processed. `PUT /:id` (hr/admin): edit duty_days (0.5/1/1.5/2), grant_type,
+  verification_source, reference_number, remarks on PENDING/UNREVIEWED rows only; audit per field (HR_EDIT).
+  POST / 409 now appends a "Return to HR" hint for manual rejected/flagged rows (AUTO-row text unchanged).
+- **UI (`ExtraDutyGrants.jsx`):** finance "↩ Return to HR" per row + bulk via checkboxes; HR "✎ Edit" on pending rows;
+  the finance note shows under Days. List/summary/finance-queue reads send `no-cache` (server 5 s GET cache). dist rebuilt.
+- **HR still cannot override a finance rejection.** Pay moves only after HR re-approves, finance approves, and
+  Stage 6 + Stage 7 are re-run (ED is read from grants with both approvals).
+- **Verified:** jest 80 suites / 1317 (new `extraDutyGrantsReturn.test.js` 33 — all fail on origin/main);
+  `backend/scripts/ed-return-simulation.py` 29/29 (real server + logins: reject → 409 hint → return → edit 0.5 →
+  approve ×2 → Stage 6 finance_ed_days 0.5, Stage 7 ed_pay ₹500 on ₹30k, control unchanged, drift 0);
+  `backend/scripts/ed-return-browser-check.py` 16/16 (Chromium, built dist), 0 page errors, 0 API 4xx/5xx.
+- **Not tested:** Railway; production rows (22 Sep 2026 FINANCE_REJECTED grants waiting for finance to return).
+- **Seen, not fixed:** `POST /:id/finance-approve` does not check finance_status, so the API (no UI) can approve a
+  rejected row directly at its old days.
+
 ## Last Session — 2026-10-10 (Loans import: one-click confirm of clean rows)
 **Branch `feat/loan-import-bulk-confirm` (on origin/main 2cd0b26 = PR-10 merged), NOT merged.** Maker-checker unchanged.
 - **What:** Loans → Import batch view: HR "Confirm all clean matches (N)", finance "Confirm all balances as in the file (N)"
