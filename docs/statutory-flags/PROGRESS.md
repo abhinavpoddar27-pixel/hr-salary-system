@@ -87,11 +87,33 @@
   numberInUse holder (same master, across sales companies = N3, never self, plant master separate). **4/4 FAIL on dcad556's
   file** (swap-verified). Guard + service suites green (57).
 
+- PR-3 STEP 2 — 7ee1ede `feat(filing): ECR and ESI list missing UAN / ESI numbers instead of writing blanks`. exportFormats.js: ECR loop
+  skips a row whose UAN (spaces stripped) fails UAN_RE, ESI loop one whose IP number fails ESI_NUMBER_RE → `missing[]`
+  {employee_code, employee_name, ee, er (2-dp), reason none|malformed}; `employees` = rows written; totals over written rows +
+  missingCount / missingEE / missingER; helpers missingRow / missingTotals / missingCodesHeader exported (reused by the sales file).
+  SQL, ORDER BY, line builders, filenames, generateBankFile byte-unchanged. reports.js: `/pf-ecr`, `/esi-contribution` JSON gains
+  `missing`; `X-Missing-UAN` / `X-Missing-ESI-Number` (codes reduced to [A-Za-z0-9_-], N6) on JSON + download when missing > 0.
+  statutoryFilingPlant.test.js F1 (golden strings = the dcad556 loops copied verbatim; A / B / all; old totals deep-equal),
+  F2 ECR (blank / spaces / 11 digits → none/none/malformed; no line starts with '|'), F3 ESI (blank / spaces / 9 digits), F4 bank
+  md5 = golden of the dcad556 generator, route header on JSON + download (code 'PW 02' → 'PW02'), no header when nothing missing:
+  **6 of 7 FAIL on dcad556** (F4 passes = unchanged). `docs/statutory-flags/sim/filing_identity.js` (new): run 1 (2 companies, 8 PF /
+  12 ESI / 20 bank, all valid) branch vs dcad556 worktree **106/106** — content md5, filenames, employees, route download + JSON rows
+  identical, old totals equal, only missing* keys added (all 0), no header; run 2 (3 bad UANs, 2 blank ESI numbers) **79/79** — base
+  lines − branch lines = exactly the bad rows = `missing` = header codes, bank identical. Negative control: a changed md5 / a 0.5 in
+  missingEE / a wrong header code each FAIL the compare.
+- PR-3 C4 — (next commit) `feat(filing): reports serving UANs / ESI numbers / bank accounts limited to hr / finance / admin`. reports.js:
+  the existing `requireHrFinanceOrAdmin` (JWT roles are normalised at login) on `/pf-ecr`, `/esi-contribution`, `/bank-salary-file`
+  (the three filing downloads) + `/pf-statement`, `/esi-statement` (UAN / PF no. / ESI no.), `/bank-transfer` (account + IFSC),
+  `/audit-trail` (old/new values of master edits incl. bank accounts and, from STEP 4, ESI numbers / UANs), GET `/company-config`
+  (company bank account / PAN / TAN; no UI caller). Open to the viewer as before: attendance-summary, miss-punch-report, late-coming,
+  overtime, headcount, department-payroll. 12 tests: viewer 403 (no X-Missing-* leaks), hr / finance / admin 200, no token 401 on
+  all 11 URLs (incl. the 3 downloads); **11 of 12 FAIL on the STEP 2 file** (the open-reports test passes = unchanged).
+
 ## LAST STEP
-PR-3 STEP 1.
+PR-3 C4 (role gates on reports.js).
 
 ## NEXT STEP
-PR-3 STEP 2 (plant ECR / ESI missing lists) + C4 (filing downloads hr/finance/admin). Carried from PR-2b: run VERIFY V13 on production before PR-2b deploys; do NOT recompute sales September until D3 is answered.
+PR-3 STEP 3 (sales ESI file + route). Carried from PR-2b: run VERIFY V13 on production before PR-2b deploys; do NOT recompute sales September until D3 is answered.
 
 ## OWNER RULINGS ADDED DURING THE BUILD
 (record date + ruling; BUILD_PLAN §1 holds the original set)

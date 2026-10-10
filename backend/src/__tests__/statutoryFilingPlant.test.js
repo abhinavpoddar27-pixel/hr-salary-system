@@ -259,3 +259,29 @@ describe('F2 / F3 over HTTP — header on the JSON preview and on the download',
     expect(j.json.missing).toEqual([]);
   });
 });
+
+describe('C4 — every report serving UANs / ESI numbers / bank accounts: hr / finance / admin only', () => {
+  const Q = `month=${MONTH}&year=${YEAR}`;
+  const RESTRICTED = [
+    `/api/reports/pf-ecr?${Q}`, `/api/reports/pf-ecr?${Q}&download=true`,
+    `/api/reports/esi-contribution?${Q}`, `/api/reports/esi-contribution?${Q}&download=true`,
+    `/api/reports/bank-salary-file?${Q}`, `/api/reports/bank-salary-file?${Q}&download=true`,
+    `/api/reports/pf-statement?${Q}`, `/api/reports/esi-statement?${Q}`, `/api/reports/bank-transfer?${Q}`,
+    `/api/reports/audit-trail?${Q}`, '/api/reports/company-config',
+  ];
+  test.each(RESTRICTED)('%s → viewer 403; hr, finance, admin 200', async (url) => {
+    const v = await get(url, 'view1');
+    expect(v.status).toBe(403);
+    expect(v.json).toEqual({ success: false, error: 'HR, finance, or admin access required' });
+    expect(v.headers['x-missing-uan']).toBeUndefined();          // nothing leaks before the gate
+    expect(v.headers['x-missing-esi-number']).toBeUndefined();
+    for (const as of ['hr1', 'fin1', 'adm1']) expect([as, (await get(url, as)).status]).toEqual([as, 200]);
+    expect((await get(url, null)).status).toBe(401);
+  });
+  test('reports without those identifiers stay open to the viewer', async () => {
+    for (const url of [`/api/reports/attendance-summary?${Q}`, `/api/reports/headcount?${Q}`, `/api/reports/department-payroll?${Q}`,
+      `/api/reports/late-coming?${Q}`, `/api/reports/overtime?${Q}`, `/api/reports/miss-punch-report?${Q}`]) {
+      expect([url, (await get(url, 'view1')).status]).toEqual([url, 200]);
+    }
+  });
+});

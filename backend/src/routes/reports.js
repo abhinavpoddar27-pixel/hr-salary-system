@@ -4,7 +4,10 @@ const XLSX = require('xlsx');
 const { getDb } = require('../database/db');
 const { generatePFECR, generateESIFile, generateBankFile, missingCodesHeader } = require('../services/exportFormats');
 
-// Role gate — HR / finance / admin may read the leave register.
+// Role gate — HR / finance / admin may read the leave register and (statutory flags PR-3,
+// owner ruling C4) every report here that serves UANs, ESI numbers or bank accounts:
+// /pf-statement, /esi-statement, /bank-transfer, /pf-ecr, /esi-contribution,
+// /bank-salary-file, /audit-trail (old/new field values), GET /company-config.
 function requireHrFinanceOrAdmin(req, res, next) {
   const role = req.user?.role;
   if (role !== 'hr' && role !== 'finance' && role !== 'admin') {
@@ -119,7 +122,7 @@ router.get('/overtime', (req, res) => {
 });
 
 // GET PF monthly statement
-router.get('/pf-statement', (req, res) => {
+router.get('/pf-statement', requireHrFinanceOrAdmin, (req, res) => {
   const db = getDb();
   const { month, year } = req.query;
 
@@ -148,7 +151,7 @@ router.get('/pf-statement', (req, res) => {
 });
 
 // GET ESI statement
-router.get('/esi-statement', (req, res) => {
+router.get('/esi-statement', requireHrFinanceOrAdmin, (req, res) => {
   const db = getDb();
   const { month, year } = req.query;
 
@@ -175,7 +178,7 @@ router.get('/esi-statement', (req, res) => {
 });
 
 // GET bank transfer sheet (NEFT)
-router.get('/bank-transfer', (req, res) => {
+router.get('/bank-transfer', requireHrFinanceOrAdmin, (req, res) => {
   const db = getDb();
   const { month, year, company } = req.query;
 
@@ -221,7 +224,7 @@ router.get('/headcount', (req, res) => {
 });
 
 // GET audit trail
-router.get('/audit-trail', (req, res) => {
+router.get('/audit-trail', requireHrFinanceOrAdmin, (req, res) => {
   const db = getDb();
   const { month, year, employeeCode, stage } = req.query;
 
@@ -240,7 +243,7 @@ router.get('/audit-trail', (req, res) => {
 });
 
 // GET PF ECR file (EPFO format)
-router.get('/pf-ecr', (req, res) => {
+router.get('/pf-ecr', requireHrFinanceOrAdmin, (req, res) => {
   const db = getDb();
   const { month, year, company, download } = req.query;
   if (!month || !year) return res.status(400).json({ success: false, error: 'month and year required' });
@@ -258,7 +261,7 @@ router.get('/pf-ecr', (req, res) => {
 });
 
 // GET ESI contribution file (ESIC format)
-router.get('/esi-contribution', (req, res) => {
+router.get('/esi-contribution', requireHrFinanceOrAdmin, (req, res) => {
   const db = getDb();
   const { month, year, company, download } = req.query;
   if (!month || !year) return res.status(400).json({ success: false, error: 'month and year required' });
@@ -276,7 +279,7 @@ router.get('/esi-contribution', (req, res) => {
 });
 
 // GET bank salary upload file (PNB/generic CSV format)
-router.get('/bank-salary-file', (req, res) => {
+router.get('/bank-salary-file', requireHrFinanceOrAdmin, (req, res) => {
   const db = getDb();
   const { month, year, company, download } = req.query;
   if (!month || !year) return res.status(400).json({ success: false, error: 'month and year required' });
@@ -300,7 +303,7 @@ router.get('/bank-salary-file', (req, res) => {
 });
 
 // GET company config (for export headers, PF/ESI codes)
-router.get('/company-config', (req, res) => {
+router.get('/company-config', requireHrFinanceOrAdmin, (req, res) => {
   const db = getDb();
   const { company } = req.query;
 
