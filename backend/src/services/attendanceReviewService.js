@@ -35,19 +35,25 @@ const DEFAULT_CONFIG = Object.freeze({
     option_c_short_per_half: 3,    // … every 3 shorter exits = ½ day
     default_shift_hours: 12,       // shift hours when shifts.duration_hours is missing (flagged)
     stayed_late_lookback_days: 7,  // LAG window starts this many days before last month
+    shift_fit_share: 0.6,          // shift check: early exits on >= 60% of Mon–Sat worked days = habitual (likely wrong shift) …
+    shift_fit_min_days: 5,         // … with at least 5 such worked days
+    shift_fit_grace: 10,           // … then an exit counts only if out − in < shift length − 10 min
+    shift_fit_confirm_share: 0.8,  // habitual AND short on >= 80% of those days → flagged "check master shift" (no change to the action)
   }),
   stayed_late_mode: 'either',      // 'worked' | 'calendar' | 'either' (previous worked day OR previous calendar day)
   early_exit_rule: 'warning',      // 'warning' | 'option_c'
+  shift_fit: 'habitual',           // early-exit shift check: 'habitual' | 'everyone' | 'off'
   loading_designation_patterns: Object.freeze(['LOAD', 'LODING']),
   excluded_codes: Object.freeze([]),        // left out of every output
   excluded_departments: Object.freeze([]),  // left out of every output (e.g. piece-rate contractors)
-  early_excluded_codes: Object.freeze([]),  // early exits not assessed (wrong shift in master)
+  early_excluded_codes: Object.freeze([]),  // manual override: early exits not assessed (normally empty — the shift check handles wrong shifts)
   held_codes: Object.freeze([]),            // listed as held, no action / notice
-  remeasure: Object.freeze({}),             // { code: { start, end 'HH:MM', late_grace 9, early_grace 15, left_late 'system'|'shift'|'off', left_late_minutes 20 } }
+  remeasure: Object.freeze({}),             // { code: { start, end 'HH:MM', late_grace 9, early_grace 15, left_late 'system'|'shift'|'off', left_late_minutes 20, hours_complete false, hours_grace 10 } }
 });
 
 const MODES = { worked: 0, calendar: 1, either: 2 };
 const ACTIONS = ['include', 'exclude', 'warning'];
+const SHIFT_FIT = ['habitual', 'everyone', 'off'];
 const WORKED = "('P','WOP','½P','WO½P')";
 
 // ── config ────────────────────────────────────────────────────────────────
@@ -88,6 +94,7 @@ function validateConfig(c) {
   }
   if (c.stayed_late_mode !== undefined && !(c.stayed_late_mode in MODES)) errs.push('stayed_late_mode must be worked | calendar | either');
   if (c.early_exit_rule !== undefined && !['warning', 'option_c'].includes(c.early_exit_rule)) errs.push('early_exit_rule must be warning | option_c');
+  if (c.shift_fit !== undefined && !SHIFT_FIT.includes(c.shift_fit)) errs.push('shift_fit must be habitual | everyone | off');
   for (const k of ['loading_designation_patterns', 'excluded_codes', 'excluded_departments', 'early_excluded_codes', 'held_codes']) {
     if (c[k] !== undefined && !isCodeList(c[k])) errs.push(`${k} must be a list of non-empty strings`);
   }
@@ -98,6 +105,8 @@ function validateConfig(c) {
       else if (toMin(r.end) <= toMin(r.start)) errs.push(`remeasure ${code}: end must be after start (day shifts only)`);
       for (const g of ['late_grace', 'early_grace', 'left_late_minutes']) if (r && r[g] !== undefined && (typeof r[g] !== 'number' || r[g] < 0)) errs.push(`remeasure ${code}: ${g} must be a non-negative number`);
       if (r && r.left_late !== undefined && !['system', 'shift', 'off'].includes(r.left_late)) errs.push(`remeasure ${code}: left_late must be system | shift | off`);
+      if (r && r.hours_complete !== undefined && typeof r.hours_complete !== 'boolean') errs.push(`remeasure ${code}: hours_complete must be true or false`);
+      if (r && r.hours_grace !== undefined && (typeof r.hours_grace !== 'number' || r.hours_grace < 0 || r.hours_grace > 120)) errs.push(`remeasure ${code}: hours_grace must be 0–120 minutes`);
     }
   }
   return errs;
@@ -145,7 +154,8 @@ function roundDeduction(wdl, t) {
 
 /**
  * Person-month aggregate for this month and last, one row per (code, ym).
- * Named params: @from @to @cur @prev @rel @prel @lateMin @mis @eMin @eMax @sunOff @mode @defH @longMin
+ * Named params: @from @to @cur @prev @rel @prel @lateMin @mis @eMin @eMax @sunOff @mode @defH @longMin @fitGrace
+ * Shift-check columns: ms_days (Mon–Sat worked days when @sunOff), early_short* (exits on days out − in < shift length − @fitGrace).
  * Exported so the acceptance check can run the exact same SQL through the SQL Console.
  */
 const PERSON_MONTH_SQL = `
@@ -153,7 +163,7 @@ WITH base AS (
   SELECT a.employee_code c, a.date d, a.status_final st, COALESCE(a.is_miss_punch,0) mp,
          COALESCE(a.is_late_arrival,0) la, COALESCE(a.late_by_minutes,0) lm,
          COALESCE(a.is_early_departure,0) ed, COALESCE(a.early_by_minutes,0) em,
-         COALESCE(a.is_left_late,0) ll, a.shift_detected sd
+         COALESCE(a.is_left_late,0) ll, a.shift_detected sd, a.in_time_final it, a.out_time_final ot
   FROM attendance_processed a WHERE a.date BETWEEN @from AND @to),
 pl AS (SELECT c, d, MAX(ll) ll FROM base GROUP BY c, d),
 w AS (SELECT b.*, LAG(b.ll) OVER (PARTITION BY b.c ORDER BY b.d) pll FROM base b
@@ -162,7 +172,10 @@ x AS (SELECT w.*, COALESCE(p.ll,0) cll, substr(w.d,1,7) ym,
              CASE WHEN w.st IN ('½P','WO½P') THEN 0.5 ELSE 1.0 END f,
              COALESCE((SELECT s.duration_hours FROM shifts s WHERE s.name = w.sd AND s.duration_hours > 0 ORDER BY s.id LIMIT 1), @defH) h,
              CASE WHEN (SELECT s.duration_hours FROM shifts s WHERE s.name = w.sd AND s.duration_hours > 0 LIMIT 1) IS NULL THEN 1 ELSE 0 END hmiss,
-             strftime('%w', w.d) dow
+             strftime('%w', w.d) dow,
+             CASE WHEN w.it IS NULL OR w.ot IS NULL OR length(w.it) < 5 OR length(w.ot) < 5 THEN NULL
+               ELSE ((CAST(substr(w.ot,1,2) AS INTEGER)*60 + CAST(substr(w.ot,4,2) AS INTEGER))
+                   - (CAST(substr(w.it,1,2) AS INTEGER)*60 + CAST(substr(w.it,4,2) AS INTEGER)) + 1440) % 1440 END wm
       FROM w LEFT JOIN pl p ON p.c = w.c AND p.d = date(w.d,'-1 day')
       WHERE substr(w.d,1,7) IN (@cur, @prev)),
 y AS (SELECT x.*,
@@ -171,32 +184,46 @@ y AS (SELECT x.*,
                OR (@mode = 2 AND (COALESCE(x.pll,0) = 1 OR x.cll = 1)) THEN 1 ELSE 0 END exc,
         CASE WHEN x.ed = 1 AND x.em > @eMin AND x.em < @eMax AND (@sunOff = 0 OR x.dow <> '0')
               AND x.d NOT IN (SELECT value FROM json_each(CASE WHEN x.ym = @cur THEN @rel ELSE @prel END))
-             THEN 1 ELSE 0 END ise
+             THEN 1 ELSE 0 END ise,
+        CASE WHEN x.wm IS NULL OR x.wm < x.f*x.h*60 - @fitGrace THEN 1 ELSE 0 END short
       FROM x)
 SELECT c AS code, ym, COUNT(*) AS worked_days, SUM(f) AS worked_units, SUM(f*h*60) AS sched_min,
        MAX(h) AS shift_h, MAX(hmiss) AS shift_h_missing,
        SUM(isl) AS late_raw, SUM(isl*exc) AS late_excused,
        SUM(isl*(1-exc)) AS lates, SUM(CASE WHEN isl = 1 AND exc = 0 THEN lm ELSE 0 END) AS late_min,
        SUM(ise) AS early_exits, SUM(CASE WHEN ise = 1 THEN em ELSE 0 END) AS early_min,
-       SUM(CASE WHEN ise = 1 AND em >= @longMin THEN 1 ELSE 0 END) AS early_long
+       SUM(CASE WHEN ise = 1 AND em >= @longMin THEN 1 ELSE 0 END) AS early_long,
+       SUM(CASE WHEN @sunOff = 0 OR dow <> '0' THEN 1 ELSE 0 END) AS ms_days,
+       SUM(ise*short) AS early_short, SUM(CASE WHEN ise = 1 AND short = 1 THEN em ELSE 0 END) AS early_short_min,
+       SUM(CASE WHEN ise = 1 AND short = 1 AND em >= @longMin THEN 1 ELSE 0 END) AS early_short_long,
+       SUM(CASE WHEN ise = 1 THEN COALESCE(wm,0) ELSE 0 END) AS early_wm_sum
 FROM y GROUP BY c, ym`;
 
 const WEEKLY_SQL = `
 WITH base AS (
   SELECT a.employee_code c, a.date d, a.status_final st, COALESCE(a.is_miss_punch,0) mp,
          COALESCE(a.is_late_arrival,0) la, COALESCE(a.late_by_minutes,0) lm,
-         COALESCE(a.is_early_departure,0) ed, COALESCE(a.early_by_minutes,0) em, COALESCE(a.is_left_late,0) ll
+         COALESCE(a.is_early_departure,0) ed, COALESCE(a.early_by_minutes,0) em, COALESCE(a.is_left_late,0) ll,
+         a.shift_detected sd, a.in_time_final it, a.out_time_final ot
   FROM attendance_processed a WHERE a.date BETWEEN @from AND @to),
 pl AS (SELECT c, d, MAX(ll) ll FROM base GROUP BY c, d),
 w AS (SELECT b.*, LAG(b.ll) OVER (PARTITION BY b.c ORDER BY b.d) pll FROM base b WHERE b.st IN ${WORKED} AND b.mp = 0),
-x AS (SELECT w.*, COALESCE(p.ll,0) cll, substr(w.d,1,7) ym FROM w LEFT JOIN pl p ON p.c = w.c AND p.d = date(w.d,'-1 day')
+x AS (SELECT w.*, COALESCE(p.ll,0) cll, substr(w.d,1,7) ym,
+             CASE WHEN w.st IN ('½P','WO½P') THEN 0.5 ELSE 1.0 END f,
+             COALESCE((SELECT s.duration_hours FROM shifts s WHERE s.name = w.sd AND s.duration_hours > 0 ORDER BY s.id LIMIT 1), @defH) h,
+             CASE WHEN w.it IS NULL OR w.ot IS NULL OR length(w.it) < 5 OR length(w.ot) < 5 THEN NULL
+               ELSE ((CAST(substr(w.ot,1,2) AS INTEGER)*60 + CAST(substr(w.ot,4,2) AS INTEGER))
+                   - (CAST(substr(w.it,1,2) AS INTEGER)*60 + CAST(substr(w.it,4,2) AS INTEGER)) + 1440) % 1440 END wm
+      FROM w LEFT JOIN pl p ON p.c = w.c AND p.d = date(w.d,'-1 day')
       WHERE substr(w.d,1,7) IN (@cur, @prev) AND strftime('%w', w.d) <> '0')
-SELECT c AS code, date(d, 'weekday 1', '-7 days') AS week_start, COUNT(*) AS worked_days,
+SELECT c AS code, ym, date(d, 'weekday 1', '-7 days') AS week_start, COUNT(*) AS worked_days,
   SUM(CASE WHEN la = 1 AND lm >= @lateMin AND lm < @mis AND NOT ((@mode = 0 AND COALESCE(pll,0) = 1) OR (@mode = 1 AND cll = 1)
        OR (@mode = 2 AND (COALESCE(pll,0) = 1 OR cll = 1))) THEN 1 ELSE 0 END) AS lates,
   SUM(CASE WHEN ed = 1 AND em > @eMin AND em < @eMax
-       AND d NOT IN (SELECT value FROM json_each(CASE WHEN ym = @cur THEN @rel ELSE @prel END)) THEN 1 ELSE 0 END) AS early_exits
-FROM x GROUP BY c, week_start`;
+       AND d NOT IN (SELECT value FROM json_each(CASE WHEN ym = @cur THEN @rel ELSE @prel END)) THEN 1 ELSE 0 END) AS early_exits,
+  SUM(CASE WHEN ed = 1 AND em > @eMin AND em < @eMax AND (wm IS NULL OR wm < f*h*60 - @fitGrace)
+       AND d NOT IN (SELECT value FROM json_each(CASE WHEN ym = @cur THEN @rel ELSE @prel END)) THEN 1 ELSE 0 END) AS early_short
+FROM x GROUP BY c, ym, week_start`;
 
 const RELEASE_DAYS_SQL = `
 SELECT date, COUNT(*) AS worked,
@@ -225,7 +252,7 @@ function sqlParams(month, year, cfg, releaseDays, prevReleaseDays) {
     rel: JSON.stringify(releaseDays || []), prel: JSON.stringify(prevReleaseDays || []),
     lateMin: t.late_min_minutes, mis: t.misread_minutes, eMin: t.early_min_exclusive, eMax: t.early_max_exclusive,
     sunOff: t.early_weekdays_only ? 1 : 0, mode: MODES[cfg.stayed_late_mode] ?? 2, defH: t.default_shift_hours,
-    longMin: t.option_c_long_minutes,
+    longMin: t.option_c_long_minutes, fitGrace: t.shift_fit_grace,
   };
 }
 
@@ -261,6 +288,8 @@ function loadPersonMonth(db, month, year, cfg, releaseDays, prevReleaseDays) {
  * Re-measures the configured codes on the shift given in config (both months), from the final punches.
  * Late = in > start + late_grace (minutes counted from start); early = out < end − early_grace, Mon–Sat, release days out.
  * Stayed-late exemption per code: left_late 'system' (stored flag, default), 'shift' (recomputed on this shift), 'off' (none).
+ * Full-hours rule per code (hours_complete): a late or an early exit is not counted on a day where
+ * out − in ≥ the shift's length (half for ½P) − hours_grace minutes (default 10). Counted in hours_excused.
  */
 function remeasureRows(db, month, year, cfg, releaseDays, prevReleaseDays) {
   const codes = Object.keys(cfg.remeasure || {});
@@ -293,18 +322,23 @@ function remeasureRows(db, month, year, cfg, releaseDays, prevReleaseDays) {
     const exc = cfg.stayed_late_mode === 'worked' ? pll === 1 : cfg.stayed_late_mode === 'calendar' ? cll === 1 : (pll === 1 || cll === 1);
     const h = (toMin(rm.end) - toMin(rm.start)) / 60; const f = ['½P', 'WO½P'].includes(r.st) ? 0.5 : 1;
     const key = `${code}|${ym}`;
-    const a = out.get(key) || { code, ym, worked_days: 0, worked_units: 0, sched_min: 0, shift_h: h, shift_h_missing: 0, late_raw: 0, late_excused: 0, lates: 0, late_min: 0, early_exits: 0, early_min: 0, early_long: 0, remeasured: true };
+    const a = out.get(key) || { code, ym, worked_days: 0, worked_units: 0, sched_min: 0, shift_h: h, shift_h_missing: 0, late_raw: 0, late_excused: 0, lates: 0, late_min: 0, early_exits: 0, early_min: 0, early_long: 0, hours_excused: 0, remeasured: true };
     a.worked_days += 1; a.worked_units += f; a.sched_min += f * h * 60;
     const inM = toMin(r.it); const outM = toMin(r.ot);
+    const fullHours = rm.hours_complete === true && inM !== null && outM !== null && outM > inM
+      && outM - inM >= f * h * 60 - (rm.hours_grace ?? 10);
     const lateBy = inM === null ? 0 : inM - toMin(rm.start);
     if (lateBy > (rm.late_grace ?? 9) && lateBy >= t.late_min_minutes && lateBy < t.misread_minutes) {
       a.late_raw += 1;
-      if (exc) a.late_excused += 1; else { a.lates += 1; a.late_min += lateBy; }
+      if (exc) a.late_excused += 1;
+      else if (fullHours) { a.late_excused += 1; a.hours_excused += 1; }
+      else { a.lates += 1; a.late_min += lateBy; }
     }
     const earlyBy = outM === null ? 0 : toMin(rm.end) - outM;
     const dow = new Date(`${r.d}T00:00:00Z`).getUTCDay();
     if (earlyBy > (rm.early_grace ?? t.early_min_exclusive) && earlyBy < t.early_max_exclusive && (!t.early_weekdays_only || dow !== 0) && !rel[ym].has(r.d)) {
-      a.early_exits += 1; a.early_min += earlyBy; if (earlyBy >= t.option_c_long_minutes) a.early_long += 1;
+      if (fullHours) a.hours_excused += 1;
+      else { a.early_exits += 1; a.early_min += earlyBy; if (earlyBy >= t.option_c_long_minutes) a.early_long += 1; }
     }
     out.set(key, a);
   }
@@ -348,6 +382,20 @@ function buildPeople(sqlRows, remRows, empMap, cfg, cur, prev) {
 
 // ── step 4: exclusions ────────────────────────────────────────────────────
 
+/**
+ * Shift check (early exits). A person whose system early exits fall on >= shift_fit_share of their Mon–Sat worked days
+ * (min shift_fit_min_days days) is "habitual" — usually a wrong shift in the master. For them ('habitual') or for everyone
+ * ('everyone') an exit counts only on a day out − in < shift length − shift_fit_grace. Re-measured rows have their own rule.
+ */
+function isHabitualEarly(m, t) {
+  return !!m && m.ms_days >= t.shift_fit_min_days && m.early_exits > 0 && m.early_exits >= t.shift_fit_share * m.ms_days;
+}
+function shiftFitApplies(m, cfg) {
+  if (!m || m.remeasured || m.early_short === undefined || m.early_short === null) return false;
+  if (cfg.shift_fit === 'everyone') return true;
+  return cfg.shift_fit === 'habitual' && isHabitualEarly(m, cfg.thresholds);
+}
+
 function applyExclusions(byCode, cfg) {
   const exCodes = new Set(cfg.excluded_codes); const exDept = new Set(cfg.excluded_departments.map((d) => d.toUpperCase()));
   const earlyEx = new Set(cfg.early_excluded_codes); const held = new Set(cfg.held_codes);
@@ -358,7 +406,14 @@ function applyExclusions(byCode, cfg) {
       if (!m) continue;
       m.lates_counted = p.loading ? 0 : m.lates; m.late_min_counted = p.loading ? 0 : m.late_min;
       const ee = earlyEx.has(p.code);
-      m.early_counted = ee ? 0 : m.early_exits; m.early_min_counted = ee ? 0 : m.early_min; m.early_long_counted = ee ? 0 : m.early_long;
+      const fit = !ee && shiftFitApplies(m, cfg);
+      m.fit_applied = fit; m.early_raw = m.early_exits;
+      m.fit_excused = fit ? m.early_exits - m.early_short : 0;
+      m.early_counted = ee ? 0 : fit ? m.early_short : m.early_exits;
+      m.early_min_counted = ee ? 0 : fit ? m.early_short_min : m.early_min;
+      m.early_long_counted = ee ? 0 : fit ? m.early_short_long : m.early_long;
+      m.fit_confirm_master = fit && isHabitualEarly(m, cfg.thresholds) && m.early_counted > 0
+        && m.early_counted >= cfg.thresholds.shift_fit_confirm_share * m.early_raw;
     }
     p.early_excluded = earlyEx.has(p.code);
     p.held = held.has(p.code);
@@ -414,7 +469,7 @@ function personLine(p, monthDays) {
     late_min: c.late_min_counted || 0, early_min: c.early_min_counted || 0, shift_h: c.shift_h || null,
     workdays_lost: r2(p.workdays_lost || 0),
     last_month: p.prev ? { worked_days: p.prev.worked_days, late_days: p.prev.lates_counted, early_days: p.prev.early_counted } : null,
-    newcomer: p.newcomer, categories: p.categories || [], remeasured: !!c.remeasured,
+    newcomer: p.newcomer, categories: p.categories || [], remeasured: !!c.remeasured, hours_excused: c.hours_excused || 0, fit_excused: c.fit_excused || 0,
     gross_salary: p.gross_salary, _monthDays: monthDays,
   };
 }
@@ -431,6 +486,9 @@ function actions(people, cfg, overrides, month, year) {
     if (!selected && !(o && o.action === 'include')) continue;
     const line = personLine(p, md);
     const forcedWarn = o && o.action === 'warning';
+    // Leaves early almost every day and short of the master shift: punches alone cannot tell a wrong master shift from a
+    // habitual early leaver, so this is a flag for the admin (fix the master, or override) — the action is unchanged.
+    if (p.cur.fit_confirm_master) line.check_master_shift = true;
     if (p.newcomer || forcedWarn) { line.action = 'warning'; line.deduction_days = 0; }
     else { line.action = 'deduction'; line.deduction_days = roundDeduction(p.workdays_lost, t); }
     line.indicative_amount = line.deduction_days > 0 && p.gross_salary ? Math.round((p.gross_salary / md) * line.deduction_days) : 0;
@@ -449,7 +507,8 @@ function actions(people, cfg, overrides, month, year) {
     const c = p.cur; if (c.early_counted < t.early_warning_min) continue;
     const days = optionCDays(c, t);
     const line = { code: p.code, name: p.name, department: p.department, designation: p.designation, group: p.group,
-      early_exits: c.early_counted, over_1h: c.early_long_counted, early_min: c.early_min_counted, option_c_days: days, newcomer: p.newcomer };
+      early_exits: c.early_counted, over_1h: c.early_long_counted, early_min: c.early_min_counted, option_c_days: days, newcomer: p.newcomer,
+      check_master_shift: !!c.fit_confirm_master };
     if (cfg.early_exit_rule === 'option_c' && !p.newcomer && days > 0) {
       line.action = 'deduction'; line.deduction_days = days;
       line.indicative_amount = p.gross_salary ? Math.round((p.gross_salary / md) * days) : 0;
@@ -515,8 +574,9 @@ function weeklyTrend(db, month, year, cfg, releaseDays, prevReleaseDays, peopleB
   for (const r of rows) {
     const p = peopleByCode.get(String(r.code)); if (!p) continue; // excluded or unknown
     const key = `${r.week_start}|${p.group}`;
+    const m = r.ym === (p.cur && p.cur.ym) ? p.cur : r.ym === (p.prev && p.prev.ym) ? p.prev : null;
     const a = wk.get(key) || { week_start: r.week_start, group: p.group, worked_days: 0, late_days: 0, early_exits: 0 };
-    a.worked_days += r.worked_days; a.late_days += p.loading ? 0 : r.lates; a.early_exits += p.early_excluded ? 0 : r.early_exits;
+    a.worked_days += r.worked_days; a.late_days += p.loading ? 0 : r.lates; a.early_exits += p.early_excluded ? 0 : (m && m.fit_applied ? r.early_short : r.early_exits);
     wk.set(key, a);
   }
   return [...wk.values()].map((a) => ({ ...a, late_pct: a.worked_days ? r1((a.late_days / a.worked_days) * 100) : 0, early_pct: a.worked_days ? r1((a.early_exits / a.worked_days) * 100) : 0 }))
@@ -575,17 +635,25 @@ function computeAttendanceReview(db, { month, year, config, releaseDays = [], pr
   const regular = live.filter((p) => p.is_regular).map((p) => ({ code: p.code, name: p.name, department: p.department,
     late_days: p.cur.lates_counted, early_days: p.cur.early_counted, last_late: p.prev ? p.prev.lates_counted : null, last_early: p.prev ? p.prev.early_counted : null,
     newcomer: p.newcomer, late_improved: p.late_improved, early_improved: p.early_improved, selected: p.categories.length > 0 }));
+  const shiftCheck = live.filter((p) => p.cur.fit_applied && (isHabitualEarly(p.cur, cfg.thresholds) || p.cur.fit_excused > 0)).map((p) => {
+    const c = p.cur; const habitual = isHabitualEarly(c, cfg.thresholds);
+    const result = c.early_counted === 0 ? 'hidden' : c.early_counted >= cfg.thresholds.early_warning_min ? 'shown' : 'below_threshold';
+    return { code: p.code, name: p.name, department: p.department, designation: p.designation, shift_h: c.shift_h, ms_days: c.ms_days,
+      system_early: c.early_raw, excused: c.fit_excused, counted: c.early_counted,
+      avg_hours: c.early_raw ? r1(c.early_wm_sum / c.early_raw / 60) : null, habitual, result,
+      check_master: !!c.fit_confirm_master };
+  }).sort((a, b) => b.system_early - a.system_early || a.code.localeCompare(b.code));
   const gatePassCount = db.prepare('SELECT COUNT(*) n FROM short_leaves WHERE substr(date,1,7) = ?').get(cur).n;
   const ded = act.actionList.filter((a) => a.action === 'deduction');
   return {
     meta: { month, year, ym: cur, prev_ym: prev, days_in_month: md, release_days: releaseDays, prev_release_days: prevReleaseDays,
       excluded_people: excludedCount, people_assessed: live.length, missing_shift_hours: live.filter((p) => p.cur.shift_h_missing).map((p) => p.code),
       not_in_employee_master: live.filter((p) => !p.in_employee_master).map((p) => p.code) },
-    criteria: { thresholds: cfg.thresholds, stayed_late_mode: cfg.stayed_late_mode, early_exit_rule: cfg.early_exit_rule, loading_designation_patterns: cfg.loading_designation_patterns },
+    criteria: { thresholds: cfg.thresholds, stayed_late_mode: cfg.stayed_late_mode, early_exit_rule: cfg.early_exit_rule, shift_fit: cfg.shift_fit, loading_designation_patterns: cfg.loading_designation_patterns, remeasure: cfg.remeasure || {} },
     releaseDaysDetected: detectReleaseDays(db, month, year, cfg),
     shiftIssues: detectShiftIssues(db, month, year).filter((r) => !cfg.excluded_codes.includes(r.code)
       && !cfg.excluded_departments.map((d) => d.toUpperCase()).includes(String(r.department || '').toUpperCase())),
-    trend: { monthly, weekly }, departments,
+    trend: { monthly, weekly }, departments, shiftCheck,
     people: peopleOut, doubleDefaulters, regular,
     actionList: act.actionList, earlyExitWarnings: act.earlyExitWarnings,
     actionTotals: { people: act.actionList.length, deduction_notes: ded.length, warning_notes: act.actionList.length - ded.length,
@@ -600,6 +668,6 @@ function computeAttendanceReview(db, { month, year, config, releaseDays = [], pr
 module.exports = {
   DEFAULT_CONFIG, mergeConfig, validateConfig, validateOverrides, loadConfig,
   PERSON_MONTH_SQL, WEEKLY_SQL, RELEASE_DAYS_SQL, SHIFT_ISSUES_SQL, sqlParams, inlineParams,
-  detectReleaseDays, detectShiftIssues, loadPersonMonth, remeasureRows, buildPeople, applyExclusions, classify, actions, notices,
+  isHabitualEarly, shiftFitApplies, detectReleaseDays, detectShiftIssues, loadPersonMonth, remeasureRows, buildPeople, applyExclusions, classify, actions, notices,
   roundDeduction, optionCDays, prevMonth, daysInMonth, computeAttendanceReview,
 };

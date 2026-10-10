@@ -21,6 +21,17 @@
 - **Found, not fixed:** (1) An unresolved miss-punch cell edited through this editor stays red:
   `PUT /attendance/record/:id` sets `stage_5_done` but not `miss_punch_resolved`, and `cellClass()` checks miss-punch first.
   (2) `updateMutation` has no `onError` (a failed save shows only the global handler, editor stays open).
+## Last Session — 2026-10-10 (Stage 7 register: DOJ to drill-down, smarter column widths)
+**Branch `feat/stage7-col-widths` (on origin/main b8b9759), NOT merged.** Frontend display only.
+- **What:** DOJ column removed from the register (Everything 25 → 24); date of joining (+ new-joiner holiday note) now heads the
+  row drill-down. Widths: cell padding 6/8 → 5/6px; Employee pin 280 → 232 (pills max 190px); Dept max 140px, 260px from a
+  1900px viewport; right pins Net 92 / Take Home 96 / status 124 / actions 72. The ▼ button in the actions column is gone
+  (the row's chevron and a row click already expand it). At 1440 the middle area shows ~2 more columns.
+- **Fragile (replaces item 3 of the wide-layout entry):** right-pin offsets are now SUMMED in code from the widths of the
+  pinned columns to their right — change `w:` only, never add `right:` by hand.
+- **Verified:** `wide-layout-check.py` 47/47 (expectation updated to 24); render 60 PNGs, 0 page errors; Held + Release fits at 124.
+- **Not tested:** Railway; Safari/Firefox; real production names in the 232px Employee cell.
+
 ## Last Session — 2026-10-10 (Attendance Review PR-3: Excel + Word downloads)
 **Branch `feat/attendance-review-exports` (stacked on PR-2 `feat/attendance-review-tab`, PR #84).** Merge #84 first.
 - **What:** `backend/src/services/attendanceReviewExports.js` — workbook (Summary, Action list, Early-exit warnings, Notice
