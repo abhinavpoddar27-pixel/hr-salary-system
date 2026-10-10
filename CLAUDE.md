@@ -23,6 +23,28 @@
   "not computed yet"; (2) readiness failure shows score 0 "Not Ready" with an empty checklist; (3) Department Cost table silently
   hidden when its call fails; (4) the finance-view KPI half has no error UI at all; (5) backend `GET /finance-audit/salary-manual-flags`
   catch returns `success: true` with zero counts on a SQL error, so a server-side failure there still reads 0 (the UI can't tell).
+## Last Session — 2026-10-10 (P1-10: Night Shift "Undo" actually rejected the pairing)
+**Branch `fix/nightshift-undo-relabel`, NOT merged.** Frontend only (`pages/NightShift.jsx`). Plan + log:
+`docs/ux-bulk/prs/P1-10/PLAN.md`, `PROGRESS.md`. Finding P-6.
+- **Bug:** on a confirmed medium/low pair the "Undo" button called the reject route (not back to Pending), and the
+  pending-row "✕" also rejected in one click, with no label or confirm. Reject (`attendance.js` L249–270) marks the pair
+  rejected, clears the IN day's OUT time and sends it back to Miss Punches as MISSING_OUT; the next-morning OUT stands alone.
+  No UI path back.
+- **Fix:** "Undo" → "Reject pairing"; "✕" kept, with aria-label + title "Reject pairing". Both open the existing
+  `ConfirmDialog` naming the employee, code, IN/OUT dates + times, the consequence and "This cannot be undone here"
+  (+ "confirmed earlier" for a confirmed pair); "Keep pairing" / backdrop sends nothing. stopPropagation on both buttons
+  (row no longer expands on click). Confirm untouched. dist rebuilt (own commit; vs a fresh 3d20021 build only the
+  NightShift chunk + the index preload list differ).
+- **Fragile:** the dialog wording describes the backend reject route — change both together.
+- **Verified:** `backend/scripts/nightshift-reject-confirm-check.py` (Chromium, built dist, hr, fictional T9601–T9605,
+  port 3110) 44/44 — labels/aria, cancel = 0 POST + DB unchanged, reject = is_rejected 1 + MISSING_OUT, confirmed pair,
+  high pair no button, double-click, backdrop, 390px, 0 page/console errors, 0 API ≥ 400. `--base` on 3d20021 9/9:
+  one click rejects, no dialog. jest 85 suites / 1380 before and after.
+- **Not tested:** Railway; Safari/Firefox; keyboard Escape (ConfirmDialog has none).
+- **Found, not fixed:** F-a no un-reject (confirm route clears the flag but restores no attendance field); F-b reject
+  leaves `actual_hours` + shift metrics; F-c confirm/reject have no role guard (→ P2-11); F-d re-import INSERT OR REPLACE
+  may revive a rejected pair (unverified); F-e after reject/confirm the row still shows Pending until reload —
+  `getNightShifts` lacks `fresh` (server GET max-age=5), same on main.
 ## Last Session — 2026-10-10 (P1-09: Miss Punch "all resolved" banner followed the filter, not real work)
 **Branch `fix/misspunch-all-resolved-banner`, NOT merged.** Frontend only (`pages/MissPunch.jsx`, banner + progress label).
 Plan + log: `docs/ux-bulk/prs/P1-09/PLAN.md`, `PROGRESS.md`. Finding P-5. Planner rulings Q1–Q3 (10 Oct).
