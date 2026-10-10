@@ -68,7 +68,8 @@ describe('T12 — flags ON with a live loan', () => {
     const sep = salary(db, emp.code, 9, 2026);
     expect(sep.pf_employee).toBeGreaterThan(0);
     expect(sep.esi_employee).toBeGreaterThan(0);
-    const before = sep.pf_employee + sep.esi_employee + sep.advance_recovery;
+    expect(sep.lwf_employee).toBe(5); // PR-2: LWF Y from September; ranks above the loan (headroom.js)
+    const before = sep.pf_employee + sep.esi_employee + sep.advance_recovery + sep.lwf_employee;
     const cap = Math.floor(sep.gross_earned * 0.5 * 100) / 100;
     expect(sep.loan_recovery).toBeCloseTo(Math.min(3000, Math.max(0, cap - before)), 2);
     expect(sep.loan_recovery).toBeLessThan(3000); // the cap binds because PF/ESI now take room

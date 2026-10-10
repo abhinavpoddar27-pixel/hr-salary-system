@@ -443,20 +443,25 @@ stop and report.
 
 ### 2. Deduction components
 
-Checks that `total_deductions` equals the sum of its components.
+Checks that `total_deductions` equals the sum of its components. From statutory flags PR-2 the
+employee LWF (`lwf_employee`, ₹5 for flagged employees with earned gross > 0) is one of them — without
+that term every flagged row reads ₹5 short (N2). The `backend/scripts` simulations' `componentShort`
+checks still use the 10-component sum; their employees are unflagged, so it stays exact there.
 
 ```sql
 SELECT month, year, company, COUNT(*) AS rows_off,
        ROUND(SUM((COALESCE(pf_employee,0) + COALESCE(esi_employee,0) + COALESCE(professional_tax,0)
          + COALESCE(tds,0) + COALESCE(advance_recovery,0) + COALESCE(lop_deduction,0)
          + COALESCE(other_deductions,0) + COALESCE(loan_recovery,0)
-         + COALESCE(late_coming_deduction,0) + COALESCE(early_exit_deduction,0))
+         + COALESCE(late_coming_deduction,0) + COALESCE(early_exit_deduction,0)
+         + COALESCE(lwf_employee,0))
          - total_deductions), 2) AS components_minus_total
 FROM salary_computations
 WHERE ABS(total_deductions - (COALESCE(pf_employee,0) + COALESCE(esi_employee,0)
          + COALESCE(professional_tax,0) + COALESCE(tds,0) + COALESCE(advance_recovery,0)
          + COALESCE(lop_deduction,0) + COALESCE(other_deductions,0) + COALESCE(loan_recovery,0)
-         + COALESCE(late_coming_deduction,0) + COALESCE(early_exit_deduction,0))) > 1
+         + COALESCE(late_coming_deduction,0) + COALESCE(early_exit_deduction,0)
+         + COALESCE(lwf_employee,0))) > 1
 GROUP BY month, year, company
 ORDER BY year, month;
 ```
