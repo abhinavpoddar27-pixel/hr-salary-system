@@ -4,7 +4,6 @@ const XLSX = require('xlsx');
 const { getDb } = require('../database/db');
 const { generatePFECR, generateESIFile, generateBankFile, missingCodesHeader } = require('../services/exportFormats');
 const { buildLwfRegister, lwfRegisterWorkbook } = require('../services/lwfRegister');
-const { requireAdmin } = require('../middleware/roles');
 
 // Role gate — HR / finance / admin may read the leave register and (statutory flags PR-3,
 // owner ruling C4) every report here that serves UANs, ESI numbers or bank accounts:
@@ -15,6 +14,14 @@ function requireHrFinanceOrAdmin(req, res, next) {
   if (role !== 'hr' && role !== 'finance' && role !== 'admin') {
     return res.status(403).json({ success: false, error: 'HR, finance, or admin access required' });
   }
+  next();
+}
+
+// Admin only (PR-3 review, D-16) — same raw-role check as above (JWT roles are normalised at login).
+// Kept local: importing middleware/roles pulls routes/auth → middleware/auth, which throws at load
+// without JWT_SECRET, and this router is also loaded standalone (docs/statutory-flags/sim/filing_identity.js).
+function requireAdmin(req, res, next) {
+  if (req.user?.role !== 'admin') return res.status(403).json({ success: false, error: 'Admin access required' });
   next();
 }
 

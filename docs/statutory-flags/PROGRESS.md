@@ -209,8 +209,8 @@
 
 - PR-3 REVIEW FIX 1 — c845cc2 `fix(filing): company config write admin only`. Independent review: SHIP WITH FIXES. reports.js
   `PUT /company-config/:id` had no role check while GET is now restricted. No screen edits it (`updateCompanyConfig` in api.js has no
-  caller); the company master write in Settings (`POST /settings/companies`) is `requireAdmin` → `requireAdmin` from middleware/roles
-  (D-16). statutoryFilingPlant.test.js +1: viewer / hr / finance 403 ('Admin access required') with company_config byte-unchanged,
+  caller); the company master write in Settings (`POST /settings/companies`) is `requireAdmin` → admin only (D-16; the gate is
+  a local `requireAdmin` in reports.js since REVIEW FIX 1b). statutoryFilingPlant.test.js +1: viewer / hr / finance 403 ('Admin access required') with company_config byte-unchanged,
   no token 401, admin 200 writes the three fields; fails on the previous reports.js. OPEN_ITEMS entry marked fixed.
 
 - PR-3 REVIEW FIX 2 — d164fd0 `docs(filing): only missing rows with a contribution block filing`. RUNBOOK T7 rule now: missing
@@ -221,17 +221,31 @@
   toast naming them. Reports.jsx: MissingPanel marks ₹0 rows; the confirm fires only for rows with a contribution and mentions the
   ₹0 ones. OPEN_ITEMS D-F6 note updated. dist rebuilt.
 
-- PR-3 REVIEW FIX 3 — (next commit) `docs(statutory): open items from the PR-3 review`. OPEN_ITEMS, not fixed here: (a) the viewer
+- PR-3 REVIEW FIX 3 — 06efa5c `docs(statutory): open items from the PR-3 review`. OPEN_ITEMS, not fixed here: (a) the viewer
   can read UAN / ESI / bank via `GET /api/employees` (employees.js:179 `SELECT e.*`), `GET /api/employees/:code` and
   `GET /api/payroll/payslip/:code` (all requireAuth only; checked); `/payslips/bulk` is 403 for everyone by policy (checked, not
   listed as an exposure). (b) numberInUse counts Left / Exited rows, returns the code without the company, and compares raw stored
   values (legacy spaced numbers slip through); none in production today.
 
+- PR-3 MERGE — 9f70de9 `Merge origin/feat/lwf-sales (7eed259 …)` (`git fetch origin`; PR-2b now carries origin/main 3a7630f, #71
+  leave employee search). Auto-merged with no conflict hunks: CLAUDE.md (every entry kept; PR-3 on top, then PR-2b, #71, PR-2 … as
+  7eed259 ordered them) and frontend/src/utils/api.js (= 7eed259 + PR-3's own lines: fresh on the filing helpers, LWF register,
+  salesExportESI, getSalesEmployees). frontend/dist: 221 rename/content conflicts → 7eed259's dist taken wholesale. No other file
+  conflicted; no backend file changed on 7eed259. d2b07d3 `build(frontend): rebuild dist after merging origin/feat/lwf-sales` —
+  bundle has PR-3's chunks and #71's "Type code or name…" (LeaveManagement); a second `rm -rf dist && npm run build` → git status
+  clean.
+- PR-3 REVIEW FIX 1b — (next commit) `fix(filing): reports.js keeps a local admin gate`. Found by re-running filing_identity.js after
+  the merge: importing `requireAdmin` from middleware/roles made reports.js pull routes/auth → middleware/auth, which throws at load
+  without JWT_SECRET (filing_identity.js loads the router standalone). Now a local `requireAdmin` beside `requireHrFinanceOrAdmin`
+  (raw role; JWT roles are normalised at login). D-16 test unchanged and still fails on e3af923's file; identity 106/106 + 79/79.
+
 ## LAST STEP
-PR-3 review fix 3 (OPEN_ITEMS).
+PR-3 review fixes 1–4 + merge of origin/feat/lwf-sales 7eed259.
 
 ## NEXT STEP
-Review fixes 2 (RUNBOOK T7 vs V16), 3 (OPEN_ITEMS), 4 (merge origin/feat/lwf-sales 7eed259); then chat: push, PR
+chat: push, PR (merge PR #73 first)
+
+
 
 ## OWNER RULINGS ADDED DURING THE BUILD
 (record date + ruling; BUILD_PLAN §1 holds the original set)
