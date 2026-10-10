@@ -34,6 +34,15 @@ REAL logins, on a SCRATCH database. Never point it at a real database.
     non-borrower (seeded); the sales payslip page likewise; the close tab's Plant / Sales
     toggle — sales readiness, a sales close by finance (201), the history row, hr read-only.
     Screens go to <screenshot_dir>/pr9/.
+  * Pass 6 (Loans PR-10) — import from the accounts Excel. No new login. Seeds 3 plant
+    employees + 1 Left one, writes an .xlsx whose amount headers are not recognised
+    ("Owed", "Cut per month"): hr downloads the template, uploads, maps the two columns,
+    creates the batch, confirms an exact and a close-spelling match; the Left-only name sits
+    in "Left — settle outside the app" and the unknown name is out; finance confirms one
+    balance and corrects another (note required); the admin approves with the cutover month;
+    the cutover check renders + Excel; the imported loan carries the badge; the outstanding
+    report labels it "Opening balance (import)"; the viewer is read-only. Screens go to
+    <screenshot_dir>/pr10/.
 
 Usage:  python3 backend/scripts/loans-ui-browser-check.py [screenshot_dir]
 Needs Python Playwright and Chromium (PLAYWRIGHT_BROWSERS_PATH, e.g. /opt/pw-browsers).
@@ -59,6 +68,7 @@ OUT = os.path.abspath(sys.argv[1]) if len(sys.argv) > 1 else os.path.join(ROOT, 
 OUT6B = os.path.join(OUT, 'pr6b')
 OUT8 = os.path.join(OUT, 'pr8')
 OUT9 = os.path.join(OUT, 'pr9')
+OUT10 = os.path.join(OUT, 'pr10')
 PORT = int(os.environ.get('PORT', '3997'))
 BASE = f'http://127.0.0.1:{PORT}'
 COMPANY = 'Indriyan Beverages Pvt Ltd'
@@ -543,6 +553,7 @@ def run_browser(db_path, admin_loan_id):
         run_close_pass(browser, db_path, hr, admin, fin, viewer)
         run_sales_pass(db_path, hr)
         run_reports_pass(db_path, hr, admin, fin, viewer)
+        run_import_pass(db_path, hr, admin, fin, viewer)
 
         browser.close()
 
@@ -1052,6 +1063,122 @@ def run_reports_pass(db_path, hr, admin, fin, viewer):
     hr.get_by_test_id('loan-close').wait_for()
     hr.get_by_test_id('close-payroll-sales').click()
     check('close tab (sales): hr is read-only', visible(hr, 'close-readonly') and hr.get_by_test_id('close-run').count() == 0)
+
+# ── Pass 6 (Loans PR-10): import from the accounts Excel ─────────────────────
+IMPORT_XLSX_JS = r'''
+const [root, out] = process.argv.slice(2);
+const XLSX = require(root + '/backend/node_modules/xlsx');
+const wb = XLSX.utils.book_new();
+XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([
+  ['Loans register (accounts)'], [],
+  ['Emp Name', 'Firm', 'Owed', 'Cut per month', 'Remarks'],
+  ['Imran Qureshi', 'Indriyan', 9000, 3000, ''],
+  ['Jaspal Ranaa', 'Indriyan', 5000, 2000, ''],
+  ['Lal Chand', 'Indriyan', 4000, 1000, 'left in Aug'],
+  ['Nobody Known', 'Indriyan', 2000, 500, ''],
+]), 'Sheet1');
+XLSX.writeFile(wb, out);
+'''
+
+
+def run_import_pass(db_path, hr, admin, fin, viewer):
+    print('\n— Pass 6: import from the accounts Excel (Loans PR-10) —')
+    con = sqlite3.connect(db_path, timeout=10)
+    for code, name, status in [('I201', 'Imran Qureshi', 'Active'), ('I202', 'Jaspal Rana', 'Active'), ('I203', 'Komal Dutt', 'Active'), ('I204', 'Lal Chand', 'Left')]:
+        con.execute("""INSERT INTO employees (code, name, department, company, status, employment_type, is_contractor, gross_salary, date_of_joining)
+                       VALUES (?, ?, 'PRODUCTION', ?, ?, 'Permanent', 0, 24000, '2022-01-01')""", (code, name, COMPANY, status))
+    con.commit()
+    con.close()
+    work = os.path.dirname(db_path)
+    js = os.path.join(work, 'import-xlsx.js')
+    with open(js, 'w') as f:
+        f.write(IMPORT_XLSX_JS)
+    xlsx = os.path.join(work, 'accounts_loans.xlsx')
+    subprocess.check_call(['node', js, ROOT, xlsx])
+
+    hr.goto(f'{BASE}/loans?tab=import')
+    check('Import tab renders for hr', visible(hr, 'imp-tab', 15000))
+    try:
+        with hr.expect_download(timeout=15000) as dl:
+            hr.get_by_test_id('imp-template').click()
+        tpath = os.path.join(work, dl.value.suggested_filename)
+        dl.value.save_as(tpath)
+        check('hr: template downloads as .xlsx', tpath.endswith('.xlsx') and os.path.getsize(tpath) > 1000, tpath)
+    except Exception as e:
+        check('hr: template downloads as .xlsx', False, repr(e)[:200])
+    hr.get_by_test_id('imp-file').set_input_files(xlsx)
+    st = hr.get_by_test_id('imp-parse-status')
+    st.wait_for(timeout=15000)
+    check('hr: unrecognised amount headers → the mapping step', 'Map the columns' in st.inner_text(), st.inner_text())
+    shot(hr, '01-mapping-step', element='imp-upload', out=OUT10)
+    hr.get_by_test_id('imp-map-outstanding').select_option(label='Owed')
+    hr.get_by_test_id('imp-map-emi').select_option(label='Cut per month')
+    hr.get_by_test_id('imp-reparse').click()
+    hr.get_by_text('Check the column mapping').wait_for(timeout=15000)
+    check('hr: after mapping, 4 rows read and a preview shown', '4 rows' in st.inner_text() and visible(hr, 'imp-preview'), st.inner_text())
+    hr.get_by_test_id('imp-create').click()
+    check('hr: batch created (toast)', toast(hr, 'created: 4 rows'))
+    check('hr: batch view opens', visible(hr, 'imp-batch', 15000))
+    check('row 4 (exact) proposed, row 5 close spelling', hr.get_by_test_id('imp-tier-4').inner_text() == 'Exact name'
+          and hr.get_by_test_id('imp-tier-5').inner_text() == 'Close spelling')
+    check('Left-only name listed under "Left — settle outside the app"', visible(hr, 'imp-left') and 'Lal Chand' in hr.get_by_test_id('imp-left').inner_text())
+    check('unknown name is "Not imported"', hr.get_by_test_id('imp-state-7').inner_text() == 'Not imported')
+    hr.get_by_test_id('imp-confirm-4').click()
+    check('hr: exact match confirmed', toast(hr, 'Row 4: match confirmed'))
+    hr.get_by_test_id('imp-cand-5').select_option(index=1)
+    hr.get_by_test_id('imp-confirm-5').click()
+    check('hr: close-spelling match confirmed', toast(hr, 'Row 5: match confirmed'))
+    check('hr: no balance inputs for hr', hr.locator('[data-testid^="imp-balance-confirm-"]').count() == 0)
+    shot(hr, '02-hr-matched', element='imp-rows', out=OUT10)
+    batch_id = int(hr.get_by_role('heading', name='Batch #').inner_text().split('#')[1].split(' ')[0])
+
+    fin.goto(f'{BASE}/loans?tab=import')
+    fin.get_by_test_id(f'imp-batch-{batch_id}').click()
+    fin.get_by_test_id('imp-balance-confirm-4').click()
+    check('finance: balance confirmed as in the Excel', toast(fin, 'Row 4: balance confirmed'))
+    fin.get_by_test_id('imp-emi-5').fill('2500')
+    check('finance: a changed value needs a note (button disabled)', fin.get_by_test_id('imp-balance-confirm-5').is_disabled())
+    fin.get_by_test_id('imp-note-5').fill('ledger shows 2,500 from Oct')
+    fin.get_by_test_id('imp-balance-confirm-5').click()
+    check('finance: corrected balance confirmed', toast(fin, 'Row 5: balance confirmed'))
+    check('finance: no match buttons for finance', fin.locator('[data-testid^="imp-confirm-"]').count() == 0)
+    shot(fin, '03-finance-confirmed', element='imp-rows', out=OUT10)
+
+    admin.goto(f'{BASE}/loans?tab=import')
+    admin.get_by_test_id(f'imp-batch-{batch_id}').click()
+    check('admin: approve panel, no blockers', visible(admin, 'imp-approve', 15000) and admin.get_by_test_id('imp-blockers').count() == 0)
+    check('admin: totals show 2 loans', '2 loans' in admin.get_by_test_id('imp-totals').inner_text(), admin.get_by_test_id('imp-totals').inner_text())
+    shot(admin, '04-admin-approve', element='imp-approve', out=OUT10)
+    admin.get_by_test_id('imp-approve-go').click()
+    check('admin: approval toast', toast(admin, '2 loans imported'))
+    check('admin: result banner', visible(admin, 'imp-result', 15000))
+    check('admin: cutover check renders 2 rows', visible(admin, 'imp-cutover-check', 15000) and admin.locator('[data-testid^="imp-cc-"]').count() >= 2)
+    try:
+        with admin.expect_download(timeout=15000) as dl:
+            admin.get_by_test_id('imp-cutover-xlsx').click()
+        check('admin: cutover check Excel downloads', dl.value.suggested_filename.endswith('.xlsx'), dl.value.suggested_filename)
+    except Exception as e:
+        check('admin: cutover check Excel downloads', False, repr(e)[:200])
+    shot(admin, '05-cutover-check', element='imp-batch', out=OUT10)
+    con = sqlite3.connect(db_path, timeout=10)
+    rows = con.execute("SELECT id, employee_code, disbursed_amount, emi_amount, disbursed_by, disbursement_mode FROM loans WHERE disbursement_mode = 'Opening balance (import)' ORDER BY id").fetchall()
+    events = con.execute("SELECT COUNT(*) FROM loan_events WHERE event = 'imported'").fetchone()[0]
+    con.close()
+    check('DB: 2 imported loans (I201 ₹9,000 / ₹3,000; I202 ₹5,000 / ₹2,500), disbursed_by = finance',
+          [(r[1], r[2], r[3], r[4]) for r in rows] == [('I201', 9000.0, 3000.0, 'finance'), ('I202', 5000.0, 2500.0, 'finance')], rows)
+    check('DB: one imported event per loan', events == 2, events)
+    admin.goto(f'{BASE}/loans/{rows[0][0]}')
+    check('loan page: "Imported opening balance" badge', visible(admin, 'loan-imported', 15000))
+    shot(admin, '06-loan-imported', out=OUT10)
+    fin.goto(f'{BASE}/loans?tab=reports')
+    check('Reports: outstanding labels the import "Opening balance (import)"', visible(fin, 'rep-opening-import', 15000))
+    viewer.goto(f'{BASE}/loans?tab=import')
+    check('viewer: Import tab read-only (no upload, no template)', visible(viewer, 'imp-tab', 15000)
+          and viewer.get_by_test_id('imp-upload').count() == 0 and viewer.get_by_test_id('imp-template').count() == 0)
+    viewer.get_by_test_id(f'imp-batch-{batch_id}').click()
+    viewer.get_by_test_id('imp-batch').wait_for(timeout=15000)
+    check('viewer: no confirm / approve controls', viewer.locator('[data-testid^="imp-confirm-"], [data-testid="imp-approve-go"]').count() == 0)
+
 
 if __name__ == '__main__':
     main()

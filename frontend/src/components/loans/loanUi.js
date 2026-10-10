@@ -9,6 +9,8 @@ import { normalizeRole } from '../../utils/role'
 export const LOAN_COMPANIES = ['Indriyan Beverages Pvt Ltd', 'Asian Lakto Ind Ltd']
 
 export const DISBURSE_MODES = ['Bank transfer', 'Cheque', 'Cash']
+/** Loans PR-10: disbursement_mode of a loan imported from the accounts Excel (an opening balance, not a payout). */
+export const IMPORT_MODE = 'Opening balance (import)'
 export const RECEIPT_MODES = ['Cash', 'Bank transfer', 'Cheque', 'UPI']
 
 export const LOAN_STATE = {
