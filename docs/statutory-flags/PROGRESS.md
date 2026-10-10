@@ -109,7 +109,7 @@
   overtime, headcount, department-payroll. 12 tests: viewer 403 (no X-Missing-* leaks), hr / finance / admin 200, no token 401 on
   all 11 URLs (incl. the 3 downloads); **11 of 12 FAIL on the STEP 2 file** (the open-reports test passes = unchanged).
 
-- PR-3 STEP 3 — (next commit) `feat(filing): sales ESI contribution file`. salesExportFormats.js: NEW `generateSalesESIFile` (before
+- PR-3 STEP 3 — e097a32 `feat(filing): sales ESI contribution file`. salesExportFormats.js: NEW `generateSalesESIFile` (before
   module.exports): `sales_salary_computations c LEFT JOIN sales_employees e` (code + company), month/year/company, ORDER BY e.name, code;
   rows = ESI (EE + ER) > 0, OR the in-force structure (`carryFlags(db,'sales',e.id,monthKey('sales',YYYY-MM))`) has ESI on and
   `gross_monthly <= esi_threshold` (policy, parsed like compute's getPolicyNumber; default 21000); hold rows in. Line = the plant builder
@@ -123,11 +123,23 @@
   (400 ×4, JSON, download = generator content + header + DB snapshot unchanged incl. audit_log count, hr/finance/admin 200, viewer
   403, no token 401, rest of the sales router still finance 403). **6/6 FAIL on dcad556's files**. Guard unedited, 86 neighbour tests green.
 
+- PR-3 STEP 4 — (next commit) `feat(filing): sales master edits ESI number / UAN under the upload's rules`. sales.js only: UPDATABLE_FIELDS
+  += `'esi_number', 'uan'` (never in STATUTORY_FLAG_FIELDS); the statutoryFlags require += `ESI_NUMBER_RE, UAN_RE, numberInUse`; NEW
+  `checkStatutoryNumbers(db, body, existing)` (spaces stripped, '' → NULL; unchanged vs stored (normalised) → removed from the body
+  (N2); malformed → 400 `INVALID_ESI_NUMBER` / `INVALID_UAN`; `numberInUse(db,'sales',col,v,existing?.id ?? -1)` → 409
+  `NUMBER_IN_USE` + `heldBy` + `field`); called in POST `/employees` after the doj check and in PUT `/employees/:code` after the status
+  check — both before any write; the existing writeAudit logs the change (stage `sales_employee_master`). PUT loop line
+  `if (STATUTORY_FLAG_FIELDS.includes(field)) continue;` untouched (N8). statutoryNumbers.test.js F7 ×6 (valid with spaces → stored
+  normalised + 2 audit rows; 4 malformed → 400 with the other fields NOT written; held → 409 heldBy, also from the other company (N3),
+  nothing written; legacy bad '12345' re-sent with a name edit → 200 + only the name audited, a changed value still checked; '' / spaces
+  → NULL audited; flags → ignoredFields, master flags + structures unchanged, number written) + F8 ×2 (valid 201 normalised; 400 / 409
+  create nothing). **8/8 FAIL on the STEP 3 sales.js.** statutoryWriterGuard.test.js **unedited, 9/9**; 98 neighbour tests green.
+
 ## LAST STEP
-PR-3 STEP 3 (sales ESI file + route).
+PR-3 STEP 4 (sales master numbers).
 
 ## NEXT STEP
-PR-3 STEP 4 (sales master ESI number / UAN edits). Carried from PR-2b: run VERIFY V13 on production before PR-2b deploys; do NOT recompute sales September until D3 is answered.
+PR-3 STEP 5 (LWF register). Carried from PR-2b: run VERIFY V13 on production before PR-2b deploys; do NOT recompute sales September until D3 is answered.
 
 ## OWNER RULINGS ADDED DURING THE BUILD
 (record date + ruling; BUILD_PLAN §1 holds the original set)

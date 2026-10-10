@@ -1147,6 +1147,7 @@ const UPDATABLE_FIELDS = [
   'designation', 'punch_no', 'working_hours',
   'gross_salary', 'pf_applicable', 'esi_applicable', 'lwf_applicable', 'pt_applicable',
   'bank_name', 'account_no', 'ifsc',
+  'esi_number', 'uan',
   'status',
   'predecessor_type', 'predecessor_id', 'predecessor_code'
 ];
@@ -1155,9 +1156,36 @@ const UPDATABLE_FIELDS = [
 // statutory upload. PUT /employees/:code ignores them (returns ignoredFields);
 // POST /employees (create) may still set them on the new employee (§4.4).
 const STATUTORY_FLAG_FIELDS = ['pf_applicable', 'esi_applicable', 'lwf_applicable'];
-const { carryFlags, structureDatedAfter } = require('../services/statutoryFlags');
+const { carryFlags, structureDatedAfter, ESI_NUMBER_RE, UAN_RE, numberInUse } = require('../services/statutoryFlags');
 // A structure row's effective_from taken from a request: YYYY-MM, month 01–12 only.
 const SALES_MONTH_RE = /^\d{4}-(0[1-9]|1[0-2])$/;
+
+// Statutory flags PR-3: the master's ESI number / UAN follow the statutory upload's rules
+// (ESI_NUMBER_RE, UAN_RE, numberInUse — exported from the service, not copied): spaces
+// stripped, '' → NULL, 10 / 12 digits, not held by another sales employee (any company,
+// N3). Checked only when the value CHANGES (normalised), so a legacy bad value never
+// blocks an unrelated edit (N2) — an unchanged value is dropped from the body. Runs before
+// any write; normalises body in place. Returns null, or { status, body } to send.
+function checkStatutoryNumbers(db, body, existing) {
+  const norm = (v) => (v === undefined ? undefined : (v === null ? null : (String(v).replace(/\s+/g, '') || null)));
+  const RULES = [
+    ['esi_number', ESI_NUMBER_RE, 'INVALID_ESI_NUMBER', 'ESI number must be 10 digits (spaces are ignored)', 'ESI number'],
+    ['uan', UAN_RE, 'INVALID_UAN', 'UAN must be 12 digits (spaces are ignored)', 'UAN'],
+  ];
+  for (const [col, re, code, message, label] of RULES) {
+    const v = norm(body[col]);
+    if (v === undefined) continue;
+    if (existing && v === norm(existing[col] ?? null)) { delete body[col]; continue; }
+    body[col] = v;
+    if (v === null) continue;
+    if (!re.test(v)) return { status: 400, body: { success: false, code, field: col, error: message } };
+    const heldBy = numberInUse(db, 'sales', col, v, existing?.id ?? -1);
+    if (heldBy) {
+      return { status: 409, body: { success: false, code: 'NUMBER_IN_USE', field: col, heldBy, error: `${label} ${v} is already used by sales employee ${heldBy}` } };
+    }
+  }
+  return null;
+}
 
 const VALID_STATUSES = ['Active', 'Inactive', 'Left', 'Exited'];
 
@@ -1389,6 +1417,10 @@ router.post('/employees', (req, res) => {
     return res.status(400).json({ success: false, error: 'doj must be YYYY-MM-DD with month 01–12 (it dates the salary structure)' });
   }
 
+  // PR-3: ESI number / UAN under the statutory upload's rules — before anything is written.
+  const numberRefusal = checkStatutoryNumbers(db, body, null);
+  if (numberRefusal) return res.status(numberRefusal.status).json(numberRefusal.body);
+
   const explicitCode = body.code && String(body.code).trim() !== ''
     ? String(body.code).trim()
     : null;
@@ -1524,6 +1556,10 @@ router.put('/employees/:code', (req, res) => {
   if (body.status !== undefined && !VALID_STATUSES.includes(body.status)) {
     return res.status(400).json({ success: false, error: `Invalid status. Must be one of: ${VALID_STATUSES.join(', ')}` });
   }
+
+  // PR-3: ESI number / UAN under the statutory upload's rules (only when changed) — before any write.
+  const numberRefusal = checkStatutoryNumbers(db, body, existing);
+  if (numberRefusal) return res.status(numberRefusal.status).json(numberRefusal.body);
 
   const setClauses = [];
   const params = [];
