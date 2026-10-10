@@ -2940,7 +2940,9 @@ router.get('/salary-register', (req, res) => {
     net_salary: acc.net_salary + (r.net_salary || 0),
     incentive_amount: acc.incentive_amount + (r.incentive_amount || 0),
     diwali_bonus: acc.diwali_bonus + (r.diwali_bonus || 0),
-  }), { gross_earned: 0, total_deductions: 0, net_salary: 0, incentive_amount: 0, diwali_bonus: 0 });
+    lwf_employee: acc.lwf_employee + (r.lwf_employee || 0),
+    lwf_employer: acc.lwf_employer + (r.lwf_employer || 0),
+  }), { gross_earned: 0, total_deductions: 0, net_salary: 0, incentive_amount: 0, diwali_bonus: 0, lwf_employee: 0, lwf_employer: 0 });
 
   const round2 = (n) => Math.round(n * 100) / 100;
   Object.keys(totals).forEach(k => totals[k] = round2(totals[k]));
@@ -3007,17 +3009,17 @@ router.put('/salary/:id', (req, res) => {
         salary: {
           gross_earned: existing.gross_earned, pf_employee: existing.pf_employee, esi_employee: existing.esi_employee,
           professional_tax: existing.professional_tax, tds: existing.tds, advance_recovery: existing.advance_recovery,
-          diwali_recovery: 0, other_deductions: otherDed,
+          diwali_recovery: 0, other_deductions: otherDed, lwf_employee: existing.lwf_employee || 0,
         },
       });
       if (!loanPlan.skipped) loanRecovery = loanPlan.totalRupees;
     }
-    // Rebuild total_deductions from the non-editable components + loan + other_deductions.
-    // (diwali_recovery is 0 per Q5 reversal — not in the sum.)
+    // Rebuild total_deductions from the non-editable components (incl. LWF(EE), statutory
+    // flags PR-2b) + loan + other_deductions. (diwali_recovery is 0 per Q5 reversal — not in the sum.)
     const fixedDeductions =
       (existing.pf_employee || 0) + (existing.esi_employee || 0) +
       (existing.professional_tax || 0) + (existing.tds || 0) +
-      (existing.advance_recovery || 0) + loanRecovery;
+      (existing.advance_recovery || 0) + (existing.lwf_employee || 0) + loanRecovery;
     newTotalDed = Math.round((fixedDeductions + otherDed) * 100) / 100;
     newNetSalary = salesNetWithLoanFloor((existing.gross_earned || 0) + diwaliBonus + incentive - newTotalDed, loanRecovery);
 

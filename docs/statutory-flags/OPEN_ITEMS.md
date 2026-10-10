@@ -58,3 +58,20 @@
   September's PF base. Same family as the 'splits lag a month' item. Follow-up PR; HR to avoid split-only edits for
   those employees until then.
 - PF scope widening (EPF ceiling ₹25,000 from 17 Sep 2026, S.O. 5109(E)) — owner chose to keep the 6.
+
+## Added by PR-2b (sales LWF, 10 Oct 2026)
+- N3 Sales `paid` is terminal: `PUT /api/sales/salary/:id` refuses a `paid` (or `finalized`) row with 409 and there is
+  no move out of `paid`. So Other Deductions / TDS can never be entered on a paid sales row. Production 11:45 IST
+  (C2): September sales has 0 finalized, 0 paid (215 computed incl. 187 NEFT-exported + 15 hold), so a 6A run can
+  still take them; any row moved to `paid` first cannot.
+- N5 (review C5) A flagged sales row with a tiny earned gross and NO loan can go negative by the ₹5 LWF — e.g. 0 days
+  given but a gazetted holiday in the cycle gives gross_earned > 0, so LWF is charged (R7 literal), and the ₹0 floor
+  applies only to rows that carry a loan (PR-8 Q1). Pinned as current behaviour by `lwfSales.test.js` (C5 / N5 pin);
+  no code change. The V8 identity still holds on such a row. Owner: decide whether LWF should need a minimum earned
+  gross or days given.
+- N9 The LWF amounts (`lwf_employee_amount` '5', `lwf_employer_amount` '20') are not on the Settings → Policy tab;
+  change them only through the admin policy API or the SQL Console UI (with a remark). A non-numeric or negative value
+  makes compute fall back to 5 / 20 (both payrolls); VERIFY V12 / V14 read the stored value and would list rows.
+- N10 Employee Profile shows only total / PF / ESI deductions (the total includes LWF). Employee Quick View reads
+  `ee_pf` / `ee_esi` / `basic_earned` / `net_salary`, which the payslip payload never returns — blank already,
+  pre-existing, not touched.
