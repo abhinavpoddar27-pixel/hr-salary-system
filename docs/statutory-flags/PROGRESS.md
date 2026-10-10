@@ -8,7 +8,7 @@
 4. Continue from NEXT STEP. Update this file after every small step (state, done, next) and commit it.
 
 ## PR STATUS
-- PR-1 feat/statutory-flags — REVIEW FIXES IN PROGRESS (independent review of a4eb3d1: SHIP WITH FIXES) — then BUILT LOCALLY — awaiting push (repo public). Base d1ad7bf.
+- PR-1 feat/statutory-flags — BUILT LOCALLY — awaiting push (repo public). Independent review of a4eb3d1 (SHIP WITH FIXES) addressed: fixes 1–4 committed. Code head 923dad3 (+ this PROGRESS commit on top), base d1ad7bf (origin/main unchanged), 49 suites / 886 tests green, sim 68/68.
 - PR-2 feat/lwf-deduction — NOT STARTED
 - PR-3 feat/statutory-filing — NOT STARTED
 
@@ -34,12 +34,15 @@
 - REVIEW FIX 2 — e5ceaef `fix(statutory): never write a number duplicated in the file or already held by another employee` (review minor 2). planFlagChanges pre-counts every non-blank ESI number / UAN across the file (spaces stripped, as the write does); a number on ≥2 rows → warning on every such row ('repeated on rows … of this file — not written for any of them'), written for none; flags + other unique numbers still apply. DB conflict (held by another employee): already warned + not written (T7) — unchanged, now also tested for sales. 2 tests (plant 3-row repeat incl. a spaced variant; sales in-file repeat + held-by-other); both FAIL on the pre-fix service. Suite 49 / 885.
 - REVIEW FIX 3 — 9278f9a `fix(statutory): same company normalisation in parser and matcher` (review minor 3). One shared normCompany (trim, collapse spaces, lower case) used by parseFlagFile's repeat key and matchEmployee; two sales rows for one code whose company differs only in case/spacing → blocking 'repeats row N', nothing applied. 1 test (lower-case + extra-space variants; apply refused, structures unchanged, 0 batches); FAILS on the pre-fix service. Suite 49 / 886.
 - REVIEW FIX 4 — 5e2bb64 `docs(statutory): state the undo file's exact limits` (review minor 1). Mechanism unchanged. Wording 'Restores the flags that were in force at the effective month onto that month, later rows and the master. A later-dated row that had different flags before this batch is set to the effective-month value. Added ESI numbers / UANs and the extra structure rows stay.' in RUNBOOK.md T4 Undo, StatutoryFlags.jsx (header comment; UNDO_LIMITS constant shown in the confirm dialog and under batch history, data-testid undo-limits) and the buildUndoWorkbook comment. D-4 now reads with this limit. frontend/dist rebuilt + committed in the same commit (clean build of the previous source reproduced dist byte-identically first). Suite 49 / 886.
+- REVIEW PHASE 2 — 0d805b2. Re-read every hunk a4eb3d1..HEAD (salary-input.js approve, sales.js versionSalesStructureForGross / PUT / POST /structures, statutoryFlags.js structureDatedAfter / normCompany / file-duplicate numbers / undo comment, StatutoryFlags.jsx UNDO_LIMITS) against IMPL_PR1 + BUILD_PLAN §3: no DO-NOT-MODIFY file touched (salaryComputation.js, schema.js, payroll.js unchanged since a4eb3d1); flags never written by the new paths (plant same-date UPDATE lists gross + components only; sales same-date UPDATE from `optional`, no flag). Caught: the new dynamic same-date SET in POST /structures was not covered by the guard → statutoryWriterGuard asserts its `optional` list names no flag (injecting 'esi_applicable' fails the suite). Noted for the owner in OPEN_ITEMS: plant compute reads gross from employees.gross_salary for every month (pre-existing). UPSERT counts unchanged: plant 56/56/56/53, sales 45/45/45/42 (reviewer's adv3.js). node --check clean on 10 backend files. Full jest twice: 49 / 886, 0 failures.
+- REVIEW SIM — 8d5f82e. docs/statutory-flags/sim/run.py re-run on a throwaway temp DATA_DIR (synthetic, sales bootstrap skipped) + 10 new checks: sales back-dated gross edit 2026-05 after the upload → 409, nothing written (structures, master gross, audit_log), Sep + Oct pay unchanged; plant HR gross change → pending; back-dated approval 2026-08-15 → 409, request Pending, rows + master unchanged, Sep pay unchanged; same-date approval 2026-09-01 → one row at that date updated in place with its own flags, Sep pays the new gross + split; drift 0 rows both; confirm dialog states the undo limits. seed.js adds an Oct sales upload. 68/68. A clean `npm run build` reproduces frontend/dist byte-identically.
+- REVIEW PHASE 4 (local only) — git fetch origin main: still d1ad7bf → no rebase (C5: 0 conflicts). CLAUDE.md Section 0 entry updated (923dad3). NOT PUSHED (C6: repo public). Code head before this PROGRESS commit: 923dad3f84c50bbd6ab14b3200e6281c35ec1b8d.
 
 ## LAST STEP
-REVIEW FIX 4 — 5e2bb64 (undo-file wording; dist rebuilt). Suite 49 / 886.
+REVIEW PHASE 4 (local only) — origin/main still d1ad7bf, no rebase; jest 49 / 886 ×2; sim 68/68; CLAUDE.md updated. NOT PUSHED. Code head before this PROGRESS commit: 923dad3f84c50bbd6ab14b3200e6281c35ec1b8d.
 
 ## NEXT STEP
-Phase 2 again over the four fixes (re-read vs IMPL_PR1 + BUILD_PLAN §3; jest ×2; node --check; UPSERT counts), sim re-run + M1 checks, fetch/rebase check, CLAUDE.md + PROGRESS, new head SHA. After that the owner steps below still apply.
+None for the build agent. Owner: confirm the 10 Oct planner ruling (structure writes dated before a later row → 409; same date → in place); decide OPEN_ITEMS 'plant compute gross source'. Then:
 
 OWNER: (1) make the repo private (GitHub → Settings → General → Danger Zone); (2) from a clone of this branch: git push -u origin feat/statutory-flags; check git rev-parse HEAD == git rev-parse origin/feat/statutory-flags; (3) open https://github.com/abhinavpoddar27-pixel/hr-salary-system/compare/main...feat/statutory-flags in the GitHub UI and merge there; (4) RUNBOOK T4/T5 only after PR-2 is live too. Before pushing, fetch + rebase again if main moved (C5).
 
@@ -93,7 +96,8 @@ OWNER: (1) make the repo private (GitHub → Settings → General → Danger Zon
 - frontend/dist (rebuilt STEP 11)
 - frontend/src/pages/Employees.jsx, SalaryInput.jsx, Sales/SalesEmployeeMaster.jsx (STEP 12)
 - backend/src/routes/salary-input.js GET /all (+ss.lwf_applicable, STEP 12)
-- docs/statutory-flags/sim/run.py, seed.js (new, PHASE 3)
+- docs/statutory-flags/sim/run.py, seed.js (new, PHASE 3; review checks added)
+- REVIEW FIXES: backend/src/services/statutoryFlags.js, routes/sales.js, routes/salary-input.js, __tests__/statutoryWriters.test.js, statutoryFlagsService.test.js, statutoryWriterGuard.test.js, frontend/src/pages/StatutoryFlags.jsx (+ dist), docs/statutory-flags/RUNBOOK.md, OPEN_ITEMS.md, CLAUDE.md
 
 ## FRAGILE-FILE EDITS (before / after)
 - STEP 1 schema.js — BEFORE (lines 2214–2218 on d1ad7bf):
@@ -171,3 +175,4 @@ After REVIEW FIX 1: 49 / 883, 0 failures.
 After REVIEW FIX 2: 49 / 885, 0 failures.
 After REVIEW FIX 3: 49 / 886, 0 failures.
 After REVIEW FIX 4: 49 / 886, 0 failures; frontend build OK.
+After REVIEW PHASE 2: 49 / 886, 0 failures, 2 clean runs. Review sim: 68/68.
