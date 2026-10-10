@@ -14,11 +14,11 @@ calcMutation + header (plus the new check script + docs + dist).
 - [x] P1 calcMutation company '' + toast
 - [x] P2 note under Run button
 - [x] P3 build dist (own commit)
-- [ ] P4 stage6-all-companies-check.py on branch
-- [ ] P5 --base on origin/main worktree
-- [ ] P6 jest after (expect 85/1377)
-- [ ] P7 self-debug + user simulation
-- [ ] P8 CLAUDE.md Last Session entry, push, HEAD == origin
+- [x] P4 stage6-all-companies-check.py on branch: 28/28 (hr A selected, All Companies, restricted hra, 390px)
+- [x] P5 --base on a 2d96842 worktree (fresh build): 4/4 — body company=A, T9605 30→15, B rows absent
+- [x] P6 jest after: 85/1377 (identical). dist vs fresh 2d96842 build: only the DayCalculation chunk differs (hash-normalised)
+- [x] P7 self-debug + user simulation. Caught: header did not wrap → Run button (and note) off-screen at 390px → flex-wrap gap-3 on the header row (own commit)
+- [x] P8 CLAUDE.md Last Session entry, push, HEAD == origin
 
 ## Owner / planner rulings
 - Q4 (planner default): always run for All companies, one-line note on screen.
