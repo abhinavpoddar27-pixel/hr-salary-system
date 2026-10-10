@@ -18,6 +18,26 @@
 - **Verified:** `backend/scripts/attendance-review-tab-check.py` 34/34 (Chromium, built dist, admin + HR, phone 390);
   jest 83/1360. **Not tested:** Railway; production data in the UI (no config entered yet).
 
+## Last Session — 2026-10-10 (P1-02: Reports → Salary Register showed ₹0)
+**Branch `fix/salary-register-report-fields`, NOT merged.** Frontend only (`pages/Reports.jsx`, Salary Register block). Plan + log:
+`docs/ux-bulk/prs/P1-02/PLAN.md`, `PROGRESS.md`. Finding H-1. Rulings R12 (drop CSV monthly Basic/HRA), R13 (held marker later).
+- **Bug:** the block read `total_earned`, `employee_pf`, `employee_esi`, `net_pay`, `professional_tax`; `GET /api/payroll/salary-register`
+  returns `sc.*` (`gross_earned`, `pf_employee`, `esi_employee`, `net_salary`) with no aliases → Earned / EE PF / EE ESI / Net Pay
+  rendered ₹0 for every row. The 4 total cards use server `totals` and were already right.
+- **Fix:** 4 keys mapped; PT column removed (PT disabled, always 0); `colSpan` 11 → 10 (empty row + DrillDownRow). CSV 15 → 12
+  columns: `basic_earned`, `hra_earned`, `gross_earned`, `pf_employee`, `esi_employee`, `net_salary`; monthly Basic/HRA dropped
+  (not on the salary row). Backend untouched (endpoint shared with Stage 7). dist rebuilt (own commit; vs a fresh 96ee482 build
+  only the Reports chunk differs).
+- **Fragile:** the register columns read raw `salary_computations` names — a column rename in the endpoint SELECT silently
+  shows ₹0 again (fmtINR(undefined) = ₹0). Σ Net Pay of ALL rows ≠ "Net Payroll" card (card excludes held; held rows are
+  not marked here — N-4, later).
+- **Verified:** `backend/scripts/salary-register-report-check.py` (Chromium, built dist, hr + finance, fictional T950x) 58/58 —
+  every row = DB, no PT, Σ Earned = Gross Payroll card, Σ non-held Net = Net Payroll card, CSV header + values, drill-down
+  full width, empty month, 390px, 0 page/console errors, 0 API ≥ 400. `--base` on a 96ee482 worktree 6/6: PT present, ₹0 cells.
+  jest 81 suites / 1332 before and after.
+- **Not tested:** Railway; real production data; Safari/Firefox.
+- **Found, not fixed:** N-1 Audit Trail reads `created_at` (column is `changed_at`) and ignores month/year; N-2 PF/ESI Statement
+  ignore `company`; N-3 Bank Transfer Sheet total includes held salaries; N-4 held rows unmarked / LWF + loan not separate.
 ## Last Session — 2026-10-10 (Attendance Review PR-1: engine + admin API, backend only)
 **Branch `feat/attendance-review-engine` (on `docs/attendance-review-handoff`), pushed, PR NOT opened.** Read `docs/attendance-review/PROGRESS.md` first.
 - **What:** `services/attendanceReviewService.js` (read-only monthly late/early review engine, every threshold in config),
