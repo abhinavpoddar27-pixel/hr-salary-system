@@ -11,7 +11,7 @@ Read PROMPT.md + PLAN.md. Never redo a ticked step. Phase 0 done; planner GO rec
 - [x] P0.3 PLAN.md + PROGRESS.md committed + pushed.
 - [x] P1 Edit MissPunch.jsx banner condition (after planner go).
 - [x] P2 Build dist (own commit). vs a fresh 3d20021 build only MissPunch differs in content (rest = hash refs).
-- [ ] P3 misspunch-banner-check.py on branch; `--base` on a 3d20021 build.
+- [x] P3 misspunch-banner-check.py: fix 33/33, --base (fresh 3d20021 build) 4/4 (banner wrongly shown on Approved + Finance Pending chips).
 - [ ] P4 jest after; self-debug + user-simulation pass.
 - [ ] P5 CLAUDE.md Last Session entry; push; HEAD == origin.
 
