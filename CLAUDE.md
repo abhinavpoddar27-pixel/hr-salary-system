@@ -19,7 +19,7 @@ open), NOT pushed.** Plan `docs/statutory-flags/IMPL_PR3.md` (C1–C7 binding); 
   (2) Header filenames drop chars outside [A-Za-z0-9_.-] — an odd company name made setHeader throw (500). (3) The formats
   themselves are PR-3b (ECR `#~#`, NCP undercount, ESIC template / reason codes) — due before 15 Nov. (4) VERIFY V15 (capped
   LWF) / V16 (fix list) are new; PR-2b owns V13/V14.
-- **Verified:** jest 65/1076 → 69/1120, two clean runs; new tests fail on dcad556 (plant 6/7, C4 11/12, sales 6/6, numbers
+- **Verified:** jest 65/1076 → 69/1121 (after the review fixes + merge), two clean runs; new tests fail on dcad556 (plant 6/7, C4 11/12, sales 6/6, numbers
   8/8 + F12 4/4). `sim/filing_identity.js` vs a dcad556 worktree: run 1 106/106 identical, run 2 79/79 (base − branch = the bad
   rows = missing = header). Guard unedited 9/9. `sim/run_pr3.py` (real server + Chromium): 51/51. Clean dist rebuild identical.
 - **Review fixes:** PUT company-config admin only (D-16). **Not done:** PR-3b formats; Railway; production data.

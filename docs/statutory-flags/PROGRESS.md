@@ -234,7 +234,7 @@
   conflicted; no backend file changed on 7eed259. d2b07d3 `build(frontend): rebuild dist after merging origin/feat/lwf-sales` —
   bundle has PR-3's chunks and #71's "Type code or name…" (LeaveManagement); a second `rm -rf dist && npm run build` → git status
   clean.
-- PR-3 REVIEW FIX 1b — (next commit) `fix(filing): reports.js keeps a local admin gate`. Found by re-running filing_identity.js after
+- PR-3 REVIEW FIX 1b — b3d2c7e `fix(filing): reports.js keeps a local admin gate`. Found by re-running filing_identity.js after
   the merge: importing `requireAdmin` from middleware/roles made reports.js pull routes/auth → middleware/auth, which throws at load
   without JWT_SECRET (filing_identity.js loads the router standalone). Now a local `requireAdmin` beside `requireHrFinanceOrAdmin`
   (raw role; JWT roles are normalised at login). D-16 test unchanged and still fails on e3af923's file; identity 106/106 + 79/79.
@@ -487,3 +487,5 @@ PR-3 STEP 3: statutoryFilingSales 6/6 (6 fail on dcad556). STEP 4: statutoryNumb
 PR-3 STEP 5: lwfRegister 6/6 (3 route tests fail without the route); statutoryFilingSales 7/7 (the odd-company test fails on the STEP 3 file).
 PR-3 after STEP 5: 69 / 1120, 0 failures. STEP 6 / 7: npm run build OK. Identity 106/106 + 79/79. run_pr3.py 51/51. Clean dist rebuild identical.
 PR-3 final: **69 suites / 1120 tests, 0 failures, 2 clean runs** (baseline 65 / 1076: +4 suites, +44 tests).
+PR-3 review (after REVIEW FIX 1 / 1b / 2 / 3 + the 7eed259 merge + dist rebuild): **69 suites / 1121 tests, 0 failures, 2 clean runs** (+1 = D-16).
+Guard 9/9 unedited; node --check clean (6 backend files); clean `rm -rf dist && npm run build` → identical; identity 106/106 + 79/79; run_pr3.py 51/51.
