@@ -27,12 +27,11 @@ const THRESHOLD_LABELS = {
   stayed_late_minutes: 'Master basis: stayed late if out after shift end by (minutes)',
 }
 const LISTS = [
-  ['excluded_codes', 'Left out of everything — employee codes', 'e.g. senior staff; data errors until fixed'],
-  ['excluded_departments', 'Left out of everything — departments', 'e.g. piece-rate contractor departments (exact name)'],
-  ['early_excluded_codes', 'Early exits not assessed — codes (manual)', 'normally empty — the automatic shift check handles wrong shifts'],
-  ['held_codes', 'Held — listed, no action — codes', 'waiting for a ruling'],
   ['loading_designation_patterns', 'Loading staff (no late assessment) — designation contains', 'one pattern per line'],
 ]
+const PERSON_RULE = { exclude: 'Not assessed', early_exempt: 'Early exits not assessed', held: 'Held (no action until a ruling)' }
+const blankPerson = () => ({ code: '', rule: 'exclude', reason: '' })
+const blankDept = () => ({ department: '', reason: '' })
 const toList = (s) => [...new Set(String(s).split(/[\n,]+/).map((x) => x.trim()).filter(Boolean))]
 const ist = (t) => { if (!t) return ''; const d = new Date(`${String(t).replace(' ', 'T')}Z`); return isNaN(d) ? t : d.toLocaleString('en-IN', { timeZone: 'Asia/Kolkata', day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' }) + ' IST' }
 const thisYm = (m, y) => `${y}-${String(m).padStart(2, '0')}`
@@ -51,6 +50,10 @@ export default function AttendanceReviewConfig({ month, year }) {
       thresholds: { ...c.thresholds },
       stayed_late_mode: c.stayed_late_mode, early_exit_rule: c.early_exit_rule, shift_fit: c.shift_fit || 'everyone', late_full_hours: c.late_full_hours !== false,
       assessment_basis: c.assessment_basis || 'import', assess_fixed_miss_punch: c.assess_fixed_miss_punch !== false,
+      contract_loaders_early_exempt: c.contract_loaders_early_exempt !== false,
+      people: Object.entries(c.standing_people || {}).map(([code, v]) => ({ ...v, code })),
+      depts: Object.entries(c.standing_departments || {}).map(([department, v]) => ({ ...v, department })),
+      dismissed: c.dismissed_suggestions || {},
       lists: Object.fromEntries(LISTS.map(([k]) => [k, (c[k] || []).join('\n')])),
       remeasure: Object.entries(c.remeasure || {}).map(([code, r]) => ({ code, start: r.start, end: r.end, late_grace: r.late_grace ?? 9, early_grace: r.early_grace ?? 15, left_late: r.left_late || 'system', hours_complete: r.hours_complete === true, hours_grace: r.hours_grace ?? 10 })),
     })
@@ -62,6 +65,11 @@ export default function AttendanceReviewConfig({ month, year }) {
       const config = {
         thresholds: form.thresholds, stayed_late_mode: form.stayed_late_mode, early_exit_rule: form.early_exit_rule, shift_fit: form.shift_fit, late_full_hours: !!form.late_full_hours,
         assessment_basis: form.assessment_basis, assess_fixed_miss_punch: !!form.assess_fixed_miss_punch,
+        contract_loaders_early_exempt: !!form.contract_loaders_early_exempt,
+        // standing rules keep who set them and why; a row edited here keeps its origin fields
+        standing_people: Object.fromEntries(form.people.filter((r) => r.code.trim()).map(({ code, ...v }) => [code.trim(), { ...v, reason: String(v.reason || '').trim() }])),
+        standing_departments: Object.fromEntries(form.depts.filter((r) => r.department.trim()).map(({ department, ...v }) => [department.trim(), { ...v, rule: 'exclude', reason: String(v.reason || '').trim() }])),
+        dismissed_suggestions: form.dismissed,
         ...Object.fromEntries(LISTS.map(([k]) => [k, toList(form.lists[k])])),
         remeasure: Object.fromEntries(form.remeasure.filter((r) => r.code.trim()).map((r) => [r.code.trim(), {
           start: r.start, end: r.end, late_grace: Number(r.late_grace), early_grace: Number(r.early_grace), left_late: r.left_late,
@@ -79,6 +87,8 @@ export default function AttendanceReviewConfig({ month, year }) {
   if (q.isLoading || !form) return <div className="card p-4 text-sm text-slate-500">Loading rules…</div>
   const setT = (k, v) => setForm((f) => ({ ...f, thresholds: { ...f.thresholds, [k]: v } }))
   const setRm = (i, k, v) => setForm((f) => ({ ...f, remeasure: f.remeasure.map((r, j) => (j === i ? { ...r, [k]: v } : r)) }))
+  const setP = (i, k, v) => setForm((f) => ({ ...f, people: f.people.map((r, j) => (j === i ? { ...r, [k]: v } : r)) }))
+  const setD = (i, k, v) => setForm((f) => ({ ...f, depts: f.depts.map((r, j) => (j === i ? { ...r, [k]: v } : r)) }))
 
   return (
     <div className="card p-4 space-y-4" data-testid="ar-config">
@@ -87,6 +97,48 @@ export default function AttendanceReviewConfig({ month, year }) {
         <span className="text-xs text-slate-500">
           {res.source ? `In force for this month: version ${res.source.id}, effective ${res.source.effective_from}, by ${res.source.updated_by}` : 'In force for this month: built-in defaults (no saved version yet)'}
         </span>
+      </div>
+
+      <div className="grid xl:grid-cols-2 gap-4" data-testid="ar-standing">
+        <div>
+          <div className="text-xs font-semibold text-slate-600 mb-1">People left out — set once, stays until removed</div>
+          <table className="text-sm w-full">
+            <thead><tr className="text-xs text-slate-500"><th className="text-left pr-2">Code</th><th className="text-left pr-2">Rule</th><th className="text-left pr-2">Reason</th><th /></tr></thead>
+            <tbody>
+              {form.people.map((r, i) => (
+                <tr key={i}>
+                  <td className="pr-2 py-1"><input aria-label="Standing person code" className="input w-24 font-mono text-xs" value={r.code} onChange={(e) => setP(i, 'code', e.target.value)} /></td>
+                  <td className="pr-2 py-1"><select aria-label="Standing person rule" className="input text-xs" value={r.rule} onChange={(e) => setP(i, 'rule', e.target.value)}>
+                    {Object.entries(PERSON_RULE).map(([k, l]) => <option key={k} value={k}>{l}</option>)}</select></td>
+                  <td className="pr-2 py-1 w-full"><input aria-label="Standing person reason" className="input w-full text-xs" placeholder="e.g. Senior staff" value={r.reason} onChange={(e) => setP(i, 'reason', e.target.value)} /></td>
+                  <td><button type="button" className="text-xs text-red-600" onClick={() => setForm((f) => ({ ...f, people: f.people.filter((_, j) => j !== i) }))}>remove</button></td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          <button type="button" className="text-xs text-blue-600 mt-1" onClick={() => setForm((f) => ({ ...f, people: [...f.people, blankPerson()] }))}>+ add a person</button>
+        </div>
+        <div>
+          <div className="text-xs font-semibold text-slate-600 mb-1">Crews (departments) left out — e.g. piece-rate loading contractors</div>
+          <table className="text-sm w-full">
+            <thead><tr className="text-xs text-slate-500"><th className="text-left pr-2">Department (exact name)</th><th className="text-left pr-2">Reason</th><th /></tr></thead>
+            <tbody>
+              {form.depts.map((r, i) => (
+                <tr key={i}>
+                  <td className="pr-2 py-1"><input aria-label="Standing department" className="input w-40 text-xs" value={r.department} onChange={(e) => setD(i, 'department', e.target.value)} /></td>
+                  <td className="pr-2 py-1 w-full"><input aria-label="Standing department reason" className="input w-full text-xs" placeholder="e.g. Piece-rate loading crew" value={r.reason} onChange={(e) => setD(i, 'reason', e.target.value)} /></td>
+                  <td><button type="button" className="text-xs text-red-600" onClick={() => setForm((f) => ({ ...f, depts: f.depts.filter((_, j) => j !== i) }))}>remove</button></td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          <button type="button" className="text-xs text-blue-600 mt-1" onClick={() => setForm((f) => ({ ...f, depts: [...f.depts, blankDept()] }))}>+ add a crew</button>
+          <label className="flex items-start gap-2 text-sm mt-3">
+            <input aria-label="Contract loaders early exits not counted" type="checkbox" className="mt-1" checked={!!form.contract_loaders_early_exempt}
+              onChange={(e) => setForm((f) => ({ ...f, contract_loaders_early_exempt: e.target.checked }))} />
+            <span><span className="text-xs font-semibold text-slate-600">Contractor loaders may leave once dispatch is done</span><br />
+              <span className="text-[11px] text-slate-400">Contract workers with a loading designation: early exits not counted (lates never are). Permanent loaders are still assessed.</span></span></label>
+        </div>
       </div>
 
       <div className="grid md:grid-cols-2 xl:grid-cols-3 gap-4">
