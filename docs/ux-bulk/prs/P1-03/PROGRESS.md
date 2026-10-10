@@ -3,17 +3,18 @@
 ## RESUME (read first after any compaction)
 - Worktree /home/claude/wt-p1-03 · branch fix/sales-neft-finalized-only · base 96ee482. Work ONLY here.
 - Prompt: docs/ux-bulk/prs/P1-03/PROMPT.md · Plan: docs/ux-bulk/prs/P1-03/PLAN.md
-- **Next step:** WAIT for owner "go" (+ answers to PLAN Q1–Q3). Then Phase 1 step 1: jest baseline count.
+- **Next step:** see first unticked box below.
 - Done steps are not redone. Update + commit + push this file after every small step.
 
 ## Owner rulings
 - Q12 = C (10 Oct 2026): keep computed/reviewed/finalized eligible, exclude paid, always confirm with counts.
+- GO 10 Oct 2026. Q1 YES: `no-cache` on the NEFT preview call in utils/api.js. Q2 NO: no held count in the modal. Q3 copy as in PLAN.
 
 ## Steps
 - [x] P0.1 worktree clean, branch on 96ee482
 - [x] P0.2 re-grep + read generateSalesNEFT, bank-neft route, NEFT handlers/modal, status set
 - [x] P0.3 PLAN.md + PROGRESS.md written, committed, pushed — STOP (Phase 0 gate)
-- [ ] P1.1 jest baseline
+- [x] P1.1 jest baseline: 81 suites / 1332 pass (worktree: backend node_modules symlinked, frontend npm ci)
 - [ ] P1.2 generateSalesNEFT change
 - [ ] P1.3 salesNeftEligibility.test.js
 - [ ] P1.4 frontend confirm modal + copy
