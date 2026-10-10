@@ -10,6 +10,7 @@ Cases (fix mode):
      `Cache-Control: private, max-age=5` must not hand back the pre-save copy)
   C  switch employee after a save (accordion: one grid at a time) → other grid renders, back again still saved
   D  calendar view: open it, back to grid, edit, open calendar again → calendar shows the new status
+  D2 calendar opened < 5 s before the save → calendar still shows the new status (no-cache on its read)
   E  Recalculate Metrics: a night punch stored with is_night_shift = 0 turns purple without reload
   F  390 px phone: case A on another day
   + 0 page errors / 0 console errors / 0 API >= 400 throughout
@@ -33,7 +34,7 @@ NOW = datetime.date.today(); M, Y = NOW.month, NOW.year
 DAYS = (datetime.date(Y + (M == 12), M % 12 + 1, 1) - datetime.timedelta(days=1)).day
 # Sundays render grey whatever the record says, so every day the script edits/inspects is a weekday
 WD = [d for d in range(1, DAYS + 1) if datetime.date(Y, M, d).weekday() != 6]
-DA, DB1, DB2, DN, DC, DD, DF = WD[1:8]   # slow save, quick save, back-to-back, night, switch, calendar, phone
+DA, DB1, DB2, DN, DC, DD, DF, DD2 = WD[1:9]   # slow save, quick save, back-to-back, night, switch, calendar, phone, calendar-quick
 PASS = FAIL = 0
 GRID = 'div.grid[style*="grid-template-columns"]'  # the daily grid (EmployeeQuickView has its own div.grid)
 
@@ -53,8 +54,8 @@ def seed():
         c.execute("INSERT OR IGNORE INTO employees(code,name,department,company,status,employment_type,gross_salary) "
                   "VALUES(?,?,'TEST DEPT',?,'Active','Permanent',20000)", (code, f'TEST EMP {i}', C))
     rows = []
-    for d in WD[:9]:
-        rows.append(('T9801', d, 'A', None, None, 0) if d in (DA, DB1, DC, DD, DF) else ('T9801', d, 'P', '08:00', '20:00', 0))
+    for d in WD[:10]:
+        rows.append(('T9801', d, 'A', None, None, 0) if d in (DA, DB1, DC, DD, DF, DD2) else ('T9801', d, 'P', '08:00', '20:00', 0))
         rows.append(('T9802', d, 'P', '20:15', '08:00', 0) if d == DN else ('T9802', d, 'P', '08:00', '20:00', 0))
     for code, d, st, tin, tout, night in rows:
         c.execute("INSERT INTO attendance_processed(employee_code,date,status_original,in_time_original,out_time_original,"
@@ -225,6 +226,23 @@ try:
                 panel.get_by_role('button', name='Calendar View').click()
                 pg.wait_for_load_state('networkidle'); time.sleep(1.5)
                 check(f'D: calendar day {DD} shows P without reload', 'P', calendar_status(panel, DD))
+                panel.get_by_role('button', name='Grid View').click()
+
+            if run('D'):
+                print('\n— D2: calendar opened < 5 s before the save —')
+                open_page(pg); panel, _ = expand(pg, 'T9801', 'TEST EMP 1')
+                panel.get_by_role('button', name='Calendar View').click()
+                pg.wait_for_load_state('networkidle'); time.sleep(0.5)
+                check(f'D2: calendar day {DD2} starts A', 'A', calendar_status(panel, DD2))
+                t_cal = time.time()
+                panel.get_by_role('button', name='Grid View').click()
+                cell(panel, DD2).wait_for()
+                check(f'D2: PUT 200 (day {DD2})', 200, edit(pg, panel, DD2, 'P', '08:00', '20:00', 'test fix D2'))
+                wait_status(panel, DD2, 'P', secs=1.5)
+                panel.get_by_role('button', name='Calendar View').click()
+                print(f'    (calendar re-opened {time.time() - t_cal:.1f} s after its first load)')
+                pg.wait_for_load_state('networkidle'); time.sleep(1.5)
+                check(f'D2: calendar day {DD2} shows P without reload', 'P', calendar_status(panel, DD2))
                 panel.get_by_role('button', name='Grid View').click()
 
             if run('E'):

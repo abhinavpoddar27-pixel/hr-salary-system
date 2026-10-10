@@ -73,7 +73,8 @@ export const updateAttendanceRecord = (id, data) => api.put(`/attendance/record/
 export const getAttendanceRegister = (params) => api.get('/attendance/register', { params, ...fresh })
 export const getMonthlyAttendanceSummary = (month, year, company) => api.get('/attendance/monthly-summary', { params: { month, year, ...(company ? { company } : {}) } })
 export const getValidationStatus = (params) => api.get('/attendance/validation-status', { params })
-export const getEmployeeDailyAttendance = (code, month, year) => api.get(`/attendance/daily/${code}`, { params: { month, year } })
+// fresh (P1-08): Calendar View re-reads this right after a Stage 5 save — no-cache past the server's 5 s GET cache
+export const getEmployeeDailyAttendance = (code, month, year) => api.get(`/attendance/daily/${code}`, { params: { month, year }, ...fresh })
 export const updateRecordShift = (id, data) => api.put(`/attendance/record/${id}/shift`, data)
 export const recalculateMetrics = (month, year) => api.post('/attendance/recalculate-metrics', { month, year })
 
