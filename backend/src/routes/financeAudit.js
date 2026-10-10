@@ -66,6 +66,7 @@ router.get('/report', (req, res) => {
         sc.pf_employee, sc.esi_employee, sc.professional_tax,
         sc.advance_recovery, sc.loan_recovery, sc.total_deductions,
         sc.late_coming_deduction,
+        sc.lwf_employee, sc.lwf_employer,
         -- Phase 3: leave buckets sourced from salary_computations
         COALESCE(sc.cl_days, 0) AS cl_days,
         COALESCE(sc.el_days, 0) AS el_days,
@@ -171,6 +172,9 @@ router.get('/report', (req, res) => {
         loanRecovery: emp.loan_recovery,
         // Phase 2 — late coming deduction (rupee amount persisted on salary_computations)
         lateComingDeduction: emp.late_coming_deduction || 0,
+        // Statutory flags PR-2 — LWF (employee deduction / employer cost)
+        lwfEmployee: emp.lwf_employee || 0,
+        lwfEmployer: emp.lwf_employer || 0,
         lateDeductionApprovedDays: Number(emp.late_deduction_approved_days || 0),
         lateDeductionStatus: emp.late_deduction_status || null,
         // Phase 3 — leave buckets
