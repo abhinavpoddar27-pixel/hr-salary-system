@@ -3,20 +3,26 @@
 ## RESUME (re-read after any compaction)
 - Branch: `fix/finance-audit-readiness-nav` (base origin/main a5aec9a). Never push to main; no PR open/merge.
 - Spec: `docs/ux-bulk/prs/P1-01/PROMPT.md`. Plan: `docs/ux-bulk/prs/P1-01/PLAN.md`.
-- Current phase: **0 done — STOP, waiting for "go" + answer to Q1** (fix `/finance-verify` → `/finance-verification`?).
-- Next on "go": edit FinanceAudit.jsx (3 lines + Q1 string) → build → dist commit → jest → readiness-check script
-  (branch + origin/main dist) → CLAUDE.md Last Session → commit, push, verify HEAD == origin.
+- Current phase: **1 build**. If you are reading this after a compaction, the next step is the FIRST row below
+  whose status is not "done"; done steps are not to be redone.
+- Only `frontend/src/pages/FinanceAudit.jsx` may change in frontend/src. Fictional data only. origin/main dist is built in a
+  git worktree under /tmp, never in the main tree.
 
-## State
-| Step | Status |
-|---|---|
-| Phase 0: git clean, HEAD d7312cc on a5aec9a | done |
-| Phase 0: re-grep + read ReadinessTab / parent / other tabs | done |
-| Phase 0: App.jsx route check + FinanceVerification query params | done — `/finance-verify` route missing |
-| Phase 0: PLAN.md + PROGRESS.md committed + pushed | done |
-| Phase 1: code | not started (gate) |
+## Steps
+| # | Step | Status | Result / sha |
+|---|---|---|---|
+| 0 | Phase 0 plan + progress | done | 619e28d |
+| 1 | Source edit (FinanceAudit.jsx: props + Q1 path) | pending | |
+| 2 | dist rebuild (own commit) | pending | |
+| 3 | jest before/after | pending | |
+| 4 | check script written | pending | |
+| 5 | script on branch dist | pending | |
+| 6 | script on origin/main dist (worktree /tmp) — crash recorded | pending | |
+| 7 | self-debug + user simulation + v2 notes | pending | |
+| 8 | CLAUDE.md Last Session entry | pending | |
+| 9 | final push + HEAD == origin | pending | |
 
 ## Rulings
 - R11: Phase 0 gate; never push to main.
-- Approach: props form (`onTab`, `navigate`) — chosen in PLAN §4.
-- Q1 pending.
+- go 10 Oct 2026 19:04 IST; Q1 approved (held card → `/finance-verification?tab=redflags&filter=salary_held`).
+- Approach: props form (`onTab`, `navigate`) — PLAN §4.
