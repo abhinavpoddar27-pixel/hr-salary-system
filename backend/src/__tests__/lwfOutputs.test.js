@@ -102,3 +102,93 @@ describe('O5 — finance report + register totals', () => {
   });
 });
 
+
+describe('O3 — plant Excel exports', () => {
+  const sheetRows = (ws) => XLSX.utils.sheet_to_json(ws, { header: 1, defval: '', blankrows: true });
+  const width = (ws) => XLSX.utils.decode_range(ws['!ref']).e.c + 1;
+
+  test('/salary-register-excel: header = data = totals = !cols = 39; LWF(EE)/LWF(ER) 5/20 next to ESI(ER); SUMMARY + CTC carry LWF', async () => {
+    const r = await rawGet('/api/payroll/salary-register-excel?month=9&year=2026');
+    expect(r.status).toBe(200);
+    const wb = XLSX.read(r.buf, { type: 'buffer', cellStyles: true });
+    const ws = wb.Sheets['PAYROLL REGISTER'];
+    const rows = sheetRows(ws);
+    const header = rows[3];
+    expect(header).toHaveLength(39);
+    expect(width(ws)).toBe(39);
+    expect(ws['!cols']).toHaveLength(39);
+    expect(ws['!merges'].map((m) => m.e.c)).toEqual([38, 38]);
+    const H = (h) => header.indexOf(h);
+    expect(H('LWF(EE)')).toBe(H('ESI(ER)') + 1);
+    expect(H('LWF(ER)')).toBe(H('ESI(ER)') + 2);
+    expect(H('PT')).toBe(H('ESI(ER)') + 3);
+
+    const sc = (code) => db.prepare('SELECT * FROM salary_computations WHERE employee_code = ? AND month = 9 AND year = 2026').get(code);
+    const data = rows.slice(4).filter((x) => /^L10[123]$/.test(String(x[1])));
+    expect(data).toHaveLength(3);
+    for (const row of data) {
+      expect(row).toHaveLength(39);
+      const s = sc(String(row[1]));
+      expect(row[H('LWF(EE)')]).toBe(Math.round(s.lwf_employee));
+      expect(row[H('LWF(ER)')]).toBe(Math.round(s.lwf_employer));
+      // every column after the insert is still aligned
+      expect(row[H('Total Ded')]).toBe(Math.round(s.total_deductions));
+      expect(row[H('Net Salary')]).toBe(Math.round(s.net_salary));
+      expect(row[H('Take Home')]).toBe(Math.round(s.take_home));
+    }
+    const byCode = Object.fromEntries(data.map((x) => [x[1], x]));
+    expect([byCode.L101[H('LWF(EE)')], byCode.L101[H('LWF(ER)')]]).toEqual([5, 20]);
+    expect([byCode.L102[H('LWF(EE)')], byCode.L102[H('LWF(ER)')]]).toEqual([0, 0]);
+
+    const totals = rows.find((x) => x[0] === 'TOTAL');
+    expect(totals).toHaveLength(39);
+    expect([totals[H('LWF(EE)')], totals[H('LWF(ER)')]]).toEqual([10, 40]);
+    expect(totals[H('Total Ded')]).toBe(data.reduce((s, x) => s + x[H('Total Ded')], 0));
+
+    const sum = sheetRows(wb.Sheets.SUMMARY);
+    const val = (label) => (sum.find((x) => x[0] === label) || [])[1];
+    expect(val('LWF (Employee)')).toBe(10);
+    expect(val('LWF (Employer)')).toBe(40);
+    expect(val('Total CTC (Gross + PF(ER) + ESI(ER) + LWF(ER))'))
+      .toBe(val('Total Gross Salary (CTC)') + val('PF (Employer)') + val('ESI (Employer)') + 40);
+  });
+
+  test('/salary-slip-excel SUMMARY: header/data/totals/!cols = 20, LWF after ESI; held row comments on TOT DED / NET PAYABLE / TAKE HOME', async () => {
+    const r = await rawGet('/api/payroll/salary-slip-excel?month=9&year=2026');
+    expect(r.status).toBe(200);
+    const wb = XLSX.read(r.buf, { type: 'buffer', cellStyles: true });
+    const ws = wb.Sheets.SUMMARY;
+    const rows = sheetRows(ws);
+    const header = rows[3];
+    expect(header).toHaveLength(20);
+    expect(width(ws)).toBe(20);
+    expect(ws['!cols']).toHaveLength(20);
+    expect(ws['!merges'].slice(0, 2).map((m) => m.e.c)).toEqual([19, 19]);
+    const H = (h) => header.indexOf(h);
+    expect(H('LWF')).toBe(H('ESI') + 1);
+    expect([H('TOT DED'), H('NET PAYABLE'), H('TAKE HOME')]).toEqual([16, 17, 18]);
+
+    const rowIdx = (code) => rows.findIndex((x) => x[1] === code);
+    for (const code of ['L101', 'L102', 'L103']) {
+      const row = rows[rowIdx(code)];
+      expect(row).toHaveLength(20);
+      const s = db.prepare('SELECT * FROM salary_computations WHERE employee_code = ? AND month = 9 AND year = 2026').get(code);
+      expect(row[H('LWF')]).toBe(s.lwf_employee);
+      expect(row[H('TOT DED')]).toBe(s.total_deductions);
+      expect(row[H('NET PAYABLE')]).toBe(s.net_salary);
+    }
+    const totals = rows.find((x) => x[2] === 'TOTAL');
+    expect(totals).toHaveLength(20);
+    expect(totals[H('LWF')]).toBe(10);
+
+    // held employee L103: caution comments on exactly the three money columns
+    const held = rowIdx('L103');
+    expect(String(rows[held][2])).toMatch(/HELD/);
+    const commented = [];
+    for (let c = 0; c < 20; c++) {
+      const cell = ws[XLSX.utils.encode_cell({ r: held, c })];
+      if (cell && cell.c && cell.c.length) commented.push(c);
+    }
+    expect(commented).toEqual([16, 17, 18]);
+  });
+});
