@@ -193,6 +193,9 @@ export const downloadLoanReport = (name, params) => api.get(`/loans/reports/${na
 export const getLoanWriteOffs = (params) => api.get('/loans/write-offs', { params, ...fresh })
 export const downloadLoanWriteOffs = (params) => api.get('/loans/write-offs', { params: { ...params, format: 'xlsx' }, responseType: 'blob' })
 export const getLoanPayslipBalance = (params) => api.get('/loans/payslip-balance', { params, ...fresh })
+// Loans PR-11: the admin dry run (always rolled back) and the rehearsal pack.
+export const runLoanDryRun = (data) => api.post('/loans/dry-run', data)
+export const getLoanDryRunPack = (params) => api.get('/loans/dry-run/pack', { params, ...fresh })
 export const getAlerts = (month, year, unread, opts = {}) => api.get('/analytics/alerts', { params: { month, year, ...(unread ? { unread: 'true' } : {}), ...opts } })
 export const generateAlerts = (month, year) => api.post('/analytics/alerts/generate', { month, year })
 export const markAlertRead = (id) => api.put(`/analytics/alerts/${id}/read`)

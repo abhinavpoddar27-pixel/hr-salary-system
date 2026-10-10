@@ -15,6 +15,7 @@ import DueThisMonth from '../components/loans/DueThisMonth'
 import LoanPolicy from '../components/loans/LoanPolicy'
 import LoanClose from '../components/loans/LoanClose'
 import LoanReports from '../components/loans/LoanReports'
+import LoanDryRun from '../components/loans/LoanDryRun'
 import {
   loanCaps, LOAN_STATE, CLOSED_STATES, KIND_LABEL, stateCls, stateLabel, rupees, monthLabel, GATE_OFF_TEXT,
 } from '../components/loans/loanUi'
@@ -87,6 +88,7 @@ export default function Loans() {
     { id: 'close', label: 'Monthly close' },
     { id: 'reports', label: 'Reports' },
     { id: 'settings', label: 'Settings' },
+    ...(caps.canDecide ? [{ id: 'dry-run', label: 'Dry run' }] : []),   // Loans PR-11: admin only
   ]
 
   return (
@@ -144,6 +146,7 @@ export default function Loans() {
       {tab === 'close' && <LoanClose />}
       {tab === 'reports' && <LoanReports />}
       {tab === 'settings' && <LoanPolicy caps={caps} />}
+      {tab === 'dry-run' && caps.canDecide && <LoanDryRun />}
       {tab === 'loans' && (
         <div className="space-y-3">
           <div className="flex items-center justify-between flex-wrap gap-2">
