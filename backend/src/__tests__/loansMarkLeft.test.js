@@ -4,6 +4,12 @@
  * Drives the real employees router over HTTP on a real initSchema() database.
  * Mark Left must flag the leaver's open plant loans for exit recovery, write one
  * loan_events row and one audit_log row per loan, and move no money.
+ *
+ * Loans PR-7 changed one PR-1 promise on purpose: an active loan's schedule is
+ * no longer left untouched — it collapses into the final month (the month of
+ * the exit date), because the whole outstanding falls due in the final payroll
+ * (SPEC §5.2 r11, D-15). The flag / status / borrower_left event / audit row
+ * assertions are unchanged; the consolidation's own events are checked apart.
  */
 const { startApi } = require('./helpers/apiHarness');
 
@@ -40,12 +46,10 @@ const loanAudits = (id) => db.prepare("SELECT * FROM audit_log WHERE table_name 
 const markLeft = (code, body = { date_of_leaving: '2026-10-05', reason: 'Resigned' }) =>
   api.request('PUT', `/api/employees/${code}/mark-left`, { body });
 
-test('an active loan becomes recover_at_exit; balance and instalments untouched', async () => {
+test('an active loan becomes recover_at_exit; balance untouched, schedule collapses into the exit month', async () => {
   addEmployee('ML01');
   const id = addLoan('ML01');
   addInstalments(id);
-  const instBefore = db.prepare('SELECT * FROM loan_instalments WHERE loan_id = ? ORDER BY sequence').all(id);
-
   const res = await markLeft('ML01');
   expect(res.status).toBe(200);
   expect(res.body.success).toBe(true);
@@ -59,13 +63,19 @@ test('an active loan becomes recover_at_exit; balance and instalments untouched'
   expect(l.exit_flagged_at).toBeTruthy();
   expect(l.remaining_balance).toBe(6000);
   expect(l.written_off_amount).toBe(0);
-  expect(db.prepare('SELECT * FROM loan_instalments WHERE loan_id = ? ORDER BY sequence').all(id)).toEqual(instBefore);
+  // Loans PR-7: exit 2026-10-05 → final month Oct 2026 holds the whole ₹6,000; Nov and Dec are cancelled.
+  const inst = db.prepare('SELECT sequence, due_month, amount_due, status FROM loan_instalments WHERE loan_id = ? ORDER BY sequence').all(id);
+  expect(inst).toEqual([
+    { sequence: 1, due_month: 10, amount_due: 6000, status: 'scheduled' },
+    { sequence: 2, due_month: 11, amount_due: 2000, status: 'cancelled' },
+    { sequence: 3, due_month: 12, amount_due: 2000, status: 'cancelled' },
+  ]);
 
   const ev = events(id);
-  expect(ev).toHaveLength(1);
+  expect(ev.map((e) => e.event)).toEqual(['borrower_left', 'instalment_cancelled', 'instalment_cancelled', 'instalment_increased', 'exit_consolidated']);
   expect(ev[0]).toMatchObject({ event: 'borrower_left', from_state: 'active', to_state: 'recover_at_exit', amount: 6000, actor: 'hr1' });
   expect(ev[0].reason).toMatch(/2026-10-05.*Resigned/);
-  const au = loanAudits(id);
+  const au = loanAudits(id).filter((a) => a.stage === 'loan_exit');
   expect(au).toHaveLength(1);
   expect(au[0]).toMatchObject({ field_name: 'status', old_value: 'active', new_value: 'recover_at_exit', stage: 'loan_exit' });
   const empAudit = db.prepare("SELECT remark FROM audit_log WHERE table_name = 'employees' ORDER BY id DESC LIMIT 1").get();
@@ -106,11 +116,13 @@ test('reactivated (Stage 6) then marked Left again: the flag holds, no second ev
   addEmployee('ML05');
   const id = addLoan('ML05');
   expect((await markLeft('ML05')).status).toBe(200);
+  const firstEvents = events(id).length;
   db.prepare("UPDATE employees SET status = 'Active' WHERE code = 'ML05'").run();   // L2-style reactivation
   expect(loan(id)).toMatchObject({ status: 'recover_at_exit', exit_flag: 1 });     // lives on the loan
   expect((await markLeft('ML05', { date_of_leaving: '2026-10-20' })).status).toBe(200);
   expect(loan(id)).toMatchObject({ status: 'recover_at_exit', exit_flag: 1, exit_date: '2026-10-05' });
-  expect(events(id)).toHaveLength(1);
+  expect(events(id).filter((e) => e.event === 'borrower_left')).toHaveLength(1);
+  expect(events(id)).toHaveLength(firstEvents);   // the second Mark Left writes nothing
 });
 
 test('the old loan tables are never written (the legacy view would refuse)', async () => {
@@ -118,4 +130,27 @@ test('the old loan tables are never written (the legacy view would refuse)', asy
   addLoan('ML06');
   expect((await markLeft('ML06')).status).toBe(200);
   expect(db.prepare("SELECT type FROM sqlite_master WHERE name = 'loan_repayments'").get().type).toBe('view');
+});
+
+test('Loans PR-7: the response lists each flagged loan — due in the final payroll, or the residual when that month is already closed', async () => {
+  addEmployee('ML07');
+  const open = addLoan('ML07');
+  addInstalments(open);                                                   // Oct / Nov / Dec 2026, ₹2,000 each
+  const req = addLoan('ML07', { status: 'requested' });
+  const res = await markLeft('ML07', { date_of_leaving: '2026-11-15', reason: 'Resigned' });
+  expect(res.status).toBe(200);
+  expect(res.body.loans).toEqual([
+    { loanId: open, status: 'recover_at_exit', outstanding: 6000, finalMonth: { month: 11, year: 2026 }, finalMonthPast: false, dueInFinalPayroll: 4000, residual: 0 },
+    { loanId: req, status: 'requested', outstanding: 0, finalMonth: null, finalMonthPast: null, dueInFinalPayroll: 0, residual: 0 },
+  ]);
+
+  // Mark Left after the final month's loan close: the outstanding is the residual at once, finance is told.
+  addEmployee('ML08');
+  const late = addLoan('ML08');
+  addInstalments(late);
+  db.prepare("INSERT INTO loan_closes (month, year, payroll, run_by, trigger_kind) VALUES (10, 2026, 'plant', 'system', 'test')").run();
+  const r2 = await markLeft('ML08', { date_of_leaving: '2026-10-10', reason: 'Absconded' });
+  expect(r2.body.loans).toEqual([{ loanId: late, status: 'recover_at_exit', outstanding: 6000, finalMonth: { month: 10, year: 2026 }, finalMonthPast: true, dueInFinalPayroll: 0, residual: 4000 }]);
+  const n = db.prepare("SELECT role_target, message FROM notifications WHERE type = 'LOAN_EXIT_RESIDUAL'").all();
+  expect(n).toEqual([{ role_target: 'finance', message: expect.stringMatching(/exit residual now ₹4000/) }]);
 });

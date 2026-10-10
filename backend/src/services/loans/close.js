@@ -37,7 +37,8 @@ const { toPaise, toRupees } = require('./money');
 const { addMonths, compareMonth, isValidMonth, todayIst, monthIndex } = require('./months');
 const { readLoanPolicy } = require('./policy');
 const { checkActor, LIVE_LOAN_STATES } = require('./states');
-const { fail, text } = require('./common');
+const { fail, text, exitResidualPaise } = require('./common');
+const { exitLoansForMonth, heldPendingPaise, exitFinalPayrollWarnings } = require('./exit');
 const { postDeduction, moveInstalmentToEnd, HELD_MOVE_REVERSAL_REASON } = require('./ledger');
 const { effectivePostedPaise, writeAdjustment } = require('./adjustments');
 const { reconcileLoan } = require('./reconcile');
@@ -156,6 +157,8 @@ function closeReadiness(db, { payroll = 'plant', month, year, now = new Date() }
                                 JOIN loans l ON l.employee_code = dc.employee_code AND l.borrower_type = 'plant' AND l.status IN (${LIVE_SQL})
                                WHERE dc.month = ? AND dc.year = ? AND dc.salary_stale = 1`).all(m.month, m.year)
     .map((r) => ({ code: 'SALARY_STALE', employeeCode: r.employee_code, message: `${r.employee_code}: Stage 6 changed after Stage 7 for ${label(m)}` }));
+  // Loans PR-7: an exit loan's final payroll that will not cover the outstanding (non-blocking).
+  warnings.push(...exitFinalPayrollWarnings(db, payroll, m));
   return { ok: true, warnings };
 }
 
@@ -190,6 +193,7 @@ function previewClose(db, { payroll = 'plant', month, year, now = new Date() }) 
     provisional: { count: rows.length, amount: toRupees(rows.reduce((s, r) => s + toPaise(r.amount), 0)) },
     wouldPost: { count: 0, amount: 0 }, held: 0, shortfalls: 0, mismatches: check.mismatches,
     noSalary: 0,
+    exitFinalMonth: { loans: exitLoansForMonth(db, payroll, m).length, short: (readiness.warnings || []).filter((w) => w.code === 'EXIT_FINAL_PAYROLL_SHORT') },
   };
   let postPaise = 0;
   for (const r of rows) {
@@ -223,6 +227,7 @@ function runLoanClose(db, { payroll = 'plant', month, year, trigger = 'auto', ac
   const loanIds = new Set(db.prepare(`SELECT id FROM loans WHERE borrower_type = ? AND status IN (${LIVE_SQL})`).all(payroll).map((r) => r.id));
   for (const r of provisionalRows(db, payroll, m)) loanIds.add(r.loan_id);
   const before = new Map([...loanIds].map((id) => [id, reconcileLoan(db, id).ok]));
+  const exitLoanIds = exitLoansForMonth(db, payroll, m).map((l) => l.id);   // Loans PR-7: final payroll = this month
 
   let out;
   try {
@@ -237,7 +242,7 @@ function runLoanClose(db, { payroll = 'plant', month, year, trigger = 'auto', ac
       }
       const check = checkPayslipLedger(db, { payroll, month: m.month, year: m.year });
       const bad = new Set(check.mismatches.map((x) => x.employeeCode));
-      const c = { posted: 0, postedPaise: 0, deferred: 0, held: 0, noSalary: 0, shortfall: 0 };
+      const c = { posted: 0, postedPaise: 0, deferred: 0, held: 0, noSalary: 0, shortfall: 0, exitResidual: 0, exitResidualPaise: 0, exitHeld: 0, exitHeldPaise: 0 };
       const notes = { mismatches: check.mismatches, held: [], refusals: [], noSalary: [], warnings: ready.warnings, leftScheduled: [] };
       const alerts = [];
 
@@ -267,6 +272,25 @@ function runLoanClose(db, { payroll = 'plant', month, year, trigger = 'auto', ac
         alerts.push(...(r.alerts || []));
       }
 
+      // Loans PR-7: exit loans whose final payroll is this month — what is left after it.
+      notes.exitResiduals = [];
+      for (const id of exitLoanIds) {
+        const l = db.prepare('SELECT * FROM loans WHERE id = ?').get(id);
+        const residual = l.status === 'recover_at_exit' ? exitResidualPaise(db, id) : 0;
+        const held = l.status === 'recover_at_exit' ? heldPendingPaise(db, id) : 0;
+        if (residual === 0 && held === 0) continue;
+        notes.exitResiduals.push({ loanId: id, employeeCode: l.employee_code, residual: toRupees(residual), heldPending: toRupees(held) });
+        c.exitResidual += residual > 0 ? 1 : 0; c.exitResidualPaise += residual;
+        if (held > 0) {
+          c.exitHeld += 1; c.exitHeldPaise += held;
+          // Held final salary (ruling Q-B): it waits the D-14 days like any held EMI, then the rest becomes residual.
+          alerts.push({
+            type: 'loan_exit_final_held', audience: 'finance', loanId: id, employeeCode: l.employee_code, heldPending: toRupees(held), residual: toRupees(residual),
+            message: `Loan ${id} (${l.employee_code}): the final payroll ${label(m)} salary is held — ₹${toRupees(held)} waits for the hold to be released (posted by the daily sweep; after ${readLoanPolicy(db).heldEmiWaitDays} days it becomes exit residual)${residual > 0 ? `; exit residual so far ₹${toRupees(residual)}` : ''}.`,
+          });
+        }
+      }
+
       const after = [...loanIds].map((id) => reconcileLoan(db, id));
       const broken = after.filter((r) => !r.ok && before.get(r.loanId));
       if (broken.length) {
@@ -282,6 +306,8 @@ function runLoanClose(db, { payroll = 'plant', month, year, trigger = 'auto', ac
         ok: true, closeId, payroll, month: m.month, year: m.year, trigger,
         posted: c.posted, postedAmount: toRupees(c.postedPaise), deferred: c.deferred, held: c.held, noSalary: c.noSalary,
         shortfall: c.shortfall, reconciliationOk: reconOk, mismatches: check.mismatches, refusals: notes.refusals, alerts,
+        exitResiduals: notes.exitResiduals,
+        exitSummary: { residual: c.exitResidual, residualAmount: toRupees(c.exitResidualPaise), heldFinal: c.exitHeld, heldFinalAmount: toRupees(c.exitHeldPaise) },
       };
     })();
   } catch (e) {
@@ -296,6 +322,8 @@ function runLoanClose(db, { payroll = 'plant', month, year, trigger = 'auto', ac
   // After the commit: finance summary + every engine alert.
   notify(db, 'finance', 'LOAN_CLOSE_DONE',
     `Loan close ${payroll} ${label(m)}: posted ${out.posted} (${rs(toPaise(out.postedAmount))}), held ${out.held}, shortfall ${out.shortfall}, no salary ${out.noSalary}`
+    + `${out.exitSummary.residual ? `, exit residual ${out.exitSummary.residual} (${rs(toPaise(out.exitSummary.residualAmount))})` : ''}`
+    + `${out.exitSummary.heldFinal ? `, held final salary ${out.exitSummary.heldFinal} (${rs(toPaise(out.exitSummary.heldFinalAmount))} pending release)` : ''}`
     + `${out.mismatches.length ? `, ${out.mismatches.length} payslip/ledger mismatch(es) left for review` : ''}${out.reconciliationOk ? '' : ' — RECONCILIATION MISMATCH (pre-existing)'}`);
   for (const x of out.mismatches) {
     notify(db, 'finance', 'LOAN_PAYSLIP_LEDGER_MISMATCH', `${x.employeeCode} ${payroll} ${label(m)}: payslip loan ₹${x.payslip} ≠ ledger ₹${x.ledger}${x.salaryRows > 1 ? ` (${x.salaryRows} salary rows)` : ''}; left provisional — re-run Stage 7 for this employee`);

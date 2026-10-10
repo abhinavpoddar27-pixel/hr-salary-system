@@ -721,6 +721,11 @@ router.put('/:code/mark-left', (req, res) => {
     "SELECT 1 FROM policy_config WHERE key = 'migration_loans_schema_v2_done' AND value = '1'"
   ).get();
 
+  const { consolidateForExit } = require('../services/loans/exit');
+  const { notifyAlerts } = require('../services/loans/notify');
+  const exitAlerts = [];
+  const loanSummary = [];   // Loans PR-7: what each flagged loan now owes (the Mark Left dialog, PR-6b)
+
   const txn = db.transaction(() => {
     // 1. Set status = 'Left', is_active = 0, date_of_exit
     // Also set inactive_since (for reactivation cutoff) and auto_inactive = 0
@@ -738,8 +743,9 @@ router.put('/:code/mark-left', (req, res) => {
       .run(exitDate, reason || '', exitDate, code);
 
     // 2. Flag the leaver's open plant loans for exit recovery (Loans PR-1, SPEC §5.2
-    //    rule 11). Nothing is closed or written off and no balance or instalment
-    //    moves: an active loan becomes recover_at_exit; a requested / approved
+    //    rule 11). Nothing is closed or written off and no balance moves: an
+    //    active loan becomes recover_at_exit (its schedule collapses into the
+    //    final month, Loans PR-7, below); a requested / approved
     //    loan keeps its status and only gets the exit flag (the admin decides it).
     //    The flag lives on the loan, so a later Stage 6 reactivation cannot undo
     //    it. borrower_type = 'plant' keeps a sales loan with the same code untouched.
@@ -765,6 +771,16 @@ router.put('/:code/mark-left', (req, res) => {
         `Marked Left (exit ${exitDate}). ${reason || 'No reason given'}`);
       logAudit('loans', loan.id, 'status', loan.status, toState, 'loan_exit',
         `Borrower ${code} marked Left; loan flagged for exit recovery`, req.user?.username);
+      // Loans PR-7: the whole outstanding falls due in the final payroll (the
+      // month of the exit date); if that month's loan close has already run,
+      // the outstanding is the exit residual (receipt or write-off) at once.
+      const exit = toState === 'recover_at_exit' ? consolidateForExit(db, loan.id, { username: markedBy }) : null;
+      if (exit) exitAlerts.push(...exit.alerts);
+      loanSummary.push({
+        loanId: loan.id, status: toState, outstanding: toState === 'recover_at_exit' ? loan.remaining_balance : 0,
+        finalMonth: exit ? exit.finalMonth : null, finalMonthPast: exit ? exit.finalMonthPast : null,
+        dueInFinalPayroll: exit ? exit.dueInFinalPayroll : 0, residual: exit ? exit.residual : 0,
+      });
     }
 
     // 3. Audit log
@@ -772,7 +788,8 @@ router.put('/:code/mark-left', (req, res) => {
   });
 
   txn();
-  res.json({ success: true, message: `Employee ${code} marked as Left. ${emp.name} removed from active roster.` });
+  notifyAlerts(db, exitAlerts);   // after the commit, best effort (never throws)
+  res.json({ success: true, message: `Employee ${code} marked as Left. ${emp.name} removed from active roster.`, loans: loanSummary });
 });
 
 // GET departments list
