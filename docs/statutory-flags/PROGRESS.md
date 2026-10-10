@@ -66,11 +66,13 @@
 
 - PR-2b STEP 3 — db3019e `feat(lwf): LWF on the sales payslip and the sales register Excel (39 columns)`. generateSalesPayslipData: `{ label: 'LWF (Employee)', amount: comp.lwf_employee }` after Loan EMI (the existing filter drops 0) + `lwfEmployer: comp.lwf_employer || 0` after netSalary (API only, E6 — SalesPayslip.jsx / salesPayslipPdf.js map `deductions` generically, not edited). salesExportFormats.js generateSalesExcel only: header `'ESI Employee', 'LWF Employee', 'PT'` (38 → 39, index 25), data cell `round2(r.lwf_employee)`, `!cols` `{ wch: 8 }` after the PF/ESI `{ wch: 10 }`s (39 entries), JSON totals lwf_employee / lwf_employer. NEFT / TA-DA generators untouched. Tests O2 (function + GET /api/sales/payslip/:code; unflagged → no line, lwfEmployer 0; deductions sum = total) + O4 ×2 (real download route read with `cellStyles: true`: header = every row = `!cols` = width = 39, 18 header→DB-column checks per row; JSON preview + /salary-register totals 10 / 40 for N = 2) — all 3 FAIL with the pre-step files (STEP 1 service + ad96604 export file). Nothing else reads the sales Excel (grep: tests, scripts, sims). loansSales*/loansReports* 8 / 84 green. `node --check` clean.
 
+- PR-2b STEP 4 — 62d80ec `feat(lwf): LWF column and total in the sales salary register`. Before editing, a clean `npm run build` of 18ff118 reproduced the committed dist byte-identically (0 changes), so the environment is deterministic. SalesSalaryCompute.jsx: `min-w-[1480px]` → `min-w-[1540px]`; LWF th after ESI (title explains employer share); td `fmtINR(r.lwf_employee)` with `title` "Employer LWF: …"; tfoot `colSpan={3}` → `colSpan={2}` + LWF total td (`totals.lwf_employee`, employer total in title) + empty td under TDS. Cell count by script: header 21 = body 21 = tfoot 21 (was 20). dist rebuilt and committed in the same commit (80 paths). Proof: `SalesSalaryCompute-PJwJp7me.js` contains `lwf_employee` ×2, `Employer LWF` ×2, `min-w-[1540px]`, `children:"LWF"`; `rm -rf frontend/dist && npm run build` after the commit → git status clean (byte-identical). Not done: a browser pass of the page (bundle grep only, same as PR-2).
+
 ## LAST STEP
-PR-2b STEP 3 (payslip data + sales Excel).
+PR-2b STEP 4 (sales register UI + dist).
 
 ## NEXT STEP
-PR-2b STEP 4 (SalesSalaryCompute.jsx LWF column + total; npm run build; dist in the same commit). Keep: do NOT recompute sales September until D3 is answered.
+PR-2b STEP 5 (VERIFY.sql V12 policy read + V13 + V14, OPEN_ITEMS N3/N10/N5, sim run_pr2b.py + seed_pr2b.js, C3, C4). Keep: do NOT recompute sales September until D3 is answered.
 
 ## OWNER RULINGS ADDED DURING THE BUILD
 (record date + ruling; BUILD_PLAN §1 holds the original set)
