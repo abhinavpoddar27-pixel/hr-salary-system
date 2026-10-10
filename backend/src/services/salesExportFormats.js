@@ -171,15 +171,26 @@ function generateSalesExcel(db, month, year, company) {
 function generateSalesNEFT(db, month, year, company) {
   const rows = db.prepare(`
     SELECT c.employee_code, c.net_salary, c.status, c.id AS computation_id,
+           c.neft_exported_at,
            e.name, e.account_no, e.ifsc, e.bank_name, e.doj
       FROM sales_salary_computations c
  LEFT JOIN sales_employees e
         ON e.code = c.employee_code AND e.company = c.company
      WHERE c.month = ? AND c.year = ? AND c.company = ?
        AND c.net_salary > 0
-       AND c.status != 'hold'
+       AND c.status NOT IN ('hold', 'paid')
   ORDER BY e.name ASC, c.employee_code ASC
   `).all(month, year, company);
+
+  // P1-03 (S-1): rows already marked `paid` are left out of the file so a
+  // re-download can never pay them twice. Counted here for the confirm modal.
+  const paid = db.prepare(`
+    SELECT COUNT(*) AS n, COALESCE(SUM(net_salary), 0) AS amt
+      FROM sales_salary_computations
+     WHERE month = ? AND year = ? AND company = ?
+       AND net_salary > 0
+       AND status = 'paid'
+  `).get(month, year, company);
 
   const narration = `SALARY ${MONTHS_SHORT[month].toUpperCase()} ${year}`;
 
@@ -211,6 +222,15 @@ function generateSalesNEFT(db, month, year, company) {
   const validEmployees = rows.filter(r => r.account_no && r.ifsc);
   const totalAmount = validEmployees.reduce((s, r) => s + (r.net_salary || 0), 0);
 
+  // Preview-only counts over the rows WRITTEN to the file (missing-bank rows
+  // stay in `missing`). Sum of byStatus = count.
+  const byStatus = { computed: 0, reviewed: 0, finalized: 0 };
+  let alreadyExported = 0;
+  for (const r of validEmployees) {
+    if (Object.prototype.hasOwnProperty.call(byStatus, r.status)) byStatus[r.status]++;
+    if (r.neft_exported_at) alreadyExported++;
+  }
+
   return {
     content: csvLines.join('\n'),
     filename: `Sales_Bank_Salary_${MONTHS_SHORT[month]}_${year}_${underscoreCompany(company)}.csv`,
@@ -221,6 +241,11 @@ function generateSalesNEFT(db, month, year, company) {
       count: validEmployees.length,
       totalAmount: Math.round(totalAmount * 100) / 100,
       missingCount: missing.length,
+      byStatus,
+      notFinalized: byStatus.computed + byStatus.reviewed,
+      alreadyExported,
+      excludedPaid: paid.n,
+      excludedPaidAmount: Math.round((paid.amt || 0) * 100) / 100,
     },
   };
 }
