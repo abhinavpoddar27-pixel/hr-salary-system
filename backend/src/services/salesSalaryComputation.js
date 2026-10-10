@@ -287,6 +287,15 @@ function computeSalesEmployee(db, { salesEmployee, monthlyInputRow, cycleStart, 
     esiEmployer = Math.round(grossEarned * esiEmprRate * 100) / 100;
   }
 
+  // ─── LWF (statutory flags PR-2b, R7): ₹5 EE / ₹20 ER per month ───
+  // Flag from the in-force structure (getLatestStructure, fallback included); only when
+  // earned gross > 0; a held row is still charged. getPolicyNumber parses the stored
+  // string ('0' → 0, E7); garbage / negative / missing → 5 / 20 (same results as plant).
+  const lwfAmt = (k, d) => { const v = getPolicyNumber(db, k, d); return Number.isFinite(v) && v >= 0 ? v : d; };
+  const lwfOn = !!structure.lwf_applicable && grossEarned > 0;
+  const lwfEmployee = lwfOn ? Math.round(lwfAmt('lwf_employee_amount', 5) * 100) / 100 : 0;
+  const lwfEmployer = lwfOn ? Math.round(lwfAmt('lwf_employer_amount', 20) * 100) / 100 : 0;
+
   // Professional Tax — disabled per plant policy (Issue 6, April 2026)
   const professionalTax = 0;
 
@@ -300,17 +309,17 @@ function computeSalesEmployee(db, { salesEmployee, monthlyInputRow, cycleStart, 
     salary: {
       gross_earned: grossEarned, pf_employee: pfEmployee, esi_employee: esiEmployee,
       professional_tax: professionalTax, tds, advance_recovery: advanceRecovery,
-      diwali_recovery: diwaliRecovery, other_deductions: otherDeductions,
+      diwali_recovery: diwaliRecovery, other_deductions: otherDeductions, lwf_employee: lwfEmployee,
     },
   });
   for (const w of loanPlan.warnings) console.warn(`${RID} ${salesEmployee.code} ${month}/${year}: ${w}`);
   const loanRecovery = loanPlan.totalRupees;
 
-  // Q5 reversal: total_deductions = PF_e + ESI_e + PT + TDS + advance + loan + other
-  // (diwali_recovery term removed — Diwali is now only a bonus in Step 7).
+  // Q5 reversal: total_deductions = PF_e + ESI_e + PT + TDS + advance + loan + other + LWF(EE)
+  // (diwali_recovery term removed — Diwali is now only a bonus in Step 7; LWF since PR-2b).
   const totalDeductions = Math.round((
     pfEmployee + esiEmployee + professionalTax + tds +
-    advanceRecovery + loanRecovery + otherDeductions
+    advanceRecovery + loanRecovery + otherDeductions + lwfEmployee
   ) * 100) / 100;
 
   // ── Step 7 — Net salary ──
@@ -364,6 +373,8 @@ function computeSalesEmployee(db, { salesEmployee, monthlyInputRow, cycleStart, 
     pf_employer: pfEmployer,
     esi_employee: esiEmployee,
     esi_employer: esiEmployer,
+    lwf_employee: lwfEmployee,
+    lwf_employer: lwfEmployer,
     professional_tax: professionalTax,
     tds,
     advance_recovery: advanceRecovery,
@@ -407,7 +418,7 @@ function saveSalesSalaryComputation(db, comp, { runId = null } = {}) {
       diwali_bonus, incentive_amount, net_salary,
       sunday_rule_trace, status, hold_reason,
       computed_by, finalized_at, finalized_by,
-      neft_exported_at, payslip_generated_at
+      neft_exported_at, payslip_generated_at, lwf_employee, lwf_employer
     ) VALUES (
       ?, ?, ?, ?,
       ?, ?,
@@ -421,7 +432,7 @@ function saveSalesSalaryComputation(db, comp, { runId = null } = {}) {
       ?, ?, ?,
       ?, ?, ?,
       ?, ?, ?,
-      ?, ?
+      ?, ?, ?, ?
     )
     ON CONFLICT(employee_code, month, year, company) DO UPDATE SET
       cycle_start_date = excluded.cycle_start_date,
@@ -465,6 +476,8 @@ function saveSalesSalaryComputation(db, comp, { runId = null } = {}) {
       finalized_by = excluded.finalized_by,
       neft_exported_at = excluded.neft_exported_at,
       payslip_generated_at = excluded.payslip_generated_at,
+      lwf_employee = excluded.lwf_employee,
+      lwf_employer = excluded.lwf_employer,
       computed_at = datetime('now')
   `).run(
     comp.employee_code, comp.month, comp.year, comp.company,
@@ -479,7 +492,7 @@ function saveSalesSalaryComputation(db, comp, { runId = null } = {}) {
     comp.diwali_bonus, comp.incentive_amount, comp.net_salary,
     comp.sunday_rule_trace, comp.status, comp.hold_reason,
     comp.computed_by, comp.finalized_at, comp.finalized_by,
-    comp.neft_exported_at, comp.payslip_generated_at
+    comp.neft_exported_at, comp.payslip_generated_at, comp.lwf_employee || 0, comp.lwf_employer || 0
   );
 
   // Loans PR-8: this month's provisional loan deduction(s), AFTER the salary row —
