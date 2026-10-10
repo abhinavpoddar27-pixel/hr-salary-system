@@ -21,6 +21,27 @@
   late days without finance approval (3 Aug cases) — no write-back until fixed. `short_leaves` has 0 rows ever.
 - **Not tested:** nothing built. Reference builders were sanitised (config-driven) and only syntax-checked.
 
+## Last Session — 2026-10-10 (P1-01: Finance Audit Readiness cards did nothing on click)
+**Branch `fix/finance-audit-readiness-nav`, NOT merged.** Frontend only (`pages/FinanceAudit.jsx`, 4 lines). Plan + log:
+`docs/ux-bulk/prs/P1-01/PLAN.md`, `PROGRESS.md`. Finding F-5.
+- **Bug:** `ReadinessTab()` called `setActiveTab` / `navigate`, which exist only in the parent `FinanceAudit()`. Every click
+  on a "Click to review →" blocker card threw `setActiveTab is not defined` / `navigate is not defined`. Event-handler errors
+  are not caught by the ErrorBoundary, so the card just did nothing (prod frontend log: 35× F-5). The manual-flags card
+  (UNAPPROVED_MANUAL_FLAGS — Aug 265 / Sep 206 unapproved rows) is the one finance needs most.
+- **Fix:** `ReadinessTab({ onTab, navigate })`, rendered as `<ReadinessTab onTab={setActiveTab} navigate={navigate} />`.
+  The held-salary card pointed at `/finance-verify` (API prefix, no page route → `*` redirects to `/`); now
+  `/finance-verification?tab=redflags&filter=salary_held` (owner approved), which opens Red Flags filtered to held salaries.
+  dist rebuilt (own commit; vs a fresh a5aec9a build only the FinanceAudit chunk differs).
+- **Fragile:** a tab component that needs the parent's tab switch or navigate must get them as props — the scope scan found no
+  other tab in FinanceAudit.jsx doing this. Card actions key on blocker `type` strings (`includes('HELD')` before
+  `includes('SALARY')`); renaming a readiness blocker type in `routes/financeAudit.js` silently drops its click.
+- **Verified:** `backend/scripts/finance-audit-readiness-check.py` (Chromium, built dist, finance + admin logins, fictional data)
+  31/31 — manual flags → Interventions (Pending KPI 1), HELD → Finance Verification Red Flags + salary_held chip, Back
+  returns, DAY CALC WITHOUT SALARY → /pipeline/salary, no-action card inert, 390px phone, 0 page/console errors, 0 API ≥ 400.
+  `--base` on an a5aec9a worktree 5/5: all three cards throw. jest 81 suites / 1332 pass before and after.
+- **Not tested:** Railway; Safari/Firefox; Sentry does not receive frontend errors (P2-09), so "error stops after deploy"
+  can only be checked in the frontend error log.
+
 ## Last Session — 2026-10-10 (Extra duty: Finance Review screen — finance could not select rejected rows)
 **Branch `fix/ed-finance-review-ux`, NOT merged.** Frontend only (`pages/ExtraDutyGrants.jsx`); no backend file changed.
 - **Report:** after #76 shipped "Return to HR", finance said they couldn't select the rejected grants. Reproduced on a
