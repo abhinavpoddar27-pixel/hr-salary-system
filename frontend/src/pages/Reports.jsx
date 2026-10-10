@@ -573,12 +573,10 @@ export default function Reports() {
                 <button onClick={() => exportToCSV(salData, [
                   { key: 'employee_code', label: 'Code' }, { key: 'employee_name', label: 'Name' },
                   { key: 'department', label: 'Dept' }, { key: 'gross_salary', label: 'Gross' },
-                  { key: 'basic', label: 'Basic' }, { key: 'hra', label: 'HRA' },
-                  { key: 'payable_days', label: 'Payable Days' }, { key: 'earned_basic', label: 'Earned Basic' },
-                  { key: 'earned_hra', label: 'Earned HRA' }, { key: 'total_earned', label: 'Total Earned' },
-                  { key: 'employee_pf', label: 'EE PF' }, { key: 'employee_esi', label: 'EE ESI' },
-                  { key: 'professional_tax', label: 'PT' }, { key: 'total_deductions', label: 'Total Ded.' },
-                  { key: 'net_pay', label: 'Net Pay' }
+                  { key: 'payable_days', label: 'Payable Days' }, { key: 'basic_earned', label: 'Earned Basic' },
+                  { key: 'hra_earned', label: 'Earned HRA' }, { key: 'gross_earned', label: 'Total Earned' },
+                  { key: 'pf_employee', label: 'EE PF' }, { key: 'esi_employee', label: 'EE ESI' },
+                  { key: 'total_deductions', label: 'Total Ded.' }, { key: 'net_salary', label: 'Net Pay' }
                 ], `salary_register_${monthLabel}.csv`)} className="btn-secondary text-sm">⬇ Export CSV</button>
               </div>
               {/* Totals */}
@@ -604,14 +602,13 @@ export default function Reports() {
                           <th className="text-right">Earned</th>
                           <th className="text-right">EE PF</th>
                           <th className="text-right">EE ESI</th>
-                          <th className="text-right">PT</th>
                           <th className="text-right">Ded.</th>
                           <th className="text-right font-bold text-brand-700">Net Pay</th>
                         </tr>
                       </thead>
                       <tbody>
                         {salData.length === 0 ? (
-                          <tr><td colSpan={11} className="text-center py-6 text-slate-400">Run salary computation first</td></tr>
+                          <tr><td colSpan={10} className="text-center py-6 text-slate-400">Run salary computation first</td></tr>
                         ) : salData.map((e, i) => (
                           <React.Fragment key={e.employee_code || i}>
                             <tr onClick={() => toggle(e.employee_code)} className={`cursor-pointer transition-colors hover:bg-slate-50 ${isExpanded(e.employee_code) ? 'bg-blue-50' : ''}`}>
@@ -620,15 +617,14 @@ export default function Reports() {
                               <td>{e.department}</td>
                               <td className="text-center">{e.payable_days}</td>
                               <td className="text-right">{fmtINR(e.gross_salary)}</td>
-                              <td className="text-right">{fmtINR(e.total_earned)}</td>
-                              <td className="text-right text-blue-600">{fmtINR(e.employee_pf)}</td>
-                              <td className="text-right text-purple-600">{fmtINR(e.employee_esi)}</td>
-                              <td className="text-right">{fmtINR(e.professional_tax)}</td>
+                              <td className="text-right">{fmtINR(e.gross_earned)}</td>
+                              <td className="text-right text-blue-600">{fmtINR(e.pf_employee)}</td>
+                              <td className="text-right text-purple-600">{fmtINR(e.esi_employee)}</td>
                               <td className="text-right text-red-600">{fmtINR(e.total_deductions)}</td>
-                              <td className="text-right font-bold text-green-700">{fmtINR(e.net_pay)}</td>
+                              <td className="text-right font-bold text-green-700">{fmtINR(e.net_salary)}</td>
                             </tr>
                             {isExpanded(e.employee_code) && (
-                              <DrillDownRow colSpan={11}>
+                              <DrillDownRow colSpan={10}>
                                 <EmployeeQuickView employeeCode={e.employee_code} showPayslip={true} />
                               </DrillDownRow>
                             )}

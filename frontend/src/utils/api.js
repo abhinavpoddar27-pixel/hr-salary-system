@@ -242,6 +242,8 @@ export const getLeaveApplications = (params) => api.get('/leaves', { params, ...
 export const submitLeaveApplication = (data) => api.post('/leaves', data)
 export const approveLeave = (id, data) => api.put(`/leaves/${id}/approve`, data)
 export const rejectLeave = (id, data) => api.put(`/leaves/${id}/reject`, data)
+// Cancels a Pending or Approved application; an approved CL/EL is credited back.
+export const cancelLeave = (id) => api.delete(`/leaves/${id}`)
 export const getLeaveSummary = (params) => api.get('/leaves/summary', { params, ...fresh })
 export const getLeaveBalancesList = (params) => api.get('/leaves/balances', { params, ...fresh })
 // no-cache: server.js caches GETs for 5s, which showed a stale balance right after an approval.
@@ -738,5 +740,18 @@ export const statutoryFlagsApply = (file, scope, effectiveMonth, expectedSha256)
 export const statutoryFlagsBatches = () => api.get('/statutory-flags/batches', { headers: { 'Cache-Control': 'no-cache' } })
 export const statutoryFlagsUndoFile = (batchId) =>
   api.get(`/statutory-flags/batches/${batchId}/undo-file`, { responseType: 'blob', headers: { 'Cache-Control': 'no-cache' } })
+
+// Attendance Review (admin only). Every read skips the 5 s GET cache so a just-saved config or run shows at once.
+const AR = '/analytics/attendance-review'
+const arFresh = { 'Cache-Control': 'no-cache' }
+export const attendanceReviewPreview = (month, year, releaseDays = [], overrides = []) =>
+  api.get(AR, { params: { month, year, releaseDays: releaseDays.join(','), ...(overrides.length ? { overrides: JSON.stringify(overrides) } : {}) }, headers: arFresh })
+export const attendanceReviewConfig = (month, year) => api.get(`${AR}/config`, { params: { month, year }, headers: arFresh })
+export const attendanceReviewSaveConfig = (effective_from, config) => api.put(`${AR}/config`, { effective_from, config })
+export const attendanceReviewRuns = () => api.get(`${AR}/runs`, { headers: arFresh })
+export const attendanceReviewRun = (id) => api.get(`${AR}/runs/${id}`, { headers: arFresh })
+export const attendanceReviewGenerate = (body) => api.post(`${AR}/runs`, body)
+export const attendanceReviewFinalise = (id) => api.put(`${AR}/runs/${id}/finalise`)
+export const attendanceReviewExport = (id, kind) => api.get(`${AR}/runs/${id}/export.${kind}`, { responseType: 'blob', headers: arFresh })
 
 export default api

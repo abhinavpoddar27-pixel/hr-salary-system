@@ -3801,6 +3801,33 @@ If description and screenshot are incoherent or unrelated, set summary_confidenc
   // Switched to '1' deliberately at cutover; PUT /api/loans/policy cannot change it.
   insertPolicyIfMissing.run('loans_disbursement_enabled', '0', 'Loan disbursement gate: 0 = disbursement refused (until PR-5/PR-6 are live); 1 = allowed. Switched on at cutover only');
 
+  // ── Attendance Review (Analytics tab, PR-1) — additive, no seed rows ──
+  // Config rows hold admin-entered exclusion lists; never seed employee codes here (public repo).
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS attendance_review_config (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      effective_from TEXT NOT NULL,
+      config_json TEXT NOT NULL,
+      updated_by TEXT NOT NULL,
+      updated_at TEXT DEFAULT (datetime('now'))
+    );
+    CREATE TABLE IF NOT EXISTS attendance_review_runs (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      month INTEGER NOT NULL,
+      year INTEGER NOT NULL,
+      status TEXT NOT NULL DEFAULT 'draft' CHECK (status IN ('draft','final')),
+      config_snapshot TEXT NOT NULL,
+      release_days TEXT NOT NULL DEFAULT '[]',
+      overrides TEXT NOT NULL DEFAULT '[]',
+      result_json TEXT NOT NULL,
+      generated_by TEXT NOT NULL,
+      generated_at TEXT DEFAULT (datetime('now')),
+      finalised_by TEXT,
+      finalised_at TEXT,
+      UNIQUE(month, year)
+    );
+  `);
+
   console.log('✅ Database schema initialized');
 }
 
