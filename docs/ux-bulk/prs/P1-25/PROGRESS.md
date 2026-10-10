@@ -17,9 +17,9 @@
 | 2 | employees.js: requireHrOrAdmin on PUT /:code + gross refusal | done | +20/−1, PUT /:code only |
 | 3 | new employeeEditGrossGuard.test.js; prove fails on origin/main | done | 23/23 on branch; on origin/main worktree 12 fail / 11 pass (all refusal + 403 cases fail; regression guards pass) |
 | 4 | adjust statutoryWriters (T9a, T8b) + markLeftRoleGuard (view1/fin1) per Q1/Q2 | done | 3 suites 85/85 |
-| 5 | jest full suite AFTER | todo | |
-| 6 | verify script (port 3125) + `--base` on origin/main worktree | todo | |
-| 7 | self-debug + user-simulation pass; git diff --stat (salaryComputation.js untouched) | todo | |
+| 5 | jest full suite AFTER | done | 93 suites / 1501 pass (+1 suite / +23 tests) |
+| 6 | verify script (port 3125) + `--base` on origin/main worktree | done | backend/scripts/employee-edit-gross-guard-check.js 22/22; --base on 0ea1409 worktree 7/7 (hr AND viewer move gross via PUT /:code, structure rescaled, no request; finance edit 200) |
+| 7 | self-debug + user-simulation pass; git diff --stat (salaryComputation.js untouched) | done | diff vs origin/main in backend+frontend = employees.js + 3 test files (+ script); no DO-NOT-MODIFY file, no frontend. User sim = exact Edit-modal body as hr/admin → 200. Found: finance sees the Edit button (page permission) → Save now 403 toast |
 | 8 | CLAUDE.md Last Session entry | todo | |
 | 9 | final push, HEAD == origin | todo | |
 
