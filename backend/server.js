@@ -196,6 +196,7 @@ app.use('/api/import',     requireAuth, require('./src/routes/import'));
 app.use('/api/attendance', requireAuth, require('./src/routes/attendance'));
 app.use('/api/employees',  requireAuth, require('./src/routes/employees'));
 app.use('/api/payroll',    requireAuth, require('./src/routes/payroll'));
+app.use('/api/analytics/attendance-review', requireAuth, require('./src/routes/attendanceReview')); // admin-only inside the router
 app.use('/api/analytics',  requireAuth, require('./src/routes/analytics'));
 app.use('/api/reports',    requireAuth, require('./src/routes/reports'));
 app.use('/api/settings',   requireAuth, require('./src/routes/settings'));
