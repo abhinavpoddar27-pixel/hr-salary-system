@@ -46,11 +46,14 @@
   - No fragile file (salaryComputation.js, schema.js, payroll.js, dayCalculation.js) changed on main; main's loans code writes no pf/esi/lwf (grep + guard). UPSERT counts unchanged 56/56/56/53, 45/45/45/42.
   After the merge: jest 51 / 915 twice (main added 2 suites / 25 tests), statutoryWriterGuard 9/9, node --check clean (employees.js, loans.js, sales.js, salary-input.js, statutoryFlags.js, loans/exit.js), sim 68/68 on a throwaway DB.
 
+- PR-2 PHASE 0 — 4363d64 `Merge origin/main (66c6a08: loans PR-8 + PR-9) into feat/lwf-deduction`. Drift: main moved 8b9561d -> 66c6a08 (loans PR-8 sales borrowers + PR-9 reports). No conflicts. IMPL_PR2 files touched on main: schema.js (+1 policy line at ~3692, outside every LWF site), headroom.js (comment only), financeAudit.js, SalaryComputation.jsx, payslipPdf.js (STEP 4/6 cited line numbers shift — re-locate by anchor text); salaryComputation.js and payroll.js unchanged on main; salesSalaryComputation.js changed (PR-2b file, not touched here). Baseline after the merge: 60 suites / 1004 tests green (was 51 / 915 on 8b9561d; main added 9 suites / 89 tests).
+- PR-2 STEP 1 — 0a2f12a `feat(lwf): LWF columns, policy keys 5/20, AI cache trigger includes LWF`. lwfSchema.test.js S1–S4 (7 tests; 7/7 fail on the previous schema.js, swap-verified).
+
 ## LAST STEP
-PR-1 merged (#65, 8b9561d). PR-2 plan written: IMPL_PR2.md (planning agent + chat review, C1 plant-only split).
+PR-2 STEP 1 (schema) — 0a2f12a.
 
 ## NEXT STEP
-Build agent: PR-2 on feat/lwf-deduction from 8b9561d — Phase 0, then STEP 1 (schema) and STEP 2 (plant compute + headroom + T12 edit); report; then STEPs 4–7. Owner: T4/T5 uploads on the live page; do NOT compute plant September until PR-2 is merged and deployed (or the owner chooses the fallback: compute now with ESI+PF, LWF from October). Do NOT recompute sales September (D3).
+PR-2 STEP 2 — plant compute + save + loan headroom (salaryComputation.js edits 1–4, UPSERT 58/58/58/55, headroom.js both arrays, lwfPlant.test.js P1–P10, T12 edit). Owner: do NOT compute plant September until PR-2 is merged and deployed (or choose the fallback). Do NOT recompute sales September (D3).
 
 ## OWNER RULINGS ADDED DURING THE BUILD
 (record date + ruling; BUILD_PLAN §1 holds the original set)
@@ -75,11 +78,14 @@ Build agent: PR-2 on feat/lwf-deduction from 8b9561d — Phase 0, then STEP 1 (s
   read-only LWF box in SalaryInput.jsx shows the real value. Not in the IMPL file list; additive read.
 - D-6 (PHASE 2) integrity-fix repairs gross only (pt included in 'reported, not written'), per IMPL
   'fix syncs gross only'. Sales company match in the upload ignores case/spacing.
+- D-7 (PR-2 STEP 1) The AI-cache trigger DROP + CREATE runs inside one db.transaction() (plan: plain db.exec), so a
+  failed CREATE rolls the DROP back and the cache never runs without its trigger. Same SQL otherwise.
 - D-4 (STEP 4) The undo file carries the flags that were IN FORCE AT E before the batch (what September compute
   used), not the master's flags; numbers are left blank (blank = unchanged, per §4.2). Not a full restore (review
   minor 1, wording fixed in REVIEW FIX 4): a later row whose flags differed before the batch ends at the E value.
 
 ## FILES TOUCHED
+- PR-2: backend/src/database/schema.js (STEP 1), backend/src/__tests__/lwfSchema.test.js (new, STEP 1)
 - backend/src/database/schema.js (STEP 1)
 - backend/src/__tests__/helpers/statutoryFixture.js (new, STEP 1)
 - backend/src/__tests__/statutorySchema.test.js (new, STEP 1; T8 added STEP 2)
@@ -109,6 +115,16 @@ Build agent: PR-2 on feat/lwf-deduction from 8b9561d — Phase 0, then STEP 1 (s
 - REVIEW FIXES: backend/src/services/statutoryFlags.js, routes/sales.js, routes/salary-input.js, __tests__/statutoryWriters.test.js, statutoryFlagsService.test.js, statutoryWriterGuard.test.js, frontend/src/pages/StatutoryFlags.jsx (+ dist), docs/statutory-flags/RUNBOOK.md, OPEN_ITEMS.md, CLAUDE.md
 
 ## FRAGILE-FILE EDITS (before / after)
+- PR-2 STEP 1 schema.js (lines on 66c6a08) — BEFORE 1705–1735:
+    safeAddColumn('salary_computations', 'early_exit_deduction', 'REAL DEFAULT 0');
+    … ai_explanation / ai_explanation_at safeAddColumn …
+    try { db.exec(`CREATE TRIGGER IF NOT EXISTS invalidate_salary_ai_cache AFTER UPDATE OF <29 columns … salary_held,
+          hold_reason, gross_changed> ON salary_computations FOR EACH ROW WHEN NEW.ai_explanation IS NOT NULL BEGIN … END;`); }
+  AFTER: after the early_exit_deduction line: safeAddColumn salary_computations lwf_employee / lwf_employer REAL DEFAULT 0;
+    insertPolicyIfMissing lwf_employee_amount '5', lwf_employer_amount '20'. Trigger: db.transaction(() => { DROP TRIGGER
+    IF EXISTS invalidate_salary_ai_cache; CREATE TRIGGER invalidate_salary_ai_cache AFTER UPDATE OF <same 29>,
+    lwf_employee, lwf_employer ON salary_computations … (WHEN/BEGIN body unchanged) })(). After cycle_end_date (~2578):
+    safeAddColumn sales_salary_computations lwf_employee / lwf_employer REAL DEFAULT 0. Force-reset list untouched.
 - STEP 1 schema.js — BEFORE (lines 2214–2218 on d1ad7bf):
     safeCreateIndex('...idx_sales_salary_structures_emp ON sales_salary_structures(employee_id, effective_from)');
     <blank>
@@ -187,3 +203,5 @@ After REVIEW FIX 4: 49 / 886, 0 failures; frontend build OK.
 After REVIEW PHASE 2: 49 / 886, 0 failures, 2 clean runs. Review sim: 68/68.
 After REVIEW FIX 5: 49 / 890, 0 failures.
 After MERGE origin/main f4b3b2f: 51 / 915, 0 failures, 2 clean runs; guard 9/9; sim 68/68.
+PR-2 baseline after merging origin/main 66c6a08: 60 / 1004, 0 failures.
+PR-2 STEP 1: lwfSchema 7/7 (+ statutorySchema, loansSchema green).
