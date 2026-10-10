@@ -140,11 +140,14 @@ Verify: `git log --oneline -1` shows the merge of the previous PR. Return: the S
 
 ## T7 — Filing (after PR-3)
 - September (due 15 Oct 2026): file from the manual registers as usual (OPEN_ITEMS D5).
-- **Rule: file a month only when its missing list is 0.** A row without a valid identifier (UAN = 12 digits, ESI number
-  = 10 digits, spaces ignored) is LEFT OUT of the file — the portal never sees that contribution. The app shows who:
-  an amber "NOT in the file" list with the EE / ER amounts, a confirm before the download, and the
-  `X-Missing-UAN` / `X-Missing-ESI-Number` header on the download. Fix the numbers, download again, and file only when
-  the list is empty. PR-3b (OPEN_ITEMS) changes the line formats before the October filing (15 Nov) — until it lands,
+- **Rule: missing rows that carry a contribution (EE + ER > 0) must be 0 before filing; ₹0 rows are informational.**
+  A row without a valid identifier (UAN = 12 digits, ESI number = 10 digits, spaces ignored) is LEFT OUT of the file —
+  the portal never sees that contribution. The app shows who: an amber "NOT in the file" list with the EE / ER amounts,
+  a confirm before the download (only when someone with a contribution is missing), and the `X-Missing-UAN` /
+  `X-Missing-ESI-Number` header on the download (it names every missing row, ₹0 ones included). A ₹0 row — only the
+  sales ESI file has them: a rep with ESI on and no wages this cycle — is marked "₹0 due (informational)"; nothing is
+  owed for it, so it does not block filing (VERIFY V16 does not count it either). Fix the numbers, download again, and
+  file only when no row with a contribution is missing. PR-3b (OPEN_ITEMS) changes the line formats before the October filing (15 Nov) — until it lands,
   check the files against the portal's template before uploading.
 - Where the files are (HR / finance / admin only — a viewer sees "HR, finance or admin only"):
   - Plant PF ECR: Reports → **PF ECR File** → Download ECR (.txt) (`ECR_<Mon>_<YYYY>.txt`).

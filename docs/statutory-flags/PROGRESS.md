@@ -207,14 +207,22 @@
     untouched (plant 58/58/58/55, sales 47/47/47/44 — files unchanged). No xlsx / csv / db in the diff.
   - Full jest twice: 69 suites / 1120 tests, 0 failures (baseline 65 / 1076).
 
-- PR-3 REVIEW FIX 1 — (next commit) `fix(filing): company config write admin only`. Independent review: SHIP WITH FIXES. reports.js
+- PR-3 REVIEW FIX 1 — c845cc2 `fix(filing): company config write admin only`. Independent review: SHIP WITH FIXES. reports.js
   `PUT /company-config/:id` had no role check while GET is now restricted. No screen edits it (`updateCompanyConfig` in api.js has no
   caller); the company master write in Settings (`POST /settings/companies`) is `requireAdmin` → `requireAdmin` from middleware/roles
   (D-16). statutoryFilingPlant.test.js +1: viewer / hr / finance 403 ('Admin access required') with company_config byte-unchanged,
   no token 401, admin 200 writes the three fields; fails on the previous reports.js. OPEN_ITEMS entry marked fixed.
 
+- PR-3 REVIEW FIX 2 — (next commit) `docs(filing): only missing rows with a contribution block filing`. RUNBOOK T7 rule now: missing
+  rows that carry a contribution (EE + ER > 0) must be 0 before filing; ₹0 rows (sales: ESI on, no wages, no number) are
+  informational — matches VERIFY V16, which counts contribution rows only. UI (no server / file / line-builder change; `missing[]`
+  already carries ee / er): SalesEsiExportButton opens the confirm modal only when a row with a contribution is missing, marks ₹0
+  rows "₹0 due (informational)", counts them apart in the header and the button; only-₹0 missing → straight download + an info
+  toast naming them. Reports.jsx: MissingPanel marks ₹0 rows; the confirm fires only for rows with a contribution and mentions the
+  ₹0 ones. OPEN_ITEMS D-F6 note updated. dist rebuilt.
+
 ## LAST STEP
-PR-3 review fix 1 (company-config PUT).
+PR-3 review fix 2 (T7 rule vs V16).
 
 ## NEXT STEP
 Review fixes 2 (RUNBOOK T7 vs V16), 3 (OPEN_ITEMS), 4 (merge origin/feat/lwf-sales 7eed259); then chat: push, PR

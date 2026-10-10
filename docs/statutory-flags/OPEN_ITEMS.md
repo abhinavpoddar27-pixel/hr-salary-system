@@ -97,6 +97,7 @@
 - N3: a number held by another sales employee is refused even when it is the same person under the other sales company (409
   heldBy) — same as the upload. The check is in-app only (no UNIQUE index), so two edits racing on one number are not stopped.
 - The sales ESI file also lists a rep whose in-force structure has ESI on with gross ≤ ₹21,000 even when the cycle earned 0
-  (an IP with 0 days, D-F6); the plant file lists contributors only. V16 counts contribution rows only.
+  (an IP with 0 days, D-F6); the plant file lists contributors only. V16 counts contribution rows only; such a rep without a
+  number is a ₹0 `missing` row — informational, it does not block filing (RUNBOOK T7, PR-3 review fix 2).
 - Finance gets the sales ESI file through the API only (`/api/sales/export/esi-contribution`); the button sits on the sales
   register, which finance's sidebar does not show. Owner: put a copy on Reports if finance files sales ESI.

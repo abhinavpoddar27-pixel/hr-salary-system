@@ -30,6 +30,8 @@ const FILING_REPORTS = new Set(['bank', 'pf', 'esi', 'pf-ecr', 'esi-contrib', 'b
 const FILING_ROLES = ['admin', 'hr', 'finance']
 
 // Amber "NOT in the file" panel for the ECR / ESI files (rows without a valid UAN / ESI number).
+// RUNBOOK T7: rows that carry a contribution (EE + ER > 0) must be 0 before filing; ₹0 rows are informational.
+const owes = (m) => (m.ee || 0) + (m.er || 0) > 0
 function MissingPanel({ missing, totals, idLabel }) {
   if (!missing || missing.length === 0) return null
   return (
@@ -46,6 +48,7 @@ function MissingPanel({ missing, totals, idLabel }) {
           <div key={m.employee_code} className="text-xs text-amber-700">
             <span className="font-mono">{m.employee_code}</span> — {m.employee_name} — EE {fmtINR2(m.ee)} · ER {fmtINR2(m.er)}
             <span className="ml-1 badge badge-red text-xs">{m.reason === 'malformed' ? `${idLabel} malformed` : `No ${idLabel}`}</span>
+            {!owes(m) && <span className="ml-1 text-slate-500">₹0 due — informational</span>}
           </div>
         ))}
       </div>
@@ -280,13 +283,17 @@ export default function Reports() {
   // ECR / ESI download: confirm first when the preview lists people NOT in the file, then
   // re-read the server's X-Missing-* header on the download itself (RUNBOOK T7: missing must be 0).
   async function handleFilingDownload(downloadFn, missing, idLabel, headerName) {
-    if (missing.length > 0) {
-      const codes = missing.map(m => m.employee_code).join(', ')
-      const ee = missing.reduce((s, m) => s + (m.ee || 0), 0)
-      const er = missing.reduce((s, m) => s + (m.er || 0), 0)
+    const due = missing.filter(owes)
+    if (due.length > 0) {
+      const codes = due.map(m => m.employee_code).join(', ')
+      const ee = due.reduce((s, m) => s + (m.ee || 0), 0)
+      const er = due.reduce((s, m) => s + (m.er || 0), 0)
+      const zero = missing.length - due.length
       const ok = window.confirm(
-        `${missing.length} employee(s) have no valid ${idLabel} and are NOT in this file:\n${codes}\n\n` +
-        `Their contributions (EE ${fmtINR2(ee)}, ER ${fmtINR2(er)}) would not be filed.\n\nDownload the file without them?`
+        `${due.length} employee(s) with a contribution have no valid ${idLabel} and are NOT in this file:\n${codes}\n\n` +
+        `Their contributions (EE ${fmtINR2(ee)}, ER ${fmtINR2(er)}) would not be filed.` +
+        (zero > 0 ? `\n(${zero} more with ₹0 due are listed for information only.)` : '') +
+        `\n\nDownload the file without them?`
       )
       if (!ok) return
     }
