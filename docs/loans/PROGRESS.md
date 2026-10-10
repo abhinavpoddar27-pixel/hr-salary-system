@@ -442,6 +442,34 @@ Repeat the PR-9 checks: `node backend/scripts/loans-payslip-html-check.mjs`; the
   (import)'`, `disbursed_on` = last payroll date of M−1 (plant: month end; sales: the 25th) so `firstEmiMonth` = M, schedule
   outstanding ÷ EMI (last = remainder), one `imported` loan event (never `disbursed`). Reconciled inside the transaction.
 
+### PR-10 follow-up — the real accounts file (coordinator, 10 Oct 2026)
+
+Shape: `Sheet1`, title "Loan Register"; `Punch No | Name | Pending Loan Amount | Deduct per month Aug | Op sep`; 9 rows + a
+Total row; no company / loan date / type / agreement. Built: code-column matching (S… sales master, numeric plant; company
+from the master; name = cross-check), Total rows skipped, balance-column choice (default = the last; uploader / admin can switch
+on the batch, which resets finance confirmations), EMI 0 → `EMI_MISSING` (finance enters it with a note before approval).
+A word missing in a name ("SHUBHAM" ↔ "SHUBHAM K…") counts as close spelling.
+
+**Rehearsal** (scratch DB; masters and Jul–Sep 2026 salary rows copied read-only from production; codes only):
+
+| Code | Match | Flags | Schedule (Op sep → months) | (Pending → months) |
+| --- | --- | --- | --- | --- |
+| S163 | code (sales, IND) | NO_DOJ, EMI_OVER_CEILING, HEADROOM_SHORT (room ₹21,010.74 < EMI ₹25,000) | ₹75,000 / ₹25,000 → 3 | ₹1,00,000 → 4 |
+| S158 | code, NAME_MISMATCH (needs HR note) | NO_DOJ | ₹85,000 / ₹15,000 → 6 (last ₹10,000) | ₹1,00,000 → 7 |
+| S021 | code | — | ₹2,000 / ₹2,000 → 1 | ₹4,000 → 2 |
+| 23706 | code (plant, ALI) | — | ₹15,000 / ₹5,000 → 3 | ₹20,000 → 4 |
+| 23138 | code, close spelling (word missing) | EMI_MISSING, NO_DOJ | blocked until finance enters the EMI | blocked |
+| 23234 | code, close spelling | NO_DOJ | ₹1,60,000 / ₹40,000 → 4 | ₹2,00,000 → 5 |
+| 23525 | code | — | ₹15,000 / ₹5,000 → 3 | ₹20,000 → 4 |
+| S230 | code, close spelling (typo) | — | ₹16,000 / ₹4,000 → 4 | ₹20,000 → 5 |
+| 22906 | code | — | ₹30,000 / ₹10,000 → 3 | ₹40,000 → 4 |
+
+Every row also carries AGREEMENT_MISSING (the file has no agreement column). **Open for the owner:** which balance is the
+cutover outstanding (Op sep = Sep already deducted?), the EMI for 23138, and — found in the rehearsal — the sales payroll
+carries the Aug loan cut as `other_deductions` (S163 ₹25,000, S158 ₹15,000, S021 ₹2,000 in Jul and Aug; nothing in Sep). If HR
+keeps entering it after cutover the EMI is deducted twice; it also lowers the projected headroom. 23138 and 23525 carry
+advance recovery (₹10,000 a month in Sep) — accounts should confirm that is not the same loan.
+
 ### Loans PR-10 check (read-only, after deploy)
 
 ```sql
@@ -545,5 +573,6 @@ FROM sales_salary_computations WHERE month = ? AND year = ?;
 | 2026-10-10 | Loans PR-7 | Built | Exit recovery: schedule collapses into the final month at Mark Left; residual after it; exit-residual and write-off (TDS) endpoints; Mark Left reply summary. Merged origin/main (#61). Suite 769 → 792 (44 suites). Exit simulation 5 leavers × 5 months PASS (reconciles daily, drift 0, component-short 0, payslip = ledger); `--empty` 84 tables unchanged. |
 | 2026-10-10 | Loans PR-6b | Built | Close tab, admin reversal on the loan page, Mark Left outstanding; `GET /:id` gains `deductions` + `adjustments`. Suite 769 → 771 (42 suites). Browser check 103/103 (63 PR-4 + 40 Pass 3), 0 page errors. |
 | 2026-10-10 | Loans PR-8 | Built | Sales borrowers: eligibility (structure gross, company-scoped), cycle first EMI, borrower search; sales Stage 7 within headroom matched on code + company; loan-only ₹0 floor; K30 edits, K31 hold block, K28 release guard; sales close / sweep / payslip check; sales exit hook. Suite 792 → 849 (49 suites, 3 clean runs). `loans-sales-simulation.js` 7 loans × 5 sales months PASS; `--dump` byte-identical vs PR-7 base and vs main after #63/#64 (232 rows); `--empty` writes nothing. Merged main (up to #65): suite 972 / 56; dist rebuilt on the merged tree; browser check 116/116 (Pass 4 sales, 13), 0 page errors. |
+| 2026-10-10 | Loans PR-10 | Follow-up: code files | Real file arrived. Code-column matching, Total rows, balance-column choice + switch, EMI_MISSING. Suite 1120 → 1133 (3 clean runs); simulation PASS; browser 183/183. Real file rehearsed in a scratch DB (table above): 9 rows, 0 unmatched, 1 NAME_MISMATCH (S158), 3 close spelling, 1 EMI missing. |
 | 2026-10-10 | Loans PR-10 | Built | Import engine + API + Import tab. Suite 1004 → 1077 (64 suites) before the merge of main (#68–#70); 1120 / 68 after, 3 clean runs. Simulation: 25-row file through HTTP → 22 loans, 3 out; plant Stage 7 + sales compute + close for Nov and Dec 2026 reconcile to the paisa, payslip = ledger, drift 0 (plant + sales), component-short 0; non-borrowers identical to `--empty`. Browser 176/176 (Pass 6, 38). Production read-only: 18 shared names / 39 people in the Asian Lakto + unknown-company plant pool (3 still shared within a department), 7 / 14 in the Indriyan sales master; every Active Indriyan plant row is typed Sales or Contract. |
 | 2026-10-10 | Loans PR-9 | Built | Reports service + API (register, forecast, exceptions, leavers, perquisite, Excel), payslip balance line (separate read, plant + sales), Finance Audit readiness warning + 3 plant red flags, `loan_emi_net_flag_pct`, sales statement by cycle month, Reports tab, sales close toggle. Suite 972 → 1004 (60 suites, 3 clean runs). Reports sim 255/255; payslip HTML 77/77 byte-identical without a loan; Stage 7 + sales `--dump` md5-identical to main; browser 148/148 (Pass 5, 32), 0 page errors. Portal unused in production → no portal view (Q6). |

@@ -1,24 +1,22 @@
-## Last Session — 2026-10-10 (Loans PR-10: import of the accounts-Excel loans)
-**Branch `feat/loans-pr10` (origin/main #71 merged in), PR open, NOT merged.** Plan + rulings: `docs/loans/PROGRESS.md` (PR-10 rulings).
-- **What:** Loans → Import. HR/finance upload the accounts Excel (template, or any layout via a column-mapping step); names are
-  matched to codes (exact → shared name/department → close spelling → Left → none; proposals only); **HR confirms each match,
-  finance confirms or corrects each balance (note required), the admin approves the batch** (never one they uploaded or confirmed
-  in) and names cutover month M. One transaction creates `active` loans: principal = disbursed = balance = outstanding, mode
-  `'Opening balance (import)'`, `disbursed_on` = last payroll date of M−1 (so first EMI = M), schedule outstanding ÷ EMI,
-  one `imported` event. Cutover check: Excel EMI vs app instalment vs Stage 7 deduction + headroom flags (+ Excel).
-- **Files:** `services/loans/importParse.js`, `importMatch.js`, `importer.js`; `routes/loanImport.js` (mounted BEFORE `/api/loans`
-  in server.js); `schema.js` (+2 tables, 3 indexes inside `loansSchemaV2Ddl` only); `states.js` (`import_*` roles); `reports.js`
-  (labels "Opening balance (import)"); frontend `LoanImport.jsx`, Loans tab, LoanDetail badge, report labels; dist rebuilt.
-- **Fragile:** Indian dates are day-first and never guessed (unreadable → row invalid). Plant pool = not Sales-typed AND company =
-  row's company OR unknown (K7) — the loan's company comes from the Excel row. A borrower who is not Active is refused (settle
-  outside the app). If Stage 7 for M already ran, those borrowers must be re-run or their first EMI moves to the end at the close
-  as no-salary (approval warns). HR re-matching a row after finance confirmed keeps the finance confirmation.
-  Imported loans appear "paid out" in M−1 in the perquisite list (labelled; ruling Q11).
-- **Verified:** jest 1004 → 1077 (+73, 4 suites); 1120/68 after merging main, 3 clean runs. `scripts/loans-import-simulation.js`:
-  25 rows via HTTP → 22 loans / 3 out, Nov + Dec Stage 7 + sales compute + close, reconcile to the paisa, drift 0, component-short 0,
-  non-borrowers identical to `--empty`. Browser `loans-ui-browser-check.py` 176/176 (Pass 6).
-- **NOT tested:** a real accounts file (not received); concurrent approvals from two processes; an .xls (old format) upload
-  in the browser; the import screens on Railway preview.
+## Last Session — 2026-10-10 (Loans PR-10: import of the accounts-Excel loans, + code-file follow-up)
+**Branch `feat/loans-pr10` (origin/main #71 merged in), PR #74 open, NOT merged.** Rulings + rehearsal: `docs/loans/PROGRESS.md` (PR-10).
+- **What:** Loans → Import. HR/finance upload the accounts Excel (template, or any layout via a column-mapping step). With a
+  code column (Punch No…) the match is exact by code (S… sales master, numeric plant), company from the master, name only a
+  cross-check (NAME_CLOSE_SPELLING pre-selectable; NAME_MISMATCH never accepted without a note); without one, name matching
+  (exact → shared name/department → close spelling → Left → none). Proposals only. **HR confirms each match, finance confirms or
+  corrects each balance (note), the admin approves** (never a batch they uploaded / confirmed in) and names cutover month M.
+  One transaction creates `active` loans: principal = disbursed = balance = outstanding, mode `'Opening balance (import)'`,
+  `disbursed_on` = last payroll date of M−1 (first EMI = M), schedule outstanding ÷ EMI, one `imported` event. Cutover check.
+- **Files:** `services/loans/importParse.js`, `importMatch.js`, `importer.js`; `routes/loanImport.js` (mounted BEFORE `/api/loans`);
+  `schema.js` (+2 tables inside `loansSchemaV2Ddl` only); `states.js` (`import_*`); `reports.js` (labels); `LoanImport.jsx` + tab/badge.
+- **Fragile:** day-first dates, never guessed. Several balance columns → the LAST is the default outstanding; uploader/admin can
+  re-choose (`POST …/columns`), which resets finance confirmations. EMI 0 → finance must enter it. If Stage 7 for M already ran,
+  re-run those borrowers or their first EMI moves to the end as no-salary. **Sales: the accounts' Aug loan cut was entered as
+  `other_deductions` on the sales payroll (S163, S158, S021) — HR must stop that at cutover or the EMI is taken twice.**
+- **Verified:** jest 1004 → 1133 (after merging main; 3 clean runs). `scripts/loans-import-simulation.js` PASS (25 rows via HTTP,
+  Nov + Dec Stage 7/compute/close, paisa-exact, drift 0). Browser 183/183. Real file rehearsed in a scratch DB (PROGRESS).
+- **NOT tested:** the real file against production masters through the real screen; two-process approvals; .xls in the browser;
+  Railway preview.
 
 ---
 
