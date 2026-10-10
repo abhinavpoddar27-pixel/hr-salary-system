@@ -213,7 +213,7 @@
   (D-16). statutoryFilingPlant.test.js +1: viewer / hr / finance 403 ('Admin access required') with company_config byte-unchanged,
   no token 401, admin 200 writes the three fields; fails on the previous reports.js. OPEN_ITEMS entry marked fixed.
 
-- PR-3 REVIEW FIX 2 — (next commit) `docs(filing): only missing rows with a contribution block filing`. RUNBOOK T7 rule now: missing
+- PR-3 REVIEW FIX 2 — d164fd0 `docs(filing): only missing rows with a contribution block filing`. RUNBOOK T7 rule now: missing
   rows that carry a contribution (EE + ER > 0) must be 0 before filing; ₹0 rows (sales: ESI on, no wages, no number) are
   informational — matches VERIFY V16, which counts contribution rows only. UI (no server / file / line-builder change; `missing[]`
   already carries ee / er): SalesEsiExportButton opens the confirm modal only when a row with a contribution is missing, marks ₹0
@@ -221,8 +221,14 @@
   toast naming them. Reports.jsx: MissingPanel marks ₹0 rows; the confirm fires only for rows with a contribution and mentions the
   ₹0 ones. OPEN_ITEMS D-F6 note updated. dist rebuilt.
 
+- PR-3 REVIEW FIX 3 — (next commit) `docs(statutory): open items from the PR-3 review`. OPEN_ITEMS, not fixed here: (a) the viewer
+  can read UAN / ESI / bank via `GET /api/employees` (employees.js:179 `SELECT e.*`), `GET /api/employees/:code` and
+  `GET /api/payroll/payslip/:code` (all requireAuth only; checked); `/payslips/bulk` is 403 for everyone by policy (checked, not
+  listed as an exposure). (b) numberInUse counts Left / Exited rows, returns the code without the company, and compares raw stored
+  values (legacy spaced numbers slip through); none in production today.
+
 ## LAST STEP
-PR-3 review fix 2 (T7 rule vs V16).
+PR-3 review fix 3 (OPEN_ITEMS).
 
 ## NEXT STEP
 Review fixes 2 (RUNBOOK T7 vs V16), 3 (OPEN_ITEMS), 4 (merge origin/feat/lwf-sales 7eed259); then chat: push, PR

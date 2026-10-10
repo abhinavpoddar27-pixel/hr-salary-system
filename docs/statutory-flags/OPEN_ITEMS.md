@@ -101,3 +101,16 @@
   number is a ₹0 `missing` row — informational, it does not block filing (RUNBOOK T7, PR-3 review fix 2).
 - Finance gets the sales ESI file through the API only (`/api/sales/export/esi-contribution`); the button sits on the sales
   register, which finance's sidebar does not show. Owner: put a copy on Reports if finance files sales ESI.
+- **Not fixed here (PR-3 review) — the viewer can still read UANs / ESI numbers / bank accounts outside Reports.** C4 covered
+  reports.js only. Checked on this branch: `GET /api/employees` (employees.js:179, `SELECT e.*` — every master column incl. uan,
+  esi_number, pf_number, bank_account / account_number, ifsc, PAN, Aadhaar) and `GET /api/employees/:code` (`SELECT *`) have no role
+  guard (requireAuth only); `GET /api/payroll/payslip/:code` (generatePayslipData → pf_number, uan, esi_number, bank_account, ifsc)
+  has none either. `GET /api/payroll/payslips/bulk` already returns 403 for everyone by policy — not an exposure. A fix means
+  column-level redaction for the viewer on the employee list (the Employees page is shared by many roles), so it needs its own PR.
+- **Not fixed here (PR-3 review) — numberInUse (shared by the upload and the sales master) is blunt.** (1) It counts rows of any
+  status, Left / Exited included, so a rep re-joined under another sales company gets 409 naming the old row's code; (2) it returns
+  the code only, not the company — sales codes repeat across companies (S001 in both), so `heldBy` can point at the wrong person;
+  (3) it compares the stored value as is, so a legacy number stored with spaces ('2000 000 301') does not match the normalised
+  '2000000301' and the duplicate slips through. Production has no such rows today (sales numbers came in through the upload, which
+  stores them normalised; no Left rep carries a number). Proposed with the next statutory change: ignore Left / Exited, return code +
+  company, compare `REPLACE(col,' ','')`.
