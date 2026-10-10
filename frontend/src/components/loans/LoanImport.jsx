@@ -1,8 +1,9 @@
 // Loans PR-10 — import the loans run outside the app (accounts Excel). SPEC D-9, K36, K37; §7 last row.
 //   HR or finance uploads (template or the accounts file, with a column-mapping step);
 //   HR confirms each name → employee code; finance confirms (or corrects, with a note) each balance;
-//   the admin approves the batch and names the cutover month. Approval creates opening-balance loans
-//   that Stage 7 deducts from the cutover month. Then the cutover check (EMI and headroom per borrower).
+//   the admin approves the batch and names the cutover month for each payroll in it (plant and sales
+//   may differ). Approval creates opening-balance loans that Stage 7 deducts from that month. Then the
+//   cutover check (EMI and headroom per borrower, the month per row).
 // The server enforces every rule (routes/loanImport.js); this screen only hides what a role cannot do.
 import React, { useEffect, useMemo, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
@@ -66,6 +67,13 @@ const Chip = ({ map, k, testid }) => (
     {(map[k] && map[k].label) || k || '—'}
   </span>
 )
+
+const PAYROLLS = ['plant', 'sales']
+const PAYROLL_LABEL = { plant: 'Plant', sales: 'Sales' }
+/** "Plant Sep 2026 · Sales Oct 2026" for a { plant, sales } cutover (null payrolls left out). */
+const cutoverText = (c) => (c ? PAYROLLS.filter((p) => c[p]).map((p) => `${PAYROLL_LABEL[p]} ${monthLabel(c[p].month, c[p].year)}`).join(' · ') : '') || '—'
+/** Query / body params for a { plant, sales } cutover, e.g. plantCutoverMonth. */
+const cutoverParams = (c, prefix = 'Cutover') => Object.fromEntries(PAYROLLS.filter((p) => c && c[p]).flatMap((p) => [[`${p}${prefix}Month`, c[p].month], [`${p}${prefix}Year`, c[p].year]]))
 
 function MonthPicker({ value, onChange, testid }) {
   const now = new Date().getFullYear()
@@ -329,20 +337,22 @@ const FILTERS = [
 function ApprovePanel({ d, caps, onDone }) {
   const b = d.batch
   const ap = d.approval
-  const [m, setM] = useState(ap.earliestForBatch)
+  // One cutover month per payroll in the batch; each defaults to its own earliest allowed month.
+  const [m, setM] = useState({ plant: ap.earliestCutover.plant, sales: ap.earliestCutover.sales })
+  const chosen = Object.fromEntries(PAYROLLS.map((p) => [p, ap.payrolls.includes(p) ? m[p] : null]))
   const [note, setNote] = useState('')
   const qc = useQueryClient()
   const preview = useQuery({
-    queryKey: ['loan-import-batch', b.id, m.month, m.year],
-    queryFn: () => getLoanImportBatch(b.id, { cutoverMonth: m.month, cutoverYear: m.year }),
+    queryKey: ['loan-import-batch', b.id, cutoverText(chosen)],
+    queryFn: () => getLoanImportBatch(b.id, cutoverParams(chosen)),
     retry: 0,
   })
   const s7 = preview.data?.data?.data?.approval?.stage7Computed || []
   const approve = useMutation({
-    mutationFn: () => approveLoanImportBatch(b.id, { cutoverMonth: m.month, cutoverYear: m.year, note }),
+    mutationFn: () => approveLoanImportBatch(b.id, { ...cutoverParams(chosen), note }),
     onSuccess: (res) => {
       const r = res.data.data
-      toast.success(`${r.loans.length} loans imported; first EMI ${monthLabel(r.cutover.month, r.cutover.year)}`)
+      toast.success(`${r.loans.length} loans imported; first EMI ${cutoverText(r.cutover)}`)
       qc.invalidateQueries({ queryKey: ['loans'] }); qc.invalidateQueries({ queryKey: ['loan-stats'] })
       onDone()
     },
@@ -363,14 +373,22 @@ function ApprovePanel({ d, caps, onDone }) {
           <span><strong>{ap.totals.loans}</strong> loans</span><span>Outstanding <strong>{rupees(ap.totals.outstanding)}</strong></span>
           <span>Monthly EMI <strong>{rupees(ap.totals.monthlyEmi)}</strong></span>
         </div>
-        <div className="flex items-center gap-2 flex-wrap">
-          <span className="text-xs text-slate-500">Cutover month (first EMI):</span>
-          <MonthPicker value={m} onChange={setM} testid="imp-cutover" />
-          <span className="text-[11px] text-slate-400">earliest {monthLabel(ap.earliestForBatch.month, ap.earliestForBatch.year)}</span>
+        <div className="space-y-2">
+          <div className="text-xs text-slate-500">Cutover month (first EMI) for each payroll — sales = the cycle ending the 25th of that month:</div>
+          {ap.payrolls.map((p) => (
+            <div key={p} className="flex items-center gap-2 flex-wrap" data-testid={`imp-cutover-row-${p}`}>
+              <span className="text-xs font-medium text-slate-600 w-12">{PAYROLL_LABEL[p]}</span>
+              <MonthPicker value={m[p]} onChange={(v) => setM((x) => ({ ...x, [p]: v }))} testid={`imp-cutover-${p}`} />
+              <span className="text-[11px] text-slate-400">
+                {ap.byPayroll?.[p]?.loans} loan{ap.byPayroll?.[p]?.loans === 1 ? '' : 's'} · {rupees(ap.byPayroll?.[p]?.monthlyEmi)} a month · earliest {monthLabel(ap.earliestCutover[p].month, ap.earliestCutover[p].year)}
+              </span>
+            </div>
+          ))}
         </div>
         {s7.length > 0 && (
           <div className="rounded-lg bg-amber-50 text-amber-800 px-3 py-2 text-xs" data-testid="imp-stage7-warning">
-            Salary for {monthLabel(m.month, m.year)} is already computed for {s7.length} borrower{s7.length === 1 ? '' : 's'} ({s7.map((x) => x.employeeCode).join(', ')}).
+            Salary for the cutover month is already computed for {s7.length} borrower{s7.length === 1 ? '' : 's'} ({PAYROLLS.filter((p) => s7.some((x) => x.borrowerType === p))
+              .map((p) => `${PAYROLL_LABEL[p]} ${monthLabel(chosen[p].month, chosen[p].year)}: ${s7.filter((x) => x.borrowerType === p).map((x) => x.employeeCode).join(', ')}`).join('; ')}).
             Re-run Stage 7 / the sales compute for them after approval, or their first EMI moves to the end at the loan close.
           </div>
         )}
@@ -385,28 +403,36 @@ function ApprovePanel({ d, caps, onDone }) {
 }
 
 function CutoverCheck({ batch }) {
-  const [m, setM] = useState({ month: batch.cutover_month, year: batch.cutover_year })
+  // Each loan is checked in its own payroll's cutover month; a picker per payroll looks at another month.
+  const [m, setM] = useState(batch.cutover || {})
+  const params = cutoverParams(m, '')
   const { data, isLoading } = useQuery({
-    queryKey: ['loan-import-cutover', batch.id, m.month, m.year],
-    queryFn: () => getLoanImportCutoverCheck(batch.id, { month: m.month, year: m.year }),
+    queryKey: ['loan-import-cutover', batch.id, cutoverText(m)],
+    queryFn: () => getLoanImportCutoverCheck(batch.id, params),
     retry: 0,
   })
   const c = data?.data?.data
   const download = async () => {
-    try { saveBlob(await downloadLoanImportCutoverCheck(batch.id, { month: m.month, year: m.year }), `loan_import_${batch.id}_cutover.xlsx`) } catch (err) { toast.error(errText(err, 'Download failed')) }
+    try { saveBlob(await downloadLoanImportCutoverCheck(batch.id, params), `loan_import_${batch.id}_cutover.xlsx`) } catch (err) { toast.error(errText(err, 'Download failed')) }
   }
   return (
     <Card title="Cutover check — app EMI vs Excel EMI, before the bank file goes out" testid="imp-cutover-check"
-      right={<span className="flex items-center gap-2"><MonthPicker value={m} onChange={setM} /><button className="btn-secondary text-xs" onClick={download} data-testid="imp-cutover-xlsx">Excel</button></span>}>
+      right={<span className="flex items-center gap-2 flex-wrap">
+        {PAYROLLS.filter((p) => m[p]).map((p) => (
+          <span key={p} className="flex items-center gap-1"><span className="text-[11px] text-slate-500">{PAYROLL_LABEL[p]}</span>
+            <MonthPicker value={m[p]} onChange={(v) => setM((x) => ({ ...x, [p]: v }))} testid={`imp-cc-month-${p}`} /></span>
+        ))}
+        <button className="btn-secondary text-xs" onClick={download} data-testid="imp-cutover-xlsx">Excel</button></span>}>
       {isLoading || !c ? <div className="p-4 text-sm text-slate-400">Loading…</div> : (
         <table className="table-compact w-full min-w-[1100px] text-xs">
-          <thead><tr><th>Row</th><th>Loan</th><th>Borrower</th><th className="text-right">Excel EMI</th><th className="text-right">App instalment</th><th className="text-right">Stage 7 deduction</th>
+          <thead><tr><th>Row</th><th>Loan</th><th>Borrower</th><th>Month</th><th className="text-right">Excel EMI</th><th className="text-right">App instalment</th><th className="text-right">Stage 7 deduction</th>
             <th className="text-right">Net salary</th><th className="text-right">Room under cap</th><th className="text-right">Balance</th><th>Flags</th></tr></thead>
           <tbody>
             {c.rows.map((r) => (
               <tr key={r.loanId} data-testid={`imp-cc-${r.rowNo}`} className={r.flags.length ? 'bg-amber-50/50' : ''}>
                 <td>{r.rowNo}</td><td><a className="text-blue-600" href={`/loans/${r.loanId}`}>#{r.loanId}</a></td>
                 <td>{r.name}<div className="text-[11px] text-slate-400 font-mono">{r.employeeCode} · {r.payroll}</div></td>
+                <td className="whitespace-nowrap" data-testid={`imp-cc-row-month-${r.rowNo}`}>{monthLabel(r.month.month, r.month.year)}</td>
                 <td className="text-right font-mono">{rupees(r.excelEmi)}</td><td className="text-right font-mono">{rupees(r.appInstalment)}</td>
                 <td className="text-right font-mono">{r.deduction ? `${rupees(r.deduction.amount)} (${r.deduction.state})` : '—'}</td>
                 <td className="text-right font-mono">{rupees(r.netSalary)}</td>
@@ -416,7 +442,7 @@ function CutoverCheck({ batch }) {
             ))}
           </tbody>
           <tfoot><tr className="font-semibold bg-slate-50" data-testid="imp-cc-totals">
-            <td colSpan={3}>{c.totals.loans} loans · {c.totals.flagged} flagged</td><td className="text-right font-mono">{rupees(c.totals.excelEmi)}</td>
+            <td colSpan={4}>{c.totals.loans} loans · {c.totals.flagged} flagged</td><td className="text-right font-mono">{rupees(c.totals.excelEmi)}</td>
             <td className="text-right font-mono">{rupees(c.totals.appInstalment)}</td><td className="text-right font-mono">{rupees(c.totals.deducted)}</td><td colSpan={4} />
           </tr></tfoot>
         </table>
@@ -488,7 +514,7 @@ function BatchView({ id, caps, onBack }) {
           <h3 className="font-semibold text-slate-800">Batch #{b.id} · {b.file_name}</h3>
           <div className="text-xs text-slate-500">
             Uploaded by {b.uploaded_by} · {istDateTime(b.uploaded_at)} · <span data-testid="imp-batch-status">{b.status}</span>
-            {b.status === 'approved' && ` · approved by ${b.approved_by} · cutover ${monthLabel(b.cutover_month, b.cutover_year)}`}
+            {b.status === 'approved' && ` · approved by ${b.approved_by} · cutover ${cutoverText(b.cutover)}`}
           </div>
         </div>
         {canDiscard && (
@@ -501,8 +527,8 @@ function BatchView({ id, caps, onBack }) {
 
       {b.status === 'approved' && b.result && (
         <div className="rounded-xl border border-green-200 bg-green-50 px-4 py-3 text-sm text-green-800" data-testid="imp-result">
-          {b.result.loans} loans imported ({rupees(b.result.outstanding)} outstanding, {rupees(b.result.monthlyEmi)} a month), first EMI {monthLabel(b.result.cutover.month, b.result.cutover.year)} · {b.result.leftOut} row{b.result.leftOut === 1 ? '' : 's'} left out.
-          {b.result.stage7Computed > 0 && ` Salary for the cutover month was already computed for ${b.result.stage7Computed} borrower(s): re-run it before the bank file.`}
+          {b.result.loans} loans imported ({rupees(b.result.outstanding)} outstanding, {rupees(b.result.monthlyEmi)} a month), first EMI {cutoverText(b.result.cutover)} · {b.result.leftOut} row{b.result.leftOut === 1 ? '' : 's'} left out.
+          {b.result.stage7Computed > 0 && ` Salary for its cutover month was already computed for ${b.result.stage7Computed} borrower(s): re-run it before the bank file.`}
         </div>
       )}
 
@@ -592,7 +618,7 @@ export default function LoanImport({ caps }) {
               <tr key={b.id} className="cursor-pointer hover:bg-blue-50/50" onClick={() => setBatchId(b.id)} data-testid={`imp-batch-${b.id}`}>
                 <td>{b.id}</td><td>{b.fileName}</td><td>{b.uploadedBy} · {istDateTime(b.uploadedAt)}</td><td>{b.status}</td><td className="text-center">{b.totalRows}</td>
                 <td className="text-center">{b.counts.needsMatch}</td><td className="text-center">{b.counts.needsBalance}</td><td className="text-center">{b.status === 'approved' ? b.counts.imported : b.counts.ready}</td>
-                <td className="text-center">{b.counts.out}</td><td>{b.cutover ? monthLabel(b.cutover.month, b.cutover.year) : '—'}</td>
+                <td className="text-center">{b.counts.out}</td><td>{b.cutover ? cutoverText(b.cutover) : '—'}</td>
               </tr>
             ))}
           </tbody>
