@@ -13,7 +13,7 @@ Needs Python Playwright + Chromium for the browser part, backend/node_modules, a
 built frontend/dist. The temp DATA_DIR lives in the system temp dir and is deleted.
 Logins use throwaway passwords set only for the temp server (ADMIN/HR/FINANCE_PASSWORD).
 """
-import json, os, sqlite3, subprocess, sys, tempfile, time, urllib.request, shutil, io
+import json, os, sqlite3, subprocess, sys, tempfile, time, urllib.request, urllib.parse, shutil, io
 
 REPO = sys.argv[1]
 BACKEND = os.path.join(REPO, 'backend')
@@ -234,6 +234,55 @@ try:
     plant_after_boot = sql("SELECT code, pf_applicable p, esi_applicable e, lwf_applicable l FROM employees WHERE code IN ('SIM06') ORDER BY code")
     check('server restart: sales + plant flags survive the boot (no reset; no ESI numbers on plant)', len(flags_after_boot) == 3 and all(r['e'] == 1 and r['l'] == 1 for r in flags_after_boot) and plant_after_boot == [{'code': 'SIM06', 'p': 0, 'e': 1, 'l': 1}], (flags_after_boot, plant_after_boot))
 
+    # ── review fix 1 (M1): writers dated before / at a row the upload added ──
+    sid = "(SELECT id FROM sales_employees WHERE code='SIMS1')"
+    req('POST', '/api/sales/compute', hr, {'month': 10, 'year': 2026, 'company': CO})
+    s_pay = {m: [r for r in sales_rows(m, 2026) if r['employee_code'] == 'SIMS1'] for m in (9, 10)}
+    s_rows = sql(f'SELECT * FROM sales_salary_structures WHERE employee_id={sid} ORDER BY id')
+    audits = sql('SELECT COUNT(*) c FROM audit_log')[0]['c']
+    s, b = req('PUT', f'/api/sales/employees/SIMS1?company={urllib.parse.quote(CO)}', hr, {'gross_salary': 19000, 'effective_from': '2026-05'})
+    check('M1 sales: back-dated gross edit (2026-05) after the upload → 409 STRUCTURE_DATED_LATER', s == 409 and b.get('code') == 'STRUCTURE_DATED_LATER' and b.get('latestDate') == '2026-09', (s, b))
+    check('M1 sales: nothing written (structures, master gross, audit_log)',
+          sql(f'SELECT * FROM sales_salary_structures WHERE employee_id={sid} ORDER BY id') == s_rows
+          and sql("SELECT gross_salary g FROM sales_employees WHERE code='SIMS1'")[0]['g'] == 18000
+          and sql('SELECT COUNT(*) c FROM audit_log')[0]['c'] == audits)
+    for m in (9, 10): req('POST', '/api/sales/compute', hr, {'month': m, 'year': 2026, 'company': CO})
+    check('M1 sales: Sep + Oct pay unchanged after the refused edit', all([r for r in sales_rows(m, 2026) if r['employee_code'] == 'SIMS1'] == s_pay[m] and s_pay[m] for m in (9, 10)))
+
+    pid = "(SELECT id FROM employees WHERE code='SIM01')"
+    s, b = req('PUT', '/api/employees/SIM01/salary', hr, {'gross_salary': 18000})
+    rq = sql("SELECT id FROM salary_change_requests WHERE employee_code='SIM01' AND status='Pending'")
+    check('M1 plant: HR gross change → pending request', s == 200 and b.get('pendingApproval') and len(rq) == 1, (s, b))
+    p_rows = sql(f'SELECT * FROM salary_structures WHERE employee_id={pid} ORDER BY id')
+    req('POST', '/api/payroll/compute-salary', hr, {'month': 9, 'year': 2026, 'company': CO})
+    p_sep = salary_rows(9, 2026)
+    s, b = req('PUT', f"/api/salary-input/approve/{rq[0]['id']}", fin, {'effectiveFrom': '2026-08-15'})
+    check('M1 plant: back-dated approval (2026-08-15) → 409, request still Pending, rows + master unchanged',
+          s == 409 and b.get('latestDate') == '2026-09-01'
+          and sql(f"SELECT status FROM salary_change_requests WHERE id={rq[0]['id']}")[0]['status'] == 'Pending'
+          and sql(f'SELECT * FROM salary_structures WHERE employee_id={pid} ORDER BY id') == p_rows
+          and sql("SELECT gross_salary g FROM employees WHERE code='SIM01'")[0]['g'] == 15000, (s, b))
+    req('POST', '/api/payroll/compute-salary', hr, {'month': 9, 'year': 2026, 'company': CO})
+    check('M1 plant: Sep pay unchanged after the refused approval', salary_rows(9, 2026) == p_sep)
+    at_e = [r for r in p_rows if r['effective_from'] == '2026-09-01']
+    s, b = req('PUT', f"/api/salary-input/approve/{rq[0]['id']}", fin, {'effectiveFrom': '2026-09-01'})
+    after = sql(f'SELECT * FROM salary_structures WHERE employee_id={pid} ORDER BY id')
+    one = [r for r in after if r['effective_from'] == '2026-09-01']
+    check('M1 plant: same-date approval (2026-09-01) → 200, one row at that date, updated in place, own flags kept',
+          s == 200 and len(after) == len(p_rows) and len(one) == 1 and one[0]['id'] == at_e[0]['id'] and one[0]['gross_salary'] == 18000
+          and (one[0]['pf_applicable'], one[0]['esi_applicable'], one[0]['lwf_applicable']) == (at_e[0]['pf_applicable'], at_e[0]['esi_applicable'], at_e[0]['lwf_applicable']), (s, len(after), len(p_rows), one))
+    req('POST', '/api/payroll/compute-salary', hr, {'month': 9, 'year': 2026, 'company': CO})
+    sim01 = [r for r in salary_rows(9, 2026) if r['employee_code'] == 'SIM01'][0]
+    # the approved split (basic 50 % + HRA 20 %, no other allowance) sums to 12,600; compute scales components to the
+    # stated 18,000 (pre-existing rule) — so the proof the in-place split is used is other_allowances_earned == 0
+    # (the old row had 30 % there) with gross 18,000 and basic:HRA = 9000:3600.
+    check('M1 plant: Sep pays the new gross + split from the in-place row', sim01['gross_salary'] == 18000 and sim01['other_allowances_earned'] == 0
+          and abs(sim01['basic_earned'] / sim01['hra_earned'] - 2.5) < 1e-4 and abs(sim01['basic_earned'] + sim01['hra_earned'] - 18000) < 0.02,
+          (sim01['gross_salary'], sim01['basic_earned'], sim01['hra_earned'], sim01['other_allowances_earned']))
+    d1 = sql('SELECT employee_code FROM salary_computations WHERE ABS(net_salary-(gross_earned-total_deductions))>1')
+    d2 = sql('SELECT employee_code FROM sales_salary_computations WHERE ABS(net_salary-(gross_earned+COALESCE(diwali_bonus,0)+COALESCE(incentive_amount,0)-total_deductions))>1')
+    check('M1: plant + sales drift queries → 0 rows', d1 == [] and d2 == [], (d1, d2))
+
     # ── the admin page in Chromium (built dist) ──
     try:
         from playwright.sync_api import sync_playwright
@@ -255,6 +304,8 @@ try:
             pg.click('[data-testid="apply-btn"]'); pg.wait_for_selector('[data-testid="confirm"]')
             txt = pg.inner_text('[data-testid="planned-rows"]')
             check('browser: confirm quotes planned rows', '1 freeze + 1 effective' in txt, txt)
+            lim = pg.inner_text('[data-testid="confirm"]')
+            check('browser: confirm states the undo limits (review fix 4)', 'A later-dated row that had different flags before this batch is set to the effective-month value' in lim, lim[-160:])
             pg.click('[data-testid="confirm-apply"]'); pg.wait_for_timeout(2000)
             check('browser: apply wrote the batch', pg.locator('[data-testid="batch-row"]').count() == 5)
             # Employees → salary modal for SIM01 (flags ON from the upload, then undone → 0; SIM06 seeded ESI/LWF on)

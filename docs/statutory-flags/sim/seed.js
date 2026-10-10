@@ -72,7 +72,8 @@ const sstruct = (id, from, gross, to = null) => db.prepare(`INSERT INTO sales_sa
 const s1 = sales('SIMS1', 18000); sstruct(s1, '2025-01', 18000);
 const s2 = sales('SIMS2', 17000); sstruct(s2, '2026-01', 17000, '2026-09'); sstruct(s2, '2026-10', 17500); // S157 shape
 const s3 = sales('SIMS3', 16000); sstruct(s3, '2026-09', 16000);                                          // exact E row
-for (const [m, y] of [[8, 2026], [9, 2026]]) {
+// Oct upload too: the review-fix-1 check compares Sep and Oct sales pay around a refused back-dated edit.
+for (const [m, y] of [[8, 2026], [9, 2026], [10, 2026]]) {
   const up = db.prepare(`INSERT INTO sales_uploads (month, year, company, filename, file_hash, status, total_rows, matched_rows, unmatched_rows, uploaded_by, is_active)
                          VALUES (?, ?, ?, 'sim.xlsx', ?, 'matched', 3, 3, 0, 'sim', 1)`).run(m, y, CO, `h${m}`).lastInsertRowid;
   for (const c of ['SIMS1', 'SIMS2', 'SIMS3']) {
