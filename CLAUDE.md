@@ -1,3 +1,29 @@
+## Last Session — 2026-10-10 (Statutory flags PR-3: filing files)
+**ECR / ESI files leave out rows without a valid UAN / ESI number and say who; sales ESI file; sales master ESI no. / UAN;
+LWF register; filing reports hr/finance/admin only. Branch `feat/statutory-filing` on origin/feat/lwf-sales dcad556 (PR #73
+open), NOT pushed.** Plan `docs/statutory-flags/IMPL_PR3.md` (C1–C7 binding); log + D-11…D-15: `docs/statutory-flags/PROGRESS.md`.
+- **Plant files (`exportFormats.js`):** UAN not 12 digits / ESI no. not 10 (spaces stripped) → row NOT written, listed in
+  `missing` {code, name, ee, er, none|malformed}; totals = written rows + missingCount/EE/ER. Line builders, SQL, order,
+  filenames and `generateBankFile` byte-unchanged (C2). `/pf-ecr`, `/esi-contribution` send `X-Missing-UAN` /
+  `X-Missing-ESI-Number` (codes sanitised) on JSON + download. **Rule: file only when missing = 0 (RUNBOOK T7).**
+- **C4 (`reports.js`):** `requireHrFinanceOrAdmin` on pf-ecr, esi-contribution, bank-salary-file, pf-statement, esi-statement,
+  bank-transfer, audit-trail, GET company-config, new lwf-register. Reports.jsx shows other roles a plain message.
+- **Sales:** `generateSalesESIFile` + `GET /api/sales/export/esi-contribution` (registered BEFORE `router.use(requireHrOrAdmin)`
+  with its own hr/finance/admin check — D-11; read-only). Master POST/PUT take `esi_number`/`uan` via `checkStatutoryNumbers`
+  (the upload's exported ESI_NUMBER_RE / UAN_RE / numberInUse; only a CHANGED value is checked — N2; 400 / 409 heldBy).
+- **LWF register (`services/lwfRegister.js`, Reports tab):** plant + sales LWF rows, company subtotals, total; plant rows
+  `capped`/`shortfall` (V11 sum − total) — the LWF due is listed even when the cap fired (M2).
+- **UI:** sales master inputs + "ESI no. missing" badge; `SalesEsiExportButton` (preview → "NOT in the file" modal → download);
+  Reports ECR/ESI missing panel + confirm + header re-check; LWF tab. Previews/downloads + sales master list send `fresh` (N7).
+- **Fragile:** (1) the PUT loop line `if (STATUTORY_FLAG_FIELDS.includes(field)) continue;` must stay verbatim (guard).
+  (2) Header filenames drop chars outside [A-Za-z0-9_.-] — an odd company name made setHeader throw (500). (3) The formats
+  themselves are PR-3b (ECR `#~#`, NCP undercount, ESIC template / reason codes) — due before 15 Nov. (4) VERIFY V15 (capped
+  LWF) / V16 (fix list) are new; PR-2b owns V13/V14.
+- **Verified:** jest 65/1076 → 69/1121 (after the review fixes + merge), two clean runs; new tests fail on dcad556 (plant 6/7, C4 11/12, sales 6/6, numbers
+  8/8 + F12 4/4). `sim/filing_identity.js` vs a dcad556 worktree: run 1 106/106 identical, run 2 79/79 (base − branch = the bad
+  rows = missing = header). Guard unedited 9/9. `sim/run_pr3.py` (real server + Chromium): 51/51. Clean dist rebuild identical.
+- **Review fixes:** PUT company-config admin only (D-16). **Not done:** PR-3b formats; Railway; production data.
+
 ## Last Session — 2026-10-10 (Statutory flags PR-2b: sales LWF)
 **Sales LWF ₹5 employee / ₹20 employer per month. Branch `feat/lwf-sales` on origin/main ad96604 (no drift),
 NOT pushed, NOT merged.** Plan: `docs/statutory-flags/IMPL_PR2b.md` (REVIEW CORRECTIONS C1–C5 binding); log + decision D-9:

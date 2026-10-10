@@ -75,3 +75,42 @@
 - N10 Employee Profile shows only total / PF / ESI deductions (the total includes LWF). Employee Quick View reads
   `ee_pf` / `ee_esi` / `basic_earned` / `net_salary`, which the payslip payload never returns — blank already,
   pre-existing, not touched.
+
+## Added by PR-3 (filing, 10 Oct 2026)
+- **PR-3b — portal formats, due before the October filing (ESI + PF challans for October wages are due 15 Nov 2026).**
+  Owner ruling C2: PR-3 keeps the current line layouts byte-for-byte; fix them in PR-3b. [INFERENCE — confirm each against a
+  file the portal actually accepted, or the portal's downloadable template, before building]
+  - EPFO ECR 2.0 separates fields with `#~#`, not `|` (exportFormats.js ECR line builder).
+  - ECR NCP days undercount (E6): exportFormats.js 48–49 subtracts Sundays and holidays from the calendar days AND then the
+    payable days, which already include paid Sundays / holidays — 3 absences can show as NCP 0 (Reports.jsx 782 repeats the formula).
+  - ESIC monthly contribution upload is an Excel template: IP number, IP name, days, total wages, reason code, last working day —
+    no IP-contribution column (the app's file has one). Reason codes are ESIC's list (0 = none, 1 = on leave, 2 = left service,
+    …): the app writes 1 for "joined this month" (plant: calendar month; sales: cycle) — that is not ESIC's code 1 (E7).
+  - Amounts are rounded to the rupee per line (Math.round, e.g. ₹130.50 → 131); check the portal's rounding.
+  Until PR-3b lands: download, then check against the template before uploading (RUNBOOK T7).
+- **Missing must be 0 before filing** (N1, RUNBOOK T7). Rows without a valid UAN / ESI number are left out of the files (D-F2
+  default: exclude + list + header + confirm). VERIFY V16 is HR's fix list. Today: plant ESI numbers are not in the app yet
+  (data item above) → the plant ESI file would be empty and list every ESI employee as missing until the plant statutory file is
+  re-uploaded with numbers; PF without UAN: the two under 'Data HR must fix'.
+- ~~PUT `/api/reports/company-config/:id` had no role guard~~ — FIXED in the PR-3 review (D-16): admin only. It held the PF
+  establishment / ESI codes, PAN / TAN and the company bank account that head the filing files; no screen edits it.
+- N3: a number held by another sales employee is refused even when it is the same person under the other sales company (409
+  heldBy) — same as the upload. The check is in-app only (no UNIQUE index), so two edits racing on one number are not stopped.
+- The sales ESI file also lists a rep whose in-force structure has ESI on with gross ≤ ₹21,000 even when the cycle earned 0
+  (an IP with 0 days, D-F6); the plant file lists contributors only. V16 counts contribution rows only; such a rep without a
+  number is a ₹0 `missing` row — informational, it does not block filing (RUNBOOK T7, PR-3 review fix 2).
+- Finance gets the sales ESI file through the API only (`/api/sales/export/esi-contribution`); the button sits on the sales
+  register, which finance's sidebar does not show. Owner: put a copy on Reports if finance files sales ESI.
+- **Not fixed here (PR-3 review) — the viewer can still read UANs / ESI numbers / bank accounts outside Reports.** C4 covered
+  reports.js only. Checked on this branch: `GET /api/employees` (employees.js:179, `SELECT e.*` — every master column incl. uan,
+  esi_number, pf_number, bank_account / account_number, ifsc, PAN, Aadhaar) and `GET /api/employees/:code` (`SELECT *`) have no role
+  guard (requireAuth only); `GET /api/payroll/payslip/:code` (generatePayslipData → pf_number, uan, esi_number, bank_account, ifsc)
+  has none either. `GET /api/payroll/payslips/bulk` already returns 403 for everyone by policy — not an exposure. A fix means
+  column-level redaction for the viewer on the employee list (the Employees page is shared by many roles), so it needs its own PR.
+- **Not fixed here (PR-3 review) — numberInUse (shared by the upload and the sales master) is blunt.** (1) It counts rows of any
+  status, Left / Exited included, so a rep re-joined under another sales company gets 409 naming the old row's code; (2) it returns
+  the code only, not the company — sales codes repeat across companies (S001 in both), so `heldBy` can point at the wrong person;
+  (3) it compares the stored value as is, so a legacy number stored with spaces ('2000 000 301') does not match the normalised
+  '2000000301' and the duplicate slips through. Production has no such rows today (sales numbers came in through the upload, which
+  stores them normalised; no Left rep carries a number). Proposed with the next statutory change: ignore Left / Exited, return code +
+  company, compare `REPLACE(col,' ','')`.
