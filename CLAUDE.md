@@ -1,3 +1,25 @@
+## Last Session — 2026-10-11 (P1-05: Stage 6 Apply Leave form kept the previous employee's values)
+**Branch `fix/stage6-leave-form-reset`, NOT merged.** Frontend only (`pages/DayCalculation.jsx`, Apply Leave open/close). Plan + log:
+`docs/ux-bulk/prs/P1-05/PLAN.md`, `PROGRESS.md`. Finding P-3. Rulings Q1 (reset on every open, same employee too), Q2 (success path
+through `closeLeaveModal()`), Q3 (late error toast after close left as is).
+- **Bug:** `leaveForm` was reset only after a successful submit. Type a date/type/reason for employee A, close with Cancel / ✕ / Esc /
+  backdrop, open for B → B's window showed A's date, leave type and reason with the submit button enabled; one click sent a leave
+  (HR: a finance request) for B on A's day with A's reason.
+- **Fix:** module-level `EMPTY_LEAVE_FORM`; `openLeaveModal(target)` resets then opens, `closeLeaveModal()` closes then resets. Used by
+  the Absent-cell "Apply Leave" button, the Modal `onClose` (✕ / Esc / backdrop), Cancel and the submit success path. A refused
+  submit keeps the window and values (unchanged). Balance display, HR→finance flow, Withdraw, P1-04's calcMutation/header untouched.
+  dist rebuilt (own commit; vs a fresh 18bef07 build, hash-normalised, only the DayCalculation chunk differs).
+- **Fragile:** any new opener of the window must call `openLeaveModal`, any new close path `closeLeaveModal`. Reopening the same
+  employee no longer keeps a half-typed draft (by ruling).
+- **Verified:** `backend/scripts/stage6-leave-form-reset-check.py` (Chromium, built dist, real hr login, fictional T9501/T9502, Sep 2026,
+  port 3105) 53/53 — each of Cancel / ✕ / Esc / backdrop: A typed → dismissed → B empty + submit disabled; same employee reopened empty;
+  submit for B → POST body + exactly one `Pending Finance` row with B's code/date/EL/reason, reopen empty; refused submit (404, not an
+  absent day) keeps window + values, then B empty; 390px; 0 page/console errors, 0 API ≥ 400 (except the intended 404).
+  `--base` on an 18bef07 worktree 4/4: B's window shows A's EL/date/reason, submit enabled. jest 89 suites / 1430 before and after.
+- **Not tested:** Railway; Safari/Firefox; finance/admin direct-apply path in the browser (same handlers, only the button label differs).
+- **Found, not fixed:** (1) Q3 — if HR closes the window while a submit is in flight, a late error toast still shows; a late SUCCESS
+  calls `closeLeaveModal()` and would close a window already reopened for another employee (pre-existing: old code did
+  `setLeaveModal(null)` too). (2) backend `validateLeaveCorrection` error text says "Must be CL or EL" although LWP is allowed.
 ## Last Session — 2026-10-11 (Attendance Review: standing leave-outs + monthly suggestions; contractor loaders)
 **Branch `feat/attendance-review-smart-leaveouts` (on origin/main bbb8a34), NOT merged.** Private plan/rulings: project `claude/attendance-review/`.
 - **Owner rulings 11 Oct:** senior staff marked once per person; piece-rate crews marked once per department; contractor workers
