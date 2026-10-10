@@ -92,9 +92,8 @@
   default: exclude + list + header + confirm). VERIFY V16 is HR's fix list. Today: plant ESI numbers are not in the app yet
   (data item above) → the plant ESI file would be empty and list every ESI employee as missing until the plant statutory file is
   re-uploaded with numbers; PF without UAN: the two under 'Data HR must fix'.
-- **Decision needed — PUT `/api/reports/company-config/:id` has no role guard** (pre-existing): any logged-in user, a viewer
-  included, can change the company's PF establishment code, ESI code, PAN / TAN and bank account — values that head the filing
-  files. PR-3 gated GET (C4) but did not touch the write (not in scope). Proposed: admin only.
+- ~~PUT `/api/reports/company-config/:id` had no role guard~~ — FIXED in the PR-3 review (D-16): admin only. It held the PF
+  establishment / ESI codes, PAN / TAN and the company bank account that head the filing files; no screen edits it.
 - N3: a number held by another sales employee is refused even when it is the same person under the other sales company (409
   heldBy) — same as the upload. The check is in-app only (no UNIQUE index), so two edits racing on one number are not stopped.
 - The sales ESI file also lists a rep whose in-force structure has ESI on with gross ≤ ₹21,000 even when the cycle earned 0

@@ -207,11 +207,17 @@
     untouched (plant 58/58/58/55, sales 47/47/47/44 — files unchanged). No xlsx / csv / db in the diff.
   - Full jest twice: 69 suites / 1120 tests, 0 failures (baseline 65 / 1076).
 
+- PR-3 REVIEW FIX 1 — (next commit) `fix(filing): company config write admin only`. Independent review: SHIP WITH FIXES. reports.js
+  `PUT /company-config/:id` had no role check while GET is now restricted. No screen edits it (`updateCompanyConfig` in api.js has no
+  caller); the company master write in Settings (`POST /settings/companies`) is `requireAdmin` → `requireAdmin` from middleware/roles
+  (D-16). statutoryFilingPlant.test.js +1: viewer / hr / finance 403 ('Admin access required') with company_config byte-unchanged,
+  no token 401, admin 200 writes the three fields; fails on the previous reports.js. OPEN_ITEMS entry marked fixed.
+
 ## LAST STEP
-PR-3 built: STEPs 0–8 + C4 + sim fix + docs. Local only, not pushed.
+PR-3 review fix 1 (company-config PUT).
 
 ## NEXT STEP
-chat: independent review, push, PR
+Review fixes 2 (RUNBOOK T7 vs V16), 3 (OPEN_ITEMS), 4 (merge origin/feat/lwf-sales 7eed259); then chat: push, PR
 
 ## OWNER RULINGS ADDED DURING THE BUILD
 (record date + ruling; BUILD_PLAN §1 holds the original set)
@@ -267,6 +273,9 @@ chat: independent review, push, PR
   route returning UANs / PF numbers / ESI numbers / bank accounts: pf-statement, esi-statement, bank-transfer, audit-trail (old /
   new values of master edits — bank accounts, and from STEP 4 ESI numbers / UANs) and GET company-config (company bank account /
   PAN / TAN; no UI caller). PUT company-config (unguarded write) left alone — OPEN_ITEMS decision.
+- D-16 (PR-3 review) `PUT /api/reports/company-config/:id` → `requireAdmin` (not hr/finance/admin): no screen edits company_config
+  (api.js `updateCompanyConfig` has no caller), the Settings company master write is admin-only, and the row heads every filing
+  file (PF / ESI establishment codes, PAN / TAN, company bank account). Nobody loses a button.
 - D-4 (STEP 4) The undo file carries the flags that were IN FORCE AT E before the batch (what September compute
   used), not the master's flags; numbers are left blank (blank = unchanged, per §4.2). Not a full restore (review
   minor 1, wording fixed in REVIEW FIX 4): a later row whose flags differed before the batch ends at the E value.

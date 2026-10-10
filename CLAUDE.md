@@ -22,7 +22,7 @@ open), NOT pushed.** Plan `docs/statutory-flags/IMPL_PR3.md` (C1–C7 binding); 
 - **Verified:** jest 65/1076 → 69/1120, two clean runs; new tests fail on dcad556 (plant 6/7, C4 11/12, sales 6/6, numbers
   8/8 + F12 4/4). `sim/filing_identity.js` vs a dcad556 worktree: run 1 106/106 identical, run 2 79/79 (base − branch = the bad
   rows = missing = header). Guard unedited 9/9. `sim/run_pr3.py` (real server + Chromium): 51/51. Clean dist rebuild identical.
-- **Not done:** PR-3b formats; PUT company-config is still unguarded (OPEN_ITEMS, decision); Railway; production data.
+- **Review fixes:** PUT company-config admin only (D-16). **Not done:** PR-3b formats; Railway; production data.
 
 ## Last Session — 2026-10-10 (Statutory flags PR-2b: sales LWF)
 **Sales LWF ₹5 employee / ₹20 employer per month. Branch `feat/lwf-sales` on origin/main ad96604 (no drift),

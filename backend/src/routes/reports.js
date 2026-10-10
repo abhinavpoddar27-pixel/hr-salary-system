@@ -4,6 +4,7 @@ const XLSX = require('xlsx');
 const { getDb } = require('../database/db');
 const { generatePFECR, generateESIFile, generateBankFile, missingCodesHeader } = require('../services/exportFormats');
 const { buildLwfRegister, lwfRegisterWorkbook } = require('../services/lwfRegister');
+const { requireAdmin } = require('../middleware/roles');
 
 // Role gate — HR / finance / admin may read the leave register and (statutory flags PR-3,
 // owner ruling C4) every report here that serves UANs, ESI numbers or bank accounts:
@@ -337,8 +338,10 @@ router.get('/company-config', requireHrFinanceOrAdmin, (req, res) => {
   res.json({ success: true, data: configs });
 });
 
-// PUT company config
-router.put('/company-config/:id', (req, res) => {
+// PUT company config — admin only (statutory flags PR-3 review, D-16): these values head the
+// filing files (PF establishment / ESI codes, PAN / TAN, company bank account). No screen edits
+// them today; the company master in Settings (POST /settings/companies) is admin-only too.
+router.put('/company-config/:id', requireAdmin, (req, res) => {
   const db = getDb();
   const { id } = req.params;
   const fields = ['short_name', 'pf_establishment_code', 'esi_code', 'address_line1', 'address_line2',

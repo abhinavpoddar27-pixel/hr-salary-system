@@ -285,3 +285,22 @@ describe('C4 — every report serving UANs / ESI numbers / bank accounts: hr / f
     }
   });
 });
+
+describe('D-16 — PUT /api/reports/company-config/:id: admin only', () => {
+  test('viewer / hr / finance 403 with nothing written; no token 401; admin 200 writes', async () => {
+    const row = api.db.prepare('SELECT * FROM company_config ORDER BY id LIMIT 1').get();
+    expect(row).toBeTruthy();
+    const body = { pf_establishment_code: 'SYNPF0000001', esi_code: '00000000000000099', bank_account: '9999999999' };
+    const snap = () => JSON.stringify(api.db.prepare('SELECT * FROM company_config ORDER BY id').all());
+    const before = snap();
+    for (const as of ['view1', 'hr1', 'fin1']) {
+      const r = await api.request('PUT', `/api/reports/company-config/${row.id}`, { as, body });
+      expect([as, r.status, r.body.error]).toEqual([as, 403, 'Admin access required']);
+    }
+    expect((await api.request('PUT', `/api/reports/company-config/${row.id}`, { body })).status).toBe(401);
+    expect(snap()).toBe(before);
+    const ok = await api.request('PUT', `/api/reports/company-config/${row.id}`, { as: 'adm1', body });
+    expect(ok.status).toBe(200);
+    expect(api.db.prepare('SELECT pf_establishment_code, esi_code, bank_account FROM company_config WHERE id = ?').get(row.id)).toEqual(body);
+  });
+});
