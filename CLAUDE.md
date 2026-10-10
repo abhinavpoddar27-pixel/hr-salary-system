@@ -22,6 +22,26 @@
 - **Seen, not fixed:** `POST /:id/finance-approve` does not check finance_status, so the API (no UI) can approve a
   rejected row directly at its old days.
 
+## Last Session — 2026-10-10 (Loans import: one-click confirm of clean rows)
+**Branch `feat/loan-import-bulk-confirm` (on origin/main 2cd0b26 = PR-10 merged), NOT merged.** Maker-checker unchanged.
+- **What:** Loans → Import batch view: HR "Confirm all clean matches (N)", finance "Confirm all balances as in the file (N)"
+  (confirm dialog, toast "Confirmed N · skipped M"). `importer.js` `bulkPlan` / `confirmCleanMatches` / `confirmFileBalances`
+  loop the EXISTING `confirmMatch` / `confirmBalance` per row inside ONE `inTxn` (plan read inside it) — same row update and
+  per-row audit as the single button, plus one summary audit row (`loan_import_bulk_match_confirmed` / `_balance_confirmed`);
+  any refusal → `BULK_CONFIRM_FAILED` (409), nothing confirmed. `batchDetail.bulk = {cleanMatches, fileBalances}` = same plan.
+  Routes `POST /api/loans/import/batches/:id/confirm-clean-matches` (hr) and `/confirm-file-balances` (finance).
+- **Clean match:** needs_match, parse 'ok', tier `code`/`exact`, exactly one candidate = the proposal, borrower Active, and
+  no flag (stored + `rowWarnings` as if confirmed) except INFO_ONLY = AGREEMENT_MISSING, SERVICE_UNKNOWN (= "NO_DOJ"),
+  LOAN_TYPE_DEFAULTED; no other live row with the same borrower. **File balance:** needs_balance (match confirmed), parse 'ok'
+  (EMI_MISSING etc. skipped), outstanding/EMI > 0, no flag except INFO_ONLY + NAME_MISMATCH/NAME_CLOSE_SPELLING (HR decided).
+  Expected on the real file (from the PR-10 rehearsal flags, NOT run): 4 of 9 clean matches; S163 skipped (EMI flags).
+- **Fragile:** INFO_ONLY lives in `importer.js` (`BULK_INFO_ONLY`) — a new info warning blocks bulk until added there. A new
+  `rowWarnings` flag blocks bulk by default (safe). Company-restricted users are refused at batch level (like batchDetail).
+- **Verified:** jest 1284 → 1299 (80 suites); `loansImportBulk.test.js` 15 (per-row result + audit identical to the single path
+  on a twin DB; trigger ABORT and IGNORE mid-loop → nothing confirmed; roles via real requireAuth/JWT; counts = action;
+  SELF_APPROVAL unchanged; approve after bulk creates loans). Browser `loans-ui-browser-check.py` 236/236 (Pass 8, 16), 0 page errors.
+- **NOT tested:** Railway; production data through the screen; two people clicking at once across processes.
+
 ## Last Session — 2026-10-10 (Loans PR-10: import of the accounts-Excel loans, + code-file + per-payroll cutover follow-ups)
 **Branch `feat/loans-pr10` (origin/main #75 merged in), PR #74 open, NOT merged.** Rulings + rehearsal: `docs/loans/PROGRESS.md` (PR-10).
 - **What:** Loans → Import. HR/finance upload the accounts Excel (template, or any layout via a column-mapping step). With a
