@@ -3,7 +3,7 @@
 ## RESUME (re-read after any compaction)
 - Branch: `fix/stage5-grid-refresh` (base origin/main 2d96842). Never push to main; no PR open/merge.
 - Spec: `docs/ux-bulk/prs/P1-08/PROMPT.md`. Plan: `docs/ux-bulk/prs/P1-08/PLAN.md`.
-- Current phase: **Phase 0 done — waiting for planner "go" + rulings Q1/Q2.**
+- Current phase: **BUILD (planner GO 10 Oct 2026).**
 - Continue from the first step whose status is not `done`. Never redo a done step.
 - Work only in /home/claude/wt-p1-08; other builders use other worktrees — never touch them. Server port 3108 only.
 - Only `frontend/src/pages/AttendanceRegister.jsx` (updateMutation + recalcMutation) may change in frontend/src
@@ -13,7 +13,7 @@
 ## Steps
 | # | Step | Status | Result / sha |
 |---|---|---|---|
-| 0 | Phase 0 plan + progress | done | this commit |
+| 0 | Phase 0 plan + progress | done | 87d9e5b |
 | 1 | jest before | done | 85 suites / 1377 pass (branch = 2d96842 + docs) |
 | 2 | Source edit (updateMutation + recalcMutation invalidate prefix) | pending | |
 | 3 | dist rebuild (own commit) | pending | |
@@ -27,5 +27,6 @@
 
 ## Rulings
 - Programme "go" from owner 10 Oct 2026; planner approves Phase 0.
-- Q1 (fresh on getAttendanceRegister if 5 s cache serves stale): pending.
-- Q2 (Calendar View invalidation): pending.
+- Q1: YES — add `fresh` to getAttendanceRegister in utils/api.js IF the quick-save case is proven stale (script before + after).
+- Q2: INCLUDE — invalidate ['daily-attendance', code, month, year] for the edited employee in the same onSuccess.
+- Miss-punch cell stays red after a generic edit → CLAUDE.md "found, not fixed".
