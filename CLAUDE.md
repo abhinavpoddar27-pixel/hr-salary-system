@@ -1,3 +1,25 @@
+## Last Session — 2026-10-10 (P4: Mark Left role guard)
+**P4: Mark Left is hr + admin only; no exit via the general edit. Branch `fix/mark-left-role-guard`, NOT merged.**
+- **`PUT /api/employees/:code/mark-left` had no role guard** (router mounted behind `requireAuth` only), so viewer,
+  supervisor, finance or an employee-portal login could mark anyone Left, which flags loans `recover_at_exit` and
+  collapses schedules. Now uses the existing `requireHrOrAdmin`, before the lookup (403, not 404). Finance excluded
+  on purpose: prod's 216 Mark Left actions were hr 215 / admin 1.
+- **`PUT /api/employees/:code` refuses a move into Left/Exited for every role** (400 "Use Mark Left …"). That path
+  wrote no exit date, no inactive_since, no audit row and never flagged loans. Resending the current exit status and
+  reactivating to Active still work; the whole edit is refused, not just the status. No screen sends status there.
+- **Sales exit paths were already guarded** (`router.use(requireHrOrAdmin)`, sales.js ~l.1099); now pinned by tests.
+- **Frontend:** Mark Left button only renders for hr/admin (`canMarkLeft` = `canBulkAssignShift`). dist rebuilt.
+- **Fragile:** the sales guard depends on the mark-left and status-edit handlers staying BELOW the router.use line;
+  `salesExitRoleGuard.test.js` fails if they move. `isExit()` in PUT /:code is case/space-insensitive on purpose.
+- **Verified:** suite 1004 → 1032 (62 suites), 3 clean runs. New `markLeftRoleGuard.test.js` (20) and
+  `salesExitRoleGuard.test.js` (8), real `requireAuth` + real JWTs. Each new refusal test fails with its fix reverted.
+- **NOT tested:** the rebuilt dist in a browser (gate confirmed only by reading the minified Employees chunk).
+- **Found, not fixed (follow-up):** the rest of `PUT /employees/:code` (any role can change gross_salary, bank, PAN,
+  employment_type), `POST /employees`, `POST /bulk-set-contractor`, documents POST/DELETE,
+  `POST /api/analytics/auto-detect-left`, `POST /api/import/upload` are all unguarded beyond requireAuth.
+
+---
+
 ## Last Session — 2026-10-10 (Statutory flags PR-3: filing files)
 **ECR / ESI files leave out rows without a valid UAN / ESI number and say who; sales ESI file; sales master ESI no. / UAN;
 LWF register; filing reports hr/finance/admin only. Branch `feat/statutory-filing` on origin/feat/lwf-sales dcad556 (PR #73
