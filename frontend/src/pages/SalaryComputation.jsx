@@ -2,7 +2,7 @@ import React, { useState, useMemo, useEffect } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { Link, useSearchParams } from 'react-router-dom'
 import toast from 'react-hot-toast'
-import { getSalaryRegister, computeSalary, finaliseSalary, getPayslip, getMonthEndChecklist, getSalaryComparison, downloadSalarySlipExcel, releaseHeldSalary, getDayCalcStaleness, getSalaryStale } from '../utils/api'
+import { getSalaryRegister, computeSalary, finaliseSalary, getPayslip, getMonthEndChecklist, getSalaryComparison, downloadSalarySlipExcel, releaseHeldSalary, getDayCalcStaleness, getSalaryStale, getLoanPayslipBalance } from '../utils/api'
 import { useAppStore } from '../store/appStore'
 import CompanyFilter from '../components/shared/CompanyFilter'
 import DateSelector from '../components/common/DateSelector'
@@ -157,6 +157,15 @@ export default function SalaryComputation() {
     enabled: !!payslipEmployee
   })
   const payslip = payslipRes?.data?.data
+  // Loans PR-9: the payslip's loan balance line is a separate read; any error
+  // (or a role without loan access) simply shows no line.
+  const { data: loanBalRes } = useQuery({
+    queryKey: ['payslip-loan-balance', payslipEmployee, month, year],
+    queryFn: () => getLoanPayslipBalance({ payroll: 'plant', employeeCode: payslipEmployee, month, year }),
+    enabled: !!payslipEmployee,
+    retry: 0
+  })
+  const loanBalance = loanBalRes?.data?.data?.show ? loanBalRes.data.data : null
 
   // April 2026: day-calc staleness check for the "Recompute Stage 6"
   // banner. Salary Computation is downstream of Stage 6, so if Stage 6
@@ -195,7 +204,7 @@ export default function SalaryComputation() {
     if (!payslip) return
     setPdfLoading(true)
     try {
-      await downloadPayslipPDF(payslip, null)
+      await downloadPayslipPDF(payslip, null, loanBalance)
       toast.success('Payslip PDF downloaded')
     } catch { toast.error('PDF generation failed') }
     finally { setPdfLoading(false) }
@@ -1006,6 +1015,16 @@ export default function SalaryComputation() {
                   <span className="font-bold text-green-800">Net Salary</span>
                   <span className="text-xl font-bold text-green-700 font-mono">{fmtINR(payslip.netSalary)}</span>
                 </div>
+                {loanBalance && (
+                  <div className="bg-slate-50 px-3 py-2 rounded-xl border border-slate-200 space-y-0.5" data-testid="payslip-loan-balance">
+                    {loanBalance.loans.map((l) => (
+                      <div key={l.loanId} className="flex justify-between text-xs">
+                        <span className="text-slate-600">{loanBalance.loans.length > 1 ? `Loan #${l.loanId} (${l.loanType}) outstanding after this month's EMI` : "Loan outstanding after this month's EMI"}</span>
+                        <span className="font-mono font-semibold">{fmtINR(l.outstandingAfter)}</span>
+                      </div>
+                    ))}
+                  </div>
+                )}
                 {((payslip.otPay || 0) > 0 || (payslip.edPay || 0) > 0 || (payslip.holidayDutyPay || 0) > 0) && (
                   <div className="bg-emerald-50 p-3 rounded-xl border border-emerald-200 space-y-1">
                     {(payslip.otPay || 0) > 0 && (

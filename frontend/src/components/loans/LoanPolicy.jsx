@@ -23,6 +23,7 @@ const META = {
   loan_agreement_required: ['Signed agreement before disbursement', 'true / false', 'D-25'],
   loan_interest_rate: ['Interest rate', '0 only (interest-free, D-2)', 'D-2'],
   loan_perquisite_threshold: ['Perquisite reporting threshold (₹)', '₹', 'pending CA'],
+  loan_emi_net_flag_pct: ['Finance red flag: loan EMI above this % of net salary (plant)', '%', 'PR-9'],
 }
 const LIST_KEYS = ['loan_eligible_employment_types', 'loan_types']
 const READ_ONLY_KEYS = ['loan_interest_rate']

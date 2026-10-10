@@ -446,7 +446,72 @@ router.get('/write-offs', allow(READ_ROLES), handle((req, res) => {
   if (!['writeoff', 'final'].includes(basis)) return refuse(res, { code: 'BASIS_INVALID', message: 'basis must be writeoff or final' });
   const rows = L.writeOffsForTds(getDb(), { ...my, basis }).filter((r) => companyAllowed(req, r.company));
   const total = rows.reduce((s, r) => s + toPaise(r.amount), 0);
+  if (wantsXlsx(req)) {   // Loans PR-9: Excel of the same rows
+    const tag = `${my.year}-${String(my.month).padStart(2, '0')}`;
+    return sendXlsx(res, `Loans_write-offs_${basis}_${tag}.xlsx`, L.reportSheets('write-offs', { rows, total: toRupees(total) }));
+  }
   return res.json({ success: true, data: rows, basis, total: toRupees(total) });
+}));
+
+// ── reports and the payslip balance line (Loans PR-9). Declared before /:id. ─
+// Read roles; a company-restricted user sees only their companies' loans.
+
+const wantsXlsx = (req) => text(req.query.format).toLowerCase() === 'xlsx';
+function sendXlsx(res, filename, sheets) {
+  const buf = L.toXlsx(sheets);
+  res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+  res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+  return res.send(buf);
+}
+/** {month, year} from ?<prefix>Month & ?<prefix>Year, null when absent; false when malformed. */
+function monthParam(q, prefix) {
+  const rawM = q[`${prefix}Month`]; const rawY = q[`${prefix}Year`];
+  if ((rawM === undefined || rawM === '') && (rawY === undefined || rawY === '')) return null;
+  const month = posInt(rawM); const year = posInt(rawY);
+  return month && month <= 12 && year >= 1900 ? { month, year } : false;
+}
+
+router.get('/reports/:name', allow(READ_ROLES), handle((req, res) => {
+  const name = text(req.params.name).toLowerCase();
+  if (!Object.prototype.hasOwnProperty.call(L.REPORTS, name)) {
+    return refuse(res, { code: 'REPORT_NOT_FOUND', message: `unknown report ${name}; one of ${Object.keys(L.REPORTS).join(', ')}` });
+  }
+  // ?company= (the screen's company filter) narrows within the user's companies.
+  const ac = allowedCompanies(req);
+  const one = text(req.query.company);
+  const opts = { companies: one ? (ac ? ac.filter((c) => c === one) : [one]) : ac };
+  for (const [prefix, key] of [['from', 'from'], ['to', 'to']]) {
+    const m = monthParam(req.query, prefix);
+    if (m === false) return refuse(res, { code: 'MONTH_INVALID', message: `${prefix}Month (1–12) and ${prefix}Year are required together` });
+    if (m) opts[key] = m;
+  }
+  if (req.query.months !== undefined) opts.months = posInt(req.query.months) || 12;
+  const { ok: _ok, ...data } = L.REPORTS[name](getDb(), opts);
+  if (wantsXlsx(req)) return sendXlsx(res, `Loans_${name}_${todayIst()}.xlsx`, L.reportSheets(name, data));
+  return res.json({ success: true, data });
+}));
+
+/**
+ * "Loan outstanding after this month's EMI" for a payslip (SPEC §7 screens 8).
+ * A separate read, so the payslip itself (payroll.js / sales.js) is untouched;
+ * a non-borrower gets {show:false} and the payslip shows nothing extra.
+ */
+router.get('/payslip-balance', allow(READ_ROLES), handle((req, res) => {
+  const payroll = payrollOf(req.query.payroll);
+  if (!['plant', 'sales'].includes(payroll)) return refuse(res, { code: 'PAYROLL_INVALID', message: 'payroll must be plant or sales' });
+  const my = monthYear(req.query);
+  if (!my) return refuse(res, { code: 'MONTH_REQUIRED', message: 'month (1–12) and year are required' });
+  const employeeCode = text(req.query.employeeCode);
+  if (!employeeCode) return refuse(res, { code: 'EMPLOYEE_REQUIRED', message: 'employeeCode is required' });
+  const company = text(req.query.company) || null;
+  if (payroll === 'sales' && !company) return refuse(res, { code: 'COMPANY_REQUIRED', message: 'a sales borrower is identified by code and company; give the company' });
+  if (company && !companyAllowed(req, company)) return refuse(res, notAllowedCompany);
+  const r = L.payslipLoanBalance(getDb(), { payroll, employeeCode, company, ...my });
+  // A plant payslip is keyed by code only: keep the loans of the user's companies.
+  const loans = r.loans.filter((l) => companyAllowed(req, L.getLoan(getDb(), l.loanId).company));
+  const total = toRupees(loans.reduce((s, l) => s + toPaise(l.outstandingAfter), 0));
+  const { ok: _ok, ...data } = r;
+  return res.json({ success: true, data: { ...data, loans, total, show: loans.length > 0 } });
 }));
 
 router.post('/deductions/:did/reverse', allow(DECIDE_ROLES), handle((req, res) => {

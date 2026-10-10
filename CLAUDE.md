@@ -1,3 +1,30 @@
+## Last Session — 2026-10-10 (Loans PR-9)
+**Loans PR-9: reports, payslip balance line, Finance Audit hooks, perquisite list, sales close tab. Branch `feat/loans-pr9`, NOT merged.**
+- **New `services/loans/reports.js` (read-only):** outstanding register (payroll → company → department), 12-month forecast
+  (overdue / months / later / unscheduled = outstanding), exceptions, leavers, perquisite list, `payslipLoanBalance`,
+  `loanRedFlagData`, `overdueCloses`, Excel. Routes `GET /api/loans/reports/:name[?format=xlsx&company=]`,
+  `GET /api/loans/payslip-balance`, `?format=xlsx` on `/write-offs` (JSON unchanged). Read roles; restricted users = own companies.
+- **Payslip line = separate read.** `salaryComputation.js`, `salesSalaryComputation.js`, `payroll.js`, `sales.js` byte-unchanged.
+  outstandingAfter = statement closing for M − M's EMI while provisional (= statement closing after the close).
+  PDF helpers take it as an optional arg and insert it INLINE after the Net Salary box — keep it inline, or a no-loan
+  payslip gains whitespace (`scripts/loans-payslip-html-check.mjs` guards this).
+- **Statement (ruling Q1):** sales loans bucket disbursement / top-up / receipt / write-off by SALES CYCLE month; plant unchanged.
+- **Finance Audit (warnings only):** readiness `LOAN_CLOSE_OVERDUE` (needed close ≤ M−1, past its day); red flags
+  `loan_emi_high_vs_net` (> `loan_emi_net_flag_pct`, default 30, of net after the loan), `loan_posted_unborne`,
+  `loan_exit_residual` (final month ≤ M, repeats until cleared). Plant only (Q2). No loans → nothing added anywhere.
+- **New policy key** `loan_emi_net_flag_pct` (schema.js: ONE seed line). Loan% key count 17 → 18 (+ gate = 19).
+- **Perquisite (Q4):** borrower = payroll + code + company; listed when peak (opening + paid out in month) > threshold;
+  month-end closing shown; "pending CA confirmation" on screen. **Portal view dropped (Q6):** 0 employee users, 0 portal calls.
+- **UI:** Loans → Reports tab; Stage 7 + sales payslip line; close tab Plant / Sales toggle (plant toast text unchanged).
+- **Fragile:** the perquisite "peak" is an upper bound (receipt before a top-up in one month); pre-existing stray "0" under
+  the Stage 7 payslip modal (`grossChanged || salaryHeld` renders 0) — not fixed here.
+- **Verified:** jest 972 → 1004 (60 suites, 3 clean runs). Reports sim 255/255 on the close/exit/sales sim DBs (ledger to the
+  paisa, payslip = independent replay, drift 0, component 0, sales drift 0). Payslip HTML 77/77 byte-identical without a loan.
+  Stage 7 + sales `--dump` md5-identical to origin/main. Browser 148/148 (116 + Pass 5), 0 page errors.
+- **NOT tested:** Railway preview; real CA treatment; Excel styling (plain numbers); the bulk payslip export (403 by policy).
+
+---
+
 ## Last Session — 2026-10-10 (Loans PR-8)
 **Loans PR-8: sales borrowers. Branch `feat/loans-pr8` (merged with main after #63/#64), NOT merged. No schema change.**
 - **Identity:** a sales borrower is code + company (sales_employees UNIQUE on both). Stage 7, payslip↔ledger, hold

@@ -1,7 +1,7 @@
 /**
  * Loans engine — policy reader (Loans PR-2, docs/loans/SPEC.md §4).
  *
- * Reads the 16 `loan_*` keys PR-1 seeded into policy_config. The admin edits
+ * Reads the `loan_*` keys seeded into policy_config. The admin edits
  * them from the Loan settings screen (PR-4), so nothing here is hard-coded
  * except the SPEC §4 defaults used when a value is missing, unparseable or out
  * of range. A fallback never throws: it is reported in `warnings[]` so the
@@ -31,6 +31,7 @@ const DEFAULTS = Object.freeze({
   agreementRequired: true,
   interestRate: 0,
   perquisiteThreshold: 20000,
+  emiNetFlagPct: 30,
 });
 
 // key → [field, parser, validator]
@@ -67,6 +68,8 @@ const KEYS = [
   ['loan_agreement_required', 'agreementRequired', bool, () => true],
   ['loan_interest_rate', 'interestRate', num, (n) => n >= 0],
   ['loan_perquisite_threshold', 'perquisiteThreshold', num, (n) => n >= 0],
+  // Loans PR-9: Finance Audit red flag when a plant loan EMI exceeds this % of net salary.
+  ['loan_emi_net_flag_pct', 'emiNetFlagPct', num, (n) => n > 0 && n <= 100],
 ];
 
 /**

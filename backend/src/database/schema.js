@@ -3692,6 +3692,7 @@ If description and screenshot are incoherent or unrelated, set summary_confidenc
   insertPolicyIfMissing.run('loan_agreement_required', 'true', 'A scanned signed agreement is required before disbursement');
   insertPolicyIfMissing.run('loan_interest_rate', '0', 'Interest rate, % (interest-free only in v1)');
   insertPolicyIfMissing.run('loan_perquisite_threshold', '20000', 'Perquisite reporting threshold, ₹ aggregate (pending CA)');
+  insertPolicyIfMissing.run('loan_emi_net_flag_pct', '30', 'Finance red flag when a plant loan EMI exceeds this % of net salary (Loans PR-9)');
   // Loans PR-3 gate: no disbursement until Stage 7 (PR-5) + loan close (PR-6) can recover it.
   // Switched to '1' deliberately at cutover; PUT /api/loans/policy cannot change it.
   insertPolicyIfMissing.run('loans_disbursement_enabled', '0', 'Loan disbursement gate: 0 = disbursement refused (until PR-5/PR-6 are live); 1 = allowed. Switched on at cutover only');

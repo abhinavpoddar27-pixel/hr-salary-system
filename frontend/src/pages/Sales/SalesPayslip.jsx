@@ -3,7 +3,7 @@ import { useParams, useSearchParams, useNavigate } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
 import toast from 'react-hot-toast'
 import clsx from 'clsx'
-import { salesPayslip } from '../../utils/api'
+import { salesPayslip, getLoanPayslipBalance } from '../../utils/api'
 import { downloadSalesPayslipPDF } from '../../utils/salesPayslipPdf'
 
 const MONTHS = ['', 'January', 'February', 'March', 'April', 'May', 'June',
@@ -27,6 +27,15 @@ export default function SalesPayslip() {
     enabled: !!code && !!month && !!year && !!company,
     retry: 0,
   })
+
+  // Loans PR-9: loan balance line, a separate read (code + company); errors show no line.
+  const { data: loanBalRes } = useQuery({
+    queryKey: ['sales-payslip-loan-balance', code, month, year, company],
+    queryFn: () => getLoanPayslipBalance({ payroll: 'sales', employeeCode: code, company, month, year }),
+    enabled: !!code && !!month && !!year && !!company,
+    retry: 0,
+  })
+  const loanBalance = loanBalRes?.data?.data?.show ? loanBalRes.data.data : null
 
   const [pdfBusy, setPdfBusy] = useState(false)
 
@@ -61,7 +70,7 @@ export default function SalesPayslip() {
     if (pdfBusy) return
     setPdfBusy(true)
     try {
-      await downloadSalesPayslipPDF(d)
+      await downloadSalesPayslipPDF(d, loanBalance)
       toast.success('PDF downloaded')
     } catch (err) {
       toast.error('Failed to render PDF: ' + (err?.message || 'unknown error'))
@@ -175,6 +184,16 @@ export default function SalesPayslip() {
           <span className="text-sm font-semibold text-green-900">Net Salary Payable</span>
           <span className="text-xl font-bold text-green-900 font-mono">₹{fmtINR(netSalary)}</span>
         </div>
+        {loanBalance && (
+          <div className="bg-slate-50 border border-slate-200 rounded px-3 py-2 mb-4 space-y-0.5" data-testid="sales-payslip-loan-balance">
+            {loanBalance.loans.map((l) => (
+              <div key={l.loanId} className="flex items-center justify-between text-sm">
+                <span className="text-slate-600">{loanBalance.loans.length > 1 ? `Loan #${l.loanId} (${l.loanType}) outstanding after this month's EMI` : "Loan outstanding after this month's EMI"}</span>
+                <span className="font-mono font-semibold">₹{fmtINR(l.outstandingAfter)}</span>
+              </div>
+            ))}
+          </div>
+        )}
 
         {(bank.bank_name || bank.account_no || bank.ifsc) && (
           <div className="text-xs text-slate-500 border-t border-slate-200 pt-3 mb-2">

@@ -6,6 +6,7 @@
  *   node backend/scripts/loans-sales-simulation.js                 # full: 7 sales loans, Nov 2026 – Mar 2027
  *   node backend/scripts/loans-sales-simulation.js --dump out.json # no-loan month only: every sales salary row
  *   node backend/scripts/loans-sales-simulation.js --empty         # the full calendar with no loans: the loan job writes nothing
+ *   node backend/scripts/loans-sales-simulation.js --keep db.sqlite # full mode, and write the final database (Loans PR-9 reports sim)
  *
  * Real schema (via the JWT harness: temp DATA_DIR, real initSchema), the REAL
  * sales routes over HTTP with real JWTs (POST /api/sales/compute,
@@ -50,6 +51,7 @@ const DUMP = dumpIdx >= 0 ? args[dumpIdx + 1] : null;
 if (dumpIdx >= 0 && !DUMP) { console.error('--dump needs a file path'); process.exit(2); }
 const EMPTY = args.includes('--empty');
 const ROWS_OUT = (() => { const i = args.indexOf('--rows-out'); return i >= 0 ? args[i + 1] : null; })();
+const KEEP = (() => { const i = args.indexOf('--keep'); return i >= 0 ? args[i + 1] : null; })();   // Loans PR-9
 
 const { log: realLog, error: realError, warn: realWarn } = console;
 const quiet = () => { console.log = () => {}; console.warn = () => {}; console.error = () => {}; };
@@ -389,6 +391,7 @@ async function fullMode() {
     loud();
     failures.push(`exception: ${e.stack || e.message}`);
   }
+  if (KEEP && !DUMP) fs.writeFileSync(KEEP, db.serialize());   // final database for loans-reports-simulation.js
   await api.close();
   if (failures.length) {
     console.error(`FAIL (${failures.length})`);
