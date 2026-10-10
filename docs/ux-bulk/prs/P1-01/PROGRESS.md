@@ -14,7 +14,7 @@
 | 0 | Phase 0 plan + progress | done | 619e28d |
 | 1 | Source edit (FinanceAudit.jsx: props + Q1 path) | done | 4 lines (+4/−4); e7b4aea |
 | 2 | dist rebuild (own commit) | done | build clean 17 s; vs fresh a5aec9a build (worktree /tmp/p101-main) only the FinanceAudit chunk differs (hash-normalised); 4b0f406 |
-| 3 | jest before/after | pending | |
+| 3 | jest before/after | done | before (a5aec9a worktree) 81 suites / 1332 pass, 0 red; after (branch) 81 / 1332 pass, 0 red (no backend change; TDS parked tests currently green) |
 | 4 | check script written | pending | |
 | 5 | script on branch dist | pending | |
 | 6 | script on origin/main dist (worktree /tmp) — crash recorded | pending | |
