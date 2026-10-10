@@ -1,3 +1,30 @@
+## Last Session — 2026-10-11 (Attendance enforcement PR-A: Attendance Review measures on the current master shift)
+**Branch `feat/attendance-review-master-basis`, stacked on PR-1 `fix/close-legacy-late-deduction` (#101) — merge #101 first. NOT merged.**
+Plan: private project `claude/attendance-review/PLAN_enforcement_v2.md` (owner rulings B, D-12, D-13, MP-1, MP-3, MP-4).
+- **Switch:** config `assessment_basis: 'import' | 'master'` (default `import`, so saved v4 and run 1 keep their meaning) and
+  `assess_fixed_miss_punch` (default true). Rules editor: "Measure every day against" + MP-1 tick. New thresholds
+  `odd_punch_minutes` 180, `night_start_minutes` 1200, `stayed_late_minutes` 20.
+- **Engine:** the base CTE is now chosen by basis (`IMPORT_BASE` / `MASTER_BASE`) in front of the SAME person-month and weekly
+  SQL, so every rule (stay-back, full hours, loading, release days, shift check, improved/newcomer, Option C) runs unchanged on
+  both. Master: current `default_shift_id`; day on its times; night (`is_night_shift` / "Night Shift") on a 12-hour master on
+  20:00 for 12 h; an overnight master (end < start) on its own times; not assessed = no master / night on a 9–10 h master /
+  in-punch > 3 h early; half days not checked; gate pass exactly as earlyExitDetection (out ≥ end − pass → not early, else
+  minutes beyond); miss-punch days with `miss_punch_resolved` assessed on gate times; an out equal to the shift end on such a
+  day = "out not verified" (worked minutes NULL → no early exit, no full-hours or stay-back excuse). Release days detected on
+  the basis. Re-measure rows still win (and still skip miss-punch days).
+- **Output:** `criteria.assessment_basis`, `assessment.quality` (days + codes by reason; excluded codes/departments left out),
+  tab line + "What the master-shift basis left out" section, Excel Summary rows. Nothing writes payroll.
+- **Live acceptance (Sep 2026, v4 rules, SQL Console, read-only):** lates 426 vs plan 424, early exits 284 / 24,746 min exact,
+  unassessable 37 exact; engine selection on the live rows = the plan's expected action list exactly (people, deductions, days,
+  amount). MP-1 on: early +15 (+2,037 min) as planned; lates +30 (plan +27 — the 3 extra are MP-3 refusing full-hours
+  excuses on unverified outs). Import-basis September early is 284 now, not run 1's 322 — #96's sweep rewrote the flags.
+- **Fragile:** master basis applies TODAY's master to every month — a wrong master is wrong everywhere (data-quality section is
+  the guard). Per-row correlated lookups (employees, short_leaves) — check indexes before T1 runs 18 months.
+- **Verified:** new `attendanceReviewMasterBasis.test.js` 22 (all 22 fail on the old engine); jest 91 suites / 1456;
+  `scripts/attendance-review-master-basis-check.py` 26/26 (import → switch to master → action list / warnings / data quality
+  follow → MP-1 off → reload keeps the choice → phone; no payroll table written); `attendance-review-tab-check.py` 49/49.
+  **Not tested:** Railway.
+
 ## Last Session — 2026-10-11 (Attendance enforcement PR-1: legacy Stage 6 late-deduction route closed)
 **Branch `fix/close-legacy-late-deduction` (on origin/main 8237205, main 18bef07 merged in), NOT merged.** Plan: private project `claude/attendance-review/PLAN_enforcement_v2.md`.
 - **Owner rulings 10 Oct:** D-1 the Attendance Review is the only place late/early deductions are decided; D-2 the August
