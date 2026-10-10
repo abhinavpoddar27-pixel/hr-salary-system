@@ -19,5 +19,11 @@
 - [x] P1.3 salesNeftEligibility.test.js: 8/8 pass; on the 96ee482 service 6 of 8 fail (the 2 that pass: no-paid byte identity, finance 403)
 - [x] P1.4 frontend: modal always shown (title "Download bank (NEFT) file?", summary N people · ₹X, conditional lines), missing table only when missing; preview call no-cache (Q1)
 - [x] P1.5 dist rebuilt, own commit (api.js is in the index chunk, so chunk hashes rotate widely)
-- [ ] P1.6 plant bank md5 + browser check + --base run
+- [x] P1.6 checks:
+  - plant bank file md5 on a scratch DB (30 fictional rows): 96ee482 = branch = 1569dc36…; sales NEFT with no paid rows
+    96ee482 = branch = a5d61f12… (byte-identical).
+  - `backend/scripts/sales-neft-confirm-check.py` (port 3103, built dist, hr login): 37/37 (two more clean runs at 36/36
+    before the no-cache check was added). Base run on a 96ee482 archive (`git archive`, committed dist): 5/5 — Nov file
+    downloads with no confirm, paid row in the file and re-stamped.
+  - jest after: 82 suites / 1340 pass (baseline 81 / 1332; +8 new).
 - [ ] P1.7 self-debug, v2, CLAUDE.md Last Session, push
