@@ -359,6 +359,7 @@ app.listen(PORT, () => {
   try { require('./src/services/monthEndScheduler').startScheduler(); } catch (e) { console.error('Scheduler init failed:', e.message); }
   // Start nightly DB backup scheduler
   try { require('./src/services/backupScheduler').initBackupScheduler(); } catch (e) { console.error('Backup scheduler init failed:', e.message); }
+  try { require('./src/services/earlyExitDetection').initEarlyExitScheduler(require('./src/database/db').getDb); } catch (e) { console.error('Early-exit scheduler init failed:', e.message); }
   // Start Sarvam batch-job safety-net poller (bug reporter — step 8)
   try { require('./src/services/sarvamBatchPoller').startPollerCron(); } catch (e) { console.error('Sarvam poller init failed:', e.message); }
   // Rescue bug-report rows stuck in pending state across container restarts (step 10)

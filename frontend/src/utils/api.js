@@ -561,9 +561,9 @@ export const getDWPendingLiabilities = () => api.get('/daily-wage/reports/pendin
 export const getDWSeasonalTrends = () => api.get('/daily-wage/reports/seasonal-trends')
 
 // ── Short Leaves / Gate Passes ─────────────────────────────
-export const getShortLeaves = (params) => api.get('/short-leaves', { params })
+export const getShortLeaves = (params) => api.get('/short-leaves', { params, ...fresh })
 export const createShortLeave = (data) => api.post('/short-leaves', data)
-export const getShortLeaveQuota = (code, params) => api.get(`/short-leaves/quota/${code}`, { params })
+export const getShortLeaveQuota = (code, params) => api.get(`/short-leaves/quota/${code}`, { params, ...fresh })
 export const cancelShortLeave = (id, data) => api.put(`/short-leaves/${id}/cancel`, data)
 
 // ── Early Exit Detection ──────────────────────────────────
