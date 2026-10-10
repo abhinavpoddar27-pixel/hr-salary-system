@@ -137,7 +137,7 @@ const salesDrift = () => db.prepare(`SELECT COUNT(*) AS n FROM sales_salary_comp
 const componentShort = () => db.prepare(`SELECT COUNT(*) AS n FROM salary_computations
   WHERE ABS(total_deductions - (COALESCE(pf_employee,0) + COALESCE(esi_employee,0) + COALESCE(professional_tax,0) + COALESCE(tds,0)
     + COALESCE(advance_recovery,0) + COALESCE(lop_deduction,0) + COALESCE(other_deductions,0) + COALESCE(loan_recovery,0)
-    + COALESCE(late_coming_deduction,0) + COALESCE(early_exit_deduction,0))) > 1`).get().n;
+    + COALESCE(late_coming_deduction,0) + COALESCE(early_exit_deduction,0) + COALESCE(lwf_employee,0))) > 1`).get().n;
 /** Σ payslip loan_recovery vs Σ ledger (provisional + effective posted) per payroll + month. */
 function payslipVsLedger(m, y) {
   const plantSlip = db.prepare('SELECT COALESCE(SUM(loan_recovery),0) s FROM salary_computations WHERE month = ? AND year = ?').get(m, y).s;
