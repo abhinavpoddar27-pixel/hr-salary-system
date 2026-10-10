@@ -43,8 +43,8 @@ def seed():
               "VALUES('T9001',9,2026,?,20000,20000,0,20000,0,'')", (C,))
     c.execute("INSERT INTO salary_computations(employee_code,month,year,company,gross_salary,gross_earned,total_deductions,net_salary,salary_held,hold_reason) "
               "VALUES('T9002',9,2026,?,20000,3000,0,3000,1,'Test hold reason')", (C,))
-    c.execute("INSERT INTO salary_manual_flags(employee_code,month,year,company,flag_type,finance_approved) "
-              "VALUES('T9001',9,2026,?,'TEST_FLAG',0)", (C,))
+    c.execute("INSERT INTO salary_manual_flags(employee_code,month,year,flag_type,finance_approved) "
+              "VALUES('T9001',9,2026,'TEST_FLAG',0)")
     c.commit(); c.close()
 
 
