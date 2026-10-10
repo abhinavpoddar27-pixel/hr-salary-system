@@ -1613,6 +1613,9 @@ function initSchema(db) {
   `);
   safeCreateIndex('CREATE INDEX IF NOT EXISTS idx_short_leaves_employee ON short_leaves(employee_code, calendar_month, calendar_year)');
   safeCreateIndex('CREATE INDEX IF NOT EXISTS idx_short_leaves_date ON short_leaves(date, company)');
+  // Gate pass quota (Oct 2026): admin's written reason when a pass is created
+  // over the monthly allowance (2 Short Leaves OR 1 Half Day).
+  safeAddColumn('short_leaves', 'breach_reason', 'TEXT');
 
   // Early exit detections — one row per employee per date where punch-out
   // was before shift end. Detection runs daily (or on demand) and upserts.

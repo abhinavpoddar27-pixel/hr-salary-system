@@ -135,7 +135,10 @@ export default function GatePasses() {
                       {r.status}
                     </span>
                     {r.quota_breach ? (
-                      <span className="ml-1 text-xs px-1.5 py-0.5 rounded-full bg-red-100 text-red-700 font-bold">BREACH</span>
+                      <span
+                        className="ml-1 text-xs px-1.5 py-0.5 rounded-full bg-red-100 text-red-700 font-bold"
+                        title={r.breach_reason ? `Over allowance — ${r.breach_reason}` : 'Over the monthly allowance'}
+                      >BREACH</span>
                     ) : null}
                   </td>
                   <td className="px-3 py-2">
@@ -172,15 +175,39 @@ export default function GatePasses() {
   )
 }
 
+// Monthly allowance (owner ruling 10 Oct 2026): 2 Short Leaves OR 1 Half Day.
+// The server is the source of truth; these mirror it only for the screen.
+const SHORT_LEAVE_HOURS = 2
+const MIN_BREACH_REASON = 10
+
+function plural(n, word) { return `${n} ${word}${n === 1 ? '' : 's'}` }
+
+function usedText(q) {
+  const parts = []
+  if (q.short_leaves_used) parts.push(plural(q.short_leaves_used, 'Short Leave'))
+  if (q.half_days_used) parts.push(plural(q.half_days_used, 'Half Day'))
+  return parts.length ? parts.join(' + ') : 'nothing yet'
+}
+
+function stillAllowedText(q) {
+  if (q.can_half_day) return '2 Short Leaves or 1 Half Day'
+  if (q.can_short_leave) return '1 Short Leave'
+  return 'nothing more this month'
+}
+
+const MONTH_NAMES = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December']
+
 function CreateGatePassModal({ show, onClose, company, month, year }) {
   const queryClient = useQueryClient()
+  const { user } = useAppStore()
+  const isAdmin = user?.role === 'admin'
   const [empCode, setEmpCode] = useState('')
   const [empSearch, setEmpSearch] = useState('')
   const [date, setDate] = useState(new Date().toISOString().split('T')[0])
   const [leaveType, setLeaveType] = useState('short_leave')
   const [remark, setRemark] = useState('')
-  const [forceQuota, setForceQuota] = useState(false)
   const [remarkError, setRemarkError] = useState(false)
+  const [breachReason, setBreachReason] = useState('')
 
   const { data: empRes } = useQuery({
     queryKey: ['employees-active', company],
@@ -199,42 +226,48 @@ function CreateGatePassModal({ show, onClose, company, month, year }) {
 
   const selectedEmp = employees.find(e => e.code === empCode)
 
-  // Quota check
+  // Quota for the month of the chosen date
   const dateObj = date ? new Date(date + 'T00:00:00') : null
   const qMonth = dateObj ? dateObj.getMonth() + 1 : month
   const qYear = dateObj ? dateObj.getFullYear() : year
+  const dateValid = !!dateObj && !isNaN(dateObj.getTime())
+  const qMonthName = dateValid ? MONTH_NAMES[qMonth - 1] : ''
+  const qMonthLabel = dateValid ? `${qMonthName} ${qYear}` : ''
 
-  const { data: quotaRes } = useQuery({
+  const { data: quotaRes, isFetching: quotaLoading } = useQuery({
     queryKey: ['short-leave-quota', empCode, qMonth, qYear],
     queryFn: () => getShortLeaveQuota(empCode, { month: qMonth, year: qYear }),
-    enabled: !!empCode
+    enabled: !!empCode && !!dateObj && !isNaN(dateObj?.getTime())
   })
   const quota = quotaRes?.data
 
-  // Compute duration
-  const duration = leaveType === 'short_leave' ? 3 : 'Half shift'
+  const canType = (t) => !quota || (t === 'half_day' ? quota.can_half_day : quota.can_short_leave)
+  const overQuota = !!quota && !canType(leaveType)
+  const blocked = overQuota && !isAdmin
+  const reasonOk = breachReason.trim().length >= MIN_BREACH_REASON
 
   const createMut = useMutation({
     mutationFn: (data) => createShortLeave(data),
     onSuccess: (res) => {
-      toast.success('Gate pass created')
+      const base = res?.data?.quota_breach ? 'Gate pass created over the monthly allowance' : 'Gate pass created'
+      // The list below follows the page's month picker. A pass dated in another
+      // month is saved but will not appear there — say so instead of looking lost.
+      const otherMonth = dateValid && (Number(qMonth) !== Number(month) || Number(qYear) !== Number(year))
+      if (otherMonth) {
+        toast.success(`${base}. Saved for ${qMonthLabel} — set the month picker to ${qMonthName} ${qYear} to see it in the list.`, { duration: 7000 })
+      } else {
+        toast.success(base)
+      }
       queryClient.invalidateQueries({ queryKey: ['short-leaves'] })
+      queryClient.invalidateQueries({ queryKey: ['short-leave-quota'] })
       onClose()
     },
     onError: (err) => {
       const data = err.response?.data
-      if (data?.quota_warning && !forceQuota) {
-        if (confirm(`${data.message} Create anyway (quota breach)?`)) {
-          setForceQuota(true)
-          createMut.mutate({
-            employee_code: empCode,
-            date,
-            leave_type: leaveType,
-            remark: remark.trim(),
-            force_quota_breach: true
-          })
-        }
-      }
+      // Quota may have changed since the screen loaded — refresh it so the
+      // modal shows the current allowance, and say why it was refused.
+      queryClient.invalidateQueries({ queryKey: ['short-leave-quota'] })
+      toast.error(data?.message || data?.error || 'Could not create the gate pass')
     }
   })
 
@@ -249,13 +282,17 @@ function CreateGatePassModal({ show, onClose, company, month, year }) {
       date,
       leave_type: leaveType,
       remark: remark.trim(),
-      force_quota_breach: forceQuota
+      force_quota_breach: overQuota && isAdmin,
+      breach_reason: overQuota && isAdmin ? breachReason.trim() : undefined
     })
   }
 
   const quotaColor = !quota ? 'text-slate-500' :
-    quota.used >= 2 ? 'text-red-600' :
-    quota.used === 1 ? 'text-amber-600' : 'text-green-600'
+    quota.remaining_points === 0 ? 'text-red-600' :
+    quota.used_points > 0 ? 'text-amber-600' : 'text-green-600'
+
+  const submitDisabled = !empCode || !date || createMut.isPending || blocked ||
+    (overQuota && isAdmin && !reasonOk) || (!!empCode && quotaLoading && !quota)
 
   return (
     <Modal show={show} onClose={onClose} title="Create Gate Pass" size="md">
@@ -303,34 +340,70 @@ function CreateGatePassModal({ show, onClose, company, month, year }) {
         {/* Leave type */}
         <div>
           <label className="text-sm font-medium text-slate-700 mb-1 block">Leave Type</label>
-          <div className="flex gap-4">
-            <label className="flex items-center gap-2 cursor-pointer">
-              <input type="radio" value="short_leave" checked={leaveType === 'short_leave'} onChange={() => setLeaveType('short_leave')} />
-              <span className="text-sm">Short Leave (3 hrs)</span>
-            </label>
-            <label className="flex items-center gap-2 cursor-pointer">
-              <input type="radio" value="half_day" checked={leaveType === 'half_day'} onChange={() => setLeaveType('half_day')} />
-              <span className="text-sm">Half Day</span>
-            </label>
+          <div className="flex gap-4 flex-wrap">
+            {[
+              { value: 'short_leave', label: `Short Leave (${SHORT_LEAVE_HOURS} hrs)` },
+              { value: 'half_day', label: 'Half Day' },
+            ].map(opt => {
+              const unavailable = !!quota && !canType(opt.value)
+              return (
+                <label key={opt.value} className={clsx('flex items-center gap-2 cursor-pointer', unavailable && !isAdmin && 'opacity-50 cursor-not-allowed')}>
+                  <input
+                    type="radio"
+                    name="gate-pass-type"
+                    value={opt.value}
+                    checked={leaveType === opt.value}
+                    disabled={unavailable && !isAdmin}
+                    onChange={() => setLeaveType(opt.value)}
+                  />
+                  <span className="text-sm">{opt.label}</span>
+                  {unavailable && <span className="text-xs text-red-500">not available</span>}
+                </label>
+              )
+            })}
           </div>
+          <div className="text-xs text-slate-400 mt-1">Allowance: 2 Short Leaves or 1 Half Day per month</div>
         </div>
 
-        {/* Duration (read-only) */}
+        {/* Duration (read-only) + allowance */}
         <div className="flex gap-4">
           <div className="flex-1">
             <label className="text-sm font-medium text-slate-700 mb-1 block">Duration</label>
-            <input className="input w-full bg-slate-50" value={typeof duration === 'number' ? `${duration} hrs` : duration} readOnly />
+            <input className="input w-full bg-slate-50" value={leaveType === 'short_leave' ? `${SHORT_LEAVE_HOURS} hrs` : 'Half shift'} readOnly />
           </div>
           {quota && (
             <div className="flex-1">
-              <label className="text-sm font-medium text-slate-700 mb-1 block">Quota</label>
+              <label className="text-sm font-medium text-slate-700 mb-1 block">Allowance for {qMonthLabel}</label>
               <div className={clsx('text-sm font-semibold mt-1', quotaColor)}>
-                {quota.used >= 2 && '⚠ '}{quota.used} / {quota.limit} used
-                {quota.used >= 2 && <div className="text-xs font-normal text-red-500 mt-0.5">Quota exceeded — will be a breach</div>}
+                Used in {qMonthName}: {usedText(quota)}
+                <div className="text-xs font-normal text-slate-500 mt-0.5">Still allowed: {stillAllowedText(quota)}</div>
               </div>
             </div>
           )}
         </div>
+
+        {/* Over the allowance */}
+        {blocked && (
+          <div className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
+            {leaveType === 'half_day' ? 'A Half Day' : 'A Short Leave'} is not available — the monthly allowance (2 Short Leaves or 1 Half Day) is used up. Only an admin can allow one more.
+          </div>
+        )}
+        {overQuota && isAdmin && (
+          <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2">
+            <div className="text-sm text-amber-800 mb-1">
+              This goes over the monthly allowance. It will be marked as a breach. Write why you are allowing it.
+            </div>
+            <textarea
+              className={clsx('input w-full', breachReason && !reasonOk && 'border-red-400')}
+              rows={2}
+              value={breachReason}
+              onChange={e => setBreachReason(e.target.value)}
+              placeholder="Reason for going over the allowance (at least 10 characters)"
+              aria-label="Reason for going over the allowance"
+            />
+            {!reasonOk && <div className="text-xs text-amber-700 mt-1">{Math.max(0, MIN_BREACH_REASON - breachReason.trim().length)} more characters needed</div>}
+          </div>
+        )}
 
         {/* Remark */}
         <div>
@@ -353,12 +426,12 @@ function CreateGatePassModal({ show, onClose, company, month, year }) {
           <div className="flex gap-3">
             <button className="btn" onClick={onClose}>Cancel</button>
             <button
-              className={clsx('btn', quota?.used >= 2 ? 'bg-amber-600 hover:bg-amber-700 text-white' : 'btn-primary')}
+              className={clsx('btn-primary disabled:opacity-50', overQuota && 'from-amber-500 to-amber-600')}
               onClick={handleSubmit}
-              disabled={!empCode || !date || createMut.isPending}
-              title={!empCode ? 'Select an employee first' : !date ? 'Pick a date' : undefined}
+              disabled={submitDisabled}
+              title={!empCode ? 'Select an employee first' : !date ? 'Pick a date' : blocked ? 'Monthly allowance used up' : undefined}
             >
-              {createMut.isPending ? 'Creating...' : quota?.used >= 2 ? 'Create Gate Pass (Quota Breach)' : 'Create Gate Pass'}
+              {createMut.isPending ? 'Creating...' : overQuota && isAdmin ? 'Create over allowance' : 'Create Gate Pass'}
             </button>
           </div>
         </div>

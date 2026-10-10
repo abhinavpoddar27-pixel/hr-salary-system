@@ -37,12 +37,13 @@ const DEFAULT_CONFIG = Object.freeze({
     stayed_late_lookback_days: 7,  // LAG window starts this many days before last month
     shift_fit_share: 0.6,          // shift check: early exits on >= 60% of Mon–Sat worked days = habitual (likely wrong shift) …
     shift_fit_min_days: 5,         // … with at least 5 such worked days
-    shift_fit_grace: 10,           // … then an exit counts only if out − in < shift length − 10 min
+    shift_fit_grace: 10,           // full-hours tolerance: a day counts as "full shift worked" if out − in ≥ shift length − 10 min
     shift_fit_confirm_share: 0.8,  // habitual AND short on >= 80% of those days → flagged "check master shift" (no change to the action)
   }),
   stayed_late_mode: 'either',      // 'worked' | 'calendar' | 'either' (previous worked day OR previous calendar day)
   early_exit_rule: 'warning',      // 'warning' | 'option_c'
-  shift_fit: 'habitual',           // early-exit shift check: 'habitual' | 'everyone' | 'off'
+  shift_fit: 'everyone',           // early exit not counted on a full-hours day: 'everyone' | 'habitual' (only habitual early leavers) | 'off'
+  late_full_hours: true,           // late not counted on a day the person still worked the full shift length (owner ruling 10 Oct 2026)
   loading_designation_patterns: Object.freeze(['LOAD', 'LODING']),
   excluded_codes: Object.freeze([]),        // left out of every output
   excluded_departments: Object.freeze([]),  // left out of every output (e.g. piece-rate contractors)
@@ -95,6 +96,7 @@ function validateConfig(c) {
   if (c.stayed_late_mode !== undefined && !(c.stayed_late_mode in MODES)) errs.push('stayed_late_mode must be worked | calendar | either');
   if (c.early_exit_rule !== undefined && !['warning', 'option_c'].includes(c.early_exit_rule)) errs.push('early_exit_rule must be warning | option_c');
   if (c.shift_fit !== undefined && !SHIFT_FIT.includes(c.shift_fit)) errs.push('shift_fit must be habitual | everyone | off');
+  if (c.late_full_hours !== undefined && typeof c.late_full_hours !== 'boolean') errs.push('late_full_hours must be true or false');
   for (const k of ['loading_designation_patterns', 'excluded_codes', 'excluded_departments', 'early_excluded_codes', 'held_codes']) {
     if (c[k] !== undefined && !isCodeList(c[k])) errs.push(`${k} must be a list of non-empty strings`);
   }
@@ -154,7 +156,8 @@ function roundDeduction(wdl, t) {
 
 /**
  * Person-month aggregate for this month and last, one row per (code, ym).
- * Named params: @from @to @cur @prev @rel @prel @lateMin @mis @eMin @eMax @sunOff @mode @defH @longMin @fitGrace
+ * Named params: @from @to @cur @prev @rel @prel @lateMin @mis @eMin @eMax @sunOff @mode @defH @longMin @fitGrace @lateFull
+ * A late is excused when the person stayed late the previous evening (exc) OR, with @lateFull, worked the full shift that day.
  * Shift-check columns: ms_days (Mon–Sat worked days when @sunOff), early_short* (exits on days out − in < shift length − @fitGrace).
  * Exported so the acceptance check can run the exact same SQL through the SQL Console.
  */
@@ -185,12 +188,16 @@ y AS (SELECT x.*,
         CASE WHEN x.ed = 1 AND x.em > @eMin AND x.em < @eMax AND (@sunOff = 0 OR x.dow <> '0')
               AND x.d NOT IN (SELECT value FROM json_each(CASE WHEN x.ym = @cur THEN @rel ELSE @prel END))
              THEN 1 ELSE 0 END ise,
-        CASE WHEN x.wm IS NULL OR x.wm < x.f*x.h*60 - @fitGrace THEN 1 ELSE 0 END short
+        CASE WHEN x.wm IS NULL OR x.wm < x.f*x.h*60 - @fitGrace THEN 1 ELSE 0 END short,
+        -- full shift worked, for lates: tolerance kept below the late threshold, so a late is only forgiven when made up
+        CASE WHEN x.wm IS NOT NULL AND x.wm >= x.f*x.h*60 - MIN(@fitGrace, @lateMin - 1) THEN 1 ELSE 0 END fhl
       FROM x)
 SELECT c AS code, ym, COUNT(*) AS worked_days, SUM(f) AS worked_units, SUM(f*h*60) AS sched_min,
        MAX(h) AS shift_h, MAX(hmiss) AS shift_h_missing,
-       SUM(isl) AS late_raw, SUM(isl*exc) AS late_excused,
-       SUM(isl*(1-exc)) AS lates, SUM(CASE WHEN isl = 1 AND exc = 0 THEN lm ELSE 0 END) AS late_min,
+       SUM(isl) AS late_raw, SUM(isl*MAX(exc, @lateFull*fhl)) AS late_excused,
+       SUM(isl*(1-MAX(exc, @lateFull*fhl))) AS lates,
+       SUM(CASE WHEN isl = 1 AND MAX(exc, @lateFull*fhl) = 0 THEN lm ELSE 0 END) AS late_min,
+       SUM(CASE WHEN isl = 1 AND exc = 0 AND @lateFull = 1 AND fhl = 1 THEN 1 ELSE 0 END) AS late_full_excused,
        SUM(ise) AS early_exits, SUM(CASE WHEN ise = 1 THEN em ELSE 0 END) AS early_min,
        SUM(CASE WHEN ise = 1 AND em >= @longMin THEN 1 ELSE 0 END) AS early_long,
        SUM(CASE WHEN @sunOff = 0 OR dow <> '0' THEN 1 ELSE 0 END) AS ms_days,
@@ -218,7 +225,8 @@ x AS (SELECT w.*, COALESCE(p.ll,0) cll, substr(w.d,1,7) ym,
       WHERE substr(w.d,1,7) IN (@cur, @prev) AND strftime('%w', w.d) <> '0')
 SELECT c AS code, ym, date(d, 'weekday 1', '-7 days') AS week_start, COUNT(*) AS worked_days,
   SUM(CASE WHEN la = 1 AND lm >= @lateMin AND lm < @mis AND NOT ((@mode = 0 AND COALESCE(pll,0) = 1) OR (@mode = 1 AND cll = 1)
-       OR (@mode = 2 AND (COALESCE(pll,0) = 1 OR cll = 1))) THEN 1 ELSE 0 END) AS lates,
+       OR (@mode = 2 AND (COALESCE(pll,0) = 1 OR cll = 1)))
+       AND NOT (@lateFull = 1 AND wm IS NOT NULL AND wm >= f*h*60 - MIN(@fitGrace, @lateMin - 1)) THEN 1 ELSE 0 END) AS lates,
   SUM(CASE WHEN ed = 1 AND em > @eMin AND em < @eMax
        AND d NOT IN (SELECT value FROM json_each(CASE WHEN ym = @cur THEN @rel ELSE @prel END)) THEN 1 ELSE 0 END) AS early_exits,
   SUM(CASE WHEN ed = 1 AND em > @eMin AND em < @eMax AND (wm IS NULL OR wm < f*h*60 - @fitGrace)
@@ -252,7 +260,7 @@ function sqlParams(month, year, cfg, releaseDays, prevReleaseDays) {
     rel: JSON.stringify(releaseDays || []), prel: JSON.stringify(prevReleaseDays || []),
     lateMin: t.late_min_minutes, mis: t.misread_minutes, eMin: t.early_min_exclusive, eMax: t.early_max_exclusive,
     sunOff: t.early_weekdays_only ? 1 : 0, mode: MODES[cfg.stayed_late_mode] ?? 2, defH: t.default_shift_hours,
-    longMin: t.option_c_long_minutes, fitGrace: t.shift_fit_grace,
+    longMin: t.option_c_long_minutes, fitGrace: t.shift_fit_grace, lateFull: cfg.late_full_hours === false ? 0 : 1,
   };
 }
 
@@ -325,19 +333,24 @@ function remeasureRows(db, month, year, cfg, releaseDays, prevReleaseDays) {
     const a = out.get(key) || { code, ym, worked_days: 0, worked_units: 0, sched_min: 0, shift_h: h, shift_h_missing: 0, late_raw: 0, late_excused: 0, lates: 0, late_min: 0, early_exits: 0, early_min: 0, early_long: 0, hours_excused: 0, remeasured: true };
     a.worked_days += 1; a.worked_units += f; a.sched_min += f * h * 60;
     const inM = toMin(r.it); const outM = toMin(r.ot);
-    const fullHours = rm.hours_complete === true && inM !== null && outM !== null && outM > inM
-      && outM - inM >= f * h * 60 - (rm.hours_grace ?? 10);
+    const wmin = inM !== null && outM !== null && outM > inM ? outM - inM : null;
+    const need = f * h * 60;
+    // Full-hours excuse: this row's own tick (its own tolerance), or the plant-wide rules
+    // (lates: late_full_hours, tolerance kept below the late threshold; early exits: shift_fit 'everyone').
+    const own = rm.hours_complete === true && wmin !== null && wmin >= need - (rm.hours_grace ?? 10);
+    const fullLate = own || (cfg.late_full_hours !== false && wmin !== null && wmin >= need - Math.min(t.shift_fit_grace, t.late_min_minutes - 1));
+    const fullEarly = own || (cfg.shift_fit === 'everyone' && wmin !== null && wmin >= need - t.shift_fit_grace);
     const lateBy = inM === null ? 0 : inM - toMin(rm.start);
     if (lateBy > (rm.late_grace ?? 9) && lateBy >= t.late_min_minutes && lateBy < t.misread_minutes) {
       a.late_raw += 1;
       if (exc) a.late_excused += 1;
-      else if (fullHours) { a.late_excused += 1; a.hours_excused += 1; }
+      else if (fullLate) { a.late_excused += 1; a.hours_excused += 1; }
       else { a.lates += 1; a.late_min += lateBy; }
     }
     const earlyBy = outM === null ? 0 : toMin(rm.end) - outM;
     const dow = new Date(`${r.d}T00:00:00Z`).getUTCDay();
     if (earlyBy > (rm.early_grace ?? t.early_min_exclusive) && earlyBy < t.early_max_exclusive && (!t.early_weekdays_only || dow !== 0) && !rel[ym].has(r.d)) {
-      if (fullHours) a.hours_excused += 1;
+      if (fullEarly) a.hours_excused += 1;
       else { a.early_exits += 1; a.early_min += earlyBy; if (earlyBy >= t.option_c_long_minutes) a.early_long += 1; }
     }
     out.set(key, a);
@@ -469,7 +482,7 @@ function personLine(p, monthDays) {
     late_min: c.late_min_counted || 0, early_min: c.early_min_counted || 0, shift_h: c.shift_h || null,
     workdays_lost: r2(p.workdays_lost || 0),
     last_month: p.prev ? { worked_days: p.prev.worked_days, late_days: p.prev.lates_counted, early_days: p.prev.early_counted } : null,
-    newcomer: p.newcomer, categories: p.categories || [], remeasured: !!c.remeasured, hours_excused: c.hours_excused || 0, fit_excused: c.fit_excused || 0,
+    newcomer: p.newcomer, categories: p.categories || [], remeasured: !!c.remeasured, hours_excused: c.hours_excused || 0, fit_excused: c.fit_excused || 0, late_full_excused: c.late_full_excused || 0,
     gross_salary: p.gross_salary, _monthDays: monthDays,
   };
 }
@@ -649,7 +662,7 @@ function computeAttendanceReview(db, { month, year, config, releaseDays = [], pr
     meta: { month, year, ym: cur, prev_ym: prev, days_in_month: md, release_days: releaseDays, prev_release_days: prevReleaseDays,
       excluded_people: excludedCount, people_assessed: live.length, missing_shift_hours: live.filter((p) => p.cur.shift_h_missing).map((p) => p.code),
       not_in_employee_master: live.filter((p) => !p.in_employee_master).map((p) => p.code) },
-    criteria: { thresholds: cfg.thresholds, stayed_late_mode: cfg.stayed_late_mode, early_exit_rule: cfg.early_exit_rule, shift_fit: cfg.shift_fit, loading_designation_patterns: cfg.loading_designation_patterns, remeasure: cfg.remeasure || {} },
+    criteria: { thresholds: cfg.thresholds, stayed_late_mode: cfg.stayed_late_mode, early_exit_rule: cfg.early_exit_rule, shift_fit: cfg.shift_fit, late_full_hours: cfg.late_full_hours !== false, loading_designation_patterns: cfg.loading_designation_patterns, remeasure: cfg.remeasure || {} },
     releaseDaysDetected: detectReleaseDays(db, month, year, cfg),
     shiftIssues: detectShiftIssues(db, month, year).filter((r) => !cfg.excluded_codes.includes(r.code)
       && !cfg.excluded_departments.map((d) => d.toUpperCase()).includes(String(r.department || '').toUpperCase())),

@@ -374,7 +374,7 @@ export default function AttendanceReviewTab({ selectedMonth, selectedYear }) {
 
           <Section title="Shift check — early exits (automatic)" count={data.shiftCheck?.length} defaultOpen={false}
             note={data.criteria?.shift_fit === 'off' ? 'Shift check is OFF — every early exit is counted.'
-              : `People who leave "early" on most days (often a wrong shift in the master)${data.criteria?.shift_fit === 'everyone' ? ', and anyone else with an excused day,' : ''}: an early exit counts only on a day they worked less than their shift length. "Check master shift" = short almost every day — a wrong master shift and a habitual early leaver look the same in the punches, so confirm the shift and use an override if it is wrong.`}>
+              : `${data.criteria?.shift_fit === 'everyone' ? 'Everyone with an early exit excused because they still worked the full shift, plus anyone' : 'People'} who leaves "early" on most days (often a wrong shift in the master): an early exit counts only on a day they worked less than their shift length. "Check master shift" = short almost every day — a wrong master shift and a habitual early leaver look the same in the punches, so confirm the shift and use an override if it is wrong.`}>
             <Table rows={data.shiftCheck} empty="Nobody needed the shift check this month." cols={[
               { k: 'code', h: 'Code', v: (r) => <span className="font-mono">{r.code}</span> }, { k: 'name', h: 'Name' }, { k: 'department', h: 'Department' },
               { k: 'shift_h', h: 'Shift h', right: true }, { k: 'ms_days', h: 'Worked (Mon–Sat)', right: true },
@@ -386,7 +386,7 @@ export default function AttendanceReviewTab({ selectedMonth, selectedYear }) {
           </Section>
 
           <div className="grid xl:grid-cols-2 gap-4">
-            <Section title="Notice board — late coming" count={data.noticeLate?.length} defaultOpen={false} note="Counted lates only (stayed-late mornings excused). No money or minutes on the notice.">
+            <Section title="Notice board — late coming" count={data.noticeLate?.length} defaultOpen={false} note="Counted lates only (mornings after a stayed-late evening, and full-hours days, excused). No money or minutes on the notice.">
               <Table rows={data.noticeLate} cols={[{ k: 'code', h: 'Code' }, { k: 'name', h: 'Name' }, { k: 'department', h: 'Department' }, { k: 'late_days', h: 'Late days', right: true }]} />
             </Section>
             <Section title="Notice board — leaving early" count={data.noticeEarly?.length} defaultOpen={false} note="Release days are not counted.">
@@ -455,6 +455,7 @@ export default function AttendanceReviewTab({ selectedMonth, selectedYear }) {
           <p className="text-xs text-slate-400">
             Gate passes recorded this month: {num(data.gatePassCount)}. Rules: late = {data.criteria?.thresholds?.late_min_minutes}+ min;
             early exit = {data.criteria?.thresholds?.early_min_exclusive}–{data.criteria?.thresholds?.early_max_exclusive} min, Mon–Sat; stayed-late exemption: {data.criteria?.stayed_late_mode};
+            full-hours days: lates {data.criteria?.late_full_hours === false ? 'counted' : 'not counted'}, early exits {data.criteria?.shift_fit === 'everyone' ? 'not counted' : data.criteria?.shift_fit === 'habitual' ? 'not counted for habitual early leavers' : 'counted'};
             early-exit rule: {data.criteria?.early_exit_rule === 'option_c' ? 'Option C' : 'warning only'}. Nothing on this page changes salary.
           </p>
         </>

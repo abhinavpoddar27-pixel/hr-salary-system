@@ -23,6 +23,39 @@ Plan + log: `docs/ux-bulk/prs/P1-09/PLAN.md`, `PROGRESS.md`. Finding P-5. Planne
   answers GETs with max-age=5 — the card (and counts) appear only after a reload / ~30 s. Fix = `fresh` on the read +
   invalidate the `['miss-punches']` prefix. (2) Finance opening Stage 2 gets a 403 + console error from
   `GET /features/leave-automation/status` (hr/admin only) on every visit. (3) Stray "0" near L417 is P1-24.
+## Last Session — 2026-10-10 (Gate pass modal: name the month)
+**Branch `fix/gate-pass-month-label` (on origin/main 139faa7), NOT merged.** Frontend only (`components/GatePasses.jsx`).
+- **Report:** hr created a September Short Leave for 19222; the modal still said "Used: nothing yet". The data was right —
+  the modal opens on today's date (October) and the list follows the page's month picker (October). Nothing said which month.
+- **Fix:** label "This month" → "Allowance for <Month YYYY>" of the chosen date; "Used:" → "Used in <Month>:". A pass dated
+  outside the page's picker month gets the toast "… Saved for <Month YYYY> — set the month picker to <Month YYYY> to see it
+  in the list." (7 s). Server untouched. dist rebuilt (content change: LeaveManagement chunk only; other names = hash cascade).
+- **Verified:** `gate-pass-quota-browser-check.py` 47/47 (+9: label follows the date, previous-month save toast, not in the
+  current list, reopen shows Used in <prev>: 1 Short Leave, switching back shows this month); jest gatePassQuota 21/21.
+- **Not tested:** Railway; Safari/Firefox.
+
+## Last Session — 2026-10-10 (Gate pass allowance: 2 Short Leaves OR 1 Half Day; Short Leave 2 h; create 500 fixed)
+**Branch `feat/gate-pass-quota`, NOT merged.** Spec (private project): `claude/gate-pass-quota/SPEC.md`. Owner rulings 10 Oct 2026.
+- **Rule:** per employee per calendar month 2 Short Leaves OR 1 Half Day — points: Short Leave 1, Half Day 2, budget 2
+  (`routes/short-leaves.js` `PASS_POINTS` / `MONTHLY_POINTS`). Short Leave = 2 h ending at shift end (was 3). Over the
+  allowance: HR 422/403; admin only with `breach_reason` ≥ 10 chars → `quota_breach = 1`, reason in new
+  `short_leaves.breach_reason` (schema.js: one `safeAddColumn`), audit stage `short_leave_quota_override`. Backdating open
+  (7-day limit removed, owner: tighten later). One active pass per employee per date (409). Cancel returns the points.
+- **Bug fixed:** POST read `SELECT shift_id FROM employees` — no such column (it is `default_shift_id`) → every create
+  500'd in production; `short_leaves` had 0 rows ever (hr1 tried 6× on 8 Oct, 3× on 29 Aug). Shift lookup now mirrors
+  `earlyExitDetection` (default_shift_id → shift_code → latest attendance → 12HR). The modal also never showed non-quota
+  errors — now every refusal shows the server message.
+- **UI (`GatePasses.jsx`):** "Used: … / Still allowed: …" for the month of the chosen date; a type not covered is "not
+  available" (disabled for HR); admin gets a reason box + "Create over allowance"; BREACH badge tooltip = reason;
+  list/quota reads `no-cache`. `GET /quota` keeps `used/limit/remaining` but they are now POINTS (+ per-type counts,
+  `can_short_leave`, `can_half_day`). dist rebuilt.
+- **Fragile:** `day_calculations.short_leave_days` is the ½P count, NOT gate passes (Stage 7 label says "gate pass" —
+  misleading, untouched). A pass only changes pay through early-exit detection (exemption = shift end − duration), and
+  detection last ran for 15 Sep (manual trigger). Attendance Review still counts gate-pass-exempted days as early exits
+  (reads raw `is_early_departure`) — PR-2.
+- **Verified:** jest 86 suites / 1401 (new `gatePassQuota.test.js` 21; 19 fail on the old route).
+  `backend/scripts/gate-pass-quota-browser-check.py` 38/38 (Chromium, built dist, hr + admin, 390 px), 0 page errors,
+  only API error = the deliberate same-day 409. **Not tested:** Railway; production data; Safari/Firefox.
 
 ## Last Session — 2026-10-10 (Stage 7 register: DOJ to drill-down, smarter column widths)
 **Branch `feat/stage7-col-widths` (on origin/main b8b9759), NOT merged.** Frontend display only.
@@ -2767,7 +2800,7 @@ frontend/
 - **Salary advance recovery loop**: `getAdvanceRecovery()` resets `recovered=0` flag before query so re-runs find advances; ON CONFLICT UPDATE on `salary_computations` includes `advance_recovery` so the value persists.
 - **Holiday duty pay**: National holidays (Mar 4 etc) auto-detected. If employee works the holiday, paid extra at per_day_rate. Tracked separately from OT.
 - **Early exit detection**: Runs after attendance import (POST /api/early-exits/detect). If detection is not triggered, `is_early_departure` stays 0 and deductions cannot be created. Gate passes in `short_leaves` provide exemption or reduce flagged minutes. Detection is idempotent (UPSERT on employee_code+date).
-- **Gate pass quota**: 2 per employee per calendar month. Breachable with `force_quota_breach: true`. Cancelled gate passes don't count toward quota. Cancellation blocked after employee punches out.
+- **Gate pass quota** (Oct 2026): 2 Short Leaves (2 h) OR 1 Half Day per employee per calendar month (points 1/2, budget 2). Only admin can go over, with `force_quota_breach` + `breach_reason` (10+ chars). Cancelled passes don't count. Cancellation blocked after employee punches out.
 
 ## Late Coming Management System (April 2026 — Phase 1 + Phase 2 complete)
 - **Three canonical shifts** seeded in `shifts` table: `12HR` (08:00–20:00, 12h),
