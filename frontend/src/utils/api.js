@@ -214,6 +214,10 @@ export const approveLoanImportBatch = (id, data) => api.post(`/loans/import/batc
 export const discardLoanImportBatch = (id, data) => api.post(`/loans/import/batches/${id}/discard`, data)
 export const getLoanImportCutoverCheck = (id, params) => api.get(`/loans/import/batches/${id}/cutover-check`, { params, ...fresh })
 export const downloadLoanImportCutoverCheck = (id, params) => api.get(`/loans/import/batches/${id}/cutover-check`, { params: { ...params, format: 'xlsx' }, responseType: 'blob' })
+
+// Loans PR-11: the admin dry run (always rolled back) and the rehearsal pack.
+export const runLoanDryRun = (data) => api.post('/loans/dry-run', data)
+export const getLoanDryRunPack = (params) => api.get('/loans/dry-run/pack', { params, ...fresh })
 export const getAlerts = (month, year, unread, opts = {}) => api.get('/analytics/alerts', { params: { month, year, ...(unread ? { unread: 'true' } : {}), ...opts } })
 export const generateAlerts = (month, year) => api.post('/analytics/alerts/generate', { month, year })
 export const markAlertRead = (id) => api.put(`/analytics/alerts/${id}/read`)
