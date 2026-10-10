@@ -101,9 +101,9 @@ Verify: `git log --oneline -1` shows the merge of the previous PR. Return: the S
   not in September pay (22127, 23152, 23534, 23627, 23666, 60230, 60289, 70077),
   PF without UAN (19222, 22331). Then Apply → confirm.
 - Verify: chat runs VERIFY.sql V1 (24 / 6 / 118), V2 (only 22127, months 1–5) and V10.
-- Undo: batch history → Download undo file → upload it the same way → Apply. Restores every flag;
-  it does not delete the extra structure rows (they carry the original flags again) and cannot remove
-  ESI numbers / UANs that were added (blank means "unchanged").
+- Undo: batch history → Download undo file → upload it the same way → Apply. Restores the flags that were in force at the effective month onto that month, later rows and the master. A later-dated row that had different flags before this batch is set to the effective-month value. Added ESI numbers / UANs and the extra structure rows stay.
+  (The undo file holds, per employee, the flags in force at the effective month before the batch; its
+  number columns are blank, and blank means "unchanged". Not a full restore: check V10 after it.)
 - Return: "plant applied" + the batch id shown.
 
 ## T5 — Apply sales flags

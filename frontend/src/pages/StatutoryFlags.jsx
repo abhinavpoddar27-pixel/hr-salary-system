@@ -4,8 +4,10 @@
 //   pick scope + effective month → drop the file → Preview (server plans, writes
 //   nothing) → Apply (admin, confirm quoting the counts; the server re-plans
 //   inside one transaction and refuses a different file or a re-applied one).
-// Batch history lists every apply; each has an undo file (the before-values in
-// the upload layout — re-upload it here to restore the flags).
+// Batch history lists every apply; each has an undo file (the flags in force at
+// the effective month before the batch, in the upload layout). Re-uploading it
+// restores those flags onto that month, later rows and the master — not a full
+// restore: see UNDO_LIMITS below.
 //
 // The upload file and the undo file hold names and numbers: they are never
 // stored by this page and never belong in the repo.
@@ -15,6 +17,10 @@ import toast from 'react-hot-toast'
 import { useAppStore } from '../store/appStore'
 import { normalizeRole } from '../utils/role'
 import { statutoryFlagsPreview, statutoryFlagsApply, statutoryFlagsBatches, statutoryFlagsUndoFile } from '../utils/api'
+
+// What re-applying an undo file does (and does not) restore — shown at confirm
+// time and under the batch history. Keep in step with buildUndoWorkbook.
+const UNDO_LIMITS = 'Undo file: Restores the flags that were in force at the effective month onto that month, later rows and the master. A later-dated row that had different flags before this batch is set to the effective-month value. Added ESI numbers / UANs and the extra structure rows stay.'
 
 const FLAGS = [['esi', 'ESI'], ['pf', 'PF'], ['lwf', 'LWF']]
 
@@ -262,8 +268,7 @@ export default function StatutoryFlags() {
               {' '}{t.rowsUpdatedAtE} updated at {preview.keys?.E}, {t.laterRowsUpdated} later rows updated.
             </div>
             <div className="text-xs text-slate-500">
-              Earlier months are frozen and do not change. The undo file restores the flags; it cannot remove numbers added here
-              (blank means unchanged) or the extra structure rows (they get the original flags back).
+              Earlier months are frozen and do not change. {UNDO_LIMITS}
             </div>
             <div className="flex justify-end gap-2">
               <button className="btn-secondary" onClick={() => setConfirming(false)} disabled={busy}>Cancel</button>
@@ -303,6 +308,7 @@ export default function StatutoryFlags() {
             {batches.length === 0 && <tr><td colSpan={9} className="px-3 py-6 text-center text-slate-400">No batches yet</td></tr>}
           </tbody>
         </table>
+        <div className="px-4 py-2 border-t border-slate-100 text-xs text-slate-500" data-testid="undo-limits">{UNDO_LIMITS}</div>
       </div>
     </div>
   )

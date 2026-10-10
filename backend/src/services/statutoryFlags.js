@@ -566,12 +566,15 @@ function applyFlagChanges(db, { scope, effectiveMonth, rows, user, fileName, sha
 }
 
 /**
- * The before-values of an applied batch, in the upload layout, as an .xlsx
- * buffer (never written to disk — N9: it holds names). Flags are the ones
- * that were in force at the effective month (what compute used). Number
- * columns are left blank: blank means "unchanged", so numbers the batch added
- * stay. Re-applying it restores the flags from E onward; the freeze and
- * effective rows stay (carrying the original flags again).
+ * The undo file of an applied batch, in the upload layout, as an .xlsx buffer
+ * (never written to disk — N9: it holds names). Per employee it carries the
+ * flags that were in force at the effective month before the batch (what
+ * compute used). Number columns are left blank (blank means "unchanged").
+ * Re-applying it is NOT a full restore: it restores the flags that were in
+ * force at the effective month onto that month, later rows and the master.
+ * A later-dated row that had different flags before this batch is set to the
+ * effective-month value. Added ESI numbers / UANs and the extra structure
+ * rows stay.
  */
 function buildUndoWorkbook(db, batchId) {
   const b = db.prepare('SELECT * FROM statutory_flag_batches WHERE id = ?').get(batchId);
