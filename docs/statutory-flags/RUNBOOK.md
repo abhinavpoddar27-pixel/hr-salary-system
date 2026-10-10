@@ -131,6 +131,11 @@ Verify: `git log --oneline -1` shows the merge of the previous PR. Return: the S
   owner's choice. Chat then compares every row's
   net with the register's NET PAID (target: all within ₹1) and runs V7 + V8.
 - 6B (bank paid the app NEFT file): do not recompute September sales. Decide recovery separately.
+- Guard (PR-2b review, 10 Oct): any sales September recompute — 6A or a stray click — now also charges LWF ₹5 on the
+  139 flagged and ESI on the 57, on rows already NEFT-exported (187 of 230 on 10 Oct). Those rows are `computed`/`hold`,
+  not finalized/paid, so `finalizedRecomputeWarnings` stays EMPTY — do not rely on it. Before clicking: chat takes a
+  snapshot of every September net (code, net, neft_exported_at); after: chat diffs it. In 6A the drop is intended
+  (the register already deducted it); in 6B do not recompute at all. Never regenerate the September NEFT file.
 - Return: "sales 6A done" or "6B".
 
 ## T7 — Filing (after PR-3)
