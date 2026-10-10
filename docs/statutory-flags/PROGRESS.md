@@ -8,7 +8,7 @@
 4. Continue from NEXT STEP. Update this file after every small step (state, done, next) and commit it.
 
 ## PR STATUS
-- PR-1 feat/statutory-flags — BUILT LOCALLY — awaiting push (repo public). Independent review of a4eb3d1 (SHIP WITH FIXES) addressed: fixes 1–4 committed. Code head 923dad3 (+ this PROGRESS commit on top), base d1ad7bf (origin/main unchanged), 49 suites / 886 tests green, sim 68/68.
+- PR-1 feat/statutory-flags — BUILT LOCALLY — awaiting push (repo public). Independent review of a4eb3d1 (SHIP WITH FIXES) addressed: fixes 1–4 committed. Reviewer re-check: SHIP; FIX 5 added. Code head cec4fe0 (+ this commit on top), base d1ad7bf (origin/main unchanged), 49 suites / 890 tests green, sim 68/68.
 - PR-2 feat/lwf-deduction — NOT STARTED
 - PR-3 feat/statutory-filing — NOT STARTED
 
@@ -37,9 +37,10 @@
 - REVIEW PHASE 2 — 0d805b2. Re-read every hunk a4eb3d1..HEAD (salary-input.js approve, sales.js versionSalesStructureForGross / PUT / POST /structures, statutoryFlags.js structureDatedAfter / normCompany / file-duplicate numbers / undo comment, StatutoryFlags.jsx UNDO_LIMITS) against IMPL_PR1 + BUILD_PLAN §3: no DO-NOT-MODIFY file touched (salaryComputation.js, schema.js, payroll.js unchanged since a4eb3d1); flags never written by the new paths (plant same-date UPDATE lists gross + components only; sales same-date UPDATE from `optional`, no flag). Caught: the new dynamic same-date SET in POST /structures was not covered by the guard → statutoryWriterGuard asserts its `optional` list names no flag (injecting 'esi_applicable' fails the suite). Noted for the owner in OPEN_ITEMS: plant compute reads gross from employees.gross_salary for every month (pre-existing). UPSERT counts unchanged: plant 56/56/56/53, sales 45/45/45/42 (reviewer's adv3.js). node --check clean on 10 backend files. Full jest twice: 49 / 886, 0 failures.
 - REVIEW SIM — 8d5f82e. docs/statutory-flags/sim/run.py re-run on a throwaway temp DATA_DIR (synthetic, sales bootstrap skipped) + 10 new checks: sales back-dated gross edit 2026-05 after the upload → 409, nothing written (structures, master gross, audit_log), Sep + Oct pay unchanged; plant HR gross change → pending; back-dated approval 2026-08-15 → 409, request Pending, rows + master unchanged, Sep pay unchanged; same-date approval 2026-09-01 → one row at that date updated in place with its own flags, Sep pays the new gross + split; drift 0 rows both; confirm dialog states the undo limits. seed.js adds an Oct sales upload. 68/68. A clean `npm run build` reproduces frontend/dist byte-identically.
 - REVIEW PHASE 4 (local only) — git fetch origin main: still d1ad7bf → no rebase (C5: 0 conflicts). CLAUDE.md Section 0 entry updated (923dad3). NOT PUSHED (C6: repo public). Code head before this PROGRESS commit: 923dad3f84c50bbd6ab14b3200e6281c35ec1b8d.
+- REVIEW FIX 5 — cec4fe0 `fix(statutory): strict structure dates from requests (month 01–12, real calendar day)` (reviewer re-check, verdict SHIP). With the 409 STRUCTURE_DATED_LATER, a bogus later-dated row would block every honest edit. sales PUT /employees/:code effective_from and POST /employees/:code/structures share SALES_MONTH_RE ^\d{4}-(0[1-9]|1[0-2])$ (PUT was ^\d{4}-\d{2}$); sales POST /employees create rejects a doj whose month is not 01–12 (it dates the auto-created structure); plant approve requires a real calendar date (isCalendarDate: month 01–12, day valid for the month, leap years). 4 tests (plant 6 bad dates → 400 with rows/master/audit unchanged and request Pending, 2028-02-29 accepted; sales PUT + POST /structures 2026-13/2026-00/2026-5 → 400 nothing written; create doj month 13/00 → 400 nothing created); 3 of 4 FAIL on the previous routes. Suite 49 / 890. OPEN_ITEMS: added the same-gross split-edit / latest-row item (follow-up PR).
 
 ## LAST STEP
-REVIEW PHASE 4 (local only) — origin/main still d1ad7bf, no rebase; jest 49 / 886 ×2; sim 68/68; CLAUDE.md updated. NOT PUSHED. Code head before this PROGRESS commit: 923dad3f84c50bbd6ab14b3200e6281c35ec1b8d.
+REVIEW FIX 5 — cec4fe0 (strict structure dates from requests) + OPEN_ITEMS split-edit item. Suite 49 / 890. NOT PUSHED.
 
 ## NEXT STEP
 None for the build agent. Owner: confirm the 10 Oct planner ruling (structure writes dated before a later row → 409; same date → in place); decide OPEN_ITEMS 'plant compute gross source'. Then:
@@ -176,3 +177,4 @@ After REVIEW FIX 2: 49 / 885, 0 failures.
 After REVIEW FIX 3: 49 / 886, 0 failures.
 After REVIEW FIX 4: 49 / 886, 0 failures; frontend build OK.
 After REVIEW PHASE 2: 49 / 886, 0 failures, 2 clean runs. Review sim: 68/68.
+After REVIEW FIX 5: 49 / 890, 0 failures.

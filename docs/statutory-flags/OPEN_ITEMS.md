@@ -53,4 +53,9 @@
   'Priority: employees.gross_salary'), so after any approved gross change a re-run of an EARLIER month is paid at the
   new gross (components re-scaled). Seen while testing review fix 1 (10 Oct 2026). Pre-existing; money logic in a
   DO-NOT-MODIFY file, not touched. Owner: decide whether a historical re-run should read the dated structure's gross.
+- employees.js PUT /:code/salary same-gross split edit updates only the latest-dated row (~678–686). After an upload, an
+  employee whose latest row is dated after the effective month's 1st (e.g. 2026-09-06 / 2026-09-11 — about 8 people,
+  incl. one PF employee) keeps September on the upload's 2026-09-01 copy, so a split edit made now does not reach
+  September's PF base. Same family as the 'splits lag a month' item. Follow-up PR; HR to avoid split-only edits for
+  those employees until then.
 - PF scope widening (EPF ceiling ₹25,000 from 17 Sep 2026, S.O. 5109(E)) — owner chose to keep the 6.
