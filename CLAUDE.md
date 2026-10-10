@@ -13,7 +13,7 @@
   PENDING/UNREVIEWED with the note, other 405−22 rows untouched; 0 page errors, 0 API 4xx/5xx. jest ED suite 33/33.
 - **Not tested:** Railway; mobile widths (bar wraps). **Still open:** `POST /:id/finance-approve` doesn't check finance_status.
 ## Last Session — 2026-10-10 (Wide layout: 9 pages full width + Stage 7 register rework)
-**Branch `feat/wide-layout` (origin/main 02e1115 merged in — #76 + #77), NOT pushed, NOT merged.** Frontend display only.
+**Branch `feat/wide-layout` — MERGED as PR #78 (d11a6c7).** Frontend display only.
 Checkpoint doc + owner rulings: `docs/wide-layout/PROGRESS.md` (read first; CP-8 push is next).
 - **What:** 9 pages lose the 1280px cap (`max-w-screen-xl` → `w-full min-w-0`): Stage 7, DailyMIS, LoanDetail, Loans,
   MissPunch, NightShift, SalaryAdvance, SalaryInput, ShiftVerification (+ LoanPolicy, LoanImport: only elements that
