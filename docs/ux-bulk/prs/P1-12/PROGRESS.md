@@ -3,7 +3,7 @@
 ## RESUME (re-read after any compaction)
 - Branch: `fix/sidebar-header-hook-order` (base origin/main 3d20021). Never push to main; no PR open/merge.
 - Spec: `docs/ux-bulk/prs/P1-12/PROMPT.md`. Plan: `docs/ux-bulk/prs/P1-12/PLAN.md`.
-- Current phase: **Phase 0 done — waiting for planner "go" / corrections.** Do not start step 1 before that.
+- Current phase: **Build — planner GO received (Q1 effect as-is, Q2 one switch per load OK, Q3 no merge).**
 - Continue from the first step whose status is not `done`; never redo a done step.
 - Only Sidebar.jsx + Header.jsx in frontend/src may change; dist in its own commit; check script port 3112.
   Fictional data only (repo public). main dist is built in a git worktree under /tmp, never in this tree.
@@ -12,12 +12,12 @@
 | # | Step | Status | Result / sha |
 |---|---|---|---|
 | 0 | Phase 0 plan + progress | done | 16c2d76 |
-| 1 | jest baseline (3d20021 worktree /tmp) | pending | |
-| 2 | Source edit (NavItem hidden flag + Header selector lifted) | pending | |
-| 3 | dist rebuild (own commit) + hash-normalised compare | pending | |
-| 4 | check script `backend/scripts/layout-hook-order-check.py` | pending | |
-| 5 | script on branch dist | pending | |
-| 6 | `--base` on 3d20021 dist | pending | |
+| 1 | jest baseline (3d20021 worktree /tmp) | done | /tmp/p112-main: 85 suites / 1380 pass |
+| 2 | Source edit (NavItem hidden flag + Header selector lifted) | done | Sidebar +19/−13, Header +3/−1; 02e073b |
+| 3 | dist rebuild (own commit) + hash-normalised compare | done | only the index chunk differs vs fresh 3d20021 build; 479b76f |
+| 4 | check script `backend/scripts/layout-hook-order-check.py` | done | one real UI login per role (login rate limit 5), sessions reused; /auth/me intercept = in-place switch |
+| 5 | script on branch dist | done | 52/52 (A 4 roles, B 6 switches, C 390px). Reload sends a 401 session-analytics beacon + role-mismatch 403s in B — printed, not asserted |
+| 6 | `--base` on 3d20021 dist | done | 15/15: all 6 in-place switches crash the layout (React #300 / #310); per-role labels + selector identical main vs branch |
 | 7 | jest after | pending | |
 | 8 | self-debug + user simulation + v2 | pending | |
 | 9 | CLAUDE.md Last Session entry | pending | |
@@ -25,4 +25,5 @@
 
 ## Rulings
 - Programme-level owner "go" 10 Oct 2026; planner approves Phase 0 (pending).
-- Open: Q1 (effect byte-identical), Q2 (test switch mechanism), Q3 (no merge of Header store calls) — see PLAN §6.
+- Planner GO 10 Oct 2026: Q1 keep useEffect as-is (comment above the hidden return); Q2 one switch per load per pair OK;
+  Q3 do not merge the two useAppStore calls; no-ESLint → CLAUDE.md follow-up.
