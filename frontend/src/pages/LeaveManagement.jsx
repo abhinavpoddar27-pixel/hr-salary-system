@@ -1,6 +1,7 @@
 import React, { useState, useMemo } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { getLeaveApplications, submitLeaveApplication, approveLeave, rejectLeave, getEmployees, getLeaveSummary, getLeaveBalancesList, getLeaveRegister, adjustLeave, getLeaveTransactions, getEmployeeLeaveBalance, getCompOffList, getCompOffPending, createCompOff, reviewCompOff, bulkReviewCompOff, deleteCompOff, getLeaveAccrualLedger, getLeaveRecomputePreview, downloadLeaveRecomputePreview, applyLeaveRecompute, getLeaveAutomationStatus, updateLeaveAutomationSettings, getLeaveChangeFlags, clearLeaveChangeFlag, uploadLeaveExternalGrants, acknowledgeNoExternalGrants, getLeaveExternalGrants, deleteLeaveExternalGrant, downloadLeaveLapseReport } from '../utils/api'
+import EmployeeSearchSelect from '../components/shared/EmployeeSearchSelect'
 import { normalizeRole } from '../utils/role'
 import { fmtIstDateTime } from '../utils/formatters'
 import LeaveAutomationTab from '../components/leave/LeaveAutomationTab'
@@ -37,7 +38,18 @@ function ApplyLeaveModal({ show, onClose, employees }) {
   })
 
   const submit = useMutation({
-    mutationFn: (data) => submitLeaveApplication(data),
+    // POST /api/leaves reads camelCase (employeeCode, leaveType, startDate,
+    // endDate, hrRemark). The form keeps snake_case, and sending it as-is got
+    // "Missing required fields" on every submit since March 2026.
+    mutationFn: (f) => submitLeaveApplication({
+      employeeCode: f.employee_code,
+      leaveType: f.leave_type,
+      startDate: f.start_date,
+      endDate: f.end_date,
+      days: f.days,
+      reason: f.reason,
+      hrRemark: f.hr_remark,
+    }),
     onSuccess: () => {
       toast.success('Leave application submitted')
       queryClient.invalidateQueries({ queryKey: ['leave-applications'] })
@@ -87,10 +99,11 @@ function ApplyLeaveModal({ show, onClose, employees }) {
       <div className="space-y-4">
         <div>
           <label className="block text-sm font-medium text-slate-700 mb-1">Employee</label>
-          <select className="input w-full" value={form.employee_code} onChange={e => setForm(f => ({ ...f, employee_code: e.target.value }))}>
-            <option value="">Select Employee</option>
-            {(employees || []).map(e => <option key={e.code} value={e.code}>{e.code} - {e.name}</option>)}
-          </select>
+          <EmployeeSearchSelect
+            employees={employees || []}
+            value={form.employee_code}
+            onChange={code => setForm(f => ({ ...f, employee_code: code }))}
+          />
         </div>
 
         {/* Balance summary for selected employee */}
@@ -330,6 +343,17 @@ export default function LeaveManagement() {
     enabled: mainTab === 'balances' && isAdmin,
     retry: 0,
   })
+  // The Approve window needs the employee's own balance whichever tab is open.
+  // The balances list above is only fetched on the Balances tab, so reading it
+  // here showed 0 (and blocked approval) everywhere else.
+  const approveYear = approveTarget?.start_date ? Number(String(approveTarget.start_date).slice(0, 4)) : year
+  const { data: approveBalRes, isFetching: approveBalLoading } = useQuery({
+    queryKey: ['emp-leave-balance', approveTarget?.employee_code, approveYear],
+    queryFn: () => getEmployeeLeaveBalance(approveTarget.employee_code, { year: approveYear }),
+    enabled: !!approveTarget?.employee_code,
+  })
+  const approveBal = approveBalRes?.data?.data || null
+
   const previewByCode = useMemo(() => {
     const out = {}
     for (const e of previewRes?.data?.employees || []) out[e.employee_code] = e
@@ -379,6 +403,7 @@ export default function LeaveManagement() {
   const afterLeaveChange = () => {
     queryClient.invalidateQueries({ queryKey: ['leave-applications'] })
     queryClient.invalidateQueries({ queryKey: ['leave-balances-list'] })
+    queryClient.invalidateQueries({ queryKey: ['emp-leave-balance'] })
     queryClient.invalidateQueries({ queryKey: ['day-calculations'] })
     queryClient.invalidateQueries({ queryKey: ['leave-automation-status'] })
     queryClient.invalidateQueries({ queryKey: ['notifications'] })
@@ -807,17 +832,15 @@ export default function LeaveManagement() {
             <div className="grid grid-cols-2 lg:grid-cols-5 gap-4">
               <div>
                 <label className="block text-xs font-medium text-slate-600 mb-1">Employee</label>
-                <select
-                  className="input w-full text-sm"
+                <EmployeeSearchSelect
+                  employees={employees || []}
                   value={adjForm.employee_code}
-                  onChange={e => {
-                    setAdjForm(f => ({ ...f, employee_code: e.target.value }))
-                    setAdjViewCode(e.target.value)
+                  inputClassName="input w-full text-sm"
+                  onChange={code => {
+                    setAdjForm(f => ({ ...f, employee_code: code }))
+                    setAdjViewCode(code)
                   }}
-                >
-                  <option value="">Select Employee</option>
-                  {(employees || []).map(e => <option key={e.code} value={e.code}>{e.code} - {e.name}</option>)}
-                </select>
+                />
               </div>
               <div>
                 <label className="block text-xs font-medium text-slate-600 mb-1">Leave Type</label>
@@ -980,11 +1003,12 @@ export default function LeaveManagement() {
         const row = balances.find(b => b.employee_code === approveTarget.employee_code)
         const type = approveTarget.leave_type
         const tracked = type === 'CL' || type === 'EL'
-        const current = !tracked ? null : type === 'CL'
+        const balLoading = tracked && !approveBal && approveBalLoading
+        const current = !tracked ? null : (approveBal?.[type] ?? (type === 'CL'
           ? (row?.CL ?? row?.cl ?? plan?.cl.current_balance ?? 0)
-          : (row?.EL ?? row?.el ?? plan?.el.current_balance ?? 0)
+          : (row?.EL ?? row?.el ?? plan?.el.current_balance ?? 0)))
         const after = tracked ? Math.round((current - (approveTarget.days || 0)) * 100) / 100 : null
-        const short = tracked && after < 0
+        const short = tracked && !balLoading && after < 0
         return (
           <Modal open onClose={() => setApproveTarget(null)} title="Approve leave" size="sm">
             <div className="p-4 space-y-3">
@@ -995,9 +1019,11 @@ export default function LeaveManagement() {
               {tracked ? (
                 <div className="bg-slate-50 rounded-lg p-3 text-sm">
                   {type} balance:{' '}
-                  <span className="font-mono">{current}</span>
-                  <span className="mx-1">→</span>
-                  <span className={clsx('font-mono font-semibold', short ? 'text-red-600' : 'text-slate-800')}>{after}</span>
+                  {balLoading ? <span className="text-slate-400">loading…</span> : (<>
+                    <span className="font-mono">{current}</span>
+                    <span className="mx-1">→</span>
+                    <span className={clsx('font-mono font-semibold', short ? 'text-red-600' : 'text-slate-800')}>{after}</span>
+                  </>)}
                 </div>
               ) : (
                 <div className="bg-slate-50 rounded-lg p-3 text-sm text-slate-600">
@@ -1017,7 +1043,7 @@ export default function LeaveManagement() {
                 <button className="btn-ghost px-4 py-2 text-sm" onClick={() => setApproveTarget(null)}>Cancel</button>
                 <button
                   className="btn-primary px-4 py-2 text-sm disabled:opacity-50 disabled:cursor-not-allowed"
-                  disabled={short || approve.isPending}
+                  disabled={short || balLoading || approve.isPending}
                   onClick={() => approve.mutate(approveTarget.id)}
                 >
                   {approve.isPending ? 'Approving…' : 'Approve'}
@@ -1195,16 +1221,12 @@ function CompOffTab({ month, year, company, employees, user }) {
           <div className="grid grid-cols-2 lg:grid-cols-3 gap-4">
             <div>
               <label className="block text-xs font-medium text-slate-600 mb-1">Employee</label>
-              <select
-                className="input w-full text-sm"
+              <EmployeeSearchSelect
+                employees={eligibleEmployees}
                 value={form.employee_code}
-                onChange={e => setForm(f => ({ ...f, employee_code: e.target.value }))}
-              >
-                <option value="">Select Employee</option>
-                {eligibleEmployees.map(e => (
-                  <option key={e.code} value={e.code}>{e.code} - {e.name}</option>
-                ))}
-              </select>
+                inputClassName="input w-full text-sm"
+                onChange={code => setForm(f => ({ ...f, employee_code: code }))}
+              />
               <div className="text-[11px] text-slate-400 mt-1">Contractors excluded.</div>
             </div>
             <div>
