@@ -182,6 +182,62 @@ describe('exclusions, re-measure, overrides, rule switch', () => {
     expect(S.validateConfig(rm('maybe'))[0]).toMatch(/left_late/);
   });
 
+  test('re-measure full-hours excuse: a late or early exit is not counted when the shift length was still worked', () => {
+    const db = F.newDb(); F.emp(db, 'ARF'); F.month(db, 'ARF', 2026, 9, 20);
+    F.day(db, 'ARF', '2026-10-01', { it: '09:40', ot: '19:45' });   // late 40, worked 10 h 05 → excused
+    F.day(db, 'ARF', '2026-10-02', { it: '09:40', ot: '19:20' });   // late 40, worked 9 h 40 → counted
+    F.day(db, 'ARF', '2026-10-03', { it: '09:15', ot: '19:06' });   // late 15, worked 9 h 51 → excused only with the 10-min tolerance
+    F.day(db, 'ARF', '2026-10-05', { it: '08:00', ot: '18:00' });   // early 60, worked 10 h → excused
+    F.day(db, 'ARF', '2026-10-06', { it: '09:00', ot: '18:00' });   // early 60, worked 9 h → counted
+    const rm = (extra) => ({ remeasure: { ARF: { start: '09:00', end: '19:00', left_late: 'off', ...extra } } });
+    expect(person(run(db, { config: rm({}) }), 'ARF')).toMatchObject({ late_days: 3, early_days: 2, hours_excused: 0 });
+    expect(person(run(db, { config: rm({ hours_complete: true }) }), 'ARF')).toMatchObject({ late_days: 1, late_min: 40, early_days: 1, early_min: 60, hours_excused: 3 });
+    expect(person(run(db, { config: rm({ hours_complete: true, hours_grace: 0 }) }), 'ARF')).toMatchObject({ late_days: 2, early_days: 1, hours_excused: 2 });
+    expect(S.validateConfig(rm({ hours_complete: 'yes' }))[0]).toMatch(/hours_complete/);
+    expect(S.validateConfig(rm({ hours_complete: true, hours_grace: 500 }))[0]).toMatch(/hours_grace/);
+    expect(S.validateConfig(rm({ hours_complete: true, hours_grace: 10 }))).toEqual([]);
+  });
+
+  test('shift check: habitual early leavers count only on days short of the shift length', () => {
+    const db = F.newDb();
+    // ARS1 wrong shift: in 07:00, out 19:00 every day (12 h worked, system says 60 min early) → nothing counted, listed as hidden.
+    F.emp(db, 'ARS1'); sep(db, 'ARS1'); F.month(db, 'ARS1', 2026, 10, 20, () => ({ it: '07:00', em: 60 }));
+    // ARS2 wrong shift but genuinely short on 4 days (out 17:00 = 9 h).
+    F.emp(db, 'ARS2'); sep(db, 'ARS2'); F.month(db, 'ARS2', 2026, 10, 20, (i) => ({ it: '07:00', ot: i < 4 ? '17:00' : '19:00', em: i < 4 ? 180 : 60 }));
+    // ARS3 short every day (08:00–17:00 on a 12 h shift) → all counted, flagged "check master shift".
+    F.emp(db, 'ARS3'); sep(db, 'ARS3'); F.month(db, 'ARS3', 2026, 10, 20, () => ({ em: 180 }));
+    // ARS4 not habitual (3 of 20) but those days full hours (07:00–19:00) → counted under 'habitual', excused under 'everyone'.
+    F.emp(db, 'ARS4'); sep(db, 'ARS4'); F.month(db, 'ARS4', 2026, 10, 20, (i) => (i < 3 ? { it: '07:00', em: 60 } : {}));
+    const r = run(db);
+    const sc = (c) => r.shiftCheck.find((x) => x.code === c);
+    expect(r.people.find((x) => x.code === 'ARS1')).toBeUndefined();   // no counted lates/exits → not in people
+    expect(sc('ARS1')).toMatchObject({ system_early: 20, excused: 20, counted: 0, habitual: true, result: 'hidden', check_master: false, avg_hours: 12 });
+    expect(person(r, 'ARS2')).toMatchObject({ early_days: 4, early_min: 720, fit_excused: 16 });
+    expect(sc('ARS2')).toMatchObject({ counted: 4, result: 'shown' });
+    expect(sc('ARS3')).toMatchObject({ system_early: 20, counted: 20, check_master: true, avg_hours: 9 });
+    // short almost every day → flagged for a master-shift check; the action itself follows the normal rules
+    expect(action(r, 'ARS3')).toMatchObject({ action: 'deduction', deduction_days: 5, check_master_shift: true });
+    expect(sc('ARS2')).toMatchObject({ check_master: false });
+    expect(action(r, 'ARS2')).toBeUndefined();
+    expect(sc('ARS4')).toBeUndefined();
+    expect(person(r, 'ARS4')).toMatchObject({ early_days: 3, fit_excused: 0 });
+    expect(r.noticeEarly.map((n) => n.code).sort()).toEqual(['ARS2', 'ARS3', 'ARS4']);
+    // weekly trend uses the same counted exits
+    const wkEarly = (res) => res.trend.weekly.filter((w) => w.week_start >= '2026-09-28').reduce((s, w) => s + w.early_exits, 0);
+    expect(wkEarly(r)).toBe(4 + 20 + 3);
+    const all = run(db, { config: { shift_fit: 'everyone' } });
+    expect(all.people.find((x) => x.code === 'ARS4')).toBeUndefined();
+    expect(all.shiftCheck.find((x) => x.code === 'ARS4')).toMatchObject({ habitual: false, excused: 3, counted: 0, result: 'hidden' });
+    const off = run(db, { config: { shift_fit: 'off' } });
+    expect(off.shiftCheck).toEqual([]);
+    expect(person(off, 'ARS1')).toMatchObject({ early_days: 20 });
+    expect(wkEarly(off)).toBe(20 + 20 + 20 + 3);
+    // the manual list still wins
+    const man = run(db, { config: { early_excluded_codes: ['ARS3'] } });
+    expect(man.people.find((x) => x.code === 'ARS3')).toBeUndefined(); expect(man.shiftCheck.find((x) => x.code === 'ARS3')).toBeUndefined();
+    expect(S.validateConfig({ shift_fit: 'sometimes' })[0]).toMatch(/shift_fit/);
+  });
+
   test('overrides: include adds, exclude removes, warning downgrades — each with its reason', () => {
     const db = F.newDb(); heavy(db, 'AR7'); heavy(db, 'AR8'); F.emp(db, 'AR9'); sep(db, 'AR9'); F.month(db, 'AR9', 2026, 10, 20, (i) => ({ lm: i < 2 ? 30 : 0 }));
     const overrides = [{ code: 'AR7', action: 'exclude', reason: 'owner ruling' }, { code: 'AR8', action: 'warning', reason: 'confirm shift' },
