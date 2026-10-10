@@ -64,11 +64,13 @@
 
 - PR-2b STEP 2 — 3fa385d `feat(lwf): sales salary edit keeps LWF in the total and the loan re-plan; register totals`. sales.js `git diff -U0` hunks @@ 2943 (register totals + lwf_employee / lwf_employer), @@ 3010 (PUT loan salary object + `lwf_employee: existing.lwf_employee || 0`), @@ 3015/3020 (rebuild comment + `(existing.lwf_employee || 0)` in fixedDeductions) — nothing else in sales.js. Tests: Q6 ×5 (flagged no-loan edit other 100 → total = PF + ESI + 5 + 100, recompute = same row; loan edit other 9000 → loan 995, total 10000, net 10000, compute → same row, same ledger row, no new loan events, reconcile ok; unflagged edit = old formula; paid → 409, row unchanged; register totals 5×N / 20×N). Proof: dropping ONLY the 3010 term → Q6 loan test fails with loan 1000 / total 10005 / net 9995 (= the prototype); whole ad96604 sales.js → 3 of 5 Q6 fail (the 2 that pass pin unchanged behaviour). Suite file 26/26. Decision D-9 (test harness): one file-level startJwtApi (a second one in the same file gets getDb's closed singleton). `node --check` clean.
 
+- PR-2b STEP 3 — db3019e `feat(lwf): LWF on the sales payslip and the sales register Excel (39 columns)`. generateSalesPayslipData: `{ label: 'LWF (Employee)', amount: comp.lwf_employee }` after Loan EMI (the existing filter drops 0) + `lwfEmployer: comp.lwf_employer || 0` after netSalary (API only, E6 — SalesPayslip.jsx / salesPayslipPdf.js map `deductions` generically, not edited). salesExportFormats.js generateSalesExcel only: header `'ESI Employee', 'LWF Employee', 'PT'` (38 → 39, index 25), data cell `round2(r.lwf_employee)`, `!cols` `{ wch: 8 }` after the PF/ESI `{ wch: 10 }`s (39 entries), JSON totals lwf_employee / lwf_employer. NEFT / TA-DA generators untouched. Tests O2 (function + GET /api/sales/payslip/:code; unflagged → no line, lwfEmployer 0; deductions sum = total) + O4 ×2 (real download route read with `cellStyles: true`: header = every row = `!cols` = width = 39, 18 header→DB-column checks per row; JSON preview + /salary-register totals 10 / 40 for N = 2) — all 3 FAIL with the pre-step files (STEP 1 service + ad96604 export file). Nothing else reads the sales Excel (grep: tests, scripts, sims). loansSales*/loansReports* 8 / 84 green. `node --check` clean.
+
 ## LAST STEP
-PR-2b STEP 2 (sales.js hunks).
+PR-2b STEP 3 (payslip data + sales Excel).
 
 ## NEXT STEP
-PR-2b STEP 3 (payslip data + sales register Excel 39 cols; O2, O4). Keep: do NOT recompute sales September until D3 is answered.
+PR-2b STEP 4 (SalesSalaryCompute.jsx LWF column + total; npm run build; dist in the same commit). Keep: do NOT recompute sales September until D3 is answered.
 
 ## OWNER RULINGS ADDED DURING THE BUILD
 (record date + ruling; BUILD_PLAN §1 holds the original set)
