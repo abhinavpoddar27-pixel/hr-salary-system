@@ -608,7 +608,7 @@ function listBatches(db, { limit = 50 } = {}) {
 }
 
 module.exports = {
-  PLANT, SALES, FLAG_KEYS, FLAG_COL, ESI_THRESHOLD,
+  PLANT, SALES, FLAG_KEYS, FLAG_COL, ESI_THRESHOLD, ESI_NUMBER_RE, UAN_RE, numberInUse,
   normaliseHeader, parseYesNo, parseFlagFile, planFlagChanges,
   applyFlagChanges, buildUndoWorkbook, listBatches, sha256,
   structureForDate, carryFlags, latestStructure, structureDatedAfter, keysFor, monthKey, scopeTables,
