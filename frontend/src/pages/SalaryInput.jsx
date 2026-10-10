@@ -273,7 +273,7 @@ export default function SalaryInput() {
                           <button disabled title={SELF_DECIDE_TEXT} className="btn-primary text-xs opacity-50 cursor-not-allowed">Approve</button>
                           <button disabled title={SELF_DECIDE_TEXT} className="btn-ghost text-xs text-red-600 opacity-50 cursor-not-allowed">Reject</button>
                         </div>
-                        <div className="text-[10px] text-slate-500 mt-1 max-w-[16rem]" data-testid="self-decide-note">{SELF_DECIDE_TEXT}</div>
+                        <div className="text-[10px] text-slate-500 mt-1 max-w-xs" data-testid="self-decide-note">{SELF_DECIDE_TEXT}</div>
                       </div>
                     ) : canFinance ? (
                       <div className="flex gap-2">
