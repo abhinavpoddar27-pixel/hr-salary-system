@@ -14,7 +14,7 @@ import { useAppStore } from '../store/appStore'
 import { ReasonModal, DisburseModal, ReceiptModal, ChangeRequestModal } from '../components/loans/LoanActionModals'
 import { openStatementWindow } from '../components/loans/printStatement'
 import {
-  loanCaps, sameUser, LOAN_STATE, INSTALMENT_STATE, REQUEST_STATE, KIND_LABEL, ORIGIN_LABEL, LIVE_STATES,
+  loanCaps, sameUser, IMPORT_MODE, LOAN_STATE, INSTALMENT_STATE, REQUEST_STATE, KIND_LABEL, ORIGIN_LABEL, LIVE_STATES,
   stateCls, stateLabel, rupees, paiseToRupees, monthLabel, istDateTime, errText, requestSummary, GATE_OFF_TEXT,
   ADJUSTMENT_KIND,
 } from '../components/loans/loanUi'
@@ -179,6 +179,7 @@ export default function LoanDetail() {
             </span>
             {loan.urgent && <span className="text-[10px] font-bold px-2 py-0.5 rounded bg-red-600 text-white">URGENT</span>}
             {loan.exit_flag === 1 && <span className="text-[10px] font-bold px-2 py-0.5 rounded bg-orange-600 text-white">EXIT FLAGGED</span>}
+            {loan.disbursement_mode === IMPORT_MODE && <span className="text-[10px] px-2 py-0.5 rounded bg-indigo-100 text-indigo-800" data-testid="loan-imported">Imported opening balance ({loan.disbursement_reference})</span>}
             {pending && <span className="text-[10px] px-2 py-0.5 rounded bg-purple-100 text-purple-800">{KIND_LABEL[pending.kind]} request pending</span>}
           </h2>
           <div className="text-sm text-slate-500 mt-0.5">
@@ -224,7 +225,7 @@ export default function LoanDetail() {
         <Fact label="Principal">{rupees(loan.principal_amount)}</Fact>
         <Fact label="Tenure">{loan.tenure_months} months</Fact>
         <Fact label="EMI">{rupees(loan.emi_amount)}</Fact>
-        <Fact label="Disbursed">{loan.disbursed_amount !== null ? rupees(loan.disbursed_amount) : '—'}</Fact>
+        <Fact label={loan.disbursement_mode === IMPORT_MODE ? IMPORT_MODE : 'Disbursed'}>{loan.disbursed_amount !== null ? rupees(loan.disbursed_amount) : '—'}</Fact>
         <Fact label="Balance">{loan.disbursed_amount !== null ? rupees(loan.remaining_balance) : '—'}</Fact>
         <Fact label="First EMI">{monthLabel(loan.first_emi_month, loan.first_emi_year)}</Fact>
       </div>
@@ -246,7 +247,7 @@ export default function LoanDetail() {
           ) : <div className="text-slate-400">Waiting for the admin</div>}
         </div>
         <div className="card p-3 space-y-1">
-          <div className="text-xs font-semibold text-slate-500">Disbursement</div>
+          <div className="text-xs font-semibold text-slate-500">{loan.disbursement_mode === IMPORT_MODE ? 'Opening balance (imported — no money paid out)' : 'Disbursement'}</div>
           {loan.disbursed_on ? (
             <>
               <div>{loan.disbursement_mode} · ref <span className="font-mono">{loan.disbursement_reference}</span> · {loan.disbursed_on}</div>

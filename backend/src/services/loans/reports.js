@@ -36,6 +36,7 @@ const { reconcileLoan, loanStatement } = require('./reconcile');
 const { listExitResiduals, heldPendingPaise } = require('./exit');
 const { dueCloseMonth, neededUnclosedMonths } = require('./close');
 const { effectivePostedPaise } = require('./adjustments');
+const { IMPORT_MODE } = require('./importer');   // Loans PR-10: imported loans are an opening balance, not a payout
 
 const LIVE_SQL = LIVE_LOAN_STATES.map((s) => `'${s}'`).join(',');
 const PAYROLLS = Object.freeze(['plant', 'sales']);
@@ -84,7 +85,7 @@ function outstandingRegister(db, { companies = null } = {}) {
   const nextDue = db.prepare(`SELECT due_month, due_year, amount_due FROM loan_instalments
                                WHERE loan_id = ? AND status IN ('scheduled','provisional')
                                ORDER BY due_year, due_month, sequence LIMIT 1`);
-  const F = ['disbursed', 'recovered', 'cash', 'writtenOff', 'balance', 'openInstalments', 'uncovered'];
+  const F = ['disbursed', 'openingImported', 'recovered', 'cash', 'writtenOff', 'balance', 'openInstalments', 'uncovered'];
   const zero = () => Object.fromEntries(F.map((f) => [f, 0]));
   const totals = { loans: 0, ...zero() };
   const groups = new Map();
@@ -95,13 +96,15 @@ function outstandingRegister(db, { companies = null } = {}) {
     const w = who(loan);
     const nd = nextDue.get(loan.id);
     const p = {
-      disbursed: toPaise(rec.disbursed), recovered: toPaise(rec.posted) - toPaise(rec.adjusted), cash: toPaise(rec.receipts),
+      disbursed: toPaise(rec.disbursed), openingImported: loan.disbursement_mode === IMPORT_MODE ? toPaise(rec.disbursed) : 0,
+      recovered: toPaise(rec.posted) - toPaise(rec.adjusted), cash: toPaise(rec.receipts),
       writtenOff: toPaise(rec.writtenOff), balance: toPaise(rec.balance), openInstalments: toPaise(rec.openInstalments), uncovered: toPaise(rec.uncovered),
     };
     if (!rec.ok) problems += 1;
     rows.push({
       loanId: loan.id, payroll: loan.borrower_type, employeeCode: loan.employee_code, employeeName: w.name, company: loan.company,
       department: w.department || '(no department)', headquarters: w.headquarters, loanType: loan.loan_type, status: loan.status,
+      disbursedAs: loan.disbursement_mode === IMPORT_MODE ? IMPORT_MODE : 'Paid out',
       ...Object.fromEntries(F.map((f) => [f, R(p[f])])),
       nextDue: nd ? { month: nd.due_month, year: nd.due_year, amount: R(toPaise(nd.amount_due)) } : null,
       reconciles: rec.ok, problems: rec.problems,
@@ -282,15 +285,16 @@ function perquisiteList(db, { from = null, to = null, companies = null, now = ne
       const s = statementAt(st, m);
       if (!s) continue;
       const key = `${loan.borrower_type}|${loan.employee_code}|${loan.company}`;
-      if (!by.has(key)) by.set(key, { payroll: loan.borrower_type, employeeCode: loan.employee_code, employeeName: who(loan).name, company: loan.company, loans: [], peak: 0, closing: 0 });
+      if (!by.has(key)) by.set(key, { payroll: loan.borrower_type, employeeCode: loan.employee_code, employeeName: who(loan).name, company: loan.company, loans: [], peak: 0, closing: 0, openingImported: 0 });
       const b = by.get(key);
       b.loans.push(loan.id);
       b.peak += s.opening + s.disbursed;
+      if (loan.disbursement_mode === IMPORT_MODE) b.openingImported += s.disbursed;   // Loans PR-10 (ruling Q11): labelled, not a payout
       b.closing += s.closing;
     }
     const borrowers = [...by.values()].filter((b) => b.peak > thresholdPaise)
       .sort((a, b) => a.company.localeCompare(b.company) || a.payroll.localeCompare(b.payroll) || a.employeeCode.localeCompare(b.employeeCode))
-      .map((b) => ({ ...b, peak: R(b.peak), closing: R(b.closing) }));
+      .map((b) => ({ ...b, peak: R(b.peak), closing: R(b.closing), openingImported: R(b.openingImported), paidOutAs: b.openingImported > 0 ? IMPORT_MODE : null }));
     months.push({
       month: m.month, year: m.year, label: monthLabel(m),
       closed: Object.fromEntries(PAYROLLS.map((p) => [p, !!closed.get(p, m.month, m.year)])),
@@ -409,10 +413,11 @@ function reportSheets(name, d) {
     return [
       { name: 'Outstanding register', rows: d.rows.map((r) => ({ ...r, nextDueMonth: r.nextDue ? mLabel(r.nextDue) : '', reconcilesText: r.reconciles ? 'yes' : 'NO' })),
         columns: [['loanId', 'Loan #'], ['payroll', 'Payroll'], ['company', 'Company', 26], ['department', 'Department', 18], ['employeeCode', 'Code'], ['employeeName', 'Name', 24],
-          ['loanType', 'Type', 18], ['status', 'Status', 16], ...MONEY_COLS, ['openInstalments', 'Open instalments ₹'], ['uncovered', 'Unscheduled ₹'],
+          ['loanType', 'Type', 18], ['status', 'Status', 16], ...MONEY_COLS, ['disbursedAs', 'Disbursed as', 24], ['openInstalments', 'Open instalments ₹'], ['uncovered', 'Unscheduled ₹'],
           ['nextDueMonth', 'Next due'], ['reconcilesText', 'Reconciles']],
         totals: { ...d.totals, loanId: '' } },
-      { name: 'By department', rows: d.groups, columns: [['payroll', 'Payroll'], ['company', 'Company', 26], ['department', 'Department', 18], ['loans', 'Loans'], ...MONEY_COLS],
+      { name: 'By department', rows: d.groups, columns: [['payroll', 'Payroll'], ['company', 'Company', 26], ['department', 'Department', 18], ['loans', 'Loans'], ...MONEY_COLS,
+        ['openingImported', 'of which Opening balance (import) ₹', 30]],
         totals: d.totals },
     ];
   }
@@ -442,7 +447,7 @@ function reportSheets(name, d) {
     for (const m of d.months) for (const b of m.borrowers) rows.push({ month: m.label, ...b, loans: b.loans.join(', '), closedText: m.closed[b.payroll] ? 'yes' : 'no' });
     return [{ name: 'Perquisite list', rows,
       columns: [['month', 'Month'], ['payroll', 'Payroll'], ['company', 'Company', 26], ['employeeCode', 'Code'], ['employeeName', 'Name', 24], ['loans', 'Loans'],
-        ['peak', 'Peak outstanding ₹', 18], ['closing', 'Month-end outstanding ₹', 22], ['closedText', 'Loan close run']] },
+        ['peak', 'Peak outstanding ₹', 18], ['openingImported', 'of which Opening balance (import) ₹', 30], ['closing', 'Month-end outstanding ₹', 22], ['closedText', 'Loan close run']] },
     { name: 'Notes', rows: [{ k: 'Threshold ₹', v: d.threshold }, { k: 'Status', v: d.thresholdPending }, { k: 'Rule', v: 'Listed when peak > threshold (≤ threshold is exempt)' },
       { k: 'Range', v: `${mLabel(d.from)} to ${mLabel(d.to)}` }], columns: [['k', 'Item', 16], ['v', 'Value', 60]] }];
   }

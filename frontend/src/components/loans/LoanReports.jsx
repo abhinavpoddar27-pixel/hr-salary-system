@@ -116,7 +116,7 @@ function Outstanding({ d, navigate }) {
             {d.groups.length === 0 ? <Empty cols={9} text="No live loans." /> : d.groups.map((g) => (
               <tr key={`${g.payroll}|${g.company}|${g.department}`}>
                 <td className="text-xs">{g.payroll}</td><td className="text-xs">{g.company}</td><td className="text-xs">{g.department}</td>
-                <td className="text-center">{g.loans}</td><td className="text-right font-mono">{rupees(g.disbursed)}</td><td className="text-right font-mono">{rupees(g.recovered)}</td>
+                <td className="text-center">{g.loans}</td><td className="text-right font-mono">{rupees(g.disbursed)}{g.openingImported > 0 && <div className="text-[10px] text-indigo-700">incl. {rupees(g.openingImported)} Opening balance (import)</div>}</td><td className="text-right font-mono">{rupees(g.recovered)}</td>
                 <td className="text-right font-mono">{rupees(g.cash)}</td><td className="text-right font-mono">{rupees(g.writtenOff)}</td><td className="text-right font-mono font-semibold">{rupees(g.balance)}</td>
               </tr>
             ))}
@@ -141,7 +141,7 @@ function Outstanding({ d, navigate }) {
                 <td><div className="text-sm">{r.employeeName || r.employeeCode}</div><div className="text-[11px] text-slate-400 font-mono">{r.employeeCode}{PAYROLL_TAG(r.payroll)}</div></td>
                 <td className="text-xs">{r.company}</td><td className="text-xs">{r.department}{r.headquarters ? ` · ${r.headquarters}` : ''}</td><td className="text-xs">{r.loanType}</td>
                 <td><span className={clsx('text-xs px-2 py-0.5 rounded-full', stateCls(LOAN_STATE, r.status))}>{stateLabel(LOAN_STATE, r.status)}</span></td>
-                <td className="text-right font-mono">{rupees(r.disbursed)}</td><td className="text-right font-mono">{rupees(r.recovered)}</td><td className="text-right font-mono">{rupees(r.cash)}</td>
+                <td className="text-right font-mono">{rupees(r.disbursed)}{r.disbursedAs && r.disbursedAs !== 'Paid out' && <div className="text-[10px] text-indigo-700" data-testid="rep-opening-import">{r.disbursedAs}</div>}</td><td className="text-right font-mono">{rupees(r.recovered)}</td><td className="text-right font-mono">{rupees(r.cash)}</td>
                 <td className="text-right font-mono font-semibold">{rupees(r.balance)}</td><td className="text-right font-mono">{r.uncovered ? rupees(r.uncovered) : '—'}</td>
                 <td className="text-xs">{r.nextDue ? `${monthLabel(r.nextDue.month, r.nextDue.year)} · ${rupees(r.nextDue.amount)}` : '—'}</td>
                 <td className="text-center">{r.reconciles ? <span className="text-green-600">✓</span> : <span className="text-red-600 font-semibold" title={(r.problems || []).join('; ')}>✗</span>}</td>
@@ -261,7 +261,7 @@ function Perquisite({ d }) {
                 <tr key={`${b.payroll}|${b.employeeCode}|${b.company}`}>
                   <td><div className="text-sm">{b.employeeName || b.employeeCode}</div><div className="text-[11px] text-slate-400 font-mono">{b.employeeCode}{PAYROLL_TAG(b.payroll)}</div></td>
                   <td className="text-xs">{b.company}</td><td className="text-xs">{b.loans.map((x) => `#${x}`).join(', ')}</td>
-                  <td className="text-right font-mono font-semibold">{rupees(b.peak)}</td><td className="text-right font-mono">{rupees(b.closing)}</td>
+                  <td className="text-right font-mono font-semibold">{rupees(b.peak)}{b.openingImported > 0 && <div className="text-[10px] font-normal text-indigo-700">incl. {rupees(b.openingImported)} Opening balance (import)</div>}</td><td className="text-right font-mono">{rupees(b.closing)}</td>
                 </tr>
               ))}
             </tbody>

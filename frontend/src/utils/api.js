@@ -193,6 +193,28 @@ export const downloadLoanReport = (name, params) => api.get(`/loans/reports/${na
 export const getLoanWriteOffs = (params) => api.get('/loans/write-offs', { params, ...fresh })
 export const downloadLoanWriteOffs = (params) => api.get('/loans/write-offs', { params: { ...params, format: 'xlsx' }, responseType: 'blob' })
 export const getLoanPayslipBalance = (params) => api.get('/loans/payslip-balance', { params, ...fresh })
+// Loans PR-10: import of the loans run outside the app (accounts Excel) — routes/loanImport.js
+const importForm = (file, { mapping, defaultCompany } = {}) => {
+  const fd = new FormData()
+  fd.append('file', file)
+  if (mapping) fd.append('mapping', JSON.stringify(mapping))
+  if (defaultCompany) fd.append('defaultCompany', defaultCompany)
+  return fd
+}
+export const downloadLoanImportTemplate = () => api.get('/loans/import/template', { responseType: 'blob' })
+export const parseLoanImport = (file, opts) => api.post('/loans/import/parse', importForm(file, opts), { headers: { 'Content-Type': 'multipart/form-data' } })
+export const createLoanImportBatch = (file, opts) => api.post('/loans/import/batches', importForm(file, opts), { headers: { 'Content-Type': 'multipart/form-data' } })
+export const getLoanImportBatches = () => api.get('/loans/import/batches', fresh)
+export const getLoanImportBatch = (id, params) => api.get(`/loans/import/batches/${id}`, { params, ...fresh })
+export const confirmLoanImportMatch = (id, rid, data) => api.post(`/loans/import/batches/${id}/rows/${rid}/match`, data)
+export const excludeLoanImportRow = (id, rid, data) => api.post(`/loans/import/batches/${id}/rows/${rid}/exclude`, data)
+export const confirmLoanImportBalance = (id, rid, data) => api.post(`/loans/import/batches/${id}/rows/${rid}/balance`, data)
+export const remapLoanImportColumns = (id, data) => api.post(`/loans/import/batches/${id}/columns`, data)
+export const approveLoanImportBatch = (id, data) => api.post(`/loans/import/batches/${id}/approve`, data)
+export const discardLoanImportBatch = (id, data) => api.post(`/loans/import/batches/${id}/discard`, data)
+export const getLoanImportCutoverCheck = (id, params) => api.get(`/loans/import/batches/${id}/cutover-check`, { params, ...fresh })
+export const downloadLoanImportCutoverCheck = (id, params) => api.get(`/loans/import/batches/${id}/cutover-check`, { params: { ...params, format: 'xlsx' }, responseType: 'blob' })
+
 // Loans PR-11: the admin dry run (always rolled back) and the rehearsal pack.
 export const runLoanDryRun = (data) => api.post('/loans/dry-run', data)
 export const getLoanDryRunPack = (params) => api.get('/loans/dry-run/pack', { params, ...fresh })

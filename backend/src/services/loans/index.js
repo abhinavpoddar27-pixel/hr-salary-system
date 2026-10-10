@@ -19,6 +19,7 @@ module.exports = {
   ...require('./close'),
   ...require('./exit'),
   ...require('./reports'),   // Loans PR-9 (read-only)
+  ...require('./importer'),  // Loans PR-10 (accounts-Excel import)
   money: require('./money'),
   months: require('./months'),
 };

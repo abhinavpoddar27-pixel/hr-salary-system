@@ -202,6 +202,7 @@ app.use('/api/settings',   requireAuth, require('./src/routes/settings'));
 app.use('/api/advance',    requireAuth, require('./src/routes/advance'));
 app.use('/api/salary-input', requireAuth, require('./src/routes/salary-input'));
 app.use('/api/daily-mis',   requireAuth, require('./src/routes/daily-mis'));
+app.use('/api/loans/import', requireAuth, require('./src/routes/loanImport')); // Loans PR-10 — before /api/loans
 app.use('/api/loans',       requireAuth, require('./src/routes/loans'));
 app.use('/api/leaves',      requireAuth, require('./src/routes/leaves'));
 app.use('/api/notifications', requireAuth, require('./src/routes/notifications'));
