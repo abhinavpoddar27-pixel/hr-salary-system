@@ -656,7 +656,9 @@ function computeAttendanceReview(db, { month, year, config, releaseDays = [], pr
       avg_hours: c.early_raw ? r1(c.early_wm_sum / c.early_raw / 60) : null, habitual, result,
       check_master: !!c.fit_confirm_master };
   }).sort((a, b) => b.system_early - a.system_early || a.code.localeCompare(b.code));
-  const gatePassCount = db.prepare('SELECT COUNT(*) n FROM short_leaves WHERE substr(date,1,7) = ?').get(cur).n;
+  const gatePassCount = db.prepare('SELECT COUNT(*) n FROM short_leaves WHERE substr(date,1,7) = ? AND cancelled_at IS NULL').get(cur).n;
+  // early exits a gate pass fully covered (early-exit detection writes these as 'exempted')
+  const gatePassExcused = db.prepare("SELECT COUNT(*) n FROM early_exit_detections WHERE substr(date,1,7) = ? AND has_gate_pass = 1 AND flagged_minutes = 0").get(cur).n;
   const ded = act.actionList.filter((a) => a.action === 'deduction');
   return {
     meta: { month, year, ym: cur, prev_ym: prev, days_in_month: md, release_days: releaseDays, prev_release_days: prevReleaseDays,
@@ -673,7 +675,7 @@ function computeAttendanceReview(db, { month, year, config, releaseDays = [], pr
       deduction_days: ded.reduce((s, a) => s + a.deduction_days, 0), indicative_amount: ded.reduce((s, a) => s + a.indicative_amount, 0) },
     held: held.filter((p) => p.cur).map((p) => ({ code: p.code, name: p.name, department: p.department, late_days: p.cur.lates_counted, early_exits: p.cur.early_counted })),
     noticeLate: nt.noticeLate, noticeEarly: nt.noticeEarly,
-    payrollChecks: payrollChecks(db, pm.month, pm.year), gatePassCount,
+    payrollChecks: payrollChecks(db, pm.month, pm.year), gatePassCount, gatePassExcused,
     overridesApplied: act.overridesApplied,
   };
 }

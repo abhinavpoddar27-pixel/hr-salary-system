@@ -23,6 +23,31 @@ Plan + log: `docs/ux-bulk/prs/P1-09/PLAN.md`, `PROGRESS.md`. Finding P-5. Planne
   answers GETs with max-age=5 — the card (and counts) appear only after a reload / ~30 s. Fix = `fresh` on the read +
   invalidate the `['miss-punches']` prefix. (2) Finance opening Stage 2 gets a 403 + console error from
   `GET /features/leave-automation/status` (hr/admin only) on every visit. (3) Stray "0" near L417 is P1-24.
+## Last Session — 2026-10-10 (Gate pass PR-2: early exits allow for gate passes everywhere; detection fixed for night shifts)
+**Branch `fix/gate-pass-early-exit-wiring` (on origin/main 69f00a3), NOT merged.** Spec: private project `claude/gate-pass-quota/SPEC.md`.
+- **Found:** `services/earlyExitDetection.js` compared every punch-out with the DAY end time (night 12HR in 19:58 / out 08:09 →
+  "711 min early"); ~18–25% of all `early_exit_detections` rows were such misreads (Sep 1–15: 270 of 1,472). The 1 Oct reimport
+  had overwritten detection's `attendance_processed` writes with import's (correct, gate-pass-blind) values, so Attendance
+  Review never saw a gate pass. Detection last ran for 15 Sep (manual only).
+- **Fix:** detection rebuilt on `utils/shiftMetrics.calcShiftMetrics` with import.js's exact inputs + shift resolution
+  (default_shift_id → shift_code → DAY), then the gate pass: out ≥ (effective shift end − pass hours) → not early (`exempted`,
+  ed 0 / em 0); earlier → only the minutes beyond the pass. Night passes measured against the night end. Writes
+  `attendance_processed.is_early_departure/early_by_minutes` (what Review/analytics read) + `early_exit_detections`
+  (minutes_early = raw, flagged_minutes = adjusted). Never deletes an `actioned` row or one a deduction points at (FK);
+  `actioned` status kept. Salary/day-calc tables untouched.
+- **Runs automatically:** import (that month/company), recalculate-metrics, miss-punch resolve + bulk (date and date+1),
+  gate pass create/cancel (that date), nightly 22:15 UTC = 03:45 IST + 30 s after boot (current + previous IST month).
+  Hooks go through `safeRefresh` (never fails the caller). `/detect` and `/detect-range` unchanged on the outside.
+- **Review/notices:** `gatePassCount` excludes cancelled passes; new `gatePassExcused` (tab footer + xlsx Summary). Notices say
+  "without a gate pass covering it" (a pass left early beyond still counts the extra minutes).
+- **Fragile:** (1) the boot/nightly sweep rewrites Sep+Oct detection rows — Feb–Aug still hold the old night misreads (HR can
+  run Detect range per ≤90 days). (2) `missPunch.js` resolves with default_shift_id only (no shift_code) — late values on
+  those rows still use DAY; early values are corrected by the refresh (0 such Sep rows today). (3) Gate pass still exempts
+  only via HR's early-exit deduction flow — Stage 6/7 never read these flags.
+- **Verified:** new `earlyExitGatePass.test.js` 15 (11 fail on the old engine); jest 87 suites / 1417; gate pass browser check
+  47/47; real server boot logs the sweep. Prod read-only: no Sep/Oct detection row actioned or linked to a deduction; current
+  Sep values = import's. **Not tested:** Railway; a full-month replay of production rows (SQL tool shows 100 rows).
+
 ## Last Session — 2026-10-10 (Gate pass modal: name the month)
 **Branch `fix/gate-pass-month-label` (on origin/main 139faa7), NOT merged.** Frontend only (`components/GatePasses.jsx`).
 - **Report:** hr created a September Short Leave for 19222; the modal still said "Used: nothing yet". The data was right —
