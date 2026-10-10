@@ -20,6 +20,29 @@
   leaves `actual_hours` + shift metrics; F-c confirm/reject have no role guard (→ P2-11); F-d re-import INSERT OR REPLACE
   may revive a rejected pair (unverified); F-e after reject/confirm the row still shows Pending until reload —
   `getNightShifts` lacks `fresh` (server GET max-age=5), same on main.
+## Last Session — 2026-10-10 (P1-08: Stage 5 grid did not refresh after a correction)
+**Branch `fix/stage5-grid-refresh`, NOT merged.** Frontend only (`pages/AttendanceRegister.jsx`, `utils/api.js` 2 lines). Plan + log:
+`docs/ux-bulk/prs/P1-08/PLAN.md`, `PROGRESS.md`. Finding P-4. Rulings Q1 (no-cache on the register read), Q2 (calendar too).
+- **Bug:** Stage 5 → expand employee → click a day → Save. `updateMutation` only refetched the summary; the daily grid
+  query `['attendance-register', month, year, code]` was never invalidated, so the cell kept the old status/times/colour
+  until a reload (76 Stage 5 edits in 90 days in prod). Recalculate Metrics (rewrites `is_night_shift`) had the same gap.
+- **Fix:** update + recalc `onSuccess` invalidate `['attendance-register', month, year]` (prefix, copied from pbaMutation);
+  update also invalidates the edited employee's `['daily-attendance', code, month, year]` (Calendar View; mutate now
+  passes `code`), recalc every `['daily-attendance']` (calendar shows "NH" from is_night_shift). `getAttendanceRegister`
+  sends `no-cache` (`fresh`): a save < 5 s after the grid loaded refetched inside the server's `max-age=5` window and the
+  browser handed back the pre-save copy (proven: check case B failed without it). `getEmployeeDailyAttendance` (Calendar View;
+  also read by DayCalculation) sends `no-cache` too (case D2 failed without it: calendar opened < 5 s before a save). dist rebuilt (own commit; hash-normalised
+  vs a fresh 2d96842 build only the AttendanceRegister chunk + main index chunk differ).
+- **Fragile:** the page is an accordion (one grid open). The grid key and the calendar key are separate — a new view on the
+  expanded row needs its own invalidation. `fresh` is declared lower in api.js than `getAttendanceRegister` (read at call time — fine).
+- **Verified:** `backend/scripts/stage5-grid-refresh-check.py` (Chromium, built dist, hr login, fictional T9801/T9802,
+  weekday-aware days, port 3108) 34/34 twice — slow save, quick save + back-to-back edit, switch employee and back, calendar
+  after save, calendar opened < 5 s before a save, recalc turns a night cell purple, 390 px, 0 page/console errors, 0 API ≥ 400. `--base` on a 2d96842 worktree
+  5/5: PUT 200 + DB saved, cell still old after 3 s, right only after reload. jest 85 suites / 1377 before and after.
+- **Not tested:** Railway; Safari/Firefox (`no-cache` request header); real production data.
+- **Found, not fixed:** (1) An unresolved miss-punch cell edited through this editor stays red:
+  `PUT /attendance/record/:id` sets `stage_5_done` but not `miss_punch_resolved`, and `cellClass()` checks miss-punch first.
+  (2) `updateMutation` has no `onError` (a failed save shows only the global handler, editor stays open).
 ## Last Session — 2026-10-10 (P1-06: leave rejection reason was dropped)
 **Branch `fix/leave-rejection-reason`, NOT merged.** Frontend only (`pages/LeaveManagement.jsx`). Plan + log:
 `docs/ux-bulk/prs/P1-06/PLAN.md`, `PROGRESS.md`. Finding H-3. Planner rulings: reason in the row + detail; F-a/F-b later.
