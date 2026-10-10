@@ -16,7 +16,7 @@
 - [x] P0.3 PLAN.md + PROGRESS.md written, committed, pushed — STOP (Phase 0 gate)
 - [x] P1.1 jest baseline: 81 suites / 1332 pass (worktree: backend node_modules symlinked, frontend npm ci)
 - [x] P1.2 generateSalesNEFT: NOT IN (hold,paid) + totals byStatus/notFinalized/alreadyExported/excludedPaid/excludedPaidAmount
-- [ ] P1.3 salesNeftEligibility.test.js
+- [x] P1.3 salesNeftEligibility.test.js: 8/8 pass; on the 96ee482 service 6 of 8 fail (the 2 that pass: no-paid byte identity, finance 403)
 - [ ] P1.4 frontend confirm modal + copy
 - [ ] P1.5 dist rebuild (own commit)
 - [ ] P1.6 plant bank md5 + browser check + --base run
