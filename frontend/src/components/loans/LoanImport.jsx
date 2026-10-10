@@ -11,10 +11,11 @@ import toast from 'react-hot-toast'
 import clsx from 'clsx'
 import {
   downloadLoanImportTemplate, parseLoanImport, createLoanImportBatch, getLoanImportBatches, getLoanImportBatch,
-  confirmLoanImportMatch, excludeLoanImportRow, confirmLoanImportBalance, approveLoanImportBatch, discardLoanImportBatch, remapLoanImportColumns,
+  confirmLoanImportMatch, excludeLoanImportRow, confirmLoanImportBalance, confirmLoanImportCleanMatches, confirmLoanImportFileBalances, approveLoanImportBatch, discardLoanImportBatch, remapLoanImportColumns,
   getLoanImportCutoverCheck, downloadLoanImportCutoverCheck, searchLoanBorrowers,
 } from '../../utils/api'
 import { LOAN_COMPANIES, rupees, monthLabel, istDateTime, errText, sameUser } from './loanUi'
+import ConfirmDialog from '../ui/ConfirmDialog'
 
 const TIER = {
   exact: { label: 'Exact name', cls: 'bg-green-100 text-green-800' },
@@ -487,6 +488,51 @@ function ColumnsCard({ batch, onDone }) {
   )
 }
 
+/**
+ * One click for the clean rows: HR confirms every clean match (code or exact name, one candidate, no flags),
+ * finance confirms every clean balance as in the file. The server re-checks each row exactly as the
+ * single-row buttons do; flagged rows stay below for one-by-one review.
+ */
+function BulkBar({ batchId, role, bulk, onDone }) {
+  const [open, setOpen] = useState(false)
+  const hr = role === 'hr'
+  const n = hr ? bulk?.cleanMatches || 0 : bulk?.fileBalances || 0
+  const run = useMutation({
+    mutationFn: () => (hr ? confirmLoanImportCleanMatches(batchId) : confirmLoanImportFileBalances(batchId)),
+    onSuccess: (res) => {
+      const r = res.data.data
+      toast.success(`Confirmed ${r.confirmed} · skipped ${r.skipped.length}`)
+      setOpen(false)
+      onDone()
+    },
+    onError: (err) => { toast.error(errText(err, 'Nothing was confirmed')); setOpen(false); onDone() },
+  })
+  if (!['hr', 'finance'].includes(role) || n === 0) return null
+  return (
+    <div className="rounded-xl border border-blue-200 bg-blue-50 px-4 py-3 flex items-center justify-between gap-3 flex-wrap" data-testid="imp-bulk">
+      <span className="text-xs text-blue-900">
+        {hr
+          ? `${n} row${n === 1 ? '' : 's'} match by employee code or an exact name to one employee with no flags.`
+          : `${n} row${n === 1 ? '' : 's'} have a usable outstanding and EMI in the file and no balance flags.`}
+        {' '}Flagged rows stay for one-by-one review.
+      </span>
+      <button className="btn-primary text-xs" disabled={run.isPending} onClick={() => setOpen(true)} data-testid={hr ? 'imp-bulk-match' : 'imp-bulk-balance'}>
+        {run.isPending ? 'Confirming…' : (hr ? `Confirm all clean matches (${n})` : `Confirm all balances as in the file (${n})`)}
+      </button>
+      {open && (
+        <ConfirmDialog
+          title={hr ? 'Confirm clean matches' : 'Confirm balances as in the file'}
+          message={`Confirm ${n} row${n === 1 ? '' : 's'} (${hr ? 'clean matches' : 'balances exactly as in the file'})? Each row is confirmed in your name with its own audit entry, exactly as the per-row button does. Flagged rows are left for you to do one by one.`}
+          confirmText={`Confirm ${n}`}
+          variant="warning"
+          onConfirm={() => run.mutate()}
+          onCancel={() => setOpen(false)}
+        />
+      )}
+    </div>
+  )
+}
+
 function BatchView({ id, caps, onBack }) {
   const qc = useQueryClient()
   const [filter, setFilter] = useState('all')
@@ -533,6 +579,8 @@ function BatchView({ id, caps, onBack }) {
       )}
 
       {review && (caps.role === 'admin' || sameUser(b.uploaded_by, caps.username)) && <ColumnsCard batch={b} onDone={refresh} />}
+
+      {review && <BulkBar key={`${d.bulk?.cleanMatches}|${d.bulk?.fileBalances}`} batchId={b.id} role={caps.role} bulk={d.bulk} onDone={refresh} />}
 
       {leftRows.length > 0 && (
         <Card title={`Left — settle outside the app (${leftRows.length})`} testid="imp-left">

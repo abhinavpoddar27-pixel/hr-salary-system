@@ -380,10 +380,12 @@ function batchDetail(db, batchId, { companies = null, cutover = null, now = new 
     const list = included.filter((r) => r.borrower_type === p);
     return [p, { loans: list.length, outstanding: toRupees(sumP(list, effOutstanding)), monthlyEmi: toRupees(sumP(list, effEmi)) }];
   }));
+  const bp = b.status === 'review' ? bulkPlan(db, b.id, policy) : null;
   return {
     ok: true,
     batch: { ...b, column_map: json(b.column_map, {}), result: json(b.result, null), cutover: b.status === 'approved' ? batchCutover(b) : null },
     rows: out,
+    bulk: { cleanMatches: bp ? bp.matches.eligible.length : 0, fileBalances: bp ? bp.balances.eligible.length : 0 },
     sections: {
       needsMatch: out.filter((r) => r.state === 'needs_match').map((r) => r.id),
       needsBalance: out.filter((r) => r.state === 'needs_balance').map((r) => r.id),
@@ -510,6 +512,125 @@ function confirmBalance(db, { batchId, rowId, outstanding, emi, note = null }, a
       newValue: `outstanding ${toRupees(o.paise)} / EMI ${toRupees(m.paise)}`,
       remark: `batch #${batchId} row ${row.row_no} "${row.name}"${changed ? ' · CHANGED' : ''}${text(note) ? ` · ${text(note)}` : ''}` });
     return { ok: true, rowId: row.id, outstanding: toRupees(o.paise), emi: toRupees(m.paise), changed };
+  });
+}
+
+// ── bulk confirmation of clean rows (one click; maker-checker unchanged) ────
+//
+// HR confirms every CLEAN match in one click, finance confirms every balance as
+// in the file in one click. Each row still goes through the single-row
+// confirmMatch / confirmBalance (same checks, same row update, same audit row);
+// the loop runs in ONE transaction, so a refusal or an error on any row
+// confirms nothing. Flagged rows are skipped, listed with the reason, and stay
+// for one-by-one review. The admin approval is untouched.
+
+/** Flags that never stop a bulk confirmation (information only). */
+const BULK_INFO_ONLY = new Set(['AGREEMENT_MISSING', 'SERVICE_UNKNOWN', 'LOAN_TYPE_DEFAULTED']);
+/** Identity flags HR has already decided (with a note when needed) — not a balance matter. */
+const BULK_HR_DECIDED = new Set(NAME_WARNINGS);
+const CLEAN_TIERS = new Set(['code', 'exact']);
+
+const borrowerKey = (r) => `${r.borrower_type}|${r.employee_code}|${r.borrower_type === 'sales' ? r.company : ''}`;
+
+/**
+ * Which rows of a batch in review the two bulk actions would confirm, and why
+ * the others are left. Read-only; batchDetail's `bulk` counts use the same plan.
+ * @returns {{matches:{eligible:Array, skipped:Array}, balances:{eligible:Array, skipped:Array}}}
+ */
+function bulkPlan(db, batchId, policy = readLoanPolicy(db)) {
+  const rows = db.prepare('SELECT * FROM loan_import_rows WHERE batch_id = ? ORDER BY row_no').all(batchId).map(hydrate);
+  const live = rows.filter((r) => rowState(r).state !== 'out');
+  const sameBorrower = (row) => live.filter((r) => r.id !== row.id && r.employee_code && r.borrower_type && borrowerKey(r) === borrowerKey(row)).map((r) => r.row_no);
+  const flagsOf = (row) => rowWarnings(db, { ...row, match_status: 'confirmed', parse_warnings: row.warnings }, policy, []).map((w) => w.code);
+  const plan = { matches: { eligible: [], skipped: [] }, balances: { eligible: [], skipped: [] } };
+  const skip = (list, row, reason, flags = []) => list.push({ rowId: row.id, rowNo: row.row_no, name: row.name, reason, flags });
+
+  for (const row of rows) {
+    const st = rowState(row).state;
+    if (st === 'needs_match') {
+      const s = plan.matches.skipped;
+      if (row.parse_status !== 'ok') { skip(s, row, 'the row has an amount problem — confirm it one by one'); continue; }
+      if (!CLEAN_TIERS.has(row.match_tier)) { skip(s, row, `match is "${row.match_tier}" — not a code or exact-name match`); continue; }
+      if (row.candidates.length !== 1 || !row.borrower_type || !row.employee_code
+        || row.candidates[0].borrowerType !== row.borrower_type || row.candidates[0].code !== row.employee_code) {
+        skip(s, row, 'not exactly one proposed employee'); continue;
+      }
+      const who = checkBorrower(db, { borrowerType: row.borrower_type, employeeCode: row.employee_code, company: row.company });
+      if (!who.ok) { skip(s, row, who.message); continue; }
+      const stored = row.warnings.map((w) => w.code).filter((c) => !BULK_INFO_ONLY.has(c));
+      const flags = [...new Set([...stored, ...flagsOf(row).filter((c) => !BULK_INFO_ONLY.has(c))])];
+      if (flags.length) { skip(s, row, `flagged: ${flags.join(', ')}`, flags); continue; }
+      const twins = sameBorrower(row);
+      if (twins.length) { skip(s, row, `the same employee is also on row(s) ${twins.join(', ')}`, ['SECOND_LOAN_IN_BATCH']); continue; }
+      plan.matches.eligible.push(row);
+    } else if (st === 'needs_balance') {
+      const s = plan.balances.skipped;
+      if (row.parse_status !== 'ok') { skip(s, row, `the file's amounts need finance: ${row.parse_errors.map((e) => e.code).join(', ')}`, row.parse_errors.map((e) => e.code)); continue; }
+      const o = toPaise(row.outstanding);
+      const m = toPaise(row.emi);
+      if (!(o > 0) || !(m > 0) || m % 100 !== 0) { skip(s, row, 'outstanding or EMI in the file is not usable'); continue; }
+      const flags = rowWarnings(db, { ...row, parse_warnings: row.warnings }, policy, rows).map((w) => w.code)
+        .filter((c) => !BULK_INFO_ONLY.has(c) && !BULK_HR_DECIDED.has(c));
+      if (flags.length) { skip(s, row, `flagged: ${[...new Set(flags)].join(', ')}`, [...new Set(flags)]); continue; }
+      plan.balances.eligible.push(row);
+    }
+  }
+  return plan;
+}
+
+function loadBulkBatch(db, batchId, companies) {
+  if (!importReady(db)) return fail('NOT_MIGRATED', 'loan tables are not migrated');
+  const b = getBatch(db, batchId);
+  if (!b) return fail('BATCH_NOT_FOUND', `import batch ${batchId} not found`);
+  if (!companiesAllowed(companies, batchCompanies(db, b.id))) return fail('COMPANY_NOT_ALLOWED', 'this batch has rows for a company you do not have access to');
+  if (b.status !== 'review') return fail('BATCH_NOT_IN_REVIEW', `batch #${b.id} is ${b.status}`);
+  return { ok: true, batch: b };
+}
+
+const skippedOut = (list) => list.map(({ rowNo, name, reason, flags }) => ({ rowNo, name, reason, flags }));
+
+/**
+ * Shared loop: ONE transaction — the plan is read inside it, then the single-row
+ * function runs per eligible row; any refusal (or error) rolls everything back.
+ */
+function runBulk(db, { batchId, gate, kind, step, action, label }) {
+  return inTxn(db, () => {
+    const { eligible, skipped } = bulkPlan(db, batchId)[kind];
+    if (!eligible.length) return { ok: true, batchId, confirmed: 0, rows: [], skipped: skippedOut(skipped) };
+    for (const row of eligible) {
+      const r = step(row);
+      if (!r || !r.ok) {
+        return fail('BULK_CONFIRM_FAILED', `row ${row.row_no}: ${(r && (r.message || r.code)) || 'refused'} — nothing was confirmed`, { rowNo: row.row_no, cause: r && r.code });
+      }
+    }
+    audit(db, { table: 'loan_import_batches', recordId: batchId, field: label, actor: gate.actor, action,
+      newValue: `${eligible.length} confirmed`, remark: `rows ${eligible.map((r) => r.row_no).join(', ')}; ${skipped.length} left for one-by-one` });
+    return { ok: true, batchId, confirmed: eligible.length, rows: eligible.map((r) => r.row_no), skipped: skippedOut(skipped) };
+  });
+}
+
+/** HR: confirm every clean proposed match of a batch in one click (bulkPlan().matches). */
+function confirmCleanMatches(db, { batchId, note = null }, actor, { companies = null } = {}) {
+  const gate = checkActor('import_confirm_match', actor);
+  if (!gate.ok) return gate;
+  const e = loadBulkBatch(db, batchId, companies);
+  if (!e.ok) return e;
+  return runBulk(db, {
+    batchId: e.batch.id, gate, kind: 'matches', action: 'bulk_match_confirmed', label: 'match',
+    step: (row) => confirmMatch(db, { batchId: e.batch.id, rowId: row.id, borrowerType: row.borrower_type, employeeCode: row.employee_code, company: row.company, note: text(note) || null },
+      actor, { companies }),
+  });
+}
+
+/** Finance: confirm every clean balance of a batch as in the file, in one click (bulkPlan().balances). */
+function confirmFileBalances(db, { batchId, note = null }, actor, { companies = null } = {}) {
+  const gate = checkActor('import_confirm_balance', actor);
+  if (!gate.ok) return gate;
+  const e = loadBulkBatch(db, batchId, companies);
+  if (!e.ok) return e;
+  return runBulk(db, {
+    batchId: e.batch.id, gate, kind: 'balances', action: 'bulk_balance_confirmed', label: 'balance',
+    step: (row) => confirmBalance(db, { batchId: e.batch.id, rowId: row.id, note: text(note) || null }, actor, { companies }),
   });
 }
 
@@ -828,6 +949,7 @@ function importOfLoan(db, loanId) {
 
 module.exports = {
   IMPORT_MODE, importReady, previewImport, createBatch, listBatches, batchDetail, confirmMatch, excludeRow, confirmBalance,
+  bulkPlan, confirmCleanMatches, confirmFileBalances,
   discardBatch, remapColumns, approveBatch, cutoverCheck, cutoverCheckXlsx, importOfLoan, openingDate, earliestCutover, rowKey,
   batchCutover, cutoverLabel, pickCutover,
   buildImportTemplate: P.buildTemplate,

@@ -27,12 +27,12 @@ const upload = multer({
 });
 
 const STATUS_403 = new Set(['ACTOR_REQUIRED', 'ROLE_NOT_ALLOWED', 'SELF_APPROVAL', 'NOT_UPLOADER', 'COMPANY_NOT_ALLOWED', 'ADMIN_CANNOT_UPLOAD']);
-const STATUS_409 = new Set(['CONCURRENT_CHANGE', 'IMPORT_FILE_ALREADY_UPLOADED', 'BATCH_NOT_IN_REVIEW']);
+const STATUS_409 = new Set(['CONCURRENT_CHANGE', 'IMPORT_FILE_ALREADY_UPLOADED', 'BATCH_NOT_IN_REVIEW', 'BULK_CONFIRM_FAILED']);
 const httpStatus = (code) => (STATUS_403.has(code) ? 403 : STATUS_409.has(code) ? 409 : /_NOT_FOUND$/.test(code) ? 404 : 400);
 
 function refuse(res, r) {
   const body = { success: false, code: r.code, error: r.message || r.error || r.code };
-  for (const k of ['blockers', 'batchId', 'earliest', 'payroll', 'errors', 'rowNo', 'headers', 'mapping', 'autoMapping', 'fields', 'balanceColumns']) if (r[k] !== undefined) body[k] = r[k];
+  for (const k of ['blockers', 'batchId', 'earliest', 'payroll', 'errors', 'rowNo', 'cause', 'headers', 'mapping', 'autoMapping', 'fields', 'balanceColumns']) if (r[k] !== undefined) body[k] = r[k];
   return res.status(httpStatus(r.code)).json(body);
 }
 
@@ -173,6 +173,24 @@ router.post('/batches/:id/rows/:rid/balance', allow(['finance']), handle((req, r
   const r = L.confirmBalance(db, { batchId: posInt(req.params.id), rowId: posInt(req.params.rid), outstanding: b.outstanding, emi: b.emi, note: b.note },
     req.actor, { companies: companies(req) });
   if (r.ok) notifyIfReady(db, posInt(req.params.id));
+  return reply(res, r);
+}));
+
+/** HR: confirm every clean proposed match in one click (code or exact name, one candidate, no flags). Flagged rows stay. */
+router.post('/batches/:id/confirm-clean-matches', allow(['hr']), handle((req, res) => {
+  const db = getDb();
+  const id = posInt(req.params.id);
+  const r = L.confirmCleanMatches(db, { batchId: id, note: (req.body || {}).note }, req.actor, { companies: companies(req) });
+  if (r.ok) notifyIfReady(db, id);
+  return reply(res, r);
+}));
+
+/** Finance: confirm every clean balance as in the file in one click (no correction, so no note). Flagged rows stay. */
+router.post('/batches/:id/confirm-file-balances', allow(['finance']), handle((req, res) => {
+  const db = getDb();
+  const id = posInt(req.params.id);
+  const r = L.confirmFileBalances(db, { batchId: id, note: (req.body || {}).note }, req.actor, { companies: companies(req) });
+  if (r.ok) notifyIfReady(db, id);
   return reply(res, r);
 }));
 
