@@ -12,12 +12,14 @@ function emp(db, code, over = {}) {
   return code;
 }
 
-/** One attendance_processed row. Defaults: present, on time, on the 12-hour shift. */
+const hhmm = (m) => `${String(Math.floor(m / 60)).padStart(2, '0')}:${String(m % 60).padStart(2, '0')}`;
+
+/** One attendance_processed row. Defaults: present, on the 12-hour shift (08:00–20:00); in/out follow lm/em unless given. */
 function day(db, code, date, o = {}) {
   db.prepare(`INSERT INTO attendance_processed (employee_code, date, status_original, status_final, in_time_final, out_time_final,
       shift_detected, is_night_shift, is_miss_punch, is_late_arrival, late_by_minutes, is_early_departure, early_by_minutes, is_left_late, month, year)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
-    .run(code, date, o.st || 'P', o.st || 'P', o.it || '08:00', o.ot || '20:00', o.sd || '12-Hour Shift', o.night || 0, o.mp || 0,
+    .run(code, date, o.st || 'P', o.st || 'P', o.it || hhmm(480 + (o.lm || 0)), o.ot || hhmm(1200 - (o.em || 0)), o.sd || '12-Hour Shift', o.night || 0, o.mp || 0,
       o.lm ? 1 : 0, o.lm || 0, o.em ? 1 : 0, o.em || 0, o.ll || 0, Number(date.slice(5, 7)), Number(date.slice(0, 4)));
 }
 

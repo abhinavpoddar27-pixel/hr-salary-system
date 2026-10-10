@@ -1,7 +1,7 @@
 # Attendance Review build — PROGRESS
 
 ## RESUME
-- Phase: **PR-1 (#82), PR-2 (#84), PR-3 (#85) merged and live.** Follow-up `feat/attendance-review-hours-rule`: full-hours excuse on re-measure rows (owner ruling 10 Oct). Next: owner enters config, generates September; PR-4 stays blocked (L3).
+- Phase: **PR-1 (#82), PR-2 (#84), PR-3 (#85) merged and live.** Follow-ups: #87 full-hours excuse on re-measure rows (merged); `feat/attendance-review-shift-check` automatic early-exit shift check (owner ruling 10 Oct: wrong-shift list must not be a hard list). Next: owner enters config, generates September; PR-4 stays blocked (L3).
 - Decided 10 Oct 2026: D1 approved · D2 Option 2 (release days excluded everywhere, 0.9-day cut-off, improved = fell 40%+) + per-run overrides · D3 `docx` backend · D4 Kuldeep loading excluded · D5 configurable, default warning.
 - Acceptance method (owner chose no DB snapshot): `backend/scripts/attendance-review-acceptance.js print-sql` → run the engine's own SQL in the SQL Console → `rows` mode feeds the output to the engine's JS stages and diffs against the private fixture. Private config + fixture live outside the repo.
 - Sep 2026 result: PASS — 17 people, 14 deductions, 12.5 days; late notice 51 and early notice 38 = fixture; early-exit warnings 32.
@@ -16,7 +16,8 @@
 | PR-1 | `feat/attendance-review-engine` | service + config/run tables + admin endpoints | merged #82, live |
 | PR-2 | `feat/attendance-review-tab` | Analytics tab + config editor; preview takes overrides | merged #84, live |
 | PR-3 | `feat/attendance-review-exports` | xlsx + docx exports from the stored run | merged #85, live |
-| PR-4b | `feat/attendance-review-hours-rule` | full-hours excuse on re-measure rows | built, tested, PR open |
+| PR-4b | `feat/attendance-review-hours-rule` | full-hours excuse on re-measure rows | merged #87, live |
+| PR-4c | `feat/attendance-review-shift-check` | automatic early-exit shift check (replaces the manual wrong-shift list) | built, tested, PR open |
 | PR-4 | later | write-back to `late_coming_deductions` | blocked on day-calc fix (L3) |
 
 ## PR-1 contents
@@ -35,3 +36,4 @@
 - 2026-10-10 — PR-3 built: `services/attendanceReviewExports.js` (SheetJS workbook: 10 sheets; docx pack: landscape action list with ₹, Late Coming + Leaving Early notices with no money/minutes, one note per person, contractor copy line, DRAFT marked on every page group until final). Routes `GET /runs/:id/export.xlsx|docx` (admin only, audited). `docx` ^9.9 added to backend (D3). Tab: Download Excel / Word buttons only while the saved run matches the screen. Rendered via LibreOffice and inspected (page 1 landscape, rest portrait). jest 84/1366; browser check 40/40.
 - 2026-10-10 — #84 and #85 merged; production: deploy success, endpoints 401 without login, new bundle live, drift unchanged (1 row, Feb 2026).
 - 2026-10-10 — Full-hours excuse built (engine, validation, config editor column + tolerance, Excel column + Rules sheet line, Word remark). jest 85/1378; browser check 45/45; real-punch simulation as above.
+- 2026-10-10 — OWNER RULING: the early-exit exclusion list must not be hard — the engine must recognise wrong shifts itself. Built `shift_fit` (default 'habitual'): a person with system early exits on >= 60% of Mon–Sat worked days (min 5) has an exit counted only on a day out − in < shift length − 10 min. "Check master shift" flag when short on >= 80% of those exits (flag only — a hold was tried and dropped: it also hid genuine habitual early leavers; punches cannot tell the two apart). New tab section + Excel sheet "Shift check"; manual list kept as an override, normally empty. jest 85/1380; browser check 48/48.

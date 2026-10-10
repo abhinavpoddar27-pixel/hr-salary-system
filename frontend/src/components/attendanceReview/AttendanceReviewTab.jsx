@@ -351,7 +351,10 @@ export default function AttendanceReviewTab({ selectedMonth, selectedYear }) {
               { k: 'workdays_lost', h: 'Workdays lost', right: true, v: (r) => num(r.workdays_lost, 2) },
               { k: 'last', h: 'Last month L/E', right: true, v: (r) => (r.last_month ? `${r.last_month.late_days} / ${r.last_month.early_days}` : 'new') },
               { k: 'categories', h: 'Why', v: (r) => (r.categories?.length ? r.categories.map((c) => CAT_LABEL[c]).join(', ') : r.override ? 'Override' : '') },
-              { k: 'action', h: 'Action', v: (r) => (r.action === 'deduction' ? <span className="text-red-700 font-semibold">Deduction</span> : <span className="text-amber-700 font-semibold">Warning{r.newcomer ? ' (newcomer)' : ''}</span>) },
+              { k: 'action', h: 'Action', v: (r) => (<>
+                {r.action === 'deduction' ? <span className="text-red-700 font-semibold">Deduction</span> : <span className="text-amber-700 font-semibold">Warning{r.newcomer ? ' (newcomer)' : ''}</span>}
+                {r.check_master_shift && <span className="ml-1 text-[11px] rounded bg-amber-100 text-amber-800 px-1" title="Leaves early almost every day and short of the master shift. Confirm the shift; use an override if the master is wrong.">check master shift</span>}
+              </>) },
               { k: 'deduction_days', h: 'Days', right: true, v: (r) => (r.deduction_days ? num(r.deduction_days, 1) : '—') },
               { k: 'indicative_amount', h: 'Indicative ₹', right: true, v: (r) => (r.indicative_amount ? inr(r.indicative_amount) : '—') },
               { k: 'override', h: 'Override', v: (r) => (r.override ? `${OV_LABEL[r.override.action]}: ${r.override.reason}` : '') },
@@ -365,7 +368,20 @@ export default function AttendanceReviewTab({ selectedMonth, selectedYear }) {
               { k: 'code', h: 'Code', v: (r) => <span className="font-mono">{r.code}</span> }, { k: 'name', h: 'Name' }, { k: 'department', h: 'Department' },
               { k: 'early_exits', h: 'Early exits', right: true }, { k: 'over_1h', h: '1 h or more', right: true },
               { k: 'option_c_days', h: 'Option C days', right: true, v: (r) => num(r.option_c_days, 1) },
-              { k: 'action', h: 'Action', v: (r) => (r.action === 'deduction' ? `Deduction ${num(r.deduction_days, 1)} d` : `Warning${r.newcomer ? ' (newcomer)' : ''}`) },
+              { k: 'action', h: 'Action', v: (r) => `${r.action === 'deduction' ? `Deduction ${num(r.deduction_days, 1)} d` : `Warning${r.newcomer ? ' (newcomer)' : ''}`}${r.check_master_shift ? ' · check master shift' : ''}` },
+            ]} />
+          </Section>
+
+          <Section title="Shift check — early exits (automatic)" count={data.shiftCheck?.length} defaultOpen={false}
+            note={data.criteria?.shift_fit === 'off' ? 'Shift check is OFF — every early exit is counted.'
+              : `People who leave "early" on most days (often a wrong shift in the master)${data.criteria?.shift_fit === 'everyone' ? ', and anyone else with an excused day,' : ''}: an early exit counts only on a day they worked less than their shift length. "Check master shift" = short almost every day — a wrong master shift and a habitual early leaver look the same in the punches, so confirm the shift and use an override if it is wrong.`}>
+            <Table rows={data.shiftCheck} empty="Nobody needed the shift check this month." cols={[
+              { k: 'code', h: 'Code', v: (r) => <span className="font-mono">{r.code}</span> }, { k: 'name', h: 'Name' }, { k: 'department', h: 'Department' },
+              { k: 'shift_h', h: 'Shift h', right: true }, { k: 'ms_days', h: 'Worked (Mon–Sat)', right: true },
+              { k: 'system_early', h: 'System early exits', right: true }, { k: 'excused', h: 'Full hours — not counted', right: true },
+              { k: 'counted', h: 'Counted', right: true }, { k: 'avg_hours', h: 'Avg hours those days', right: true, v: (r) => (r.avg_hours == null ? '—' : num(r.avg_hours, 1)) },
+              { k: 'result', h: 'Result', v: (r) => (r.check_master ? <span className="text-amber-700 font-semibold">Check master shift</span>
+                : { hidden: 'Not shown — full hours worked', shown: 'Shown — short of shift hours', below_threshold: 'Below warning threshold' }[r.result]) },
             ]} />
           </Section>
 
