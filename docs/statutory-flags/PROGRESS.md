@@ -123,7 +123,7 @@
   (400 ×4, JSON, download = generator content + header + DB snapshot unchanged incl. audit_log count, hr/finance/admin 200, viewer
   403, no token 401, rest of the sales router still finance 403). **6/6 FAIL on dcad556's files**. Guard unedited, 86 neighbour tests green.
 
-- PR-3 STEP 4 — (next commit) `feat(filing): sales master edits ESI number / UAN under the upload's rules`. sales.js only: UPDATABLE_FIELDS
+- PR-3 STEP 4 — e70339c `feat(filing): sales master edits ESI number / UAN under the upload's rules`. sales.js only: UPDATABLE_FIELDS
   += `'esi_number', 'uan'` (never in STATUTORY_FLAG_FIELDS); the statutoryFlags require += `ESI_NUMBER_RE, UAN_RE, numberInUse`; NEW
   `checkStatutoryNumbers(db, body, existing)` (spaces stripped, '' → NULL; unchanged vs stored (normalised) → removed from the body
   (N2); malformed → 400 `INVALID_ESI_NUMBER` / `INVALID_UAN`; `numberInUse(db,'sales',col,v,existing?.id ?? -1)` → 409
@@ -135,11 +135,26 @@
   → NULL audited; flags → ignoredFields, master flags + structures unchanged, number written) + F8 ×2 (valid 201 normalised; 400 / 409
   create nothing). **8/8 FAIL on the STEP 3 sales.js.** statutoryWriterGuard.test.js **unedited, 9/9**; 98 neighbour tests green.
 
+- PR-3 STEP 5 — (next commit) `feat(filing): LWF register (plant + sales) for the Punjab remittance`. NEW `services/lwfRegister.js`:
+  `buildLwfRegister(db, {month, year, company})` — plant `salary_computations` LEFT JOIN employees (code) + sales
+  `sales_salary_computations` LEFT JOIN sales_employees (code + company), rows with LWF EE or ER > 0; columns payroll / company / code /
+  name / EE / ER; plant rows `shortfall` = V11 component sum − total_deductions, `capped` = shortfall > ₹1 (sales null, E8); order company,
+  payroll, name, code; company subtotals (count, plant, sales, EE, ER, capped, shortfall) + total. `lwfRegisterWorkbook` — per company its
+  rows then a subtotal row, a total last; every row 8 cells, `!cols` 8, frozen header. reports.js: NEW `GET /lwf-register?month&year
+  [&company][&download=xlsx]` behind `requireHrFinanceOrAdmin` (400 without month 1–12 / year). Filenames that go into a header drop
+  everything outside [A-Za-z0-9_.-] (N6) — here and in the STEP 3 sales ESI filename (`Sales_ESI_…`; real company names unchanged). An odd
+  company ('Wëird "Co" Ltd') made the STEP 3 route 500 on setHeader — test added, fails on the STEP 3 file. lwfRegister.test.js F10 ×2
+  (real plant + sales computes: L1/L2/L3 + SL1/SL2 5/20, U1/SU1 absent, subtotals per company, company filter, other month empty; XLSX
+  header = data = subtotal = total = `!cols` = 8) + F11 ×1 (M2: C1 flagged with a ₹40,000 advance → lwf_employee 5, total = gross,
+  register capped 1 + shortfall = sum − total; L1–L3 capped 0; ECR / ESI lines carry round(pf_employee) / round(esi_employee) as
+  computed) + 3 route tests (JSON, filter, 400 ×3, xlsx download 8 wide, odd company, hr/finance/admin 200, viewer 403, 401). Without
+  the route 3 of 6 fail; without the service the suite cannot load.
+
 ## LAST STEP
-PR-3 STEP 4 (sales master numbers).
+PR-3 STEP 5 (LWF register).
 
 ## NEXT STEP
-PR-3 STEP 5 (LWF register). Carried from PR-2b: run VERIFY V13 on production before PR-2b deploys; do NOT recompute sales September until D3 is answered.
+PR-3 STEP 6 (UI-a: api.js, sales master numbers, SalesEsiExportButton, SalesSalaryCompute, dist). Carried from PR-2b: run VERIFY V13 on production before PR-2b deploys; do NOT recompute sales September until D3 is answered.
 
 ## OWNER RULINGS ADDED DURING THE BUILD
 (record date + ruling; BUILD_PLAN §1 holds the original set)

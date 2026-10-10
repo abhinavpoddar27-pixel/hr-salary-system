@@ -3,11 +3,12 @@ const router = express.Router();
 const XLSX = require('xlsx');
 const { getDb } = require('../database/db');
 const { generatePFECR, generateESIFile, generateBankFile, missingCodesHeader } = require('../services/exportFormats');
+const { buildLwfRegister, lwfRegisterWorkbook } = require('../services/lwfRegister');
 
 // Role gate — HR / finance / admin may read the leave register and (statutory flags PR-3,
 // owner ruling C4) every report here that serves UANs, ESI numbers or bank accounts:
 // /pf-statement, /esi-statement, /bank-transfer, /pf-ecr, /esi-contribution,
-// /bank-salary-file, /audit-trail (old/new field values), GET /company-config.
+// /bank-salary-file, /audit-trail (old/new field values), GET /company-config, /lwf-register.
 function requireHrFinanceOrAdmin(req, res, next) {
   const role = req.user?.role;
   if (role !== 'hr' && role !== 'finance' && role !== 'admin') {
@@ -300,6 +301,26 @@ router.get('/bank-salary-file', requireHrFinanceOrAdmin, (req, res) => {
     filename: result.filename,
     month, year
   });
+});
+
+// GET LWF register (statutory flags PR-3) — plant + sales rows carrying LWF for the month, company
+// subtotals and a total, for the Punjab LWF remittance. Read-only.
+// ?month&year[&company][&download=xlsx]
+router.get('/lwf-register', requireHrFinanceOrAdmin, (req, res) => {
+  const month = parseInt(req.query.month, 10);
+  const year = parseInt(req.query.year, 10);
+  if (!month || month < 1 || month > 12 || !year) {
+    return res.status(400).json({ success: false, error: 'month (1–12) and year required' });
+  }
+  const company = String(req.query.company || '').trim() || null;
+  const reg = buildLwfRegister(getDb(), { month, year, company });
+  if (req.query.download === 'xlsx') {
+    const { buffer, filename } = lwfRegisterWorkbook(reg);
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+    return res.end(buffer);
+  }
+  res.json({ success: true, data: reg.rows, subtotals: reg.subtotals, totals: reg.totals, filename: reg.filename, month, year });
 });
 
 // GET company config (for export headers, PF/ESI codes)

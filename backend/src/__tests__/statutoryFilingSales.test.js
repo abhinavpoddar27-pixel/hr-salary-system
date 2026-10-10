@@ -163,6 +163,13 @@ describe('F6 — GET /api/sales/export/esi-contribution', () => {
     expect(snapshot()).toBe(before);
   });
 
+  test('an odd company name never breaks the Content-Disposition header (N6)', async () => {
+    const r = await get(`/api/sales/export/esi-contribution?month=${M}&year=${Y}&company=${encodeURIComponent('Wëird "Co"\u00a0Ltd')}&download=true`, 'hr1');
+    expect(r.status).toBe(200);
+    expect(r.headers['content-disposition']).toBe('attachment; filename="Sales_ESI_Oct_2026_Wird_Co_Ltd.txt"');
+    expect(r.text).toBe('');
+  });
+
   test('hr / finance / admin 200; viewer 403; no token 401 (C4)', async () => {
     for (const as of ['hr1', 'fin1', 'adm1']) {
       expect([as, (await get(URL, as)).status]).toEqual([as, 200]);

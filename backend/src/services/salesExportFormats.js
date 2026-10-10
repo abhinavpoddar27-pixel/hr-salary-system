@@ -434,7 +434,8 @@ function generateSalesESIFile(db, month, year, company) {
 
   return {
     content: lines.join('\n'),
-    filename: `Sales_ESI_${MONTHS_SHORT[month]}_${year}_${underscoreCompany(company)}.txt`,
+    // the filename goes into a header: anything outside [A-Za-z0-9_.-] is dropped (N6)
+    filename: `Sales_ESI_${MONTHS_SHORT[month]}_${year}_${underscoreCompany(company).replace(/[^A-Za-z0-9_.-]/g, '')}.txt`,
     employees: written,
     missing,
     totals: {
