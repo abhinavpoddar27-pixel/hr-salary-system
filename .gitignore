@@ -53,3 +53,7 @@ http-client.private.env.json
 *.swp
 *.swo
 Thumbs.db
+
+# statutory upload files never go in the repo
+*statutory*.xlsx
+*statutory*.csv

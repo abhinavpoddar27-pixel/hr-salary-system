@@ -1105,11 +1105,19 @@ const UPDATABLE_FIELDS = [
   'contact', 'personal_contact',
   'state', 'headquarters', 'city_of_operation', 'reporting_manager',
   'designation', 'punch_no', 'working_hours',
-  'gross_salary', 'pf_applicable', 'esi_applicable', 'pt_applicable',
+  'gross_salary', 'pf_applicable', 'esi_applicable', 'lwf_applicable', 'pt_applicable',
   'bank_name', 'account_no', 'ifsc',
   'status',
   'predecessor_type', 'predecessor_id', 'predecessor_code'
 ];
+
+// Statutory flags PR-1 (R10): PF / ESI / LWF change only through the audited
+// statutory upload. PUT /employees/:code ignores them (returns ignoredFields);
+// POST /employees (create) may still set them on the new employee (§4.4).
+const STATUTORY_FLAG_FIELDS = ['pf_applicable', 'esi_applicable', 'lwf_applicable'];
+const { carryFlags, structureDatedAfter } = require('../services/statutoryFlags');
+// A structure row's effective_from taken from a request: YYYY-MM, month 01–12 only.
+const SALES_MONTH_RE = /^\d{4}-(0[1-9]|1[0-2])$/;
 
 const VALID_STATUSES = ['Active', 'Inactive', 'Left', 'Exited'];
 
@@ -1154,13 +1162,23 @@ function prevMonthYYYYMM(yyyymm) {
 }
 
 // Insert (or upsert) a structure row at `effectiveFrom` whose components sum
-// EXACTLY to newGross: basic absorbs the delta, hra/cca/conveyance + the
-// pf/esi/pt flags + pf_wage_ceiling_override + notes are carried forward from
-// the current row unchanged. No new allowance line is added. The prior open
+// EXACTLY to newGross: basic absorbs the delta, hra/cca/conveyance + pt +
+// pf_wage_ceiling_override + notes are carried forward from the current row
+// unchanged. PF / ESI / LWF come from the row IN FORCE AT F (compute's lookup,
+// carryFlags) — not from the current row: after a statutory upload the current
+// row carries the new flags, and copying them into a back-dated row would
+// change earlier months (L18, statutory flags PR-1). No new allowance line is added. The prior open
 // row is closed (effective_to = month before F) for history hygiene —
 // getLatestStructure keys on effective_from alone, so the new row already
 // wins; closing is descriptive only. Must run inside a db.transaction().
+// A row dated after F would shadow this one from its date on (compute reads
+// the row in force), so that case throws (err.statutory → 409) and the caller's
+// transaction rolls back, master included. A row dated exactly F is updated in
+// place by the ON CONFLICT below; its flags are the ones carryFlags reads at F,
+// i.e. that row's own (10 Oct 2026 ruling, statutory flags PR-1 review).
 function versionSalesStructureForGross(db, { employeeId, newGross, effectiveFrom, user }) {
+  const later = structureDatedAfter(db, 'sales', employeeId, effectiveFrom);
+  if (later) { const err = new Error(later.error); err.statutory = later; throw err; }
   const grossNum = Math.round((Number(newGross) || 0) * 100) / 100;
 
   // Carry components + flags forward from the current (most-recent) row.
@@ -1174,8 +1192,10 @@ function versionSalesStructureForGross(db, { employeeId, newGross, effectiveFrom
   const hra        = cur ? Math.round((cur.hra || 0) * 100) / 100 : 0;
   const cca        = cur ? Math.round((cur.cca || 0) * 100) / 100 : 0;
   const conveyance = cur ? Math.round((cur.conveyance || 0) * 100) / 100 : 0;
-  const pfApp      = cur && cur.pf_applicable ? 1 : 0;
-  const esiApp     = cur && cur.esi_applicable ? 1 : 0;
+  const inForce    = carryFlags(db, 'sales', employeeId, effectiveFrom); // read before any write
+  const pfApp      = inForce.pf;
+  const esiApp     = inForce.esi;
+  const lwfApp     = inForce.lwf;
   const ptApp      = cur && cur.pt_applicable ? 1 : 0;
   const ceiling    = cur ? (cur.pf_wage_ceiling_override ?? null) : null;
   const notes      = cur ? (cur.notes ?? null) : null;
@@ -1198,9 +1218,9 @@ function versionSalesStructureForGross(db, { employeeId, newGross, effectiveFrom
   db.prepare(`
     INSERT INTO sales_salary_structures
       (employee_id, effective_from, effective_to, basic, hra, cca, conveyance,
-       gross_salary, pf_applicable, esi_applicable, pt_applicable,
+       gross_salary, pf_applicable, esi_applicable, lwf_applicable, pt_applicable,
        pf_wage_ceiling_override, notes, created_by)
-    VALUES (?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    VALUES (?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(employee_id, effective_from) DO UPDATE SET
       effective_to             = NULL,
       basic                    = excluded.basic,
@@ -1210,13 +1230,14 @@ function versionSalesStructureForGross(db, { employeeId, newGross, effectiveFrom
       gross_salary             = excluded.gross_salary,
       pf_applicable            = excluded.pf_applicable,
       esi_applicable           = excluded.esi_applicable,
+      lwf_applicable           = excluded.lwf_applicable,
       pt_applicable            = excluded.pt_applicable,
       pf_wage_ceiling_override = excluded.pf_wage_ceiling_override,
       notes                    = excluded.notes,
       created_by               = excluded.created_by
   `).run(
     employeeId, effectiveFrom, basic, hra, cca, conveyance,
-    grossNum, pfApp, esiApp, ptApp, ceiling, notes, user
+    grossNum, pfApp, esiApp, lwfApp, ptApp, ceiling, notes, user
   );
 
   const row = db.prepare(
@@ -1322,6 +1343,12 @@ router.post('/employees', (req, res) => {
     return res.status(400).json({ success: false, error: `Invalid status. Must be one of: ${VALID_STATUSES.join(', ')}` });
   }
 
+  // The auto-created structure row is dated doj's YYYY-MM (below); a bogus month
+  // (e.g. '2026-13') would block every later honest edit (review fix 5).
+  if (body.doj && String(body.doj).trim() && !SALES_MONTH_RE.test(String(body.doj).trim().substring(0, 7))) {
+    return res.status(400).json({ success: false, error: 'doj must be YYYY-MM-DD with month 01–12 (it dates the salary structure)' });
+  }
+
   const explicitCode = body.code && String(body.code).trim() !== ''
     ? String(body.code).trim()
     : null;
@@ -1394,15 +1421,17 @@ router.post('/employees', (req, res) => {
       const effectiveFrom = (body.doj && String(body.doj).trim())
         ? String(body.doj).trim().substring(0, 7)
         : new Date().toISOString().substring(0, 7);
+      // Create may set flags on the new employee (§4.4); omitted = 0.
       const pfApp = body.pf_applicable ? 1 : 0;
       const esiApp = body.esi_applicable ? 1 : 0;
+      const lwfApp = body.lwf_applicable ? 1 : 0;
       const ptApp = body.pt_applicable ? 1 : 0;
 
       const structInfo = db.prepare(`
         INSERT INTO sales_salary_structures
           (employee_id, effective_from, basic, hra, cca, conveyance,
-           gross_salary, pf_applicable, esi_applicable, pt_applicable, created_by)
-        VALUES (?, ?, ?, 0, 0, 0, ?, ?, ?, ?, ?)
+           gross_salary, pf_applicable, esi_applicable, lwf_applicable, pt_applicable, created_by)
+        VALUES (?, ?, ?, 0, 0, 0, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(employee_id, effective_from) DO UPDATE SET
           basic           = excluded.basic,
           hra             = excluded.hra,
@@ -1411,8 +1440,9 @@ router.post('/employees', (req, res) => {
           gross_salary    = excluded.gross_salary,
           pf_applicable   = excluded.pf_applicable,
           esi_applicable  = excluded.esi_applicable,
+          lwf_applicable  = excluded.lwf_applicable,
           pt_applicable   = excluded.pt_applicable
-      `).run(info.lastInsertRowid, effectiveFrom, grossNum, grossNum, pfApp, esiApp, ptApp, user);
+      `).run(info.lastInsertRowid, effectiveFrom, grossNum, grossNum, pfApp, esiApp, lwfApp, ptApp, user);
 
       writeAudit(db, {
         recordId: info.lastInsertRowid,
@@ -1458,9 +1488,11 @@ router.put('/employees/:code', (req, res) => {
   const setClauses = [];
   const params = [];
   const changedFields = [];
+  const ignoredFields = STATUTORY_FLAG_FIELDS.filter((f) => body[f] !== undefined);
 
   for (const field of UPDATABLE_FIELDS) {
     if (IMMUTABLE_FIELDS.has(field)) continue;
+    if (STATUTORY_FLAG_FIELDS.includes(field)) continue; // statutory upload only (R10)
     if (body[field] === undefined) continue;
     setClauses.push(`${field} = ?`);
     params.push(body[field]);
@@ -1470,7 +1502,7 @@ router.put('/employees/:code', (req, res) => {
   }
 
   if (setClauses.length === 0) {
-    return res.json({ success: true, message: 'No updates', data: existing });
+    return res.json({ success: true, message: 'No updates', data: existing, ...(ignoredFields.length ? { ignoredFields } : {}) });
   }
 
   setClauses.push('updated_by = ?'); params.push(user);
@@ -1491,10 +1523,12 @@ router.put('/employees/:code', (req, res) => {
   if (body.effective_from !== undefined && body.effective_from !== null
       && String(body.effective_from).trim() !== '') {
     const v = String(body.effective_from).trim();
-    if (!/^\d{4}-\d{2}$/.test(v)) {
+    // Month 01–12 only (review fix 5): a bogus later-dated row such as
+    // '2026-13' would block every honest edit after it (STRUCTURE_DATED_LATER).
+    if (!SALES_MONTH_RE.test(v)) {
       return res.status(400).json({
         success: false,
-        error: 'effective_from must be zero-padded YYYY-MM (e.g. 2026-05)',
+        error: 'effective_from must be zero-padded YYYY-MM with month 01–12 (e.g. 2026-05)',
       });
     }
     effectiveFrom = v;
@@ -1557,13 +1591,14 @@ router.put('/employees/:code', (req, res) => {
   try {
     applyUpdate();
   } catch (e) {
+    if (e.statutory) return res.status(e.statutory.status).json({ success: false, error: e.statutory.error, code: e.statutory.code, latestDate: e.statutory.latestDate });
     return res.status(500).json({ success: false, error: e.message });
   }
   notifyLoanAlerts(db, loanExit.alerts);   // after the commit, best effort
 
   const updated = db.prepare('SELECT * FROM sales_employees WHERE code = ? AND company = ?')
                     .get(req.params.code, company);
-  res.json({ success: true, data: updated, structure: structureResult, ...(becameExit ? { loans: loanExit.loans } : {}) });
+  res.json({ success: true, data: updated, structure: structureResult, ...(ignoredFields.length ? { ignoredFields } : {}), ...(becameExit ? { loans: loanExit.loans } : {}) });
 });
 
 // ── PUT /api/sales/employees/:code/mark-left?company=X ─────────────
@@ -1643,8 +1678,11 @@ router.get('/employees/:code/structures', (req, res) => {
 });
 
 // ── POST /api/sales/employees/:code/structures?company=X ───────────
-// Phase 1: insert only. No supersede semantics (effective_to not auto-set
-// on prior row). Phase 3 will layer the effective-from supersede logic.
+// Inserts a version at effective_from. No supersede semantics (effective_to
+// not auto-set on prior row). Statutory flags PR-1 review (10 Oct 2026
+// ruling): a row dated after effective_from → 409, nothing written; a row
+// dated exactly effective_from → the supplied columns are updated in place on
+// that row and it keeps its own flags (200, updatedInPlace).
 router.post('/employees/:code/structures', (req, res) => {
   const company = requireCompany(req, res);
   if (!company) return;
@@ -1660,18 +1698,44 @@ router.post('/employees/:code/structures', (req, res) => {
   if (!body.effective_from || !String(body.effective_from).trim()) {
     return res.status(400).json({ success: false, error: 'effective_from is required (YYYY-MM)' });
   }
+  const effectiveFrom = String(body.effective_from).trim();
+  if (!SALES_MONTH_RE.test(effectiveFrom)) {
+    return res.status(400).json({ success: false, error: 'effective_from must be zero-padded YYYY-MM with month 01–12 (e.g. 2026-05)' });
+  }
 
-  // Only include columns the caller actually supplied so SQLite DEFAULT
-  // values (e.g. pf_applicable=0) apply for omitted fields.
-  const cols = ['employee_id', 'created_by', 'effective_from'];
-  const values = [emp.id, user, body.effective_from];
+  // Statutory flags PR-1 (R10): body flags are ignored; the new row carries
+  // the flags in force at its own effective month (compute's lookup).
+  const ignoredFields = STATUTORY_FLAG_FIELDS.filter((f) => body[f] !== undefined);
+  const withIgnored = (b) => (ignoredFields.length ? { ...b, ignoredFields } : b);
+
+  const later = structureDatedAfter(db, 'sales', emp.id, effectiveFrom);
+  if (later) return res.status(later.status).json(withIgnored({ success: false, error: later.error, code: later.code, latestDate: later.latestDate }));
+
   const optional = [
     'effective_to', 'basic', 'hra', 'cca', 'conveyance', 'gross_salary',
-    'pf_applicable', 'esi_applicable', 'pt_applicable',
+    'pt_applicable',
     'pf_wage_ceiling_override', 'notes'
   ];
-  for (const f of optional) {
-    if (body[f] === undefined) continue;
+  const supplied = optional.filter((f) => body[f] !== undefined);
+
+  const sameDate = db.prepare('SELECT id FROM sales_salary_structures WHERE employee_id = ? AND effective_from = ?').get(emp.id, effectiveFrom);
+  if (sameDate) {
+    // In place: only the supplied columns; this row keeps its own flags.
+    if (supplied.length) {
+      db.prepare(`UPDATE sales_salary_structures SET ${supplied.map((f) => `${f} = ?`).join(', ')} WHERE id = ?`)
+        .run(...supplied.map((f) => body[f]), sameDate.id);
+    }
+    const row = db.prepare('SELECT * FROM sales_salary_structures WHERE id = ?').get(sameDate.id);
+    return res.json(withIgnored({ success: true, data: row, updatedInPlace: true }));
+  }
+
+  const carried = carryFlags(db, 'sales', emp.id, effectiveFrom);
+
+  // Only include columns the caller actually supplied so SQLite DEFAULT
+  // values apply for omitted fields — flags always listed (carried).
+  const cols = ['employee_id', 'created_by', 'effective_from', 'pf_applicable', 'esi_applicable', 'lwf_applicable'];
+  const values = [emp.id, user, effectiveFrom, carried.pf, carried.esi, carried.lwf];
+  for (const f of supplied) {
     cols.push(f);
     values.push(body[f]);
   }
@@ -1682,7 +1746,7 @@ router.post('/employees/:code/structures', (req, res) => {
       `INSERT INTO sales_salary_structures (${cols.join(', ')}) VALUES (${placeholders})`
     ).run(...values);
     const row = db.prepare('SELECT * FROM sales_salary_structures WHERE id = ?').get(info.lastInsertRowid);
-    res.status(201).json({ success: true, data: row });
+    res.status(201).json({ success: true, data: row, ...(ignoredFields.length ? { ignoredFields } : {}) });
   } catch (e) {
     if (String(e.message).includes('UNIQUE')) {
       return res.status(409).json({

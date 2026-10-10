@@ -1802,19 +1802,23 @@ router.get('/statutory-crosscheck', (req, res) => {
     FROM salary_computations WHERE month = ? AND year = ? AND professional_tax > 0
   `).get(month, year);
 
-  // Cross-check PF against salary structures
+  // Cross-check PF against salary structures — the row IN FORCE for the month
+  // (compute's lookup: effective_from <= YYYY-MM-01, else the latest row), not
+  // the latest row (statutory flags PR-1, L19). SQLite has no LEAST(): scalar MIN.
   const pfExpected = db.prepare(`
     SELECT SUM(
       CASE WHEN ss.pf_applicable = 1 THEN
-        ROUND(LEAST(COALESCE(ss.basic, 0) + COALESCE(ss.da, 0), COALESCE(ss.pf_wage_ceiling, 15000)) * 0.12, 2)
+        ROUND(MIN(COALESCE(ss.basic, 0) + COALESCE(ss.da, 0), COALESCE(ss.pf_wage_ceiling, 15000)) * 0.12, 2)
       ELSE 0 END
     ) as expected_pf
     FROM salary_computations sc
     JOIN employees e ON sc.employee_code = e.code
-    JOIN salary_structures ss ON ss.employee_id = e.id
-    WHERE sc.month = ? AND sc.year = ? AND ss.id = (
-      SELECT id FROM salary_structures WHERE employee_id = e.id ORDER BY effective_from DESC LIMIT 1
+    JOIN salary_structures ss ON ss.id = COALESCE(
+      (SELECT x.id FROM salary_structures x WHERE x.employee_id = e.id AND x.effective_from <= printf('%04d-%02d-01', sc.year, sc.month)
+        ORDER BY x.effective_from DESC, x.id DESC LIMIT 1),
+      (SELECT x.id FROM salary_structures x WHERE x.employee_id = e.id ORDER BY x.effective_from DESC, x.id DESC LIMIT 1)
     )
+    WHERE sc.month = ? AND sc.year = ?
   `).get(month, year);
 
   const pfTotal = Math.round((pfSalary?.emp_total || 0) * 100) / 100;
@@ -1829,6 +1833,7 @@ router.get('/statutory-crosscheck', (req, res) => {
         employerTotal: Math.round((pfSalary?.empr_total || 0) * 100) / 100,
         wagesTotal: Math.round((pfSalary?.wages_total || 0) * 100) / 100,
         count: pfSalary?.pf_count || 0,
+        expectedEmployeeTotal: Math.round((pfExpected?.expected_pf || 0) * 100) / 100,
         match: true // self-consistent
       },
       esi: {

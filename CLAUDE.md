@@ -27,6 +27,53 @@
 
 ---
 
+## Last Session — 2026-10-10 (Statutory flags PR-1)
+**Statutory flags PR-1: audited PF/ESI/LWF flag upload + every writer preserves flags. Branch `feat/statutory-flags`,
+built LOCALLY on d1ad7bf, NOT pushed (repo public — awaiting owner), NOT merged.** Plan: `docs/statutory-flags/IMPL_PR1.md`
+(REVIEW CORRECTIONS C1–C6 binding); log + decisions: `docs/statutory-flags/PROGRESS.md`. No LWF deduction yet (PR-2).
+- **Schema (additive):** `lwf_applicable INTEGER DEFAULT 0` on employees / salary_structures / sales_employees /
+  sales_salary_structures; `sales_employees.esi_number`, `.uan`; `statutory_flag_batches` + partial UNIQUE
+  (scope, effective_month, file_sha256) WHERE status='applied'; trigger `employees_statutory_default_off` (AFTER INSERT →
+  pf/esi/lwf 0; DROP+CREATE, placed after the lwf column). **Startup PF/ESI reset removed** (L2).
+- **`services/statutoryFlags.js` + `routes/statutoryFlags.js` (`/api/statutory-flags`, admin only):** parse (Y/N, codes as
+  text, SheetJS raw:true so 12-digit UANs survive) → plan (read-only; blocking = missing column / repeated code / malformed
+  structure date / duplicate date at latest or in-force row; row errors = unmatched / no structure) → apply in one
+  `.immediate()` txn: batch row first, re-plan inside, FREEZE copy of the latest row at 2000-01-01 (sales 2000-01) with its
+  own flags, E row (exact rows updated, else copy of the in-force row with new flags, sales effective_to NULL), later rows
+  updated, master flags + valid numbers, audit on the passed handle (stage `statutory_upload`, remark `batch:<id>`).
+  Preview returns the planned freeze/effective/at-E/later row counts (= apply counts) for the RUNBOOK V10 check.
+  Undo file = flags in force at E before the batch, in the upload layout; blank numbers = unchanged. NOT a full
+  restore: a later row whose flags differed before the batch ends at the E value; added numbers + extra rows stay.
+- **R10 single path:** employees.js (sync helper no longer touches pf/esi; POST/PUT/salary/bulk-import/integrity) ,
+  salary-input.js approve (flags + pt + percents + pf_wage_ceiling from the row in force at effectiveFrom; YYYY-MM-DD
+  validated; master gross only), salaryComputation.js 303–307 (auto-create lists lwf — ONLY change in that file),
+  sales.js (PUT ignores flags; versionSalesStructureForGross + POST /structures carry flags from the in-force row;
+  YYYY-MM validated), schema.js sales backfill lists lwf. Bodies with flags → ignored + `ignoredFields`. bulk-import and
+  integrity-check/fix now `requireAdmin`; integrity-fix repairs gross only (flag/pt mismatch reported, never written).
+- **L19 readers:** /statutory-crosscheck (LEAST → MIN, in-force join, +`pf.expectedEmployeeTotal`) no longer 500s;
+  red-flag compliance_gap reads the in-force row and skips ESI above ₹21k.
+- **Frontend:** new admin page `/admin/statutory-flags` (sidebar adminOnly); PF/ESI/LWF read-only in Employees salary
+  modal (L4 bug gone), SalaryInput, Sales master (+ "Change via Statutory Flags"). dist rebuilt + committed.
+- **Fragile:** (1) structure copies list columns from PRAGMA (minus id/created/updated) — a new structure column is copied
+  automatically; a new FLAG column is not. (2) The guard test `statutoryWriterGuard.test.js` pins 3 dynamic-insert
+  exemptions and a 5-entry flag-assignment allowlist — a new writer must carry pf/esi/lwf or the suite fails.
+  (3) Plant compute has no id tie-break; the planner blocks same-date ties instead. (4) Rollback = the startup reset
+  comes back (N8) and wipes plant ESI (no numbers) on the next boot — prefer rolling forward. (5) `backend/scripts`
+  simulations insert employees with flags = 1; the trigger now zeroes them (N4, scripts untouched).
+- **Verified:** suite 769 → 877 (42 → 49 suites), two clean runs; 0 DO-NOT-MODIFY diffs; UPSERT counts unchanged
+  (plant 56/56/56/53, sales 45/45/45/42). New tests fail on the old code (writers 14/17, approval 5/7, sales 7/8,
+  readers 3/3, guard flags every site PR-1 fixed on d1ad7bf). Deploy sim: old-schema DB + new boot ×2 → flags intact.
+  `docs/statutory-flags/sim/run.py` (real server + logins + Chromium, synthetic throwaway DB): 58/58 — August
+  byte-identical after the upload (plant + sales), Sep flags on, re-apply 0 changes, undo restores, drift 0 both.
+- **Independent review fixes (10 Oct, SHIP WITH FIXES):** (1) a structure write dated before an existing row → 409
+  STRUCTURE_DATED_LATER, nothing written (sales PUT gross / POST /structures, plant approve); same date → that row
+  updated in place, keeps its flags (planner ruling, owner to confirm). (2) An ESI number / UAN repeated in one file
+  is written for none. (3) Parser repeat check uses the matcher's company normalisation. (4) Undo wording fixed.
+  Suite 49 / 886, sim 68/68. Found, not fixed: plant compute reads gross from employees.gross_salary for EVERY month,
+  so an approval re-grosses earlier months on a re-run (pre-existing; OPEN_ITEMS).
+- **Not tested:** Railway; production data (the 125/139-row files); cross-process concurrency; Safari/Firefox.
+  **Not pushed: repo public — owner makes it private, then pushes and opens the PR in the GitHub UI.**
+
 ## Last Session — 2026-10-10 (Loans PR-6b)
 **Loans PR-6b: close screen, admin reversal, Mark Left outstanding. Branch `feat/loans-pr6b` (based on `feat/loans-pr6`), NOT pushed/merged.**
 - **Close screen:** new `components/loans/LoanClose.jsx` = "Monthly close" tab on `/loans?tab=close` (no new route).

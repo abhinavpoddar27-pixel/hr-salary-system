@@ -1,0 +1,192 @@
+/**
+ * Shared fixture for the statutory-flags PR-1 suites.
+ * Real initSchema() on an in-memory database; synthetic codes only (never real
+ * employees, ESI numbers or UANs).
+ */
+const Database = require('better-sqlite3');
+const XLSX = require('xlsx');
+const { initSchema } = require('../../database/schema');
+
+const COMPANY = 'Indriyan Beverages Pvt Ltd';
+const OTHER_COMPANY = 'Asian Lakto Ind Ltd';
+
+function silently(fn) {
+  const log = console.log; const err = console.error; const warn = console.warn;
+  console.log = () => {}; console.error = () => {}; console.warn = () => {};
+  try { return fn(); } finally { console.log = log; console.error = err; console.warn = warn; }
+}
+
+function newDb() {
+  const db = new Database(':memory:');
+  silently(() => initSchema(db));
+  return db;
+}
+
+/**
+ * Production's `employees` and `salary_structures` have pf_applicable /
+ * esi_applicable DEFAULT 1 (PRAGMA-verified; schema.js text says 0 — L3).
+ * Rebuild both tables from their own sqlite_master SQL with DEFAULT 1, copy the
+ * rows, then run initSchema again (re-creates the trigger and indexes), so a
+ * test sees exactly what an insert that omits the flags does in production.
+ */
+function withLiveDefaults(db) {
+  db.pragma('foreign_keys = OFF');
+  for (const t of ['employees', 'salary_structures']) {
+    const { sql } = db.prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name = ?").get(t);
+    let live = sql
+      .replace(/pf_applicable INTEGER DEFAULT 0/, 'pf_applicable INTEGER DEFAULT 1')
+      .replace(/esi_applicable INTEGER DEFAULT 0/, 'esi_applicable INTEGER DEFAULT 1');
+    if (live === sql) throw new Error(`withLiveDefaults: no DEFAULT 0 flags found on ${t}`);
+    live = live.replace(new RegExp(`CREATE TABLE ("?)${t}\\1`), `CREATE TABLE ${t}__live`);
+    db.exec(live);
+    const names = db.prepare(`PRAGMA table_info(${t})`).all().map((c) => c.name).join(', ');
+    db.exec(`INSERT INTO ${t}__live (${names}) SELECT ${names} FROM ${t}`);
+    db.exec(`DROP TABLE ${t}`);
+    db.exec(`ALTER TABLE ${t}__live RENAME TO ${t}`);
+  }
+  db.pragma('foreign_keys = ON');
+  silently(() => initSchema(db));
+  return db;
+}
+
+const dflt = (db, t, col) => db.prepare(`PRAGMA table_info(${t})`).all().find((c) => c.name === col).dflt_value;
+
+let seq = 1;
+
+/** Plant employee. The trigger sets flags to 0 on insert; pass flags to switch them on afterwards. */
+function plant(db, over = {}) {
+  const code = over.code || `T${String(9000 + seq++)}`;
+  const info = db.prepare(`
+    INSERT INTO employees (code, name, department, company, employment_type, status, date_of_joining, gross_salary, uan, esi_number, pf_number)
+    VALUES (?, 'SYNTH EMP', ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(code, over.department || 'PRODUCTION', over.company === undefined ? COMPANY : over.company,
+    over.employment_type || 'Permanent', over.status || 'Active', over.date_of_joining || '2024-01-01',
+    over.gross_salary ?? 15000, over.uan ?? null, over.esi_number ?? null, over.pf_number ?? null);
+  const id = Number(info.lastInsertRowid);
+  if (over.pf !== undefined || over.esi !== undefined || over.lwf !== undefined) {
+    db.prepare('UPDATE employees SET pf_applicable = ?, esi_applicable = ?, lwf_applicable = ? WHERE id = ?')
+      .run(over.pf ? 1 : 0, over.esi ? 1 : 0, over.lwf ? 1 : 0, id);
+  }
+  return { id, code, company: over.company === undefined ? COMPANY : over.company };
+}
+
+/** Plant structure row. Every column the copy logic must carry gets a distinct value. */
+function plantStructure(db, emp, effectiveFrom, over = {}) {
+  const g = over.gross_salary ?? 15000;
+  const info = db.prepare(`
+    INSERT INTO salary_structures
+      (employee_id, effective_from, gross_salary, basic, da, hra, conveyance, special_allowance, other_allowances,
+       basic_percent, da_percent, hra_percent, pf_applicable, esi_applicable, pt_applicable, lwf_applicable, pf_wage_ceiling)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(emp.id, effectiveFrom, g, over.basic ?? g * 0.5, over.da ?? 0, over.hra ?? g * 0.2,
+    over.conveyance ?? 300, over.special_allowance ?? 0, over.other_allowances ?? (g * 0.3 - 300),
+    over.basic_percent ?? 50, over.da_percent ?? 0, over.hra_percent ?? 20,
+    over.pf ? 1 : 0, over.esi ? 1 : 0, over.pt ?? 0, over.lwf ? 1 : 0, over.pf_wage_ceiling ?? 15000);
+  return Number(info.lastInsertRowid);
+}
+
+function salesEmp(db, over = {}) {
+  const code = over.code || `Z${String(800 + seq++)}`;
+  const company = over.company || COMPANY;
+  const info = db.prepare(`
+    INSERT INTO sales_employees (code, name, company, status, doj, gross_salary, state, pf_applicable, esi_applicable, pt_applicable, lwf_applicable, esi_number, uan)
+    VALUES (?, 'SYNTH SALES', ?, ?, ?, ?, 'Punjab', ?, ?, 0, ?, ?, ?)
+  `).run(code, company, over.status || 'Active', over.doj ?? '2025-01-01', over.gross_salary ?? 18000,
+    over.pf ? 1 : 0, over.esi ? 1 : 0, over.lwf ? 1 : 0, over.esi_number ?? null, over.uan ?? null);
+  return { id: Number(info.lastInsertRowid), code, company };
+}
+
+function salesStructure(db, emp, effectiveFrom, over = {}) {
+  const g = over.gross_salary ?? 18000;
+  const info = db.prepare(`
+    INSERT INTO sales_salary_structures
+      (employee_id, effective_from, effective_to, basic, hra, cca, conveyance, gross_salary,
+       pf_applicable, esi_applicable, pt_applicable, lwf_applicable, notes, created_by)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'fixture')
+  `).run(emp.id, effectiveFrom, over.effective_to ?? null, over.basic ?? g * 0.5, over.hra ?? g * 0.2,
+    over.cca ?? g * 0.1, over.conveyance ?? g * 0.2, g, over.pf ? 1 : 0, over.esi ? 1 : 0, 0, over.lwf ? 1 : 0,
+    over.notes ?? null);
+  return Number(info.lastInsertRowid);
+}
+
+const plantRows = (db, emp) => db.prepare('SELECT * FROM salary_structures WHERE employee_id = ? ORDER BY effective_from, id').all(emp.id);
+const salesRows = (db, emp) => db.prepare('SELECT * FROM sales_salary_structures WHERE employee_id = ? ORDER BY effective_from, id').all(emp.id);
+const master = (db, emp) => db.prepare('SELECT * FROM employees WHERE id = ?').get(emp.id);
+const salesMaster = (db, emp) => db.prepare('SELECT * FROM sales_employees WHERE id = ?').get(emp.id);
+const flags = (r) => ({ pf: r.pf_applicable, esi: r.esi_applicable, lwf: r.lwf_applicable });
+
+function counts(db) {
+  const c = (t) => db.prepare(`SELECT COUNT(*) AS c FROM ${t}`).get().c;
+  return {
+    employees: c('employees'), salary_structures: c('salary_structures'),
+    sales_employees: c('sales_employees'), sales_salary_structures: c('sales_salary_structures'),
+  };
+}
+
+// ── Compute helpers (real Stage 7 / sales compute on the fixture DB) ───────
+const VOLATILE = new Set(['id', 'computed_at', 'created_at', 'updated_at', 'ai_explanation', 'ai_explanation_at', 'finalised_at']);
+const strip = (r) => (r ? Object.fromEntries(Object.entries(r).filter(([k]) => !VOLATILE.has(k))
+  .map(([k, v]) => [k, k === 'sunday_rule_trace' && typeof v === 'string' ? v.replace(/"computedAt":"[^"]*"/, '"computedAt":"-"') : v])) : r);
+
+/** Day-calc row for a plant month (enough present days to be paid, no hold). */
+function plantMonth(db, emp, month, year, days = 26) {
+  const dim = new Date(Date.UTC(year, month, 0)).getUTCDate();
+  db.prepare(`
+    INSERT INTO day_calculations (employee_code, month, year, company, days_present, total_payable_days, paid_sundays, days_absent)
+    VALUES (?, ?, ?, ?, ?, ?, ?, 0)
+    ON CONFLICT DO NOTHING
+  `).run(emp.code, month, year, emp.company, days, dim, dim - days);
+}
+
+/** Plant Stage 7 for one employee-month; returns the saved salary row (volatile columns stripped). */
+function computePlant(db, emp, month, year) {
+  const { computeEmployeeSalary, saveSalaryComputation } = require('../../services/salaryComputation');
+  const e = db.prepare('SELECT * FROM employees WHERE id = ?').get(emp.id);
+  const c = silently(() => computeEmployeeSalary(db, e, month, year, emp.company, 'statutory-test'));
+  if (!c.success) throw new Error(`plant compute failed: ${c.reason || c.error}`);
+  silently(() => saveSalaryComputation(db, c));
+  return strip(db.prepare('SELECT * FROM salary_computations WHERE employee_code = ? AND month = ? AND year = ?').get(emp.code, month, year));
+}
+
+function computeSales(db, emp, month, year, daysGiven = 24) {
+  const { computeSalesEmployee, saveSalesSalaryComputation } = require('../../services/salesSalaryComputation');
+  const { deriveCycle } = require('../../services/cycleUtil');
+  const cy = deriveCycle(month, year);
+  const e = db.prepare('SELECT * FROM sales_employees WHERE id = ?').get(emp.id);
+  const c = silently(() => computeSalesEmployee(db, {
+    salesEmployee: e, monthlyInputRow: { sheet_days_given: daysGiven }, cycleStart: cy.start, cycleEnd: cy.end,
+    month, year, company: emp.company, requestId: 'statutory-test', user: 'test',
+  }));
+  if (!c.success) throw new Error(`sales compute failed: ${c.reason || c.error}`);
+  silently(() => saveSalesSalaryComputation(db, c));
+  return strip(db.prepare('SELECT * FROM sales_salary_computations WHERE employee_code = ? AND month = ? AND year = ? AND company = ?').get(emp.code, month, year, emp.company));
+}
+
+/** Parse + apply a file the way the route does (sha of the buffer). */
+function applyFile(db, scope, buffer, effectiveMonth = '2026-09', user = 'boss') {
+  const SF = require('../../services/statutoryFlags');
+  const parsed = SF.parseFlagFile(buffer, scope);
+  if (!parsed.ok) throw new Error(`parse failed: ${parsed.errors.join('; ')}`);
+  return SF.applyFlagChanges(db, { scope, effectiveMonth, rows: parsed.rows, user, fileName: 't.xlsx', sha256: SF.sha256(buffer) });
+}
+
+// ── Upload files (synthetic) ───────────────────────────────────────────────
+const PLANT_HDR = ['code', 'name', 'type', 'esi_applicable', 'pf_applicable', 'lwf_applicable', 'esi_number', 'uan', 'note'];
+const SALES_HDR = ['code', 'company', 'name', 'esi_applicable', 'pf_applicable', 'lwf_applicable', 'esi_number', 'uan', 'note'];
+function xlsxBuf(aoa) {
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(aoa), 'flags');
+  return XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' });
+}
+const yn = (v) => (v === 1 || v === true ? 'Y' : v === 0 || v === false ? 'N' : v);
+const prow = (code, esi, pf, lwf, extra = {}) => [code, 'SYNTH', 'Worker', yn(esi), yn(pf), yn(lwf), extra.esi_number ?? '', extra.uan ?? '', ''];
+const srow = (code, company, esi, pf, lwf, extra = {}) => [code, company, 'SYNTH', yn(esi), yn(pf), yn(lwf), extra.esi_number ?? '', extra.uan ?? '', ''];
+const plantFile = (...rows) => xlsxBuf([PLANT_HDR, ...rows]);
+const salesFile = (...rows) => xlsxBuf([SALES_HDR, ...rows]);
+
+module.exports = {
+  PLANT_HDR, SALES_HDR, xlsxBuf, prow, srow, plantFile, salesFile,
+  strip, plantMonth, computePlant, computeSales, applyFile,
+  COMPANY, OTHER_COMPANY, silently, newDb, withLiveDefaults, dflt, plant, plantStructure, salesEmp, salesStructure,
+  plantRows, salesRows, master, salesMaster, flags, counts,
+};
