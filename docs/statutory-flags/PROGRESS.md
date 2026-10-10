@@ -33,12 +33,13 @@
 - REVIEW FIX 1 — e88d3d2 `fix(statutory): refuse structure writes shadowed by later rows; same-date updates in place` (review M1 + minor 4). New statutoryFlags.structureDatedAfter(db, scope, empId, date). sales versionSalesStructureForGross throws (err.statutory → PUT /employees/:code 409 STRUCTURE_DATED_LATER, txn rolls back incl. master + audit); sales POST /employees/:code/structures → 409 when a later row exists, same date → supplied columns updated in place on that row (flags kept, 200 updatedInPlace); plant salary-input approve → 409 inside the txn (request stays Pending), same date → gross + components UPDATE in place (flags/pt/percents/ceiling kept; no same-date twin). employees.js inserts only run with no structure → unchanged. Tests: T11 ×3, T11b ×3 rewritten (back-dated → 409 with every month May–Oct byte-identical and rows/master/audit unchanged; same-date + later-dated assert gross + components), T18 +2 (409, same-date in place); first T18 case now has no later row. 5 of the new tests FAIL on the pre-fix routes (swap-verified). Suite 49 / 883. Note found while testing: plant compute takes the stated gross from employees.gross_salary for EVERY month (salaryComputation.js 'Priority: employees.gross_salary'), so any approval re-grosses earlier months on a re-run — pre-existing, not touched (DO-NOT-MODIFY money logic); OPEN for the owner.
 - REVIEW FIX 2 — e5ceaef `fix(statutory): never write a number duplicated in the file or already held by another employee` (review minor 2). planFlagChanges pre-counts every non-blank ESI number / UAN across the file (spaces stripped, as the write does); a number on ≥2 rows → warning on every such row ('repeated on rows … of this file — not written for any of them'), written for none; flags + other unique numbers still apply. DB conflict (held by another employee): already warned + not written (T7) — unchanged, now also tested for sales. 2 tests (plant 3-row repeat incl. a spaced variant; sales in-file repeat + held-by-other); both FAIL on the pre-fix service. Suite 49 / 885.
 - REVIEW FIX 3 — 9278f9a `fix(statutory): same company normalisation in parser and matcher` (review minor 3). One shared normCompany (trim, collapse spaces, lower case) used by parseFlagFile's repeat key and matchEmployee; two sales rows for one code whose company differs only in case/spacing → blocking 'repeats row N', nothing applied. 1 test (lower-case + extra-space variants; apply refused, structures unchanged, 0 batches); FAILS on the pre-fix service. Suite 49 / 886.
+- REVIEW FIX 4 — 5e2bb64 `docs(statutory): state the undo file's exact limits` (review minor 1). Mechanism unchanged. Wording 'Restores the flags that were in force at the effective month onto that month, later rows and the master. A later-dated row that had different flags before this batch is set to the effective-month value. Added ESI numbers / UANs and the extra structure rows stay.' in RUNBOOK.md T4 Undo, StatutoryFlags.jsx (header comment; UNDO_LIMITS constant shown in the confirm dialog and under batch history, data-testid undo-limits) and the buildUndoWorkbook comment. D-4 now reads with this limit. frontend/dist rebuilt + committed in the same commit (clean build of the previous source reproduced dist byte-identically first). Suite 49 / 886.
 
 ## LAST STEP
-REVIEW FIX 3 — 9278f9a (parser repeat key uses the matcher's company normalisation). Suite 49 / 886.
+REVIEW FIX 4 — 5e2bb64 (undo-file wording; dist rebuilt). Suite 49 / 886.
 
 ## NEXT STEP
-REVIEW FIX 4 — undo-file wording (RUNBOOK T4 Undo, StatutoryFlags.jsx limits text + dist, buildUndoWorkbook comment). Then Phase 2 again, sim (+ M1 checks), fetch/rebase check, PROGRESS + CLAUDE.md, new head SHA. After that the owner steps below still apply.
+Phase 2 again over the four fixes (re-read vs IMPL_PR1 + BUILD_PLAN §3; jest ×2; node --check; UPSERT counts), sim re-run + M1 checks, fetch/rebase check, CLAUDE.md + PROGRESS, new head SHA. After that the owner steps below still apply.
 
 OWNER: (1) make the repo private (GitHub → Settings → General → Danger Zone); (2) from a clone of this branch: git push -u origin feat/statutory-flags; check git rev-parse HEAD == git rev-parse origin/feat/statutory-flags; (3) open https://github.com/abhinavpoddar27-pixel/hr-salary-system/compare/main...feat/statutory-flags in the GitHub UI and merge there; (4) RUNBOOK T4/T5 only after PR-2 is live too. Before pushing, fetch + rebase again if main moved (C5).
 
@@ -63,7 +64,8 @@ OWNER: (1) make the repo private (GitHub → Settings → General → Danger Zon
 - D-6 (PHASE 2) integrity-fix repairs gross only (pt included in 'reported, not written'), per IMPL
   'fix syncs gross only'. Sales company match in the upload ignores case/spacing.
 - D-4 (STEP 4) The undo file carries the flags that were IN FORCE AT E before the batch (what September compute
-  used), not the master's flags; numbers are left blank (blank = unchanged, per §4.2).
+  used), not the master's flags; numbers are left blank (blank = unchanged, per §4.2). Not a full restore (review
+  minor 1, wording fixed in REVIEW FIX 4): a later row whose flags differed before the batch ends at the E value.
 
 ## FILES TOUCHED
 - backend/src/database/schema.js (STEP 1)
@@ -168,3 +170,4 @@ PHASE 3 sim: 58/58.
 After REVIEW FIX 1: 49 / 883, 0 failures.
 After REVIEW FIX 2: 49 / 885, 0 failures.
 After REVIEW FIX 3: 49 / 886, 0 failures.
+After REVIEW FIX 4: 49 / 886, 0 failures; frontend build OK.
