@@ -1,3 +1,29 @@
+## Last Session — 2026-10-10 (P1-11: Dashboard showed "All clear" when a check failed)
+**Branch `fix/dashboard-failed-call-not-all-clear`, NOT merged.** Frontend only (`pages/Dashboard.jsx`, action items). Plan + log:
+`docs/ux-bulk/prs/P1-11/PLAN.md`, `PROGRESS.md`. Finding H-4. Rulings Q1 (finance workbench too), Q2 (held retry = count only), Q3 (200 + success:false = failed).
+- **Bug:** the finance view's 4 action calls (salary-register held count, salary-manual-flags, late-coming deductions, miss-punches)
+  each `.catch(() => ({ success: false }))` → count 0 → admin "Pending Actions" read "{label}: All clear" and the finance workbench
+  showed a green 0 card + "All caught up — nothing pending". A failed check looked like nothing to do.
+- **Fix:** `financeData.actionsFailed` (per item, `success !== true`). Admin list: failed item → amber dot, "Couldn't check {label}" +
+  Retry. Finance cards: "—", amber border, "Couldn't check — Retry" (button stops the card's link); banner never "All caught up"
+  while a check failed ("{n} check(s) couldn't load — retry above"), failed items excluded from the pending total.
+  `retryAction(key)` re-calls ONLY that API (no page blank); held retry updates only the held count (Q2). A retry answer that lands
+  after a month/company reload is dropped (`financeFetchSeq` ref). Loaded items unchanged. dist rebuilt (own commit; vs a fresh
+  3d20021 build only the Dashboard chunk differs, index only by chunk hashes).
+- **Fragile:** the four item keys (`heldSalaries`, `manualFlags`, `lateDeductions`, `missPunchFinance`) must match in `actions`,
+  `actionsFailed`, the `retryAction` loaders and both render lists — a fifth action item needs all four. Retry loaders repeat the
+  Promise.all params by hand. The check script reads `data-action-failed` attributes.
+- **Verified:** `backend/scripts/dashboard-failed-call-check.py` (Chromium, built dist, admin + finance, fictional T97xx, port 3111)
+  66/66 — control (all real), each of the 4 calls → 500: that item "Couldn't check", other 3 real, Retry → real value; finance
+  200 {success:false} → "—" + banner, Retry no navigation; all 4 fail + retry-while-failing stays failed; 390px; 0 page errors,
+  console errors only from the intercepted call. `--base` on a 3d20021 worktree 3/3: "All clear", green 0s, "All caught up".
+  jest 85 suites / 1380 before and after.
+- **Not tested:** Railway; Safari/Firefox; the stale-retry guard (month changed while a Retry is in flight) in a browser.
+- **Found, not fixed:** (1) salary-register failure makes the admin KPI cards read "Pending" / "0 employees" / PF+ESI ₹0.0L — same as
+  "not computed yet"; (2) readiness failure shows score 0 "Not Ready" with an empty checklist; (3) Department Cost table silently
+  hidden when its call fails; (4) the finance-view KPI half has no error UI at all; (5) backend `GET /finance-audit/salary-manual-flags`
+  catch returns `success: true` with zero counts on a SQL error, so a server-side failure there still reads 0 (the UI can't tell).
+
 ## Last Session — 2026-10-10 (Stage 7 register: DOJ to drill-down, smarter column widths)
 **Branch `feat/stage7-col-widths` (on origin/main b8b9759), NOT merged.** Frontend display only.
 - **What:** DOJ column removed from the register (Everything 25 → 24); date of joining (+ new-joiner holiday note) now heads the
