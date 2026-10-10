@@ -1,3 +1,14 @@
+## Last Session — 2026-10-10 (Attendance Review: monthly late/early report → Analytics tab, DESIGN ONLY)
+**Branch `docs/attendance-review-handoff` (docs only), NOT merged. No app code changed.** Read `docs/attendance-review/HANDOFF_attendance_review_10Oct2026.md` first.
+- **Done by hand for Sep 2026:** late coming / early exit / double-defaulter review vs Aug (company late 27.7% → 14.4%; early
+  exits 23.3% → 18.7%; contract early exits got WORSE 16.0% → 19.1%). Rules locked in `docs/attendance-review/RUNBOOK.md`.
+- **Next:** build an admin-only Analytics → "Attendance Review" tab (`BUILD_PLAN.md`: PR-1 engine + 2 config/run tables,
+  PR-2 tab, PR-3 xlsx/docx exports, PR-4 write-back gated). Start with `PROMPT_PLAN.md` (Phase 0, plan only).
+- **Fragile:** repo is PUBLIC — named exclusions + the Sep acceptance fixture are in the private Claude Project
+  (`claude/attendance-review/`), and in the app must be admin-entered config rows, never source/seeds. Day calc applies HR
+  late days without finance approval (3 Aug cases) — no write-back until fixed. `short_leaves` has 0 rows ever.
+- **Not tested:** nothing built. Reference builders were sanitised (config-driven) and only syntax-checked.
+
 ## Last Session — 2026-10-10 (Extra duty: Finance Review screen — finance could not select rejected rows)
 **Branch `fix/ed-finance-review-ux`, NOT merged.** Frontend only (`pages/ExtraDutyGrants.jsx`); no backend file changed.
 - **Report:** after #76 shipped "Return to HR", finance said they couldn't select the rejected grants. Reproduced on a
