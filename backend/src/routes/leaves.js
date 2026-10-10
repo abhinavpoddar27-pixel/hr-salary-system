@@ -8,15 +8,43 @@ const { adjustLeaveBalance } = require('../services/leaveBalanceGuard');
 // ── Role gate ────────────────────────────────────────────────────────────────
 // Until Sept 2026 this router had no role check at all, so a viewer could
 // approve leave and move balances. Reads stay open to everyone who can see the
-// payroll screens; every write is HR or admin.
+// payroll screens; every write is HR or admin — except deciding a leave
+// application, which finance does (owner rule, 10 Oct 2026: HR raises leave,
+// finance approves). Finance may approve or reject; nothing else.
+const DECISION_PATH = /^\/\d+\/(approve|reject)\/?$/;
 router.use((req, res, next) => {
   if (req.method === 'GET' || req.method === 'HEAD') {
     if (roleIn(req, 'admin', 'hr', 'finance', 'viewer')) return next();
     return res.status(403).json({ success: false, error: 'Access denied' });
   }
   if (roleIn(req, 'admin', 'hr')) return next();
+  if (req.method === 'PUT' && DECISION_PATH.test(req.path) && roleIn(req, 'finance')) return next();
   return res.status(403).json({ success: false, error: 'HR or admin access required' });
 });
+
+/**
+ * Approved, pending or with-finance applications of this employee that share
+ * at least one day with [startDate, endDate]. Used to stop the same day being
+ * taken as leave twice (e.g. an EL raised over a day already approved as CL).
+ */
+function overlappingLeaves(db, employeeCode, startDate, endDate, { excludeId = null, statuses = ['Approved', 'Pending', 'Pending Finance'] } = {}) {
+  const marks = statuses.map(() => '?').join(', ');
+  return db.prepare(`
+    SELECT id, leave_type, start_date, COALESCE(end_date, start_date) AS end_date, status
+    FROM leave_applications
+    WHERE employee_code = ? AND status IN (${marks})
+      AND (? IS NULL OR id <> ?)
+      AND date(start_date) <= date(?) AND date(COALESCE(end_date, start_date)) >= date(?)
+    ORDER BY start_date
+  `).all(employeeCode, ...statuses, excludeId, excludeId, endDate || startDate, startDate);
+}
+
+function describeOverlap(rows) {
+  return rows.map((r) => {
+    const span = r.start_date === r.end_date ? r.start_date : `${r.start_date} to ${r.end_date}`;
+    return `${r.leave_type} ${span} (${r.status}, #${r.id})`;
+  }).join('; ');
+}
 
 /**
  * GET /api/leaves
@@ -126,6 +154,16 @@ router.post('/', (req, res) => {
     });
   }
 
+  // The same day cannot be raised as leave twice, whatever the type.
+  const clash = overlappingLeaves(db, employeeCode, startDate, endDate);
+  if (clash.length) {
+    return res.status(409).json({
+      success: false,
+      code: 'LEAVE_OVERLAP',
+      error: `These dates already have leave: ${describeOverlap(clash)}. Cancel or reject that first.`,
+    });
+  }
+
   const cleanHrRemark = hrRemark ? String(hrRemark).trim() : null;
 
   const result = db.prepare(`
@@ -154,8 +192,30 @@ router.put('/:id/approve', (req, res) => {
   const db = getDb();
   const approvedBy = req.user?.username || 'admin';
 
+  // Owner rule (10 Oct 2026): HR raises leave, finance approves it. Admin may too.
+  if (!roleIn(req, 'finance', 'admin')) {
+    return res.status(403).json({
+      success: false,
+      code: 'HR_CANNOT_APPROVE',
+      error: 'Finance approves leave. HR raises it and can reject it.',
+    });
+  }
+
   const leave = db.prepare('SELECT * FROM leave_applications WHERE id = ? AND status = ?').get(req.params.id, 'Pending');
   if (!leave) return res.status(404).json({ success: false, error: 'Leave not found or already processed' });
+
+  // A day already approved as leave cannot be approved again (CL and EL on the
+  // same day would debit both balances).
+  const clash = overlappingLeaves(db, leave.employee_code, leave.start_date, leave.end_date, {
+    excludeId: leave.id, statuses: ['Approved'],
+  });
+  if (clash.length) {
+    return res.status(409).json({
+      success: false,
+      code: 'LEAVE_OVERLAP',
+      error: `Cannot approve: these dates already have approved leave — ${describeOverlap(clash)}. Reject this one, or cancel the other first.`,
+    });
+  }
 
   // A Pending SL row can only be one raised before Sept 2026. It cannot be
   // approved — HR re-raises it as CL, EL or LWP.

@@ -251,7 +251,8 @@ describe('PUT /api/leaves/:id/approve', () => {
     VALUES (?, ?, 'CL', ?, ?, ?, 'test', 'Pending')
   `).run(emp.id, emp.code, `${YEAR}-03-10`, `${YEAR}-03-10`, days).lastInsertRowid;
 
-  const approve = (id, body = {}, role = 'hr') =>
+  // Finance approves leave since 10 Oct 2026 (HR raises it).
+  const approve = (id, body = {}, role = 'finance') =>
     api.request('PUT', `/api/leaves/${id}/approve`, { body, role });
 
   test('an approval landing exactly on zero succeeds', async () => {
@@ -289,7 +290,7 @@ describe('PUT /api/leaves/:id/approve', () => {
 
   test('a non-admin override is refused', async () => {
     const e = addEmployee(); setBalance(e, 'CL', 1);
-    const res = await approve(apply(e, 3), { allow_negative: true, negative_reason: LONG_REASON }, 'hr');
+    const res = await approve(apply(e, 3), { allow_negative: true, negative_reason: LONG_REASON }, 'finance');
     expect(res.status).toBe(400);
     expect(balanceOf(e)).toBe(1);
   });

@@ -284,6 +284,9 @@ export default function LeaveManagement() {
   const role = normalizeRole(user?.role)
   const isAdmin = role === 'admin'
   const isHrOrAdmin = role === 'hr' || role === 'admin'
+  // Owner rule (10 Oct 2026): HR raises leave, finance approves it.
+  const canApproveLeave = role === 'finance' || role === 'admin'
+  const canRejectLeave = isHrOrAdmin || role === 'finance'
   const actor = user?.username || user?.name || 'unknown'
   const queryClient = useQueryClient()
   const [mainTab, setMainTab] = useState('applications')
@@ -588,16 +591,16 @@ export default function LeaveManagement() {
                         <div className="flex items-center justify-center gap-1">
                           <button
                             onClick={() => setApproveTarget(l)}
-                            disabled={approve.isPending || !isHrOrAdmin}
-                            title={isHrOrAdmin ? 'Approve this leave' : 'Only HR or an admin can approve leave'}
+                            disabled={approve.isPending || !canApproveLeave}
+                            title={canApproveLeave ? 'Approve this leave' : 'Finance approves leave — HR raises it'}
                             className="px-2 py-1 text-xs font-medium bg-green-100 text-green-700 rounded hover:bg-green-200 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                           >
                             Approve
                           </button>
                           <button
                             onClick={() => setRejectModal(l)}
-                            disabled={!isHrOrAdmin}
-                            title={isHrOrAdmin ? 'Reject this leave' : 'Only HR or an admin can reject leave'}
+                            disabled={!canRejectLeave}
+                            title={canRejectLeave ? 'Reject this leave' : 'Only HR, finance or an admin can reject leave'}
                             className="px-2 py-1 text-xs font-medium bg-red-100 text-red-700 rounded hover:bg-red-200 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                           >
                             Reject
