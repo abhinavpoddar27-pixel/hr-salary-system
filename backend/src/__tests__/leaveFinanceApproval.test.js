@@ -160,4 +160,21 @@ describe('the same day cannot be taken as leave twice', () => {
     expect((await raise(e, { start: `${YEAR}-09-04`, end: `${YEAR}-09-05`, days: 2 })).status).toBe(200);
     expect((await raise(e, { start: `${YEAR}-09-03`, end: `${YEAR}-09-04`, days: 2 })).status).toBe(409);
   });
+
+  test('cleanup of a legacy double booking: cancelling the CL returns it and leaves the EL in place', async () => {
+    const e = addEmployee();
+    const cl = (await raise(e, { type: 'CL', start: `${YEAR}-09-26` })).body.id;
+    expect((await approve(cl, 'finance')).status).toBe(200);
+    // An EL approved on the same day before the guard existed:
+    const el = db.prepare(`INSERT INTO leave_applications (employee_id, employee_code, leave_type, start_date, end_date, days, reason, status, approved_by)
+                           VALUES (?, ?, 'EL', ?, ?, 1, 'legacy', 'Approved', 'admin')`).run(e.id, e.code, `${YEAR}-09-26`, `${YEAR}-09-26`).lastInsertRowid;
+    expect(balanceOf(e, 'CL')).toBe(3);
+    const res = await api.request('DELETE', `/api/leaves/${cl}`, { role: 'admin' });
+    expect(res.status).toBe(200);
+    expect(statusOf(cl).status).toBe('Cancelled');
+    expect(balanceOf(e, 'CL')).toBe(4);
+    expect(statusOf(el).status).toBe('Approved');
+    // finance cannot cancel; that stays with HR/admin
+    expect((await api.request('DELETE', `/api/leaves/${el}`, { role: 'finance' })).status).toBe(403);
+  });
 });
