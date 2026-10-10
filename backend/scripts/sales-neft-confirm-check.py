@@ -46,6 +46,8 @@ ROWS = [  # code, month, status, net, has_ifsc, stamp
     ('S921', 11, 'computed', 16000, True, None),
     ('S922', 11, 'computed', 17000, True, None),
     ('S923', 11, 'paid', 18000, True, PAID_STAMP),
+    ('S931', 12, 'computed', 12500, True, None),
+    ('S932', 12, 'reviewed', 13500, True, None),
 ]
 FILE_OCT = ['S901', 'S902', 'S903', 'S904', 'S905', 'S906', 'S907']
 SUM_OCT = 15000.50 + 14000 + 13000 + 12000 + 11000 + 10000 + 9000
@@ -92,7 +94,7 @@ def open_month(pg, month, collapsed=False):
     pg.locator('select').filter(has=pg.locator('option', has_text='September')).first.select_option(str(month))
     pg.wait_for_load_state('networkidle'); time.sleep(1)
     sub = pg.locator('p.section-subtitle').first.inner_text()
-    assert sub.startswith(('Oct 2026', 'Nov 2026')[month - 10]) and CO in sub, f'page not on {month}/2026 {CO}: {sub!r}'
+    assert sub.startswith(('Oct 2026', 'Nov 2026', 'Dec 2026')[month - 10]) and CO in sub, f'page not on {month}/2026 {CO}: {sub!r}'
 
 
 def modal(pg):
@@ -148,7 +150,8 @@ try:
             check('line: no bank details', '1 have no bank account or IFSC — left out', line('mb'))
             check('missing table lists S910', True, m.locator('td', has_text='S910').count() == 1)
             check('no held count shown (ruling Q2)', 0, m.get_by_text('hold', exact=False).count())
-            check('button "Download NEFT (7 rows)"', 1, m.get_by_role('button', name='Download NEFT (7 rows)').count())
+            check('no duplicate "Total to export" line (review Low-3)', 0, m.get_by_text('Total to export').count())
+            check('button "Download NEFT (7 people)"', 1, m.get_by_role('button', name='Download NEFT (7 people)').count())
 
             print('\n— Cancel: nothing downloaded, nothing stamped —')
             got = []
@@ -163,7 +166,7 @@ try:
             print('\n— Download: CSV rows = N, paid row absent, only file rows stamped —')
             pg.get_by_role('button', name='Export Bank NEFT').click(); time.sleep(1)
             with pg.expect_download(timeout=10000) as dl:
-                modal(pg).get_by_role('button', name='Download NEFT (7 rows)').click()
+                modal(pg).get_by_role('button', name='Download NEFT (7 people)').click()
             rows = csv_rows(dl.value.path())
             check('header = plant bank header', 'Sr No,Beneficiary Name,Account Number,IFSC Code,Date of Joining,Amount,Narration', rows[0])
             check('data lines = 7', 7, len(rows) - 1)
@@ -194,9 +197,23 @@ try:
             check('paid line', '1 marked paid — left out (₹18,000.00)', line('pd'))
             check('no missing-bank table', 0, m.locator('table').count())
             with pg.expect_download(timeout=10000) as dl:
-                m.get_by_role('button', name='Download NEFT (2 rows)').click()
+                m.get_by_role('button', name='Download NEFT (2 people)').click()
             rows = csv_rows(dl.value.path())
             check('Nov file lines = 2, paid S923 absent', (2, False), (len(rows) - 1, any('9100923' in r for r in rows)))
+
+            print('\n— Dec: double click on Download → ONE file, ONE audit row (review Low-1) —')
+            open_month(pg, 12)
+            _, aud_b = db_state(12)
+            dl_reqs = []
+            pg.on('request', lambda r: dl_reqs.append(r.url) if '/export/bank-neft' in r.url and 'download=true' in r.url else None)
+            pg.get_by_role('button', name='Export Bank NEFT').click(); time.sleep(1)
+            # Two clicks in the same JS tick: React has not re-rendered `disabled` yet, only the ref can stop the 2nd.
+            pg.evaluate("""() => { const b = [...document.querySelectorAll('button')].find(x => x.textContent.includes('Download NEFT (2 people)')); b.click(); b.click(); }""")
+            time.sleep(3)
+            _, aud_a = db_state(12)
+            check('exactly 1 NEFT audit row for the double click', aud_b + 1, aud_a)
+            check('exactly 1 download request reached the server', 1, len(dl_reqs))
+            # (a synthetic click carries no user gesture, so Chromium does not save the blob — the request count is the proof)
 
             print('\n— 390px phone —')
             pg.set_viewport_size({'width': 390, 'height': 800})
@@ -205,7 +222,7 @@ try:
             m = modal(pg)
             box = m.locator('div.bg-white').first.bounding_box()
             check('window fits the screen width', True, box is not None and box['x'] >= 0 and box['x'] + box['width'] <= 390)
-            check('Download button visible', True, m.get_by_role('button', name='Download NEFT (2 rows)').is_visible())
+            check('Download button visible', True, m.get_by_role('button', name='Download NEFT (2 people)').is_visible())
             m.get_by_role('button', name='Cancel').click()
 
             check('every preview request sends Cache-Control: no-cache (ruling Q1)', True, len(prev_hdrs) >= 4 and all(h == 'no-cache' for h in prev_hdrs))

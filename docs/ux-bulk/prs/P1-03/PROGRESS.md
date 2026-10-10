@@ -34,4 +34,7 @@
 - [x] R1 Low-1: `useRef` in-flight guard in `downloadNEFT` (early return if running; cleared in finally)
 - [x] R2 Low-3: button "Download NEFT (N people)"; duplicate "Total to export: ₹…" line removed
 - [x] R3 dist rebuilt (own commit)
-- [ ] R4 browser check + double-click check (exactly 1 audit row), jest new file, push
+- [x] R4 `sales-neft-confirm-check.py` 40/40 twice (adds: no "Total to export" line; Dec double click — two clicks in one
+  JS tick → exactly 1 NEFT audit row and exactly 1 download request). Probe with the guard line removed: 39/40, the
+  request check fails (2 requests). Note: the audit check alone still passed in the probe — the 2nd identical download GET
+  came from the browser's 5 s GET cache, so the request count is the real proof. jest new file 8/8. Pushed.
