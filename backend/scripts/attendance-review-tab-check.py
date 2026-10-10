@@ -136,7 +136,10 @@ try:
         check('config shows built-in defaults', True, cfg.get_by_text('built-in defaults').count() == 1)
         check('early-exit full-hours rule defaults to everyone', 'everyone', cfg.get_by_label('Early-exit shift check').input_value())
         check('late full-hours rule on by default', True, cfg.get_by_label('Late not counted on a full-hours day').is_checked())
-        cfg.get_by_label('Left out of everything — employee codes').fill('T7004')
+        # standing rule (set once, with a reason) replaced the code text box on 11 Oct 2026
+        cfg.get_by_role('button', name='+ add a person').click()
+        cfg.get_by_label('Standing person code').last.fill('T7004')
+        cfg.get_by_label('Standing person reason').last.fill('Senior staff')
         cfg.get_by_label('Effective from').fill('2026-10')
         cfg.get_by_role('button', name='Save as new version').click(); time.sleep(1.5)
         check('saved version shown', True, cfg.get_by_text('version 1, effective 2026-10').count() == 1)
