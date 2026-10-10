@@ -563,7 +563,8 @@ export const searchEmployeesForAI = (q) => api.get('/ai/employee-search', { para
 export const explainSalary = (data) => api.post('/ai/explain-salary', data)
 
 // ── Sales Salary Module (Phase 1) ────────────────────────
-export const getSalesEmployees = (params) => api.get('/sales/employees', { params })
+// fresh (PR-3): after an edit the list refetches past the 5 s GET cache, so a fixed ESI number clears its badge at once
+export const getSalesEmployees = (params) => api.get('/sales/employees', { params, ...fresh })
 export const getSalesEmployee = (code, company) => api.get(`/sales/employees/${encodeURIComponent(code)}`, { params: { company } })
 export const createSalesEmployee = (data) => api.post('/sales/employees', data)
 export const updateSalesEmployee = (code, company, data) => api.put(`/sales/employees/${encodeURIComponent(code)}`, data, { params: { company } })
