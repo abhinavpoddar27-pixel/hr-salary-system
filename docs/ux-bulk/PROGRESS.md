@@ -9,7 +9,7 @@
 Programme:   UI/UX improvement + bulk input, HR Salary System (Indriyan / Asian Lakto)
 Base:        origin/main a5aec9a (10 Oct 2026). Re-check: git fetch origin; git log -1 origin/main
 Plan:        docs/ux-bulk/MASTER_PLAN.md (§5.2 = PR order, §6 = specs, §7 = bulk design, §14 = open questions)
-Current PR:  8 PRs OPEN for owner merge (all synced with main 11 Oct ~00:30 IST, jest green): P1-03 #86 (money), P1-04 #90, P1-06 #91, P1-08 #92, P1-09 #97, P1-10 #98, P1-11 #99, P1-12 #100. Every merge makes the others conflict on frontend/dist + CLAUDE.md → planner re-runs scratchpad sync.sh on the rest. Next: P1-05 (after #90), P1-24 (after #97), P1-13/15/16/17/19/20/21/22. Owner questions pending: Q5 (P1-07, fragile payroll.js), Q6 (P1-23). Planner tool: mod ux-bulk-control (/ux-status pane).
+Current PR:  ALL 8 MERGED 11 Oct 00:10–00:43 IST: P1-03 #86, P1-04 #90, P1-06 #91, P1-08 #92, P1-09 #97, P1-10 #98, P1-11 #99, P1-12 #100 (main 18bef07). Owner post-deploy checks pending → verified. Next: P1-05 (DayCalculation leave form reset), P1-24 (Miss Punch stray 0), P1-13/15/16/17/19/20/21/22; N-9 fresh-reads PR. Owner Qs pending: Q5 (P1-07), Q6 (P1-23). Lesson: merge-time conflicts are only frontend/dist + CLAUDE.md top — re-sync after each merge (scratchpad syncfast.sh, builds one at a time — parallel vite builds OOM).
 Asked, not answered: Q1 Q2 Q3 (P3-01/P5-02), Q4 (P1-04) — re-ask before those PRs
 Open Qs:     Q1 Q2 (needed by P3-01) · Q4 (P1-04) · Q5 (P1-07) · Q6 (P1-23) · Q10 (one-PR rule) — ask when the PR needs them
 Roles:       planner = new chat; builder = Claude Code agent session reading prs/<PR-ID>/PROMPT.md; Abhinav says "go" and merges in GitHub UI
@@ -60,16 +60,16 @@ Status values: `todo` · `plan` (Phase 0 written, waiting for go) · `build` · 
 | P0-3 | Triage 6 `new` bug reports | todo | — | — | — | — | owner |
 | P1-01 | Finance Audit Readiness click crash | merged | fix/finance-audit-readiness-nav | #81 | 96ee482 | pending owner check | Phase 0 done; go 10 Oct 19:04 incl. held-card link fix to /finance-verification (owner OK) |
 | P1-02 | Salary Register ₹0 | merged | fix/salary-register-report-fields | #83 | cc58076 | pending owner check | go 10 Oct 20:17; rulings R12/R13 |
-| P1-03 | Sales NEFT excludes paid rows + always confirm | PR open #86 | fix/sales-neft-finalized-only | | | | Q12=C; jest 86/1388 merged tree; check 40/40; review SHIP (Low-1,3 fixed) |
-| P1-04 | Stage 6 company-scope guard | PR open #90 | fix/stage6-company-scope-guard | | | | Q4 default (always all companies); check 28/28, base 4/4 |
+| P1-03 | Sales NEFT excludes paid rows + always confirm | merged #86 | fix/sales-neft-finalized-only | | | | Q12=C; jest 86/1388 merged tree; check 40/40; review SHIP (Low-1,3 fixed) |
+| P1-04 | Stage 6 company-scope guard | merged #90 | fix/stage6-company-scope-guard | | | | Q4 default (always all companies); check 28/28, base 4/4 |
 | P1-05 | Stage 6 Apply Leave form reset | todo | | | | | |
-| P1-06 | Leave rejection reason dropped + require | PR open #91 | fix/leave-rejection-reason | | | | check 29/29; jest +5 |
+| P1-06 | Leave rejection reason dropped + require | merged #91 | fix/leave-rejection-reason | | | | check 29/29; jest +5 |
 | P1-07 | Retire Payable OT grant tab + endpoint | todo | | | | | Q5, fragile payroll.js |
-| P1-08 | Stage 5 grid not refreshed after save | PR open #92 | fix/stage5-grid-refresh | | | | +calendar + no-cache; check 34/34 |
-| P1-09 | Miss Punch banner based on filter | PR open #97 | fix/misspunch-all-resolved-banner | | | | pending+financePending; check 33/33 |
-| P1-10 | Night Shift Undo → Reject pairing + confirm | PR open #98 | fix/nightshift-undo-relabel | | | | check 44/44 |
-| P1-11 | Dashboard All clear on failed call | PR open #99 | fix/dashboard-failed-call-not-all-clear | | | | admin + finance views; check 66/66 |
-| P1-12 | Sidebar/Header hook order | PR open #100 | fix/sidebar-header-hook-order | | | | 6/6 switches crash on main; check 58/58 |
+| P1-08 | Stage 5 grid not refreshed after save | merged #92 | fix/stage5-grid-refresh | | | | +calendar + no-cache; check 34/34 |
+| P1-09 | Miss Punch banner based on filter | merged #97 | fix/misspunch-all-resolved-banner | | | | pending+financePending; check 33/33 |
+| P1-10 | Night Shift Undo → Reject pairing + confirm | merged #98 | fix/nightshift-undo-relabel | | | | check 44/44 |
+| P1-11 | Dashboard All clear on failed call | merged #99 | fix/dashboard-failed-call-not-all-clear | | | | admin + finance views; check 66/66 |
+| P1-12 | Sidebar/Header hook order | merged #100 | fix/sidebar-header-hook-order | | | | 6/6 switches crash on main; check 58/58 |
 | P1-13 | Finance Verify company filter | todo | | | | | |
 | P1-14 | Bank columns + salary split | todo | | | | | |
 | P1-15 | Finance Verify flag reason + Approve gate | todo | | | | | |
@@ -142,6 +142,7 @@ Status values: `todo` · `plan` (Phase 0 written, waiting for go) · `build` · 
 | N-8 | P1-08 | Stage 5 editor: miss-punch cell stays red after edit; failed save has no page-level error | later PR |
 
 ## Session log (newest first; one line per meaningful event)
+- 11 Oct 2026 00:43 IST — all 8 P1 PRs merged (#86 #90 #91 #92 #97 #98 #99 #100); each merge forced a dist/CLAUDE.md re-sync of the rest (done by planner, CI green each time). main = 18bef07.
 - 11 Oct 2026 ~00:30 IST — P1-09/10/11/12 built in parallel (planner approved Phase 0s) → PRs #97–#100. All 8 open branches synced with main (dist rebuilt, jest 87–88 suites green). Planner mod `ux-bulk-control` written (pane + /ux-status + status line).
 - 10 Oct 2026 ~23:30 IST — P1-03 built (review SHIP, Low-1 double-click guard + Low-3 copy fixed; Low-2 preview/download race → register) → PR #86. P1-04/P1-06/P1-08 built in parallel worktrees, planner approved Phase 0s under owner's programme go → PRs #90 #91 #92. All four synced with main (dist rebuilt, jest green).
 - 10 Oct 2026 20:37 IST — P1-02 merged by owner (#83, cc58076).
