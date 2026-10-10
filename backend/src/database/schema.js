@@ -3598,6 +3598,85 @@ If description and screenshot are incoherent or unrelated, set summary_confidenc
       BEFORE DELETE ON loan_adjustments
       BEGIN SELECT RAISE(ABORT, 'loan_adjustments is append-only'); END;
 
+    -- Loans PR-10: import of the loans run outside the app (accounts Excel).
+    -- One batch = one uploaded file; one row per Excel row. HR confirms the
+    -- match, finance the balance, the admin approves the batch; approval
+    -- creates the loans (loan_id). The partial unique indexes stop the same
+    -- file (while its batch is live) and the same imported loan (row_key)
+    -- from being imported twice.
+    CREATE TABLE IF NOT EXISTS loan_import_batches (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      file_name TEXT NOT NULL,
+      file_sha256 TEXT NOT NULL,
+      sheet_name TEXT,
+      header_row INTEGER,
+      column_map TEXT NOT NULL DEFAULT '{}',
+      default_company TEXT,
+      status TEXT NOT NULL DEFAULT 'review' CHECK (status IN ('review','approved','discarded')),
+      total_rows INTEGER NOT NULL DEFAULT 0,
+      uploaded_by TEXT NOT NULL,
+      uploaded_by_role TEXT NOT NULL,
+      uploaded_at TEXT NOT NULL DEFAULT (datetime('now')),
+      cutover_month INTEGER CHECK (cutover_month IS NULL OR cutover_month BETWEEN 1 AND 12),
+      cutover_year INTEGER,
+      approved_by TEXT,
+      approved_at TEXT,
+      approval_note TEXT,
+      discarded_by TEXT,
+      discarded_at TEXT,
+      discard_reason TEXT,
+      result TEXT,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+    CREATE UNIQUE INDEX IF NOT EXISTS uniq_loan_import_batches_live_file
+      ON loan_import_batches(file_sha256) WHERE status <> 'discarded';
+
+    CREATE TABLE IF NOT EXISTS loan_import_rows (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      batch_id INTEGER NOT NULL REFERENCES loan_import_batches(id),
+      row_no INTEGER NOT NULL,
+      raw TEXT NOT NULL DEFAULT '{}',
+      name TEXT,
+      name_norm TEXT,
+      company TEXT,
+      department TEXT,
+      loan_date TEXT,
+      original_principal REAL,
+      outstanding REAL,
+      emi REAL,
+      loan_type TEXT,
+      agreement_ref TEXT,
+      notes TEXT,
+      parse_status TEXT NOT NULL CHECK (parse_status IN ('ok','invalid','duplicate')),
+      parse_errors TEXT,
+      match_tier TEXT CHECK (match_tier IS NULL OR match_tier IN ('exact','ambiguous','close','none','inactive')),
+      candidates TEXT,
+      borrower_type TEXT CHECK (borrower_type IS NULL OR borrower_type IN ('plant','sales')),
+      employee_code TEXT,
+      match_status TEXT NOT NULL DEFAULT 'pending' CHECK (match_status IN ('pending','confirmed','excluded')),
+      match_confirmed_by TEXT,
+      match_confirmed_at TEXT,
+      match_note TEXT,
+      balance_status TEXT NOT NULL DEFAULT 'pending' CHECK (balance_status IN ('pending','confirmed')),
+      confirmed_outstanding REAL,
+      confirmed_emi REAL,
+      balance_confirmed_by TEXT,
+      balance_confirmed_at TEXT,
+      balance_note TEXT,
+      warnings TEXT,
+      row_key TEXT,
+      outcome TEXT CHECK (outcome IS NULL OR outcome IN ('imported','left_out')),
+      outcome_reason TEXT,
+      loan_id INTEGER REFERENCES loans(id),
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+      UNIQUE (batch_id, row_no)
+    );
+    CREATE INDEX IF NOT EXISTS idx_loan_import_rows_batch ON loan_import_rows(batch_id);
+    CREATE UNIQUE INDEX IF NOT EXISTS uniq_loan_import_rows_imported_key
+      ON loan_import_rows(row_key) WHERE outcome = 'imported';
+
     CREATE INDEX IF NOT EXISTS idx_loans_employee ON loans(employee_code, borrower_type);
     CREATE INDEX IF NOT EXISTS idx_loans_status ON loans(status);
     CREATE INDEX IF NOT EXISTS idx_loans_company_status ON loans(company, status);

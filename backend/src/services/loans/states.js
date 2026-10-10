@@ -71,6 +71,12 @@ const ACTION_ROLES = Object.freeze({
   flag_exit: ['hr', 'admin', 'system'],
   close: ['finance', 'admin', 'system'],      // monthly loan close + held sweep (Loans PR-6)
   reverse_posted: ['admin'],                  // opposite entry for a posted deduction (Loans PR-6)
+  // Loans PR-10: import of the loans run outside the app (SPEC §7 last row).
+  import_upload: ['hr', 'finance'],
+  import_confirm_match: ['hr'],
+  import_confirm_balance: ['finance'],
+  import_approve: ['admin'],
+  import_discard: ['hr', 'finance', 'admin'],
 });
 
 /** Actions where the actor may never be the person who raised the request. */
