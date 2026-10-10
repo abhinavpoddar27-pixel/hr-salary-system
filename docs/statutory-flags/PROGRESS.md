@@ -8,7 +8,7 @@
 4. Continue from NEXT STEP. Update this file after every small step (state, done, next) and commit it.
 
 ## PR STATUS
-- PR-1 feat/statutory-flags — BUILT LOCALLY — awaiting push (repo public). Independent review of a4eb3d1 (SHIP WITH FIXES) addressed: fixes 1–4 committed. Reviewer re-check: SHIP; FIX 5 added. Code head cec4fe0 (+ this commit on top), base d1ad7bf (origin/main unchanged), 49 suites / 890 tests green, sim 68/68.
+- PR-1 feat/statutory-flags — BUILT LOCALLY — ready to push (owner decision 10 Oct 08:53: repo stays public, open the PR now; the coordinator pushes). Independent review: SHIP (fixes 1–5 in). origin/main f4b3b2f (loans PR-6b + PR-7) MERGED in (66f34d6, no-ff) + dist rebuilt (322a75d). Base f4b3b2f. Code head 322a75d (+ this PROGRESS commit on top), 51 suites / 915 tests green ×2, guard 9/9, sim 68/68.
 - PR-2 feat/lwf-deduction — NOT STARTED
 - PR-3 feat/statutory-filing — NOT STARTED
 
@@ -38,14 +38,18 @@
 - REVIEW SIM — 8d5f82e. docs/statutory-flags/sim/run.py re-run on a throwaway temp DATA_DIR (synthetic, sales bootstrap skipped) + 10 new checks: sales back-dated gross edit 2026-05 after the upload → 409, nothing written (structures, master gross, audit_log), Sep + Oct pay unchanged; plant HR gross change → pending; back-dated approval 2026-08-15 → 409, request Pending, rows + master unchanged, Sep pay unchanged; same-date approval 2026-09-01 → one row at that date updated in place with its own flags, Sep pays the new gross + split; drift 0 rows both; confirm dialog states the undo limits. seed.js adds an Oct sales upload. 68/68. A clean `npm run build` reproduces frontend/dist byte-identically.
 - REVIEW PHASE 4 (local only) — git fetch origin main: still d1ad7bf → no rebase (C5: 0 conflicts). CLAUDE.md Section 0 entry updated (923dad3). NOT PUSHED (C6: repo public). Code head before this PROGRESS commit: 923dad3f84c50bbd6ab14b3200e6281c35ec1b8d.
 - REVIEW FIX 5 — cec4fe0 `fix(statutory): strict structure dates from requests (month 01–12, real calendar day)` (reviewer re-check, verdict SHIP). With the 409 STRUCTURE_DATED_LATER, a bogus later-dated row would block every honest edit. sales PUT /employees/:code effective_from and POST /employees/:code/structures share SALES_MONTH_RE ^\d{4}-(0[1-9]|1[0-2])$ (PUT was ^\d{4}-\d{2}$); sales POST /employees create rejects a doj whose month is not 01–12 (it dates the auto-created structure); plant approve requires a real calendar date (isCalendarDate: month 01–12, day valid for the month, leap years). 4 tests (plant 6 bad dates → 400 with rows/master/audit unchanged and request Pending, 2028-02-29 accepted; sales PUT + POST /structures 2026-13/2026-00/2026-5 → 400 nothing written; create doj month 13/00 → 400 nothing created); 3 of 4 FAIL on the previous routes. Suite 49 / 890. OPEN_ITEMS: added the same-gross split-edit / latest-row item (follow-up PR).
+- MERGE origin/main — 66f34d6 `Merge origin/main (f4b3b2f: loans PR-6b + PR-7) into feat/statutory-flags` (owner decision: open the PR now; merge, not rebase). Kept 9e0f266 (coordinator's docs-only commit: per-person amounts/age out of BUILD_PLAN/OPEN_ITEMS/RUNBOOK). Resolved hunks:
+  - CLAUDE.md (1 conflict, top of Section 0): both sides prepended entries. Kept all, newest first: statutory flags PR-1, then main's Loans PR-6b and Loans PR-7, then the shared older entries. Script check: 0 lines of either side missing.
+  - frontend/dist (212 rename/content conflicts): took origin/main's dist wholesale, then rebuilt from the merged source — 322a75d `build(frontend): rebuild dist after merging main` (bundle has both the undo-limits text and the Mark Left outstanding text; a second clean build reproduces it byte-identically).
+  - backend/src/routes/employees.js, frontend/src/pages/Employees.jsx, frontend/src/utils/api.js: auto-merged by git, no conflict hunks. main changed only PUT /:code/mark-left (consolidateForExit, notifyAlerts, `loans` in the reply), Employees.jsx MarkLeftLoans, api.js loan close/reversal helpers; PR-1's flag rules sit in other handlers/components — both behaviours kept, nothing hand-edited.
+  - No fragile file (salaryComputation.js, schema.js, payroll.js, dayCalculation.js) changed on main; main's loans code writes no pf/esi/lwf (grep + guard). UPSERT counts unchanged 56/56/56/53, 45/45/45/42.
+  After the merge: jest 51 / 915 twice (main added 2 suites / 25 tests), statutoryWriterGuard 9/9, node --check clean (employees.js, loans.js, sales.js, salary-input.js, statutoryFlags.js, loans/exit.js), sim 68/68 on a throwaway DB.
 
 ## LAST STEP
-REVIEW FIX 5 — cec4fe0 (strict structure dates from requests) + OPEN_ITEMS split-edit item. Suite 49 / 890. NOT PUSHED.
+MERGE origin/main f4b3b2f (66f34d6) + dist rebuild (322a75d). 51 / 915 ×2, guard 9/9, sim 68/68. NOT PUSHED by the build agent (the coordinator pushes).
 
 ## NEXT STEP
-None for the build agent. Owner: confirm the 10 Oct planner ruling (structure writes dated before a later row → 409; same date → in place); decide OPEN_ITEMS 'plant compute gross source'. Then:
-
-OWNER: (1) make the repo private (GitHub → Settings → General → Danger Zone); (2) from a clone of this branch: git push -u origin feat/statutory-flags; check git rev-parse HEAD == git rev-parse origin/feat/statutory-flags; (3) open https://github.com/abhinavpoddar27-pixel/hr-salary-system/compare/main...feat/statutory-flags in the GitHub UI and merge there; (4) RUNBOOK T4/T5 only after PR-2 is live too. Before pushing, fetch + rebase again if main moved (C5).
+Coordinator: push feat/statutory-flags and open the PR (compare main...feat/statutory-flags); fetch again first — if main moved, merge it in the same way. Owner: confirm the 10 Oct planner ruling (structure writes dated before a later row → 409; same date → in place); decide OPEN_ITEMS 'plant compute gross source' and 'same-gross split edit / latest row'. RUNBOOK T4/T5 only after PR-2 is live too.
 
 ## OWNER RULINGS ADDED DURING THE BUILD
 (record date + ruling; BUILD_PLAN §1 holds the original set)
@@ -53,6 +57,7 @@ OWNER: (1) make the repo private (GitHub → Settings → General → Danger Zon
 - 10 Oct 2026 (owner): PR-1 is run from the claude.ai project chat's cloud Claude Code workspace: a separate planning agent, the chat's review, then a separate build agent. Plan files come from this repo or the claude.ai Project, never from ~/Downloads. The owner still merges only in the GitHub web UI.
 - 10 Oct 2026 (owner, on the planner's advice): helper agents may read, search and run tests in parallel, but STEPs stay strictly in order and only one agent edits files at a time; salaryComputation.js, schema.js and payroll.js are edited only by the main build agent.
 - 10 Oct 2026: the repo was confirmed PUBLIC (GitHub API, raw file 200). Nothing on this branch is pushed until the owner makes it private (T0 prerequisite). Build and commit locally; push is the last step.
+- 10 Oct 2026 08:53 (owner): keep the repo public and open the PR now (supersedes the line above); push access granted to the coordinator, who pushes. Merge origin/main into the branch (not rebase).
 - 10 Oct 2026 (planner, after independent review; owner to confirm): in every writer that can insert a structure row for an existing employee (sales versionSalesStructureForGross / PUT /sales/employees/:code, sales POST /sales/employees/:code/structures, plant salary-input approve; employees.js inserts only fire when no structure exists): (a) if any structure row for that employee is dated AFTER the new row's date → refuse with 409 {error: 'A salary structure dated <latest date> already exists; date this change on or after <latest date>.'}, nothing written (whole request rolls back, master included); (b) if a row exists dated EXACTLY at the new date → update that row's gross/components in place and keep that row's own flags; (c) new date after every existing row (the normal case) → unchanged.
 
 ## DECISIONS TAKEN BY CLAUDE CODE (safest option, owner to review)
@@ -178,3 +183,4 @@ After REVIEW FIX 3: 49 / 886, 0 failures.
 After REVIEW FIX 4: 49 / 886, 0 failures; frontend build OK.
 After REVIEW PHASE 2: 49 / 886, 0 failures, 2 clean runs. Review sim: 68/68.
 After REVIEW FIX 5: 49 / 890, 0 failures.
+After MERGE origin/main f4b3b2f: 51 / 915, 0 failures, 2 clean runs; guard 9/9; sim 68/68.
