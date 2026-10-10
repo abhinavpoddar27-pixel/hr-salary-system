@@ -1,7 +1,7 @@
 ## Last Session — 2026-10-10 (Statutory flags PR-3: filing files)
 **ECR / ESI files leave out rows without a valid UAN / ESI number and say who; sales ESI file; sales master ESI no. / UAN;
 LWF register; filing reports hr/finance/admin only. Branch `feat/statutory-filing` on origin/feat/lwf-sales dcad556 (PR #73
-open), NOT pushed.** Plan `docs/statutory-flags/IMPL_PR3.md` (C1–C7 binding); log + D-11…D-14: `docs/statutory-flags/PROGRESS.md`.
+open), NOT pushed.** Plan `docs/statutory-flags/IMPL_PR3.md` (C1–C7 binding); log + D-11…D-15: `docs/statutory-flags/PROGRESS.md`.
 - **Plant files (`exportFormats.js`):** UAN not 12 digits / ESI no. not 10 (spaces stripped) → row NOT written, listed in
   `missing` {code, name, ee, er, none|malformed}; totals = written rows + missingCount/EE/ER. Line builders, SQL, order,
   filenames and `generateBankFile` byte-unchanged (C2). `/pf-ecr`, `/esi-contribution` send `X-Missing-UAN` /

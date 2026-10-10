@@ -177,7 +177,7 @@
 - PR-3 SIM FIX — 5c3acef `fix(filing): sales master list refetches past the 5 s GET cache`. Caught by run_pr3.py: after HR saved
   an ESI number through the sales master form the list refetch came from the browser's 5 s GET cache, so the "ESI no. missing"
   badge stayed on the fixed row. `getSalesEmployees` sends `fresh` (D-14). dist rebuilt in the same commit.
-- PR-3 STEP 8 — (this commit) `docs(filing): fix list and capped-LWF checks, filing runbook, PR-3 simulation`. VERIFY.sql **V15**
+- PR-3 STEP 8 — 68f848e `docs(filing): fix list and capped-LWF checks, filing runbook, PR-3 simulation`. VERIFY.sql **V15**
   (capped LWF rows: lwf_employee > 0 and V11 sum − total > ₹1; expect 0 on production) and **V16** (fix list per payroll / month /
   company: PF without a 12-digit UAN, ESI without a 10-digit ESI number, spaces / tabs ignored, GLOB — no REGEXP in SQLite); both
   prepare and run on a fresh schema (C6: PR-2b owns V13 / V14). RUNBOOK T7: the "missing must be 0 before filing" rule, where each
