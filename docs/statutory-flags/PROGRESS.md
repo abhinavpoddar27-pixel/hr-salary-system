@@ -48,12 +48,13 @@
 
 - PR-2 PHASE 0 — 4363d64 `Merge origin/main (66c6a08: loans PR-8 + PR-9) into feat/lwf-deduction`. Drift: main moved 8b9561d -> 66c6a08 (loans PR-8 sales borrowers + PR-9 reports). No conflicts. IMPL_PR2 files touched on main: schema.js (+1 policy line at ~3692, outside every LWF site), headroom.js (comment only), financeAudit.js, SalaryComputation.jsx, payslipPdf.js (STEP 4/6 cited line numbers shift — re-locate by anchor text); salaryComputation.js and payroll.js unchanged on main; salesSalaryComputation.js changed (PR-2b file, not touched here). Baseline after the merge: 60 suites / 1004 tests green (was 51 / 915 on 8b9561d; main added 9 suites / 89 tests).
 - PR-2 STEP 1 — 0a2f12a `feat(lwf): LWF columns, policy keys 5/20, AI cache trigger includes LWF`. lwfSchema.test.js S1–S4 (7 tests; 7/7 fail on the previous schema.js, swap-verified).
+- PR-2 STEP 2 — 93302ab `feat(lwf): plant Stage 7 LWF ₹5/₹20 (flagged, earned gross > 0), counted in the loan headroom`. salaryComputation.js edits 1–4 exactly as IMPL_PR2 (LWF after the ESI block, before planStage7Loans; lwf_employee in the loan salary object; + lwfEmployee in totalDeductions before the cap; lwfEmployee/lwfEmployer returned); UPSERT 56/56/56/53 → 58/58/58/55. generatePayslipData NOT done here — moved with its test O1 to STEP 4 (as the plan lists it). headroom.js: 'lwf_employee' appended to plant + sales PRIOR_DEDUCTION_COMPONENTS (sales inert: the sales salary object has no lwf_employee → 0). lwfPlant.test.js P1–P10 = 18 tests (14 fail on the pre-STEP-2 files, swap-verified; the 4 that pass are flag-off / zero-gross / zero-attendance, which assert unchanged behaviour). P9 adds a control DB (same people, no upload): the unflagged colleague's September row is identical in every column; the flagged employee's row differs ONLY in lwf_employee, lwf_employer, total_deductions (+5), net_salary, total_payable, take_home (−5). P10: two DBs (LWF on/off, PF+ESI on, ₹6,000 advance) → loan_recovery 2645 vs 2650, ledger provisional = loan_recovery, reconcileLoan ok. T12 (statutoryLoans.test.js, N3): asserts lwf_employee 5 and adds it to `before`; the unedited T12 fails by exactly ₹5 on the new code. No runtime invariant sums the deduction components (driftMonitor/close/financeRedFlags checked) — only the docs SQL + sim scripts (N2, STEP 7).
 
 ## LAST STEP
-PR-2 STEP 1 (schema) — 0a2f12a.
+PR-2 STEP 2 (plant compute + save + loan headroom) — 93302ab.
 
 ## NEXT STEP
-PR-2 STEP 2 — plant compute + save + loan headroom (salaryComputation.js edits 1–4, UPSERT 58/58/58/55, headroom.js both arrays, lwfPlant.test.js P1–P10, T12 edit). Owner: do NOT compute plant September until PR-2 is merged and deployed (or choose the fallback). Do NOT recompute sales September (D3).
+PR-2 STEP 4 — payslip + readers (plant): generatePayslipData (deductions line 'LWF (Employee)' after the 'Early Exit Deduction' line; lwfEmployer after esiEmployer), payroll.js /salary-register totals, financeAudit.js /report (main changed this file — re-locate by anchor), ai.js, schemaReference.js; tests O1, O5. Then STEPs 5, 6, 7 (+ C3 worktree --dump byte-identical check, C4 sim). Owner: do NOT compute plant September until PR-2 is merged and deployed (or choose the fallback). Do NOT recompute sales September (D3).
 
 ## OWNER RULINGS ADDED DURING THE BUILD
 (record date + ruling; BUILD_PLAN §1 holds the original set)
@@ -86,6 +87,7 @@ PR-2 STEP 2 — plant compute + save + loan headroom (salaryComputation.js edits
 
 ## FILES TOUCHED
 - PR-2: backend/src/database/schema.js (STEP 1), backend/src/__tests__/lwfSchema.test.js (new, STEP 1)
+- PR-2: backend/src/services/salaryComputation.js, backend/src/services/loans/headroom.js, backend/src/__tests__/lwfPlant.test.js (new), backend/src/__tests__/statutoryLoans.test.js (T12) (STEP 2)
 - backend/src/database/schema.js (STEP 1)
 - backend/src/__tests__/helpers/statutoryFixture.js (new, STEP 1)
 - backend/src/__tests__/statutorySchema.test.js (new, STEP 1; T8 added STEP 2)
@@ -115,6 +117,22 @@ PR-2 STEP 2 — plant compute + save + loan headroom (salaryComputation.js edits
 - REVIEW FIXES: backend/src/services/statutoryFlags.js, routes/sales.js, routes/salary-input.js, __tests__/statutoryWriters.test.js, statutoryFlagsService.test.js, statutoryWriterGuard.test.js, frontend/src/pages/StatutoryFlags.jsx (+ dist), docs/statutory-flags/RUNBOOK.md, OPEN_ITEMS.md, CLAUDE.md
 
 ## FRAGILE-FILE EDITS (before / after)
+- PR-2 STEP 2 salaryComputation.js (lines on 66c6a08 = 8b9561d, file unchanged on main) —
+  (1) after 583 (ESI block `}`), NEW:
+        const lwfAmt = (k, d) => { const v = parseFloat(getPolicyValue(db, k, d)); return Number.isFinite(v) && v >= 0 ? v : d; };
+        const lwfOn = !!salStruct.lwf_applicable && grossEarned > 0;
+        const lwfEmployee = lwfOn ? Math.round(lwfAmt('lwf_employee_amount', 5) * 100) / 100 : 0;
+        const lwfEmployer = lwfOn ? Math.round(lwfAmt('lwf_employer_amount', 20) * 100) / 100 : 0;
+  (2) 691 BEFORE `late_coming_deduction: lateComingDeduction, early_exit_deduction: earlyExitDeduction,`
+          AFTER  `late_coming_deduction: lateComingDeduction, early_exit_deduction: earlyExitDeduction, lwf_employee: lwfEmployee,`
+  (3) 697 BEFORE `… + loanRecovery + lateComingDeduction + earlyExitDeduction;`  AFTER `… + earlyExitDeduction + lwfEmployee;` (cap unchanged)
+  (4) 807 BEFORE `esiEmployee, esiEmployer,`  AFTER `esiEmployee, esiEmployer, lwfEmployee, lwfEmployer,`
+  UPSERT (saveSalaryComputation): column `lwf_employee, lwf_employer,` after `early_exit_deduction,`; placeholders `?, ?,` after the
+  early-exit `?,`; SET `lwf_employee = excluded.lwf_employee, lwf_employer = excluded.lwf_employer,` after early_exit; params
+  `comp.lwfEmployee || 0, comp.lwfEmployer || 0,` after `comp.earlyExitDeduction || 0,`.
+  UPSERT counts BEFORE plant 56 cols / 56 placeholders / 56 params / 53 SET → AFTER 58 / 58 / 58 / 55 (counted by script + P7 static test).
+  Sales UPSERT untouched: 45 / 45 / 45 / 42 before and after.
+  headroom.js 30/32: `'early_exit_deduction']` → `'early_exit_deduction', 'lwf_employee']`; `'other_deductions']` → `'other_deductions', 'lwf_employee']`.
 - PR-2 STEP 1 schema.js (lines on 66c6a08) — BEFORE 1705–1735:
     safeAddColumn('salary_computations', 'early_exit_deduction', 'REAL DEFAULT 0');
     … ai_explanation / ai_explanation_at safeAddColumn …
@@ -205,3 +223,4 @@ After REVIEW FIX 5: 49 / 890, 0 failures.
 After MERGE origin/main f4b3b2f: 51 / 915, 0 failures, 2 clean runs; guard 9/9; sim 68/68.
 PR-2 baseline after merging origin/main 66c6a08: 60 / 1004, 0 failures.
 PR-2 STEP 1: lwfSchema 7/7 (+ statutorySchema, loansSchema green).
+PR-2 STEP 2: lwfPlant 18/18, T12 green; full suite 62 / 1029, 0 failures (= baseline 60 / 1004 + 2 suites / 25 tests).
