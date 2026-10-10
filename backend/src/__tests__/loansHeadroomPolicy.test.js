@@ -40,14 +40,14 @@ describe('headroom', () => {
 });
 
 describe('readLoanPolicy', () => {
-  test('reads the 16 seeded keys with no warnings', () => {
+  test('reads the 17 seeded keys with no warnings', () => {
     const db = F.newDb();
     const p = readLoanPolicy(db);
     expect(p.warnings).toEqual([]);
     expect(p).toMatchObject({
       closeDay: 13, deductionCapPct: 50, maxMultipleGross: 2, maxMultipleGrossEmergency: 3, maxTenureMonths: 12,
       minServiceMonths: 6, maxActivePerPerson: 1, emiCeilingPctGross: 30, deductionLoadWarningPct: 30, heldEmiWaitDays: 60,
-      maxShortfallExtensionMonths: 3, agreementRequired: true, interestRate: 0, perquisiteThreshold: 20000,
+      maxShortfallExtensionMonths: 3, agreementRequired: true, interestRate: 0, perquisiteThreshold: 20000, emiNetFlagPct: 30,
     });
     expect(p.eligibleEmploymentTypes).toEqual(['Permanent', 'SILP', 'Worker', 'Sales']);
     expect(p.loanTypes).toEqual(['Personal', 'Emergency / medical', 'Festival advance', 'Education']);

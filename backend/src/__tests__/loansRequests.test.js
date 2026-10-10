@@ -195,7 +195,7 @@ describe('policy validator and gate', () => {
     expect(L.validatePolicyValue('loan_interest_rate', 2).code).toBe('POLICY_VALUE_INVALID');
     expect(L.validatePolicyValue('loans_disbursement_enabled', '1').code).toBe('POLICY_KEY_UNKNOWN');
     expect(L.POLICY_KEYS.map((k) => k.key)).not.toContain('loans_disbursement_enabled');
-    expect(L.POLICY_KEYS).toHaveLength(16);
+    expect(L.POLICY_KEYS).toHaveLength(17);   // Loans PR-9 added loan_emi_net_flag_pct
   });
   test('disbursementEnabled: only the exact string 1', () => {
     expect(L.disbursementEnabled(db)).toBe(false);
