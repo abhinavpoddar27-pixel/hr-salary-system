@@ -2,7 +2,7 @@ const express = require('express');
 const router = express.Router();
 const XLSX = require('xlsx');
 const { getDb } = require('../database/db');
-const { generatePFECR, generateESIFile, generateBankFile } = require('../services/exportFormats');
+const { generatePFECR, generateESIFile, generateBankFile, missingCodesHeader } = require('../services/exportFormats');
 
 // Role gate — HR / finance / admin may read the leave register.
 function requireHrFinanceOrAdmin(req, res, next) {
@@ -246,6 +246,7 @@ router.get('/pf-ecr', (req, res) => {
   if (!month || !year) return res.status(400).json({ success: false, error: 'month and year required' });
 
   const result = generatePFECR(db, parseInt(month), parseInt(year), company);
+  if (result.missing.length > 0) res.setHeader('X-Missing-UAN', missingCodesHeader(result.missing));
 
   if (download === 'true') {
     res.setHeader('Content-Type', 'text/plain');
@@ -253,7 +254,7 @@ router.get('/pf-ecr', (req, res) => {
     return res.send(result.content);
   }
 
-  res.json({ success: true, data: result.employees, totals: result.totals, filename: result.filename, month, year });
+  res.json({ success: true, data: result.employees, missing: result.missing, totals: result.totals, filename: result.filename, month, year });
 });
 
 // GET ESI contribution file (ESIC format)
@@ -263,6 +264,7 @@ router.get('/esi-contribution', (req, res) => {
   if (!month || !year) return res.status(400).json({ success: false, error: 'month and year required' });
 
   const result = generateESIFile(db, parseInt(month), parseInt(year), company);
+  if (result.missing.length > 0) res.setHeader('X-Missing-ESI-Number', missingCodesHeader(result.missing));
 
   if (download === 'true') {
     res.setHeader('Content-Type', 'text/plain');
@@ -270,7 +272,7 @@ router.get('/esi-contribution', (req, res) => {
     return res.send(result.content);
   }
 
-  res.json({ success: true, data: result.employees, totals: result.totals, filename: result.filename, month, year });
+  res.json({ success: true, data: result.employees, missing: result.missing, totals: result.totals, filename: result.filename, month, year });
 });
 
 // GET bank salary upload file (PNB/generic CSV format)

@@ -79,13 +79,19 @@
   `frontend/dist`). None of PR-3's backend FILES / DO NOT MODIFY files moved. `utils/api.js` + `frontend/dist` are on PR-3's FILES list → they
   merge (api.js) / rebuild (dist) when #73 and PR-3 land on main; nothing to do on this branch. Baseline jest on dcad556: **65 suites / 1076
   tests**, 0 failures. Base worktree `<scratch>/base` moved to dcad556 (backend + frontend node_modules symlinked) for filing_identity.js.
-  Plan copied to `docs/statutory-flags/IMPL_PR3.md`.
+  Plan copied to `docs/statutory-flags/IMPL_PR3.md`. Commit af5fffe.
+  (PR-3 PROGRESS lines ride in the NEXT step's commit, so the step SHA can be quoted.)
+- PR-3 STEP 1 — dd37aa9 `refactor(statutory): export ESI/UAN rules for reuse`. statutoryFlags.js: the exports line only
+  (`ESI_NUMBER_RE, UAN_RE, numberInUse` appended to the first line). statutoryNumbers.test.js F12 ×4: regex sources, planner
+  verdict = exported-regex verdict over 8 ESI / 6 UAN samples (spaces, 9/11/13 digits, letters, Arabic-Indic digits, hyphen),
+  numberInUse holder (same master, across sales companies = N3, never self, plant master separate). **4/4 FAIL on dcad556's
+  file** (swap-verified). Guard + service suites green (57).
 
 ## LAST STEP
-PR-3 STEP 0 (plan copied, PR-3 BUILDING, Phase 0 recorded).
+PR-3 STEP 1.
 
 ## NEXT STEP
-PR-3 STEP 1 (export ESI/UAN rules). Carried from PR-2b: run VERIFY V13 on production before PR-2b deploys; do NOT recompute sales September until D3 is answered.
+PR-3 STEP 2 (plant ECR / ESI missing lists) + C4 (filing downloads hr/finance/admin). Carried from PR-2b: run VERIFY V13 on production before PR-2b deploys; do NOT recompute sales September until D3 is answered.
 
 ## OWNER RULINGS ADDED DURING THE BUILD
 (record date + ruling; BUILD_PLAN §1 holds the original set)
