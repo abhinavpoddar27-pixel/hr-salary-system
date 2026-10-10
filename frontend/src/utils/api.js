@@ -473,8 +473,6 @@ export const getLateComingDailyDetail = (date, company) =>
   api.get('/late-coming/daily-detail', { params: { date, ...(company ? { company } : {}) } })
 export const getLateComingEmployeeHistory = (employeeCode, months) =>
   api.get('/late-coming/employee-history', { params: { employeeCode, months } })
-export const applyLateComingDeduction = (data) =>
-  api.post('/late-coming/deduction', data)
 export const getLateComingDeductions = (month, year, params) =>
   api.get('/late-coming/deductions', { params: { month, year, ...params } })
 export const exportLateComingReport = (month, year, company) =>
@@ -755,6 +753,8 @@ export const attendanceReviewRuns = () => api.get(`${AR}/runs`, { headers: arFre
 export const attendanceReviewRun = (id) => api.get(`${AR}/runs/${id}`, { headers: arFresh })
 export const attendanceReviewGenerate = (body) => api.post(`${AR}/runs`, body)
 export const attendanceReviewFinalise = (id) => api.put(`${AR}/runs/${id}/finalise`)
+export const attendanceReviewFinance = (id) => api.get(`${AR}/runs/${id}/finance`, { headers: arFresh })
+export const attendanceReviewSendToFinance = (id) => api.post(`${AR}/runs/${id}/send-to-finance`)
 export const attendanceReviewExport = (id, kind) => api.get(`${AR}/runs/${id}/export.${kind}`, { responseType: 'blob', headers: arFresh })
 
 export default api

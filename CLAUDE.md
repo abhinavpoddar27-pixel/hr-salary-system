@@ -1,3 +1,27 @@
+## Last Session — 2026-10-11 (Attendance enforcement PR-2: Send to finance from a final review; Late Coming apply retired)
+**Branch `feat/attendance-review-send-to-finance` (on origin/main d0409f06), NOT merged.** Plan: private project `claude/attendance-review/PLAN_enforcement_v2.md`.
+- **Why (D-1):** the review is the only place a late / early-exit deduction is decided. Before this, a final review's action
+  list went nowhere, and the Late Coming screen could still raise a deduction for the same person by hand.
+- **Send:** `POST /api/analytics/attendance-review/runs/:id/send-to-finance` (admin, FINAL runs only, else 409). One PENDING
+  `late_coming_deductions` row per action-list deduction (warnings and 0-day lines not sent); `deduction_days` = the review's
+  rounded workdays lost (late + early minutes), `late_count` = late days, company from the employee, remark carries
+  `[review run N]` (the link back to the run — no schema change). Finance approves in the existing queue; Stage 7 applies
+  approved rows exactly as before. One transaction; an `ATTENDANCE_REVIEW_SEND` audit row per insert.
+- **Never overwrites:** a person who already has a pending/approved row for that month (sent before, or entered in the old
+  screen) is skipped and listed; a rejected row does not block. A second click creates nothing.
+- **Status:** `GET /runs/:id/finance` → rows sent by the run (pending / approved / rejected / in salary, finance note), rows for
+  the month entered outside the review, and on a final run a preview of what Send would create/skip.
+- **UI:** Attendance Review tab → new "Finance" section under the action list (draft: "finalise first"; final: "Send N to
+  finance", blocked-person note, contractor note, status tables). Analytics → Punctuality: "Apply Deduction" column, modal and
+  mutation removed, read-only note added; `POST /api/late-coming/deduction` answers 410. Finance review routes unchanged.
+  `applyLateComingDeduction` removed from `utils/api.js` (no other caller). dist rebuilt.
+- **Limits (by plan):** contractor rows are recorded but salaryComputation still skips contractors until PR-2b. Early-exit
+  per-date deductions (`early_exit_deductions`) are PR-3. No protected file touched.
+- **Verified:** new `attendanceReviewSendToFinance.test.js` 9 (all 9 fail on the old code); jest 93 suites / 1487;
+  `scripts/attendance-review-send-to-finance-check.py` 28/28 (draft → finalise → Send 3, old approved row blocks its person,
+  DB rows + audit, button disables, finance approval shows, Punctuality has no Apply and a direct POST → 410, phone 390,
+  salary tables untouched); tab 49/49, suggestions 29/29, master basis 26/26, legacy 15/15 re-run. **Not tested:** Railway.
+
 ## Last Session — 2026-10-11 (P1-05: Stage 6 Apply Leave form kept the previous employee's values)
 **Branch `fix/stage6-leave-form-reset`, NOT merged.** Frontend only (`pages/DayCalculation.jsx`, Apply Leave open/close). Plan + log:
 `docs/ux-bulk/prs/P1-05/PLAN.md`, `PROGRESS.md`. Finding P-3. Rulings Q1 (reset on every open, same employee too), Q2 (success path

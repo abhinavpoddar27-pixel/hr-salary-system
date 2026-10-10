@@ -161,6 +161,46 @@ router.post('/runs', (req, res) => {
   }
 });
 
+// POST /runs/:id/send-to-finance — FINAL runs only. Writes one PENDING late_coming_deductions row per deduction on the
+// action list (finance approves it in the usual queue; Stage 7 applies approved rows). Never overwrites: a person who already
+// has a pending or approved row for that month is skipped and listed. A second click creates nothing. Audited.
+router.post('/runs/:id/send-to-finance', (req, res) => {
+  const id = parseInt(req.params.id, 10);
+  const db = getDb();
+  const run = Number.isInteger(id) ? db.prepare('SELECT * FROM attendance_review_runs WHERE id = ?').get(id) : null;
+  if (!run) return res.status(404).json({ success: false, error: 'Run not found' });
+  if (run.status !== 'final') return res.status(409).json({ success: false, error: 'Finalise the review first — only a final review can be sent to finance' });
+  try {
+    const plan = svc.financeSendPlan(db, run);
+    const ins = db.prepare(`INSERT INTO late_coming_deductions
+      (employee_code, employee_id, month, year, company, late_count, deduction_days, remark, applied_by, finance_status)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending')`);
+    const created = [];
+    db.transaction(() => {
+      for (const c of plan.create) {
+        const info = ins.run(c.code, c.employee_id, run.month, run.year, c.company, c.late_count, c.deduction_days, c.remark, user(req));
+        created.push({ ...c, id: info.lastInsertRowid });
+        logAudit('late_coming_deductions', info.lastInsertRowid, 'deduction_applied', '', `${c.deduction_days} days`, 'ATTENDANCE_REVIEW_SEND',
+          `Sent from Attendance Review run ${run.id} (${run.year}-${run.month}) — pending finance review`, user(req));
+      }
+    })();
+    res.json({ success: true, data: { created: created.map(({ code, name, deduction_days, contractor, id: rowId }) => ({ code, name, deduction_days, contractor, id: rowId })),
+      skipped: plan.skipped, status: svc.financeStatus(db, run) } });
+  } catch (err) {
+    console.error('Attendance review send-to-finance error:', err.message);
+    res.status(500).json({ success: false, error: 'Failed to send to finance: ' + err.message });
+  }
+});
+
+// GET /runs/:id/finance — where the run's deductions are (pending / approved / rejected / in salary) + rows entered outside it
+router.get('/runs/:id/finance', (req, res) => {
+  const id = parseInt(req.params.id, 10);
+  const db = getDb();
+  const run = Number.isInteger(id) ? db.prepare('SELECT * FROM attendance_review_runs WHERE id = ?').get(id) : null;
+  if (!run) return res.status(404).json({ success: false, error: 'Run not found' });
+  res.json({ success: true, data: { ...svc.financeStatus(db, run), preview: run.status === 'final' ? svc.financeSendPlan(db, run) : null } });
+});
+
 // GET /runs — list (no result payload)
 router.get('/runs', (req, res) => {
   const rows = getDb().prepare('SELECT * FROM attendance_review_runs ORDER BY year DESC, month DESC').all();

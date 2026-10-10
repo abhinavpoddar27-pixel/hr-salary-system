@@ -10,7 +10,7 @@ import {
   getAttendanceHeatmap, getOvertimeReport, getWorkingHoursReport,
   getDepartmentDeepDive,
   getLateComingAnalytics, getLateComingDeptSummary, getLateComingDeductions,
-  applyLateComingDeduction, exportLateComingReport
+  exportLateComingReport
 } from '../utils/api'
 import toast from 'react-hot-toast'
 import { useQueryClient } from '@tanstack/react-query'
@@ -397,81 +397,7 @@ function TrendArrow({ trend }) {
   return <span className="text-slate-400">→</span>
 }
 
-// Late Coming Phase 1: HR deduction modal
-function LateComingDeductionModal({ employee, month, year, company, onClose, onSubmit, isPending }) {
-  const suggested = `Late coming deduction: ${employee.late_count_this_month} late instances in ${new Date(year, month - 1).toLocaleString('en-US', { month: 'long' })} ${year}. Policy: 4 late = 1 day deduction.`
-  const [days, setDays] = useState(Math.max(0.5, Math.min(5, Math.round((employee.late_count_this_month / 4) * 2) / 2 || 0.5)))
-  const [remark, setRemark] = useState(suggested)
-
-  return (
-    <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4" onClick={onClose}>
-      <div className="bg-white rounded-xl shadow-2xl w-full max-w-lg max-h-[90vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
-        <div className="p-5 border-b">
-          <h3 className="font-bold text-slate-800">Apply Late Coming Deduction</h3>
-          <p className="text-xs text-slate-500 mt-0.5">
-            {employee.employee_code} · {employee.name} · {employee.department || '—'} · Shift {employee.shift_code || '—'}
-          </p>
-        </div>
-        <div className="p-5 space-y-4">
-          <div className="bg-amber-50 border border-amber-200 rounded-lg p-3 text-sm space-y-1">
-            <div>
-              Late <strong>{employee.late_count_this_month} times</strong> this month,{' '}
-              <strong>{employee.late_count_last_month} times</strong> last month
-              {' '}<TrendArrow trend={employee.trend} />
-            </div>
-            <div className="text-xs text-slate-600">
-              Left late (20+ min past shift end): <strong>{employee.left_late_count_this_month || 0}</strong> times this month
-              {employee.left_late_count_last_month ? ` · ${employee.left_late_count_last_month} last month` : ''}
-            </div>
-          </div>
-          <div>
-            <label className="label">Deduction Days</label>
-            <input
-              type="number"
-              min="0.5"
-              max="5"
-              step="0.5"
-              value={days}
-              onChange={e => setDays(parseFloat(e.target.value))}
-              className="input"
-            />
-            <p className="text-xs text-slate-400 mt-1">Allowed range: 0.5 – 5 days</p>
-          </div>
-          <div>
-            <label className="label">Remark (required)</label>
-            <textarea
-              rows={3}
-              value={remark}
-              onChange={e => setRemark(e.target.value)}
-              className="input"
-            />
-          </div>
-        </div>
-        <div className="p-5 border-t flex gap-2">
-          <button
-            className="btn-primary flex-1 disabled:opacity-50"
-            disabled={isPending || !remark.trim() || !(days > 0 && days <= 5)}
-            onClick={() => onSubmit({
-              employeeCode: employee.employee_code,
-              month, year, company,
-              lateCount: employee.late_count_this_month,
-              deductionDays: days,
-              remark: remark.trim()
-            })}
-          >
-            {isPending ? 'Applying…' : 'Apply Deduction (Pending Finance Review)'}
-          </button>
-          <button className="btn-secondary" onClick={onClose}>Cancel</button>
-        </div>
-      </div>
-    </div>
-  )
-}
-
 function PunctualityTab({ selectedMonth, selectedYear, dateRangeMode, dateRangeStart, dateRangeEnd, selectedCompany }) {
-  const qc = useQueryClient()
-  const { user } = useAppStore()
-  const canApplyDeduction = user?.role === 'admin' || user?.role === 'hr'
   const sort = useSortable('lateRate', 'desc')
   const deptSort = useSortable('lateRate', 'desc')
   const lcSort = useSortable('late_count_this_month', 'desc')
@@ -485,7 +411,6 @@ function PunctualityTab({ selectedMonth, selectedYear, dateRangeMode, dateRangeS
   const [lcShiftFilter, setLcShiftFilter] = useState('')
   const [lcDeptFilter, setLcDeptFilter] = useState('')
   const [lcSearch, setLcSearch] = useState('')
-  const [deductionEmp, setDeductionEmp] = useState(null)
   // Phase 2: view mode toggle (employee list vs department rollup)
   const [lcViewMode, setLcViewMode] = useState('employee')
   const [lcExpandedDept, setLcExpandedDept] = useState(null)
@@ -554,17 +479,6 @@ function PunctualityTab({ selectedMonth, selectedYear, dateRangeMode, dateRangeS
   const totalLateMinutes = lcRows.reduce((s, r) => s + (r.avg_late_minutes || 0) * (r.late_count_this_month || 0), 0)
   const avgLateDuration = totalLateInstances > 0 ? Math.round(totalLateMinutes / totalLateInstances) : 0
   const totalLeftLate = lcRows.reduce((s, r) => s + (r.left_late_count_this_month || 0), 0)
-
-  const deductionMutation = useMutation({
-    mutationFn: (data) => applyLateComingDeduction(data),
-    onSuccess: (_, vars) => {
-      toast.success(`Deduction applied for ${vars.employeeCode}. Pending finance review.`)
-      qc.invalidateQueries({ queryKey: ['lc-deductions'] })
-      qc.invalidateQueries({ queryKey: ['lc-analytics'] })
-      setDeductionEmp(null)
-    },
-    onError: (err) => toast.error(err?.response?.data?.error || 'Failed to apply deduction')
-  })
 
   const handleExport = async () => {
     try {
@@ -641,6 +555,10 @@ function PunctualityTab({ selectedMonth, selectedYear, dateRangeMode, dateRangeS
       {/* ═══ SECTION: Employee Wise Data ═══ */}
       {lcViewMode === 'employee' && (
         <Section title={`Employee Late Coming Detail (${lcDisplayRows.length})`} defaultOpen={true}>
+          <p data-testid="lc-deduction-readonly" className="mb-2 text-xs text-slate-600 bg-slate-50 border border-slate-200 rounded px-3 py-2">
+            This list is for viewing. Late and early-exit deductions are decided once a month in the <b>Attendance Review</b> tab and
+            sent to finance from the final review. Rows waiting for finance show under “Pending Deductions”.
+          </p>
           <div className="overflow-x-auto">
             <table className="table-compact w-full">
               <thead>
@@ -655,12 +573,11 @@ function PunctualityTab({ selectedMonth, selectedYear, dateRangeMode, dateRangeS
                   <SortTh sort={lcSort} k="avg_late_minutes" className="text-center">Avg Min</SortTh>
                   <SortTh sort={lcSort} k="left_late_count_this_month" className="text-center">Left Late</SortTh>
                   <SortTh sort={lcSort} k="left_late_count_last_month" className="text-center">Left Late (Prev)</SortTh>
-                  {canApplyDeduction && <th>Action</th>}
                 </tr>
               </thead>
               <tbody>
                 {lcDisplayRows.length === 0 ? (
-                  <tr><td colSpan={canApplyDeduction ? 11 : 10} className="text-center py-8 text-slate-400">No late arrivals for this period</td></tr>
+                  <tr><td colSpan={10} className="text-center py-8 text-slate-400">No late arrivals for this period</td></tr>
                 ) : lcDisplayRows.map(r => (
                   <tr key={r.employee_code}>
                     <td className="font-mono text-xs text-slate-500">{r.employee_code}</td>
@@ -673,15 +590,6 @@ function PunctualityTab({ selectedMonth, selectedYear, dateRangeMode, dateRangeS
                     <td className="text-center text-amber-600">{r.avg_late_minutes || 0}</td>
                     <td className="text-center text-purple-600">{r.left_late_count_this_month}</td>
                     <td className="text-center text-slate-500">{r.left_late_count_last_month}</td>
-                    {canApplyDeduction && (
-                      <td>
-                        {r.late_count_this_month > 0 && (
-                          <button onClick={() => setDeductionEmp(r)} className="text-xs py-0.5 px-2 bg-red-50 text-red-700 rounded hover:bg-red-100 border border-red-200">
-                            Apply Deduction
-                          </button>
-                        )}
-                      </td>
-                    )}
                   </tr>
                 ))}
               </tbody>
@@ -858,18 +766,6 @@ function PunctualityTab({ selectedMonth, selectedYear, dateRangeMode, dateRangeS
             </table>
           </div>
         </Section>
-      )}
-
-      {deductionEmp && (
-        <LateComingDeductionModal
-          employee={deductionEmp}
-          month={selectedMonth}
-          year={selectedYear}
-          company={selectedCompany}
-          isPending={deductionMutation.isPending}
-          onSubmit={(payload) => deductionMutation.mutate(payload)}
-          onClose={() => setDeductionEmp(null)}
-        />
       )}
 
       {/* ═══ SECTION: Habitual Latecomers ═══ */}
