@@ -238,6 +238,18 @@ function planFlagChanges(db, { scope, effectiveMonth, rows }) {
   const { S, E } = keysFor(scope, effectiveMonth);
   const out = [];
 
+  // A non-blank ESI number / UAN on two or more rows of this file is written
+  // for none of them (review fix 2): which row owns it is the owner's call.
+  const fileLines = { esi_number: new Map(), uan: new Map() };
+  for (const row of rows || []) {
+    for (const col of ['esi_number', 'uan']) {
+      const v = String(row[col] || '').replace(/\s+/g, '');
+      if (!v) continue;
+      if (!fileLines[col].has(v)) fileLines[col].set(v, []);
+      fileLines[col].get(v).push(row.line);
+    }
+  }
+
   for (const row of rows || []) {
     const p = {
       line: row.line, code: row.code, company: row.company, name: row.name,
@@ -295,13 +307,17 @@ function planFlagChanges(db, { scope, effectiveMonth, rows }) {
       laterRowsUpdated: structNeedsChange ? all.filter((r) => r.effective_from > E && !sameFlags(flagsOf(r), p.after)).length : 0,
     };
 
-    // Numbers: blank = leave unchanged; malformed = warning, not written.
+    // Numbers: blank = leave unchanged; malformed, repeated in this file or
+    // held by another employee = warning, not written.
     for (const [col, re, label] of [['esi_number', ESI_NUMBER_RE, 'ESI number (10 digits)'], ['uan', UAN_RE, 'UAN (12 digits)']]) {
-      const v = (row[col] || '').replace(/\s+/g, '');
+      const v = String(row[col] || '').replace(/\s+/g, '');
       if (!v) continue;
+      const name = col === 'uan' ? 'UAN' : 'ESI number';
       if (!re.test(v)) { p.warnings.push(`Malformed ${label} — not written`); continue; }
+      const lines = fileLines[col].get(v) || [];
+      if (lines.length > 1) { p.warnings.push(`${name} repeated on rows ${lines.join(', ')} of this file — not written for any of them`); continue; }
       const other = numberInUse(db, scope, col, v, emp.id);
-      if (other) { p.warnings.push(`${col === 'uan' ? 'UAN' : 'ESI number'} already used by ${other} — not written`); continue; }
+      if (other) { p.warnings.push(`${name} already used by ${other} — not written`); continue; }
       if (String(emp[col] || '') !== v) { p.numbers[col] = v; p.numberChanged = true; }
     }
 

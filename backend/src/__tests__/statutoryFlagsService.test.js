@@ -119,6 +119,56 @@ describe('planFlagChanges', () => {
     expect(p.rows[2]).toMatchObject({ numberChanged: true, changed: true, numbers: { uan: '100000000003', esi_number: '1000000003' } });
   });
 
+  test('review fix 2: a number repeated in the file → warning on every such row, written for none; unique numbers still written', () => {
+    const db = S.newDb();
+    const a = S.plant(db); const b = S.plant(db); const c = S.plant(db); const d = S.plant(db);
+    for (const e of [a, b, c, d]) S.plantStructure(db, e, '2025-01-01');
+    const rows = parsePlant(
+      prow(a.code, 'Y', 'N', 'Y', { esi_number: '3000000001', uan: '300000000009' }),
+      prow(b.code, 'Y', 'N', 'Y', { esi_number: '3000000001' }),
+      prow(c.code, 'Y', 'N', 'Y', { esi_number: '30000 00001', uan: '300000000003' }),
+      prow(d.code, 'Y', 'N', 'Y', { esi_number: '3000000004' }),
+    ).rows;
+    const p = plan(db, rows);
+    for (const i of [0, 1, 2]) {
+      expect(p.rows[i].warnings.join('|')).toMatch(/ESI number repeated on rows 2, 3, 4 of this file — not written for any of them/);
+      expect(p.rows[i].numbers.esi_number).toBeNull();
+    }
+    expect(p.rows[0].numbers.uan).toBe('300000000009');
+    expect(p.rows[2].numbers.uan).toBe('300000000003');
+    expect(p.rows[3]).toMatchObject({ warnings: [expect.stringMatching(/No pay row/)], numbers: { esi_number: '3000000004', uan: null } });
+    const r = S.applyFile(db, 'plant', S.plantFile(
+      prow(a.code, 'Y', 'N', 'Y', { esi_number: '3000000001', uan: '300000000009' }),
+      prow(b.code, 'Y', 'N', 'Y', { esi_number: '3000000001' }),
+      prow(c.code, 'Y', 'N', 'Y', { esi_number: '30000 00001', uan: '300000000003' }),
+      prow(d.code, 'Y', 'N', 'Y', { esi_number: '3000000004' }),
+    ));
+    expect(r.ok).toBe(true);
+    expect(db.prepare("SELECT COUNT(*) c FROM employees WHERE esi_number = '3000000001'").get().c).toBe(0);
+    expect([a, b, c, d].map((e) => S.master(db, e).esi_number)).toEqual([null, null, null, '3000000004']);
+    expect([a, c].map((e) => S.master(db, e).uan)).toEqual(['300000000009', '300000000003']);
+    expect([a, b, c, d].map((e) => S.flags(S.master(db, e)))).toEqual(Array(4).fill({ pf: 0, esi: 1, lwf: 1 })); // flags still apply
+  });
+
+  test('review fix 2 (sales): a UAN repeated in the file → none written; a UAN already held by another sales employee → warning, not written', () => {
+    const db = S.newDb();
+    const held = S.salesEmp(db, { code: 'Z130', uan: '400000000001' });
+    const x = S.salesEmp(db, { code: 'Z131' }); const y = S.salesEmp(db, { code: 'Z132' }); const z = S.salesEmp(db, { code: 'Z133' });
+    for (const e of [held, x, y, z]) S.salesStructure(db, e, '2025-01');
+    const buf = S.salesFile(
+      S.srow('Z131', S.COMPANY, 1, 0, 1, { uan: '400000000002' }),
+      S.srow('Z132', S.COMPANY, 1, 0, 1, { uan: '400000000002' }),
+      S.srow('Z133', S.COMPANY, 1, 0, 1, { uan: '400000000001' }),
+    );
+    const p = plan(db, SF.parseFlagFile(buf, 'sales').rows, 'sales');
+    expect(p.rows[0].warnings.join('|')).toMatch(/UAN repeated on rows 2, 3 of this file/);
+    expect(p.rows[1].warnings.join('|')).toMatch(/UAN repeated on rows 2, 3 of this file/);
+    expect(p.rows[2].warnings.join('|')).toMatch(/UAN already used by Z130 — not written/);
+    expect(p.totals.numbersAdded).toBe(0);
+    expect(S.applyFile(db, 'sales', buf).ok).toBe(true);
+    expect([held, x, y, z].map((e) => S.salesMaster(db, e).uan)).toEqual(['400000000001', null, null, null]);
+  });
+
   test('T15 no structure → row error (prevents the 2025-01-01 auto-create carrying ON flags)', () => {
     const db = S.newDb();
     const e = S.plant(db);
