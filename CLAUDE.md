@@ -1,3 +1,17 @@
+## Last Session — 2026-10-10 (Extra duty: Finance Review screen — finance could not select rejected rows)
+**Branch `fix/ed-finance-review-ux`, NOT merged.** Frontend only (`pages/ExtraDutyGrants.jsx`); no backend file changed.
+- **Report:** after #76 shipped "Return to HR", finance said they couldn't select the rejected grants. Reproduced on a
+  production-shaped Sept (171 approved / 22 rejected / 212 unreviewed): the server sorts `finance_status ASC`, so the 22
+  rejected rows sat under 171 approved ones; the header box ticked only UNREVIEWED rows; the bulk buttons were at the top,
+  off-screen once you had scrolled down to tick; no rejected count anywhere.
+- **Fix (finance tab only):** filter chips with counts (All / Unreviewed / Flagged / Rejected / Approved); client-side
+  order unreviewed → flagged → rejected → approved; header box selects every selectable row in the current filter (on
+  "All" it still selects unreviewed only, so one click never mixes approve and return); selection clears on filter or tab
+  change; a fixed bottom bar holds "N selected · Bulk Approve · ↩ Return to HR · Clear"; rejected rows tinted red. dist rebuilt.
+- **Verified:** `backend/scripts/ed-finance-review-ux-check.py` (Chromium, built dist, real finance login, prod-shaped
+  data) 25/25 — Rejected (22) → tick header → Return to HR (22) stays on screen after scrolling → submit → 22 rows
+  PENDING/UNREVIEWED with the note, other 405−22 rows untouched; 0 page errors, 0 API 4xx/5xx. jest ED suite 33/33.
+- **Not tested:** Railway; mobile widths (bar wraps). **Still open:** `POST /:id/finance-approve` doesn't check finance_status.
 ## Last Session — 2026-10-10 (Wide layout: 9 pages full width + Stage 7 register rework)
 **Branch `feat/wide-layout` (origin/main 02e1115 merged in — #76 + #77), NOT pushed, NOT merged.** Frontend display only.
 Checkpoint doc + owner rulings: `docs/wide-layout/PROGRESS.md` (read first; CP-8 push is next).
