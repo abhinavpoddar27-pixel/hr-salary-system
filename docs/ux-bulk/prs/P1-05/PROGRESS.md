@@ -16,9 +16,9 @@
 | 1 | jest before (18bef07 worktree) | done | 89 suites / 1430 tests pass (/tmp/p105-main) |
 | 2 | Source edit DayCalculation.jsx (EMPTY_LEAVE_FORM, open/closeLeaveModal, 4 call sites) | done | +18/−6; f97ad6e |
 | 3 | dist rebuild (own commit) | done | vs fresh 18bef07 build (hash-normalised) only the DayCalculation chunk differs; 0301dd5 |
-| 4 | check script written | todo | |
-| 5 | script on branch dist | todo | |
-| 6 | `--base` on origin/main dist | todo | |
+| 4 | check script written | done | backend/scripts/stage6-leave-form-reset-check.py (T9501/T9502, hr, port 3105, --base + APP_ROOT) |
+| 5 | script on branch dist | done | v1 44/44; v2 53/53 (step 8) |
+| 6 | `--base` on origin/main dist | done | 4/4 on /tmp/p105-main (18bef07): B's window shows A's EL/date/reason, submit enabled |
 | 7 | jest after | todo | |
 | 8 | self-debug + user simulation + v2 | todo | |
 | 9 | CLAUDE.md Last Session entry | todo | |
