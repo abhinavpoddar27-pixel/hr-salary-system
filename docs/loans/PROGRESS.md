@@ -10,7 +10,8 @@ after a context compaction or a new session there is a file to read and build fr
   loans 0, loan_deductions 0, no salary row with loan_recovery, drift = 1 known row, component-short = 5 known rows).
   Loans PR-7 (exit recovery, #63) and Loans PR-6b (close screen, reversal, Mark Left outstanding, #64) are merged
   (10 Oct 2026). Loans PR-8 (sales borrowers, #66) is merged. Loans PR-9 (reports, payslip balance line, Finance Audit
-  hooks, perquisite list, sales close tab) is open on `feat/loans-pr9`, waiting for review.
+  hooks, perquisite list, sales close tab) is merged (#67). Loans PR-11 (admin production dry run — the pre-pilot
+  dress rehearsal, always rolled back) is open on `feat/loans-pr11`, waiting for review.
 - **Next PR:** plant go-live after PR-9; sales go-live after PR-8 + PR-9; then PR-10 (old loans, cutover).
 - **Blockers:**
   - The PR-6 check below (nil loan impact: the 13 Oct run writes nothing); then the PR-7 check.
@@ -57,8 +58,9 @@ after a context compaction or a new session there is a file to read and build fr
 | Loans PR-6b | `feat/loans-pr6b` | Merged | #64 | 2026-10-10 | verified (planner) |
 | Loans PR-7 | `feat/loans-pr7` | Merged | #63 | 2026-10-10 | verified (planner) |
 | Loans PR-8 | `feat/loans-pr8` | Merged | #66 | 2026-10-10 | PR-8 check below + checks 1–3 |
-| Loans PR-9 | `feat/loans-pr9` | Open | see GitHub | — | PR-9 check below + checks 1–3 |
+| Loans PR-9 | `feat/loans-pr9` | Merged | #67 | 2026-10-10 | PR-9 check below + checks 1–3 |
 | Loans PR-10 | `feat/loans-pr10` | Not started | — | — | — |
+| Loans PR-11 | `feat/loans-pr11` | Open | see GitHub | — | PR-11 check below (run one dry run on production) |
 | PR-F | `feat/loans-prF` | Not started (after pilot) | — | — | — |
 
 Milestones: **plant pilot** after PR-7 · **plant go-live** after PR-9 · **sales go-live** after
@@ -420,6 +422,41 @@ Finance Audit readiness for 9/2026 → no `LOAN_CLOSE_OVERDUE`; red flags for 9/
 Repeat the PR-9 checks: `node backend/scripts/loans-payslip-html-check.mjs`; the three simulations with `--keep` then
 `node backend/scripts/loans-reports-simulation.js <dbs>`; `python3 backend/scripts/loans-ui-browser-check.py <dir>` (Pass 5 → `<dir>/pr9`).
 
+## Loans PR-11 rulings (coordinator, 10 Oct 2026 — all Phase 0 defaults approved)
+
+The pre-pilot gate's dress rehearsal on production data, without downloading the database: `POST /api/loans/dry-run`
+(admin, not company-restricted) runs the REAL engine on the live database inside ONE transaction that is ALWAYS rolled
+back; `GET /api/loans/dry-run/pack` suggests real eligible borrowers. Screen: Loans → **Dry run** (admin only).
+- **Q1** the only write that survives: one `audit_log` row (`action_type = 'loan_dry_run'`: who, scenarios,
+  rollbackVerified, timings), written after the rollback and after the second fingerprint.
+- **Q2** eligibility as of today. **Q3** the sales per-employee loop is repeated from `routes/sales.js` L2779–2837
+  (comment points there); extraction is a later PR. **Q4** Mark Left = the loan side only (`flagForExit` /
+  `flagSalesBorrowerForExit`), exit date = last day of M (sales: the 25th); the employee row is not touched.
+- **Q5** an engine failure mid-run → 200 `success:false, failedAt`; 500 only when the rollback cannot be verified
+  (`ROLLBACK_NOT_VERIFIED`) or the transaction ended on its own (`ROLLBACK_GUARANTEE_LOST`; admin notification).
+- **Q6** one payroll per run; the pack button runs plant then sales. **Q7** every table's row count on every run.
+- `disburseMonthOffset` −1 (first EMI = M, default) or 0 (first EMI M+1). No gate change (the engine never reads it).
+- A transaction already open on the shared handle (SQL Console write preview, up to 60 s) → 409 `DB_BUSY`.
+- **Production shape (read-only, 10 Oct 2026):** all 583 Sep 2026 `day_calculations` rows are `salary_stale = 1`, so a
+  re-run will not reproduce the stored rows: the report keeps "stored → re-run without loan" (stale difference) apart
+  from "re-run without → with loan" (the loan's effect), with a plain-English note on screen.
+- After the pilot the close inside a dry run also covers the real loans of that month (rolled back with it); an
+  already-closed month shows `ALREADY_CLOSED` in the report.
+
+### Loans PR-11 check (after deploy; the planner runs one dry run, nothing else)
+
+1. Admin → Loans → Dry run → Rehearsal pack (Sep 2026). Expect the green "Nothing was saved" banner on both reports,
+   `rollbackVerified: true`, and record `timings.lockMs` / fingerprint ms (the first real number for 257 MB).
+2. Read-only, counts only:
+```sql
+SELECT (SELECT COUNT(*) FROM loans), (SELECT COUNT(*) FROM loan_deductions), (SELECT COUNT(*) FROM loan_closes);   -- 0, 0, 0
+SELECT COUNT(*) FROM audit_log WHERE action_type = 'loan_dry_run';                                                -- = number of runs
+SELECT COUNT(*) FROM notifications WHERE type LIKE 'LOAN_%';                                                      -- 0
+SELECT value FROM policy_config WHERE key = 'loans_disbursement_enabled';                                         -- '0'
+```
+Then checks 1–3 below: identical to before the run (the dry run writes no salary row).
+Repeat locally: `node backend/scripts/loans-dry-run-simulation.js`; `python3 backend/scripts/loans-ui-browser-check.py <dir>` (Pass 6 → `<dir>/pr11`).
+
 ## Post-merge checks
 
 Run after every PR that touches salary, and after every deploy. Both queries are read-only;
@@ -513,3 +550,4 @@ FROM sales_salary_computations WHERE month = ? AND year = ?;
 | 2026-10-10 | Loans PR-6b | Built | Close tab, admin reversal on the loan page, Mark Left outstanding; `GET /:id` gains `deductions` + `adjustments`. Suite 769 → 771 (42 suites). Browser check 103/103 (63 PR-4 + 40 Pass 3), 0 page errors. |
 | 2026-10-10 | Loans PR-8 | Built | Sales borrowers: eligibility (structure gross, company-scoped), cycle first EMI, borrower search; sales Stage 7 within headroom matched on code + company; loan-only ₹0 floor; K30 edits, K31 hold block, K28 release guard; sales close / sweep / payslip check; sales exit hook. Suite 792 → 849 (49 suites, 3 clean runs). `loans-sales-simulation.js` 7 loans × 5 sales months PASS; `--dump` byte-identical vs PR-7 base and vs main after #63/#64 (232 rows); `--empty` writes nothing. Merged main (up to #65): suite 972 / 56; dist rebuilt on the merged tree; browser check 116/116 (Pass 4 sales, 13), 0 page errors. |
 | 2026-10-10 | Loans PR-9 | Built | Reports service + API (register, forecast, exceptions, leavers, perquisite, Excel), payslip balance line (separate read, plant + sales), Finance Audit readiness warning + 3 plant red flags, `loan_emi_net_flag_pct`, sales statement by cycle month, Reports tab, sales close toggle. Suite 972 → 1004 (60 suites, 3 clean runs). Reports sim 255/255; payslip HTML 77/77 byte-identical without a loan; Stage 7 + sales `--dump` md5-identical to main; browser 148/148 (Pass 5, 32), 0 page errors. Portal unused in production → no portal view (Q6). |
+| 2026-10-10 | Loans PR-11 | Built | Admin dry run (`services/loans/dryRun.js`, 2 routes, Dry run tab). Merged origin/main up to #70 (LWF): component check counts `lwf_employee`. Suite 1047 → 1091 (66 suites, 3 clean runs). Rollback proof: full-content hash of every table identical after every run incl. a throw at each of 5 steps and inside the close; simulation 42/42 (600 plant + 230 sales, WAL file, a real loan alongside; 21–108 ms in the transaction); browser 171/171 (Pass 6, 23), 0 page errors. |
