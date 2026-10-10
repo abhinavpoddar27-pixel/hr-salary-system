@@ -34,6 +34,12 @@ REAL logins, on a SCRATCH database. Never point it at a real database.
     non-borrower (seeded); the sales payslip page likewise; the close tab's Plant / Sales
     toggle — sales readiness, a sales close by finance (201), the history row, hr read-only.
     Screens go to <screenshot_dir>/pr9/.
+  * Pass 6 (Loans PR-11) — the admin dry run. Seeds two Aug 2026 plant employees with a
+    stored Stage 7 (Aug imports stamped done), then on the Dry run tab: hidden for hr; two
+    scenarios (one with Hold), the green "nothing was saved" banner, the stale note, the
+    per-employee table, the close line, JSON + Excel exports, the rehearsal pack (two
+    reports). After every run an INDEPENDENT hash of every table must equal the one taken
+    before (except exactly one new 'loan_dry_run' audit row). Screens go to <screenshot_dir>/pr11/.
 
 Usage:  python3 backend/scripts/loans-ui-browser-check.py [screenshot_dir]
 Needs Python Playwright and Chromium (PLAYWRIGHT_BROWSERS_PATH, e.g. /opt/pw-browsers).
@@ -59,6 +65,7 @@ OUT = os.path.abspath(sys.argv[1]) if len(sys.argv) > 1 else os.path.join(ROOT, 
 OUT6B = os.path.join(OUT, 'pr6b')
 OUT8 = os.path.join(OUT, 'pr8')
 OUT9 = os.path.join(OUT, 'pr9')
+OUT11 = os.path.join(OUT, 'pr11')
 PORT = int(os.environ.get('PORT', '3997'))
 BASE = f'http://127.0.0.1:{PORT}'
 COMPANY = 'Indriyan Beverages Pvt Ltd'
@@ -543,6 +550,7 @@ def run_browser(db_path, admin_loan_id):
         run_close_pass(browser, db_path, hr, admin, fin, viewer)
         run_sales_pass(db_path, hr)
         run_reports_pass(db_path, hr, admin, fin, viewer)
+        run_dry_run_pass(db_path, hr, admin)
 
         browser.close()
 
@@ -1052,6 +1060,183 @@ def run_reports_pass(db_path, hr, admin, fin, viewer):
     hr.get_by_test_id('loan-close').wait_for()
     hr.get_by_test_id('close-payroll-sales').click()
     check('close tab (sales): hr is read-only', visible(hr, 'close-readonly') and hr.get_by_test_id('close-run').count() == 0)
+
+# ── Pass 6 (Loans PR-11): the admin dry run ─────────────────────────────────
+
+SEED_PR11_JS = r"""
+// Scratch DB only. argv: ROOT DB_PATH. Two Aug 2026 plant employees with a stored Stage 7.
+const [ROOT, DB] = process.argv.slice(2);
+const Database = require(`${ROOT}/backend/node_modules/better-sqlite3`);
+const db = new Database(DB);
+db.pragma('busy_timeout = 10000');
+const { recomputeSalary } = require(`${ROOT}/backend/src/services/recompute`);
+const COMPANY = 'Indriyan Beverages Pvt Ltd';
+const quiet = (fn) => { const l = console.log; const w = console.warn; console.log = () => {}; console.warn = () => {}; try { return fn(); } finally { console.log = l; console.warn = w; } };
+for (const [code, name] of [['E140', 'Manpreet Gill'], ['E141', 'Navdeep Kaur']]) {
+  db.prepare(`INSERT INTO employees (code, name, department, company, status, employment_type, is_contractor, gross_salary, date_of_joining)
+              VALUES (?, ?, 'PRODUCTION', ?, 'Active', 'Permanent', 0, 24000, '2020-04-01')`).run(code, name, COMPANY);
+  db.prepare(`INSERT INTO day_calculations (employee_code, month, year, company, days_present, total_payable_days) VALUES (?, 8, 2026, ?, 27, 27)`).run(code, COMPANY);
+  const ins = db.prepare("INSERT OR IGNORE INTO attendance_processed (employee_code, date, status_original, status_final, company, month, year) VALUES (?, ?, 'P', 'P', ?, 8, 2026)");
+  for (let day = 24; day <= 31; day++) ins.run(code, `2026-08-${day}`, COMPANY);
+}
+quiet(() => recomputeSalary(db, { month: 8, year: 2026, company: COMPANY, employeeCodes: ['E140', 'E141'], requestId: 'ui-check-pr11' }));
+db.prepare('UPDATE monthly_imports SET stage_7_done = 1 WHERE month = 8 AND year = 2026').run();
+// Sep 2026 imported but Stage 7 not finished (as production would be mid-month): the pack's latest computed month is Aug.
+db.prepare("INSERT INTO monthly_imports (month, year, file_name, company, stage_1_done, stage_7_done) VALUES (9, 2026, 'ui-check-sep.xls', ?, 1, 0)").run(COMPANY);
+// Production shape: Stage 6 changed after Stage 7 for one of them (stale).
+db.prepare("UPDATE day_calculations SET total_payable_days = 25, days_present = 25, salary_stale = 1 WHERE employee_code = 'E141' AND month = 8 AND year = 2026").run();
+process.stdout.write(JSON.stringify({ ok: true }));
+"""
+
+
+def db_hashes(db_path):
+    """{table: sha256} of every table; audit_log and its sqlite_sequence counter returned apart."""
+    import hashlib
+    con = sqlite3.connect(db_path, timeout=10)
+    out = {}
+    for (name,) in con.execute("SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name").fetchall():
+        # audit_log is compared apart; the app's own request logging (usage_logs, session_*)
+        # writes on every page call and is not part of the dry run.
+        if name in ('audit_log', 'usage_logs', 'session_events', 'session_daily_summary'):
+            continue
+        where = " WHERE name NOT IN ('audit_log', 'usage_logs', 'session_events', 'session_daily_summary')" if name == 'sqlite_sequence' else ''
+        h = hashlib.sha256()
+        for row in con.execute(f'SELECT * FROM "{name}"{where} ORDER BY rowid'):
+            h.update(repr(row).encode())
+        out[name] = h.hexdigest()
+    audit_max = con.execute('SELECT COALESCE(MAX(id), 0) FROM audit_log').fetchone()[0]
+    h = hashlib.sha256()
+    for row in con.execute('SELECT * FROM audit_log WHERE id <= ? ORDER BY id', (audit_max,)):
+        h.update(repr(row).encode())
+    con.close()
+    return out, audit_max, h.hexdigest()
+
+
+def audit_since(db_path, audit_max):
+    con = sqlite3.connect(db_path, timeout=10)
+    rows = con.execute('SELECT action_type, changed_by, remark FROM audit_log WHERE id > ? ORDER BY id', (audit_max,)).fetchall()
+    con.close()
+    return rows
+
+
+def untouched(db_path, before, label, runs=1):
+    tables, amax, ahash = before
+    after_tables, _, _ = db_hashes(db_path)
+    changed = [t for t in tables if tables[t] != after_tables.get(t)]
+    con = sqlite3.connect(db_path, timeout=10)
+    old_audit = hashlib_rows(con, amax)
+    con.close()
+    check(f'{label}: every table identical to before the run', not changed, changed)
+    check(f'{label}: existing audit rows unchanged', old_audit == ahash)
+    new = audit_since(db_path, amax)
+    check(f'{label}: exactly {runs} new audit row(s), all loan_dry_run by admin',
+          len(new) == runs and all(r[0] == 'loan_dry_run' and r[1] == 'admin' for r in new), [r[:2] for r in new])
+    return new
+
+
+def hashlib_rows(con, amax):
+    import hashlib
+    h = hashlib.sha256()
+    for row in con.execute('SELECT * FROM audit_log WHERE id <= ? ORDER BY id', (amax,)):
+        h.update(repr(row).encode())
+    return h.hexdigest()
+
+
+def pick_borrower(page, idx, code):
+    page.get_by_test_id(f'dry-run-emp-{idx}').fill(code)
+    page.get_by_role('button', name=code).first.click()
+
+
+def run_dry_run_pass(db_path, hr, admin):
+    print('\n— Pass 6: admin dry run (Loans PR-11) —')
+    js = os.path.join(os.path.dirname(db_path), 'seed-pr11.js')
+    with open(js, 'w') as f:
+        f.write(SEED_PR11_JS)
+    subprocess.check_output(['node', js, ROOT, db_path])
+
+    hr.goto(f'{BASE}/loans?tab=loans')
+    hr.get_by_test_id('tab-loans').wait_for()
+    check('dry run: the tab is hidden for hr', hr.get_by_test_id('tab-dry-run').count() == 0)
+
+    admin.goto(f'{BASE}/loans?tab=dry-run')
+    check('dry run: admin sees the Dry run tab', visible(admin, 'tab-dry-run'))
+    check('dry run: the form renders', visible(admin, 'dry-run-run'))
+    admin.get_by_test_id('dry-run-month').select_option('8')
+    pick_borrower(admin, 1, 'E140')
+    admin.get_by_test_id('dry-run-principal-1').fill('10000')
+    admin.get_by_test_id('dry-run-tenure-1').fill('4')
+    admin.get_by_role('button', name='+ Add employee').click()
+    pick_borrower(admin, 2, 'E141')
+    admin.get_by_test_id('dry-run-principal-2').fill('12000')
+    admin.get_by_test_id('dry-run-tenure-2').fill('4')
+    admin.get_by_test_id('dry-run-hold-2').check()
+    shot(admin, '01-dry-run-form', out=OUT11)
+
+    before = db_hashes(db_path)
+    admin.get_by_test_id('dry-run-run').click()
+    check('dry run: report appears', visible(admin, 'dry-run-report', 30000))
+    banner = admin.get_by_test_id('dry-run-banner').inner_text()
+    check('dry run: green "Nothing was saved" banner', 'Nothing was saved' in banner, banner[:200])
+    row1 = admin.get_by_test_id('dry-run-row-1').inner_text()
+    check('dry run: E140 deducted ₹2,500 and posted', '2,500' in row1 and 'Posted' in row1, row1)
+    row2 = admin.get_by_test_id('dry-run-row-2').inner_text()
+    check('dry run: E141 (hold) waits for the hold to be released', 'Held' in row2, row2)
+    stale = admin.get_by_test_id('dry-run-stale-note').inner_text()
+    check('dry run: stale note says the difference is not caused by the loan', 'not caused by the loan' in stale and '1 of 2' in stale, stale[:300])
+    close = admin.get_by_test_id('dry-run-close').inner_text()
+    check('dry run: close line shows the Aug close', 'Closed: posted' in close, close)
+    checks_t = admin.get_by_test_id('dry-run-checks').inner_text()
+    check('dry run: touched-row checks clean', 'all clean' in checks_t, checks_t)
+    shot(admin, '02-dry-run-report', element='dry-run-report', out=OUT11)
+    new = untouched(db_path, before, 'dry run (2 scenarios)')
+    if new:
+        try:
+            meta = json.loads(new[0][2])
+            check('dry run: audit row records scenarios, verified and timings',
+                  len(meta.get('scenarios', [])) == 2 and meta.get('rollbackVerified') is True and 'lockMs' in meta.get('timings', {}), meta)
+        except Exception as e:
+            check('dry run: audit row records scenarios, verified and timings', False, repr(e))
+    con = sqlite3.connect(db_path, timeout=10)
+    left = con.execute("SELECT (SELECT COUNT(*) FROM loans WHERE employee_code IN ('E140','E141')), (SELECT COUNT(*) FROM loan_closes WHERE month = 8 AND year = 2026)").fetchone()
+    check('dry run: no loan and no Aug close row survived', left == (0, 0), left)
+    con.close()
+
+    try:
+        with admin.expect_download(timeout=15000) as dl:
+            admin.get_by_test_id('dry-run-export-json').first.click()
+        d = dl.value
+        p = d.path()
+        data = json.load(open(p))
+        check('dry run: JSON export downloads the report', d.suggested_filename.endswith('.json') and data.get('nothingSaved') is True)
+    except Exception as e:
+        check('dry run: JSON export downloads the report', False, repr(e)[:200])
+    try:
+        with admin.expect_download(timeout=15000) as dl:
+            admin.get_by_test_id('dry-run-export-xlsx').first.click()
+        check('dry run: Excel export downloads', dl.value.suggested_filename.endswith('.xlsx'))
+    except Exception as e:
+        check('dry run: Excel export downloads', False, repr(e)[:200])
+
+    before = db_hashes(db_path)
+    admin.get_by_test_id('dry-run-pack').click()
+    # Plant: E140 / E141 (the only Aug borrowers without a loan). Sales: every Jul rep already
+    # has an open loan from Pass 4, so the sales pack is honestly empty and says so.
+    ok = False
+    for _ in range(60):
+        if admin.get_by_test_id('dry-run-report').count() == 1 and admin.get_by_test_id('dry-run-pack-empty').count() == 1:
+            ok = True
+            break
+        admin.wait_for_timeout(500)
+    check('dry run: rehearsal pack shows the plant report and the empty sales pack note', ok,
+          (admin.get_by_test_id('dry-run-report').count(), admin.get_by_test_id('dry-run-pack-empty').count(), admin.locator('main').inner_text()[-600:]))
+    if admin.get_by_test_id('dry-run-pack-empty').count():
+        note = admin.get_by_test_id('dry-run-pack-empty').first.inner_text()
+        check('dry run: the empty sales pack explains why', 'No eligible sales borrower' in note, note)
+    banners = admin.get_by_test_id('dry-run-banner')
+    check('dry run: the pack report says nothing was saved', banners.count() == 1 and 'Nothing was saved' in banners.first.inner_text())
+    shot(admin, '03-dry-run-pack', out=OUT11)
+    untouched(db_path, before, 'rehearsal pack', runs=1)
+
 
 if __name__ == '__main__':
     main()
