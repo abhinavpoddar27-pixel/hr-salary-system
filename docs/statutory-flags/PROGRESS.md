@@ -101,7 +101,7 @@
   identical, old totals equal, only missing* keys added (all 0), no header; run 2 (3 bad UANs, 2 blank ESI numbers) **79/79** — base
   lines − branch lines = exactly the bad rows = `missing` = header codes, bank identical. Negative control: a changed md5 / a 0.5 in
   missingEE / a wrong header code each FAIL the compare.
-- PR-3 C4 — (next commit) `feat(filing): reports serving UANs / ESI numbers / bank accounts limited to hr / finance / admin`. reports.js:
+- PR-3 C4 — 08909f7 `feat(filing): reports serving UANs / ESI numbers / bank accounts limited to hr / finance / admin`. reports.js:
   the existing `requireHrFinanceOrAdmin` (JWT roles are normalised at login) on `/pf-ecr`, `/esi-contribution`, `/bank-salary-file`
   (the three filing downloads) + `/pf-statement`, `/esi-statement` (UAN / PF no. / ESI no.), `/bank-transfer` (account + IFSC),
   `/audit-trail` (old/new values of master edits incl. bank accounts and, from STEP 4, ESI numbers / UANs), GET `/company-config`
@@ -109,11 +109,25 @@
   overtime, headcount, department-payroll. 12 tests: viewer 403 (no X-Missing-* leaks), hr / finance / admin 200, no token 401 on
   all 11 URLs (incl. the 3 downloads); **11 of 12 FAIL on the STEP 2 file** (the open-reports test passes = unchanged).
 
+- PR-3 STEP 3 — (next commit) `feat(filing): sales ESI contribution file`. salesExportFormats.js: NEW `generateSalesESIFile` (before
+  module.exports): `sales_salary_computations c LEFT JOIN sales_employees e` (code + company), month/year/company, ORDER BY e.name, code;
+  rows = ESI (EE + ER) > 0, OR the in-force structure (`carryFlags(db,'sales',e.id,monthKey('sales',YYYY-MM))`) has ESI on and
+  `gross_monthly <= esi_threshold` (policy, parsed like compute's getPolicyNumber; default 21000); hold rows in. Line = the plant builder
+  on [IP, NAME, round(total_days), round(gross_earned), round(esi_employee), reason]; reason 1 = DOJ inside cycle_start..cycle_end
+  (NULL → deriveCycle). `missing` / totals = plant helpers. Filename `Sales_ESI_<Mon>_<YYYY>_<Company_>.txt`. sales.js: NEW
+  `GET /export/esi-contribution` registered BEFORE `router.use(requireHrOrAdmin)` with its own hr/finance/admin check (C4 — see D-11);
+  400 without month (1–12) / year / company; header `X-Missing-ESI-Number`; JSON `{filename, employees, missing, totals}` or a
+  text/plain download; read-only. statutoryFilingSales.test.js F5 ×2 (IN: flagged ESI>0, flagged 0 days → `|0|0|0|0`, flag off at file
+  time with ESI>0 (N4), hold; OUT: >₹21k, unflagged, other company; spaces in an IP stripped; DOJ 28 Sep → reason 1, DOJ 27 Oct → 0;
+  NULL cycle → same; threshold policy 17000 drops the 0-wage flagged rep only; blank / 5-digit IP → missing none/malformed) + F6 ×4
+  (400 ×4, JSON, download = generator content + header + DB snapshot unchanged incl. audit_log count, hr/finance/admin 200, viewer
+  403, no token 401, rest of the sales router still finance 403). **6/6 FAIL on dcad556's files**. Guard unedited, 86 neighbour tests green.
+
 ## LAST STEP
-PR-3 C4 (role gates on reports.js).
+PR-3 STEP 3 (sales ESI file + route).
 
 ## NEXT STEP
-PR-3 STEP 3 (sales ESI file + route). Carried from PR-2b: run VERIFY V13 on production before PR-2b deploys; do NOT recompute sales September until D3 is answered.
+PR-3 STEP 4 (sales master ESI number / UAN edits). Carried from PR-2b: run VERIFY V13 on production before PR-2b deploys; do NOT recompute sales September until D3 is answered.
 
 ## OWNER RULINGS ADDED DURING THE BUILD
 (record date + ruling; BUILD_PLAN §1 holds the original set)
@@ -153,6 +167,14 @@ PR-3 STEP 3 (sales ESI file + route). Carried from PR-2b: run VERIFY V13 on prod
   beyond the plan's "Aug + Sep" by also computing October so V14 runs exactly as written; sales sheet uploads are seeded
   in SQL (as salesLoanFixture.setUpload / the PR-8 sales sim do), the statutory upload goes through the real route.
   OPEN_ITEMS also records N9 (plan named N3 + N10; C5 added N5).
+- D-11 (PR-3 STEP 3) The sales ESI route sits BEFORE `router.use(requireHrOrAdmin)` (sales.js ~1100) with its own hr/finance/admin
+  check, not after `/export/bank-neft` as IMPL_PR3 says: C4 (owner) gives finance the filing downloads, and after the router gate
+  finance gets 403 (IMPL F6 said "finance 403" — superseded by C4). Same pattern as the TA/DA exports; inline require of the generator
+  there, so the 2531–2534 require block is untouched. The rest of the sales router stays HR/admin (tested). Finance reaches this file
+  through the API only — the button lives on the sales register page, which finance's sidebar does not show.
+- D-12 (PR-3 STEP 3) `generateSalesESIFile` uses LEFT JOIN (plan: JOIN) and selects on ESI EE + ER > 0 (plan: EE > 0): a
+  contribution row whose master is missing, or with only an employer share, is listed in `missing` instead of vanishing from the file.
+  Identical output whenever every row has a master and both shares (always true for compute's rows).
 - D-4 (STEP 4) The undo file carries the flags that were IN FORCE AT E before the batch (what September compute
   used), not the master's flags; numbers are left blank (blank = unchanged, per §4.2). Not a full restore (review
   minor 1, wording fixed in REVIEW FIX 4): a later row whose flags differed before the batch ends at the E value.

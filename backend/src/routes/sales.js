@@ -1096,6 +1096,46 @@ router.get('/ta-da/export/payslip/:code',
     }
   });
 
+// ── GET /api/sales/export/esi-contribution?month&year&company[&download=true] ──
+// Statutory flags PR-3: the sales ESI contribution file (generateSalesESIFile).
+// HR / finance / admin (owner ruling C4, same as the plant filing downloads), so it is
+// registered here — before router.use(requireHrOrAdmin) — with its own role check,
+// like the TA/DA exports above. Read-only: stamps nothing. Rows without a valid ESI
+// number are left out of the file, listed in `missing` and named in X-Missing-ESI-Number.
+router.get('/export/esi-contribution',
+  (req, res, next) => {
+    const r = normalizeRole(req.user?.role);
+    if (r === 'admin' || r === 'hr' || r === 'finance') return next();
+    return res.status(403).json({ success: false, error: 'HR, finance, or admin access required' });
+  },
+  (req, res) => {
+    const month = parseInt(req.query.month, 10);
+    const year = parseInt(req.query.year, 10);
+    const company = (req.query.company || '').trim();
+    const download = req.query.download === 'true';
+    if (!month || month < 1 || month > 12 || !year || !company) {
+      return res.status(400).json({ success: false, error: 'month (1–12), year, and company query params are required' });
+    }
+    const { generateSalesESIFile } = require('../services/salesExportFormats');
+    const { missingCodesHeader } = require('../services/exportFormats');
+    let result;
+    try {
+      result = generateSalesESIFile(getDb(), month, year, company);
+    } catch (e) {
+      return res.status(500).json({ success: false, error: `ESI file generation failed: ${e.message}` });
+    }
+    if (result.missing.length > 0) res.setHeader('X-Missing-ESI-Number', missingCodesHeader(result.missing));
+    if (download) {
+      res.setHeader('Content-Type', 'text/plain');
+      res.setHeader('Content-Disposition', `attachment; filename="${result.filename}"`);
+      return res.send(result.content);
+    }
+    res.json({
+      success: true,
+      data: { filename: result.filename, employees: result.employees, missing: result.missing, totals: result.totals },
+    });
+  });
+
 router.use(requireHrOrAdmin);
 
 const IMMUTABLE_FIELDS = new Set(['id', 'code', 'company', 'created_at', 'created_by']);
