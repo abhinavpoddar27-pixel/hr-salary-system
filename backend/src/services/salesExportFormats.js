@@ -57,7 +57,7 @@ function generateSalesExcel(db, month, year, company) {
     'Total Days', 'Calendar Days', 'Earned Ratio',
     'Basic (Monthly)', 'HRA (Monthly)', 'CCA (Monthly)', 'Conveyance (Monthly)', 'Gross (Monthly)',
     'Basic (Earned)', 'HRA (Earned)', 'CCA (Earned)', 'Conveyance (Earned)', 'Gross (Earned)',
-    'PF Employee', 'ESI Employee', 'PT', 'TDS', 'Advance Recovery', 'Loan Recovery',
+    'PF Employee', 'ESI Employee', 'LWF Employee', 'PT', 'TDS', 'Advance Recovery', 'Loan Recovery',
     'Other Deductions', 'Total Deductions',
     'Diwali Bonus', 'Incentive', 'Net Salary',
     'Status', 'Bank Name', 'Account Number', 'IFSC',
@@ -69,6 +69,7 @@ function generateSalesExcel(db, month, year, company) {
   const totals = {
     gross_earned: 0, total_deductions: 0, net_salary: 0,
     incentive_amount: 0, diwali_bonus: 0,
+    lwf_employee: 0, lwf_employer: 0,
   };
 
   for (const r of rows) {
@@ -98,6 +99,7 @@ function generateSalesExcel(db, month, year, company) {
       round2(r.gross_earned),
       round2(r.pf_employee),
       round2(r.esi_employee),
+      round2(r.lwf_employee),
       round2(r.professional_tax),
       round2(r.tds),
       round2(r.advance_recovery),
@@ -118,6 +120,8 @@ function generateSalesExcel(db, month, year, company) {
     totals.net_salary += r.net_salary || 0;
     totals.incentive_amount += r.incentive_amount || 0;
     totals.diwali_bonus += r.diwali_bonus || 0;
+    totals.lwf_employee += r.lwf_employee || 0;
+    totals.lwf_employer += r.lwf_employer || 0;
   }
 
   Object.keys(totals).forEach(k => { totals[k] = round2(totals[k]); });
@@ -134,7 +138,7 @@ function generateSalesExcel(db, month, year, company) {
     { wch: 10 }, { wch: 10 }, { wch: 10 }, { wch: 10 }, { wch: 10 }, { wch: 10 }, { wch: 10 },
     { wch: 12 }, { wch: 12 }, { wch: 10 }, { wch: 12 }, { wch: 12 },
     { wch: 12 }, { wch: 12 }, { wch: 10 }, { wch: 12 }, { wch: 12 },
-    { wch: 10 }, { wch: 10 }, { wch: 8 }, { wch: 10 }, { wch: 12 }, { wch: 12 },
+    { wch: 10 }, { wch: 10 }, { wch: 8 }, { wch: 8 }, { wch: 10 }, { wch: 12 }, { wch: 12 },
     { wch: 14 }, { wch: 14 },
     { wch: 12 }, { wch: 10 }, { wch: 12 },
     { wch: 10 }, { wch: 18 }, { wch: 18 }, { wch: 12 },

@@ -483,3 +483,104 @@ describe('Q6 — HR edit (PUT /api/sales/salary/:id) keeps LWF in the total and 
     expect(reg.body.data.totals.total_deductions).toBe(sumDed);
   });
 });
+
+describe('O2 / O4 — LWF on the sales payslip and in the sales register Excel (39 columns)', () => {
+  const XLSX = require('xlsx');
+  const http = require('http');
+  const { generateSalesPayslipData } = require('../services/salesSalaryComputation');
+  const { generateSalesExcel } = require('../services/salesExportFormats');
+  const M = 12; const Y = 2026;
+  let db;
+  const q = `month=${M}&year=${Y}&company=${encodeURIComponent(CO)}`;
+  /** Raw bytes over the same JWT API (the harness's request() decodes bodies as text). */
+  const rawGet = (url, as = 'hr1') => new Promise((resolve, reject) => {
+    http.get({ host: '127.0.0.1', port: api.server.address().port, path: url, headers: { Authorization: `Bearer ${api.tokens[as]}` } }, (res) => {
+      const chunks = []; res.on('data', (c) => chunks.push(c)); res.on('end', () => resolve({ status: res.statusCode, body: Buffer.concat(chunks) }));
+    }).on('error', reject);
+  });
+
+  beforeAll(async () => {
+    db = api.db;
+    const flag = (e) => db.prepare('UPDATE sales_salary_structures SET lwf_applicable = 1 WHERE employee_id = ?').run(e.id);
+    flag(SL.addRep(db, { code: 'OF1', pf: 1, esi: 1 }));
+    flag(SL.addRep(db, { code: 'OF2', gross: 15000 }));
+    SL.addRep(db, { code: 'OU1', pf: 1, esi: 1 });
+    SL.setUpload(db, { month: M, year: Y, rows: [{ code: 'OF1', days: 31 }, { code: 'OF2', days: 20 }, { code: 'OU1', days: 31 }] });
+    await compute(M, Y);
+    db.prepare(`UPDATE sales_salary_computations SET other_deductions = 250 WHERE employee_code = 'OF1' AND month = ? AND year = ?`).run(M, Y);
+    await compute(M, Y);
+  });
+
+  test('O2 payslip (function + GET /api/sales/payslip/:code): LWF (Employee) 5, lwfEmployer 20, total = Σ lines; unflagged → no line', async () => {
+    const fn = generateSalesPayslipData(db, 'OF1', M, Y, CO);
+    expect(fn.success).toBe(true);
+    expect(fn.deductions).toEqual(expect.arrayContaining([{ label: 'LWF (Employee)', amount: 5 }]));
+    expect(fn.lwfEmployer).toBe(20);
+    expect(Math.round(fn.deductions.reduce((s, d) => s + d.amount, 0) * 100) / 100).toBe(fn.totalDeductions);
+    expect(fn.netSalary).toBeCloseTo(fn.totalEarnings - fn.totalDeductions, 2);
+
+    const r = await api.request('GET', `/api/sales/payslip/OF1?${q}`, { as: 'hr1' });
+    expect(r.status).toBe(200);
+    expect(r.body.data.deductions).toEqual(fn.deductions);
+    expect(r.body.data.lwfEmployer).toBe(20);
+    expect(r.body.data.totalDeductions).toBe(fn.totalDeductions);
+
+    const u = await api.request('GET', `/api/sales/payslip/OU1?${q}`, { as: 'hr1' });
+    expect(u.status).toBe(200);
+    expect(u.body.data.deductions.some((d) => /LWF/.test(d.label))).toBe(false);
+    expect(u.body.data.lwfEmployer).toBe(0);
+    expect(Math.round(u.body.data.deductions.reduce((s, d) => s + d.amount, 0) * 100) / 100).toBe(u.body.data.totalDeductions);
+  });
+
+  test('O4 Excel: header = every row = !cols = 39; "LWF Employee" at index 25; every column aligned with the DB row', async () => {
+    const res = await rawGet(`/api/sales/export/salary-register?${q}&download=true`);
+    expect(res.status).toBe(200);
+    const wb = XLSX.read(res.body, { type: 'buffer', cellStyles: true });
+    const ws = wb.Sheets['Sales Salary Register'];
+    const aoa = XLSX.utils.sheet_to_json(ws, { header: 1, defval: '' });
+    const hdr = aoa[0];
+    expect(hdr).toHaveLength(39);
+    expect(XLSX.utils.decode_range(ws['!ref']).e.c + 1).toBe(39);
+    expect(ws['!cols']).toHaveLength(39);
+    expect(hdr.indexOf('LWF Employee')).toBe(25);
+    expect(hdr.slice(23, 27)).toEqual(['PF Employee', 'ESI Employee', 'LWF Employee', 'PT']);
+    expect(aoa.slice(1).every((row) => row.length === 39)).toBe(true);
+    expect(aoa).toHaveLength(4); // header + 3 rows
+
+    const COL = {
+      Code: 'employee_code', 'Days Given': 'days_given', 'Gross (Earned)': 'gross_earned', 'PF Employee': 'pf_employee',
+      'ESI Employee': 'esi_employee', 'LWF Employee': 'lwf_employee', PT: 'professional_tax', TDS: 'tds',
+      'Advance Recovery': 'advance_recovery', 'Loan Recovery': 'loan_recovery', 'Other Deductions': 'other_deductions',
+      'Total Deductions': 'total_deductions', 'Diwali Bonus': 'diwali_bonus', Incentive: 'incentive_amount',
+      'Net Salary': 'net_salary', Status: 'status', 'Account Number': 'account_no', IFSC: 'ifsc',
+    };
+    for (const row of aoa.slice(1)) {
+      const code = row[0];
+      const dbRow = db.prepare(`SELECT c.*, e.account_no, e.ifsc FROM sales_salary_computations c
+        JOIN sales_employees e ON e.code = c.employee_code AND e.company = c.company
+        WHERE c.employee_code = ? AND c.month = ? AND c.year = ? AND c.company = ?`).get(code, M, Y, CO);
+      for (const [h, col] of Object.entries(COL)) {
+        const v = dbRow[col];
+        expect([code, h, row[hdr.indexOf(h)]]).toEqual([code, h, typeof v === 'number' ? Math.round(v * 100) / 100 : v]);
+      }
+    }
+    const of1 = aoa.find((r) => r[0] === 'OF1');
+    const ou1 = aoa.find((r) => r[0] === 'OU1');
+    expect([of1[25], ou1[25]]).toEqual([5, 0]);
+    // function output is the same workbook
+    const fnWb = XLSX.read(generateSalesExcel(db, M, Y, CO).content, { type: 'buffer' });
+    expect(XLSX.utils.sheet_to_json(fnWb.Sheets['Sales Salary Register'], { header: 1, defval: '' })).toEqual(aoa);
+  });
+
+  test('O4 totals: export JSON preview + GET /salary-register → LWF 5 × N / 20 × N', async () => {
+    const n = 2;
+    const pv = await api.request('GET', `/api/sales/export/salary-register?${q}`, { as: 'hr1' });
+    expect(pv.status).toBe(200);
+    expect([pv.body.data.totals.lwf_employee, pv.body.data.totals.lwf_employer]).toEqual([5 * n, 20 * n]);
+    const reg = await api.request('GET', `/api/sales/salary-register?${q}`, { as: 'hr1' });
+    expect([reg.body.data.totals.lwf_employee, reg.body.data.totals.lwf_employer]).toEqual([5 * n, 20 * n]);
+    expect(reg.body.data.totals.total_deductions).toBe(pv.body.data.totals.total_deductions);
+    expect(db.prepare(`${SL.SALES_DRIFT_SQL} AND month = ? AND year = ?`).get(M, Y).n).toBe(0);
+    expect(db.prepare(`${SL.SALES_SHORT_SQL} AND month = ? AND year = ?`).get(M, Y).n).toBe(0);
+  });
+});

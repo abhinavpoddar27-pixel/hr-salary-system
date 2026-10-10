@@ -548,6 +548,7 @@ function generateSalesPayslipData(db, employeeCode, month, year, company) {
     { label: 'TDS', amount: comp.tds },
     { label: 'Advance Recovery', amount: comp.advance_recovery },
     { label: 'Loan EMI', amount: comp.loan_recovery },
+    { label: 'LWF (Employee)', amount: comp.lwf_employee },
     { label: 'Other Deductions', amount: comp.other_deductions },
   ].filter(d => d.amount && d.amount > 0);
 
@@ -573,6 +574,8 @@ function generateSalesPayslipData(db, employeeCode, month, year, company) {
     deductions,
     totalDeductions: comp.total_deductions,
     netSalary: comp.net_salary,
+    // Employer LWF is a company cost, not a deduction: API only (the sales payslip shows no employer PF/ESI either, E6).
+    lwfEmployer: comp.lwf_employer || 0,
     status: comp.status,
     bank: {
       bank_name: emp.bank_name,
