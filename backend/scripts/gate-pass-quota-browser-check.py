@@ -30,6 +30,10 @@ DB = os.path.join(WORK, 'hr_system.db')
 IST = datetime.now(timezone(timedelta(hours=5, minutes=30)))
 M, Y = IST.month, IST.year
 D = lambda day: f'{Y}-{M:02d}-{day:02d}'
+MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December']
+MN = MONTHS[M - 1]
+PM, PY = (12, Y - 1) if M == 1 else (M - 1, Y)
+PMN = MONTHS[PM - 1]
 PASS = FAIL = 0
 PAGE_ERRORS, API_ERRORS = [], []
 
@@ -77,12 +81,12 @@ try:
             page.get_by_role('button', name='Gate Passes', exact=True).click(); page.wait_for_load_state('networkidle')
             return page
 
-        def open_modal(page, code, day, ltype=None):
+        def open_modal(page, code, day, ltype=None, full_date=None):
             page.get_by_role('button', name='+ New Gate Pass').click()
             modal = page.locator('div', has=page.get_by_text('Create Gate Pass', exact=True)).last
             page.get_by_placeholder('Search by name or code...').fill(code)
             page.get_by_role('button', name=code, exact=False).first.click()
-            page.locator('input[type=date]').fill(D(day))
+            page.locator('input[type=date]').fill(full_date or D(day))
             page.wait_for_load_state('networkidle'); page.wait_for_timeout(400)
             if ltype: page.locator(f'input[name=gate-pass-type][value={ltype}]').check()
             return modal
@@ -93,7 +97,9 @@ try:
         check('label says Short Leave (2 hrs)', hr.get_by_text('Short Leave (2 hrs)').count() == 1)
         check('duration shows 2 hrs', hr.locator('input[readonly]').first.input_value() == '2 hrs')
         check('allowance text shown', hr.get_by_text('Allowance: 2 Short Leaves or 1 Half Day per month').count() == 1)
-        check('used: nothing yet', hr.get_by_text('Used: nothing yet').count() == 1)
+        check(f'label: Allowance for {MN} {Y}', hr.get_by_text(f'Allowance for {MN} {Y}', exact=True).count() == 1)
+        check('old "This month" label gone', hr.get_by_text('This month', exact=True).count() == 0)
+        check(f'used in {MN}: nothing yet', hr.get_by_text(f'Used in {MN}: nothing yet').count() == 1)
         check('still allowed: 2 Short Leaves or 1 Half Day', hr.get_by_text('Still allowed: 2 Short Leaves or 1 Half Day').count() == 1)
         hr.get_by_placeholder('Reason for gate pass...').fill('Doctor visit')
         hr.screenshot(path=os.path.join(SHOTS, '1-hr-first-short-leave.png'))
@@ -108,7 +114,7 @@ try:
 
         print('\n— hr: Half Day not available after one Short Leave —')
         open_modal(hr, '91001', 3)
-        check('used: 1 Short Leave', hr.get_by_text('Used: 1 Short Leave').count() == 1)
+        check(f'used in {MN}: 1 Short Leave', hr.get_by_text(f'Used in {MN}: 1 Short Leave').count() == 1)
         check('still allowed: 1 Short Leave', hr.get_by_text('Still allowed: 1 Short Leave').count() == 1)
         hd = hr.locator('input[name=gate-pass-type][value=half_day]')
         check('Half Day radio disabled for HR', hd.is_disabled())
@@ -121,7 +127,7 @@ try:
 
         print('\n— hr: allowance used up —')
         open_modal(hr, '91001', 4)
-        check('used: 2 Short Leaves', hr.get_by_text('Used: 2 Short Leaves').count() == 1)
+        check(f'used in {MN}: 2 Short Leaves', hr.get_by_text(f'Used in {MN}: 2 Short Leaves').count() == 1)
         check('still allowed: nothing more this month', hr.get_by_text('Still allowed: nothing more this month').count() == 1)
         check('red banner says only admin can allow one more', hr.get_by_text('Only an admin can allow one more', exact=False).count() == 1)
         hr.get_by_placeholder('Reason for gate pass...').fill('Personal work')
@@ -139,7 +145,7 @@ try:
         r2 = q("SELECT * FROM short_leaves WHERE employee_code='91002'")
         check('DB: Half Day 6 h on 12HR, leave from 14:00', len(r2) == 1 and r2[0]['leave_type'] == 'half_day' and r2[0]['duration_hours'] == 6 and r2[0]['authorized_leave_until'] == '14:00', str(r2))
         open_modal(hr, '91002', 9)
-        check('used: 1 Half Day', hr.get_by_text('Used: 1 Half Day').count() == 1)
+        check(f'used in {MN}: 1 Half Day', hr.get_by_text(f'Used in {MN}: 1 Half Day').count() == 1)
         check('Short Leave radio disabled', hr.locator('input[name=gate-pass-type][value=short_leave]').is_disabled())
         check('Create disabled', hr.get_by_role('button', name='Create Gate Pass', exact=True).is_disabled())
         hr.locator('button.btn', has_text='Cancel').click()
@@ -189,6 +195,26 @@ try:
         open_modal(hr, '91002', 9, 'half_day')
         check('after cancel: Half Day available again', not hr.locator('input[name=gate-pass-type][value=half_day]').is_disabled()
               and not hr.get_by_role('button', name='Create Gate Pass', exact=True).is_disabled())
+        hr.locator('button.btn', has_text='Cancel').click()
+
+        print('\n— hr: pass for the previous month —')
+        prev_date = f'{PY}-{PM:02d}-15'
+        open_modal(hr, '91003', 0, full_date=prev_date)
+        check(f'label follows the chosen date: Allowance for {PMN} {PY}', hr.get_by_text(f'Allowance for {PMN} {PY}', exact=True).count() == 1)
+        check(f'used in {PMN}: nothing yet', hr.get_by_text(f'Used in {PMN}: nothing yet').count() == 1)
+        hr.get_by_placeholder('Reason for gate pass...').fill('Backdated pass')
+        hr.get_by_role('button', name='Create Gate Pass', exact=True).click()
+        msg = f'Gate pass created. Saved for {PMN} {PY} — set the month picker to {PMN} {PY} to see it in the list.'
+        hr.get_by_text(msg, exact=True).last.wait_for(timeout=10000)
+        check('toast says which month it was saved for', True)
+        check('DB: previous-month pass saved', len(q("SELECT id FROM short_leaves WHERE employee_code='91003' AND date=?", (prev_date,))) == 1)
+        hr.wait_for_timeout(800)
+        hr.screenshot(path=os.path.join(SHOTS, '5a-hr-prev-month-toast.png'))
+        check('current-month list does not show it', hr.locator('tbody tr', has=hr.get_by_text('91003', exact=True)).count() == 0)
+        open_modal(hr, '91003', 0, full_date=prev_date)
+        check(f'reopened: Used in {PMN}: 1 Short Leave', hr.get_by_text(f'Used in {PMN}: 1 Short Leave').count() == 1)
+        hr.locator('input[type=date]').fill(D(2)); hr.wait_for_load_state('networkidle'); hr.wait_for_timeout(400)
+        check(f'switch date to this month: Used in {MN}: nothing yet', hr.get_by_text(f'Used in {MN}: nothing yet').count() == 1)
         hr.locator('button.btn', has_text='Cancel').click()
 
         print('\n— phone width —')

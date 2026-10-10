@@ -1,3 +1,14 @@
+## Last Session — 2026-10-10 (Gate pass modal: name the month)
+**Branch `fix/gate-pass-month-label` (on origin/main 139faa7), NOT merged.** Frontend only (`components/GatePasses.jsx`).
+- **Report:** hr created a September Short Leave for 19222; the modal still said "Used: nothing yet". The data was right —
+  the modal opens on today's date (October) and the list follows the page's month picker (October). Nothing said which month.
+- **Fix:** label "This month" → "Allowance for <Month YYYY>" of the chosen date; "Used:" → "Used in <Month>:". A pass dated
+  outside the page's picker month gets the toast "… Saved for <Month YYYY> — set the month picker to <Month YYYY> to see it
+  in the list." (7 s). Server untouched. dist rebuilt (content change: LeaveManagement chunk only; other names = hash cascade).
+- **Verified:** `gate-pass-quota-browser-check.py` 47/47 (+9: label follows the date, previous-month save toast, not in the
+  current list, reopen shows Used in <prev>: 1 Short Leave, switching back shows this month); jest gatePassQuota 21/21.
+- **Not tested:** Railway; Safari/Firefox.
+
 ## Last Session — 2026-10-10 (Gate pass allowance: 2 Short Leaves OR 1 Half Day; Short Leave 2 h; create 500 fixed)
 **Branch `feat/gate-pass-quota`, NOT merged.** Spec (private project): `claude/gate-pass-quota/SPEC.md`. Owner rulings 10 Oct 2026.
 - **Rule:** per employee per calendar month 2 Short Leaves OR 1 Half Day — points: Short Leave 1, Half Day 2, budget 2

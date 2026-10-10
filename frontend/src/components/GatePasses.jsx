@@ -195,6 +195,8 @@ function stillAllowedText(q) {
   return 'nothing more this month'
 }
 
+const MONTH_NAMES = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December']
+
 function CreateGatePassModal({ show, onClose, company, month, year }) {
   const queryClient = useQueryClient()
   const { user } = useAppStore()
@@ -228,6 +230,9 @@ function CreateGatePassModal({ show, onClose, company, month, year }) {
   const dateObj = date ? new Date(date + 'T00:00:00') : null
   const qMonth = dateObj ? dateObj.getMonth() + 1 : month
   const qYear = dateObj ? dateObj.getFullYear() : year
+  const dateValid = !!dateObj && !isNaN(dateObj.getTime())
+  const qMonthName = dateValid ? MONTH_NAMES[qMonth - 1] : ''
+  const qMonthLabel = dateValid ? `${qMonthName} ${qYear}` : ''
 
   const { data: quotaRes, isFetching: quotaLoading } = useQuery({
     queryKey: ['short-leave-quota', empCode, qMonth, qYear],
@@ -244,7 +249,15 @@ function CreateGatePassModal({ show, onClose, company, month, year }) {
   const createMut = useMutation({
     mutationFn: (data) => createShortLeave(data),
     onSuccess: (res) => {
-      toast.success(res?.data?.quota_breach ? 'Gate pass created over the monthly allowance' : 'Gate pass created')
+      const base = res?.data?.quota_breach ? 'Gate pass created over the monthly allowance' : 'Gate pass created'
+      // The list below follows the page's month picker. A pass dated in another
+      // month is saved but will not appear there — say so instead of looking lost.
+      const otherMonth = dateValid && (Number(qMonth) !== Number(month) || Number(qYear) !== Number(year))
+      if (otherMonth) {
+        toast.success(`${base}. Saved for ${qMonthLabel} — set the month picker to ${qMonthName} ${qYear} to see it in the list.`, { duration: 7000 })
+      } else {
+        toast.success(base)
+      }
       queryClient.invalidateQueries({ queryKey: ['short-leaves'] })
       queryClient.invalidateQueries({ queryKey: ['short-leave-quota'] })
       onClose()
@@ -360,9 +373,9 @@ function CreateGatePassModal({ show, onClose, company, month, year }) {
           </div>
           {quota && (
             <div className="flex-1">
-              <label className="text-sm font-medium text-slate-700 mb-1 block">This month</label>
+              <label className="text-sm font-medium text-slate-700 mb-1 block">Allowance for {qMonthLabel}</label>
               <div className={clsx('text-sm font-semibold mt-1', quotaColor)}>
-                Used: {usedText(quota)}
+                Used in {qMonthName}: {usedText(quota)}
                 <div className="text-xs font-normal text-slate-500 mt-0.5">Still allowed: {stillAllowedText(quota)}</div>
               </div>
             </div>
