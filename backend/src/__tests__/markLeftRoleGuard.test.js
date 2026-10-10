@@ -118,3 +118,57 @@ describe('PUT /api/employees/:code/mark-left — hr and admin still work, loan f
     expect(ev).toEqual([{ actor: who }]);
   });
 });
+
+// ── PUT /api/employees/:code — no exit by the back door (P4, option B) ──
+// Setting status Left/Exited here skipped the exit date, inactive_since, the
+// audit row and the loan exit flagging — for every role, HR included.
+describe('PUT /api/employees/:code cannot move an employee into Left / Exited', () => {
+  const put = (code, as, body) => api.request('PUT', `/api/employees/${code}`, { as, body });
+
+  test.each([
+    ['hr1', 'Left'], ['boss', 'Exited'], ['view1', 'Left'], ['fin1', 'Exited'], ['hr1', ' left '],
+  ])('%s sending status %p → 400 pointing to Mark Left; nothing written', async (who, status) => {
+    const code = nextCode();
+    addEmployee(code);
+    const loanId = addActiveLoan(code);
+    const before = { emp: empRow(code), loan: loanRow(loanId), counts: counts() };
+
+    const r = await put(code, who, { status, name: 'RENAMED' });
+    expect(r.status).toBe(400);
+    expect(r.body.error).toMatch(/Use Mark Left/);
+
+    expect(empRow(code)).toEqual(before.emp);
+    expect(db.prepare('SELECT name FROM employees WHERE code = ?').get(code).name).toBe('TEST');   // whole edit refused
+    expect(loanRow(loanId)).toEqual(before.loan);
+    expect(counts()).toEqual(before.counts);
+  });
+
+  test('ordinary edits are unaffected (status Active resent on an Active employee)', async () => {
+    const code = nextCode();
+    addEmployee(code);
+    const r = await put(code, 'hr1', { status: 'Active', name: 'RENAMED' });
+    expect(r.status).toBe(200);
+    expect(db.prepare('SELECT name, status FROM employees WHERE code = ?').get(code)).toEqual({ name: 'RENAMED', status: 'Active' });
+  });
+
+  test('re-sending the current exit status is a no-op, not refused', async () => {
+    const code = nextCode();
+    addEmployee(code, 'Left');
+    const r = await put(code, 'hr1', { status: 'Left', name: 'RENAMED' });
+    expect(r.status).toBe(200);
+    expect(db.prepare('SELECT name, status FROM employees WHERE code = ?').get(code)).toEqual({ name: 'RENAMED', status: 'Left' });
+  });
+
+  test('reactivation (Left → Active) still works', async () => {
+    const code = nextCode();
+    addEmployee(code, 'Left');
+    const r = await put(code, 'hr1', { status: 'Active' });
+    expect(r.status).toBe(200);
+    expect(empRow(code).status).toBe('Active');
+  });
+
+  test('the refusal does not hide a missing employee (404 first)', async () => {
+    const r = await put('NOPE998', 'hr1', { status: 'Left' });
+    expect(r.status).toBe(404);
+  });
+});

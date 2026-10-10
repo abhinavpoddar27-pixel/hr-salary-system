@@ -398,6 +398,14 @@ router.put('/:code', (req, res) => {
   const emp = db.prepare('SELECT * FROM employees WHERE code = ?').get(code);
   if (!emp) return res.status(404).json({ success: false, error: 'Employee not found' });
 
+  // P4: an exit goes through Mark Left only. Setting status here skipped the
+  // exit date, inactive_since, the audit row and the loan exit flagging.
+  // Re-sending a status the employee already has, and reactivation, still work.
+  const isExit = (s) => ['left', 'exited'].includes(String(s ?? '').trim().toLowerCase());
+  if (updates.status !== undefined && isExit(updates.status) && !isExit(emp.status)) {
+    return res.status(400).json({ success: false, error: 'Use Mark Left to record an exit — it sets the exit date and flags loans' });
+  }
+
   const allowedFields = [
     'name', 'father_name', 'dob', 'gender', 'department', 'designation', 'company',
     'employment_type', 'contractor_group', 'date_of_joining', 'date_of_exit', 'exit_reason',
