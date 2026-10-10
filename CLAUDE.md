@@ -21,6 +21,53 @@
   one switch per load per pair, planner Q2).
 - **Found, not fixed:** the page reload sends a `session-analytics/events` beacon without a token → 401 (pre-existing).
   NavItem `isActive` uses `item.to`, so a parent without `to` never auto-opens (pre-existing, not changed).
+## Last Session — 2026-10-10 (P1-10: Night Shift "Undo" actually rejected the pairing)
+**Branch `fix/nightshift-undo-relabel`, NOT merged.** Frontend only (`pages/NightShift.jsx`). Plan + log:
+`docs/ux-bulk/prs/P1-10/PLAN.md`, `PROGRESS.md`. Finding P-6.
+- **Bug:** on a confirmed medium/low pair the "Undo" button called the reject route (not back to Pending), and the
+  pending-row "✕" also rejected in one click, with no label or confirm. Reject (`attendance.js` L249–270) marks the pair
+  rejected, clears the IN day's OUT time and sends it back to Miss Punches as MISSING_OUT; the next-morning OUT stands alone.
+  No UI path back.
+- **Fix:** "Undo" → "Reject pairing"; "✕" kept, with aria-label + title "Reject pairing". Both open the existing
+  `ConfirmDialog` naming the employee, code, IN/OUT dates + times, the consequence and "This cannot be undone here"
+  (+ "confirmed earlier" for a confirmed pair); "Keep pairing" / backdrop sends nothing. stopPropagation on both buttons
+  (row no longer expands on click). Confirm untouched. dist rebuilt (own commit; vs a fresh 3d20021 build only the
+  NightShift chunk + the index preload list differ).
+- **Fragile:** the dialog wording describes the backend reject route — change both together.
+- **Verified:** `backend/scripts/nightshift-reject-confirm-check.py` (Chromium, built dist, hr, fictional T9601–T9605,
+  port 3110) 44/44 — labels/aria, cancel = 0 POST + DB unchanged, reject = is_rejected 1 + MISSING_OUT, confirmed pair,
+  high pair no button, double-click, backdrop, 390px, 0 page/console errors, 0 API ≥ 400. `--base` on 3d20021 9/9:
+  one click rejects, no dialog. jest 85 suites / 1380 before and after.
+- **Not tested:** Railway; Safari/Firefox; keyboard Escape (ConfirmDialog has none).
+- **Found, not fixed:** F-a no un-reject (confirm route clears the flag but restores no attendance field); F-b reject
+  leaves `actual_hours` + shift metrics; F-c confirm/reject have no role guard (→ P2-11); F-d re-import INSERT OR REPLACE
+  may revive a rejected pair (unverified); F-e after reject/confirm the row still shows Pending until reload —
+  `getNightShifts` lacks `fresh` (server GET max-age=5), same on main.
+## Last Session — 2026-10-10 (P1-09: Miss Punch "all resolved" banner followed the filter, not real work)
+**Branch `fix/misspunch-all-resolved-banner`, NOT merged.** Frontend only (`pages/MissPunch.jsx`, banner + progress label).
+Plan + log: `docs/ux-bulk/prs/P1-09/PLAN.md`, `PROGRESS.md`. Finding P-5. Planner rulings Q1–Q3 (10 Oct).
+- **Bug:** the green "All miss punches resolved! Proceed to Stage 3" card used `pendingCount === 0 && records.length > 0`,
+  counted over the CURRENT status chip. On Approved / Finance Pending every row is resolved, so the card showed while HR
+  and finance still had work.
+- **Fix:** card shows only when the miss-punch query succeeded (`!isError`, summary present), `summary.total > 0`,
+  `summary.pending + summary.financePending === 0`, and no department filter (the summary is department-scoped; the
+  card is a month claim). `summary.pending` (= resolved 0) is used, NOT `hrPending`: a finance REJECT sets resolved 0 +
+  status 'rejected', which `classify()` files under `rejected` though it is back with HR (Q1). Progress label gets
+  " (this filter)" when a status chip other than All is active (Q3). dist rebuilt (own commit; vs a fresh 3d20021 build
+  only the MissPunch chunk differs in content; the rest is hash references).
+- **Fragile:** the rule depends on the server summary ignoring `state` and including legacy `pending`
+  (`routes/attendance.js` GET /miss-punches). If someone makes the summary follow the chip, the card is wrong again.
+- **Verified:** `backend/scripts/misspunch-banner-check.py` (Chromium, built dist, real hr + finance logins, fictional T97xx,
+  routes driven over HTTP + one UI approve) 33/33, two runs: no card on All / Approved / Finance Pending / Rejected while
+  work is open, none while only a finance-rejected row waits for HR, card on every chip once clear, hidden with a dept
+  filter, none on a 500, 0 page errors. `--base` on a fresh 3d20021 build 4/4 (card wrongly on Approved + Finance
+  Pending). jest 85 suites / 1380 before and after.
+- **Not tested:** Railway; production data; Safari/Firefox; mobile widths.
+- **Found, not fixed:** (1) stale data after the last approve: the mutation only `refetch()`es the current chip's query,
+  other chips come from react-query (global staleTime 30 s), and `getMissPunches` is not sent `no-cache` while server.js
+  answers GETs with max-age=5 — the card (and counts) appear only after a reload / ~30 s. Fix = `fresh` on the read +
+  invalidate the `['miss-punches']` prefix. (2) Finance opening Stage 2 gets a 403 + console error from
+  `GET /features/leave-automation/status` (hr/admin only) on every visit. (3) Stray "0" near L417 is P1-24.
 ## Last Session — 2026-10-10 (P1-08: Stage 5 grid did not refresh after a correction)
 **Branch `fix/stage5-grid-refresh`, NOT merged.** Frontend only (`pages/AttendanceRegister.jsx`, `utils/api.js` 2 lines). Plan + log:
 `docs/ux-bulk/prs/P1-08/PLAN.md`, `PROGRESS.md`. Finding P-4. Rulings Q1 (no-cache on the register read), Q2 (calendar too).
