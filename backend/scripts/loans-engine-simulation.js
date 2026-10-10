@@ -268,7 +268,12 @@ check(instOf('nosalary').some((i) => i.origin === 'no_salary'), 'nosalary: expec
 check(instOf('defer').some((i) => i.origin === 'deferred'), 'defer: expected a deferred instalment');
 check(instOf('restructure').filter((i) => i.origin === 'restructure').length === 6, 'restructure: expected 6 restructure instalments');
 check(instOf('extension').filter((i) => i.origin === 'shortfall').length === 3, 'extension: expected exactly 3 shortfall months');
-check(alerts.length === 1 && alerts[0].type === 'loan_extension_limit_reached' && alerts[0].uncoveredAmount === 600, `extension: expected 1 alert of ₹600, got ${JSON.stringify(alerts)}`);
+const extAlerts = alerts.filter((a) => a.type === 'loan_extension_limit_reached');
+const exitAlerts = alerts.filter((a) => a.type === 'loan_exit_residual');
+check(extAlerts.length === 1 && extAlerts[0].uncoveredAmount === 600, `extension: expected 1 alert of ₹600, got ${JSON.stringify(extAlerts)}`);
+// Loans PR-7: the exit loan's final-payroll shortfall is an exit residual, never a new instalment or an extension month.
+check(exitAlerts.length === 1 && exitAlerts[0].loanId === S.exit.loanId && exitAlerts[0].residual === 4000, `exit: expected 1 residual alert of ₹4000, got ${JSON.stringify(exitAlerts)}`);
+check(alerts.length === 2, `expected exactly 2 alerts, got ${alerts.length}`);
 check(db.prepare("SELECT COUNT(*) n FROM loan_deductions WHERE payroll = 'sales' AND state = 'posted'").get().n === 3, 'sales: expected 3 posted sales deductions');
 const tds = L.writeOffsForTds(db, (() => { const t = new Date(Date.now() + 330 * 60000); return { month: t.getUTCMonth() + 1, year: t.getUTCFullYear() }; })());
 check(tds.length === 2, `TDS list: expected 2 write-offs, got ${tds.length}`);

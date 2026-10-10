@@ -21,6 +21,29 @@
   view (only its note is shown); a restricted user's 403 from the server (the client never calls preview for them).
 - **Held tile on the Loans page: not done** (ruling: no `/stats` change).
 
+## Last Session — 2026-10-10 (Loans PR-7)
+**Loans PR-7: exit recovery. Branch `feat/loans-pr7` (on main after #61).** Backend only, no schema change, no dist.
+- **Final month F** = month of the loan's own `exit_date` (else IST month of `exit_flagged_at`) — `common.js finalMonthOf`.
+  **"F is past"** = a `loan_closes` row for F or a later month closed — `isFinalMonthPast`, the ONE helper, used everywhere.
+- **Mark Left / `flagForExit` → `exit.js consolidateForExit`:** scheduled instalments after F cancelled; ONE open
+  instalment in F holds the rest of the balance (uncovered folded in; none → new origin `exit`). F already past →
+  later instalments cancelled, the outstanding is the exit residual at once, finance alerted (LOAN_EXIT_RESIDUAL).
+- **`appendInstalment` exit branch:** for `recover_at_exit`, F open → amount added to the F instalment; F past → nothing
+  added, amount stays as residual (= reconciliation "uncovered") + alert. Exit loans never use an extension month.
+  `moveInstalmentToEnd` on an exit loan with F past → `cancelled` (ruling Q-D), not `deferred`.
+- **`stage7.js` byte-unchanged:** it already deducts min(F instalment, headroom, balance) as one provisional row.
+- **Close:** non-blocking readiness warning `EXIT_FINAL_PAYROLL_SHORT` (`computedBeforeExit` when Stage 7 for F ran
+  before Mark Left); `notes.exitResiduals`; LOAN_EXIT_FINAL_HELD for a held final salary (60-day wait kept, Q-B).
+- **API:** `GET /api/loans/exit-residuals`, `GET /api/loans/write-offs?month&year[&basis=final]` (TDS by write-off month,
+  rows carry exitDate + finalMonth, Q-A). Mark Left reply gains `loans: [...]` (additive).
+- **Fragile:** the close of F writes its `loan_closes` row first, so inside that close F is already past — that is
+  what turns the final payroll's shortfall into residual. A returning leaver's loan stays recover_at_exit (Q-C).
+  Two PR-1/PR-2 tests changed on purpose (schedule no longer untouched at Mark Left).
+- **Verified:** suite 769 → 792 (44 suites); `scripts/loans-exit-simulation.js` 5 leavers Nov 2026–Mar 2027 PASS
+  (every loan reconciles daily, drift 0, component-short 0, payslip = ledger); `--empty` 84 tables unchanged.
+- **NOT tested:** the real Mark Left HTTP route inside the simulation (engine path used; the route is jest-tested);
+  multi-process races; sales borrowers (PR-8); TDS treatment itself (CA Q4).
+
 ---
 
 ## Last Session — 2026-10-10 (Loans PR-6)
