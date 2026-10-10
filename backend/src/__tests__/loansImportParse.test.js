@@ -21,7 +21,7 @@ describe('template', () => {
     expect(wb.SheetNames).toEqual(['Loans', 'Read me']);
     const aoa = XLSX.utils.sheet_to_json(wb.Sheets.Loans, { header: 1 });
     expect(aoa[0]).toEqual(P.TEMPLATE_HEADERS);
-    aoa.push(['Ravi Kumar', 'Asian Lakto Ind Ltd', 'Production', '03-04-2026', 20000, 12000, 2000, 'Personal', 'AG-1', 'n']);
+    aoa.push(['', 'Ravi Kumar', 'Asian Lakto Ind Ltd', 'Production', '03-04-2026', 20000, 12000, 2000, 'Personal', 'AG-1', 'n']);
     const p = parse(aoa);
     expect(p.ok).toBe(true);
     expect(Object.keys(p.mapping).sort()).toEqual(P.FIELDS.map((f) => f.key).sort());
@@ -81,7 +81,7 @@ describe('row validation', () => {
     expect(p.rows[0]).toMatchObject({ outstandingPaise: 1200050, emiPaise: 100000, errors: [] });
     expect(codes(p.rows[1])).toEqual(['EMI_NOT_WHOLE_RUPEE']);
     expect(p.rows[1].amountFixable).toBe(true);
-    expect(codes(p.rows[2])).toEqual(['OUTSTANDING_INVALID', 'EMI_INVALID']);
+    expect(codes(p.rows[2])).toEqual(['OUTSTANDING_INVALID', 'EMI_MISSING']);
     expect(codes(p.rows[3])).toEqual(['NAME_MISSING']);
     expect(p.rows[3].amountFixable).toBe(false);
   });

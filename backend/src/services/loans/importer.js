@@ -131,10 +131,20 @@ function checkBorrower(db, { borrowerType, employeeCode, company }) {
 }
 
 /** Eligibility findings as warnings (not enforced for imports). Row hydrated, with a confirmed borrower. */
+const NAME_WARNINGS = ['NAME_MISMATCH', 'NAME_CLOSE_SPELLING'];
+
 function rowWarnings(db, row, policy, batchRows = []) {
-  const w = [...(row.parse_warnings || [])];
-  if (!row.borrower_type || !row.employee_code) return w;
+  const w = (row.parse_warnings || []).filter((x) => !NAME_WARNINGS.includes(x.code));
+  if (!row.borrower_type || !row.employee_code) return [...w, ...(row.parse_warnings || []).filter((x) => NAME_WARNINGS.includes(x.code))];
   const add = (code, message, extra = {}) => w.push({ code, message, ...extra });
+  const master = row.borrower_type === 'sales'
+    ? db.prepare('SELECT name FROM sales_employees WHERE code = ? AND company = ?').get(row.employee_code, row.company)
+    : db.prepare('SELECT name FROM employees WHERE code = ?').get(row.employee_code);
+  if (master && row.name) {
+    const nc = Mx.nameCheck(row.name, master.name);
+    if (nc.result === 'mismatch') add('NAME_MISMATCH', 'the Excel name differs from the master name of the confirmed employee');
+    if (nc.result === 'close') add('NAME_CLOSE_SPELLING', `the Excel name differs slightly from the master (${nc.reason})`);
+  }
   const facts = loadBorrowerFacts(db, { borrowerType: row.borrower_type, employeeCode: row.employee_code, company: row.company });
   const out = effOutstanding(row);
   const emi = effEmi(row);
@@ -204,10 +214,10 @@ function previewImport(db, { buffer, mapping = null, defaultCompany = null }) {
   const fields = P.FIELDS.map((f) => ({ key: f.key, label: f.label, required: f.required }));
   if (!p.ok) return { ...p, fields };
   return {
-    ok: true, fields, sheetName: p.sheetName, headerRow: p.headerRow, headers: p.headers, mapping: p.mapping, autoMapping: p.autoMapping,
+    ok: true, fields, sheetName: p.sheetName, headerRow: p.headerRow, headers: p.headers, mapping: p.mapping, autoMapping: p.autoMapping, balanceColumns: p.balanceColumns,
     rowCount: p.rows.length, invalidCount: p.rows.filter((r) => r.errors.length).length,
     preview: p.rows.slice(0, 5).map((r) => ({
-      rowNo: r.rowNo, name: r.name, company: r.company, department: r.department, loanDate: r.loanDate,
+      rowNo: r.rowNo, code: r.code, name: r.name, company: r.company, department: r.department, loanDate: r.loanDate,
       originalPrincipal: r.originalPrincipalPaise === null ? null : toRupees(r.originalPrincipalPaise),
       outstanding: r.outstandingPaise === null ? null : toRupees(r.outstandingPaise), emi: r.emiPaise === null ? null : toRupees(r.emiPaise),
       loanType: r.loanType, errors: r.errors,
@@ -236,25 +246,39 @@ function createBatch(db, input, actor, { companies = null } = {}) {
   return inTxn(db, () => {
     const b = db.prepare(`INSERT INTO loan_import_batches (file_name, file_sha256, sheet_name, header_row, column_map, default_company, total_rows, uploaded_by, uploaded_by_role)
                           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`)
-      .run(text(input.fileName) || 'upload.xlsx', sha, p.sheetName, p.headerRow, JSON.stringify(p.mapping), P.normaliseCompany(input.defaultCompany),
+      .run(text(input.fileName) || 'upload.xlsx', sha, p.sheetName, p.headerRow,
+        JSON.stringify({ mapping: p.mapping, headers: p.headers, balanceColumns: p.balanceColumns }), P.normaliseCompany(input.defaultCompany),
         p.rows.length, gate.actor.username, gate.actor.role).lastInsertRowid;
     const ins = db.prepare(`INSERT INTO loan_import_rows (batch_id, row_no, raw, name, name_norm, company, department, loan_date, original_principal, outstanding, emi,
-                              loan_type, agreement_ref, notes, parse_status, parse_errors, match_tier, candidates, borrower_type, employee_code, warnings)
-                            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
+                              loan_type, agreement_ref, notes, parse_status, parse_errors, match_tier, candidates, borrower_type, employee_code, warnings, code)
+                            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
+    const defCo = P.normaliseCompany(input.defaultCompany);
     const pools = new Map();
     const firstSeen = new Map();
-    const counts = { rows: 0, invalid: 0, duplicate: 0, exact: 0, ambiguous: 0, close: 0, inactive: 0, none: 0 };
+    const counts = { rows: 0, invalid: 0, duplicate: 0, exact: 0, ambiguous: 0, close: 0, inactive: 0, none: 0, code: 0, code_close: 0, code_mismatch: 0 };
     for (const r of p.rows) {
       const nameNorm = Mx.normalizeImportName(r.name);
       let status = r.errors.length ? 'invalid' : 'ok';
       const errors = [...r.errors];
-      const dk = [nameNorm, r.company, r.loanDate, r.originalPrincipalPaise, r.outstandingPaise, r.emiPaise].join('|');
+      const dk = [r.code || '', nameNorm, r.company, r.loanDate, r.originalPrincipalPaise, r.outstandingPaise, r.emiPaise].join('|');
       if (status === 'ok' && firstSeen.has(dk)) {
         status = 'duplicate';
         errors.push({ code: 'DUPLICATE_ROW', message: `same as row ${firstSeen.get(dk)}` });
       } else if (status === 'ok') firstSeen.set(dk, r.rowNo);
       let m = { tier: null, candidates: [], selected: null };
-      if (status !== 'duplicate' && r.name && r.company) {
+      let company = r.company;
+      const warnings = [...r.warnings];
+      if (status !== 'duplicate' && r.code) {
+        // PR-10 follow-up: exact by code; the name is a cross-check; the company comes from the master.
+        m = Mx.matchByCode(db, { code: r.code, name: r.name, company: r.company, defaultCompany: defCo });
+        company = m.company;
+        if (m.warning) warnings.push(m.warning);
+        if (!company && m.tier !== 'none') {
+          status = 'invalid';
+          errors.push({ code: 'COMPANY_INVALID', message: 'the file has no company and the employee master has none for this code — choose a default company at upload' });
+        }
+        if (company && companies && !companies.includes(company)) return fail('COMPANY_NOT_ALLOWED', 'the file has rows for a company you do not have access to');
+      } else if (status !== 'duplicate' && r.name && r.company) {
         if (!pools.has(r.company)) pools.set(r.company, Mx.loadPool(db, r.company));
         m = Mx.matchRow(pools.get(r.company), r);
       }
@@ -262,12 +286,12 @@ function createBatch(db, input, actor, { companies = null } = {}) {
       if (status === 'invalid') counts.invalid += 1;
       if (status === 'duplicate') counts.duplicate += 1;
       if (m.tier) counts[m.tier] += 1;
-      ins.run(b, r.rowNo, JSON.stringify(r.raw), r.name || null, nameNorm || null, r.company, r.department, r.loanDate,
+      ins.run(b, r.rowNo, JSON.stringify(r.raw), r.name || null, nameNorm || null, company, r.department, r.loanDate,
         r.originalPrincipalPaise === null ? null : toRupees(r.originalPrincipalPaise),
         r.outstandingPaise === null ? null : toRupees(r.outstandingPaise), r.emiPaise === null ? null : toRupees(r.emiPaise),
         r.loanType, r.agreementRef, [r.notes, r.loanTypeOriginal && r.loanTypeOriginal !== r.loanType ? `Excel loan type: ${r.loanTypeOriginal}` : null].filter(Boolean).join(' · ') || null,
         status, JSON.stringify(errors), m.tier, JSON.stringify(m.candidates),
-        m.selected ? m.selected.borrowerType : null, m.selected ? m.selected.code : null, JSON.stringify(r.warnings));
+        m.selected ? m.selected.borrowerType : null, m.selected ? m.selected.code : null, JSON.stringify(warnings), r.code || null);
     }
     audit(db, { table: 'loan_import_batches', recordId: b, field: 'status', newValue: 'review', actor: gate.actor, action: 'upload',
       remark: `${text(input.fileName)} · ${counts.rows} rows (${counts.invalid} invalid, ${counts.duplicate} duplicate) · sha256 ${sha.slice(0, 12)}` });
@@ -378,6 +402,11 @@ function confirmMatch(db, { batchId, rowId, borrowerType, employeeCode, company 
   const code = text(employeeCode);
   const listed = row.candidates.some((c) => c.borrowerType === borrowerType && c.code === code);
   if (!listed && text(note).length < 5) return fail('NOTE_REQUIRED', 'a note (5+ characters) is required when the employee is not one of the proposed candidates');
+  // PR-10 follow-up: never accept a name that differs from the master (beyond close spelling) without a note.
+  const nc = Mx.nameCheck(row.name, who.employee.name);
+  if (nc.result === 'mismatch' && text(note).length < 5) {
+    return fail('NOTE_REQUIRED', 'the Excel name and the master name differ — a note (5+ characters) confirming it is the same person is required');
+  }
   return inTxn(db, () => {
     const r = db.prepare(`UPDATE loan_import_rows SET borrower_type = ?, employee_code = ?, match_status = 'confirmed', match_confirmed_by = ?,
                                  match_confirmed_at = datetime('now'), match_note = ?, updated_at = datetime('now')
@@ -430,6 +459,8 @@ function confirmBalance(db, { batchId, rowId, outstanding, emi, note = null }, a
   if (!o.ok) return o;
   const m = pick(emi, row.emi, 'EMI');
   if (!m.ok) return m;
+  if (!(o.paise > 0)) return fail('AMOUNT_INVALID', 'outstanding must be above ₹0');
+  if (!(m.paise > 0)) return fail('EMI_MISSING', 'enter the monthly EMI (the Excel has none)');
   if (m.paise % 100 !== 0) return fail('EMI_NOT_WHOLE_RUPEE', 'EMI must be a whole rupee amount');
   const changed = row.outstanding === null || row.emi === null || o.paise !== toPaise(row.outstanding) || m.paise !== toPaise(row.emi);
   if (changed && text(note).length < 5) return fail('NOTE_REQUIRED', 'a note (5+ characters) is required when the outstanding or EMI differs from the Excel');
@@ -469,6 +500,60 @@ function discardBatch(db, { batchId, reason }, actor, { companies = null } = {})
     if (r.changes !== 1) return fail('CONCURRENT_CHANGE', 'the batch changed underneath');
     audit(db, { table: 'loan_import_batches', recordId: b.id, field: 'status', oldValue: 'review', newValue: 'discarded', actor: gate.actor, action: 'discard', remark: text(reason) });
     return { ok: true, batchId: b.id, status: 'discarded' };
+  });
+}
+
+/**
+ * Re-choose which column is the cutover outstanding and which is the EMI on a
+ * batch in review (PR-10 follow-up): a file can carry several balance columns
+ * (before / after a month's deduction) and the right one is a business answer
+ * that may come after the upload. Uploader or admin. Values are re-read from
+ * each row's original cells; every finance balance confirmation is reset (the
+ * amounts it attested changed); audited.
+ */
+function remapColumns(db, { batchId, outstanding, emi }, actor, { companies = null } = {}) {
+  const gate = checkActor('import_remap', actor);
+  if (!gate.ok) return gate;
+  const b = getBatch(db, batchId);
+  if (!b) return fail('BATCH_NOT_FOUND', `import batch ${batchId} not found`);
+  if (!companiesAllowed(companies, batchCompanies(db, b.id))) return fail('COMPANY_NOT_ALLOWED', 'this batch has rows for a company you do not have access to');
+  if (gate.actor.role !== 'admin' && gate.actor.username.toLowerCase() !== String(b.uploaded_by).toLowerCase()) {
+    return fail('NOT_UPLOADER', 'only the person who uploaded the batch (or the admin) can change its columns');
+  }
+  if (b.status !== 'review') return fail('BATCH_NOT_IN_REVIEW', `batch #${b.id} is ${b.status}`);
+  const cm = json(b.column_map, {});
+  const headers = cm.headers || [];
+  const mapping = { ...(cm.mapping || {}) };
+  const col = (v) => headers.find((h) => h.index === Number(v)) || null;
+  const o = col(outstanding === undefined ? mapping.outstanding : outstanding);
+  const e = col(emi === undefined ? mapping.emi : emi);
+  if (!o || !e) return fail('MAPPING_INVALID', 'choose an outstanding column and an EMI column from the file headers');
+  if (o.index === e.index) return fail('MAPPING_INVALID', 'the outstanding and EMI columns must differ');
+  const others = Object.entries(mapping).filter(([k, v]) => !['outstanding', 'emi'].includes(k) && (v === o.index || v === e.index)).map(([k]) => k);
+  if (others.length) return fail('MAPPING_INVALID', `that column is already used for ${others.join(', ')}`);
+  return inTxn(db, () => {
+    const rows = db.prepare('SELECT * FROM loan_import_rows WHERE batch_id = ?').all(b.id).map(hydrate);
+    let changed = 0; let reset = 0;
+    const up = db.prepare(`UPDATE loan_import_rows SET outstanding = ?, emi = ?, parse_status = ?, parse_errors = ?, balance_status = 'pending',
+                                  confirmed_outstanding = NULL, confirmed_emi = NULL, balance_confirmed_by = NULL, balance_confirmed_at = NULL, balance_note = NULL,
+                                  updated_at = datetime('now') WHERE id = ?`);
+    for (const r of rows) {
+      const am = P.amountChecks(r.raw[o.text], r.raw[e.text]);
+      const errors = [...r.parse_errors.filter((x) => !P.AMOUNT_ERRORS.has(x.code)), ...am.errors];
+      const status = r.parse_status === 'duplicate' ? 'duplicate' : (errors.length ? 'invalid' : 'ok');
+      const out = am.out.ok ? am.out.paise : null;
+      const em = am.emi.ok ? am.emi.paise : null;
+      if (toPaise(r.outstanding) !== out || toPaise(r.emi) !== em) changed += 1;
+      if (r.balance_status === 'confirmed') reset += 1;
+      up.run(out === null ? null : toRupees(out), em === null ? null : toRupees(em), status, JSON.stringify(errors), r.id);
+    }
+    const before = `${(headers.find((h) => h.index === mapping.outstanding) || {}).text || '—'} / ${(headers.find((h) => h.index === mapping.emi) || {}).text || '—'}`;
+    mapping.outstanding = o.index;
+    mapping.emi = e.index;
+    db.prepare("UPDATE loan_import_batches SET column_map = ?, updated_at = datetime('now') WHERE id = ?").run(JSON.stringify({ ...cm, mapping }), b.id);
+    audit(db, { table: 'loan_import_batches', recordId: b.id, field: 'column_map', actor: gate.actor, action: 'columns_changed',
+      oldValue: before, newValue: `${o.text} / ${e.text}`, remark: `${changed} row(s) changed; ${reset} finance confirmation(s) reset` });
+    return { ok: true, batchId: b.id, outstandingColumn: o.text, emiColumn: e.text, rowsChanged: changed, confirmationsReset: reset };
   });
 }
 
@@ -692,6 +777,6 @@ function importOfLoan(db, loanId) {
 
 module.exports = {
   IMPORT_MODE, importReady, previewImport, createBatch, listBatches, batchDetail, confirmMatch, excludeRow, confirmBalance,
-  discardBatch, approveBatch, cutoverCheck, cutoverCheckXlsx, importOfLoan, openingDate, earliestCutover, rowKey,
+  discardBatch, remapColumns, approveBatch, cutoverCheck, cutoverCheckXlsx, importOfLoan, openingDate, earliestCutover, rowKey,
   buildImportTemplate: P.buildTemplate,
 };

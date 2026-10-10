@@ -60,6 +60,13 @@ describe('tiers', () => {
     expect(match('Manpret Singh', AL, 'Production').tier).toBe('none');
     expect(match('Manpret Singh', AL, 'Store').tier).toBe('close');
   });
+  test('a word missing ("SHUBHAM" ↔ "SHUBHAM KUMAR") is close spelling; a different surname is not', () => {
+    expect(M.closeScore('SHUBHAM KUMAR', 'SHUBHAM')).toMatchObject({ reason: 'a word missing' });
+    expect(M.nameCheck('Shubham Kumar', 'SHUBHAM').result).toBe('close');
+    expect(M.nameCheck('Prince Tyagi', 'PRINCE KUMAR').result).toBe('mismatch');
+    expect(M.nameCheck('Naveem Arora', 'NAVEEN ARORA').result).toBe('close');
+    expect(M.nameCheck('', 'ANYONE').result).toBe('same');
+  });
   test('short names allow only one letter of difference', () => {
     plant('ANIL');
     expect(match('AMIT').tier).toBe('none');

@@ -32,7 +32,7 @@ const httpStatus = (code) => (STATUS_403.has(code) ? 403 : STATUS_409.has(code) 
 
 function refuse(res, r) {
   const body = { success: false, code: r.code, error: r.message || r.error || r.code };
-  for (const k of ['blockers', 'batchId', 'earliest', 'errors', 'rowNo', 'headers', 'mapping', 'autoMapping', 'fields']) if (r[k] !== undefined) body[k] = r[k];
+  for (const k of ['blockers', 'batchId', 'earliest', 'errors', 'rowNo', 'headers', 'mapping', 'autoMapping', 'fields', 'balanceColumns']) if (r[k] !== undefined) body[k] = r[k];
   return res.status(httpStatus(r.code)).json(body);
 }
 
@@ -163,6 +163,12 @@ router.post('/batches/:id/rows/:rid/balance', allow(['finance']), handle((req, r
     req.actor, { companies: companies(req) });
   if (r.ok) notifyIfReady(db, posInt(req.params.id));
   return reply(res, r);
+}));
+
+/** Re-choose the outstanding / EMI columns of a batch in review (uploader or admin); resets finance confirmations. */
+router.post('/batches/:id/columns', allow(['hr', 'finance', 'admin']), handle((req, res) => {
+  const b = req.body || {};
+  return reply(res, L.remapColumns(getDb(), { batchId: posInt(req.params.id), outstanding: b.outstanding, emi: b.emi }, req.actor, { companies: companies(req) }));
 }));
 
 router.post('/batches/:id/approve', allow(['admin']), handle((req, res) => {

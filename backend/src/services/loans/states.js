@@ -77,6 +77,7 @@ const ACTION_ROLES = Object.freeze({
   import_confirm_balance: ['finance'],
   import_approve: ['admin'],
   import_discard: ['hr', 'finance', 'admin'],
+  import_remap: ['hr', 'finance', 'admin'],     // re-choose the outstanding / EMI columns (uploader or admin)
 });
 
 /** Actions where the actor may never be the person who raised the request. */

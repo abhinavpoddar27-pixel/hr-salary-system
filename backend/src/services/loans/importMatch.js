@@ -68,6 +68,11 @@ function closeScore(rowName, candName) {
   const maxD = Math.min(rowName.length, candName.length) <= 6 ? 1 : 2;
   if (d <= maxD) return { score: Math.round((1 - d / Math.max(rowName.length, candName.length)) * 1000) / 1000, reason: `${d} letter${d === 1 ? '' : 's'} different` };
   if (initialsMatch(rowName, candName)) return { score: 0.8, reason: 'initials' };
+  // One name is the other with a word missing ("SHUBHAM" ↔ "SHUBHAM KUMAR"): every word of the shorter
+  // (each 3+ letters) appears in the longer.
+  const [short, long] = rowName.split(' ').length <= candName.split(' ').length ? [rowName, candName] : [candName, rowName];
+  const sw = short.split(' '); const lw = new Set(long.split(' '));
+  if (sw.length < lw.size && sw.every((w) => w.length >= 3 && lw.has(w))) return { score: 0.75, reason: 'a word missing' };
   return null;
 }
 
@@ -139,4 +144,71 @@ function matchRow(pool, row) {
   return { tier: 'none', nameNorm, candidates: [], selected: null };
 }
 
-module.exports = { normalizeImportName, normDept, levenshtein, initialsMatch, closeScore, loadPool, matchRow, isKnownCompany };
+/**
+ * Excel name vs a master name (PR-10 follow-up): 'same' | 'close' (the close-spelling rule above) | 'mismatch'.
+ * A blank Excel name is 'same' (nothing to cross-check).
+ */
+function nameCheck(excelName, masterName) {
+  const a = normalizeImportName(excelName);
+  const b = normalizeImportName(masterName);
+  if (!a || a === b) return { result: 'same' };
+  const c = closeScore(a, b);
+  return c ? { result: 'close', reason: c.reason } : { result: 'mismatch' };
+}
+
+const isSalesCode = (code) => /^S/i.test(String(code || '').trim());
+
+/**
+ * Exact match by employee code (PR-10 follow-up). S-prefixed → sales_employees
+ * (of the row's company when the file has one, else any company); otherwise →
+ * plant employees (a plant row typed Sales is never a borrower, SPEC §8.3).
+ * The name is a cross-check: same → tier 'code' (pre-selected); close spelling →
+ * 'code_close' (pre-selected, flagged); anything else → 'code_mismatch' (listed,
+ * NOT pre-selected, HR confirms with a note). Not found → 'none'; found but not
+ * Active → 'inactive' (settle outside the app). `company` = the loan's company:
+ * the file's, else the master's, else the default company, else null.
+ */
+function matchByCode(db, { code, name, company = null, defaultCompany = null }) {
+  const c = String(code || '').trim().toUpperCase();
+  const nameNorm = normalizeImportName(name);
+  let rows;
+  if (isSalesCode(c)) {
+    rows = (company
+      ? db.prepare('SELECT code, name, company, designation, headquarters, status, doj FROM sales_employees WHERE UPPER(code) = ? AND company = ?').all(c, company)
+      : db.prepare('SELECT code, name, company, designation, headquarters, status, doj FROM sales_employees WHERE UPPER(code) = ?').all(c))
+      .map((e) => ({
+        borrowerType: 'sales', code: e.code, name: e.name, nameNorm: normalizeImportName(e.name), company: e.company, masterCompany: e.company,
+        department: 'Sales', deptNorm: 'SALES', designation: e.designation || null, headquarters: e.headquarters || null, employmentType: 'Sales',
+        isContractor: false, status: e.status, doj: e.doj || null,
+      }));
+  } else {
+    rows = db.prepare(`SELECT code, name, company, department, employment_type, status, date_of_joining, is_contractor FROM employees
+                        WHERE UPPER(TRIM(code)) = ? AND LOWER(TRIM(COALESCE(employment_type, ''))) <> 'sales'`).all(c)
+      .map((e) => ({
+        borrowerType: 'plant', code: e.code, name: e.name, nameNorm: normalizeImportName(e.name), company: isKnownCompany(e.company) ? e.company.trim() : null,
+        masterCompany: e.company || null, department: e.department || null, deptNorm: normDept(e.department), employmentType: e.employment_type || null,
+        isContractor: Number(e.is_contractor) === 1, status: e.status, doj: e.date_of_joining || null,
+      }));
+  }
+  const loanCompany = (p) => company || p.company || defaultCompany || null;
+  if (!rows.length) return { tier: 'none', nameNorm, candidates: [], selected: null, company: company || null, codeNotFound: true };
+  const active = rows.filter(isActive);
+  if (!active.length) {
+    return { tier: 'inactive', nameNorm, candidates: rows.map((p) => publicCandidate(p, { reason: `code ${c}, status ${p.status || 'blank'}` })), selected: null, company: loanCompany(rows[0]) };
+  }
+  if (active.length > 1) {
+    return { tier: 'ambiguous', nameNorm, candidates: active.map((p) => publicCandidate(p, { reason: `code ${c} in ${p.company}` })), selected: null, company: company || null };
+  }
+  const p = active[0];
+  const nc = nameCheck(name, p.name);
+  const pick = { borrowerType: p.borrowerType, code: p.code, company: p.borrowerType === 'sales' ? p.company : null, by: 'code' };
+  if (nc.result === 'same') return { tier: 'code', nameNorm, candidates: [publicCandidate(p, { reason: 'code, same name' })], selected: pick, company: loanCompany(p) };
+  if (nc.result === 'close') {
+    return { tier: 'code_close', nameNorm, candidates: [publicCandidate(p, { reason: `code; name ${nc.reason}` })], selected: pick, company: loanCompany(p),
+      warning: { code: 'NAME_CLOSE_SPELLING', message: `the Excel name differs from the master (${nc.reason}) — the code matches; confirm it is the same person` } };
+  }
+  return { tier: 'code_mismatch', nameNorm, candidates: [publicCandidate(p, { reason: 'code matches; NAME DIFFERS' })], selected: null, company: loanCompany(p),
+    warning: { code: 'NAME_MISMATCH', message: 'the Excel name and the master name for this code differ — HR must confirm (with a note) that it is the same person' } };
+}
+
+module.exports = { nameCheck, matchByCode, isSalesCode, normalizeImportName, normDept, levenshtein, initialsMatch, closeScore, loadPool, matchRow, isKnownCompany };

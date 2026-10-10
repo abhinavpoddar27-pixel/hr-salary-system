@@ -154,3 +154,22 @@ describe('confirm, approve, cutover check', () => {
     expect((await api.request('POST', `/api/loans/import/batches/${batchId}/discard`, { as: 'boss', body: { reason: 'too late' } })).status).toBe(409);
   });
 });
+
+describe('PR-10 follow-up: code column and the columns route', () => {
+  test('a Punch No file matches by code over HTTP; the uploader re-chooses the balance column; viewer 403', async () => {
+    db.prepare("INSERT INTO sales_employees (code, name, company, status, doj, gross_salary) VALUES ('S777', 'API REP', 'Indriyan Beverages Pvt Ltd', 'Active', '2024-01-01', 40000)").run();
+    const f = book([['Loan Register'], [], ['Punch No', 'Name', 'Pending Loan Amount ', 'Deduct per month Aug ', 'Op sep'], ['S777', 'Api Rep', 10000, 2000, 8000], [null, 'Total', 10000, 2000, 8000]]);
+    const p = await postFile('/api/loans/import/parse', { as: 'fin1', file: f });
+    expect(p.body.data).toMatchObject({ mapping: { code: 0, name: 1, outstanding: 4, emi: 3 }, balanceColumns: [2, 4], rowCount: 1 });
+    const r = await postFile('/api/loans/import/batches', { as: 'fin1', file: f });
+    expect(r.status).toBe(201);
+    const id = r.body.data.batchId;
+    const d = (await api.request('GET', `/api/loans/import/batches/${id}`, { as: 'view1' })).body.data;
+    expect(d.rows[0]).toMatchObject({ code: 'S777', match_tier: 'code', company: 'Indriyan Beverages Pvt Ltd', outstanding: 8000 });
+    expect((await api.request('POST', `/api/loans/import/batches/${id}/columns`, { as: 'view1', body: { outstanding: 2 } })).status).toBe(403);
+    expect((await api.request('POST', `/api/loans/import/batches/${id}/columns`, { as: 'hr1', body: { outstanding: 2 } })).status).toBe(403);
+    const c = await api.request('POST', `/api/loans/import/batches/${id}/columns`, { as: 'fin1', body: { outstanding: 2 } });
+    expect(c.status).toBe(200);
+    expect(c.body.data).toMatchObject({ outstandingColumn: 'Pending Loan Amount', rowsChanged: 1 });
+  });
+});
