@@ -18,6 +18,7 @@ module.exports = {
   ...require('./adjustments'),
   ...require('./close'),
   ...require('./exit'),
+  ...require('./reports'),   // Loans PR-9 (read-only)
   money: require('./money'),
   months: require('./months'),
 };
