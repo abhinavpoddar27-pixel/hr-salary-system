@@ -9,7 +9,7 @@
 Programme:   UI/UX improvement + bulk input, HR Salary System (Indriyan / Asian Lakto)
 Base:        origin/main a5aec9a (10 Oct 2026). Re-check: git fetch origin; git log -1 origin/main
 Plan:        docs/ux-bulk/MASTER_PLAN.md (§5.2 = PR order, §6 = specs, §7 = bulk design, §14 = open questions)
-Current PR:  P1-01 merged #81 @96ee482 (10 Oct 19:24 IST) — awaiting owner post-deploy check → `verified`. P1-02 `build` (go 10 Oct 20:17 IST: drop CSV Basic/HRA; held-row marking = later, N-4). P1-03 Phase 0 in parallel (worktree /home/claude/wt-p1-03)
+Current PR:  P1-01 merged #81 @96ee482 (10 Oct 19:24 IST) — awaiting owner post-deploy check → `verified`. P1-02 `pushed` @3d6c7fa (owner: open PR + merge, then post-deploy check). P1-03 Phase 0 in parallel (worktree /home/claude/wt-p1-03)
 Asked, not answered: Q1 Q2 Q3 (P3-01/P5-02), Q4 (P1-04) — re-ask before those PRs
 Open Qs:     Q1 Q2 (needed by P3-01) · Q4 (P1-04) · Q5 (P1-07) · Q6 (P1-23) · Q10 (one-PR rule) — ask when the PR needs them
 Roles:       planner = new chat; builder = Claude Code agent session reading prs/<PR-ID>/PROMPT.md; Abhinav says "go" and merges in GitHub UI
@@ -58,7 +58,7 @@ Status values: `todo` · `plan` (Phase 0 written, waiting for go) · `build` · 
 | P0-2 | Merge docs PRs (wide-layout-cp9, attendance-review-handoff, ux-bulk-master-plan) | todo | — | — | — | — | owner |
 | P0-3 | Triage 6 `new` bug reports | todo | — | — | — | — | owner |
 | P1-01 | Finance Audit Readiness click crash | merged | fix/finance-audit-readiness-nav | #81 | 96ee482 | pending owner check | Phase 0 done; go 10 Oct 19:04 incl. held-card link fix to /finance-verification (owner OK) |
-| P1-02 | Salary Register ₹0 | build | fix/salary-register-report-fields | — | — | — | go 10 Oct 20:17; rulings R12/R13 |
+| P1-02 | Salary Register ₹0 | pushed | fix/salary-register-report-fields | — | — | — | go 10 Oct 20:17; rulings R12/R13 |
 | P1-03 | Sales NEFT unfinalised rows + confirm | todo | | | | | |
 | P1-04 | Stage 6 company-scope guard | todo | | | | | Q4 |
 | P1-05 | Stage 6 Apply Leave form reset | todo | | | | | |
@@ -134,6 +134,7 @@ Status values: `todo` · `plan` (Phase 0 written, waiting for go) · `build` · 
 | N-4 | P1-02 | Reports → Salary Register: held rows not marked; LWF/loan only inside Ded. | P9 or with P1-02 if owner says |
 
 ## Session log (newest first; one line per meaningful event)
+- 10 Oct 2026 ~20:40 IST — P1-02 built + pushed @3d6c7fa: Reports.jsx +10/−14; check 58/58 (planner re-ran: 58/58), --base 6/6 shows ₹0; jest 81/1332 before+after.
 - 10 Oct 2026 20:17 IST — Owner go on P1-02 with both recommendations (R12, R13). P1-02 builder resumed; P1-03 diagnostics started in a separate worktree.
 - 10 Oct 2026 ~19:50 IST — P1-02 diagnostics (prod Sep 211 rows/19 held; endpoint shared with Stage 7, 1,526 calls/90d → no backend change). PROMPT 5.3 KB → builder Phase 0 → PLAN @55337b2; 4 new findings N-1…N-4 logged.
 - 10 Oct 2026 19:34 IST — P1-01 merged by owner (#81, 96ee482). Post-deploy check sent; P1-02 diagnostics started.
