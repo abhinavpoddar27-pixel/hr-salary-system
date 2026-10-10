@@ -700,7 +700,7 @@ export default function LeaveManagement() {
             <div className="flex justify-end gap-3">
               <button className="btn btn-secondary" onClick={() => { setRejectModal(null); setRejectReason('') }}>Cancel</button>
               <button
-                className="btn bg-red-600 text-white hover:bg-red-700"
+                className="btn bg-red-600 text-white hover:bg-red-700 disabled:opacity-50 disabled:cursor-not-allowed"
                 disabled={reject.isPending || rejectReason.trim().length < REJECT_REASON_MIN}
                 onClick={() => { if (rejectReason.trim().length >= REJECT_REASON_MIN) reject.mutate({ id: rejectModal.id, reason: rejectReason }) }}
               >
