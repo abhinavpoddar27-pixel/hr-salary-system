@@ -413,7 +413,7 @@ function CreateGatePassModal({ show, onClose, company, month, year }) {
           <div className="flex gap-3">
             <button className="btn" onClick={onClose}>Cancel</button>
             <button
-              className={clsx('btn', overQuota ? 'bg-amber-600 hover:bg-amber-700 text-white disabled:opacity-50' : 'btn-primary')}
+              className={clsx('btn-primary disabled:opacity-50', overQuota && 'from-amber-500 to-amber-600')}
               onClick={handleSubmit}
               disabled={submitDisabled}
               title={!empCode ? 'Select an employee first' : !date ? 'Pick a date' : blocked ? 'Monthly allowance used up' : undefined}
