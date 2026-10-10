@@ -9,6 +9,7 @@ const { parseEESLFile, extractEmployees, getImportSummary } = require('../servic
 const { pairNightShifts, applyPairingToDb } = require('../services/nightShift');
 const { detectMissPunches, applyMissPunchFlags } = require('../services/missPunch');
 const { calcShiftMetrics } = require('../utils/shiftMetrics');
+const { refreshEarlyExitsForMonth, safeRefresh } = require('../services/earlyExitDetection');
 
 function friendlyParseError(errorMsg) {
   if (!errorMsg) return 'Import failed due to an unexpected error. Please verify the file and try again.';
@@ -504,6 +505,10 @@ router.post('/upload', upload.array('files', 20), async (req, res) => {
         });
         postTxn();
 
+        // Gate passes: re-work early exits for every date just imported, so a
+        // pass already on record exempts (or reduces) that day's early exit.
+        const earlyExitRefresh = safeRefresh('import', () => refreshEarlyExitsForMonth(db, month, year, company));
+
         // ── REIMPORT SAFETY: auto-recompute downstream tables ──
         // Day-calc and salary-compute that ran on the corrupted pre-reimport
         // data are now stale. Run them now, synchronously, so HR doesn't have
@@ -553,6 +558,7 @@ router.post('/upload', upload.array('files', 20), async (req, res) => {
           manualCorrectionsSkipped: skippedCount,
           recomputed: isReimport,
           recomputeStats,
+          earlyExitRefresh,
           summary
         });
       }

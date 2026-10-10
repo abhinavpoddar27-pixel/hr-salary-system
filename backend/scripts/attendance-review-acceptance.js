@@ -18,7 +18,7 @@ const path = require('path');
 const S = require(path.join(__dirname, '..', 'src', 'services', 'attendanceReviewService'));
 
 const SQL_COLS = ['code', 'ym', 'worked_days', 'worked_units', 'sched_min', 'shift_h', 'shift_h_missing', 'late_raw', 'late_excused', 'lates', 'late_min',
-  'early_exits', 'early_min', 'early_long', 'ms_days', 'early_short', 'early_short_min', 'early_short_long', 'early_wm_sum'];
+  'early_exits', 'early_min', 'early_long', 'ms_days', 'early_short', 'early_short_min', 'early_short_long', 'early_wm_sum', 'late_full_excused'];
 const ROW_COLS = [...SQL_COLS, 'department', 'designation', 'is_contractor', 'employment_type'];
 const NUM = new Set(SQL_COLS.slice(2).concat(['is_contractor']));
 

@@ -23,6 +23,64 @@
   "not computed yet"; (2) readiness failure shows score 0 "Not Ready" with an empty checklist; (3) Department Cost table silently
   hidden when its call fails; (4) the finance-view KPI half has no error UI at all; (5) backend `GET /finance-audit/salary-manual-flags`
   catch returns `success: true` with zero counts on a SQL error, so a server-side failure there still reads 0 (the UI can't tell).
+## Last Session — 2026-10-10 (Gate pass PR-2: early exits allow for gate passes everywhere; detection fixed for night shifts)
+**Branch `fix/gate-pass-early-exit-wiring` (on origin/main 69f00a3), NOT merged.** Spec: private project `claude/gate-pass-quota/SPEC.md`.
+- **Found:** `services/earlyExitDetection.js` compared every punch-out with the DAY end time (night 12HR in 19:58 / out 08:09 →
+  "711 min early"); ~18–25% of all `early_exit_detections` rows were such misreads (Sep 1–15: 270 of 1,472). The 1 Oct reimport
+  had overwritten detection's `attendance_processed` writes with import's (correct, gate-pass-blind) values, so Attendance
+  Review never saw a gate pass. Detection last ran for 15 Sep (manual only).
+- **Fix:** detection rebuilt on `utils/shiftMetrics.calcShiftMetrics` with import.js's exact inputs + shift resolution
+  (default_shift_id → shift_code → DAY), then the gate pass: out ≥ (effective shift end − pass hours) → not early (`exempted`,
+  ed 0 / em 0); earlier → only the minutes beyond the pass. Night passes measured against the night end. Writes
+  `attendance_processed.is_early_departure/early_by_minutes` (what Review/analytics read) + `early_exit_detections`
+  (minutes_early = raw, flagged_minutes = adjusted). Never deletes an `actioned` row or one a deduction points at (FK);
+  `actioned` status kept. Salary/day-calc tables untouched.
+- **Runs automatically:** import (that month/company), recalculate-metrics, miss-punch resolve + bulk (date and date+1),
+  gate pass create/cancel (that date), nightly 22:15 UTC = 03:45 IST + 30 s after boot (current + previous IST month).
+  Hooks go through `safeRefresh` (never fails the caller). `/detect` and `/detect-range` unchanged on the outside.
+- **Review/notices:** `gatePassCount` excludes cancelled passes; new `gatePassExcused` (tab footer + xlsx Summary). Notices say
+  "without a gate pass covering it" (a pass left early beyond still counts the extra minutes).
+- **Fragile:** (1) the boot/nightly sweep rewrites Sep+Oct detection rows — Feb–Aug still hold the old night misreads (HR can
+  run Detect range per ≤90 days). (2) `missPunch.js` resolves with default_shift_id only (no shift_code) — late values on
+  those rows still use DAY; early values are corrected by the refresh (0 such Sep rows today). (3) Gate pass still exempts
+  only via HR's early-exit deduction flow — Stage 6/7 never read these flags.
+- **Verified:** new `earlyExitGatePass.test.js` 15 (11 fail on the old engine); jest 87 suites / 1417; gate pass browser check
+  47/47; real server boot logs the sweep. Prod read-only: no Sep/Oct detection row actioned or linked to a deduction; current
+  Sep values = import's. **Not tested:** Railway; a full-month replay of production rows (SQL tool shows 100 rows).
+
+## Last Session — 2026-10-10 (Gate pass modal: name the month)
+**Branch `fix/gate-pass-month-label` (on origin/main 139faa7), NOT merged.** Frontend only (`components/GatePasses.jsx`).
+- **Report:** hr created a September Short Leave for 19222; the modal still said "Used: nothing yet". The data was right —
+  the modal opens on today's date (October) and the list follows the page's month picker (October). Nothing said which month.
+- **Fix:** label "This month" → "Allowance for <Month YYYY>" of the chosen date; "Used:" → "Used in <Month>:". A pass dated
+  outside the page's picker month gets the toast "… Saved for <Month YYYY> — set the month picker to <Month YYYY> to see it
+  in the list." (7 s). Server untouched. dist rebuilt (content change: LeaveManagement chunk only; other names = hash cascade).
+- **Verified:** `gate-pass-quota-browser-check.py` 47/47 (+9: label follows the date, previous-month save toast, not in the
+  current list, reopen shows Used in <prev>: 1 Short Leave, switching back shows this month); jest gatePassQuota 21/21.
+- **Not tested:** Railway; Safari/Firefox.
+
+## Last Session — 2026-10-10 (Gate pass allowance: 2 Short Leaves OR 1 Half Day; Short Leave 2 h; create 500 fixed)
+**Branch `feat/gate-pass-quota`, NOT merged.** Spec (private project): `claude/gate-pass-quota/SPEC.md`. Owner rulings 10 Oct 2026.
+- **Rule:** per employee per calendar month 2 Short Leaves OR 1 Half Day — points: Short Leave 1, Half Day 2, budget 2
+  (`routes/short-leaves.js` `PASS_POINTS` / `MONTHLY_POINTS`). Short Leave = 2 h ending at shift end (was 3). Over the
+  allowance: HR 422/403; admin only with `breach_reason` ≥ 10 chars → `quota_breach = 1`, reason in new
+  `short_leaves.breach_reason` (schema.js: one `safeAddColumn`), audit stage `short_leave_quota_override`. Backdating open
+  (7-day limit removed, owner: tighten later). One active pass per employee per date (409). Cancel returns the points.
+- **Bug fixed:** POST read `SELECT shift_id FROM employees` — no such column (it is `default_shift_id`) → every create
+  500'd in production; `short_leaves` had 0 rows ever (hr1 tried 6× on 8 Oct, 3× on 29 Aug). Shift lookup now mirrors
+  `earlyExitDetection` (default_shift_id → shift_code → latest attendance → 12HR). The modal also never showed non-quota
+  errors — now every refusal shows the server message.
+- **UI (`GatePasses.jsx`):** "Used: … / Still allowed: …" for the month of the chosen date; a type not covered is "not
+  available" (disabled for HR); admin gets a reason box + "Create over allowance"; BREACH badge tooltip = reason;
+  list/quota reads `no-cache`. `GET /quota` keeps `used/limit/remaining` but they are now POINTS (+ per-type counts,
+  `can_short_leave`, `can_half_day`). dist rebuilt.
+- **Fragile:** `day_calculations.short_leave_days` is the ½P count, NOT gate passes (Stage 7 label says "gate pass" —
+  misleading, untouched). A pass only changes pay through early-exit detection (exemption = shift end − duration), and
+  detection last ran for 15 Sep (manual trigger). Attendance Review still counts gate-pass-exempted days as early exits
+  (reads raw `is_early_departure`) — PR-2.
+- **Verified:** jest 86 suites / 1401 (new `gatePassQuota.test.js` 21; 19 fail on the old route).
+  `backend/scripts/gate-pass-quota-browser-check.py` 38/38 (Chromium, built dist, hr + admin, 390 px), 0 page errors,
+  only API error = the deliberate same-day 409. **Not tested:** Railway; production data; Safari/Firefox.
 
 ## Last Session — 2026-10-10 (Stage 7 register: DOJ to drill-down, smarter column widths)
 **Branch `feat/stage7-col-widths` (on origin/main b8b9759), NOT merged.** Frontend display only.
@@ -2767,7 +2825,7 @@ frontend/
 - **Salary advance recovery loop**: `getAdvanceRecovery()` resets `recovered=0` flag before query so re-runs find advances; ON CONFLICT UPDATE on `salary_computations` includes `advance_recovery` so the value persists.
 - **Holiday duty pay**: National holidays (Mar 4 etc) auto-detected. If employee works the holiday, paid extra at per_day_rate. Tracked separately from OT.
 - **Early exit detection**: Runs after attendance import (POST /api/early-exits/detect). If detection is not triggered, `is_early_departure` stays 0 and deductions cannot be created. Gate passes in `short_leaves` provide exemption or reduce flagged minutes. Detection is idempotent (UPSERT on employee_code+date).
-- **Gate pass quota**: 2 per employee per calendar month. Breachable with `force_quota_breach: true`. Cancelled gate passes don't count toward quota. Cancellation blocked after employee punches out.
+- **Gate pass quota** (Oct 2026): 2 Short Leaves (2 h) OR 1 Half Day per employee per calendar month (points 1/2, budget 2). Only admin can go over, with `force_quota_breach` + `breach_reason` (10+ chars). Cancelled passes don't count. Cancellation blocked after employee punches out.
 
 ## Late Coming Management System (April 2026 — Phase 1 + Phase 2 complete)
 - **Three canonical shifts** seeded in `shifts` table: `12HR` (08:00–20:00, 12h),
