@@ -59,11 +59,14 @@
 
 - PR-2b PHASE 0 + STEP 0 — branch `feat/lwf-sales` = origin/main ad96604 (`git fetch`; `git log ad96604..origin/main` empty → no drift, no merge). Baseline jest 64 suites / 1047 tests green. Base worktree `<scratch>/base` at ad96604 (backend + frontend node_modules symlinked): `loans-sales-simulation.js --dump` 232 rows, md5 9a42643837639876b6c3c76eeb48afd0 (= the planner's prototype); `loans-stage7-simulation.js --dump` 210 rows, md5 27287253ee75da0df643340a696e8bce. Plan copied to `docs/statutory-flags/IMPL_PR2b.md` (REVIEW CORRECTIONS C1–C5 binding).
 
+- PR-2b STEP 0 — 1601698 `docs(statutory): PR-2b plan; PR-1 and PR-2 done in production`.
+- PR-2b STEP 1 — a099ed3 `feat(lwf): sales LWF ₹5/₹20 (flagged, earned gross > 0) in total_deductions and the loan headroom`. salesSalaryComputation.js exactly as IMPL_PR2b: LWF block after the ESI `}` (getPolicyNumber + `>= 0`, E7); `lwf_employee: lwfEmployee` in the loan salary object; `+ lwfEmployee` in total_deductions (comment updated); `lwf_employee`/`lwf_employer` in the return object. UPSERT (static parser, base vs branch): sales **45/45/45/42 → 47/47/47/44** (cols / placeholders / params / SET; both columns appended last; params `comp.lwf_employee || 0`, `comp.lwf_employer || 0`); plant 58/58/58/55 unchanged. Tests: lwfSales.test.js 21 (Q1 ×2, Q2 ×4, C5/N5 pin, Q3 ×5, Q4 ×5 + route compute over a paid+NEFT row, Q5 ×2, M1 pin) — **15 of 21 FAIL on the ad96604 file** (swap-verified); the 6 that pass assert unchanged behaviour (flag off, 0 days, zero gross, policy '0', headroom unit, M1 pin). salesLoanFixture SALES_SHORT_SQL + `COALESCE(lwf_employee,0)` (N6; scripts' componentShort stays 7-term). Proof: sales `--dump` on the branch 232 rows, md5 9a42643837639876b6c3c76eeb48afd0 = base. Neighbour suites loansSales*/statutory*/lwf* 17 / 233 green. `node --check` clean.
+
 ## LAST STEP
-PR-2b plan (STEP 0).
+PR-2b STEP 1 (sales compute + save).
 
 ## NEXT STEP
-PR-2b STEP 1 (sales compute + save). Keep: do NOT recompute sales September until D3 is answered.
+PR-2b STEP 2 (sales.js: PUT /salary/:id loan object + rebuild, register totals; Q6). Keep: do NOT recompute sales September until D3 is answered.
 
 ## OWNER RULINGS ADDED DURING THE BUILD
 (record date + ruling; BUILD_PLAN §1 holds the original set)
