@@ -28,8 +28,8 @@ const book = (rows, head = H) => {
 };
 const FILE_ROWS = [
   ['S901', 'Amit Bansal', 60000, 15000, 45000],      // sales, same name
-  ['S902', 'Rohan Tyagi', 80000, 10000, 70000],      // sales, master says ROHAN KUMAR → NAME_MISMATCH
-  ['S903', 'Naveem Arora', 20000, 4000, 16000],      // sales, typo of NAVEEN ARORA → close spelling
+  ['S902', 'Rohan Mehta', 80000, 10000, 70000],      // sales, master says ROHAN KUMAR → NAME_MISMATCH
+  ['S903', 'Kiram Arora', 20000, 4000, 16000],      // sales, typo of KIRAN ARORA → close spelling
   [91001, 'Kamal Jeet', 20000, 5000, 15000],         // plant, same name
   [91002, 'Shubham', 40000, 0, 40000],               // plant, EMI 0 → EMI_MISSING
   [91003, 'Gone Person', 9000, 3000, 6000],          // plant, Left → Left section
@@ -46,7 +46,7 @@ beforeEach(() => {
   const sales = db.prepare("INSERT INTO sales_employees (code, name, company, status, doj, gross_salary) VALUES (?, ?, ?, 'Active', ?, 60000)");
   sales.run('S901', 'AMIT BANSAL', IND, '2024-01-01');
   sales.run('S902', 'ROHAN KUMAR', IND, null);
-  sales.run('S903', 'NAVEEN ARORA', IND, '2026-04-01');
+  sales.run('S903', 'KIRAN ARORA', IND, '2026-04-01');
   F.addEmployee(db, { code: '91001', name: 'KAMAL JEET', company: AL });
   F.addEmployee(db, { code: '91002', name: 'SHUBHAM', company: AL });
   F.addEmployee(db, { code: '91003', name: 'GONE PERSON', company: AL, status: 'Left' });
