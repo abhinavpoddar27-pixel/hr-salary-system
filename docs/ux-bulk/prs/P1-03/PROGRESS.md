@@ -15,7 +15,7 @@
 - [x] P0.2 re-grep + read generateSalesNEFT, bank-neft route, NEFT handlers/modal, status set
 - [x] P0.3 PLAN.md + PROGRESS.md written, committed, pushed — STOP (Phase 0 gate)
 - [x] P1.1 jest baseline: 81 suites / 1332 pass (worktree: backend node_modules symlinked, frontend npm ci)
-- [ ] P1.2 generateSalesNEFT change
+- [x] P1.2 generateSalesNEFT: NOT IN (hold,paid) + totals byStatus/notFinalized/alreadyExported/excludedPaid/excludedPaidAmount
 - [ ] P1.3 salesNeftEligibility.test.js
 - [ ] P1.4 frontend confirm modal + copy
 - [ ] P1.5 dist rebuild (own commit)
