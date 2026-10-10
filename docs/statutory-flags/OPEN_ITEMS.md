@@ -75,3 +75,29 @@
 - N10 Employee Profile shows only total / PF / ESI deductions (the total includes LWF). Employee Quick View reads
   `ee_pf` / `ee_esi` / `basic_earned` / `net_salary`, which the payslip payload never returns — blank already,
   pre-existing, not touched.
+
+## Added by PR-3 (filing, 10 Oct 2026)
+- **PR-3b — portal formats, due before the October filing (ESI + PF challans for October wages are due 15 Nov 2026).**
+  Owner ruling C2: PR-3 keeps the current line layouts byte-for-byte; fix them in PR-3b. [INFERENCE — confirm each against a
+  file the portal actually accepted, or the portal's downloadable template, before building]
+  - EPFO ECR 2.0 separates fields with `#~#`, not `|` (exportFormats.js ECR line builder).
+  - ECR NCP days undercount (E6): exportFormats.js 48–49 subtracts Sundays and holidays from the calendar days AND then the
+    payable days, which already include paid Sundays / holidays — 3 absences can show as NCP 0 (Reports.jsx 782 repeats the formula).
+  - ESIC monthly contribution upload is an Excel template: IP number, IP name, days, total wages, reason code, last working day —
+    no IP-contribution column (the app's file has one). Reason codes are ESIC's list (0 = none, 1 = on leave, 2 = left service,
+    …): the app writes 1 for "joined this month" (plant: calendar month; sales: cycle) — that is not ESIC's code 1 (E7).
+  - Amounts are rounded to the rupee per line (Math.round, e.g. ₹130.50 → 131); check the portal's rounding.
+  Until PR-3b lands: download, then check against the template before uploading (RUNBOOK T7).
+- **Missing must be 0 before filing** (N1, RUNBOOK T7). Rows without a valid UAN / ESI number are left out of the files (D-F2
+  default: exclude + list + header + confirm). VERIFY V16 is HR's fix list. Today: plant ESI numbers are not in the app yet
+  (data item above) → the plant ESI file would be empty and list every ESI employee as missing until the plant statutory file is
+  re-uploaded with numbers; PF without UAN: the two under 'Data HR must fix'.
+- **Decision needed — PUT `/api/reports/company-config/:id` has no role guard** (pre-existing): any logged-in user, a viewer
+  included, can change the company's PF establishment code, ESI code, PAN / TAN and bank account — values that head the filing
+  files. PR-3 gated GET (C4) but did not touch the write (not in scope). Proposed: admin only.
+- N3: a number held by another sales employee is refused even when it is the same person under the other sales company (409
+  heldBy) — same as the upload. The check is in-app only (no UNIQUE index), so two edits racing on one number are not stopped.
+- The sales ESI file also lists a rep whose in-force structure has ESI on with gross ≤ ₹21,000 even when the cycle earned 0
+  (an IP with 0 days, D-F6); the plant file lists contributors only. V16 counts contribution rows only.
+- Finance gets the sales ESI file through the API only (`/api/sales/export/esi-contribution`); the button sits on the sales
+  register, which finance's sidebar does not show. Owner: put a copy on Reports if finance files sales ESI.
