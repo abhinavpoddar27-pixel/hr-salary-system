@@ -453,7 +453,7 @@ export default function AttendanceReviewTab({ selectedMonth, selectedYear }) {
           )}
 
           <p className="text-xs text-slate-400">
-            Gate passes recorded this month: {num(data.gatePassCount)}. Rules: late = {data.criteria?.thresholds?.late_min_minutes}+ min;
+            Gate passes recorded this month: {num(data.gatePassCount)} (early exits they excused: {num(data.gatePassExcused ?? 0)}). Rules: late = {data.criteria?.thresholds?.late_min_minutes}+ min;
             early exit = {data.criteria?.thresholds?.early_min_exclusive}–{data.criteria?.thresholds?.early_max_exclusive} min, Mon–Sat; stayed-late exemption: {data.criteria?.stayed_late_mode};
             full-hours days: lates {data.criteria?.late_full_hours === false ? 'counted' : 'not counted'}, early exits {data.criteria?.shift_fit === 'everyone' ? 'not counted' : data.criteria?.shift_fit === 'habitual' ? 'not counted for habitual early leavers' : 'counted'};
             early-exit rule: {data.criteria?.early_exit_rule === 'option_c' ? 'Option C' : 'warning only'}. Nothing on this page changes salary.

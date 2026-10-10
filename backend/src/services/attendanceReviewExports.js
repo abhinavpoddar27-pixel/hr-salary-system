@@ -52,6 +52,7 @@ function buildWorkbook(result, run = {}) {
     ['Late notice names', (result.noticeLate || []).length], ['Early notice names', (result.noticeEarly || []).length],
     ['Release days (not counted)', (m.release_days || []).join(', ')],
     ['Gate passes recorded', result.gatePassCount],
+    ['Early exits excused by a gate pass', result.gatePassExcused ?? 0],
     [],
     ['Group', `Late % ${m.prev_ym}`, `Late % ${m.ym}`, `Early % ${m.prev_ym}`, `Early % ${m.ym}`, `Time lost % ${m.ym}`],
     ...['Company', 'Contract', 'All'].map((grp) => [grp, g(m.prev_ym, grp, 'late_pct'), g(m.ym, grp, 'late_pct'), g(m.prev_ym, grp, 'early_pct'), g(m.ym, grp, 'early_pct'), g(m.ym, grp, 'time_lost_pct')]),
@@ -204,8 +205,8 @@ function buildDocx(result, run = {}, { now = new Date() } = {}) {
     para('Anyone who believes their record is wrong should meet HR within 3 working days with the reason.', { size: 17, before: 60, after: 0 }),
     ...sign,
     new Paragraph({ children: [new PageBreak()] }),
-    ...noticeHead('Leaving Early', `The following employees left before the end of their shift on ${t.notice_early ?? 3} or more days in ${ML} without a recorded gate pass or short leave.`, [
-      `Leaving more than ${t.early_min_exclusive ?? 15} minutes before shift end without a gate pass or approved short leave is marked as an early exit.`,
+    ...noticeHead('Leaving Early', `The following employees left before the end of their shift on ${t.notice_early ?? 3} or more days in ${ML} without a gate pass covering it.`, [
+      `Leaving more than ${t.early_min_exclusive ?? 15} minutes before shift end, or before the time on your gate pass, is marked as an early exit.`,
       optionC ? 'Early exits are deducted from salary in half-day steps.' : 'Repeated early exits will lead to deduction from salary as per company policy.',
       'If you must leave early, take a gate pass from your in-charge and show it at the gate.',
     ]),
@@ -252,7 +253,7 @@ function buildDocx(result, run = {}, { now = new Date() } = {}) {
     if (i > 0) notes.push(new Paragraph({ children: [new PageBreak()] }));
     const avg = x.early_exits ? Math.round(x.early_min / x.early_exits) : 0;
     notes.push(...head(x, i, `${x.action === 'deduction' ? 'Deduction' : 'Warning'} – leaving before shift end, ${ML}`),
-      para(`Our attendance record shows that in ${ML} you left before the end of your shift on ${x.early_exits} days, with no gate pass or short leave recorded. On average you left ${hm(avg)} early${x.over_1h ? `, and on ${x.over_1h} of these days one hour or more early` : ''}.`),
+      para(`Our attendance record shows that in ${ML} you left before the end of your shift on ${x.early_exits} days without a gate pass covering it. On average you left ${hm(avg)} early${x.over_1h ? `, and on ${x.over_1h} of these days one hour or more early` : ''}.`),
       table(['Month', 'Early-exit days', 'Total time'], [[ML, { v: x.early_exits, align: C }, hm(x.early_min)]], [3000, 2500, 3500], 20),
       x.action === 'deduction'
         ? para([tr('As per company attendance policy, a deduction of '), tr(days(x.deduction_days), { bold: true }), tr(' will be made from your salary.')], { before: 200 })

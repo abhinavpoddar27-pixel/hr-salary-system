@@ -12,6 +12,7 @@
 const express = require('express');
 const router = express.Router();
 const { getDb, logAudit } = require('../database/db');
+const { refreshEarlyExits, safeRefresh } = require('../services/earlyExitDetection');
 
 // ─── Role helpers ─────────────────────────────────────────
 function requireHrOrAdmin(req, res, next) {
@@ -233,7 +234,10 @@ router.post('/', requireHrOrAdmin, (req, res) => {
           : `Gate pass created for ${employee_code} on ${date}`,
         req.user?.username);
 
-      return res.status(201).json({ success: true, id: result.lastInsertRowid, quota_breach: quotaBreach });
+      // A backdated pass must exempt an early exit that is already on record.
+      const earlyExit = safeRefresh('gatePass.create', () => refreshEarlyExits(db, [date]));
+
+      return res.status(201).json({ success: true, id: result.lastInsertRowid, quota_breach: quotaBreach, early_exit_refresh: earlyExit });
     } catch (e) {
       if (e.message?.includes('UNIQUE constraint')) {
         return res.status(409).json({ success: false, error: 'Gate pass already exists for this employee on this date.' });
@@ -372,6 +376,8 @@ router.put('/:id/cancel', requireHrOrAdmin, (req, res) => {
 
     logAudit('short_leaves', req.params.id, 'cancelled', 'active', 'cancelled',
       'short_leave_cancel', `Gate pass cancelled for ${record.employee_code} on ${record.date}`, req.user?.username);
+
+    safeRefresh('gatePass.cancel', () => refreshEarlyExits(db, [record.date]));
 
     return res.json({ success: true, message: 'Gate pass cancelled' });
   } catch (err) {
