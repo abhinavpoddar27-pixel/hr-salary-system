@@ -251,6 +251,44 @@ function detectRedFlags(db, month, year) {
     }
   } catch {}
 
+  // 13–15. Loans (Loans PR-9) — plant payroll only (sales loan exceptions are in
+  // Loans → Reports). Nothing is read unless the loan tables exist and hold a loan.
+  try {
+    const { loansReady } = require('./loans/stage7');
+    if (loansReady(db) && db.prepare('SELECT 1 FROM loans LIMIT 1').get()) {
+      const { loanRedFlagData } = require('./loans/reports');
+      const d = loanRedFlagData(db, month, year);
+      const empOf = db.prepare('SELECT name, department FROM employees WHERE code = ?');
+      const who = (code) => empOf.get(code) || {};
+      // 13. loan_emi_high_vs_net (WARNING): EMI above the policy % of net (net after the loan)
+      for (const r of d.emiHigh) {
+        const e = who(r.employeeCode);
+        flags.push(mkFlag('loan_emi_high_vs_net', 'warning', r.employeeCode, e.name || r.employeeCode, e.department,
+          r.pctOfNet === null
+            ? `Loan EMI ₹${r.loanRecovery} with net salary ₹${r.netSalary}`
+            : `Loan EMI ₹${r.loanRecovery} is ${r.pctOfNet}% of net ₹${r.netSalary} (flag above ${r.pct}%)`,
+          { loanRecovery: r.loanRecovery, netSalary: r.netSalary, pct: r.pct },
+          'Check the borrower can bear the EMI; consider a defer or restructure (Loans)'));
+      }
+      // 14. loan_posted_unborne (WARNING): a posted EMI the re-run pay could not bear
+      for (const r of d.unborne) {
+        const e = who(r.employeeCode);
+        flags.push(mkFlag('loan_posted_unborne', 'warning', r.employeeCode, e.name || r.employeeCode, e.department,
+          `Loan #${r.loanId}: ₹${r.amount} of the posted EMI could not be borne after a Stage 7 re-run — moved to a new last instalment`,
+          { loanId: r.loanId, amount: r.amount, posted: r.posted },
+          'Confirm the payslip and the loan ledger agree; review why pay fell after the loan close'));
+      }
+      // 15. loan_exit_residual (WARNING): an open exit residual (final month M or earlier)
+      for (const r of d.exitResiduals) {
+        const e = who(r.employeeCode);
+        flags.push(mkFlag('loan_exit_residual', 'warning', r.employeeCode, e.name || r.employeeCode, e.department,
+          `Loan #${r.loanId}: ₹${r.residual} left after the final payroll ${r.finalMonth.month}/${r.finalMonth.year}`,
+          { loanId: r.loanId, residual: r.residual, heldPending: r.heldPending, finalMonth: r.finalMonth },
+          'Record a cash receipt or raise a write-off request (Loans)'));
+      }
+    }
+  } catch {}
+
   // Sort: critical first, then warning, then info
   const sev = { critical: 0, warning: 1, info: 2 };
   flags.sort((a, b) => (sev[a.severity] || 9) - (sev[b.severity] || 9));
