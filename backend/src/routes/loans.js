@@ -476,7 +476,10 @@ router.get('/reports/:name', allow(READ_ROLES), handle((req, res) => {
   if (!Object.prototype.hasOwnProperty.call(L.REPORTS, name)) {
     return refuse(res, { code: 'REPORT_NOT_FOUND', message: `unknown report ${name}; one of ${Object.keys(L.REPORTS).join(', ')}` });
   }
-  const opts = { companies: allowedCompanies(req) };
+  // ?company= (the screen's company filter) narrows within the user's companies.
+  const ac = allowedCompanies(req);
+  const one = text(req.query.company);
+  const opts = { companies: one ? (ac ? ac.filter((c) => c === one) : [one]) : ac };
   for (const [prefix, key] of [['from', 'from'], ['to', 'to']]) {
     const m = monthParam(req.query, prefix);
     if (m === false) return refuse(res, { code: 'MONTH_INVALID', message: `${prefix}Month (1–12) and ${prefix}Year are required together` });

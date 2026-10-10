@@ -66,6 +66,13 @@ test('register total = the Loans "Outstanding" tile; restricted user sees only t
   const ali = await api.request('GET', '/api/loans/reports/outstanding', { as: 'finAsian' });
   expect(ali.body.data.rows.map((r) => r.company)).toEqual([ALI]);
   expect(ali.body.data.totals.balance).toBe(6000);
+  // ?company= narrows (the screen's company filter), but never widens a restricted user.
+  const ind = await api.request('GET', `/api/loans/reports/outstanding?company=${encodeURIComponent(IND)}`, { as: 'fin1' });
+  expect(ind.body.data.totals.balance).toBe(9000 + 6000);
+  const stInd = await api.request('GET', `/api/loans/stats?company=${encodeURIComponent(IND)}`, { as: 'fin1' });
+  expect(ind.body.data.totals.balance).toBe(stInd.body.data.outstanding);
+  const widen = await api.request('GET', `/api/loans/reports/outstanding?company=${encodeURIComponent(IND)}`, { as: 'finAsian' });
+  expect(widen.body.data.rows).toEqual([]);
 });
 
 test('every report answers JSON and Excel', async () => {
