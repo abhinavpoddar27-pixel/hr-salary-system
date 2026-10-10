@@ -8,9 +8,9 @@
 4. Continue from NEXT STEP. Update this file after every small step (state, done, next) and commit it.
 
 ## PR STATUS
-- PR-1 feat/statutory-flags — DONE: merged as PR #65 (merge 8b9561d, head a577c73), deployed; production post-merge checks passed 10 Oct 09:06 IST. Owner applies T4 (plant) / T5 (sales) on the live page.
-- PR-2 feat/lwf-deduction — BUILT locally (plant LWF, C1): STEPs 1, 2, 4, 5, 6, 7 + C3 + C4 done; suite 63 / 1036; NOT pushed (coordinator pushes). Plan `docs/statutory-flags/IMPL_PR2.md`. Base 8b9561d + origin/main 66c6a08 merged (4363d64).
-- PR-2b feat/lwf-sales — NOT STARTED. Sales LWF compute/save/rebuild/totals/export/UI (IMPL_PR2 C1). Before the 25 Oct sales close.
+- PR-1 feat/statutory-flags — DONE: merged #65 (8b9561d). T4/T5 applied 10 Oct 10:59 IST (batches 1 and 2): V1 24/6/118, V6 57/0/139, V10 248/270.
+- PR-2 feat/lwf-deduction — DONE: merged #70 (ad96604) 11:11 IST. Plant September recomputed 11:17 IST: LWF 113 / ₹565 / ₹2,260; ESI 23 / ₹2,469.06 / ₹10,699.18; PF 6 / ₹9,762.86. V3/V5/V12 0 rows; V11 only the 5 known March–May rows. Against the snapshot: 113 rows exactly −₹5, 98 identical.
+- PR-2b feat/lwf-sales — PLANNED: IMPL_PR2b.md (base ad96604); live before HR computes October sales (close 25 Oct).
 - PR-3 feat/statutory-filing — NOT STARTED
 
 ## STEPS DONE
@@ -57,11 +57,13 @@
 - PR-2 C4 (simulation) — 62d9318 `test(lwf): PR-2 simulation - synthetic mirror of the plant September run`. docs/statutory-flags/sim/run_pr2.py + seed_pr2.js (PR-1 harness pattern: real server.js on a throwaway DATA_DIR, real logins, real upload preview → apply effective 2026-09, real Stage 6/7 over HTTP, HTTP outputs; no browser). Branch 25/25: N = 8 flagged with pay (incl. held F08, contractor F07) → 40 / 160; Z01 flagged zero-gross → row saved, 0/0; Z02 flagged, no Sep attendance → no row; U01–U05 unflagged 0/0; August re-run after the upload byte-identical; V5 drift / V11 / V12 (SQL read from VERIFY.sql) 0 rows; payslip, register totals (finance login), finance report, register Excel (39), slip Excel (20, held comments on 16/17/18). `--base` on the 66c6a08 worktree: 8/8; dump comparison → every unflagged row identical in every column (Aug + Sep, 6 Sep + 15 Aug rows), flagged Sep rows differ ONLY in total_deductions +5 and net_salary / total_payable / take_home −5.
 - PR-2 FINAL — full jest twice: 63 / 1036, 0 failures (baseline after merging main 60 / 1004; +3 suites / +32 tests). node --check clean on the 7 touched backend files. DO-NOT-MODIFY diff vs 66c6a08: 0 files (dayCalculation, statutoryFlags service/route, stage7, recompute, exportFormats, all PR-2b sales files, scripts, structure writers). UPSERT plant 58/58/58/55, sales 45/45/45/42. CLAUDE.md Section 0 entry prepended. NOT pushed (the coordinator pushes, C5).
 
+- PR-2b PHASE 0 + STEP 0 — branch `feat/lwf-sales` = origin/main ad96604 (`git fetch`; `git log ad96604..origin/main` empty → no drift, no merge). Baseline jest 64 suites / 1047 tests green. Base worktree `<scratch>/base` at ad96604 (backend + frontend node_modules symlinked): `loans-sales-simulation.js --dump` 232 rows, md5 9a42643837639876b6c3c76eeb48afd0 (= the planner's prototype); `loans-stage7-simulation.js --dump` 210 rows, md5 27287253ee75da0df643340a696e8bce. Plan copied to `docs/statutory-flags/IMPL_PR2b.md` (REVIEW CORRECTIONS C1–C5 binding).
+
 ## LAST STEP
-PR-2 built: STEPs 1, 2, 4, 5, 6, 7 + C3 + C4 + CLAUDE.md. Local only, not pushed.
+PR-2b plan (STEP 0).
 
 ## NEXT STEP
-Coordinator: review, push feat/lwf-deduction, owner opens the PR in the GitHub UI and merges; deploy; then the owner computes plant September (VERIFY V4/V5/V11/V12 after Stage 7). PR-2b (sales LWF) before the 25 Oct sales close. Do NOT recompute sales September (D3).
+PR-2b STEP 1 (sales compute + save). Keep: do NOT recompute sales September until D3 is answered.
 
 ## OWNER RULINGS ADDED DURING THE BUILD
 (record date + ruling; BUILD_PLAN §1 holds the original set)
