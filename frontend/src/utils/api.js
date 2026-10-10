@@ -209,6 +209,8 @@ export const getLoanImportBatch = (id, params) => api.get(`/loans/import/batches
 export const confirmLoanImportMatch = (id, rid, data) => api.post(`/loans/import/batches/${id}/rows/${rid}/match`, data)
 export const excludeLoanImportRow = (id, rid, data) => api.post(`/loans/import/batches/${id}/rows/${rid}/exclude`, data)
 export const confirmLoanImportBalance = (id, rid, data) => api.post(`/loans/import/batches/${id}/rows/${rid}/balance`, data)
+export const confirmLoanImportCleanMatches = (id, data = {}) => api.post(`/loans/import/batches/${id}/confirm-clean-matches`, data)
+export const confirmLoanImportFileBalances = (id, data = {}) => api.post(`/loans/import/batches/${id}/confirm-file-balances`, data)
 export const remapLoanImportColumns = (id, data) => api.post(`/loans/import/batches/${id}/columns`, data)
 export const approveLoanImportBatch = (id, data) => api.post(`/loans/import/batches/${id}/approve`, data)
 export const discardLoanImportBatch = (id, data) => api.post(`/loans/import/batches/${id}/discard`, data)

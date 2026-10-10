@@ -51,6 +51,11 @@ REAL logins, on a SCRATCH database. Never point it at a real database.
     reports). After every run an INDEPENDENT hash of every table must equal the one taken
     before (except exactly one new 'loan_dry_run' audit row). Screens go to <screenshot_dir>/pr11/.
 
+  * Pass 8 (import bulk confirm) — finance uploads a 3-row code file (2 clean, 1 close
+    spelling); hr sees "Confirm all clean matches (2)", confirms in the dialog, then does the
+    close-spelling row by hand; finance "Confirm all balances as in the file (3)"; the admin
+    (no bulk button) approves and 3 loans exist. Screens go to <screenshot_dir>/import-bulk/.
+
 Usage:  python3 backend/scripts/loans-ui-browser-check.py [screenshot_dir]
 Needs Python Playwright and Chromium (PLAYWRIGHT_BROWSERS_PATH, e.g. /opt/pw-browsers).
 Uses 5 logins (the login limiter allows 5 per 15 minutes per server start).
@@ -78,6 +83,7 @@ OUT9 = os.path.join(OUT, 'pr9')
 OUT10 = os.path.join(OUT, 'pr10')
 
 OUT11 = os.path.join(OUT, 'pr11')
+OUT_BULK = os.path.join(OUT, 'import-bulk')
 PORT = int(os.environ.get('PORT', '3997'))
 BASE = f'http://127.0.0.1:{PORT}'
 COMPANY = 'Indriyan Beverages Pvt Ltd'
@@ -565,6 +571,7 @@ def run_browser(db_path, admin_loan_id):
         run_import_pass(db_path, hr, admin, fin, viewer)
 
         run_dry_run_pass(db_path, hr, admin)
+        run_bulk_confirm_pass(db_path, hr, admin, fin)
 
         browser.close()
 
@@ -1476,6 +1483,94 @@ def run_dry_run_pass(db_path, hr, admin):
     check('dry run: the pack report says nothing was saved', banners.count() == 1 and 'Nothing was saved' in banners.first.inner_text())
     shot(admin, '03-dry-run-pack', out=OUT11)
     untouched(db_path, before, 'rehearsal pack', runs=1)
+
+
+# ── Pass 8: one-click confirmation of clean import rows ─────────────────────
+IMPORT_BULK_XLSX_JS = r"""
+const [root, out] = process.argv.slice(2);
+const XLSX = require(root + '/backend/node_modules/xlsx');
+const wb = XLSX.utils.book_new();
+XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([
+  ['Punch No', 'Name', 'Outstanding', 'EMI'],
+  ['I301', 'Tarun Bedi', 6000, 2000],
+  ['I302', 'Usha Rani', 4000, 1000],
+  ['I303', 'Vikram Sod', 9000, 3000],
+]), 'Sheet1');
+XLSX.writeFile(wb, out);
+"""
+
+
+def run_bulk_confirm_pass(db_path, hr, admin, fin):
+    print('\n— Pass 8: one-click confirmation of clean import rows —')
+    con = sqlite3.connect(db_path, timeout=10)
+    for code, name in [('I301', 'Tarun Bedi'), ('I302', 'Usha Rani'), ('I303', 'Vikram Sood')]:
+        con.execute("""INSERT INTO employees (code, name, department, company, status, employment_type, is_contractor, gross_salary, date_of_joining)
+                       VALUES (?, ?, 'PRODUCTION', ?, 'Active', 'Permanent', 0, 24000, '2022-01-01')""", (code, name, COMPANY))
+        for m in (6, 7, 8):
+            con.execute("""INSERT INTO salary_computations (employee_code, month, year, company, gross_earned, total_deductions, net_salary)
+                           VALUES (?, ?, 2026, ?, 24000, 0, 24000)""", (code, m, COMPANY))
+    con.commit()
+    con.close()
+    work = os.path.dirname(db_path)
+    js = os.path.join(work, 'import-bulk-xlsx.js')
+    with open(js, 'w') as f:
+        f.write(IMPORT_BULK_XLSX_JS)
+    xlsx = os.path.join(work, 'bulk_loans.xlsx')
+    subprocess.check_call(['node', js, ROOT, xlsx])
+
+    fin.goto(f'{BASE}/loans?tab=import')
+    fin.get_by_test_id('imp-file').set_input_files(xlsx)
+    fin.get_by_test_id('imp-parse-status').wait_for(timeout=15000)
+    fin.get_by_test_id('imp-create').click()
+    check('bulk: batch created by finance (3 rows)', toast(fin, 'created: 3 rows') and visible(fin, 'imp-batch', 15000))
+    check('bulk: finance sees no balance bulk button before HR matches', fin.get_by_test_id('imp-bulk-balance').count() == 0)
+    con = sqlite3.connect(db_path, timeout=10)
+    bid = con.execute('SELECT MAX(id) FROM loan_import_batches').fetchone()[0]
+    con.close()
+
+    hr.goto(f'{BASE}/loans?tab=import')
+    hr.get_by_test_id(f'imp-batch-{bid}').click()
+    check('bulk: hr sees "Confirm all clean matches (2)"', visible(hr, 'imp-bulk-match', 15000)
+          and 'Confirm all clean matches (2)' in hr.get_by_test_id('imp-bulk-match').inner_text(), hr.get_by_test_id('imp-bulk-match').inner_text())
+    hr.get_by_test_id('imp-bulk-match').click()
+    dialog_btn = hr.get_by_role('button', name='Confirm 2', exact=True)
+    check('bulk: a confirm dialog states the count', dialog_btn.count() == 1 and toast(hr, 'Flagged rows are left for you to do one by one'))
+    shot(hr, '01-hr-bulk-dialog', out=OUT_BULK)
+    dialog_btn.click()
+    check('bulk: hr toast "Confirmed 2 · skipped 1"', toast(hr, 'Confirmed 2 · skipped 1'))
+    check('bulk: hr bulk button gone after the run', hr.get_by_test_id('imp-bulk-match').count() == 0 or not hr.get_by_test_id('imp-bulk-match').is_visible())
+    con = sqlite3.connect(db_path, timeout=10)
+    got = con.execute("SELECT row_no, match_status, match_confirmed_by FROM loan_import_rows WHERE batch_id = ? ORDER BY row_no", (bid,)).fetchall()
+    n_audit = con.execute("""SELECT COUNT(*) FROM audit_log WHERE action_type = 'loan_import_match_confirmed' AND remark LIKE ?""", (f'batch #{bid} %',)).fetchone()[0]
+    con.close()
+    check('bulk DB: rows 2–3 confirmed by hr, close-spelling row 4 still pending', got == [(2, 'confirmed', 'hr'), (3, 'confirmed', 'hr'), (4, 'pending', None)], got)
+    check('bulk DB: one per-row audit entry each (2)', n_audit == 2, n_audit)
+    hr.get_by_test_id('imp-confirm-4').click()
+    check('bulk: hr confirms the close-spelling row by hand', toast(hr, 'Row 4: match confirmed'))
+    shot(hr, '02-hr-after-bulk', element='imp-rows', out=OUT_BULK)
+
+    fin.goto(f'{BASE}/loans?tab=import')
+    fin.get_by_test_id(f'imp-batch-{bid}').click()
+    check('bulk: finance sees "Confirm all balances as in the file (3)"', visible(fin, 'imp-bulk-balance', 15000)
+          and '(3)' in fin.get_by_test_id('imp-bulk-balance').inner_text(), fin.get_by_test_id('imp-bulk-balance').inner_text())
+    check('bulk: finance sees no match bulk button', fin.get_by_test_id('imp-bulk-match').count() == 0)
+    fin.get_by_test_id('imp-bulk-balance').click()
+    fin.get_by_role('button', name='Confirm 3', exact=True).click()
+    check('bulk: finance toast "Confirmed 3 · skipped 0"', toast(fin, 'Confirmed 3 · skipped 0'))
+    shot(fin, '03-finance-after-bulk', element='imp-rows', out=OUT_BULK)
+
+    admin.goto(f'{BASE}/loans?tab=import')
+    admin.get_by_test_id(f'imp-batch-{bid}').click()
+    check('bulk: admin has no bulk buttons', visible(admin, 'imp-approve', 15000) and admin.get_by_test_id('imp-bulk').count() == 0)
+    check('bulk: admin approve panel, no blockers, 3 loans', admin.get_by_test_id('imp-blockers').count() == 0
+          and '3 loans' in admin.get_by_test_id('imp-totals').inner_text(), admin.get_by_test_id('imp-totals').inner_text())
+    admin.get_by_test_id('imp-approve-go').click()
+    check('bulk: admin approves → result banner', visible(admin, 'imp-result', 15000))
+    shot(admin, '04-admin-approved', element='imp-batch', out=OUT_BULK)
+    con = sqlite3.connect(db_path, timeout=10)
+    loans = con.execute("SELECT employee_code, status, remaining_balance FROM loans WHERE disbursement_reference LIKE ? ORDER BY employee_code", (f'IMPORT-{bid}-%',)).fetchall()
+    con.close()
+    check('bulk DB: 3 active loans at the file balances', loans == [('I301', 'active', 6000.0), ('I302', 'active', 4000.0), ('I303', 'active', 9000.0)], loans)
 
 
 if __name__ == '__main__':
