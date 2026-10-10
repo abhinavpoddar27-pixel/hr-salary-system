@@ -1081,6 +1081,23 @@ XLSX.writeFile(wb, out);
 '''
 
 
+IMPORT_CODE_XLSX_JS = r'''
+const [root, out] = process.argv.slice(2);
+const XLSX = require(root + '/backend/node_modules/xlsx');
+const wb = XLSX.utils.book_new();
+XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([
+  ['Loan Register'], [],
+  ['Punch No', 'Name', 'Pending Loan Amount ', 'Deduct per month Aug ', 'Op sep'],
+  ['I203', 'Komal Dutt', 12000, 3000, 9000],
+  ['I201', 'Imran Sheikh', 8000, 2000, 6000],
+  ['I202', 'Jaspal Rana', 6000, 0, 6000],
+  [null, null, null, null, null],
+  [null, 'Total', 26000, 5000, 21000],
+]), 'Sheet1');
+XLSX.writeFile(wb, out);
+'''
+
+
 def run_import_pass(db_path, hr, admin, fin, viewer):
     print('\n— Pass 6: import from the accounts Excel (Loans PR-10) —')
     con = sqlite3.connect(db_path, timeout=10)
@@ -1178,6 +1195,33 @@ def run_import_pass(db_path, hr, admin, fin, viewer):
     viewer.get_by_test_id(f'imp-batch-{batch_id}').click()
     viewer.get_by_test_id('imp-batch').wait_for(timeout=15000)
     check('viewer: no confirm / approve controls', viewer.locator('[data-testid^="imp-confirm-"], [data-testid="imp-approve-go"]').count() == 0)
+
+    # PR-10 follow-up: the accounts layout (Punch No, two balance columns, EMI 0, Total row) — synthetic.
+    js2 = os.path.join(work, 'import-code-xlsx.js')
+    with open(js2, 'w') as f:
+        f.write(IMPORT_CODE_XLSX_JS)
+    xlsx2 = os.path.join(work, 'punch_loans.xlsx')
+    subprocess.check_call(['node', js2, ROOT, xlsx2])
+    fin.goto(f'{BASE}/loans?tab=import')
+    fin.get_by_test_id('imp-file').set_input_files(xlsx2)
+    fin.get_by_test_id('imp-parse-status').wait_for(timeout=15000)
+    check('code file: two balance columns → the hint; mapped without a step', visible(fin, 'imp-balance-hint')
+          and 'Check the column mapping' in fin.get_by_test_id('imp-parse-status').inner_text())
+    shot(fin, '07-code-file-mapping', element='imp-upload', out=OUT10)
+    fin.get_by_test_id('imp-create').click()
+    check('code file: batch created by finance', toast(fin, 'created: 3 rows') and visible(fin, 'imp-batch', 15000))
+    check('code file: tiers by code (exact, name differs, EMI missing row)', fin.get_by_test_id('imp-tier-4').inner_text() == 'Code match'
+          and fin.get_by_test_id('imp-tier-5').inner_text() == 'Code · NAME DIFFERS', [fin.get_by_test_id('imp-tier-4').inner_text(), fin.get_by_test_id('imp-tier-5').inner_text()])
+    check('code file: the uploader sees the columns card', visible(fin, 'imp-columns'))
+    fin.get_by_test_id('imp-cols-outstanding').select_option(label='Pending Loan Amount (balance column)')
+    fin.get_by_test_id('imp-cols-apply').click()
+    check('code file: re-choosing the balance column (toast)', toast(fin, 'Columns: "Pending Loan Amount"'))
+    shot(fin, '08-code-file-batch', element='imp-batch', out=OUT10)
+    hr.goto(f'{BASE}/loans?tab=import')
+    hr.locator('[data-testid^="imp-batch-"]').first.click()
+    hr.get_by_test_id('imp-batch').wait_for(timeout=15000)
+    check('code file: hr is not the uploader → no columns card', hr.get_by_test_id('imp-columns').count() == 0)
+    check('code file: a NAME DIFFERS row asks HR for a note', visible(hr, 'imp-match-note-5'))
 
 
 if __name__ == '__main__':

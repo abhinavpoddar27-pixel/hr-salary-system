@@ -10,7 +10,7 @@ import toast from 'react-hot-toast'
 import clsx from 'clsx'
 import {
   downloadLoanImportTemplate, parseLoanImport, createLoanImportBatch, getLoanImportBatches, getLoanImportBatch,
-  confirmLoanImportMatch, excludeLoanImportRow, confirmLoanImportBalance, approveLoanImportBatch, discardLoanImportBatch,
+  confirmLoanImportMatch, excludeLoanImportRow, confirmLoanImportBalance, approveLoanImportBatch, discardLoanImportBatch, remapLoanImportColumns,
   getLoanImportCutoverCheck, downloadLoanImportCutoverCheck, searchLoanBorrowers,
 } from '../../utils/api'
 import { LOAN_COMPANIES, rupees, monthLabel, istDateTime, errText, sameUser } from './loanUi'
@@ -21,6 +21,9 @@ const TIER = {
   close: { label: 'Close spelling', cls: 'bg-orange-100 text-orange-800' },
   none: { label: 'No match', cls: 'bg-red-100 text-red-700' },
   inactive: { label: 'Left', cls: 'bg-slate-200 text-slate-700' },
+  code: { label: 'Code match', cls: 'bg-green-100 text-green-800' },
+  code_close: { label: 'Code · name spelt differently', cls: 'bg-lime-100 text-lime-800' },
+  code_mismatch: { label: 'Code · NAME DIFFERS', cls: 'bg-red-100 text-red-700' },
 }
 const STATE = {
   needs_match: { label: 'Needs HR', cls: 'bg-amber-100 text-amber-800' },
@@ -132,6 +135,12 @@ function UploadPanel({ onCreated }) {
                 ? `Sheet "${parsed.sheetName}", header on row ${parsed.headerRow}: ${parsed.rowCount} rows (${parsed.invalidCount} with a problem). Check the column mapping, then create the batch.`
                 : `Map the columns: ${parsed.error}`}
             </div>
+            {(parsed.balanceColumns || []).length > 1 && (
+              <div className="rounded-lg bg-sky-50 text-sky-800 px-3 py-2 text-xs" data-testid="imp-balance-hint">
+                The file has {parsed.balanceColumns.length} balance columns ({parsed.balanceColumns.map((i) => `"${(parsed.headers.find((h) => h.index === i) || {}).text}"`).join(', ')}).
+                The last one is used as the outstanding by default. Pick the balance <strong>before the cutover month's EMI</strong> — it can also be changed on the batch later (uploader or admin).
+              </div>
+            )}
             <div className="grid sm:grid-cols-2 lg:grid-cols-5 gap-2" data-testid="imp-mapping">
               {(parsed.fields || []).map((f) => (
                 <label key={f.key} className="text-xs">
@@ -145,7 +154,7 @@ function UploadPanel({ onCreated }) {
               ))}
               {mapping.company === undefined && (
                 <label className="text-xs">
-                  <span className="text-slate-500">Company for every row *</span>
+                  <span className="text-slate-500">{mapping.code !== undefined ? 'Company where the employee master has none' : 'Company for every row *'}</span>
                   <select className="select text-xs w-full" value={defaultCompany} onChange={(e) => setDefaultCompany(e.target.value)} data-testid="imp-default-company">
                     <option value="">— choose —</option>
                     {LOAN_COMPANIES.map((c) => <option key={c} value={c}>{c}</option>)}
@@ -254,7 +263,10 @@ function MatchCell({ row, batchId, editable, onDone }) {
           </select>
         )}
       <BorrowerSearch onPick={setOffList} />
-      {offList && <input className="input text-xs w-full" placeholder="Note (required for an employee not proposed)" value={note} onChange={(e) => setNote(e.target.value)} />}
+      {(offList || row.match_tier === 'code_mismatch') && (
+        <input className="input text-xs w-full" data-testid={`imp-match-note-${row.row_no}`}
+          placeholder={offList ? 'Note (required for an employee not proposed)' : 'Note (required — the Excel name differs from the master)'} value={note} onChange={(e) => setNote(e.target.value)} />
+      )}
       <div className="flex gap-1">
         <button className="btn-primary text-[11px] px-2 py-1" disabled={(!sel && !offList) || confirm.isPending} onClick={() => confirm.mutate()} data-testid={`imp-confirm-${row.row_no}`}>Confirm match</button>
         {!excluding && <button className="btn-secondary text-[11px] px-2 py-1" onClick={() => setExcluding(true)} data-testid={`imp-exclude-${row.row_no}`}>Exclude</button>}
@@ -299,7 +311,7 @@ function BalanceCell({ row, batchId, editable, onDone }) {
       </div>
       {excel}
       {changed && <input className="input text-xs w-full" placeholder="Note (required — why it differs from the Excel)" value={note} onChange={(e) => setNote(e.target.value)} data-testid={`imp-note-${row.row_no}`} />}
-      <button className="btn-primary text-[11px] px-2 py-1" disabled={save.isPending || (changed && note.trim().length < 5)} onClick={() => save.mutate()} data-testid={`imp-balance-confirm-${row.row_no}`}>Confirm balance</button>
+      <button className="btn-primary text-[11px] px-2 py-1" disabled={save.isPending || !(Number(out) > 0) || !(Number(emi) > 0) || (changed && note.trim().length < 5)} onClick={() => save.mutate()} data-testid={`imp-balance-confirm-${row.row_no}`}>Confirm balance</button>
     </div>
   )
 }
@@ -413,6 +425,42 @@ function CutoverCheck({ batch }) {
   )
 }
 
+/** Which column is the cutover outstanding / the EMI — re-choosable on a batch in review (uploader or admin). */
+function ColumnsCard({ batch, onDone }) {
+  const cm = batch.column_map || {}
+  const headers = cm.headers || []
+  const balances = cm.balanceColumns || []
+  const [out, setOut] = useState(cm.mapping?.outstanding ?? '')
+  const [emi, setEmi] = useState(cm.mapping?.emi ?? '')
+  const save = useMutation({
+    mutationFn: () => remapLoanImportColumns(batch.id, { outstanding: Number(out), emi: Number(emi) }),
+    onSuccess: (res) => { const r = res.data.data; toast.success(`Columns: "${r.outstandingColumn}" / "${r.emiColumn}" — ${r.rowsChanged} row(s) changed, ${r.confirmationsReset} finance confirmation(s) reset`); onDone() },
+    onError: (err) => toast.error(errText(err, 'Could not change the columns')),
+  })
+  if (!headers.length) return null
+  const changed = Number(out) !== cm.mapping?.outstanding || Number(emi) !== cm.mapping?.emi
+  return (
+    <Card title="Balance and EMI columns" testid="imp-columns">
+      <div className="p-4 flex items-end gap-3 flex-wrap text-xs">
+        <label>
+          <div className="text-slate-500">Cutover outstanding (balance before the cutover month's EMI)</div>
+          <select className="select text-xs w-64" value={out} onChange={(e) => setOut(e.target.value)} data-testid="imp-cols-outstanding">
+            {headers.map((h) => <option key={h.index} value={h.index}>{h.text}{balances.includes(h.index) ? ' (balance column)' : ''}</option>)}
+          </select>
+        </label>
+        <label>
+          <div className="text-slate-500">Monthly EMI</div>
+          <select className="select text-xs w-56" value={emi} onChange={(e) => setEmi(e.target.value)} data-testid="imp-cols-emi">
+            {headers.map((h) => <option key={h.index} value={h.index}>{h.text}</option>)}
+          </select>
+        </label>
+        <button className="btn-secondary text-xs" disabled={!changed || save.isPending} onClick={() => save.mutate()} data-testid="imp-cols-apply">Apply</button>
+        <span className="text-slate-400">Changing a column resets every finance balance confirmation.</span>
+      </div>
+    </Card>
+  )
+}
+
 function BatchView({ id, caps, onBack }) {
   const qc = useQueryClient()
   const [filter, setFilter] = useState('all')
@@ -458,6 +506,8 @@ function BatchView({ id, caps, onBack }) {
         </div>
       )}
 
+      {review && (caps.role === 'admin' || sameUser(b.uploaded_by, caps.username)) && <ColumnsCard batch={b} onDone={refresh} />}
+
       {leftRows.length > 0 && (
         <Card title={`Left — settle outside the app (${leftRows.length})`} testid="imp-left">
           <table className="table-compact w-full text-xs">
@@ -488,14 +538,14 @@ function BatchView({ id, caps, onBack }) {
               return (
                 <tr key={r.id} data-testid={`imp-row-${r.row_no}`} className="align-top">
                   <td>{r.row_no}</td>
-                  <td className="min-w-[180px]"><div className="font-medium">{r.name || '—'}</div>
+                  <td className="min-w-[180px]"><div className="font-medium">{r.code && <span className="font-mono text-slate-500 mr-1">{r.code}</span>}{r.name || '—'}</div>
                     <div className="text-[11px] text-slate-500">{r.company || '—'}{r.department ? ` · ${r.department}` : ''}{r.loan_date ? ` · ${r.loan_date}` : ''}</div>
                     <div className="text-[11px] text-slate-500">{r.loan_type}{r.agreement_ref ? ` · ${r.agreement_ref}` : ''}</div>
                     {(r.parse_errors || []).length > 0 && r.parse_status !== 'ok' && <div className="text-[11px] text-red-600">{r.parse_errors.map((e) => e.message).join('; ')}</div>}
                   </td>
                   <td>{r.match_tier ? <Chip map={TIER} k={r.match_tier} testid={`imp-tier-${r.row_no}`} /> : '—'}</td>
-                  <td><MatchCell row={r} batchId={b.id} editable={review && caps.role === 'hr' && importable} onDone={refresh} /></td>
-                  <td>{r.parse_status === 'duplicate' ? '—' : <BalanceCell row={r} batchId={b.id} editable={review && caps.role === 'finance' && importable} onDone={refresh} />}</td>
+                  <td><MatchCell key={`${r.id}|${r.match_status}|${r.employee_code}`} row={r} batchId={b.id} editable={review && caps.role === 'hr' && importable} onDone={refresh} /></td>
+                  <td>{r.parse_status === 'duplicate' ? '—' : <BalanceCell key={`${r.id}|${r.outstanding}|${r.emi}|${r.balance_status}`} row={r} batchId={b.id} editable={review && caps.role === 'finance' && importable} onDone={refresh} />}</td>
                   <td><Chip map={STATE} k={r.outcome === 'imported' ? 'imported' : r.state} testid={`imp-state-${r.row_no}`} />{r.outLabel && <div className="text-[11px] text-slate-500 mt-0.5">{r.outLabel}</div>}
                     {r.loan_id && <div><a className="text-blue-600" href={`/loans/${r.loan_id}`}>Loan #{r.loan_id}</a></div>}</td>
                   <td className="max-w-[260px]">{(r.warnings || []).map((w) => <div key={w.code} className="text-[11px] text-amber-700" title={w.message}>⚠ {w.message}</div>)}</td>
