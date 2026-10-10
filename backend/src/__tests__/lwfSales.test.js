@@ -278,21 +278,28 @@ describe('Q4 — recompute, UPSERT round trip, carried fields, unflagged control
   });
 });
 
+// ── One real-JWT HTTP API for every route test in this file (getDb() is a per-module
+// singleton, so a second startJwtApi would get the closed handle). Tests isolate by
+// company + month: Q4 route = Indriyan Oct 2026, Q6 = Asian Lakto Nov 2026,
+// O2 / O4 = Indriyan Dec 2026.
+let api;
+beforeAll(() => {
+  api = startJwtApi({ '/api/sales': '../../routes/sales', '/api/loans': '../../routes/loans' },
+    { users: [{ username: 'hr1', role: 'hr' }, { username: 'fin1', role: 'finance' }] });
+});
+afterAll(() => api.close());
+
+async function compute(month, year, company = CO) {
+  const { log, warn, error } = console;
+  console.log = () => {}; console.warn = () => {}; console.error = () => {};
+  try {
+    const r = await api.request('POST', '/api/sales/compute', { as: 'hr1', body: { month, year, company } });
+    if (r.status !== 200) throw new Error(`compute ${r.status} ${r.text}`);
+    return r.body.data;
+  } finally { console.log = log; console.warn = warn; console.error = error; }
+}
+
 describe('Q4 route — POST /api/sales/compute over a paid + NEFT-exported row', () => {
-  let api;
-  beforeAll(() => { api = startJwtApi({ '/api/sales': '../../routes/sales' }, { users: [{ username: 'hr1', role: 'hr' }] }); });
-  afterAll(() => api.close());
-
-  async function compute(month, year) {
-    const { log, warn, error } = console;
-    console.log = () => {}; console.warn = () => {}; console.error = () => {};
-    try {
-      const r = await api.request('POST', '/api/sales/compute', { as: 'hr1', body: { month, year, company: CO } });
-      if (r.status !== 200) throw new Error(`compute ${r.status} ${r.text}`);
-      return r.body.data;
-    } finally { console.log = log; console.warn = warn; console.error = error; }
-  }
-
   test('not blocked: status + stamps kept, net −5, finalizedRecomputeWarnings delta −5', async () => {
     const db = api.db;
     const e = SL.addRep(db, { code: 'QP1' }); // ₹20,000, basic = gross, no PF / ESI
@@ -380,5 +387,99 @@ describe('M1 pin — the plant auto-create cannot meet a flagged master (N8; sal
     expect(rows[0]).toMatchObject({ effective_from: '2025-01-01', lwf_applicable: 0 });
     expect([r.lwf_employee, r.lwf_employer]).toEqual([0, 0]);
     db.close();
+  });
+});
+
+describe('Q6 — HR edit (PUT /api/sales/salary/:id) keeps LWF in the total and in the loan re-plan; register totals', () => {
+  let db;
+  const ALI = SL.ALI;
+  const computeAli = (month, year) => compute(month, year, ALI);
+  const put = async (id, body) => {
+    const { error } = console; console.error = () => {};
+    try { return await api.request('PUT', `/api/sales/salary/${id}`, { as: 'hr1', body }); } finally { console.error = error; }
+  };
+  const flag = (e) => db.prepare('UPDATE sales_salary_structures SET lwf_applicable = 1 WHERE employee_id = ?').run(e.id);
+  const row = (code, month = 11) => SL.salaryRow(db, code, month, 2026, ALI);
+  const ded = (loanId) => db.prepare("SELECT * FROM loan_deductions WHERE loan_id = ? AND month = 11 AND year = 2026 AND payroll = 'sales'").get(loanId);
+  const clean = (code) => {
+    expect(db.prepare(`${SL.SALES_DRIFT_SQL} AND employee_code = ?`).get(code).n).toBe(0);
+    expect(db.prepare(`${SL.SALES_SHORT_SQL} AND employee_code = ?`).get(code).n).toBe(0);
+  };
+
+  beforeAll(async () => {
+    db = api.db;
+    const f1 = SL.addRep(db, { code: 'Q6F', company: ALI, pf: 1, esi: 1 }); flag(f1); // flagged, PF + ESI, no loan
+    SL.addRep(db, { code: 'Q6U', company: ALI, pf: 1, esi: 1 });                    // unflagged, PF + ESI, no loan
+    const f2 = SL.addRep(db, { code: 'Q6L', company: ALI }); flag(f2);              // flagged, with a loan
+    SL.addRep(db, { code: 'Q6P', company: ALI });                                   // unflagged, will be paid
+    SL.setUpload(db, { month: 11, year: 2026, company: ALI, rows: ['Q6F', 'Q6U', 'Q6L', 'Q6P'].map((code) => ({ code, days: 31 })) });
+  });
+
+  test('no-loan flagged row: other 100 → total = PF + ESI + 5 + 100; recompute gives the same row', async () => {
+    const loanId = SL.salesLoan(db, { code: 'Q6L', company: ALI });
+    await computeAli(11, 2026);
+    expect(ded(loanId)).toMatchObject({ amount: 3334, state: 'provisional' });
+    const r0 = row('Q6F');
+    expect([r0.lwf_employee, r0.lwf_employer]).toEqual([5, 20]);
+    const r = await put(r0.id, { other_deductions: 100 });
+    expect(r.status).toBe(200);
+    const fixed = r0.pf_employee + r0.esi_employee + r0.professional_tax + r0.tds + r0.advance_recovery;
+    expect(r.body.data.total_deductions).toBeCloseTo(fixed + 5 + 100, 2);
+    expect(r.body.data.net_salary).toBeCloseTo(r0.gross_earned - (fixed + 5 + 100), 2);
+    expect(r.body.data.loan_recovery).toBe(0);
+    clean('Q6F');
+    const edited = S.strip(row('Q6F'));
+    await computeAli(11, 2026);
+    expect(S.strip(row('Q6F'))).toEqual(edited);
+  });
+
+  test('with a loan: other 9000 → loan 995 (LWF ranks above it), total 10000; compute → same row + ledger (K30)', async () => {
+    const loanId = db.prepare("SELECT id FROM loans WHERE employee_code = 'Q6L'").get().id;
+    const r0 = row('Q6L');
+    expect(r0).toMatchObject({ gross_earned: 20000, lwf_employee: 5, loan_recovery: 3334, total_deductions: 3339, net_salary: 16661 });
+    const r = await put(r0.id, { other_deductions: 9000 });
+    expect(r.status).toBe(200);
+    expect(r.body.data).toMatchObject({ other_deductions: 9000, lwf_employee: 5, loan_recovery: 995, total_deductions: 10000, net_salary: 10000 });
+    expect(ded(loanId)).toMatchObject({ amount: 995, state: 'provisional' });
+    clean('Q6L');
+    const edited = S.strip(row('Q6L'));
+    // the ledger row itself, minus which run last touched it (run_id) and its timestamps
+    const ledgerOf = () => { const { run_id: _r, created_at: _c, updated_at: _u, ...rest } = ded(loanId); return rest; };
+    const ledger = ledgerOf();
+    const events = db.prepare('SELECT COUNT(*) AS n FROM loan_events WHERE loan_id = ?').get(loanId).n;
+    await computeAli(11, 2026);
+    expect(S.strip(row('Q6L'))).toEqual(edited);
+    expect(ledgerOf()).toEqual(ledger);
+    expect(db.prepare('SELECT COUNT(*) AS n FROM loan_events WHERE loan_id = ?').get(loanId).n).toBe(events);
+    expect(SL.L.reconcileLoan(db, loanId).ok).toBe(true);
+  });
+
+  test('unflagged edit = the old formula (no LWF term)', async () => {
+    const r0 = row('Q6U');
+    expect([r0.lwf_employee, r0.lwf_employer]).toEqual([0, 0]);
+    const r = await put(r0.id, { other_deductions: 100 });
+    const fixed = r0.pf_employee + r0.esi_employee + r0.professional_tax + r0.tds + r0.advance_recovery;
+    expect(r.body.data.total_deductions).toBeCloseTo(fixed + 100, 2);
+    expect(r.body.data.net_salary).toBeCloseTo(r0.gross_earned - fixed - 100, 2);
+    clean('Q6U');
+  });
+
+  test('a paid row cannot be edited → 409 (N3), nothing written', async () => {
+    const r0 = row('Q6P');
+    db.prepare("UPDATE sales_salary_computations SET status = 'paid', neft_exported_at = '2026-11-28 09:00:00' WHERE id = ?").run(r0.id);
+    const before = row('Q6P');
+    const r = await put(r0.id, { other_deductions: 100 });
+    expect(r.status).toBe(409);
+    expect(row('Q6P')).toEqual(before);
+  });
+
+  test('GET /salary-register totals carry LWF: 5 × N / 20 × N', async () => {
+    const reg = await api.request('GET', `/api/sales/salary-register?month=11&year=2026&company=${encodeURIComponent(ALI)}`, { as: 'hr1' });
+    expect(reg.status).toBe(200);
+    const n = reg.body.data.rows.filter((x) => x.lwf_employee > 0).length;
+    expect(n).toBe(2);
+    expect([reg.body.data.totals.lwf_employee, reg.body.data.totals.lwf_employer]).toEqual([5 * n, 20 * n]);
+    const sumDed = Math.round(reg.body.data.rows.reduce((s, x) => s + x.total_deductions, 0) * 100) / 100;
+    expect(reg.body.data.totals.total_deductions).toBe(sumDed);
   });
 });
