@@ -1,3 +1,32 @@
+## Last Session — 2026-10-10 (Statutory flags PR-2b: sales LWF)
+**Sales LWF ₹5 employee / ₹20 employer per month. Branch `feat/lwf-sales` on origin/main ad96604 (no drift),
+NOT pushed, NOT merged.** Plan: `docs/statutory-flags/IMPL_PR2b.md` (REVIEW CORRECTIONS C1–C5 binding); log + decision D-9:
+`docs/statutory-flags/PROGRESS.md`. No schema change (columns + policy keys came with PR-2). Plant untouched.
+- **Rule (R7):** charged when the in-force sales structure (the row `getLatestStructure` picks, fallback included) has
+  `lwf_applicable = 1` AND `gross_earned > 0`. Held rows charged. Unflagged → 0/0, nothing else moves. Amounts via
+  `getPolicyNumber` (`'0'` → 0; garbage / negative / missing → 5/20, same as plant).
+- **Compute (`salesSalaryComputation.js`):** LWF after the ESI block; `lwf_employee` in the loan salary object (headroom.js
+  already lists it); `+ lwfEmployee` in total_deductions; identity `net = gross_earned + diwali_bonus + incentive − total`
+  unchanged (₹0 floor still only with a loan). UPSERT 45/45/45/42 → 47/47/47/44 (LWF appended last in all four lists).
+- **`sales.js` (3 hunks only):** `/salary-register` totals lwf_employee/lwf_employer; PUT `/salary/:id` loan salary object
+  + rebuild both carry `existing.lwf_employee`. **Outputs:** payslip line 'LWF (Employee)' + API-only `lwfEmployer` (E6);
+  sales register Excel 38 → 39 ('LWF Employee' at index 25, `!cols` 39, JSON totals); register UI LWF column + tfoot
+  (header = body = tfoot = 21); dist rebuilt.
+- **Fragile:** (1) sales LWF lives in FOUR places — compute total, compute loan object, PUT rebuild, PUT loan object (N1);
+  dropping the PUT loan term makes an edit re-plan the loan ₹5 above the cap (1000 vs 995, total 10005). (2) Any sales
+  compute rewrites every row of the active upload incl. finalized / paid / NEFT-exported ones (N2, N4): a September re-run
+  needs D3 first. (3) `paid` is terminal — no Other Deductions on paid rows (N3). (4) A tiny-gross flagged row with no
+  loan can go negative by ₹5 (N5, pinned by a test). (5) VERIFY V13 (sales components) / V14 (sales LWF rule, literal
+  October) are new; V12 now reads the policy amounts.
+- **Verified:** jest 64/1047 → 65/1076, two clean runs; lwfSales.test.js 29 (15 fail on the old compute file, 3 of 5 Q6 on
+  the old sales.js, O2/O4 3/3 on the old files). C3: `loans-sales-simulation.js --dump` 232 rows and
+  `loans-stage7-simulation.js --dump` 210 rows md5-identical on an ad96604 worktree and the branch. C4
+  `docs/statutory-flags/sim/run_pr2b.py`: 54/54 (6 flagged → 30/120 Sep + Oct, Aug byte-identical, 6A shape: paid + NEFT
+  row kept, warning −5, holds charged, V8/V13/V14 0 rows); `--base` 23/23; `--compare`: 18 unflagged rows identical,
+  12 flagged rows differ only by LWF. Clean dist rebuild byte-identical. Payslip HTML check (scratch copy) 107/107.
+- **Not tested:** Railway; production data (run V13 on production BEFORE deploy as the baseline); a browser pass of the
+  register column (bundle grep only). Do NOT recompute sales September until D3 is answered.
+
 ## Last Session — 2026-10-10 (Statutory flags PR-2: plant LWF)
 **Plant LWF ₹5 employee / ₹20 employer per month. Branch `feat/lwf-deduction` (origin/main 66c6a08 merged in),
 NOT pushed, NOT merged.** Plan: `docs/statutory-flags/IMPL_PR2.md` (REVIEW CORRECTIONS C1–C5 binding); log + decisions D-7/D-8:
