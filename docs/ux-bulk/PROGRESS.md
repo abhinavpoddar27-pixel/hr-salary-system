@@ -135,6 +135,7 @@ Status values: `todo` · `plan` (Phase 0 written, waiting for go) · `build` · 
 | N-4 | P1-02 | Reports → Salary Register: held rows not marked; LWF/loan only inside Ded. | P9 or with P1-02 if owner says |
 
 ## Session log (newest first; one line per meaningful event)
+- 10 Oct 2026 ~20:45 IST — PR #83 had a conflict with main (#82 attendance-review merged): CLAUDE.md only, both entries kept; dist rebuild identical; jest 83/1360 green; pushed 8eba920; GitHub CI all green; Railway PR-preview status 'Deployment cancelled' (preview infra, not code) — noted on the PR.
 - 10 Oct 2026 ~20:50 IST — P1-03 Phase 0 PLAN @9d1a332: generateSalesNEFT excludes paid + new preview totals; modal always shown; sales.js unchanged; Jul–Sep files would be byte-identical (0 paid rows).
 - 10 Oct 2026 20:29 IST — Owner: "why do I need to ask every time" → planner now opens PRs itself (via REST) and sends the link; P1-02 PR #83 opened. P1-03 started with Q12=C default.
 - 10 Oct 2026 ~20:45 IST — P1-03 diagnostics: Sentry 0; sales Jul–Sep 0 finalized rows (Jul 224 computed/10 reviewed, Aug 247/2, Sep 215/0; holds 9/6/15); NEFT exported for 189 Jul + 187 Sep rows that were NOT finalized; last finalize 2 Jun (231). 7 NEFT downloads ever. Plan's finalized-only rule conflicts with live workflow → asked owner (Q12) before writing the prompt.
