@@ -4,6 +4,14 @@ const { getDb } = require('../database/db');
 const { requireHrOrAdmin, requireFinanceOrAdmin } = require('../middleware/roles');
 const { structureForDate, structureDatedAfter } = require('../services/statutoryFlags');
 
+/** 'YYYY-MM-DD' with month 01–12 and a day that exists in that month (leap years included). */
+function isCalendarDate(v) {
+  const m = /^(\d{4})-(0[1-9]|1[0-2])-(\d{2})$/.exec(String(v));
+  if (!m) return false;
+  const day = Number(m[3]);
+  return day >= 1 && day <= new Date(Date.UTC(Number(m[1]), Number(m[2]), 0)).getUTCDate();
+}
+
 // Statutory flags PR-1 (R10): PF / ESI / LWF change only through the statutory
 // upload. A salary change request never carries them; approval copies them
 // (with pt, the percent columns and pf_wage_ceiling) from the structure in
@@ -152,8 +160,10 @@ router.put('/approve/:id', requireFinanceOrAdmin, (req, res) => {
   if (!emp) return res.status(404).json({ success: false, error: 'Employee not found' });
 
   const effectiveFrom = req.body.effectiveFrom || new Date().toISOString().split('T')[0];
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(String(effectiveFrom))) {
-    return res.status(400).json({ success: false, error: 'effectiveFrom must be YYYY-MM-DD' });
+  // A real calendar date only (review fix 5): a bogus later-dated row such as
+  // '2026-13-01' would block every honest approval after it (STRUCTURE_DATED_LATER).
+  if (!isCalendarDate(effectiveFrom)) {
+    return res.status(400).json({ success: false, error: 'effectiveFrom must be a real date, YYYY-MM-DD (e.g. 2026-09-01)' });
   }
 
   // Resolve gross from newStructure — prefer explicit gross_salary field,

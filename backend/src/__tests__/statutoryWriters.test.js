@@ -474,6 +474,64 @@ describe('T11 — sales gross edit after the upload: back-dated refused, same-da
   });
 });
 
+describe('review fix 5 — a structure date from a request must be a real date', () => {
+  test('plant approve: 2026-02-31, 2026-13-01, 2026-09-1 → 400, nothing written (request still Pending); 2028-02-29 accepted', async () => {
+    const e = S.plant(db, { code: 'W140', gross_salary: 15000 });
+    S.plantStructure(db, e, '2025-01-01', { gross_salary: 15000 });
+    const rows = S.plantRows(db, e); const mst = S.master(db, e); const audits = auditCount('W140');
+    const id = pendingRequest('W140', NEW_SPLIT);
+    for (const bad of ['2026-02-31', '2026-13-01', '2026-09-1', '2026-00-10', '2026-09-00', '2027-02-29']) {
+      const r = await approve(id, bad);
+      expect({ bad, status: r.status }).toEqual({ bad, status: 400 });
+      expect(r.body.error).toMatch(/real date/);
+    }
+    expect(S.plantRows(db, e)).toEqual(rows);
+    expect(S.master(db, e)).toEqual(mst);
+    expect(auditCount('W140')).toBe(audits);
+    expect(db.prepare('SELECT status FROM salary_change_requests WHERE id = ?').get(id).status).toBe('Pending');
+    const ok = await approve(id, '2028-02-29');
+    expect(ok.status).toBe(200);
+    expect(S.plantRows(db, e).find((x) => x.effective_from === '2028-02-29')).toMatchObject({ gross_salary: 18000, basic: 12000 });
+  });
+
+  test('sales PUT gross: effective_from 2026-13, 2026-00, 2026-5 → 400, nothing written', async () => {
+    const e = S.salesEmp(db, { code: 'Z240', gross_salary: 18000 });
+    S.salesStructure(db, e, '2025-01', { gross_salary: 18000 });
+    const rows = S.salesRows(db, e); const mst = S.salesMaster(db, e); const audits = salesAudits('Z240');
+    for (const bad of ['2026-13', '2026-00', '2026-5']) {
+      const r = await putGross('Z240', 19000, bad);
+      expect({ bad, status: r.status }).toEqual({ bad, status: 400 });
+    }
+    expect(S.salesRows(db, e)).toEqual(rows);
+    expect(S.salesMaster(db, e)).toEqual(mst);
+    expect(salesAudits('Z240')).toBe(audits);
+    expect((await putGross('Z240', 19000, '2026-12')).status).toBe(200);
+  });
+
+  test('sales POST /structures: 2026-13, 2026-00, 2026-5 → 400, nothing written', async () => {
+    const e = S.salesEmp(db, { code: 'Z241' });
+    S.salesStructure(db, e, '2025-01');
+    const rows = S.salesRows(db, e);
+    for (const bad of ['2026-13', '2026-00', '2026-5']) {
+      const r = await api.request('POST', `/api/sales/employees/Z241/structures?company=${co}`, { as: 'hr1', body: { effective_from: bad, basic: 1, gross_salary: 1 } });
+      expect({ bad, status: r.status }).toEqual({ bad, status: 400 });
+    }
+    expect(S.salesRows(db, e)).toEqual(rows);
+  });
+
+  test('sales POST /employees (create): doj with month 13 / 00 → 400, no employee or structure written', async () => {
+    const n = () => db.prepare('SELECT (SELECT COUNT(*) FROM sales_employees) e, (SELECT COUNT(*) FROM sales_salary_structures) s').get();
+    const before = n();
+    for (const doj of ['2026-13-01', '2026-00-15']) {
+      const r = await api.request('POST', '/api/sales/employees', { as: 'hr1', body: {
+        name: 'BAD DOJ', company: S.COMPANY, bank_name: 'B', account_no: '9', ifsc: 'X', gross_salary: 15000, doj,
+      } });
+      expect({ doj, status: r.status }).toEqual({ doj, status: 400 });
+    }
+    expect(n()).toEqual(before);
+  });
+});
+
 describe('T18 (C3) — POST /sales/employees/:code/structures (the dynamic-insert exemption)', () => {
   test('no later row: body flags pf=1 esi=0 at 2026-05 → stored flags = in force at 2026-05 (esi on from 2025-01), not the body; ignoredFields', async () => {
     const e = S.salesEmp(db, { code: 'Z220' });

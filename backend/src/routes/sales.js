@@ -1113,6 +1113,8 @@ const UPDATABLE_FIELDS = [
 // POST /employees (create) may still set them on the new employee (§4.4).
 const STATUTORY_FLAG_FIELDS = ['pf_applicable', 'esi_applicable', 'lwf_applicable'];
 const { carryFlags, structureDatedAfter } = require('../services/statutoryFlags');
+// A structure row's effective_from taken from a request: YYYY-MM, month 01–12 only.
+const SALES_MONTH_RE = /^\d{4}-(0[1-9]|1[0-2])$/;
 
 const VALID_STATUSES = ['Active', 'Inactive', 'Left', 'Exited'];
 
@@ -1338,6 +1340,12 @@ router.post('/employees', (req, res) => {
     return res.status(400).json({ success: false, error: `Invalid status. Must be one of: ${VALID_STATUSES.join(', ')}` });
   }
 
+  // The auto-created structure row is dated doj's YYYY-MM (below); a bogus month
+  // (e.g. '2026-13') would block every later honest edit (review fix 5).
+  if (body.doj && String(body.doj).trim() && !SALES_MONTH_RE.test(String(body.doj).trim().substring(0, 7))) {
+    return res.status(400).json({ success: false, error: 'doj must be YYYY-MM-DD with month 01–12 (it dates the salary structure)' });
+  }
+
   const explicitCode = body.code && String(body.code).trim() !== ''
     ? String(body.code).trim()
     : null;
@@ -1508,10 +1516,12 @@ router.put('/employees/:code', (req, res) => {
   if (body.effective_from !== undefined && body.effective_from !== null
       && String(body.effective_from).trim() !== '') {
     const v = String(body.effective_from).trim();
-    if (!/^\d{4}-\d{2}$/.test(v)) {
+    // Month 01–12 only (review fix 5): a bogus later-dated row such as
+    // '2026-13' would block every honest edit after it (STRUCTURE_DATED_LATER).
+    if (!SALES_MONTH_RE.test(v)) {
       return res.status(400).json({
         success: false,
-        error: 'effective_from must be zero-padded YYYY-MM (e.g. 2026-05)',
+        error: 'effective_from must be zero-padded YYYY-MM with month 01–12 (e.g. 2026-05)',
       });
     }
     effectiveFrom = v;
@@ -1658,8 +1668,8 @@ router.post('/employees/:code/structures', (req, res) => {
     return res.status(400).json({ success: false, error: 'effective_from is required (YYYY-MM)' });
   }
   const effectiveFrom = String(body.effective_from).trim();
-  if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(effectiveFrom)) {
-    return res.status(400).json({ success: false, error: 'effective_from must be zero-padded YYYY-MM (e.g. 2026-05)' });
+  if (!SALES_MONTH_RE.test(effectiveFrom)) {
+    return res.status(400).json({ success: false, error: 'effective_from must be zero-padded YYYY-MM with month 01–12 (e.g. 2026-05)' });
   }
 
   // Statutory flags PR-1 (R10): body flags are ignored; the new row carries
