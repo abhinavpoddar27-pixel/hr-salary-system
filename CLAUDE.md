@@ -18,6 +18,28 @@
 - **Not tested:** Railway; real production data; Safari/Firefox.
 - **Found, not fixed:** N-1 Audit Trail reads `created_at` (column is `changed_at`) and ignores month/year; N-2 PF/ESI Statement
   ignore `company`; N-3 Bank Transfer Sheet total includes held salaries; N-4 held rows unmarked / LWF + loan not separate.
+## Last Session — 2026-10-10 (Attendance Review PR-1: engine + admin API, backend only)
+**Branch `feat/attendance-review-engine` (on `docs/attendance-review-handoff`), pushed, PR NOT opened.** Read `docs/attendance-review/PROGRESS.md` first.
+- **What:** `services/attendanceReviewService.js` (read-only monthly late/early review engine, every threshold in config),
+  `routes/attendanceReview.js` at `/api/analytics/attendance-review` (admin only: preview, config versions, draft/final runs),
+  `server.js` +1 mount line, `schema.js` +2 tables (`attendance_review_config`, `attendance_review_runs`), no seed rows.
+- **Rule (D2 Option 2):** release days excluded from early exits everywhere; selected = late-regular ∪ early-regular ∪ double;
+  improved = fell 40%+; early-regular/double need ≥ 0.9 workdays lost; per-run admin overrides with reason.
+- **Fragile:** repo is PUBLIC — exclusion codes are admin config rows only. Re-measure `left_late` mode for a re-measured person
+  is an owner decision (fixture used 'off'). Engine never writes payroll tables (PR-4 write-back blocked on the day-calc bug).
+- **Verified:** jest 83/1360; live server.js simulation 16/16; Sep acceptance via SQL Console PASS (17/14/12.5; notices exact);
+  payroll checks = the 3 known Aug errors; salary drift unchanged. **Not tested:** Railway; frontend (PR-2).
+
+## Last Session — 2026-10-10 (Attendance Review: monthly late/early report → Analytics tab, DESIGN ONLY)
+**Branch `docs/attendance-review-handoff` (docs only), NOT merged. No app code changed.** Read `docs/attendance-review/HANDOFF_attendance_review_10Oct2026.md` first.
+- **Done by hand for Sep 2026:** late coming / early exit / double-defaulter review vs Aug (company late 27.7% → 14.4%; early
+  exits 23.3% → 18.7%; contract early exits got WORSE 16.0% → 19.1%). Rules locked in `docs/attendance-review/RUNBOOK.md`.
+- **Next:** build an admin-only Analytics → "Attendance Review" tab (`BUILD_PLAN.md`: PR-1 engine + 2 config/run tables,
+  PR-2 tab, PR-3 xlsx/docx exports, PR-4 write-back gated). Start with `PROMPT_PLAN.md` (Phase 0, plan only).
+- **Fragile:** repo is PUBLIC — named exclusions + the Sep acceptance fixture are in the private Claude Project
+  (`claude/attendance-review/`), and in the app must be admin-entered config rows, never source/seeds. Day calc applies HR
+  late days without finance approval (3 Aug cases) — no write-back until fixed. `short_leaves` has 0 rows ever.
+- **Not tested:** nothing built. Reference builders were sanitised (config-driven) and only syntax-checked.
 
 ## Last Session — 2026-10-10 (P1-01: Finance Audit Readiness cards did nothing on click)
 **Branch `fix/finance-audit-readiness-nav`, NOT merged.** Frontend only (`pages/FinanceAudit.jsx`, 4 lines). Plan + log:
