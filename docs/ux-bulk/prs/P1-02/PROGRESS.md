@@ -4,7 +4,7 @@
 - Branch: `fix/salary-register-report-fields` (base origin/main 96ee482). Never push to main; no PR open/merge.
 - Spec: `docs/ux-bulk/prs/P1-02/PROMPT.md`. Plan: `docs/ux-bulk/prs/P1-02/PLAN.md`.
 - Current phase: **Phase 1 build** (owner "go" 10 Oct 2026 20:17 IST).
-- Next step is #3 jest before/after. Done steps are not to be redone;
+- Next step is #4 check script written. Done steps are not to be redone;
   continue from the first step whose status is not `done`.
 - Another builder uses worktree /home/claude/wt-p1-03 — never touch it, never remove worktrees, never checkout another
   branch here. Own server port 3101.
@@ -17,7 +17,7 @@
 | 0 | Phase 0 plan + progress | done | 55337b2 |
 | 1 | Source edit (4 keys, PT column out, colSpan 11→10, CSV map) | done | Reports.jsx +10/−14 (4 keys, PT th+td out, colSpan 11→10 ×2, CSV 15→12 keys); 1e8e4e4 |
 | 2 | dist rebuild (own commit) | done | build clean 23 s; Reports chunk has net_salary/gross_earned, no total_earned/earned_basic/professional_tax (employee_pf ×5 = PF Statement block, aliased, correct); f4683dc |
-| 3 | jest before/after | pending | |
+| 3 | jest before/after | done | before (96ee482 worktree /tmp/p102-main) 81 suites / 1332 pass; after (branch) 81 / 1332 pass; 0 red (no backend change) |
 | 4 | check script written | pending | |
 | 5 | script on branch dist | pending | |
 | 6 | `--base` on origin/main dist (worktree /tmp) | pending | |
