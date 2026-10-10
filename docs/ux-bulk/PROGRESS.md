@@ -9,7 +9,7 @@
 Programme:   UI/UX improvement + bulk input, HR Salary System (Indriyan / Asian Lakto)
 Base:        origin/main a5aec9a (10 Oct 2026). Re-check: git fetch origin; git log -1 origin/main
 Plan:        docs/ux-bulk/MASTER_PLAN.md (§5.2 = PR order, §6 = specs, §7 = bulk design, §14 = open questions)
-Current PR:  P1-01 — phase `pushed` @1e8363b (owner: open PR in GitHub UI + merge, then post-deploy check). Was: `build` (go 10 Oct 19:04 IST incl. /finance-verify → /finance-verification link fix). Builder progress: docs/ux-bulk/prs/P1-01/PROGRESS.md on fix/finance-audit-readiness-nav
+Current PR:  P1-01 merged #81 @96ee482 (10 Oct 19:24 IST) — awaiting owner post-deploy check → `verified`. Next: P1-02 Phase 0 (Salary Register ₹0)
 Asked, not answered: Q1 Q2 Q3 (P3-01/P5-02), Q4 (P1-04) — re-ask before those PRs
 Open Qs:     Q1 Q2 (needed by P3-01) · Q4 (P1-04) · Q5 (P1-07) · Q6 (P1-23) · Q10 (one-PR rule) — ask when the PR needs them
 Roles:       planner = new chat; builder = Claude Code agent session reading prs/<PR-ID>/PROMPT.md; Abhinav says "go" and merges in GitHub UI
@@ -55,7 +55,7 @@ Status values: `todo` · `plan` (Phase 0 written, waiting for go) · `build` · 
 | P0-1 | Owner CP-10 browser check of #78 | todo | — | — | — | — | owner |
 | P0-2 | Merge docs PRs (wide-layout-cp9, attendance-review-handoff, ux-bulk-master-plan) | todo | — | — | — | — | owner |
 | P0-3 | Triage 6 `new` bug reports | todo | — | — | — | — | owner |
-| P1-01 | Finance Audit Readiness click crash | pushed | fix/finance-audit-readiness-nav | — | — | — | Phase 0 done; go 10 Oct 19:04 incl. held-card link fix to /finance-verification (owner OK) |
+| P1-01 | Finance Audit Readiness click crash | merged | fix/finance-audit-readiness-nav | #81 | 96ee482 | pending owner check | Phase 0 done; go 10 Oct 19:04 incl. held-card link fix to /finance-verification (owner OK) |
 | P1-02 | Salary Register ₹0 | todo | | | | | |
 | P1-03 | Sales NEFT unfinalised rows + confirm | todo | | | | | |
 | P1-04 | Stage 6 company-scope guard | todo | | | | | Q4 |
@@ -124,6 +124,7 @@ Status values: `todo` · `plan` (Phase 0 written, waiting for go) · `build` · 
 ---
 
 ## Session log (newest first; one line per meaningful event)
+- 10 Oct 2026 19:34 IST — P1-01 merged by owner (#81, 96ee482). Post-deploy check sent; P1-02 diagnostics started.
 - 10 Oct 2026 ~19:30 IST — P1-01 built + pushed @1e8363b: 4 lines in FinanceAudit.jsx + held-card link; check script 31/31 (planner re-ran independently: 31/31), origin/main 5/5 shows the crash; jest 81/1332 green before+after. Low/non-money → no independent review. Next: P1-02 Phase 0 after owner merges or says continue.
 - 10 Oct 2026 19:04 IST — Owner "go" on P1-01 (with the held-card link fix). Builder resumed for build → verify → push. Q1–Q4 asked, no answer yet.
 - 10 Oct 2026 ~19:30 IST — Planner session start: origin/main a5aec9a; 3 docs branches NOT merged and have no PR open; push access OK after add_repo; open PRs #59 (leave), #42 (server.js), #8 (stale Apr, touches salaryComputation.js — close?). No collision with FinanceAudit.jsx. P1-01 diagnostics (Sentry 0 — frontend not reported; readiness 821 calls/90d; 265 Aug + 206 Sep unapproved manual flags). PROMPT.md 34/35 → builder Phase 0 → PLAN.md @619e28d.
