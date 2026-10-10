@@ -750,5 +750,6 @@ export const attendanceReviewRuns = () => api.get(`${AR}/runs`, { headers: arFre
 export const attendanceReviewRun = (id) => api.get(`${AR}/runs/${id}`, { headers: arFresh })
 export const attendanceReviewGenerate = (body) => api.post(`${AR}/runs`, body)
 export const attendanceReviewFinalise = (id) => api.put(`${AR}/runs/${id}/finalise`)
+export const attendanceReviewExport = (id, kind) => api.get(`${AR}/runs/${id}/export.${kind}`, { responseType: 'blob', headers: arFresh })
 
 export default api

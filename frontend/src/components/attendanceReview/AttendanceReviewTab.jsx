@@ -5,7 +5,7 @@ import toast from 'react-hot-toast'
 import clsx from 'clsx'
 import {
   attendanceReviewPreview, attendanceReviewRuns, attendanceReviewRun,
-  attendanceReviewGenerate, attendanceReviewFinalise,
+  attendanceReviewGenerate, attendanceReviewFinalise, attendanceReviewExport,
 } from '../../utils/api'
 import AttendanceReviewConfig from './AttendanceReviewConfig'
 
@@ -215,6 +215,18 @@ export default function AttendanceReviewTab({ selectedMonth, selectedYear }) {
     onSuccess: () => { toast.success('Review finalised and locked'); qc.invalidateQueries({ queryKey: ['ar-runs'] }) },
   })
 
+  const [downloading, setDownloading] = useState(null)
+  const download = async (kind) => {
+    setDownloading(kind)
+    try {
+      const res = await attendanceReviewExport(runMeta.id, kind)
+      const name = /filename="([^"]+)"/.exec(res.headers?.['content-disposition'] || '')?.[1] || `attendance-review.${kind}`
+      const url = URL.createObjectURL(res.data)
+      const a = document.createElement('a'); a.href = url; a.download = name; document.body.appendChild(a); a.click(); a.remove()
+      setTimeout(() => URL.revokeObjectURL(url), 1000)
+    } catch { /* the API layer already showed the error */ } finally { setDownloading(null) }
+  }
+
   const detected = preview?.releaseDaysDetected || run?.result?.releaseDaysDetected || []
   const dayOptions = useMemo(() => [...new Set([...detected.map((d) => d.date), ...previewDays])].sort(), [detected, previewDays])
   const toggleDay = (d) => setReleaseDays((cur) => { const s = new Set(cur || []); s.has(d) ? s.delete(d) : s.add(d); return [...s].sort() })
@@ -247,6 +259,18 @@ export default function AttendanceReviewTab({ selectedMonth, selectedYear }) {
             <button type="button" className="btn-primary" disabled={gen.isPending || loading} onClick={() => gen.mutate()}>
               {gen.isPending ? 'Working…' : runMeta ? 'Regenerate draft' : 'Generate draft'}
             </button>
+          )}
+          {runMeta && showingStored && (
+            <>
+              <button type="button" className="btn-secondary" disabled={!!downloading} onClick={() => download('xlsx')}
+                title="Workbook of the saved review (all lists, departments, payroll checks, rules used)">
+                {downloading === 'xlsx' ? 'Preparing…' : 'Download Excel'}
+              </button>
+              <button type="button" className="btn-secondary" disabled={!!downloading} onClick={() => download('docx')}
+                title="Action list, notice-board lists and one note per person, ready to print">
+                {downloading === 'docx' ? 'Preparing…' : `Download Word notes${isFinal ? '' : ' (draft)'}`}
+              </button>
+            </>
           )}
           {runMeta && !isFinal && (
             <button type="button" className="btn-secondary border-emerald-300 text-emerald-700" disabled={fin.isPending || !runMatchesEdits}
