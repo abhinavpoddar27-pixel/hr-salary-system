@@ -149,6 +149,7 @@ function buildExplainerPrompt(data) {
   lines.push(`- Loan Recovery: Rs.${comp.loan_recovery || 0}`);
   lines.push(`- Late Coming Deduction: Rs.${comp.late_coming_deduction || 0}`);
   lines.push(`- Early Exit Deduction: Rs.${comp.early_exit_deduction || 0}`);
+  lines.push(`- LWF Employee: Rs.${comp.lwf_employee || 0}`);
   lines.push(`- Other Deductions: Rs.${comp.other_deductions || 0}`);
   lines.push(`- Total Deductions: Rs.${comp.total_deductions}`);
   lines.push(`- Net Salary: Rs.${comp.net_salary}`);
@@ -250,6 +251,7 @@ function buildDataSummary(employee, comp, prevComp, dayCalc, prevMonth, prevYear
       loan: comp.loan_recovery || 0,
       late: comp.late_coming_deduction || 0,
       early_exit: comp.early_exit_deduction || 0,
+      lwf: comp.lwf_employee || 0,
       other_deductions: comp.other_deductions || 0,
       total_deductions: comp.total_deductions,
       net_salary: comp.net_salary,

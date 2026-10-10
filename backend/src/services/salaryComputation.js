@@ -1150,6 +1150,7 @@ function generatePayslipData(db, employeeCode, month, year) {
       { label: 'LOP Deduction', amount: comp.lop_deduction },
       { label: 'Late Coming Deduction', amount: comp.late_coming_deduction || 0 },
       { label: 'Early Exit Deduction', amount: comp.early_exit_deduction || 0 },
+      { label: 'LWF (Employee)', amount: comp.lwf_employee || 0 },
       { label: 'Other Deductions', amount: comp.other_deductions }
     ].filter(d => d.amount > 0),
     grossEarned: comp.gross_earned,
@@ -1157,6 +1158,7 @@ function generatePayslipData(db, employeeCode, month, year) {
     netSalary: comp.net_salary,
     pfEmployer: comp.pf_employer,
     esiEmployer: comp.esi_employer,
+    lwfEmployer: comp.lwf_employer || 0,
     grossChanged: comp.gross_changed,
     salaryHeld: comp.salary_held,
     holdReason: comp.hold_reason,
