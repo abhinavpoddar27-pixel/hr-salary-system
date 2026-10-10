@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useEffect } from 'react'
+import React, { useState, useMemo, useLayoutEffect, useRef } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { Link, useSearchParams } from 'react-router-dom'
 import toast from 'react-hot-toast'
@@ -187,6 +187,27 @@ export default function SalaryComputation() {
   })
   const checklist = checklistRes?.data?.data || []
   const checklistSummary = checklistRes?.data?.summary || {}
+  // Passed checks fold into one line; warnings / errors always shown (display only).
+  const [showPassed, setShowPassed] = useState(false)
+  const checklistPassed = checklist.filter(i => i.status === 'ok')
+  const checklistOpen = checklist.filter(i => i.status !== 'ok')
+  const renderCheckItem = (item) => (
+    <div key={item.id} className={clsx('px-3 py-2 rounded-lg text-xs', item.status === 'ok' && 'bg-green-50', item.status === 'warning' && 'bg-amber-50', item.status === 'error' && 'bg-red-50')}>
+      <div className="flex items-center gap-2">
+        <span>{item.status === 'ok' ? '✅' : item.status === 'warning' ? '⚠️' : '❌'}</span>
+        <div className="flex-1">
+          <span className="font-medium">{item.label}</span>
+          {item.count > 0 && item.status !== 'ok' && <span className="ml-1 text-slate-500">({item.count})</span>}
+        </div>
+        {item.link && item.status !== 'ok' && (
+          <a href={item.link} className="text-blue-600 hover:underline text-xs shrink-0">Fix</a>
+        )}
+      </div>
+      {item.detail && item.status !== 'ok' && (
+        <div className="mt-1 ml-6 text-[11px] text-slate-500 leading-snug">{item.detail}</div>
+      )}
+    </div>
+  )
 
   // Salary comparison
   const [showComparison, setShowComparison] = useState(false)
@@ -285,56 +306,329 @@ export default function SalaryComputation() {
   }
   const newJoinerCount = allSalaries.filter(isNewJoinerForPeriod).length
 
+  // ── Salary register: column model (display only) ─────────────────────
+  // One list drives the header, body cells, totals row and the drill-down
+  // colSpan, so hiding a column can never leave them out of step.
+  const REG_VIEWS = [
+    { key: 'review', label: 'Review', title: 'Employee, days, gross, earned, OT/ED, deductions, net, take home' },
+    { key: 'statutory', label: 'Statutory', title: 'Review + PF, ESI, LWF' },
+    { key: 'all', label: 'Everything', title: 'Every column' },
+  ]
+  const R = ['review', 'statutory', 'all'], S = ['statutory', 'all'], A = ['all']
+  const REG_VIEW_KEY = 'salreg.view.v1'
+  const [regView, setRegView] = useState(() => {
+    try {
+      const v = window.localStorage.getItem(REG_VIEW_KEY)
+      if (v === 'review' || v === 'statutory' || v === 'all') return v
+    } catch { /* storage blocked — fall through to the width default */ }
+    return (typeof window !== 'undefined' && window.innerWidth < 768) ? 'review' : 'all'
+  })
+  const chooseRegView = (v) => {
+    setRegView(v)
+    try { window.localStorage.setItem(REG_VIEW_KEY, v) } catch { /* not remembered; still switches */ }
+  }
+  const sumOf = (rows, f) => rows.reduce((t, r) => t + (f(r) || 0), 0)
+  const takeHomeOf = (r) => r.take_home || r.total_payable || r.net_salary
+  const muted = (v, cls) => (v ? cls : 'salreg-mute')
+  const pill = 'inline-block max-w-full truncate align-middle text-[10px] leading-4 px-1.5 rounded border'
+  const isCont = (s) => {
+    // Prefer live employment_type from employee master over the stale
+    // is_contractor on the salary_computations row.
+    const empType = String(s.employment_type || '').trim().toLowerCase()
+    return empType ? empType.includes('contract') : !!s.is_contractor
+  }
+  const heldTitle = (s) => (s.salary_held ? `Held: ${s.hold_reason || 'No reason specified'}` : undefined)
+  const leaveCol = (key, label, field, title, txt, onCls) => ({
+    key, label, sort: field, title, views: A, thCls: `!${txt} text-center`,
+    tdCls: (s) => clsx('text-center font-mono', (s[field] || 0) > 0 ? `${onCls} ${txt} font-semibold` : 'salreg-mute'),
+    render: (s) => ((s[field] || 0) > 0 ? s[field] : '—'),
+    footCls: `font-mono text-center ${txt}`,
+    foot: (rows) => sumOf(rows, r => r[field]) || '—',
+  })
+  const REG_COLS = [
+    { key: 'emp', label: 'Emp', sort: 'employee_name', views: R, pin: 'l', w: 280, edge: 'r',
+      render: (s, expanded) => (
+        <div className="flex items-start gap-1.5 min-w-0">
+          <span className="pt-px"><DrillDownChevron isExpanded={expanded} /></span>
+          <div className="min-w-0 flex-1 flex flex-wrap items-center gap-x-1.5 gap-y-0.5">
+            <span className="font-medium text-[12px] text-slate-800 truncate max-w-[150px]" title={s.employee_name || s.employee_code}>{s.employee_name || s.employee_code}</span>
+            <span className="text-[10px] text-slate-400 font-mono shrink-0">{s.employee_code}</span>
+            {s.gross_changed ? (
+              <span className={clsx(pill, 'max-w-[150px] bg-blue-50 text-blue-700 border-blue-200')} title={`Gross changed: ${fmtINR(s.prev_month_gross)} → ${fmtINR(s.gross_salary)}`}>
+                Gross {fmtINR(s.prev_month_gross)} → {fmtINR(s.gross_salary)}
+              </span>
+            ) : null}
+            {s.was_left_returned ? (
+              <span className={clsx(pill, 'bg-orange-50 text-orange-700 border-orange-200')} title="Returning — was previously marked as Left">Returning</span>
+            ) : null}
+            {isNewJoinerForPeriod(s) ? (
+              <span className={clsx(pill, 'max-w-[150px] bg-emerald-50 text-emerald-700 border-emerald-200')}
+                title={`New Joiner — DOJ ${fmtDOJ(s.date_of_joining)}${s.holidays_before_doj > 0 ? ` (${s.holidays_before_doj} holiday${s.holidays_before_doj > 1 ? 's' : ''} excluded)` : ''}`}>
+                New Joiner {fmtDOJ(s.date_of_joining)}{s.holidays_before_doj > 0 && ` (${s.holidays_before_doj} hol. excl.)`}
+              </span>
+            ) : null}
+            {s.salary_held ? (
+              <span className={clsx(pill, 'max-w-[170px] bg-red-50 text-red-700 border-red-200')} title={`Held: ${s.hold_reason || ''}`} data-testid="held-reason">
+                Held: {s.hold_reason}
+              </span>
+            ) : null}
+            {s.finance_remark && !s.salary_held ? (
+              <span className={clsx(pill, 'max-w-[170px] bg-yellow-50 text-yellow-700 border-yellow-200')} title={s.finance_remark}>{s.finance_remark}</span>
+            ) : null}
+          </div>
+        </div>
+      ),
+      footCls: 'whitespace-nowrap', foot: (rows) => `Totals — ${rows.length} shown`,
+    },
+    { key: 'dept', label: 'Dept', sort: 'department', views: R, tdCls: () => 'text-slate-500',
+      render: (s) => (
+        <div className="flex items-center gap-1 min-w-0 max-w-[200px]">
+          <span className="truncate" title={s.department || ''}>{s.department}</span>
+          {isCont(s) ? <span className="shrink-0 text-[9px] px-1 py-0.5 rounded bg-amber-100 text-amber-700">CONT</span> : null}
+        </div>
+      ),
+    },
+    { key: 'doj', label: 'DOJ', sort: 'date_of_joining', title: 'Date of Joining', views: A,
+      tdCls: () => 'text-slate-500 font-mono text-[10px] whitespace-nowrap', tdTitle: (s) => s.date_of_joining || '',
+      render: (s) => fmtDOJ(s.date_of_joining) },
+    { key: 'days', label: 'Days', sort: 'payable_days', views: R, thCls: 'text-center',
+      tdCls: () => 'text-center font-mono whitespace-nowrap',
+      render: (s) => (
+        <>
+          {s.payable_days}
+          {(s.ot_days || 0) > 0 && (
+            <span className="ml-1 text-[9px] text-cyan-600">{s.regular_days || s.payable_days}+{s.ot_days} OT</span>
+          )}
+        </>
+      ) },
+    { key: 'gross', label: 'Gross', sort: 'gross_salary', views: R, title: 'Monthly gross salary',
+      tdCls: (s) => clsx('font-mono whitespace-nowrap', muted(s.gross_salary, '')),
+      render: (s) => fmtINR(s.gross_salary),
+      footCls: 'font-mono whitespace-nowrap', foot: (rows) => fmtINR(sumOf(rows, r => r.gross_salary)) },
+    { key: 'earned', label: 'Earned', sort: 'gross_earned', views: R,
+      tdCls: (s) => clsx('font-mono whitespace-nowrap', muted(s.gross_earned, '')),
+      render: (s) => fmtINR(s.gross_earned),
+      footCls: 'font-mono whitespace-nowrap', footTitle: 'Sum of Earned — equals the Total Gross card when the filter is All',
+      foot: (rows) => fmtINR(sumOf(rows, r => r.gross_earned)) },
+    { key: 'oted', label: 'OT / ED', sort: 'ot_pay', title: 'OT (punch-detected) and ED (finance-approved grants), shown separately', views: R,
+      tdCls: () => 'font-mono whitespace-nowrap',
+      render: (s) => (
+        <>
+          {(s.ot_pay || 0) > 0 && (
+            <div className="text-cyan-600">
+              {fmtINR(s.ot_pay)} <span className="text-[9px] text-slate-400">OT {s.ot_days || 0}×{fmtINR(s.ot_daily_rate || 0)}</span>
+            </div>
+          )}
+          {(s.ed_pay || 0) > 0 && (
+            <div className="text-purple-600">
+              {fmtINR(s.ed_pay)} <span className="text-[9px] text-slate-400">ED {s.ed_days || 0}×{fmtINR(s.ot_daily_rate || 0)}</span>
+            </div>
+          )}
+          {!(s.ot_pay || 0) && !(s.ed_pay || 0) && '—'}
+        </>
+      ),
+      footCls: 'font-mono whitespace-nowrap',
+      foot: (rows) => (
+        <>
+          <div className="text-cyan-600">OT {fmtINR(sumOf(rows, r => r.ot_pay))}</div>
+          <div className="text-purple-600">ED {fmtINR(sumOf(rows, r => r.ed_pay))}</div>
+        </>
+      ) },
+    { key: 'pf', label: 'PF', sort: 'pf_employee', views: S,
+      tdCls: (s) => clsx('font-mono whitespace-nowrap', muted(s.pf_employee, 'text-indigo-600')),
+      render: (s) => fmtINR(s.pf_employee),
+      footCls: 'font-mono whitespace-nowrap text-indigo-600', foot: (rows) => fmtINR(sumOf(rows, r => r.pf_employee)) },
+    { key: 'esi', label: 'ESI', sort: 'esi_employee', views: S,
+      tdCls: (s) => clsx('font-mono whitespace-nowrap', muted(s.esi_employee, 'text-purple-600')),
+      render: (s) => fmtINR(s.esi_employee),
+      footCls: 'font-mono whitespace-nowrap text-purple-600', foot: (rows) => fmtINR(sumOf(rows, r => r.esi_employee)) },
+    { key: 'lwf', label: 'LWF', sort: 'lwf_employee', views: S,
+      title: 'Punjab Labour Welfare Fund — employee share (employer share in the drill-down)',
+      tdCls: (s) => clsx('font-mono whitespace-nowrap', (s.lwf_employee || 0) > 0 ? 'text-teal-700' : 'salreg-mute-soft'),
+      tdTitle: (s) => ((s.lwf_employee || 0) > 0 ? `LWF employee ${fmtINR(s.lwf_employee)} · employer ${fmtINR(s.lwf_employer || 0)}` : ''),
+      render: (s) => ((s.lwf_employee || 0) > 0 ? fmtINR(s.lwf_employee) : '—'),
+      footCls: 'font-mono whitespace-nowrap text-teal-700', foot: (rows) => fmtINR(sumOf(rows, r => r.lwf_employee)) },
+    { key: 'adv', label: 'Adv', views: A,
+      tdCls: (s) => clsx('font-mono whitespace-nowrap', muted(s.advance_recovery, '')),
+      render: (s) => fmtINR(s.advance_recovery),
+      footCls: 'font-mono whitespace-nowrap', foot: (rows) => fmtINR(sumOf(rows, r => r.advance_recovery)) },
+    { key: 'loan', label: 'Loan', views: A,
+      tdCls: (s) => clsx('font-mono whitespace-nowrap', muted(s.loan_recovery, '')),
+      render: (s) => fmtINR(s.loan_recovery),
+      footCls: 'font-mono whitespace-nowrap', foot: (rows) => fmtINR(sumOf(rows, r => r.loan_recovery)) },
+    { key: 'late', label: 'Late', sort: 'late_coming_deduction', title: 'Finance-approved late coming deduction', views: A,
+      tdCls: (s) => clsx('font-mono whitespace-nowrap', (s.late_coming_deduction || 0) > 0 ? 'bg-amber-50 text-amber-700 font-semibold' : 'salreg-mute-soft'),
+      tdTitle: (s) => ((s.late_coming_deduction || 0) > 0 ? 'Finance-approved late coming deduction' : ''),
+      render: (s) => ((s.late_coming_deduction || 0) > 0 ? fmtINR(s.late_coming_deduction) : '—'),
+      footCls: 'font-mono whitespace-nowrap text-amber-700', foot: (rows) => fmtINR(sumOf(rows, r => r.late_coming_deduction)) },
+    { key: 'early', label: 'Early Exit', sort: 'early_exit_deduction', title: 'Finance-approved early exit deduction', views: A,
+      tdCls: (s) => clsx('font-mono whitespace-nowrap', (s.early_exit_deduction || 0) > 0 ? 'bg-rose-50 text-rose-700 font-semibold' : 'salreg-mute-soft'),
+      tdTitle: (s) => ((s.early_exit_deduction || 0) > 0 ? 'Finance-approved early exit deduction' : ''),
+      render: (s) => ((s.early_exit_deduction || 0) > 0 ? fmtINR(s.early_exit_deduction) : '—'),
+      footCls: 'font-mono whitespace-nowrap text-rose-700', foot: (rows) => fmtINR(sumOf(rows, r => r.early_exit_deduction)) },
+    leaveCol('cl', 'CL', 'cl_days', 'Casual Leave days consumed this month', 'text-amber-700', 'bg-amber-50'),
+    leaveCol('el', 'EL', 'el_days', 'Earned Leave days consumed this month', 'text-green-700', 'bg-green-50'),
+    leaveCol('lwp', 'LWP', 'lwp_days', 'Leave Without Pay days', 'text-orange-700', 'bg-orange-50'),
+    leaveCol('od', 'OD', 'od_days', 'On-Duty / Comp-Off days (finance approved)', 'text-blue-700', 'bg-blue-50'),
+    leaveCol('sl', 'SL', 'short_leave_days', 'Short Leave (gate pass) days-equivalent', 'text-slate-700', 'bg-slate-100'),
+    leaveCol('ua', 'UA', 'uninformed_absent_days', 'Uninformed Absent days', 'text-red-700', 'bg-red-50'),
+    { key: 'ded', label: 'Ded', sort: 'total_deductions', views: R,
+      tdCls: (s) => clsx('font-mono whitespace-nowrap', muted(s.total_deductions, 'text-red-600'), s.salary_held && 'cell-caution'),
+      tdTitle: heldTitle, render: (s) => fmtINR(s.total_deductions),
+      footCls: 'font-mono whitespace-nowrap text-red-600', foot: (rows) => fmtINR(sumOf(rows, r => r.total_deductions)) },
+    { key: 'net', label: 'Net', sort: 'net_salary', views: R, pin: 'r', right: 328, w: 96, edge: 'l', pinCls: 'pin-net',
+      title: 'Net = Gross Earned − Deductions (base only, no OT)', thCls: 'text-slate-600',
+      tdCls: (s) => clsx('font-mono whitespace-nowrap', muted(s.net_salary, 'text-slate-700'), s.salary_held && 'cell-caution'),
+      tdTitle: heldTitle, render: (s) => fmtINR(s.net_salary),
+      footCls: 'font-mono whitespace-nowrap text-slate-700', footTitle: 'Held salaries are not included',
+      foot: (rows) => fmtINR(sumOf(rows.filter(r => !r.salary_held), r => r.net_salary)) },
+    { key: 'take', label: 'Take Home', sort: 'take_home', views: R, pin: 'r', right: 224, w: 104, pinCls: 'pin-take',
+      title: 'Take Home = Net + OT + Holiday Duty + ED (actual amount paid)', thCls: 'text-emerald-700',
+      tdCls: (s) => clsx('font-bold font-mono whitespace-nowrap', muted(takeHomeOf(s), 'text-emerald-700'), s.salary_held && 'cell-caution'),
+      tdTitle: heldTitle, render: (s) => fmtINR(takeHomeOf(s)),
+      footCls: 'font-mono whitespace-nowrap text-emerald-700',
+      footTitle: 'Held salaries are not included — equals the Take Home card when the filter is All',
+      foot: (rows) => fmtINR(sumOf(rows.filter(r => !r.salary_held), takeHomeOf)) },
+    { key: 'status', label: '', views: R, pin: 'r', right: 104, w: 120,
+      render: (s) => (
+        s.is_finalised ? (
+          <span className="badge-green text-xs">Final</span>
+        ) : s.salary_held ? (
+          <div className="flex items-center gap-1 whitespace-nowrap">
+            <span className="inline-flex items-center gap-0.5 text-xs px-1.5 py-0.5 rounded bg-red-100 text-red-700 border border-red-200 font-semibold"
+              title={`Held: ${s.hold_reason || 'No reason specified'}`}>
+              <span aria-hidden="true">⚠</span> Held
+            </span>
+            {/* Release gated to finance/admin — matches requireFinanceOrAdmin
+                on the backend. Opens the shared ReleaseHoldModal. */}
+            {canFinance && (
+              <button
+                onClick={(e) => {
+                  e.stopPropagation()
+                  setReleaseEmployee({
+                    code: s.employee_code,
+                    name: s.employee_name,
+                    department: s.department,
+                    hold_reason: s.hold_reason,
+                    net_salary: s.net_salary,
+                    month, year
+                  })
+                }}
+                className="btn-ghost text-xs px-1 py-0.5 text-blue-600"
+              >
+                Release
+              </button>
+            )}
+          </div>
+        ) : (
+          <span className="badge-yellow text-xs">Draft</span>
+        )
+      ) },
+    { key: 'actions', label: '', views: R, pin: 'r', right: 0, w: 104,
+      render: (s) => (
+        <div className="flex items-center gap-0.5 whitespace-nowrap">
+          <button onClick={() => setShowDetails(showDetails === s.employee_code ? null : s.employee_code)} className="btn-ghost text-xs px-1 py-0.5 text-blue-600">
+            {showDetails === s.employee_code ? '▲' : '▼'}
+          </button>
+          <button onClick={() => setPayslipEmployee(s.employee_code)} className="btn-ghost text-xs px-1 py-0.5 text-slate-500" title="Payslip">
+            Slip
+          </button>
+          <button
+            onClick={(e) => { e.stopPropagation(); setCalendarEmployee({ code: s.employee_code, name: s.employee_name || s.employee_code }); }}
+            className="btn-ghost text-xs px-1 py-0.5 text-blue-600" title="Calendar"
+          >
+            Cal
+          </button>
+        </div>
+      ) },
+  ]
+  const regVisible = REG_COLS.filter(c => c.views.includes(regView))
+  const pinProps = (c, part, extra) => ({
+    className: clsx(
+      part === 'th' && c.thCls,
+      part === 'th' && c.sort && 'cursor-pointer select-none',
+      part === 'tf' && c.footCls,
+      c.pin && 'pin', c.pin === 'l' && 'pin-l', c.pin === 'r' && 'pin-r',
+      c.edge === 'r' && 'pin-edge-r', c.edge === 'l' && 'pin-edge-l', c.pinCls, extra
+    ) || undefined,
+    // Offsets/widths as CSS variables: only applied from md up (see .salreg in index.css),
+    // so on phones nothing is pinned — not even the sticky header cells.
+    style: c.pin ? { '--pin-off': `${c.pin === 'l' ? 0 : c.right}px`, '--pin-w': `${c.w}px` } : undefined,
+  })
+  const sortedSalaries = useMemo(() => [...salaries].sort((a, b) => {
+    if (!sortCol) return 0;
+    let va = a[sortCol] ?? '', vb = b[sortCol] ?? '';
+    if (typeof va === 'string') { va = va.toLowerCase(); vb = (vb || '').toLowerCase(); }
+    return va < vb ? (sortDir === 'asc' ? -1 : 1) : va > vb ? (sortDir === 'asc' ? 1 : -1) : 0;
+  }), [salaries, sortCol, sortDir])
+  // The drill-down sticks to the visible width of the register's scroll box.
+  const regScrollRef = useRef(null)
+  const [regBoxW, setRegBoxW] = useState(0)
+  const hasRegRows = salaries.length > 0
+  useLayoutEffect(() => {
+    const el = regScrollRef.current
+    if (!el) return undefined
+    const update = () => setRegBoxW(el.clientWidth)
+    update()
+    if (typeof ResizeObserver === 'undefined') return undefined
+    const ro = new ResizeObserver(update)
+    ro.observe(el)
+    return () => ro.disconnect()
+  }, [hasRegRows])
+
   return (
     <div className="animate-fade-in">
       <PipelineProgress stageStatus={{ 1:'done', 2:'done', 3:'done', 4:'done', 5:'done', 6:'done', 7:'active' }} />
 
-      <div className="p-4 md:p-6 space-y-5 max-w-screen-xl">
-        <div className="flex items-start justify-between">
-          <div>
-            <h2 className="section-title">Stage 7: Salary Computation</h2>
-            <p className="section-subtitle mt-1">{monthYearLabel(month, year)} — Compute, review, and finalise salary.</p>
+      <div className="p-4 md:p-6 space-y-5 w-full min-w-0">
+        {/* Header: title + actions on row 1 (wraps on phones), filters on row 2. */}
+        <div className="space-y-3">
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div className="min-w-0">
+              <h2 className="section-title">Stage 7: Salary Computation</h2>
+              <p className="section-subtitle mt-1">{monthYearLabel(month, year)} — Compute, review, and finalise salary.</p>
+            </div>
+            <div className="flex flex-wrap gap-2" data-testid="stage7-actions">
+              <button onClick={() => computeMutation.mutate()} disabled={computeMutation.isPending} className="btn-primary whitespace-nowrap">
+                {computeMutation.isPending ? 'Computing...' : 'Compute Salary'}
+              </button>
+              {allSalaries.length > 0 && !allSalaries[0]?.is_finalised && (
+                staleCount > 0 && !isAdmin ? (
+                  <button
+                    disabled
+                    className="btn-success whitespace-nowrap opacity-50 cursor-not-allowed"
+                    title={`${staleCount} employee(s) have a day calculation newer than their salary. Compute Salary first.`}
+                  >
+                    Finalise
+                  </button>
+                ) : staleCount > 0 && isAdmin ? (
+                  <button onClick={() => setShowOverride(true)} className="btn-success whitespace-nowrap" title="Finalising with stale day calculations requires a reason">
+                    Finalise (override)
+                  </button>
+                ) : (
+                  <button onClick={() => setConfirmAction('finalise')} disabled={finaliseMutation.isPending} className="btn-success whitespace-nowrap">
+                    {finaliseMutation.isPending ? 'Finalising...' : 'Finalise'}
+                  </button>
+                )
+              )}
+              {allSalaries.length > 0 && (
+                <button onClick={handleExcelSlip} disabled={excelLoading}
+                  className="px-3 py-2 text-sm bg-green-100 text-green-700 rounded-lg hover:bg-green-200 transition-colors font-medium whitespace-nowrap">
+                  {excelLoading ? 'Generating...' : 'Salary Slip (Excel)'}
+                </button>
+              )}
+              {allSalaries.length > 0 && (
+                <button onClick={handleDownloadRegister} disabled={registerLoading}
+                  className="px-3 py-2 text-sm bg-blue-100 text-blue-700 rounded-lg hover:bg-blue-200 transition-colors font-medium whitespace-nowrap"
+                  title="Download full payroll register as Excel">
+                  {registerLoading ? 'Generating...' : 'Download Register'}
+                </button>
+              )}
+            </div>
           </div>
           <div className="flex items-center gap-3 flex-wrap">
             <CompanyFilter />
             <DateSelector {...dateProps} />
-          </div>
-          <div className="flex gap-2">
-            <button onClick={() => computeMutation.mutate()} disabled={computeMutation.isPending} className="btn-primary">
-              {computeMutation.isPending ? 'Computing...' : 'Compute Salary'}
-            </button>
-            {allSalaries.length > 0 && !allSalaries[0]?.is_finalised && (
-              staleCount > 0 && !isAdmin ? (
-                <button
-                  disabled
-                  className="btn-success opacity-50 cursor-not-allowed"
-                  title={`${staleCount} employee(s) have a day calculation newer than their salary. Compute Salary first.`}
-                >
-                  Finalise
-                </button>
-              ) : staleCount > 0 && isAdmin ? (
-                <button onClick={() => setShowOverride(true)} className="btn-success" title="Finalising with stale day calculations requires a reason">
-                  Finalise (override)
-                </button>
-              ) : (
-                <button onClick={() => setConfirmAction('finalise')} disabled={finaliseMutation.isPending} className="btn-success">
-                  {finaliseMutation.isPending ? 'Finalising...' : 'Finalise'}
-                </button>
-              )
-            )}
-            {allSalaries.length > 0 && (
-              <button onClick={handleExcelSlip} disabled={excelLoading}
-                className="px-3 py-2 text-sm bg-green-100 text-green-700 rounded-lg hover:bg-green-200 transition-colors font-medium">
-                {excelLoading ? 'Generating...' : 'Salary Slip (Excel)'}
-              </button>
-            )}
-            {allSalaries.length > 0 && (
-              <button onClick={handleDownloadRegister} disabled={registerLoading}
-                className="px-3 py-2 text-sm bg-blue-100 text-blue-700 rounded-lg hover:bg-blue-200 transition-colors font-medium"
-                title="Download full payroll register as Excel">
-                {registerLoading ? 'Generating...' : 'Download Register'}
-              </button>
-            )}
           </div>
         </div>
 
@@ -356,7 +650,7 @@ export default function SalaryComputation() {
 
         {/* Summary Cards */}
         {allSalaries.length > 0 && (
-          <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-7 gap-4">
+          <div className="grid gap-4 grid-cols-[repeat(auto-fit,minmax(150px,1fr))]" data-testid="stage7-cards">
             <div className="stat-card border-l-4 border-l-blue-400">
               <span className="text-xs font-semibold text-slate-400 uppercase tracking-wider">Total Gross</span>
               <span className="text-xl font-bold text-slate-800">{fmtINR(computedTotals.gross)}</span>
@@ -387,12 +681,12 @@ export default function SalaryComputation() {
             </div>
             <div className="stat-card border-l-4 border-l-amber-400">
               <span className="text-xs font-semibold text-slate-400 uppercase tracking-wider">Flags</span>
-              <div className="flex gap-3 mt-1">
+              <div className="flex flex-wrap gap-2 mt-1">
                 {changedCount > 0 && (
-                  <span className="salary-change-flag text-xs px-2 py-1 rounded-lg">{changedCount} changed</span>
+                  <span className="text-xs px-2 py-1 rounded-lg bg-amber-100 text-amber-700 border border-amber-200 font-semibold whitespace-nowrap">{changedCount} changed</span>
                 )}
                 {heldCount > 0 && (
-                  <span className="salary-held-flag text-xs px-2 py-1 rounded-lg">{heldCount} held</span>
+                  <span className="text-xs px-2 py-1 rounded-lg bg-red-100 text-red-700 border border-red-200 font-semibold whitespace-nowrap">{heldCount} held</span>
                 )}
                 {!changedCount && !heldCount && <span className="text-sm text-slate-400">None</span>}
               </div>
@@ -400,35 +694,32 @@ export default function SalaryComputation() {
           </div>
         )}
 
-        {/* Month-End Checklist */}
+        {/* Month-End Checklist — warnings/errors always open; passed checks fold into one line. */}
         {checklist.length > 0 && (
-          <div className="card p-4">
-            <div className="flex items-center justify-between mb-3">
+          <div className="card p-4" data-testid="stage7-checklist">
+            <div className="flex items-center justify-between mb-3 gap-2 flex-wrap">
               <h3 className="text-sm font-bold text-slate-700">Pre-Finalization Checklist</h3>
               <div className="flex gap-2 text-xs">
                 {checklistSummary.warnings > 0 && <span className="px-2 py-0.5 bg-amber-100 text-amber-700 rounded-full font-medium">{checklistSummary.warnings} warning{checklistSummary.warnings > 1 ? 's' : ''}</span>}
                 {checklistSummary.errors > 0 && <span className="px-2 py-0.5 bg-red-100 text-red-700 rounded-full font-medium">{checklistSummary.errors} error{checklistSummary.errors > 1 ? 's' : ''}</span>}
               </div>
             </div>
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
-              {checklist.map(item => (
-                <div key={item.id} className={clsx('px-3 py-2 rounded-lg text-xs', item.status === 'ok' && 'bg-green-50', item.status === 'warning' && 'bg-amber-50', item.status === 'error' && 'bg-red-50')}>
-                  <div className="flex items-center gap-2">
-                    <span>{item.status === 'ok' ? '✅' : item.status === 'warning' ? '⚠️' : '❌'}</span>
-                    <div className="flex-1">
-                      <span className="font-medium">{item.label}</span>
-                      {item.count > 0 && item.status !== 'ok' && <span className="ml-1 text-slate-500">({item.count})</span>}
-                    </div>
-                    {item.link && item.status !== 'ok' && (
-                      <a href={item.link} className="text-blue-600 hover:underline text-xs shrink-0">Fix</a>
-                    )}
-                  </div>
-                  {item.detail && item.status !== 'ok' && (
-                    <div className="mt-1 ml-6 text-[11px] text-slate-500 leading-snug">{item.detail}</div>
-                  )}
-                </div>
-              ))}
-            </div>
+            {checklistOpen.length > 0 && (
+              <div className="grid grid-cols-1 md:grid-cols-2 2xl:grid-cols-3 gap-2">
+                {checklistOpen.map(renderCheckItem)}
+              </div>
+            )}
+            {checklistPassed.length > 0 && (
+              <button type="button" onClick={() => setShowPassed(v => !v)} data-testid="checklist-passed-toggle"
+                className={clsx('text-xs text-green-700 hover:underline', checklistOpen.length > 0 && 'mt-2')}>
+                ✅ {checklistPassed.length} of {checklist.length} checks passed — {showPassed ? 'hide' : 'show'}
+              </button>
+            )}
+            {showPassed && checklistPassed.length > 0 && (
+              <div className="grid grid-cols-1 md:grid-cols-2 2xl:grid-cols-3 gap-2 mt-2">
+                {checklistPassed.map(renderCheckItem)}
+              </div>
+            )}
           </div>
         )}
 
@@ -658,318 +949,125 @@ export default function SalaryComputation() {
           </div>
         )}
 
-        {/* Salary Register Table */}
+        {/* Salary Register Table — its own scroll window (sticky header / totals,
+            pinned Employee + Net / Take Home / actions from md up). Columns come
+            from REG_COLS so header, body, totals and the drill-down colSpan stay in step. */}
         {salaries.length > 0 && (
-          <div className="card overflow-hidden">
-            <div className="card-header flex items-center justify-between">
-              <span className="font-semibold text-slate-700">Salary Register — {salaries.length} records</span>
-              {allSalaries[0]?.is_finalised && <span className="badge-green text-xs">Finalised</span>}
+          <div className="card overflow-hidden" data-testid="salary-register">
+            <div className="card-header flex flex-wrap items-center justify-between gap-2 !px-4 !py-3">
+              <div className="flex items-center gap-2 min-w-0">
+                <span className="font-semibold text-slate-700">Salary Register — {salaries.length} records</span>
+                {!!allSalaries[0]?.is_finalised && <span className="badge-green text-xs">Finalised</span>}
+              </div>
+              <div className="flex rounded-lg border border-slate-200 overflow-hidden text-xs" role="group" aria-label="Columns" data-testid="register-view">
+                {REG_VIEWS.map(v => (
+                  <button key={v.key} type="button" onClick={() => chooseRegView(v.key)} data-testid={`register-view-${v.key}`}
+                    aria-pressed={regView === v.key}
+                    className={clsx('px-3 py-1.5 font-medium whitespace-nowrap transition-colors', regView === v.key ? 'bg-blue-600 text-white' : 'bg-white text-slate-600 hover:bg-slate-50')}
+                    title={v.title}>
+                    {v.label} ({REG_COLS.filter(c => c.views.includes(v.key)).length})
+                  </button>
+                ))}
+              </div>
             </div>
-            <div className="overflow-x-auto">
-              <table className="w-full min-w-[1200px] table-compact text-[11px]">
+            <div ref={regScrollRef} className="salreg-box overflow-auto md:max-h-[calc(100vh-10rem)]" data-testid="register-scroll">
+              <table className="salreg min-w-full table-compact text-[11px]">
                 <thead>
                   <tr>
-                    <th className="cursor-pointer select-none" onClick={() => toggleSort('employee_name')}>Emp{sortIndicator('employee_name')}</th>
-                    <th className="cursor-pointer select-none" onClick={() => toggleSort('department')}>Dept{sortIndicator('department')}</th>
-                    <th className="cursor-pointer select-none" onClick={() => toggleSort('date_of_joining')} title="Date of Joining">DOJ{sortIndicator('date_of_joining')}</th>
-                    <th className="cursor-pointer select-none text-center" onClick={() => toggleSort('payable_days')}>Days{sortIndicator('payable_days')}</th>
-                    <th className="cursor-pointer select-none" onClick={() => toggleSort('gross_salary')}>Gross{sortIndicator('gross_salary')}</th>
-                    <th className="cursor-pointer select-none" onClick={() => toggleSort('gross_earned')}>Earned{sortIndicator('gross_earned')}</th>
-                    <th className="cursor-pointer select-none" onClick={() => toggleSort('ot_pay')} title="OT (punch-detected) and ED (finance-approved grants), shown separately">OT / ED{sortIndicator('ot_pay')}</th>
-                    <th className="cursor-pointer select-none" onClick={() => toggleSort('pf_employee')}>PF{sortIndicator('pf_employee')}</th>
-                    <th className="cursor-pointer select-none" onClick={() => toggleSort('esi_employee')}>ESI{sortIndicator('esi_employee')}</th>
-                    <th className="cursor-pointer select-none" onClick={() => toggleSort('lwf_employee')} title="Punjab Labour Welfare Fund — employee share (employer share in the drill-down)">LWF{sortIndicator('lwf_employee')}</th>
-                    <th>Adv</th>
-                    <th>Loan</th>
-                    <th className="cursor-pointer select-none" onClick={() => toggleSort('late_coming_deduction')} title="Finance-approved late coming deduction">Late{sortIndicator('late_coming_deduction')}</th>
-                    <th className="cursor-pointer select-none" onClick={() => toggleSort('early_exit_deduction')} title="Finance-approved early exit deduction">Early Exit{sortIndicator('early_exit_deduction')}</th>
-                    <th className="cursor-pointer select-none !text-amber-700 text-center" onClick={() => toggleSort('cl_days')} title="Casual Leave days consumed this month">CL{sortIndicator('cl_days')}</th>
-                    <th className="cursor-pointer select-none !text-green-700 text-center" onClick={() => toggleSort('el_days')} title="Earned Leave days consumed this month">EL{sortIndicator('el_days')}</th>
-                    <th className="cursor-pointer select-none !text-orange-700 text-center" onClick={() => toggleSort('lwp_days')} title="Leave Without Pay days">LWP{sortIndicator('lwp_days')}</th>
-                    <th className="cursor-pointer select-none !text-blue-700 text-center" onClick={() => toggleSort('od_days')} title="On-Duty / Comp-Off days (finance approved)">OD{sortIndicator('od_days')}</th>
-                    <th className="cursor-pointer select-none !text-slate-600 text-center" onClick={() => toggleSort('short_leave_days')} title="Short Leave (gate pass) days-equivalent">SL{sortIndicator('short_leave_days')}</th>
-                    <th className="cursor-pointer select-none !text-red-700 text-center" onClick={() => toggleSort('uninformed_absent_days')} title="Uninformed Absent days">UA{sortIndicator('uninformed_absent_days')}</th>
-                    <th className="cursor-pointer select-none" onClick={() => toggleSort('total_deductions')}>Ded{sortIndicator('total_deductions')}</th>
-                    <th className="cursor-pointer select-none bg-slate-50 text-slate-600" onClick={() => toggleSort('net_salary')} title="Net = Gross Earned − Deductions (base only, no OT)">Net{sortIndicator('net_salary')}</th>
-                    <th className="cursor-pointer select-none bg-emerald-50 text-emerald-700" onClick={() => toggleSort('take_home')} title="Take Home = Net + OT + Holiday Duty + ED (actual amount paid)">Take Home{sortIndicator('take_home')}</th>
-                    <th></th>
-                    <th></th>
+                    {regVisible.map(c => (
+                      <th key={c.key} {...pinProps(c, 'th')}
+                        onClick={c.sort ? () => toggleSort(c.sort) : undefined}
+                        title={c.title}>
+                        {c.label}{c.sort ? sortIndicator(c.sort) : ''}
+                      </th>
+                    ))}
                   </tr>
                 </thead>
                 <tbody>
-                  {[...salaries].sort((a, b) => {
-                    if (!sortCol) return 0;
-                    let va = a[sortCol] ?? '', vb = b[sortCol] ?? '';
-                    if (typeof va === 'string') { va = va.toLowerCase(); vb = (vb || '').toLowerCase(); }
-                    return va < vb ? (sortDir === 'asc' ? -1 : 1) : va > vb ? (sortDir === 'asc' ? 1 : -1) : 0;
-                  }).map(s => (
-                    <React.Fragment key={s.employee_code}>
-                      <tr onClick={() => setShowDetails(showDetails === s.employee_code ? null : s.employee_code)} className={clsx(
-                        'transition-colors cursor-pointer hover:bg-blue-50/50',
-                        showDetails === s.employee_code && 'bg-blue-50/70',
-                        s.salary_held && showDetails !== s.employee_code && 'bg-amber-50/60 border-l-4 border-l-amber-500',
-                        s.gross_changed && !s.salary_held && showDetails !== s.employee_code && 'bg-blue-50/30'
-                      )}>
-                        <td>
-                          <div className="flex items-center gap-1.5">
-                            <DrillDownChevron isExpanded={showDetails === s.employee_code} />
-                            <div>
-                              <div className="font-medium text-sm">{s.employee_name || s.employee_code}</div>
-                              <div className="text-xs text-slate-400 font-mono">{s.employee_code}</div>
-                              {s.gross_changed ? (
-                                <div className="text-[10px] mt-0.5 px-1.5 py-0.5 rounded bg-blue-50 text-blue-700 border border-blue-200 inline-block">
-                                  Gross changed: {fmtINR(s.prev_month_gross)} → {fmtINR(s.gross_salary)}
-                                </div>
-                              ) : null}
-                              {s.was_left_returned ? (
-                                <div className="text-[10px] mt-0.5 px-1.5 py-0.5 rounded bg-orange-50 text-orange-700 border border-orange-200 inline-block">
-                                  Returning — was previously marked as Left
-                                </div>
-                              ) : null}
-                              {isNewJoinerForPeriod(s) ? (
-                                <div className="text-[10px] mt-0.5 px-1.5 py-0.5 rounded bg-emerald-50 text-emerald-700 border border-emerald-200 inline-block">
-                                  New Joiner — DOJ {fmtDOJ(s.date_of_joining)}
-                                  {s.holidays_before_doj > 0 && ` (${s.holidays_before_doj} holiday${s.holidays_before_doj > 1 ? 's' : ''} excluded)`}
-                                </div>
-                              ) : null}
-                              {s.salary_held ? (
-                                <div className="text-[10px] mt-0.5 px-1.5 py-0.5 rounded bg-red-50 text-red-700 border border-red-200 inline-block">
-                                  Held: {s.hold_reason}
-                                </div>
-                              ) : null}
-                              {s.finance_remark && !s.salary_held ? (
-                                <div className="text-[10px] mt-0.5 px-1.5 py-0.5 rounded bg-yellow-50 text-yellow-700 border border-yellow-200 inline-block">
-                                  {s.finance_remark}
-                                </div>
-                              ) : null}
-                            </div>
-                          </div>
-                        </td>
-                        <td className="text-slate-500">
-                          {s.department}
-                          {(() => {
-                            // Prefer live employment_type from employee master over
-                            // the stale is_contractor on the salary_computations row
-                            // (which may reflect a classification from an earlier run).
-                            const empType = String(s.employment_type || '').trim().toLowerCase();
-                            const isCont = empType ? empType.includes('contract') : !!s.is_contractor;
-                            return isCont ? <span className="ml-1 text-[9px] px-1 py-0.5 rounded bg-amber-100 text-amber-700">CONT</span> : null;
-                          })()}
-                        </td>
-                        <td className="text-slate-500 font-mono text-[10px]" title={s.date_of_joining || ''}>
-                          {fmtDOJ(s.date_of_joining)}
-                        </td>
-                        <td className="text-center font-mono">
-                          {s.payable_days}
-                          {(s.ot_days || 0) > 0 && (
-                            <div className="text-[9px] text-cyan-600">{s.regular_days || s.payable_days}+{s.ot_days} OT</div>
-                          )}
-                        </td>
-                        <td className="font-mono">{fmtINR(s.gross_salary)}</td>
-                        <td className="font-mono">{fmtINR(s.gross_earned)}</td>
-                        <td className="font-mono">
-                          {(s.ot_pay || 0) > 0 && (
-                            <div className="text-cyan-600">
-                              {fmtINR(s.ot_pay)}
-                              <div className="text-[9px] text-slate-400">OT {s.ot_days || 0}×{fmtINR(s.ot_daily_rate || 0)}</div>
-                            </div>
-                          )}
-                          {(s.ed_pay || 0) > 0 && (
-                            <div className="text-purple-600 mt-0.5">
-                              {fmtINR(s.ed_pay)}
-                              <div className="text-[9px] text-slate-400">ED {s.ed_days || 0}×{fmtINR(s.ot_daily_rate || 0)}</div>
-                            </div>
-                          )}
-                          {!(s.ot_pay || 0) && !(s.ed_pay || 0) && '—'}
-                        </td>
-                        <td className="text-indigo-600 font-mono">{fmtINR(s.pf_employee)}</td>
-                        <td className="text-purple-600 font-mono">{fmtINR(s.esi_employee)}</td>
-                        <td className={clsx('font-mono', (s.lwf_employee || 0) > 0 ? 'text-teal-700' : 'text-slate-400')}
-                            title={(s.lwf_employee || 0) > 0 ? `LWF employee ${fmtINR(s.lwf_employee)} · employer ${fmtINR(s.lwf_employer || 0)}` : ''}>
-                          {(s.lwf_employee || 0) > 0 ? fmtINR(s.lwf_employee) : '—'}
-                        </td>
-                        <td className="font-mono">{fmtINR(s.advance_recovery)}</td>
-                        <td className="font-mono">{fmtINR(s.loan_recovery)}</td>
-                        <td className={clsx('font-mono', (s.late_coming_deduction || 0) > 0 ? 'bg-amber-50 text-amber-700 font-semibold' : 'text-slate-400')}
-                            title={(s.late_coming_deduction || 0) > 0 ? 'Finance-approved late coming deduction' : ''}>
-                          {(s.late_coming_deduction || 0) > 0 ? fmtINR(s.late_coming_deduction) : '—'}
-                        </td>
-                        <td className={clsx('font-mono', (s.early_exit_deduction || 0) > 0 ? 'bg-rose-50 text-rose-700 font-semibold' : 'text-slate-400')}
-                            title={(s.early_exit_deduction || 0) > 0 ? 'Finance-approved early exit deduction' : ''}>
-                          {(s.early_exit_deduction || 0) > 0 ? fmtINR(s.early_exit_deduction) : '—'}
-                        </td>
-                        <td className={clsx('text-center font-mono', (s.cl_days || 0) > 0 ? 'bg-amber-50 text-amber-700 font-semibold' : 'text-slate-300')}>
-                          {(s.cl_days || 0) > 0 ? s.cl_days : '—'}
-                        </td>
-                        <td className={clsx('text-center font-mono', (s.el_days || 0) > 0 ? 'bg-green-50 text-green-700 font-semibold' : 'text-slate-300')}>
-                          {(s.el_days || 0) > 0 ? s.el_days : '—'}
-                        </td>
-                        <td className={clsx('text-center font-mono', (s.lwp_days || 0) > 0 ? 'bg-orange-50 text-orange-700 font-semibold' : 'text-slate-300')}>
-                          {(s.lwp_days || 0) > 0 ? s.lwp_days : '—'}
-                        </td>
-                        <td className={clsx('text-center font-mono', (s.od_days || 0) > 0 ? 'bg-blue-50 text-blue-700 font-semibold' : 'text-slate-300')}>
-                          {(s.od_days || 0) > 0 ? s.od_days : '—'}
-                        </td>
-                        <td className={clsx('text-center font-mono', (s.short_leave_days || 0) > 0 ? 'bg-slate-100 text-slate-700 font-semibold' : 'text-slate-300')}>
-                          {(s.short_leave_days || 0) > 0 ? s.short_leave_days : '—'}
-                        </td>
-                        <td className={clsx('text-center font-mono', (s.uninformed_absent_days || 0) > 0 ? 'bg-red-50 text-red-700 font-semibold' : 'text-slate-300')}>
-                          {(s.uninformed_absent_days || 0) > 0 ? s.uninformed_absent_days : '—'}
-                        </td>
-                        <td className={clsx('text-red-600 font-mono', s.salary_held && 'cell-caution')}
-                            title={s.salary_held ? `Held: ${s.hold_reason || 'No reason specified'}` : undefined}>
-                          {fmtINR(s.total_deductions)}
-                        </td>
-                        <td className={clsx('bg-slate-50 text-slate-700 font-mono', s.salary_held && 'cell-caution')}
-                            title={s.salary_held ? `Held: ${s.hold_reason || 'No reason specified'}` : undefined}>
-                          {fmtINR(s.net_salary)}
-                        </td>
-                        <td className={clsx('bg-emerald-50 font-bold text-emerald-700 font-mono', s.salary_held && 'cell-caution')}
-                            title={s.salary_held ? `Held: ${s.hold_reason || 'No reason specified'}` : undefined}>
-                          {fmtINR(s.take_home || s.total_payable || s.net_salary)}
-                        </td>
-                        <td>
-                          {s.is_finalised ? (
-                            <span className="badge-green text-xs">Final</span>
-                          ) : s.salary_held ? (
-                            <div className="flex flex-col gap-0.5">
-                              <div className="flex items-center gap-1">
-                                <span className="inline-flex items-center gap-0.5 text-xs px-1.5 py-0.5 rounded bg-red-100 text-red-700 border border-red-200 font-semibold">
-                                  <span aria-hidden="true">⚠</span> Held
-                                </span>
-                                {/* Release gated to finance/admin — HR sees the Held
-                                    badge but not the Release button. Matches the
-                                    requireFinanceOrAdmin gate on the backend endpoint
-                                    added April 2026. Opens the shared ReleaseHoldModal
-                                    which enforces the required release_notes. */}
-                                {canFinance && (
-                                  <button
-                                    onClick={(e) => {
-                                      e.stopPropagation()
-                                      setReleaseEmployee({
-                                        code: s.employee_code,
-                                        name: s.employee_name,
-                                        department: s.department,
-                                        hold_reason: s.hold_reason,
-                                        net_salary: s.net_salary,
-                                        month, year
-                                      })
-                                    }}
-                                    className="btn-ghost text-xs px-1 text-blue-600"
-                                  >
-                                    Release
-                                  </button>
-                                )}
-                              </div>
-                              {s.hold_reason && (
-                                <span className="text-[9px] text-red-500 truncate max-w-[120px]" title={s.hold_reason}>
-                                  {s.hold_reason}
-                                </span>
-                              )}
-                            </div>
-                          ) : (
-                            <span className="badge-yellow text-xs">Draft</span>
-                          )}
-                        </td>
-                        <td>
-                          <div className="flex items-center gap-1">
-                            <button onClick={() => setShowDetails(showDetails === s.employee_code ? null : s.employee_code)} className="btn-ghost text-xs px-1 text-blue-600">
-                              {showDetails === s.employee_code ? '▲' : '▼'}
-                            </button>
-                            <button onClick={() => setPayslipEmployee(s.employee_code)} className="btn-ghost text-xs px-1 text-slate-500" title="Payslip">
-                              Slip
-                            </button>
-                            <button
-                              onClick={(e) => { e.stopPropagation(); setCalendarEmployee({ code: s.employee_code, name: s.employee_name || s.employee_code }); }}
-                              className="btn-ghost text-xs px-1 text-blue-600" title="Calendar"
-                            >
-                              Cal
-                            </button>
-                          </div>
-                        </td>
-                      </tr>
-                      {showDetails === s.employee_code && (
-                        <DrillDownRow colSpan={25}>
-                          <EmployeeQuickView
-                            employeeCode={s.employee_code}
-                            contextContent={
-                              <div className="grid grid-cols-2 gap-4 text-xs">
-                                <div>
-                                  <p className="font-semibold mb-1 text-slate-600">Earnings</p>
-                                  <div className="space-y-0.5">
-                                    {[
-                                      ['Basic', s.basic_earned],
-                                      ['DA', s.da_earned],
-                                      ['HRA', s.hra_earned],
-                                      ['Conv.', s.conveyance_earned],
-                                      ['Other', s.other_allowances_earned],
-                                      ['OT', s.ot_pay],
-                                      ['Holiday Duty', s.holiday_duty_pay],
-                                      ['Extra Duty (ED)', s.ed_pay]
-                                    ].map(([k,v]) => v > 0 && (
-                                      <div key={k} className="flex justify-between"><span>{k}</span><span className="font-mono font-medium">{fmtINR(v)}</span></div>
-                                    ))}
-                                    {(s.take_home || s.total_payable) > 0 && (
-                                      <div className="flex justify-between mt-1 pt-1 border-t border-slate-200 font-bold text-emerald-700">
-                                        <span>Take Home</span>
-                                        <span className="font-mono">{fmtINR(s.take_home || s.total_payable)}</span>
+                  {sortedSalaries.map(s => {
+                    const expanded = showDetails === s.employee_code
+                    return (
+                      <React.Fragment key={s.employee_code}>
+                        <tr onClick={() => setShowDetails(expanded ? null : s.employee_code)} className={clsx(
+                          'transition-colors cursor-pointer hover:bg-blue-50/50',
+                          expanded && 'bg-blue-50/70 row-expanded',
+                          s.salary_held && !expanded && 'bg-amber-50/60 row-held',
+                          s.gross_changed && !s.salary_held && !expanded && 'bg-blue-50/30 row-changed'
+                        )}>
+                          {regVisible.map(c => {
+                            const p = pinProps(c, 'td', c.tdCls ? c.tdCls(s) : undefined)
+                            return <td key={c.key} className={p.className} style={p.style} title={c.tdTitle ? c.tdTitle(s) || undefined : undefined}>{c.render(s, expanded)}</td>
+                          })}
+                        </tr>
+                        {expanded && (
+                          <DrillDownRow colSpan={regVisible.length}>
+                            {/* Sticks to the visible part of the scroll window so the
+                                whole breakdown reads without scrolling sideways. */}
+                            <div className="sticky left-5" style={regBoxW ? { width: Math.max(280, regBoxW - 40) } : undefined} data-testid="register-drilldown">
+                            <EmployeeQuickView
+                              employeeCode={s.employee_code}
+                              contextContent={
+                                <div className="grid grid-cols-2 gap-4 text-xs">
+                                  <div>
+                                    <p className="font-semibold mb-1 text-slate-600">Earnings</p>
+                                    <div className="space-y-0.5">
+                                      {[
+                                        ['Basic', s.basic_earned],
+                                        ['DA', s.da_earned],
+                                        ['HRA', s.hra_earned],
+                                        ['Conv.', s.conveyance_earned],
+                                        ['Other', s.other_allowances_earned],
+                                        ['OT', s.ot_pay],
+                                        ['Holiday Duty', s.holiday_duty_pay],
+                                        ['Extra Duty (ED)', s.ed_pay]
+                                      ].map(([k,v]) => v > 0 && (
+                                        <div key={k} className="flex justify-between"><span>{k}</span><span className="font-mono font-medium">{fmtINR(v)}</span></div>
+                                      ))}
+                                      {(s.take_home || s.total_payable) > 0 && (
+                                        <div className="flex justify-between mt-1 pt-1 border-t border-slate-200 font-bold text-emerald-700">
+                                          <span>Take Home</span>
+                                          <span className="font-mono">{fmtINR(s.take_home || s.total_payable)}</span>
+                                        </div>
+                                      )}
+                                    </div>
+                                  </div>
+                                  <div>
+                                    <p className="font-semibold mb-1 text-slate-600">Deductions</p>
+                                    <div className="space-y-0.5">
+                                      {[['PF (Emp)', s.pf_employee], ['PF (Empr)', s.pf_employer], ['ESI (Emp)', s.esi_employee], ['ESI (Empr)', s.esi_employer], ['LWF (Emp)', s.lwf_employee], ['LWF (Empr)', s.lwf_employer], ['TDS', s.tds], ['LOP', s.lop_deduction], ['Advance', s.advance_recovery], ['Loan EMI', s.loan_recovery], ['Late Coming', s.late_coming_deduction], ['Early Exit', s.early_exit_deduction], ['Other', s.other_deductions]].map(([k,v]) => v > 0 && (
+                                        <div key={k} className="flex justify-between"><span>{k}</span><span className="font-mono font-medium text-red-600">{fmtINR(v)}</span></div>
+                                      ))}
+                                    </div>
+                                    {!!s.gross_changed && (
+                                      <div className="mt-2 p-2 bg-blue-50 rounded-lg border border-blue-200">
+                                        <span className="text-xs text-blue-700 font-semibold">Gross Changed:</span>
+                                        <span className="text-xs text-blue-600 ml-1">{fmtINR(s.prev_month_gross)} → {fmtINR(s.gross_salary)}</span>
+                                      </div>
+                                    )}
+                                    {!!s.salary_held && (
+                                      <div className="mt-2 p-2 bg-amber-50 rounded-lg border border-amber-200">
+                                        <span className="text-xs text-amber-700 font-semibold">Held:</span>
+                                        <span className="text-xs text-amber-600 ml-1">{s.hold_reason}</span>
                                       </div>
                                     )}
                                   </div>
                                 </div>
-                                <div>
-                                  <p className="font-semibold mb-1 text-slate-600">Deductions</p>
-                                  <div className="space-y-0.5">
-                                    {[['PF (Emp)', s.pf_employee], ['PF (Empr)', s.pf_employer], ['ESI (Emp)', s.esi_employee], ['ESI (Empr)', s.esi_employer], ['LWF (Emp)', s.lwf_employee], ['LWF (Empr)', s.lwf_employer], ['TDS', s.tds], ['LOP', s.lop_deduction], ['Advance', s.advance_recovery], ['Loan EMI', s.loan_recovery], ['Late Coming', s.late_coming_deduction], ['Early Exit', s.early_exit_deduction], ['Other', s.other_deductions]].map(([k,v]) => v > 0 && (
-                                      <div key={k} className="flex justify-between"><span>{k}</span><span className="font-mono font-medium text-red-600">{fmtINR(v)}</span></div>
-                                    ))}
-                                  </div>
-                                  {s.gross_changed && (
-                                    <div className="mt-2 p-2 bg-blue-50 rounded-lg border border-blue-200">
-                                      <span className="text-xs text-blue-700 font-semibold">Gross Changed:</span>
-                                      <span className="text-xs text-blue-600 ml-1">{fmtINR(s.prev_month_gross)} → {fmtINR(s.gross_salary)}</span>
-                                    </div>
-                                  )}
-                                  {s.salary_held && (
-                                    <div className="mt-2 p-2 bg-amber-50 rounded-lg border border-amber-200">
-                                      <span className="text-xs text-amber-700 font-semibold">Held:</span>
-                                      <span className="text-xs text-amber-600 ml-1">{s.hold_reason}</span>
-                                    </div>
-                                  )}
-                                </div>
-                              </div>
-                            }
-                          />
-                        </DrillDownRow>
-                      )}
-                    </React.Fragment>
-                  ))}
+                              }
+                            />
+                            </div>
+                          </DrillDownRow>
+                        )}
+                      </React.Fragment>
+                    )
+                  })}
                 </tbody>
                 <tfoot>
-                  <tr className="bg-slate-50 font-bold text-xs">
-                    <td colSpan={4}>TOTAL ({salaries.length})</td>
-                    <td className="font-mono">{fmtINR(salaries.reduce((s, r) => s + (r.gross_salary || 0), 0))}</td>
-                    <td className="font-mono">{fmtINR(salaries.reduce((s, r) => s + (r.gross_earned || 0), 0))}</td>
-                    <td className="font-mono">
-                      <div className="text-cyan-600">OT {fmtINR(salaries.reduce((s, r) => s + (r.ot_pay || 0), 0))}</div>
-                      <div className="text-purple-600">ED {fmtINR(salaries.reduce((s, r) => s + (r.ed_pay || 0), 0))}</div>
-                    </td>
-                    <td className="font-mono text-indigo-600">{fmtINR(salaries.reduce((s, r) => s + (r.pf_employee || 0), 0))}</td>
-                    <td className="font-mono text-purple-600">{fmtINR(salaries.reduce((s, r) => s + (r.esi_employee || 0), 0))}</td>
-                    <td className="font-mono text-teal-700">{fmtINR(salaries.reduce((s, r) => s + (r.lwf_employee || 0), 0))}</td>
-                    <td colSpan={2} />
-                    <td className="font-mono text-amber-700">{fmtINR(salaries.reduce((s, r) => s + (r.late_coming_deduction || 0), 0))}</td>
-                    <td className="font-mono text-rose-700">{fmtINR(salaries.reduce((s, r) => s + (r.early_exit_deduction || 0), 0))}</td>
-                    <td className="font-mono text-center text-amber-700">{salaries.reduce((s, r) => s + (r.cl_days || 0), 0) || '—'}</td>
-                    <td className="font-mono text-center text-green-700">{salaries.reduce((s, r) => s + (r.el_days || 0), 0) || '—'}</td>
-                    <td className="font-mono text-center text-orange-700">{salaries.reduce((s, r) => s + (r.lwp_days || 0), 0) || '—'}</td>
-                    <td className="font-mono text-center text-blue-700">{salaries.reduce((s, r) => s + (r.od_days || 0), 0) || '—'}</td>
-                    <td className="font-mono text-center text-slate-700">{salaries.reduce((s, r) => s + (r.short_leave_days || 0), 0) || '—'}</td>
-                    <td className="font-mono text-center text-red-700">{salaries.reduce((s, r) => s + (r.uninformed_absent_days || 0), 0) || '—'}</td>
-                    <td className="font-mono text-red-600">{fmtINR(salaries.reduce((s, r) => s + (r.total_deductions || 0), 0))}</td>
-                    <td className="bg-slate-100 text-slate-700 font-mono">{fmtINR(salaries.filter(s => !s.salary_held).reduce((s, r) => s + (r.net_salary || 0), 0))}</td>
-                    <td className="bg-emerald-100 text-emerald-700 font-mono">{fmtINR(salaries.filter(s => !s.salary_held).reduce((s, r) => s + (r.take_home || r.total_payable || r.net_salary || 0), 0))}</td>
-                    <td colSpan={2} />
+                  <tr className="font-bold text-xs" data-testid="register-totals">
+                    {regVisible.map(c => (
+                      <td key={c.key} {...pinProps(c, 'tf')} title={c.footTitle}>
+                        {c.foot ? c.foot(salaries) : null}
+                      </td>
+                    ))}
                   </tr>
                 </tfoot>
               </table>
@@ -1049,7 +1147,7 @@ export default function SalaryComputation() {
                     </div>
                   </div>
                 )}
-                {(payslip.grossChanged || payslip.salaryHeld) && (
+                {(!!payslip.grossChanged || !!payslip.salaryHeld) && (
                   <div className="flex gap-2">
                     {payslip.grossChanged ? <span className="salary-change-flag text-xs px-2 py-1 rounded-lg print-visible">Gross Changed: {fmtINR(payslip.prevMonthGross)} → Current</span> : null}
                     {payslip.salaryHeld ? <span className="salary-held-flag text-xs px-2 py-1 rounded-lg print-visible">Held: {payslip.holdReason}</span> : null}

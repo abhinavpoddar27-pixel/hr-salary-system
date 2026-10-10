@@ -59,7 +59,7 @@ export default function NightShift() {
     <div className="animate-fade-in">
       <PipelineProgress stageStatus={{ 1: 'done', 2: 'done', 3: 'done', 4: 'active' }} />
 
-      <div className="p-6 space-y-5 max-w-screen-xl">
+      <div className="p-6 space-y-5 w-full min-w-0">
         <div>
           <h2 className="section-title">Stage 4: Night Shift Pairing</h2>
           <p className="section-subtitle mt-1">
