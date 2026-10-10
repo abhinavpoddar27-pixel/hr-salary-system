@@ -8,8 +8,9 @@
 4. Continue from NEXT STEP. Update this file after every small step (state, done, next) and commit it.
 
 ## PR STATUS
-- PR-1 feat/statutory-flags — BUILT LOCALLY — ready to push (owner decision 10 Oct 08:53: repo stays public, open the PR now; the coordinator pushes). Independent review: SHIP (fixes 1–5 in). origin/main f4b3b2f (loans PR-6b + PR-7) MERGED in (66f34d6, no-ff) + dist rebuilt (322a75d). Base f4b3b2f. Code head 322a75d (+ this PROGRESS commit on top), 51 suites / 915 tests green ×2, guard 9/9, sim 68/68.
-- PR-2 feat/lwf-deduction — NOT STARTED
+- PR-1 feat/statutory-flags — DONE: merged as PR #65 (merge 8b9561d, head a577c73), deployed; production post-merge checks passed 10 Oct 09:06 IST. Owner applies T4 (plant) / T5 (sales) on the live page.
+- PR-2 feat/lwf-deduction — PLANNED, BUILDING. Plan `docs/statutory-flags/IMPL_PR2.md` (REVIEW CORRECTIONS C1–C5 binding). Scope = PLANT LWF only (C1): schema (both tables' columns, policy keys, AI trigger), plant Stage 7 + loan headroom, plant payslip/readers/Excel/UI. Base 8b9561d. Owner releases plant September salaries today.
+- PR-2b feat/lwf-sales — NOT STARTED. Sales LWF compute/save/rebuild/totals/export/UI (IMPL_PR2 C1). Before the 25 Oct sales close.
 - PR-3 feat/statutory-filing — NOT STARTED
 
 ## STEPS DONE
@@ -46,10 +47,10 @@
   After the merge: jest 51 / 915 twice (main added 2 suites / 25 tests), statutoryWriterGuard 9/9, node --check clean (employees.js, loans.js, sales.js, salary-input.js, statutoryFlags.js, loans/exit.js), sim 68/68 on a throwaway DB.
 
 ## LAST STEP
-MERGE origin/main f4b3b2f (66f34d6) + dist rebuild (322a75d). 51 / 915 ×2, guard 9/9, sim 68/68. NOT PUSHED by the build agent (the coordinator pushes).
+PR-1 merged (#65, 8b9561d). PR-2 plan written: IMPL_PR2.md (planning agent + chat review, C1 plant-only split).
 
 ## NEXT STEP
-Coordinator: push feat/statutory-flags and open the PR (compare main...feat/statutory-flags); fetch again first — if main moved, merge it in the same way. Owner: confirm the 10 Oct planner ruling (structure writes dated before a later row → 409; same date → in place); decide OPEN_ITEMS 'plant compute gross source' and 'same-gross split edit / latest row'. RUNBOOK T4/T5 only after PR-2 is live too.
+Build agent: PR-2 on feat/lwf-deduction from 8b9561d — Phase 0, then STEP 1 (schema) and STEP 2 (plant compute + headroom + T12 edit); report; then STEPs 4–7. Owner: T4/T5 uploads on the live page; do NOT compute plant September until PR-2 is merged and deployed (or the owner chooses the fallback: compute now with ESI+PF, LWF from October). Do NOT recompute sales September (D3).
 
 ## OWNER RULINGS ADDED DURING THE BUILD
 (record date + ruling; BUILD_PLAN §1 holds the original set)
@@ -59,6 +60,8 @@ Coordinator: push feat/statutory-flags and open the PR (compare main...feat/stat
 - 10 Oct 2026: the repo was confirmed PUBLIC (GitHub API, raw file 200). Nothing on this branch is pushed until the owner makes it private (T0 prerequisite). Build and commit locally; push is the last step.
 - 10 Oct 2026 08:53 (owner): keep the repo public and open the PR now (supersedes the line above); push access granted to the coordinator, who pushes. Merge origin/main into the branch (not rebase).
 - 10 Oct 2026 (planner, after independent review; owner to confirm): in every writer that can insert a structure row for an existing employee (sales versionSalesStructureForGross / PUT /sales/employees/:code, sales POST /sales/employees/:code/structures, plant salary-input approve; employees.js inserts only fire when no structure exists): (a) if any structure row for that employee is dated AFTER the new row's date → refuse with 409 {error: 'A salary structure dated <latest date> already exists; date this change on or after <latest date>.'}, nothing written (whole request rolls back, master included); (b) if a row exists dated EXACTLY at the new date → update that row's gross/components in place and keep that row's own flags; (c) new date after every existing row (the normal case) → unchanged.
+
+- 10 Oct 2026 10:00 (planner): PR-2 split — plant LWF ships first (today's plant September release); sales LWF moves to PR-2b before the 25 Oct sales close. Loan headroom (headroom.js) counts LWF for both payrolls now (sales rows stay 0 until PR-2b).
 
 ## DECISIONS TAKEN BY CLAUDE CODE (safest option, owner to review)
 - D-1 (STEP 4) Structure rows are touched only when a structure actually needs new flags (forE or a row >= E
