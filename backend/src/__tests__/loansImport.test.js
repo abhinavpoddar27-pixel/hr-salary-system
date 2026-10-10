@@ -180,7 +180,9 @@ describe('approval', () => {
     expect(db.prepare("SELECT reason FROM loan_events WHERE loan_id = ?").get(ravi.id).reason).toMatch(/confirmed by hr1.*balance confirmed by fin1.*approved by boss/);
     expect(db.prepare("SELECT COUNT(*) n FROM audit_log WHERE action_type IN ('loan_imported','loan_import_approve')").get().n).toBe(4);
     const b = detail(id);
-    expect(b.batch).toMatchObject({ status: 'approved', cutover_month: 11, approved_by: 'boss' });
+    expect(b.batch).toMatchObject({ status: 'approved', plant_cutover_month: 11, sales_cutover_month: 11, approved_by: 'boss' });
+    expect(b.batch.cutover).toEqual({ plant: { month: 11, year: 2026 }, sales: { month: 11, year: 2026 } });
+    expect(a.loans.map((l) => l.cutover)).toEqual([{ month: 11, year: 2026 }, { month: 11, year: 2026 }, { month: 11, year: 2026 }]);
     expect(rowOf(b, 5)).toMatchObject({ outcome: 'left_out' });
     expect(L.importOfLoan(db, ravi.id)).toEqual({ batchId: id, rowNo: 2 });
   });
@@ -230,8 +232,8 @@ describe('approval', () => {
     expect(approve(id, ADMIN, { cutoverMonth: 8, cutoverYear: 2026 }).code).toBe('CUTOVER_TOO_EARLY');
     db.prepare("INSERT INTO loan_closes (month, year, payroll, run_by) VALUES (11, 2026, 'sales', 'system')").run();
     const r = approve(id, ADMIN, { cutoverMonth: 11, cutoverYear: 2026 });
-    expect(r).toMatchObject({ code: 'CUTOVER_TOO_EARLY', earliest: { month: 12, year: 2026 } });
-    expect(detail(id).approval.earliestForBatch).toEqual({ month: 12, year: 2026 });
+    expect(r).toMatchObject({ code: 'CUTOVER_TOO_EARLY', payroll: 'sales', earliest: { month: 12, year: 2026 } });
+    expect(detail(id).approval.earliestCutover).toEqual({ plant: { month: 9, year: 2026 }, sales: { month: 12, year: 2026 } });
     const ok = approve(id, ADMIN, { cutoverMonth: 12, cutoverYear: 2026 });
     expect(ok.ok).toBe(true);
     expect(ok.loans[0].firstEmi).toEqual({ month: 12, year: 2026 });
@@ -304,7 +306,7 @@ describe('approval', () => {
       ['Two Loans', 'Asian', '', '01-01-2026', '', 1000, 500, '', '', ''], ['Two Loans', 'Asian', '', '01-02-2026', '', 2000, 500, '', '', ''],
     ]);
     confirmAll(batchId);
-    const d = detail(batchId, { cutover: { month: 11, year: 2026 } });
+    const d = detail(batchId, { cutover: { plant: { month: 11, year: 2026 } } });
     const codesOf = (n) => rowOf(d, n).warnings.map((w) => w.code);
     expect(codesOf(2)).toContain('SERVICE_UNKNOWN');
     expect(codesOf(3)).toContain('CONTRACT_WORKER');

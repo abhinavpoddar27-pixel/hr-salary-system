@@ -32,7 +32,7 @@ const httpStatus = (code) => (STATUS_403.has(code) ? 403 : STATUS_409.has(code) 
 
 function refuse(res, r) {
   const body = { success: false, code: r.code, error: r.message || r.error || r.code };
-  for (const k of ['blockers', 'batchId', 'earliest', 'errors', 'rowNo', 'headers', 'mapping', 'autoMapping', 'fields', 'balanceColumns']) if (r[k] !== undefined) body[k] = r[k];
+  for (const k of ['blockers', 'batchId', 'earliest', 'payroll', 'errors', 'rowNo', 'headers', 'mapping', 'autoMapping', 'fields', 'balanceColumns']) if (r[k] !== undefined) body[k] = r[k];
   return res.status(httpStatus(r.code)).json(body);
 }
 
@@ -131,13 +131,24 @@ router.post('/batches', allow(['hr', 'finance'], { adminUpload: true }), fileUpl
   return reply(res, r, 201);
 }));
 
+/**
+ * Per-payroll cutover months from a body / query: plantCutoverMonth/Year and
+ * salesCutoverMonth/Year; a single cutoverMonth/Year applies to both.
+ */
+function cutoverFrom(src = {}) {
+  const m = (k) => {
+    const month = posInt(src[`${k}Month`]); const year = posInt(src[`${k}Year`]);
+    return month && year ? { month, year } : null;
+  };
+  return L.pickCutover({ plant: m('plantCutover'), sales: m('salesCutover'), both: m('cutover') });
+}
+
 router.get('/batches', allow(READ_ROLES), handle((req, res) => reply(res, L.listBatches(getDb(), { companies: companies(req) }))));
 
 router.get('/batches/:id', allow(READ_ROLES), handle((req, res) => {
   const id = posInt(req.params.id);
   if (!id) return refuse(res, { code: 'BATCH_NOT_FOUND', message: 'batch not found' });
-  const cm = posInt(req.query.cutoverMonth); const cy = posInt(req.query.cutoverYear);
-  return reply(res, L.batchDetail(getDb(), id, { companies: companies(req), cutover: cm && cy ? { month: cm, year: cy } : null }));
+  return reply(res, L.batchDetail(getDb(), id, { companies: companies(req), cutover: cutoverFrom(req.query) }));
 }));
 
 router.post('/batches/:id/rows/:rid/match', allow(['hr']), handle((req, res) => {
@@ -174,10 +185,10 @@ router.post('/batches/:id/columns', allow(['hr', 'finance', 'admin']), handle((r
 router.post('/batches/:id/approve', allow(['admin']), handle((req, res) => {
   const db = getDb();
   const b = req.body || {};
-  const r = L.approveBatch(db, { batchId: posInt(req.params.id), cutoverMonth: b.cutoverMonth, cutoverYear: b.cutoverYear, note: b.note }, req.actor, { companies: companies(req) });
+  const r = L.approveBatch(db, { batchId: posInt(req.params.id), cutover: cutoverFrom(b), note: b.note }, req.actor, { companies: companies(req) });
   if (r.ok) {
     const s7 = r.stage7Computed.length ? ` Re-run Stage 7 / sales compute for ${r.stage7Computed.length} borrower(s) before the bank file.` : '';
-    const msg = `Loan import batch #${r.batchId} approved: ${r.loans.length} loans imported, first EMI ${r.cutover.month}/${r.cutover.year}.${s7}`;
+    const msg = `Loan import batch #${r.batchId} approved: ${r.loans.length} loans imported, first EMI ${L.cutoverLabel(r.cutover)}.${s7}`;
     notify(db, 'hr', 'LOAN_IMPORT_APPROVED', msg);
     notify(db, 'finance', 'LOAN_IMPORT_APPROVED', msg);
   }
@@ -189,10 +200,13 @@ router.post('/batches/:id/discard', allow(['hr', 'finance', 'admin']), handle((r
 )));
 
 router.get('/batches/:id/cutover-check', allow(READ_ROLES), handle((req, res) => {
-  const r = L.cutoverCheck(getDb(), posInt(req.params.id), { month: posInt(req.query.month), year: posInt(req.query.year), companies: companies(req) });
+  const q = req.query;
+  const c = cutoverFrom({ plantCutoverMonth: q.plantMonth, plantCutoverYear: q.plantYear, salesCutoverMonth: q.salesMonth, salesCutoverYear: q.salesYear });
+  const r = L.cutoverCheck(getDb(), posInt(req.params.id), { month: posInt(q.month), year: posInt(q.year), plant: c.plant, sales: c.sales, companies: companies(req) });
   if (r.ok && req.query.format === 'xlsx') {
+    const tag = ['plant', 'sales'].filter((p) => r.months[p]).map((p) => `${p}-${r.months[p].year}-${String(r.months[p].month).padStart(2, '0')}`).join('_') || 'none';
     res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
-    res.setHeader('Content-Disposition', `attachment; filename="loan_import_${r.batchId}_cutover_${r.month.year}-${String(r.month.month).padStart(2, '0')}.xlsx"`);
+    res.setHeader('Content-Disposition', `attachment; filename="loan_import_${r.batchId}_cutover_${tag}.xlsx"`);
     return res.send(L.cutoverCheckXlsx(r));
   }
   return reply(res, r);

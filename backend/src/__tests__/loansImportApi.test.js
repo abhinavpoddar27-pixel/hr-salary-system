@@ -173,3 +173,37 @@ describe('PR-10 follow-up: code column and the columns route', () => {
     expect(c.body.data).toMatchObject({ outstandingColumn: 'Pending Loan Amount', rowsChanged: 1 });
   });
 });
+
+describe('PR-10 follow-up #2: a cutover month per payroll over HTTP', () => {
+  test('plant and sales months on one approval; detail preview, notification, cutover check month per row', async () => {
+    db.prepare(`INSERT INTO employees (code, name, department, company, employment_type, status, date_of_joining, is_contractor, weekly_off_day, gross_salary)
+                VALUES ('50001', 'API PLANT', 'PRODUCTION', ?, 'Permanent', 'Active', '2024-01-01', 0, 0, 20000)`).run(AL);
+    db.prepare("INSERT INTO sales_employees (code, name, company, status, doj, gross_salary) VALUES ('S778', 'API REP TWO', 'Indriyan Beverages Pvt Ltd', 'Active', '2024-01-01', 40000)").run();
+    const f = book([['Punch No', 'Name', 'Deduct per month Aug', 'Op sep'], ['50001', 'Api Plant', 1000, 4000], ['S778', 'Api Rep Two', 2000, 6000]]);
+    const id = (await postFile('/api/loans/import/batches', { as: 'hr1', file: f })).body.data.batchId;
+    const base = `/api/loans/import/batches/${id}`;
+    let d = (await api.request('GET', base, { as: 'view1' })).body.data;
+    for (const row of d.rows) {
+      expect((await api.request('POST', `${base}/rows/${row.id}/match`, { as: 'hr1', body: { borrowerType: row.borrower_type, employeeCode: row.employee_code, company: row.company } })).status).toBe(200);
+      expect((await api.request('POST', `${base}/rows/${row.id}/balance`, { as: 'fin1', body: {} })).status).toBe(200);
+    }
+    d = (await api.request('GET', `${base}?plantCutoverMonth=11&plantCutoverYear=2026&salesCutoverMonth=12&salesCutoverYear=2026`, { as: 'view1' })).body.data;
+    expect(d.approval.payrolls.sort()).toEqual(['plant', 'sales']);
+    expect(Object.keys(d.approval.earliestCutover)).toEqual(['plant', 'sales']);
+    expect(d.approval.byPayroll).toMatchObject({ plant: { loans: 1, monthlyEmi: 1000 }, sales: { loans: 1, monthlyEmi: 2000 } });
+    const missing = await api.request('POST', `${base}/approve`, { as: 'boss', body: { plantCutoverMonth: 11, plantCutoverYear: 2026 } });
+    expect(missing.body).toMatchObject({ code: 'MONTH_INVALID', payroll: 'sales' });
+    const a = await api.request('POST', `${base}/approve`, { as: 'boss', body: { plantCutoverMonth: 11, plantCutoverYear: 2026, salesCutoverMonth: 12, salesCutoverYear: 2026, note: 'split' } });
+    expect(a.status).toBe(201);
+    expect(a.body.data.cutover).toEqual({ plant: { month: 11, year: 2026 }, sales: { month: 12, year: 2026 } });
+    expect(a.body.data.loans.map((l) => [l.borrowerType, l.firstEmi])).toEqual([['plant', { month: 11, year: 2026 }], ['sales', { month: 12, year: 2026 }]]);
+    expect(db.prepare("SELECT message FROM notifications WHERE type = 'LOAN_IMPORT_APPROVED' ORDER BY id DESC LIMIT 1").get().message).toMatch(/first EMI plant 2026-11 · sales 2026-12/);
+    const list = (await api.request('GET', '/api/loans/import/batches', { as: 'view1' })).body.data.batches;
+    expect(list.find((b) => b.id === id).cutover).toEqual({ plant: { month: 11, year: 2026 }, sales: { month: 12, year: 2026 } });
+    const c = (await api.request('GET', `${base}/cutover-check`, { as: 'view1' })).body.data;
+    expect(c.rows.map((r) => [r.payroll, r.month, r.appInstalment])).toEqual([['plant', { month: 11, year: 2026 }, 1000], ['sales', { month: 12, year: 2026 }, 2000]]);
+    const o = (await api.request('GET', `${base}/cutover-check?plantMonth=12&plantYear=2026`, { as: 'view1' })).body.data;
+    expect(o.rows.map((r) => [r.payroll, r.month])).toEqual([['plant', { month: 12, year: 2026 }], ['sales', { month: 12, year: 2026 }]]);
+    expect((await api.request('GET', `${base}/cutover-check?month=13&year=2026`, { as: 'view1' })).body.code).toBe('MONTH_INVALID');
+  });
+});

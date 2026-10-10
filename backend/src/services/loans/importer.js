@@ -4,7 +4,8 @@
  *
  *   upload (HR or finance) → HR confirms each match → finance confirms each
  *   balance (may correct it, with a note) → the admin approves the batch and
- *   names the cutover month M → one ACTIVE loan per confirmed row.
+ *   names the cutover month M PER PAYROLL (plant rows and sales rows of one
+ *   batch may start in different months) → one ACTIVE loan per confirmed row.
  *
  * An imported loan is an OPENING BALANCE, not a payout: principal = disbursed =
  * balance = the confirmed outstanding, disbursement_mode 'Opening balance
@@ -193,14 +194,38 @@ function earliestCutover(db, payroll, now = new Date()) {
   return open && compareMonth(open, floor) > 0 ? open : floor;
 }
 
-/** Included borrowers whose Stage 7 / sales compute for M already ran (their first EMI needs a re-run). */
-function stage7ComputedFor(db, rows, M) {
+const PAYROLLS = ['plant', 'sales'];
+
+/** The cutover months stamped on a batch: { plant: {month, year} | null, sales: … }. */
+function batchCutover(b) {
+  const one = (p) => (b[`${p}_cutover_month`] ? { month: b[`${p}_cutover_month`], year: b[`${p}_cutover_year`] } : null);
+  return { plant: one('plant'), sales: one('sales') };
+}
+
+/** "plant Sep 2026 · sales Oct 2026" (only the payrolls that have a month). */
+function cutoverLabel(c) {
+  return PAYROLLS.filter((p) => c && c[p]).map((p) => `${p} ${monthLabel(c[p])}`).join(' · ') || '—';
+}
+
+/**
+ * Read a per-payroll cutover from a request: plant/sales specific months win;
+ * a single { month, year } (legacy) applies to both. Invalid → null for that payroll.
+ */
+function pickCutover({ plant = null, sales = null, both = null } = {}) {
+  const ok = (m) => (m && isValidMonth({ month: Number(m.month), year: Number(m.year) }) ? { month: Number(m.month), year: Number(m.year) } : null);
+  return { plant: ok(plant) || ok(both), sales: ok(sales) || ok(both) };
+}
+
+/** Included borrowers whose Stage 7 / sales compute for their payroll's cutover month already ran (their first EMI needs a re-run). */
+function stage7ComputedFor(db, rows, months) {
   const out = [];
   for (const r of rows) {
+    const M = months && months[r.borrower_type];
+    if (!M) continue;
     const hit = r.borrower_type === 'sales'
       ? db.prepare('SELECT 1 FROM sales_salary_computations WHERE employee_code = ? AND company = ? AND month = ? AND year = ? LIMIT 1').get(r.employee_code, r.company, M.month, M.year)
       : db.prepare('SELECT 1 FROM salary_computations WHERE employee_code = ? AND month = ? AND year = ? LIMIT 1').get(r.employee_code, M.month, M.year);
-    if (hit) out.push({ rowNo: r.row_no, borrowerType: r.borrower_type, employeeCode: r.employee_code, company: r.company });
+    if (hit) out.push({ rowNo: r.row_no, borrowerType: r.borrower_type, employeeCode: r.employee_code, company: r.company, month: M });
   }
   return out;
 }
@@ -311,7 +336,7 @@ function listBatches(db, { companies = null } = {}) {
     const st = rs.map(rowState);
     batches.push({
       id: b.id, fileName: b.file_name, status: b.status, uploadedBy: b.uploaded_by, uploadedAt: b.uploaded_at, totalRows: b.total_rows,
-      cutover: b.cutover_month ? { month: b.cutover_month, year: b.cutover_year } : null, approvedBy: b.approved_by, approvedAt: b.approved_at,
+      cutover: b.status === 'approved' ? batchCutover(b) : null, approvedBy: b.approved_by, approvedAt: b.approved_at,
       counts: {
         ready: st.filter((s) => s.state === 'in').length,
         needsMatch: st.filter((s) => s.state === 'needs_match').length,
@@ -345,12 +370,19 @@ function batchDetail(db, batchId, { companies = null, cutover = null, now = new 
     .map((r) => ({ rowId: r.id, rowNo: r.row_no, name: r.name, code: r.state === 'needs_match' ? 'NEEDS_HR_MATCH' : 'NEEDS_FINANCE_BALANCE' }));
   const included = out.filter((r) => r.state === 'in');
   const payrolls = [...new Set(included.map((r) => r.borrower_type))];
-  const earliest = Object.fromEntries(['plant', 'sales'].map((p) => [p, earliestCutover(db, p, now)]));
+  const earliest = Object.fromEntries(PAYROLLS.map((p) => [p, earliestCutover(db, p, now)]));
   const sumP = (list, f) => list.reduce((s, r) => s + f(r), 0);
-  const M = cutover && isValidMonth(cutover) ? cutover : (b.cutover_month ? { month: b.cutover_month, year: b.cutover_year } : null);
+  // The months to preview (Stage 7 already run?): the ones asked for, else the
+  // earliest allowed per payroll (= the screen's defaults).
+  const asked = cutover && cutover.month ? pickCutover({ both: cutover }) : (cutover || {});
+  const preview = Object.fromEntries(PAYROLLS.map((p) => [p, asked[p] && isValidMonth(asked[p]) ? asked[p] : earliest[p]]));
+  const byPayroll = Object.fromEntries(PAYROLLS.map((p) => {
+    const list = included.filter((r) => r.borrower_type === p);
+    return [p, { loans: list.length, outstanding: toRupees(sumP(list, effOutstanding)), monthlyEmi: toRupees(sumP(list, effEmi)) }];
+  }));
   return {
     ok: true,
-    batch: { ...b, column_map: json(b.column_map, {}), result: json(b.result, null) },
+    batch: { ...b, column_map: json(b.column_map, {}), result: json(b.result, null), cutover: b.status === 'approved' ? batchCutover(b) : null },
     rows: out,
     sections: {
       needsMatch: out.filter((r) => r.state === 'needs_match').map((r) => r.id),
@@ -366,9 +398,9 @@ function batchDetail(db, batchId, { companies = null, cutover = null, now = new 
       canApprove: b.status === 'review' && blockers.length === 0 && included.length > 0,
       blockers, payrolls,
       earliestCutover: earliest,
-      earliestForBatch: payrolls.length ? payrolls.map((p) => earliest[p]).sort(compareMonth).pop() : earliest.plant,
       totals: { loans: included.length, outstanding: toRupees(sumP(included, effOutstanding)), monthlyEmi: toRupees(sumP(included, effEmi)) },
-      stage7Computed: M && b.status === 'review' ? stage7ComputedFor(db, included, M) : [],
+      byPayroll,
+      stage7Computed: b.status === 'review' ? stage7ComputedFor(db, included, preview) : [],
     },
   };
 }
@@ -567,9 +599,13 @@ function openingDate(payroll, M) {
 
 /**
  * Admin approves the batch (never one they uploaded or confirmed anything in)
- * and names the cutover month M. All or nothing: one transaction.
+ * and names the cutover month M for each payroll in it: `cutover.plant` /
+ * `cutover.sales` ({month, year}); a single cutoverMonth/Year applies to both.
+ * Each payroll's month is checked on its own (not closed for that payroll, not
+ * earlier than the current IST month − 1). Sales M = the cycle ending the 25th
+ * of M (PR-8). All or nothing: one transaction.
  */
-function approveBatch(db, { batchId, cutoverMonth, cutoverYear, note = null }, actor, { companies = null, now = new Date() } = {}) {
+function approveBatch(db, { batchId, cutover = null, cutoverMonth = null, cutoverYear = null, note = null }, actor, { companies = null, now = new Date() } = {}) {
   const gate = checkActor('import_approve', actor);
   if (!gate.ok) return gate;
   const d = batchDetail(db, batchId, { companies, now });
@@ -585,20 +621,28 @@ function approveBatch(db, { batchId, cutoverMonth, cutoverYear, note = null }, a
   }
   const included = d.rows.filter((r) => r.state === 'in');
   if (!included.length) return fail('NOTHING_TO_IMPORT', 'no row is confirmed by both HR and finance');
-  const M = { month: Number(cutoverMonth), year: Number(cutoverYear) };
-  if (!isValidMonth(M)) return fail('MONTH_INVALID', 'cutover month/year invalid');
+  const asked = pickCutover({
+    plant: cutover && cutover.plant, sales: cutover && cutover.sales,
+    both: cutoverMonth && cutoverYear ? { month: cutoverMonth, year: cutoverYear } : null,
+  });
+  const months = { plant: null, sales: null };
   for (const p of d.approval.payrolls) {
+    if (!asked[p]) return fail('MONTH_INVALID', `the ${p} cutover month/year is missing or invalid`, { payroll: p });
     const earliest = d.approval.earliestCutover[p];
-    if (compareMonth(M, earliest) < 0) {
-      return fail('CUTOVER_TOO_EARLY', `the ${p} cutover month cannot be earlier than ${monthLabel(earliest)} (after the latest loan close, and no earlier than last month)`, { earliest });
+    if (compareMonth(asked[p], earliest) < 0) {
+      return fail('CUTOVER_TOO_EARLY', `the ${p} cutover month cannot be earlier than ${monthLabel(earliest)} (after the latest ${p} loan close, and no earlier than last month)`, { payroll: p, earliest });
     }
+    months[p] = asked[p];
   }
+  const label = cutoverLabel(months);
   const policy = readLoanPolicy(db);
 
   return inTxn(db, () => {
-    const u = db.prepare(`UPDATE loan_import_batches SET status = 'approved', cutover_month = ?, cutover_year = ?, approved_by = ?, approved_at = datetime('now'),
+    const u = db.prepare(`UPDATE loan_import_batches SET status = 'approved', plant_cutover_month = ?, plant_cutover_year = ?,
+                                 sales_cutover_month = ?, sales_cutover_year = ?, approved_by = ?, approved_at = datetime('now'),
                                  approval_note = ?, updated_at = datetime('now') WHERE id = ? AND status = 'review'`)
-      .run(M.month, M.year, gate.actor.username, text(note) || null, b.id);
+      .run(months.plant ? months.plant.month : null, months.plant ? months.plant.year : null,
+        months.sales ? months.sales.month : null, months.sales ? months.sales.year : null, gate.actor.username, text(note) || null, b.id);
     if (u.changes !== 1) return fail('CONCURRENT_CHANGE', 'the batch was approved or discarded underneath');
     const loans = [];
     const leftOut = [];
@@ -624,6 +668,7 @@ function approveBatch(db, { batchId, cutoverMonth, cutoverYear, note = null }, a
       const outP = effOutstanding(r);
       const emiP = effEmi(r);
       const payroll = r.borrower_type;
+      const M = months[payroll];
       const opening = openingDate(payroll, M);
       const first = firstEmiMonth({ disbursedOn: opening, closed: closedMonths(db, payroll), requested: M, payroll });
       if (!first.ok) return { ...first, message: `row ${r.row_no}: ${first.message}`, rowNo: r.row_no };
@@ -641,7 +686,7 @@ function approveBatch(db, { batchId, cutoverMonth, cutoverYear, note = null }, a
         VALUES (?, ?, ?, ?, ?, 0, ?, ?, 'active', ?, ?, ?, datetime('now'), ?, ?, ?, ?, ?, ?, datetime('now'), ?, ?,
                 CASE WHEN ? = 1 THEN datetime('now') END, ?, ?, ?, ?)
       `).run(payroll, r.employee_code, r.company, r.loan_type, toRupees(outP), sched.instalments.length, toRupees(sched.emiPaise),
-        b.uploaded_by, reason, gate.actor.username, `Import approved, cutover ${monthLabel(M)}${text(note) ? `: ${text(note)}` : ''}`,
+        b.uploaded_by, reason, gate.actor.username, `Import approved, ${payroll} cutover ${monthLabel(M)}${text(note) ? `: ${text(note)}` : ''}`,
         toRupees(outP), IMPORT_MODE, `IMPORT-${b.id}-R${r.row_no}`, opening, r.balance_confirmed_by,
         text(r.agreement_ref) || null, text(r.agreement_ref) ? r.balance_confirmed_by : null, text(r.agreement_ref) ? 1 : 0,
         first.month.month, first.month.year, toRupees(outP), r.notes || null);
@@ -661,23 +706,23 @@ function approveBatch(db, { batchId, cutoverMonth, cutoverYear, note = null }, a
       db.prepare(`UPDATE loan_import_rows SET outcome = 'imported', loan_id = ?, row_key = ?, warnings = ?, outcome_reason = NULL, updated_at = datetime('now') WHERE id = ?`)
         .run(loan.id, key, JSON.stringify(warnings), r.id);
       loans.push({
-        rowNo: r.row_no, loanId: loan.id, borrowerType: payroll, employeeCode: r.employee_code, company: r.company, name: r.name,
+        rowNo: r.row_no, loanId: loan.id, borrowerType: payroll, employeeCode: r.employee_code, company: r.company, name: r.name, cutover: M,
         outstanding: toRupees(outP), emi: toRupees(sched.emiPaise), tenure: sched.instalments.length, firstEmi: first.month,
         lastInstalment: toRupees(sched.instalments[sched.instalments.length - 1].amountPaise), warnings: warnings.map((w) => w.code),
       });
     }
     if (!loans.length) return fail('NOTHING_TO_IMPORT', 'every confirmed row was already imported');
-    const stage7 = stage7ComputedFor(db, included.filter((r) => loans.some((l) => l.rowNo === r.row_no)), M);
+    const stage7 = stage7ComputedFor(db, included.filter((r) => loans.some((l) => l.rowNo === r.row_no)), months);
     const result = {
-      cutover: M, loans: loans.length,
+      cutover: months, loans: loans.length,
       outstanding: toRupees(loans.reduce((s, l) => s + toPaise(l.outstanding), 0)),
       monthlyEmi: toRupees(loans.reduce((s, l) => s + toPaise(l.emi), 0)),
       leftOut: leftOut.length, stage7Computed: stage7.length,
     };
     db.prepare("UPDATE loan_import_batches SET result = ?, updated_at = datetime('now') WHERE id = ?").run(JSON.stringify(result), b.id);
     audit(db, { table: 'loan_import_batches', recordId: b.id, field: 'status', oldValue: 'review', newValue: 'approved', actor: gate.actor, action: 'approve',
-      remark: `cutover ${monthLabel(M)} · ${loans.length} loan(s) ₹${result.outstanding} · EMI ₹${result.monthlyEmi}/month · ${leftOut.length} left out${text(note) ? ` · ${text(note)}` : ''}` });
-    return { ok: true, batchId: b.id, cutover: M, loans, leftOut, totals: result, stage7Computed: stage7 };
+      remark: `cutover ${label} · ${loans.length} loan(s) ₹${result.outstanding} · EMI ₹${result.monthlyEmi}/month · ${leftOut.length} left out${text(note) ? ` · ${text(note)}` : ''}` });
+    return { ok: true, batchId: b.id, cutover: months, loans, leftOut, totals: result, stage7Computed: stage7 };
   });
 }
 
@@ -686,20 +731,26 @@ function approveBatch(db, { batchId, cutoverMonth, cutoverYear, note = null }, a
 /**
  * For every loan the batch imported: Excel EMI vs the app's instalment for M vs
  * what Stage 7 deducted, the deduction room, and net pay (for accounts to
- * compare with the bank payment).
+ * compare with the bank payment). M is the loan's OWN payroll's cutover month
+ * (shown per row); `plant` / `sales` ({month, year}) or a single month/year
+ * look at another month instead.
  */
-function cutoverCheck(db, batchId, { month = null, year = null, companies = null } = {}) {
+function cutoverCheck(db, batchId, { month = null, year = null, plant = null, sales = null, companies = null } = {}) {
   const d = batchDetail(db, batchId, { companies });
   if (!d.ok) return d;
   const b = d.batch;
   if (b.status !== 'approved') return fail('BATCH_NOT_APPROVED', `batch #${b.id} is ${b.status}; the cutover check runs after approval`);
-  const M = month && year ? { month: Number(month), year: Number(year) } : { month: b.cutover_month, year: b.cutover_year };
-  if (!isValidMonth(M)) return fail('MONTH_INVALID', 'month/year invalid');
+  if ((month || year) && !(month && year && isValidMonth({ month: Number(month), year: Number(year) }))) return fail('MONTH_INVALID', 'month/year invalid');
+  const asked = pickCutover({ plant, sales, both: month && year ? { month, year } : null });
+  const stamped = batchCutover(b);
+  const months = { plant: asked.plant || stamped.plant, sales: asked.sales || stamped.sales };
   const policy = readLoanPolicy(db);
   const rows = [];
   const totals = { loans: 0, excelEmi: 0, appInstalment: 0, deducted: 0, flagged: 0 };
   for (const r of d.rows.filter((x) => x.outcome === 'imported')) {
     const loan = getLoan(db, r.loan_id);
+    const M = months[loan.borrower_type];
+    if (!M) return fail('MONTH_INVALID', `no ${loan.borrower_type} cutover month on batch #${b.id}`);
     const ins = db.prepare(`SELECT * FROM loan_instalments WHERE loan_id = ? AND due_month = ? AND due_year = ? AND status <> 'cancelled' ORDER BY sequence LIMIT 1`)
       .get(loan.id, M.month, M.year);
     const ded = db.prepare('SELECT * FROM loan_deductions WHERE loan_id = ? AND month = ? AND year = ? AND payroll = ?').get(loan.id, M.month, M.year, loan.borrower_type);
@@ -735,7 +786,7 @@ function cutoverCheck(db, batchId, { month = null, year = null, companies = null
     const net = salRows.reduce((s, x) => s + toPaise(x.net_salary || 0), 0);
     const payslipLoan = salRows.reduce((s, x) => s + toPaise(x.loan_recovery || 0), 0);
     rows.push({
-      rowNo: r.row_no, loanId: loan.id, payroll: loan.borrower_type, employeeCode: loan.employee_code, name: r.name, company: loan.company,
+      rowNo: r.row_no, loanId: loan.id, payroll: loan.borrower_type, month: M, employeeCode: loan.employee_code, name: r.name, company: loan.company,
       excelEmi: toRupees(excel), confirmedEmi: r.confirmed_emi, appInstalment: toRupees(due),
       deduction: ded ? { state: ded.state, amount: toRupees(dedPaise) } : null,
       payslipLoan: salRows.length ? toRupees(payslipLoan) : null, netSalary: salRows.length ? toRupees(net) : null,
@@ -746,7 +797,7 @@ function cutoverCheck(db, batchId, { month = null, year = null, companies = null
     if (flags.length) totals.flagged += 1;
   }
   return {
-    ok: true, batchId: b.id, month: M, rows,
+    ok: true, batchId: b.id, months, rows,
     totals: { ...totals, excelEmi: toRupees(totals.excelEmi), appInstalment: toRupees(totals.appInstalment), deducted: toRupees(totals.deducted) },
   };
 }
@@ -754,14 +805,14 @@ function cutoverCheck(db, batchId, { month = null, year = null, companies = null
 /** Excel of the cutover check (for accounts to sign against the bank file). */
 function cutoverCheckXlsx(c) {
   const XLSX = require('xlsx');
-  const head = ['Row', 'Loan #', 'Payroll', 'Company', 'Code', 'Name', 'Excel EMI ₹', 'App instalment ₹', 'Stage 7 deduction ₹', 'Deduction state',
+  const head = ['Row', 'Loan #', 'Payroll', 'Month', 'Company', 'Code', 'Name', 'Excel EMI ₹', 'App instalment ₹', 'Stage 7 deduction ₹', 'Deduction state',
     'Payslip loan ₹', 'Net salary ₹', 'Projected room ₹', 'Room basis', 'Balance ₹', 'Status', 'Flags'];
-  const aoa = [[`Loan import cutover check — batch #${c.batchId}, ${monthLabel(c.month)}`], [], head];
+  const aoa = [[`Loan import cutover check — batch #${c.batchId}, ${cutoverLabel(c.months)}`], [], head];
   for (const r of c.rows) {
-    aoa.push([r.rowNo, r.loanId, r.payroll, r.company, r.employeeCode, r.name, r.excelEmi, r.appInstalment, r.deduction ? r.deduction.amount : '',
+    aoa.push([r.rowNo, r.loanId, r.payroll, monthLabel(r.month), r.company, r.employeeCode, r.name, r.excelEmi, r.appInstalment, r.deduction ? r.deduction.amount : '',
       r.deduction ? r.deduction.state : '', r.payslipLoan ?? '', r.netSalary ?? '', r.projectedHeadroom ?? '', r.headroomBasis, r.balance, r.status, r.flags.join(', ')]);
   }
-  aoa.push(['Total', c.totals.loans, '', '', '', '', c.totals.excelEmi, c.totals.appInstalment, c.totals.deducted, '', '', '', '', '', '', '', `${c.totals.flagged} flagged`]);
+  aoa.push(['Total', c.totals.loans, '', '', '', '', '', c.totals.excelEmi, c.totals.appInstalment, c.totals.deducted, '', '', '', '', '', '', '', `${c.totals.flagged} flagged`]);
   const wb = XLSX.utils.book_new();
   const ws = XLSX.utils.aoa_to_sheet(aoa);
   ws['!cols'] = head.map((h) => ({ wch: Math.max(10, h.length + 2) }));
@@ -778,5 +829,6 @@ function importOfLoan(db, loanId) {
 module.exports = {
   IMPORT_MODE, importReady, previewImport, createBatch, listBatches, batchDetail, confirmMatch, excludeRow, confirmBalance,
   discardBatch, remapColumns, approveBatch, cutoverCheck, cutoverCheckXlsx, importOfLoan, openingDate, earliestCutover, rowKey,
+  batchCutover, cutoverLabel, pickCutover,
   buildImportTemplate: P.buildTemplate,
 };

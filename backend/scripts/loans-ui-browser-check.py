@@ -1081,6 +1081,18 @@ XLSX.writeFile(wb, out);
 '''
 
 
+IMPORT_MIXED_XLSX_JS = r'''
+const [root, out] = process.argv.slice(2);
+const XLSX = require(root + '/backend/node_modules/xlsx');
+const wb = XLSX.utils.book_new();
+XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([
+  ['Punch No', 'Name', 'Deduct per month Aug', 'Op sep'],
+  ['I205', 'Ravinder Gill', 1500, 4500],
+  ['S951', 'Neha Bansal', 2000, 8000],
+]), 'Sheet1');
+XLSX.writeFile(wb, out);
+'''
+
 IMPORT_CODE_XLSX_JS = r'''
 const [root, out] = process.argv.slice(2);
 const XLSX = require(root + '/backend/node_modules/xlsx');
@@ -1164,12 +1176,14 @@ def run_import_pass(db_path, hr, admin, fin, viewer):
     admin.goto(f'{BASE}/loans?tab=import')
     admin.get_by_test_id(f'imp-batch-{batch_id}').click()
     check('admin: approve panel, no blockers', visible(admin, 'imp-approve', 15000) and admin.get_by_test_id('imp-blockers').count() == 0)
+    check('admin: plant cutover picker only', visible(admin, 'imp-cutover-plant') and admin.get_by_test_id('imp-cutover-sales').count() == 0)
     check('admin: totals show 2 loans', '2 loans' in admin.get_by_test_id('imp-totals').inner_text(), admin.get_by_test_id('imp-totals').inner_text())
     shot(admin, '04-admin-approve', element='imp-approve', out=OUT10)
     admin.get_by_test_id('imp-approve-go').click()
     check('admin: approval toast', toast(admin, '2 loans imported'))
     check('admin: result banner', visible(admin, 'imp-result', 15000))
-    check('admin: cutover check renders 2 rows', visible(admin, 'imp-cutover-check', 15000) and admin.locator('[data-testid^="imp-cc-"]').count() >= 2)
+    check('admin: one cutover picker (plant-only batch)', admin.get_by_test_id('imp-cutover-sales').count() == 0)
+    check('admin: cutover check renders 2 rows', visible(admin, 'imp-cutover-check', 15000) and admin.locator('[data-testid^="imp-cc-row-month-"]').count() == 2)
     try:
         with admin.expect_download(timeout=15000) as dl:
             admin.get_by_test_id('imp-cutover-xlsx').click()
@@ -1222,6 +1236,59 @@ def run_import_pass(db_path, hr, admin, fin, viewer):
     hr.get_by_test_id('imp-batch').wait_for(timeout=15000)
     check('code file: hr is not the uploader → no columns card', hr.get_by_test_id('imp-columns').count() == 0)
     check('code file: a NAME DIFFERS row asks HR for a note', visible(hr, 'imp-match-note-5'))
+
+    # PR-10 follow-up #2: one batch with a plant and a sales borrower → a cutover month per payroll
+    # (owner facts: plant Sep 2026, sales Oct 2026). Synthetic names.
+    con = sqlite3.connect(db_path, timeout=10)
+    con.execute("""INSERT INTO employees (code, name, department, company, status, employment_type, is_contractor, gross_salary, date_of_joining)
+                   VALUES ('I205', 'Ravinder Gill', 'PRODUCTION', ?, 'Active', 'Permanent', 0, 24000, '2022-01-01')""", (COMPANY,))
+    con.execute("""INSERT INTO sales_employees (code, name, company, status, doj, gross_salary)
+                   VALUES ('S951', 'Neha Bansal', ?, 'Active', '2023-01-01', 30000)""", (COMPANY,))
+    con.commit()
+    con.close()
+    js3 = os.path.join(work, 'import-mixed-xlsx.js')
+    with open(js3, 'w') as f:
+        f.write(IMPORT_MIXED_XLSX_JS)
+    xlsx3 = os.path.join(work, 'mixed_loans.xlsx')
+    subprocess.check_call(['node', js3, ROOT, xlsx3])
+    hr.goto(f'{BASE}/loans?tab=import')
+    hr.get_by_test_id('imp-file').set_input_files(xlsx3)
+    hr.get_by_test_id('imp-parse-status').wait_for(timeout=15000)
+    hr.get_by_test_id('imp-create').click()
+    check('mixed: batch created (2 rows)', toast(hr, 'created: 2 rows') and visible(hr, 'imp-batch', 15000))
+    mixed_id = int(hr.get_by_role('heading', name='Batch #').inner_text().split('#')[1].split(' ')[0])
+    for rn in (2, 3):
+        hr.get_by_test_id(f'imp-confirm-{rn}').click()
+        check(f'mixed: hr confirms row {rn}', toast(hr, f'Row {rn}: match confirmed'))
+    fin.goto(f'{BASE}/loans?tab=import')
+    fin.get_by_test_id(f'imp-batch-{mixed_id}').click()
+    for rn in (2, 3):
+        fin.get_by_test_id(f'imp-balance-confirm-{rn}').click()
+        check(f'mixed: finance confirms row {rn}', toast(fin, f'Row {rn}: balance confirmed'))
+    admin.goto(f'{BASE}/loans?tab=import')
+    admin.get_by_test_id(f'imp-batch-{mixed_id}').click()
+    check('mixed: two cutover pickers (plant, sales)', visible(admin, 'imp-cutover-plant', 15000) and visible(admin, 'imp-cutover-sales'))
+    plant_sel = admin.get_by_test_id('imp-cutover-plant').locator('select')
+    sales_sel = admin.get_by_test_id('imp-cutover-sales').locator('select')
+    check('mixed: both default to the first allowed month (Sep 2026)', plant_sel.nth(0).input_value() == '9' and sales_sel.nth(0).input_value() == '9'
+          and plant_sel.nth(1).input_value() == '2026', [plant_sel.nth(0).input_value(), sales_sel.nth(0).input_value()])
+    sales_sel.nth(0).select_option('10')
+    shot(admin, '09-mixed-cutover', element='imp-approve', out=OUT10)
+    admin.get_by_test_id('imp-approve-go').click()
+    check('mixed: approval toast names both months', toast(admin, 'first EMI Plant Sep 2026 · Sales Oct 2026'))
+    check('mixed: result banner names both months', visible(admin, 'imp-result', 15000)
+          and 'Plant Sep 2026 · Sales Oct 2026' in admin.get_by_test_id('imp-result').inner_text(), admin.get_by_test_id('imp-result').inner_text())
+    check('mixed: cutover check shows the month per row', visible(admin, 'imp-cutover-check', 15000)
+          and admin.get_by_test_id('imp-cc-row-month-2').inner_text() == 'Sep 2026' and admin.get_by_test_id('imp-cc-row-month-3').inner_text() == 'Oct 2026')
+    shot(admin, '10-mixed-cutover-check', element='imp-cutover-check', out=OUT10)
+    con = sqlite3.connect(db_path, timeout=10)
+    got = con.execute("""SELECT employee_code, borrower_type, disbursed_on, first_emi_month, first_emi_year FROM loans
+                         WHERE disbursement_reference LIKE ? ORDER BY id""", (f'IMPORT-{mixed_id}-%',)).fetchall()
+    bc = con.execute('SELECT plant_cutover_month, plant_cutover_year, sales_cutover_month, sales_cutover_year FROM loan_import_batches WHERE id = ?', (mixed_id,)).fetchone()
+    con.close()
+    check('mixed DB: plant opens 31 Aug → Sep EMI, sales opens 25 Sep → Oct EMI',
+          got == [('I205', 'plant', '2026-08-31', 9, 2026), ('S951', 'sales', '2026-09-25', 10, 2026)], got)
+    check('mixed DB: the batch stores both months', bc == (9, 2026, 10, 2026), bc)
 
 
 if __name__ == '__main__':
