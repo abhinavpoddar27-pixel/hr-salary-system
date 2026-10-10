@@ -1,3 +1,25 @@
+## Last Session — 2026-10-10 (P1-06: leave rejection reason was dropped)
+**Branch `fix/leave-rejection-reason`, NOT merged.** Frontend only (`pages/LeaveManagement.jsx`). Plan + log:
+`docs/ux-bulk/prs/P1-06/PLAN.md`, `PROGRESS.md`. Finding H-3. Planner rulings: reason in the row + detail; F-a/F-b later.
+- **Bug:** the Reject window sent `{ rejection_reason, rejected_by }`; `PUT /api/leaves/:id/reject` reads `req.body.reason`
+  and stores `reason || ''` → every rejection from the screen was saved with an empty reason (prod: 1 rejected leave ever,
+  empty). The reason was also never shown anywhere. Sentry 0 issues (silent 200).
+- **Fix:** mutation sends `{ reason: trimmed }` (rejecter comes from the JWT, as before); Confirm Reject disabled (and
+  styled disabled) until the trimmed reason has ≥ 5 chars, hint + live count; Rejected rows show "by X: reason" under the
+  status pill (truncated, full text in tooltip) and "Rejection reason: … (rejected by X)" in the expanded detail; old
+  rows with '' show "—". Route unchanged (it already reads `reason`; list already returns `rejection_reason`). dist rebuilt.
+- **Fragile:** the 5-char minimum is a UI rule only (`REJECT_REASON_MIN`); the route still accepts '' from an API caller.
+  The rejecter is stored in `approved_by` (same column as the approver). The Reject button click bubbles to the row and
+  toggles its drill-down (pre-existing, harmless).
+- **Verified:** new `leaveRejectReason.test.js` 5/5 (real JWTs: hr + finance store the reason, the old body key stores '',
+  viewer 403, anon 401, list returns the field); jest 85/1377 → 86/1382. `backend/scripts/leave-reject-reason-check.py`
+  (Chromium, built dist, scratch DB, hr + finance, fictional T960x, port 3106) 29/29 — short/spaces-only → disabled,
+  valid → Rejected, DB = typed text trimmed, row + detail show it, reopen empty, legacy '' → "—", 390px, 0 page/console
+  errors, 0 API ≥ 400. `--base` on an origin/main worktree 3/3: Confirm enabled with 3 chars, DB reason ''.
+- **Not tested:** Railway; Safari/Firefox; real production data. Branch based on 2d96842 (main since moved to b8b9759 —
+  no overlap with these files).
+- **Found, not fixed:** F-a `PUT /:id/reject` returns success even when nothing changed (row not Pending / unknown id)
+  and writes no audit_log row; F-b the route has no server-side minimum, so an API caller can still store an empty reason.
 ## Last Session — 2026-10-10 (Attendance Review PR-3: Excel + Word downloads)
 **Branch `feat/attendance-review-exports` (stacked on PR-2 `feat/attendance-review-tab`, PR #84).** Merge #84 first.
 - **What:** `backend/src/services/attendanceReviewExports.js` — workbook (Summary, Action list, Early-exit warnings, Notice
