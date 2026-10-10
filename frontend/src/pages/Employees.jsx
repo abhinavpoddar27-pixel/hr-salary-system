@@ -870,6 +870,7 @@ export default function Employees() {
   const { selectedMonth, selectedYear, selectedCompany, user } = useAppStore()
   const navigate = useNavigate()
   const canBulkAssignShift = user?.role === 'admin' || user?.role === 'hr'
+  const canMarkLeft = canBulkAssignShift  // hr + admin — same set as PUT /employees/:code/mark-left (P4)
   const [search, setSearch] = useState('')
   const [deptFilter, setDeptFilter] = useState('')
   const [typeFilter, setTypeFilter] = useState('All')
@@ -1160,7 +1161,7 @@ export default function Employees() {
                           <button onClick={(ev) => { ev.stopPropagation(); navigate(`/employee-profile?code=${e.code}`) }} className="text-xs py-0.5 px-2 bg-violet-50 text-violet-700 rounded hover:bg-violet-100 border border-violet-200" title="Full Intelligence Profile">Intel</button>
                           <button onClick={(ev) => { ev.stopPropagation(); setEditEmp(e) }} className="btn-secondary text-xs py-0.5 px-2">Edit</button>
                           <button onClick={(ev) => { ev.stopPropagation(); setSalaryEmp(e) }} className="text-xs py-0.5 px-2 bg-brand-50 text-brand-600 rounded hover:bg-brand-100 border border-brand-200">₹</button>
-                          {e.status !== 'Left' && e.status !== 'Exited' && (
+                          {canMarkLeft && e.status !== 'Left' && e.status !== 'Exited' && (
                             <button onClick={(ev) => { ev.stopPropagation(); setMarkLeftEmp(e) }} className="text-xs py-0.5 px-2 bg-red-50 text-red-600 rounded hover:bg-red-100 border border-red-200">Mark Left</button>
                           )}
                         </div>
