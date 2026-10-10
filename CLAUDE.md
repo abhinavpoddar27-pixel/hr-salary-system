@@ -1,3 +1,13 @@
+## Last Session — 2026-10-10 (Attendance Review PR-3: Excel + Word downloads)
+**Branch `feat/attendance-review-exports` (stacked on PR-2 `feat/attendance-review-tab`, PR #84).** Merge #84 first.
+- **What:** `backend/src/services/attendanceReviewExports.js` — workbook (Summary, Action list, Early-exit warnings, Notice
+  late/early, By department, All with late or early, Shift issues, Payroll checks, Rules used) and Word pack (action list
+  landscape with indicative ₹; notices without money or minutes; one note per person, Ref HR/ATT/<MON><YY>/NN, contractor copy;
+  DRAFT banner until final). Routes `GET /runs/:id/export.xlsx|docx` admin only, audit row per download. New dependency `docx`.
+  Tab buttons appear only when the saved run is what is on screen.
+- **Verified:** jest 84/1366 (new `attendanceReviewExports.test.js` 6); browser check 40/40 incl. real downloads;
+  docx rendered to PDF and inspected. **Not tested:** Railway; production data.
+
 ## Last Session — 2026-10-10 (Attendance Review PR-2: Analytics tab, admin only)
 **Branch `feat/attendance-review-tab` (on main a272f71 = PR-1 #82 merged), PR open.** Read `docs/attendance-review/PROGRESS.md` first.
 - **What:** `components/attendanceReview/AttendanceReviewTab.jsx` (preview / draft / final, release days, overrides, Finalise

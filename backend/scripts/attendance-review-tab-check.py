@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Analytics → Attendance Review tab (PR-2) — browser check.
+"""Analytics → Attendance Review tab (PR-2) + downloads (PR-3) — browser check.
 
 Chromium against the BUILT dist, real admin + HR logins, scratch DATA_DIR with fictional data
 (codes T70xx, names "TEST EMP n" — repo is public). Seeds Sep + Oct 2026:
@@ -144,11 +144,13 @@ try:
         check('status DRAFT', 'DRAFT', status(pg))
         fin = pg.get_by_role('button', name='Finalise')
         check('Finalise enabled for a saved draft', True, fin.is_enabled())
+        check('draft: Word button says (draft)', 1, pg.get_by_role('button', name='Download Word notes (draft)').count())
         pg.get_by_label('Override code').fill('T7001'); pg.get_by_label('Override action').select_option('warning')
         pg.get_by_label('Override reason').fill('confirm shift with HR first')
         pg.get_by_role('button', name='Add override').click(); pg.wait_for_load_state('networkidle'); time.sleep(1)
         check('unsaved change → live preview message', True, pg.get_by_text('you have unsaved changes').count() == 1)
         check('unsaved change → Finalise disabled', False, fin.is_enabled())
+        check('unsaved change → downloads hidden (file would not match the screen)', 0, pg.get_by_role('button', name='Download Excel').count())
         t7001 = pg.locator('[data-section="Action list"] tbody tr', has_text='T7001')
         check('preview shows T7001 as warning with reason', True, 'Warning' in t7001.inner_text() and 'confirm shift' in t7001.inner_text())
         pg.get_by_role('button', name='Regenerate draft').click(); time.sleep(1.5)
@@ -159,6 +161,15 @@ try:
         check('status FINAL', 'FINAL', status(pg))
         check('final: no Generate / Regenerate button', 0, pg.get_by_role('button', name='Regenerate draft').count() + pg.get_by_role('button', name='Generate draft').count())
         check('final: release days + override listed', True, pg.get_by_text('confirm shift with HR first').count() >= 1)
+        print('\n— admin: downloads (PR-3) —')
+        with pg.expect_download() as dl: pg.get_by_role('button', name='Download Excel').click()
+        x = dl.value; xp = os.path.join(WORK, x.suggested_filename); x.save_as(xp)
+        check('Excel file name', 'Attendance_Review_Oct2026.xlsx', x.suggested_filename)
+        check('Excel is a real xlsx (zip, > 5 KB)', True, open(xp, 'rb').read(2) == b'PK' and os.path.getsize(xp) > 5000)
+        with pg.expect_download() as dl: pg.get_by_role('button', name='Download Word notes').click()
+        d = dl.value; dp = os.path.join(WORK, d.suggested_filename); d.save_as(dp)
+        check('Word file name (final, no DRAFT)', 'Oct2026_Late_Early_Action_Notes.docx', d.suggested_filename)
+        check('Word is a real docx (zip, > 5 KB)', True, open(dp, 'rb').read(2) == b'PK' and os.path.getsize(dp) > 5000)
         pg.reload(); pg.wait_for_load_state('networkidle'); time.sleep(1.2)
         check('reload keeps FINAL', 'FINAL', status(pg))
         check('admin: 0 page errors', [], errs)

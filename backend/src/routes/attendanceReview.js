@@ -8,6 +8,7 @@ const router = express.Router();
 const { getDb, logAudit } = require('../database/db');
 const { requireAdmin } = require('../middleware/roles');
 const svc = require('../services/attendanceReviewService');
+const exportsSvc = require('../services/attendanceReviewExports');
 
 router.use(requireAdmin);
 
@@ -136,6 +137,44 @@ router.get('/runs/:id', (req, res) => {
   const row = Number.isInteger(id) ? getDb().prepare('SELECT * FROM attendance_review_runs WHERE id = ?').get(id) : null;
   if (!row) return res.status(404).json({ success: false, error: 'Run not found' });
   res.json({ success: true, data: { ...runSummary(row), config_snapshot: JSON.parse(row.config_snapshot), result: JSON.parse(row.result_json) } });
+});
+
+// GET /runs/:id/export.xlsx | /runs/:id/export.docx — files built from the STORED result (what was reviewed/finalised)
+function loadRunForExport(req, res) {
+  const id = parseInt(req.params.id, 10);
+  const row = Number.isInteger(id) ? getDb().prepare('SELECT * FROM attendance_review_runs WHERE id = ?').get(id) : null;
+  if (!row) { res.status(404).json({ success: false, error: 'Run not found' }); return null; }
+  return { row, result: JSON.parse(row.result_json) };
+}
+router.get('/runs/:id/export.xlsx', (req, res) => {
+  const r = loadRunForExport(req, res); if (!r) return;
+  try {
+    const buf = exportsSvc.buildWorkbook(r.result, r.row);
+    const name = `Attendance_Review_${exportsSvc.fileStem(r.result)}${r.row.status === 'final' ? '' : '_DRAFT'}.xlsx`;
+    logAudit('attendance_review_runs', r.row.id, 'export', '', 'xlsx', 'ATTENDANCE_REVIEW_EXPORT', name, user(req));
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.setHeader('Content-Disposition', `attachment; filename="${name}"`);
+    res.setHeader('Cache-Control', 'no-store');
+    res.send(buf);
+  } catch (err) {
+    console.error('Attendance review xlsx export error:', err.message);
+    res.status(500).json({ success: false, error: 'Failed to build the workbook: ' + err.message });
+  }
+});
+router.get('/runs/:id/export.docx', async (req, res) => {
+  const r = loadRunForExport(req, res); if (!r) return;
+  try {
+    const buf = await exportsSvc.buildDocx(r.result, r.row);
+    const name = `${exportsSvc.fileStem(r.result)}_Late_Early_Action_Notes${r.row.status === 'final' ? '' : '_DRAFT'}.docx`;
+    logAudit('attendance_review_runs', r.row.id, 'export', '', 'docx', 'ATTENDANCE_REVIEW_EXPORT', name, user(req));
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document');
+    res.setHeader('Content-Disposition', `attachment; filename="${name}"`);
+    res.setHeader('Cache-Control', 'no-store');
+    res.send(buf);
+  } catch (err) {
+    console.error('Attendance review docx export error:', err.message);
+    res.status(500).json({ success: false, error: 'Failed to build the Word file: ' + err.message });
+  }
 });
 
 // PUT /runs/:id/finalise — lock a draft
