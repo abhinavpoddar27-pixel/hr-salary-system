@@ -9,7 +9,7 @@
 Programme:   UI/UX improvement + bulk input, HR Salary System (Indriyan / Asian Lakto)
 Base:        origin/main a5aec9a (10 Oct 2026). Re-check: git fetch origin; git log -1 origin/main
 Plan:        docs/ux-bulk/MASTER_PLAN.md (§5.2 = PR order, §6 = specs, §7 = bulk design, §14 = open questions)
-Current PR:  P1-01 merged #81 @96ee482 (10 Oct 19:24 IST) — awaiting owner post-deploy check → `verified`. P1-02 `pushed` @3d6c7fa (owner: open PR + merge, then post-deploy check). P1-03 at Phase 0 gate (PLAN @9d1a332) — waiting for owner go; planner rulings on builder Qs: no-cache on preview YES, held count NO, copy OK; worktree /home/claude/wt-p1-03 branch fix/sales-neft-finalized-only (no commits yet)
+Current PR:  P1-01 merged #81 @96ee482 (10 Oct 19:24 IST) — awaiting owner post-deploy check → `verified`. P1-02 merged #83 @cc58076 — awaiting owner post-deploy check. P1-03 at Phase 0 gate (PLAN @9d1a332) — waiting for owner go; planner rulings on builder Qs: no-cache on preview YES, held count NO, copy OK; worktree /home/claude/wt-p1-03 branch fix/sales-neft-finalized-only (no commits yet)
 Asked, not answered: Q1 Q2 Q3 (P3-01/P5-02), Q4 (P1-04) — re-ask before those PRs
 Open Qs:     Q1 Q2 (needed by P3-01) · Q4 (P1-04) · Q5 (P1-07) · Q6 (P1-23) · Q10 (one-PR rule) — ask when the PR needs them
 Roles:       planner = new chat; builder = Claude Code agent session reading prs/<PR-ID>/PROMPT.md; Abhinav says "go" and merges in GitHub UI
@@ -59,7 +59,7 @@ Status values: `todo` · `plan` (Phase 0 written, waiting for go) · `build` · 
 | P0-2 | Merge docs PRs (wide-layout-cp9, attendance-review-handoff, ux-bulk-master-plan) | todo | — | — | — | — | owner |
 | P0-3 | Triage 6 `new` bug reports | todo | — | — | — | — | owner |
 | P1-01 | Finance Audit Readiness click crash | merged | fix/finance-audit-readiness-nav | #81 | 96ee482 | pending owner check | Phase 0 done; go 10 Oct 19:04 incl. held-card link fix to /finance-verification (owner OK) |
-| P1-02 | Salary Register ₹0 | pushed | fix/salary-register-report-fields | #83 | — | — | go 10 Oct 20:17; rulings R12/R13 |
+| P1-02 | Salary Register ₹0 | merged | fix/salary-register-report-fields | #83 | cc58076 | pending owner check | go 10 Oct 20:17; rulings R12/R13 |
 | P1-03 | Sales NEFT unfinalised rows + confirm | plan | fix/sales-neft-finalized-only | | | | Q12=C default; money → independent review |
 | P1-04 | Stage 6 company-scope guard | todo | | | | | Q4 |
 | P1-05 | Stage 6 Apply Leave form reset | todo | | | | | |
@@ -135,6 +135,7 @@ Status values: `todo` · `plan` (Phase 0 written, waiting for go) · `build` · 
 | N-4 | P1-02 | Reports → Salary Register: held rows not marked; LWF/loan only inside Ded. | P9 or with P1-02 if owner says |
 
 ## Session log (newest first; one line per meaningful event)
+- 10 Oct 2026 20:37 IST — P1-02 merged by owner (#83, cc58076).
 - 10 Oct 2026 ~20:45 IST — PR #83 had a conflict with main (#82 attendance-review merged): CLAUDE.md only, both entries kept; dist rebuild identical; jest 83/1360 green; pushed 8eba920; GitHub CI all green; Railway PR-preview status 'Deployment cancelled' (preview infra, not code) — noted on the PR.
 - 10 Oct 2026 ~20:50 IST — P1-03 Phase 0 PLAN @9d1a332: generateSalesNEFT excludes paid + new preview totals; modal always shown; sales.js unchanged; Jul–Sep files would be byte-identical (0 paid rows).
 - 10 Oct 2026 20:29 IST — Owner: "why do I need to ask every time" → planner now opens PRs itself (via REST) and sends the link; P1-02 PR #83 opened. P1-03 started with Q12=C default.
