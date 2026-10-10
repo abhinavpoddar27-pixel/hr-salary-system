@@ -31,6 +31,13 @@ const DESIGNATION_OPTIONS = ['SO', 'SSO', 'ASE', 'ASM', 'TSI', 'SR ASM', 'RSM', 
 const DEFAULT_COMPANY_OPTIONS = ['Asian Lakto Ind Ltd', 'Indriyan Beverages Pvt Ltd']
 
 const BANK_FIELDS_REQUIRED = ['bank_name', 'account_no', 'ifsc']
+// Statutory flags PR-3: same rules as the statutory upload (and the server): spaces ignored,
+// blank = none, ESI number 10 digits, UAN 12 digits.
+const STATUTORY_NUMBER_RULES = [
+  ['esi_number', /^\d{10}$/, 'ESI number must be 10 digits'],
+  ['uan', /^\d{12}$/, 'UAN must be 12 digits'],
+]
+const normNumber = (v) => String(v ?? '').replace(/\s+/g, '')
 
 function formatTaDaRate(emp) {
   const cls = emp.ta_da_class
@@ -132,6 +139,7 @@ function emptyForm(defaultCompany = '') {
     // PF / ESI / LWF are not in the form (statutory flags PR-1, R10): new
     // employees start with them off and they change only via Statutory Flags.
     pt_applicable: 0,
+    esi_number: '', uan: '',
     bank_name: '', account_no: '', ifsc: '',
     status: 'Active'
   }
@@ -154,6 +162,11 @@ function EmployeeForm({ initial, isEdit, onSubmit, onCancel, submitting }) {
     for (const f of BANK_FIELDS_REQUIRED) {
       if (!String(form[f] || '').trim()) errs[f] = 'Required'
     }
+    // Checked only when changed: a legacy bad value never blocks an unrelated edit (server rule N2).
+    for (const [k, re, msg] of STATUTORY_NUMBER_RULES) {
+      const v = normNumber(form[k])
+      if (v && v !== normNumber(initial?.[k]) && !re.test(v)) errs[k] = msg
+    }
     setErrors(errs)
     return Object.keys(errs).length === 0
   }
@@ -168,6 +181,8 @@ function EmployeeForm({ initial, isEdit, onSubmit, onCancel, submitting }) {
     const payload = { ...form }
     payload.gross_salary = payload.gross_salary === '' ? 0 : parseFloat(payload.gross_salary) || 0
     payload.pt_applicable = payload.pt_applicable ? 1 : 0
+    // ESI number / UAN: spaces removed, blank → null (the server validates again and refuses a number held by someone else)
+    for (const [k] of STATUTORY_NUMBER_RULES) payload[k] = normNumber(payload[k]) || null
     // never send statutory flags (the edit form is pre-filled from the row, which has them)
     delete payload.pf_applicable
     delete payload.esi_applicable
@@ -254,6 +269,18 @@ function EmployeeForm({ initial, isEdit, onSubmit, onCancel, submitting }) {
             <label className="flex items-center gap-1 text-xs text-slate-500 cursor-not-allowed" data-testid="ro-esi"><input type="checkbox" checked={!!initial?.esi_applicable} readOnly disabled /> ESI</label>
             <label className="flex items-center gap-1 text-xs text-slate-500 cursor-not-allowed" data-testid="ro-lwf"><input type="checkbox" checked={!!initial?.lwf_applicable} readOnly disabled /> LWF</label>
             <label className="flex items-center gap-1 text-xs text-slate-700"><input type="checkbox" checked={!!form.pt_applicable} onChange={e => set('pt_applicable', e.target.checked ? 1 : 0)} /> PT</label>
+          </div>
+          <div>
+            {lbl('ESI number (10 digits)')}
+            <input value={form.esi_number || ''} onChange={e => set('esi_number', e.target.value)} inputMode="numeric" data-testid="esi-number"
+              className={clsx('w-full border rounded-lg px-2 py-1.5 text-sm font-mono', errors.esi_number ? 'border-red-400' : 'border-slate-300')} />
+            {errLine('esi_number')}
+          </div>
+          <div>
+            {lbl('UAN (12 digits)')}
+            <input value={form.uan || ''} onChange={e => set('uan', e.target.value)} inputMode="numeric" data-testid="uan"
+              className={clsx('w-full border rounded-lg px-2 py-1.5 text-sm font-mono', errors.uan ? 'border-red-400' : 'border-slate-300')} />
+            {errLine('uan')}
           </div>
           <div className="col-span-2 text-[11px] text-slate-500">
             PF / ESI / LWF are read-only here{isEdit ? '' : ' (a new employee starts with them off)'} — <Link to="/admin/statutory-flags" className="text-blue-700 hover:underline">change via Statutory Flags</Link>.
@@ -739,7 +766,13 @@ export default function SalesEmployeeMaster() {
                     <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full bg-red-100 text-red-800 border border-red-300 text-[10px] font-medium">No salary set</span>
                   </td>
                 )}
-                <td className="px-3 py-2">{statusBadge(r.status)}</td>
+                <td className="px-3 py-2">
+                  {statusBadge(r.status)}
+                  {!!r.esi_applicable && !STATUTORY_NUMBER_RULES[0][1].test(normNumber(r.esi_number)) && (
+                    <span className="ml-1 inline-flex items-center px-1.5 py-0.5 rounded-full bg-amber-100 text-amber-800 border border-amber-300 text-[10px] font-medium"
+                      title="ESI is on but there is no valid 10-digit ESI number — this person is left out of the ESI contribution file">ESI no. missing</span>
+                  )}
+                </td>
                 <td className="px-3 py-2">
                   <div className="flex gap-2 text-xs flex-wrap">
                     <button onClick={() => openEdit(r)} className="text-blue-600 hover:text-blue-800">Edit</button>

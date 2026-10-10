@@ -289,12 +289,16 @@ export const getHeadcountReport = (month, year) => api.get('/reports/headcount',
 export const getAuditTrail = (month, year, company) => api.get('/reports/audit-trail', { params: { month, year, ...(company ? { company } : {}) } })
 
 // ── Government Export Files ─────────────────────────────
-export const getPFECR = (month, year, company) => api.get('/reports/pf-ecr', { params: { month, year, company } })
-export const downloadPFECR = (month, year, company) => api.get('/reports/pf-ecr', { params: { month, year, company, download: 'true' }, responseType: 'blob' })
-export const getESIContribution = (month, year, company) => api.get('/reports/esi-contribution', { params: { month, year, company } })
-export const downloadESIContribution = (month, year, company) => api.get('/reports/esi-contribution', { params: { month, year, company, download: 'true' }, responseType: 'blob' })
+// Statutory flags PR-3: previews and downloads skip the 5 s GET cache (N7) so the missing list is current.
+export const getPFECR = (month, year, company) => api.get('/reports/pf-ecr', { params: { month, year, company }, ...fresh })
+export const downloadPFECR = (month, year, company) => api.get('/reports/pf-ecr', { params: { month, year, company, download: 'true' }, responseType: 'blob', ...fresh })
+export const getESIContribution = (month, year, company) => api.get('/reports/esi-contribution', { params: { month, year, company }, ...fresh })
+export const downloadESIContribution = (month, year, company) => api.get('/reports/esi-contribution', { params: { month, year, company, download: 'true' }, responseType: 'blob', ...fresh })
 export const getBankSalaryFile = (month, year, company) => api.get('/reports/bank-salary-file', { params: { month, year, company } })
 export const downloadBankSalaryFile = (month, year, company) => api.get('/reports/bank-salary-file', { params: { month, year, company, download: 'true' }, responseType: 'blob' })
+// Statutory flags PR-3: LWF register (plant + sales) — JSON preview / XLSX download.
+export const getLWFRegister = (params) => api.get('/reports/lwf-register', { params, ...fresh })
+export const downloadLWFRegister = (params) => api.get('/reports/lwf-register', { params: { ...params, download: 'xlsx' }, responseType: 'blob', ...fresh })
 export const getCompanyConfig = (company) => api.get('/reports/company-config', { params: { company } })
 export const updateCompanyConfig = (id, data) => api.put(`/reports/company-config/${id}`, data)
 
@@ -565,7 +569,8 @@ export const searchEmployeesForAI = (q) => api.get('/ai/employee-search', { para
 export const explainSalary = (data) => api.post('/ai/explain-salary', data)
 
 // ── Sales Salary Module (Phase 1) ────────────────────────
-export const getSalesEmployees = (params) => api.get('/sales/employees', { params })
+// fresh (PR-3): after an edit the list refetches past the 5 s GET cache, so a fixed ESI number clears its badge at once
+export const getSalesEmployees = (params) => api.get('/sales/employees', { params, ...fresh })
 export const getSalesEmployee = (code, company) => api.get(`/sales/employees/${encodeURIComponent(code)}`, { params: { company } })
 export const createSalesEmployee = (data) => api.post('/sales/employees', data)
 export const updateSalesEmployee = (code, company, data) => api.put(`/sales/employees/${encodeURIComponent(code)}`, data, { params: { company } })
@@ -627,6 +632,13 @@ export const salesExportNEFT = (params, download = false) =>
     download
       ? { params: { ...params, download: 'true' }, responseType: 'blob' }
       : { params }
+  )
+// Statutory flags PR-3: sales ESI contribution file (read-only; preview skips the GET cache, N7).
+export const salesExportESI = (params, download = false) =>
+  api.get('/sales/export/esi-contribution',
+    download
+      ? { params: { ...params, download: 'true' }, responseType: 'blob', ...fresh }
+      : { params, ...fresh }
   )
 
 // ── Sales TA/DA Change Requests (Phase 2) ────────────────
