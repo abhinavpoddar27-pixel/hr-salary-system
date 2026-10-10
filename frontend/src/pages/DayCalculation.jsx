@@ -243,7 +243,7 @@ export default function DayCalculation() {
       <PipelineProgress stageStatus={{ 1: 'done', 2: 'done', 3: 'done', 4: 'done', 5: 'done', 6: 'active' }} />
 
       <div className="p-4 md:p-6 space-y-5 max-w-screen-2xl">
-        <div className="flex items-start justify-between">
+        <div className="flex flex-wrap items-start justify-between gap-3">
           <div>
             <h2 className="section-title">Stage 6: Day Calculation & Leave Adjustment</h2>
             <p className="section-subtitle mt-1">
