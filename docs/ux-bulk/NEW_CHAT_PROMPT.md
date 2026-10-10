@@ -79,8 +79,9 @@ One finding = one PR. Never batch fixes (MASTER_PLAN §10.2; exception only with
 ## 6. Start-of-session checklist (do this now, then report in ≤ 10 lines)
 1. `git fetch origin` with explicit refspecs (shallow-clone landmine, MASTER_PLAN §12.3); report origin/main sha and
    whether `docs/ux-bulk-master-plan`, `docs/wide-layout-cp9`, `docs/attendance-review-handoff` are merged.
-2. Check push access from the workspace (a dry-run push of a scratch branch, then delete it). On 10 Oct `gh auth`
-   failed in the workspace; if push fails, say so plainly and switch to the Mac fallback (§3).
+2. Check push access from the workspace. If a push is refused with "not in this session's authorized repository set",
+   attach the repo with push access (add_repo: abhinavpoddar27-pixel / hr-salary-system / push), `git fetch origin main`,
+   and retry once. If it still fails, say so plainly and switch to the Mac fallback (§3).
 3. Read PROGRESS.md RESUME; list P0 items still open (CP-10 check, docs PR merges, bug-report triage).
 4. Check for collisions: any open branch touching `schema.js`, `api.js`, `Sidebar.jsx`, `App.jsx`, the Analytics page
    (attendance-review stream, MASTER_PLAN §13). Report them.
