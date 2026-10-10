@@ -3,14 +3,13 @@
 ## Owner decisions (build proceeds on the DEFAULT unless the owner says otherwise)
 - D1 Sales ESI list. Owner said "the 49 we deducted" (August). The **September** sales register,
   which is the one actually paid, deducts ESI for **57**: adds S022, S038, S044, S054, S061, S121,
-  S123, S135, S196, S201, S251; drops S058 (0 days), S089 (gross > ₹21k), S279, S291.
+  S123, S135, S196, S201, S251; drops S058, S089, S279, S291 (reasons in the private claude.ai project doc).
   DEFAULT: use the September 57 (file as built). Alternative: rebuild the file with the August 49.
 - D2 Single path for flag changes (BUILD_PLAN 4.4). DEFAULT: yes.
 - D3 **Sales September — what did the bank actually pay?** App rows have zero deductions and
   `neft_exported_at` = 7 Oct on 187 rows (the app NEFT file = full gross). The manual register's
   NET PAID is ₹1,19,786 lower on those 187 rows (ESI ₹6,541 · LWF ₹645 · TDS ₹2,000 ·
-  other ₹1,10,600 — S150 ₹60,000, S163 ₹25,000, S158 ₹15,000, S230 ₹5,000, S157 ₹3,600,
-  S021 ₹2,000; TDS ₹1,000 each S189, S240).
+  other ₹1,10,600 across 6 employees; TDS across 2 — per-person split in the private claude.ai project doc).
   - If the bank paid the **register** amounts → recompute sales Sep after PR-1+PR-2, then HR enters
     the other deductions / TDS so app net = NET PAID (RUNBOOK step 6A).
   - If the bank paid the **app NEFT file** → employees were paid gross; no recompute of Sep sales;
@@ -24,7 +23,7 @@
 - D5 Timing. The September ESI challan is due 15 Oct 2026. Three PRs on fragile files will not be live
   and verified by then. DEFAULT: file September ESI from the manual registers as usual; the app takes
   over from the October wage month, with September recomputed in the app for the record.
-- D4 OPT-1 EPS nil at age 58+ (18054 is 62). Needs DOB; touches salaryComputation.js PF block.
+- D4 OPT-1 EPS nil at age 58+ (one of the 6 PF employees is past 58). Needs DOB; touches salaryComputation.js PF block.
   DEFAULT: not in this build.
 
 ## Data HR must fix (not code)

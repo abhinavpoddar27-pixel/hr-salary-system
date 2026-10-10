@@ -125,9 +125,9 @@ Verify: `git log --oneline -1` shows the merge of the previous PR. Return: the S
 
 ## T6-S — Sales September (needs OPEN_ITEMS D3 answered first)
 - 6A (bank paid the register amounts): Sales → Salary Compute → September → Recompute; then on the
-  register enter Other Deductions for S150 60,000 · S163 25,000 · S158 15,000 · S230 5,000 · S157 3,600 ·
-  S021 2,000. The sales register has no TDS field (TDS comes only from tax declarations), so the ₹1,000
-  TDS for S189 and S240 goes in either as a tax declaration or as Other Deductions with a remark —
+  register enter the six Other Deductions listed in the private claude.ai project doc (statutory-flags/RUNBOOK.md, T6-S).
+  The sales register has no TDS field (TDS comes only from tax declarations), so the two ₹1,000
+  TDS items (same project doc) go in either as a tax declaration or as Other Deductions with a remark —
   owner's choice. Chat then compares every row's
   net with the register's NET PAID (target: all within ₹1) and runs V7 + V8.
 - 6B (bank paid the app NEFT file): do not recompute September sales. Decide recovery separately.

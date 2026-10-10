@@ -38,7 +38,7 @@ Blank number = leave unchanged.
 
 Expected September effect (9 Oct data):
 - Plant ESI 23 people (23666 has no Sep pay) → EE ₹2,450.74, ER ₹10,619.82
-- Plant PF 6 → EE ₹9,762.86 (21498 ₹934.29, 21825 ₹1,628.57, others ₹1,800), EPS ₹6,777.05
+- Plant PF 6 → EE ₹9,762.86 (per-person split in the private claude.ai project doc), EPS ₹6,777.05
 - Plant LWF 113 with Sep pay → EE ₹565, ER ₹2,260
 - Sales ESI 57 → app ≈ ₹6,619.43 vs register ₹6,614 (rounding); Sales LWF 139 → ₹695
 
