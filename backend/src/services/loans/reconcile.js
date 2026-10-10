@@ -8,7 +8,7 @@
  *   Σ posted loan_deductions = Σ posted instalment amounts
  */
 const { toPaise, toRupees } = require('./money');
-const { monthIndex, fromIndex, dateToMonth, monthLabel } = require('./months');
+const { monthIndex, fromIndex, payrollMonthOf, monthLabel } = require('./months');
 const { getLoan, getInstalments, openPaise, finalMonthOf } = require('./common');
 
 /** Opposite entries of one loan (Loans PR-6); [] before the table exists. */
@@ -71,23 +71,29 @@ function istDate(ts) {
  * Month-by-month statement: opening, disbursed, recovered (posted deductions,
  * by payroll month), cash (receipts, by receipt date), written off, closing.
  * The last closing equals reconcileLoan().expectedBalance.
+ *
+ * Every dated movement is bucketed by PAYROLL month (Loans PR-9, ruling Q1):
+ * plant = calendar month (unchanged); sales = the sales cycle month (SPEC §5.3,
+ * day ≥ 26 → next month), the same month the sales recoveries carry, so a sales
+ * loan's rows line up with its payslips. The closing balance is unchanged.
  */
 function loanStatement(db, loanId) {
   const loan = getLoan(db, loanId);
   if (!loan) return { ok: false, code: 'LOAN_NOT_FOUND' };
+  const toMonth = (d) => payrollMonthOf(d, loan.borrower_type);
   const moves = new Map(); // monthIndex → {disbursed, recovered, cash, writtenOff}
   const bucket = (m) => {
     const k = monthIndex(m);
     if (!moves.has(k)) moves.set(k, { disbursed: 0, recovered: 0, cash: 0, writtenOff: 0 });
     return moves.get(k);
   };
-  if (loan.disbursed_on) bucket(dateToMonth(loan.disbursed_on)).disbursed += toPaise(loan.principal_amount);
+  if (loan.disbursed_on) bucket(toMonth(loan.disbursed_on)).disbursed += toPaise(loan.principal_amount);
   // Top-ups: dated by the disbursement date the engine writes into the event
   // as [disbursed_on=YYYY-MM-DD] (loan_events has no date column of its own).
   const topups = db.prepare("SELECT amount, reason, created_at FROM loan_events WHERE loan_id = ? AND event = 'topup_disbursed'").all(loanId);
   for (const t of topups) {
     const on = /\[disbursed_on=(\d{4}-\d{2}-\d{2})\]/.exec(t.reason || '');
-    bucket(dateToMonth(on ? on[1] : istDate(t.created_at))).disbursed += toPaise(t.amount);
+    bucket(toMonth(on ? on[1] : istDate(t.created_at))).disbursed += toPaise(t.amount);
   }
   for (const i of getInstalments(db, loanId).filter((x) => (x.status === 'posted' || x.status === 'deferred') && toPaise(x.posted_amount || 0) > 0)) {
     bucket({ month: i.due_month, year: i.due_year }).recovered += toPaise(i.posted_amount);
@@ -97,9 +103,9 @@ function loanStatement(db, loanId) {
     bucket({ month: a.month, year: a.year }).recovered -= toPaise(a.amount);
   }
   for (const r of db.prepare('SELECT amount, receipt_date FROM loan_receipts WHERE loan_id = ?').all(loanId)) {
-    bucket(dateToMonth(r.receipt_date)).cash += toPaise(r.amount);
+    bucket(toMonth(r.receipt_date)).cash += toPaise(r.amount);
   }
-  if (toPaise(loan.written_off_amount || 0) > 0) bucket(dateToMonth(istDate(loan.written_off_at))).writtenOff += toPaise(loan.written_off_amount);
+  if (toPaise(loan.written_off_amount || 0) > 0) bucket(toMonth(istDate(loan.written_off_at))).writtenOff += toPaise(loan.written_off_amount);
 
   const keys = [...moves.keys()].sort((a, b) => a - b);
   const rows = [];
