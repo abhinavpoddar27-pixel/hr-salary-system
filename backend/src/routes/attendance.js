@@ -5,6 +5,8 @@ const { safeTrigger, queueLeaveRecalc, checkAutoStage6 } = require('../services/
 const { resolveMissPunch, bulkResolveMissPunches } = require('../services/missPunch');
 const { applyPairingToDb } = require('../services/nightShift');
 const { calcShiftMetrics } = require('../utils/shiftMetrics');
+const { refreshEarlyExits, refreshEarlyExitsForMonth, safeRefresh } = require('../services/earlyExitDetection');
+const nextDay = (iso) => { const d = new Date(`${iso}T00:00:00Z`); d.setUTCDate(d.getUTCDate() + 1); return d.toISOString().slice(0, 10); };
 
 /**
  * GET /api/attendance/processed
@@ -151,6 +153,11 @@ router.post('/miss-punches/:id/resolve', (req, res) => {
 
   resolveMissPunch(db, parseInt(id), { inTime, outTime, source, remark, convertToLeave, leaveType });
 
+  // New punch times → re-work early exits (and gate passes) for that day and the
+  // next (a corrected night punch can dissolve a pair that spans both).
+  const fixed = db.prepare('SELECT date FROM attendance_processed WHERE id = ?').get(parseInt(id));
+  if (fixed) safeRefresh('missPunch.resolve', () => refreshEarlyExits(db, [fixed.date, nextDay(fixed.date)]));
+
   // HR has done its half. Finance still has to decide before Stage 6 can run
   // (effectiveStatusForDay ignores an HR fix finance has not ruled on), so this
   // usually just reports the remaining backlog — checkAutoStage6 decides.
@@ -178,6 +185,10 @@ router.post('/miss-punches/bulk-resolve', (req, res) => {
   }
 
   const result = bulkResolveMissPunches(db, recordIds, { inTime, outTime, source, remark });
+
+  const fixedDates = db.prepare(`SELECT DISTINCT date FROM attendance_processed
+    WHERE id IN (${recordIds.map(() => '?').join(',')})`).all(...recordIds.map((n) => parseInt(n, 10))).map((r) => r.date);
+  safeRefresh('missPunch.bulkResolve', () => refreshEarlyExits(db, fixedDates.flatMap((d) => [d, nextDay(d)])));
 
   // Fifty resolutions are still one company-month, so this checks the gate once
   // rather than once per record.
@@ -657,7 +668,10 @@ router.post('/recalculate-metrics', (req, res) => {
   });
   txn();
 
-  res.json({ success: true, message: `Recalculated metrics for ${updated} records`, updated });
+  // The loop above wrote raw early exits; apply gate passes on top.
+  const earlyExitRefresh = safeRefresh('recalculate-metrics', () => refreshEarlyExitsForMonth(db, month, year));
+
+  res.json({ success: true, message: `Recalculated metrics for ${updated} records`, updated, earlyExitRefresh });
 });
 
 /**

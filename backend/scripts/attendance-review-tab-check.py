@@ -41,7 +41,9 @@ def seed():
     for n in range(1, 9):
         c.execute("INSERT INTO employees(code,name,department,designation,company,status,employment_type,gross_salary,date_of_joining) "
                   "VALUES(?,?,'TEST DEPT','OPERATOR',?,'Active','Permanent',31000,'2024-01-01')", (f'T700{n}', f'TEST EMP {n}', C))
-    def day(code, iso, lm=0, em=0, it='08:00', ot='20:00'):
+    def day(code, iso, lm=0, em=0, it=None, ot=None):
+        hm = lambda m: f'{m // 60:02d}:{m % 60:02d}'
+        it = it or hm(480 + lm); ot = ot or hm(1200 - em)   # punches follow the late / early minutes
         c.execute("INSERT INTO attendance_processed(employee_code,date,status_original,status_final,in_time_final,out_time_final,shift_detected,"
                   "is_late_arrival,late_by_minutes,is_early_departure,early_by_minutes,is_left_late,month,year,company) "
                   "VALUES(?,?,'P','P',?,?,'12-Hour Shift',?,?,?,?,0,?,?,?)",
@@ -132,7 +134,8 @@ try:
         pg.get_by_role('button', name='Rules & exclusions').click(); time.sleep(.8)
         cfg = pg.get_by_test_id('ar-config')
         check('config shows built-in defaults', True, cfg.get_by_text('built-in defaults').count() == 1)
-        check('shift check defaults to habitual', 'habitual', cfg.get_by_label('Early-exit shift check').input_value())
+        check('early-exit full-hours rule defaults to everyone', 'everyone', cfg.get_by_label('Early-exit shift check').input_value())
+        check('late full-hours rule on by default', True, cfg.get_by_label('Late not counted on a full-hours day').is_checked())
         cfg.get_by_label('Left out of everything — employee codes').fill('T7004')
         cfg.get_by_label('Effective from').fill('2026-10')
         cfg.get_by_role('button', name='Save as new version').click(); time.sleep(1.5)

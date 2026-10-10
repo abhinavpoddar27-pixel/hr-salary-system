@@ -73,6 +73,8 @@ describe('Word pack', () => {
     expect(notices.length).toBeGreaterThan(200);
     expect(notices).toMatch('TEST EMP THREE');
     expect(notices).toMatch('(7 Oct) are not counted');
+    expect(notices).toMatch('A late arrival or early exit is not counted on a day you still worked your full shift hours.');
+    expect(text).toMatch('Nor are lates or early exits on days the full shift was still worked.');
   });
 
   test('draft is marked on every page group; Option C wording when switched on', async () => {
@@ -94,7 +96,7 @@ describe('Word pack', () => {
     expect(XLSX.utils.sheet_to_json(wb.Sheets['Shift check']).map((x) => [x.Code, x.Counted, x.Result]))
       .toEqual([['H1', 19, 'Check master shift'], ['H2', 0, 'Not shown – full hours worked']]);
     expect(XLSX.utils.sheet_to_json(wb.Sheets['Action list']).map((x) => [x.Code, x['Shift check']])).toEqual([['H1', 'check master shift']]);
-    expect(XLSX.utils.sheet_to_json(wb.Sheets['Rules used'], { header: 1 }).find((x) => x[0] === 'shift_fit')[1]).toBe('habitual');
+    expect(XLSX.utils.sheet_to_json(wb.Sheets['Rules used'], { header: 1 }).find((x) => x[0] === 'shift_fit')[1]).toBe('everyone');
     const text = docxText(await X.buildDocx(r, { status: 'final' }));
     expect(text).toMatch('1 person flagged "check master shift" – confirm the shift before issuing.');
     expect(text).toMatch('Check master shift: leaves early almost daily');
