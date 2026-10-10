@@ -2,7 +2,7 @@
 Branch `fix/misspunch-all-resolved-banner` · worktree /home/claude/wt-p1-09 · base origin/main 3d20021
 
 ## RESUME
-Read PROMPT.md + PLAN.md. Never redo a ticked step. Phase 0 done → waiting for planner "go" / answers to Q1–Q3.
+Read PROMPT.md + PLAN.md. Never redo a ticked step. Phase 0 done; planner GO received (rulings below). Building.
 
 ## Steps
 - [x] P0.1 Read MissPunch.jsx (query L102, counts L216, banner L581, chips L302), backend summary (attendance.js L43–131),
@@ -16,4 +16,5 @@ Read PROMPT.md + PLAN.md. Never redo a ticked step. Phase 0 done → waiting for
 - [ ] P5 CLAUDE.md Last Session entry; push; HEAD == origin.
 
 ## Owner / planner rulings
-- (none yet — Q1–Q3 in PLAN.md)
+- 10 Oct planner GO on 78532bb. Q1: use summary.pending + summary.financePending. Q2: hide banner while a
+  department filter is on. Q3: progress label gets " (this filter)" only when a status chip other than All is active.
