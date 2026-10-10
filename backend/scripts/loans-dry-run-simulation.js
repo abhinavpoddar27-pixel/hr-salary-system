@@ -91,6 +91,8 @@ silently(() => db.transaction(() => {
     plantCodes.push(code);
   }
 })());
+// LWF (#70): a quarter of the plant employees are flagged, so Stage 7 rows carry lwf_employee.
+db.prepare("UPDATE employees SET lwf_applicable = 1 WHERE CAST(SUBSTR(code, 4) AS INTEGER) % 4 = 1").run();
 for (const m of [8, 9]) {
   for (const co of [IND, ALI]) silently(() => recomputeSalary(db, { month: m, year: 2026, company: co, requestId: `stored-${m}` }));
 }
@@ -202,6 +204,7 @@ silently(() => {
   if (!c.ok) throw new Error(`real Aug close: ${c.code} ${c.message}`);
   recomputeSalary(db, { month: 9, year: 2026, employeeCodes: [realCode], requestId: 'real-sep' });
 });
+check(db.prepare('SELECT COUNT(*) AS n FROM salary_computations WHERE month = 9 AND year = 2026 AND lwf_employee > 0').get().n > 0, 'LWF present on Sep rows (component check includes it)');
 const realBefore = JSON.stringify(db.prepare('SELECT * FROM loan_deductions ORDER BY id').all());
 const r5 = dryRun('5 with a real loan on the books', { month: 9, year: 2026, payroll: 'plant', scenarios: pp.scenarios });
 check(r5.ok && r5.close.result.ok === true, `5 rehearsal close ran alongside the real loan (${r5.close && r5.close.result.code})`);

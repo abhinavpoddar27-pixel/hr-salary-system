@@ -303,8 +303,9 @@ function touchedChecks(db, payroll, scenarios, months) {
         out.drift.push({ employeeCode: s.employeeCode, month: m.month, year: m.year, net: row.net_salary, expected: Math.round(expectNet * 100) / 100 });
       }
       const comps = payroll === 'sales'
-        ? ['pf_employee', 'esi_employee', 'professional_tax', 'tds', 'advance_recovery', 'loan_recovery', 'other_deductions']
-        : ['pf_employee', 'esi_employee', 'professional_tax', 'tds', 'advance_recovery', 'lop_deduction', 'other_deductions', 'loan_recovery', 'late_coming_deduction', 'early_exit_deduction'];
+        ? ['pf_employee', 'esi_employee', 'professional_tax', 'tds', 'advance_recovery', 'loan_recovery', 'other_deductions', 'lwf_employee']
+        : ['pf_employee', 'esi_employee', 'professional_tax', 'tds', 'advance_recovery', 'lop_deduction', 'other_deductions', 'loan_recovery',
+          'late_coming_deduction', 'early_exit_deduction', 'lwf_employee'];   // LWF (#70) is a component of total_deductions
       const sum = comps.reduce((a, c) => a + num(row[c]), 0);
       if (Math.abs(num(row.total_deductions) - sum) > 1) {
         out.componentShort.push({ employeeCode: s.employeeCode, month: m.month, year: m.year, totalDeductions: row.total_deductions, components: Math.round(sum * 100) / 100 });
