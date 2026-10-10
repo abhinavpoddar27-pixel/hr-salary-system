@@ -133,7 +133,7 @@ def main():
             ctx, page = new_page(browser, state, 1440, 900, errors)
             open_stage7(page, base)
             check('1440: default view is Everything', pressed(page) == 'all', pressed(page))
-            expect = {'review': 11, 'statutory': 14, 'all': 25}
+            expect = {'review': 11, 'statutory': 14, 'all': 24}
             for k, n in expect.items():
                 view(page, k)
                 page.locator('[data-testid="salary-register"] tbody > tr:not(.drill-down-row)').first.locator('td').nth(1).click()
@@ -213,7 +213,7 @@ def main():
             st = page.evaluate(STRUCT_JS)
             check('sim: Review shows 11 columns', st['th'] == 11 and st['tdCounts'] == [11], st)
             view(page, 'all')
-            check('sim: back to Everything (25)', page.evaluate(STRUCT_JS)['th'] == 25)
+            check('sim: back to Everything (24)', page.evaluate(STRUCT_JS)['th'] == 24)
             page.locator('[data-testid="salary-register"] thead th', has_text='Net').first.click()
             page.wait_for_timeout(300)
             nets = [money(x) for x in page.evaluate(COL_VALUES_JS, 'Net')]

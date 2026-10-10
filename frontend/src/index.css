@@ -316,7 +316,7 @@
    the Tailwind layers so they win for this one table. Pinned cells need
    SOLID backgrounds (the shared table uses translucent ones). */
 .salreg { border-collapse: separate; border-spacing: 0; }
-.salreg th, .salreg td { padding: 6px 8px; vertical-align: middle; }
+.salreg th, .salreg td { padding: 5px 6px; vertical-align: middle; }
 .salreg th { white-space: nowrap; font-size: 10px; }
 .salreg tr.drill-down-row > td { padding: 0; }
 /* .table-compact td sets a colour that beats text-* utilities on a <td>, so zero
