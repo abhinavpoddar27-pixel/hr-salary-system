@@ -4,7 +4,7 @@
 - Branch: `fix/employee-edit-no-direct-gross` (base origin/main 0ea1409). Worktree /home/claude/wt-p1-25 only.
   Never push to main; never open/merge a PR; never write to production; never kill processes you did not start.
 - Spec: `docs/ux-bulk/prs/P1-25/PROMPT.md`. Plan: `docs/ux-bulk/prs/P1-25/PLAN.md`.
-- Current phase: **Build — planner GO received (11 Oct 2026).**
+- Current phase: **COMPLETE — handed off; waiting for the planner's independent review.** Do NOT open or merge a PR.
 - Continue from the first step whose status is not `done`; never redo a done step.
 - Targets: `backend/src/routes/employees.js` PUT /:code only (+ new test, + new verify script, + test edits if Q1/Q2 OK).
   No frontend change (Edit modal never sends gross — PLAN). Server port 3125. Fictional data only (repo public).
@@ -20,8 +20,8 @@
 | 5 | jest full suite AFTER | done | 93 suites / 1501 pass (+1 suite / +23 tests) |
 | 6 | verify script (port 3125) + `--base` on origin/main worktree | done | backend/scripts/employee-edit-gross-guard-check.js 22/22; --base on 0ea1409 worktree 7/7 (hr AND viewer move gross via PUT /:code, structure rescaled, no request; finance edit 200) |
 | 7 | self-debug + user-simulation pass; git diff --stat (salaryComputation.js untouched) | done | diff vs origin/main in backend+frontend = employees.js + 3 test files (+ script); no DO-NOT-MODIFY file, no frontend. User sim = exact Edit-modal body as hr/admin → 200. Found: finance sees the Edit button (page permission) → Save now 403 toast |
-| 8 | CLAUDE.md Last Session entry | todo | |
-| 9 | final push, HEAD == origin | todo | |
+| 8 | CLAUDE.md Last Session entry | done | prepended at top |
+| 9 | final push, HEAD == origin | done | this commit; verified with git ls-remote |
 
 ## Rulings
 - GO 11 Oct 2026: Q1 yes (T9a resend same gross, T8b seed + resend), Q2 yes (viewer/finance → 403), Q3 yes (first gross refused), Q4 yes (admin no bypass). MONEY PR: stop and report after checks; planner runs independent review.
