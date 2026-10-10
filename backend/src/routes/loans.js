@@ -26,6 +26,7 @@ const { normalizeRole } = require('./auth');
 const L = require('../services/loans');
 const { toPaise, toRupees } = require('../services/loans/money');
 const { todayIst } = require('../services/loans/months');
+const { runLoanDryRun, rehearsalPack } = require('../services/loans/dryRun');
 
 const READ_ROLES = ['admin', 'hr', 'finance', 'viewer'];
 const RAISE_ROLES = ['hr', 'finance'];
@@ -512,6 +513,30 @@ router.get('/payslip-balance', allow(READ_ROLES), handle((req, res) => {
   const total = toRupees(loans.reduce((s, l) => s + toPaise(l.outstandingAfter), 0));
   const { ok: _ok, ...data } = r;
   return res.json({ success: true, data: { ...data, loans, total, show: loans.length > 0 } });
+}));
+
+// ── production dry run (Loans PR-11). Declared before /:id. ─────────────────
+// Admin only, and only an admin not limited to some companies (the close it runs
+// covers every company). Runs the real engine on the live database inside one
+// transaction that is always rolled back; the only write that survives is one
+// audit_log row ('loan_dry_run'). See services/loans/dryRun.js.
+
+router.post('/dry-run', allow(DECIDE_ROLES), handle((req, res) => {
+  if (!unrestricted(req, res)) return undefined;
+  const r = runLoanDryRun(getDb(), req.body || {}, req.actor);
+  if (r.ok) {
+    const { ok: _ok, ...data } = r;
+    return res.json({ success: true, data });
+  }
+  const { ok: _ok, status, code, message, ...rest } = r;
+  return res.status(status || httpStatus(code)).json({ success: false, code, error: message, ...rest });
+}));
+
+router.get('/dry-run/pack', allow(DECIDE_ROLES), handle((req, res) => {
+  if (!unrestricted(req, res)) return undefined;
+  const month = posInt(req.query.month);
+  const year = posInt(req.query.year);
+  return reply(res, rehearsalPack(getDb(), { payroll: payrollOf(req.query.payroll), month, year }));
 }));
 
 router.post('/deductions/:did/reverse', allow(DECIDE_ROLES), handle((req, res) => {
