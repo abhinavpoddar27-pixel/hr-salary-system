@@ -116,6 +116,16 @@ const login = async (u, p) => (await req('POST', '/api/auth/login', { body: { us
       r = await req('PUT', '/api/employees/T2502', { token: hr, body: { gross_salary: '20000.00', name: 'SAME GROSS' } });
       check('re-sending the same gross (string) → 200, name saved', [200, 'SAME GROSS', 20000], [r.status, emp('T2502').name, emp('T2502').gross_salary]);
 
+      r = await req('PUT', '/api/employees/T2502', { token: hr, body: { gross_salary: '0x4E20', name: 'HEX' } });
+      check("F1: '0x4E20' (= 20000) → 200 but the stored number stays, not the text",
+        [200, 20000, 'real'], [r.status, emp('T2502').gross_salary, db.prepare("SELECT typeof(gross_salary) AS t FROM employees WHERE code='T2502'").get().t]);
+      const sBefore = struct('T2502');
+      r = await req('PUT', '/api/employees/T2502', { token: admin, body: { name: 'X', basic: 15000 } });
+      check('F3: admin changes basic via PUT /:code → 400 SALARY_CHANGE_NEEDS_APPROVAL', [400, 'SALARY_CHANGE_NEEDS_APPROVAL'], [r.status, r.body?.code]);
+      check('F3: structure unchanged', sBefore, struct('T2502'));
+      r = await req('PUT', '/api/employees/T2502', { token: hr, body: { name: 'SAME BASIC', basic: sBefore.basic } });
+      check('F3: same basic re-sent → 200, structure unchanged', [200, sBefore], [r.status, struct('T2502')]);
+
       console.log('\n— the approval path —');
       r = await req('PUT', '/api/employees/T2502/salary', { token: hr, body: { gross_salary: 25000 } });
       check('hr PUT /:code/salary 25000 → 200 pendingApproval', [200, true], [r.status, r.body?.pendingApproval]);

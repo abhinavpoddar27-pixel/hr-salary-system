@@ -23,8 +23,8 @@
 | 8 | CLAUDE.md Last Session entry | done | prepended at top |
 | 9 | final push, HEAD == origin | done | 17004c4 |
 | 10 | F1 store the STORED gross on a same-value resend + F3 refuse changed basic/da/hra/conveyance/otherAllowances | done | Edit modal confirmed: never sends components. +12 tests (11 fail on 5042937; '15000.00 ' already OK there). statutoryWriters W103 re-sends zeros. 3 suites 97/97 |
-| 11 | F2 hide Edit / Edit Details for non hr/admin + dist (own commit) | todo | |
-| 12 | browser check finance/viewer/hr | todo | |
+| 11 | F2 hide Edit / Edit Details for non hr/admin + dist (own commit) | done | canEditEmployee = hr/admin; src 1 commit, dist 6c1f9be |
+| 12 | browser check finance/viewer/hr | done | employee-edit-gross-guard-check.py 16/16 (hr Edit+Edit Details+save 200, finance/viewer hidden, 0 errors); --base on origin/main 1/1 (finance sees Edit). Node check 26/26 (+F1/F3), --base 7/7 |
 | 13 | full jest + check script + CLAUDE.md + push | todo | |
 
 ## Rulings
