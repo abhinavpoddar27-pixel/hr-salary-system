@@ -21,6 +21,32 @@
 - **Found, not fixed:** (1) An unresolved miss-punch cell edited through this editor stays red:
   `PUT /attendance/record/:id` sets `stage_5_done` but not `miss_punch_resolved`, and `cellClass()` checks miss-punch first.
   (2) `updateMutation` has no `onError` (a failed save shows only the global handler, editor stays open).
+## Last Session — 2026-10-10 (P1-04: Stage 6 run with a company selected cut rows → always all companies)
+**Branch `fix/stage6-company-scope-guard`, NOT merged.** Frontend only (`pages/DayCalculation.jsx`: calcMutation + header).
+Plan + log: `docs/ux-bulk/prs/P1-04/PLAN.md`, `PROGRESS.md`. Finding P-2. Ruling Q4 (always all companies + note), Q1, Q2.
+- **Bug:** both Stage 6 buttons (header Run + stale-banner Recalculate) sent the top-bar company. `day_calculations` is
+  UNIQUE(code, month, year), so a run filtered to one label rewrote whole-month rows from that label's attendance only
+  (same mechanism as the 10 Oct nightly-sweep bug). Reproduced: T9605 with 1–15 under A + 16–30 under 'Default' → 30 → 15.
+- **Fix:** calcMutation always sends `company: ''` (backend: blank = every company, row company from the master via
+  normalizeCompany — same as HR's "All Companies" run). One line under Run when a company is selected ("Day calculation
+  always runs for all companies, so no employee's days are cut. The list below still shows {company} only."); toast says
+  "(all companies)". List / staleness / leave-request queries still follow the top-bar filter. Header row now
+  `flex-wrap gap-3` (Run button was off-screen at 390px). dist rebuilt (own commits; vs a fresh 2d96842 build only the
+  DayCalculation chunk differs). Backend untouched.
+- **Fragile:** (1) A company-restricted user (allowed one company, auto-selected) now recalculates the OTHER company's
+  employees too — accepted (Q1: correct and non-destructive; the route never checked company). (2) An employee whose
+  master company is non-canonical may get a different company tag after the run (normalizeCompany fallback) and drop out
+  of / into the filtered list — that is existing "All Companies" behaviour. (3) Any new Stage 6 trigger in the UI must
+  also send `company: ''`.
+- **Verified:** `backend/scripts/stage6-all-companies-check.py` (Chromium, built dist, scratch DB, fictional T960x in two
+  companies, hr + a restricted hr user) 28/28 — body company '', both companies' rows at 30 days incl. the split employee,
+  note only with a company, list filtered, toast, restricted user, 390px, 0 page/console errors, 0 API ≥ 400.
+  `--base` on a 2d96842 worktree 4/4: body = A, split employee 15 days, company B rows absent. jest 85 / 1377 before and after.
+- **Not tested:** Railway; production data; the stale-banner Recalculate button in the browser (needs finance miss-punch
+  changes; same mutation, read in code); Safari/Firefox.
+- **Found, not fixed:** after Run the register list can keep showing the pre-run rows — its GET carries the server's
+  `private, max-age=5` header and `getDayCalculations` does not send `no-cache` (same class as the loans/leave `fresh` fix);
+  re-opening the page shows the new rows.
 ## Last Session — 2026-10-10 (P1-03: Sales NEFT file paid people again on every re-download)
 **Branch `fix/sales-neft-finalized-only`, NOT merged, no PR.** Plan + log: `docs/ux-bulk/prs/P1-03/PLAN.md`, `PROGRESS.md`.
 Finding S-1, ruling Q12 = C (keep computed/reviewed/finalized, exclude paid, always confirm; "finalized only" → P6-03).
