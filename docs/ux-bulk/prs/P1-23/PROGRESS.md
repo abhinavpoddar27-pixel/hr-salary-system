@@ -4,7 +4,7 @@
 - Branch `fix/salary-change-no-self-approval` (base origin/main 18bef07). Never push to main; no PR open/merge.
 - Spec `docs/ux-bulk/prs/P1-23/PROMPT.md`; plan `PLAN.md`. Touch ONLY salary-input.js guard lines + SalaryInput.jsx buttons
   (+ new test, new check script, dist, docs, CLAUDE.md). Fictional data only (repo public).
-- Current phase: **Build (go received 11 Oct 2026).**
+- Current phase: **COMPLETE — waiting for independent review (MONEY PR). Do not open a PR.**
 
 ## Steps
 | # | Step | Status | Result / sha |
@@ -17,10 +17,10 @@
 | 5 | dist rebuild (own commit) | done | 02d48a1 (carries the one-word class tweak too); vs fresh 18bef07 build only SalaryInput chunk differs (hash-normalised); rest = Vite filename cascade |
 | 6 | browser check script + run (branch) | done | backend/scripts/salary-change-self-approval-check.py 36/36 (admin locked + API 403, admin2 approves, finance rejects, hr unchanged, 390px), 0 page/console errors |
 | 7 | `--base` run on 18bef07 worktree | done | 3/3: admin approves own request, gross applied — bug proved |
-| 8 | full jest after | todo | |
-| 9 | self-debug + user simulation | todo | |
-| 10 | CLAUDE.md Last Session entry | todo | |
-| 11 | final push + HEAD == origin | todo | |
+| 8 | full jest after | done | 90 suites / 1439 pass, 0 red (base 89/1430 + new 9) |
+| 9 | self-debug + user simulation | done | guard order 401/403-role → 400 reason → 404 → 403 self; both writers covered; no other UI decides requests (grep); sim = browser script (happy + case/empty/Employee-Master/hr/phone edges). Found: stale 5 s cache on SalaryInput reads (not fixed) |
+| 10 | CLAUDE.md Last Session entry | done | prepended |
+| 11 | final push + HEAD == origin | done | this commit |
 
 ## Rulings
 - Q6 (owner, 11 Oct 2026): second person always decides, admin included.

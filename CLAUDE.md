@@ -1,3 +1,32 @@
+## Last Session — 2026-10-11 (P1-23: salary change — the requester can never approve or reject their own request)
+**Branch `fix/salary-change-no-self-approval`, NOT merged. MONEY PR — independent review before PR.** Plan + log:
+`docs/ux-bulk/prs/P1-23/PLAN.md`, `PROGRESS.md`. Finding F-3. Owner ruling Q6 (11 Oct 2026): a second person always decides, admin included.
+- **Bug:** `PUT /api/salary-input/approve/:id` and `/reject/:id` (requireFinanceOrAdmin) never compared the deciding user with
+  `salary_change_requests.requested_by`. Admin passes both the HR raise guard and the finance decide guard → could raise
+  and approve their own gross change (prod: 2 approved rows decided by their own requester, counts only).
+- **Fix (`routes/salary-input.js`, guard lines only):** `sameUser()` (trimmed, case-insensitive; empty never matches) +
+  403 `{code:'SELF_APPROVAL', error:'You raised this request — ask another finance or admin user to decide it.'}` right
+  after the Pending-row read / 404 and BEFORE any write (approve: before JSON parse + transaction; reject: before the
+  `finance_rejections` insert). Apply logic untouched. Covers both writers (salary-input request-change and Employee
+  Master `PUT /employees/:code/salary`). Legacy rows with empty `requested_by` stay decidable (planner Q2).
+  **UI (`SalaryInput.jsx`):** the requester's own pending card shows Approve + Reject disabled, reason as tooltip and as text
+  (`data-testid="self-decide-note"`). Others' cards unchanged. dist rebuilt (vs fresh 18bef07 build only SalaryInput chunk differs).
+- **Fragile:** the compare is on USERNAME (no user id on the request); renaming a user would unlock their old requests.
+  The UI rule (`isOwnRequest`) mirrors the server's `sameUser` by hand — change both. The server is the real gate.
+- **Verified:** jest `salaryChangeSelfApproval.test.js` 9 (real JWTs; 4 fail on 18bef07): own approve/reject 403 and nothing
+  written (structures, gross, status, finance_rejections), case/space variant, Employee-Master-raised request, second admin
+  and finance decide, hr still role-403, empty requested_by decidable, 404 before the self check. Full suite 89/1430 →
+  90/1439. Browser `backend/scripts/salary-change-self-approval-check.py` 36/36 (Chromium, built dist, admin/admin2/finance/hr,
+  forced clicks inert, API probe 403, 390px, 0 page/console errors); `--base` on 18bef07 3/3: admin approves own request.
+- **Not tested:** Railway; production data; Safari/Firefox.
+- **Found, not fixed:** (1) FinanceAudit `PUT /api/finance-audit/approve-flag/:flagId` (GROSS_STRUCTURE_CHANGE on
+  `salary_manual_flags`) has no maker-checker either. (2) `approveSalaryChange` in `frontend/src/utils/api.js` is dead
+  code; the screen never sends `effectiveFrom`, so every approval is effective TODAY. (3) SalaryInput reads don't send
+  `no-cache` → with server.js `max-age=5`, the Pending tab shows a just-submitted request only after ~5 s and keeps an
+  approved card for ~5 s (clicking it again → 404 "already processed").
+- **Process note:** during this build a broad `pkill -f jest` was run once and may have killed other parallel builders'
+  jest runs (all root) around 19:46 local — re-run their suites if a run ended abnormally.
+
 ## Last Session — 2026-10-10 (P1-12: Sidebar/Header hooks after early returns → layout crash on role change)
 **Branch `fix/sidebar-header-hook-order`, NOT merged.** Frontend only (`components/layout/Sidebar.jsx`, `Header.jsx`). Plan + log:
 `docs/ux-bulk/prs/P1-12/PLAN.md`, `PROGRESS.md`. Finding X-1.
