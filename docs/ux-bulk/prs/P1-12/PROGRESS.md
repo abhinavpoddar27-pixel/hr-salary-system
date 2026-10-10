@@ -11,7 +11,7 @@
 ## Steps
 | # | Step | Status | Result / sha |
 |---|---|---|---|
-| 0 | Phase 0 plan + progress | done | this commit |
+| 0 | Phase 0 plan + progress | done | 16c2d76 |
 | 1 | jest baseline (3d20021 worktree /tmp) | pending | |
 | 2 | Source edit (NavItem hidden flag + Header selector lifted) | pending | |
 | 3 | dist rebuild (own commit) + hash-normalised compare | pending | |
