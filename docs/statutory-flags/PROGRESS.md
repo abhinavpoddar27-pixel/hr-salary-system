@@ -135,7 +135,7 @@
   → NULL audited; flags → ignoredFields, master flags + structures unchanged, number written) + F8 ×2 (valid 201 normalised; 400 / 409
   create nothing). **8/8 FAIL on the STEP 3 sales.js.** statutoryWriterGuard.test.js **unedited, 9/9**; 98 neighbour tests green.
 
-- PR-3 STEP 5 — (next commit) `feat(filing): LWF register (plant + sales) for the Punjab remittance`. NEW `services/lwfRegister.js`:
+- PR-3 STEP 5 — 9fc5492 `feat(filing): LWF register (plant + sales) for the Punjab remittance`. NEW `services/lwfRegister.js`:
   `buildLwfRegister(db, {month, year, company})` — plant `salary_computations` LEFT JOIN employees (code) + sales
   `sales_salary_computations` LEFT JOIN sales_employees (code + company), rows with LWF EE or ER > 0; columns payroll / company / code /
   name / EE / ER; plant rows `shortfall` = V11 component sum − total_deductions, `capped` = shortfall > ₹1 (sales null, E8); order company,
@@ -150,11 +150,23 @@
   computed) + 3 route tests (JSON, filter, 400 ×3, xlsx download 8 wide, odd company, hr/finance/admin 200, viewer 403, 401). Without
   the route 3 of 6 fail; without the service the suite cannot load.
 
+- PR-3 STEP 6 — (next commit) `feat(filing): ESI/UAN fields + sales ESI export`. Before editing, a clean `npm run build` of 9fc5492
+  reproduced the committed dist byte-identically. api.js: `salesExportESI(params, download)` (preview + download send `fresh`),
+  `getLWFRegister` / `downloadLWFRegister` (`fresh`), `getPFECR` / `getESIContribution` + their two downloads send `fresh` (N7 — D-13).
+  SalesEmployeeMaster.jsx: ESI number / UAN inputs in Salary & Statutory; `validate()` applies 10 / 12 digits (spaces ignored) only
+  when the value differs from the stored one (N2, same as the server); `handleSubmit` strips spaces, '' → null; list badge
+  "ESI no. missing" when `esi_applicable` and no valid 10-digit number (= the file's rule). NEW `components/sales/SalesEsiExportButton.jsx`:
+  preview → when `missing` > 0 a modal lists code / name / none|not 10 digits / EE ₹ / ER ₹ with "NOT in the file" and the missing
+  totals → "Download anyway" → blob download; after any download the `X-Missing-ESI-Number` header is read again and toasted (and a
+  changed count is flagged). SalesSalaryCompute.jsx: one import + one `<SalesEsiExportButton/>` after the NEFT button. dist rebuilt:
+  `SalesSalaryCompute-MvaLhnaN.js` has `sales-esi-export` + "NOT in the file"; `SalesEmployeeMaster-C0fHZH1-.js` has "ESI no. missing";
+  `index-BAT0ma5J.js` has `esi-contribution` + `lwf-register`.
+
 ## LAST STEP
-PR-3 STEP 5 (LWF register).
+PR-3 STEP 6 (UI-a).
 
 ## NEXT STEP
-PR-3 STEP 6 (UI-a: api.js, sales master numbers, SalesEsiExportButton, SalesSalaryCompute, dist). Carried from PR-2b: run VERIFY V13 on production before PR-2b deploys; do NOT recompute sales September until D3 is answered.
+PR-3 STEP 7 (UI-b: Reports missing panels + LWF tab + viewer message, dist). Carried from PR-2b: run VERIFY V13 on production before PR-2b deploys; do NOT recompute sales September until D3 is answered.
 
 ## OWNER RULINGS ADDED DURING THE BUILD
 (record date + ruling; BUILD_PLAN §1 holds the original set)
@@ -202,6 +214,8 @@ PR-3 STEP 6 (UI-a: api.js, sales master numbers, SalesEsiExportButton, SalesSala
 - D-12 (PR-3 STEP 3) `generateSalesESIFile` uses LEFT JOIN (plan: JOIN) and selects on ESI EE + ER > 0 (plan: EE > 0): a
   contribution row whose master is missing, or with only an employer share, is listed in `missing` instead of vanishing from the file.
   Identical output whenever every row has a master and both shares (always true for compute's rows).
+- D-13 (PR-3 STEP 6) The two plant filing DOWNLOAD helpers (`downloadPFECR`, `downloadESIContribution`) also send `fresh` (plan named
+  only the previews): within 5 s of fixing a number, a cached download would still leave that person out. Frontend only; no server change.
 - D-4 (STEP 4) The undo file carries the flags that were IN FORCE AT E before the batch (what September compute
   used), not the master's flags; numbers are left blank (blank = unchanged, per §4.2). Not a full restore (review
   minor 1, wording fixed in REVIEW FIX 4): a later row whose flags differed before the batch ends at the E value.
