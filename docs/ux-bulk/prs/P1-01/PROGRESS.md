@@ -13,7 +13,7 @@
 |---|---|---|---|
 | 0 | Phase 0 plan + progress | done | 619e28d |
 | 1 | Source edit (FinanceAudit.jsx: props + Q1 path) | done | 4 lines (+4/−4); e7b4aea |
-| 2 | dist rebuild (own commit) | pending | |
+| 2 | dist rebuild (own commit) | done | build clean 17 s; vs fresh a5aec9a build (worktree /tmp/p101-main) only the FinanceAudit chunk differs (hash-normalised); 4b0f406 |
 | 3 | jest before/after | pending | |
 | 4 | check script written | pending | |
 | 5 | script on branch dist | pending | |
