@@ -168,7 +168,7 @@ export default function SalaryAdvance() {
 
   return (
     <div className="animate-fade-in">
-      <div className="p-6 space-y-5 max-w-screen-xl">
+      <div className="p-6 space-y-5 w-full min-w-0">
         <div className="flex items-start justify-between">
           <div>
             <h2 className="section-title">Salary Advance</h2>

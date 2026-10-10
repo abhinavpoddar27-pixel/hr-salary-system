@@ -178,7 +178,7 @@ export default function DailyMIS() {
 
   return (
     <div className="animate-fade-in">
-      <div className="p-6 space-y-5 max-w-screen-xl">
+      <div className="p-6 space-y-5 w-full min-w-0">
 
         {/* Header */}
         <div className="flex items-start justify-between">

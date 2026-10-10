@@ -1,3 +1,32 @@
+## Last Session — 2026-10-10 (Wide layout: 9 pages full width + Stage 7 register rework)
+**Branch `feat/wide-layout` (origin/main 02e1115 merged in — #76 + #77), NOT pushed, NOT merged.** Frontend display only.
+Checkpoint doc + owner rulings: `docs/wide-layout/PROGRESS.md` (read first; CP-8 push is next).
+- **What:** 9 pages lose the 1280px cap (`max-w-screen-xl` → `w-full min-w-0`): Stage 7, DailyMIS, LoanDetail, Loans,
+  MissPunch, NightShift, SalaryAdvance, SalaryInput, ShiftVerification (+ LoanPolicy, LoanImport: only elements that
+  looked broken wide get a cap, e.g. the import approve-note `max-w-xl`). Stage 7 register reworked: every column
+  still individually visible; views Review / Statutory / Everything (default Everything ≥ 768px, Review below);
+  Employee pinned left, Net / Take Home / status / buttons pinned right (≥ 768px); sticky header; totals row
+  (Earned = Total Gross card, Take Home = Take Home card, held excluded); ₹0 in light grey; hold reason truncated in
+  the Employee pill + full in tooltip + drill-down; stat cards auto-fit; X1 stray "0" in the register header fixed;
+  header buttons wrap on phones.
+- **Files:** `pages/SalaryComputation.jsx` (+836/−381), `index.css` (+45, scoped `.salreg` block), 1–2 lines each in the
+  pages above; new `backend/scripts/wide-layout-render.py` + `wide-layout-check.py`; dist rebuilt. No backend app file.
+- **Fragile:** (1) `.salreg` scoped CSS exists because `.table-compact td` colour beats Tailwind `text-*` on a td — the
+  ₹0 grey goes through `.salreg-mute` / `.salreg-mute-soft`, not Tailwind. (2) The `COLS` list drives th / td / tfoot
+  / drill-down colSpan together — a new register column is added to `COLS` ONLY (this replaces the older "header /
+  body / tfoot / DrillDownRow 25 cells" rule in the LWF entry). (3) Pinned right offsets are fixed widths: actions 104
+  at right 0, status 120 at 104, Take Home 104 at 224, Net 96 at 328 — change a pinned width → change every offset to
+  its left. (4) View choice in localStorage `salreg.view.v1` (try/catch; blocked storage → default). (5) Drill-down
+  width follows the scroll container via ResizeObserver.
+- **Verified:** `wide-layout-check.py` 47/47 (before and after the merge); render harness 9 pages × 2560/1440/390 =
+  60 PNGs, 0 page errors, 0 console errors, 0 API ≥ 400, wrapper 100% of main at 2560; merge: source auto-merged,
+  LoanImport.jsx = main's bulk confirm + the one-line cap, dist rebuilt clean; `git diff origin/main -- frontend/src backend`
+  = exactly the 14 intended files. Owner approved the renders.
+- **NOT tested:** Railway; Safari/Firefox (sticky inside overflow); real production data; finance-role Release button
+  in the pinned column; blocked browser storage; the Loans → Import tab in the harness (bundle grep only).
+- **Found, not fixed:** Miss Punch stray "0" next to Correct (`rec.miss_punch_resolved && …`); at 390px 6 pages still
+  scroll sideways (wide tables — mobile project).
+
 ## Last Session — 2026-10-10 (Extra duty: finance "Return to HR")
 **Branch `fix/ed-return-to-hr`, NOT merged.** Owner ruling 8 Oct 2026, built 10 Oct.
 - **Bug:** HR could not re-award extra duty for a person+date finance had rejected (7 Sep 2026: 19 rows, "power cut").

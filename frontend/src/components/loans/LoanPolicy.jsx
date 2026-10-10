@@ -111,7 +111,7 @@ export default function LoanPolicy({ caps }) {
         {editing && (
           <div className="p-4 border-t border-slate-100 space-y-2">
             <label className="label">Reason for the change (required; written to the audit log)</label>
-            <input className="input" value={reason} onChange={(e) => setReason(e.target.value)} data-testid="policy-reason" />
+            <input className="input max-w-xl" value={reason} onChange={(e) => setReason(e.target.value)} data-testid="policy-reason" />
             <div className="flex justify-end gap-2">
               <button className="btn-ghost" onClick={() => { setEditing(false); setDraft({}); setReason('') }}>Cancel</button>
               <button className="btn-primary" disabled={!changed.length || !reason.trim() || save.isPending} onClick={() => save.mutate()} data-testid="policy-save">

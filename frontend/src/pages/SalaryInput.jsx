@@ -111,7 +111,7 @@ export default function SalaryInput() {
 
   return (
     <div className="animate-fade-in">
-      <div className="p-6 space-y-5 max-w-screen-xl">
+      <div className="p-6 space-y-5 w-full min-w-0">
         <div className="flex items-start justify-between">
           <div>
             <h2 className="section-title">Salary Input & Changes</h2>
@@ -267,7 +267,7 @@ export default function SalaryInput() {
                       <div className="text-[10px] text-slate-400 italic">Awaiting Finance approval</div>
                     )}
                   </div>
-                  <div className="grid grid-cols-2 gap-4 mt-3 text-xs">
+                  <div className="grid grid-cols-2 gap-4 mt-3 text-xs max-w-3xl">
                     <div className="bg-slate-50 p-2 rounded-lg">
                       <p className="font-semibold text-slate-500 mb-1">Current</p>
                       <p>Basic: {fmtINR(os.basic)} | DA: {fmtINR(os.da)} | HRA: {fmtINR(os.hra)}</p>

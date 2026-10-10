@@ -150,7 +150,7 @@ export default function ShiftVerification() {
     <div className="animate-fade-in">
       <PipelineProgress stageStatus={{ 1: 'done', 2: 'done', 3: 'active' }} />
 
-      <div className="p-6 space-y-5 max-w-screen-xl">
+      <div className="p-6 space-y-5 w-full min-w-0">
         <div className="flex items-start justify-between">
           <div>
             <h2 className="section-title">Stage 3: Shift Verification</h2>

@@ -393,7 +393,7 @@ function ApprovePanel({ d, caps, onDone }) {
             Re-run Stage 7 / the sales compute for them after approval, or their first EMI moves to the end at the loan close.
           </div>
         )}
-        <input className="input text-sm w-full" placeholder="Note (optional)" value={note} onChange={(e) => setNote(e.target.value)} />
+        <input className="input text-sm w-full max-w-xl" placeholder="Note (optional)" value={note} onChange={(e) => setNote(e.target.value)} />
         {involved && <div className="text-xs text-red-600">You uploaded this batch or confirmed rows in it — another admin must approve.</div>}
         <button className="btn-primary" disabled={!ap.canApprove || involved || approve.isPending} onClick={() => approve.mutate()} data-testid="imp-approve-go">
           {approve.isPending ? 'Approving…' : `Approve and import ${ap.totals.loans} loan${ap.totals.loans === 1 ? '' : 's'}`}

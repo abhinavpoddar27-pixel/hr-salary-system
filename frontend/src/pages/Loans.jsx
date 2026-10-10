@@ -96,7 +96,7 @@ export default function Loans() {
   ]
 
   return (
-    <div className="p-4 md:p-6 space-y-5 max-w-screen-xl animate-fade-in">
+    <div className="p-4 md:p-6 space-y-5 w-full min-w-0 animate-fade-in">
       <div className="flex items-start justify-between flex-wrap gap-3">
         <div>
           <h2 className="section-title">Loan Management</h2>
