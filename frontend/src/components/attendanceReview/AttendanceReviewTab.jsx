@@ -48,6 +48,29 @@ function Section({ title, count, defaultOpen = true, children, note }) {
   )
 }
 
+const QUALITY_ROWS = [
+  ['no_master', 'No master shift — not assessed', 'Set the shift in the employee master.'],
+  ['night_on_day_master', 'Night work on a 9 / 10-hour master — not assessed', 'Night duty is only measured for 12-hour or night masters.'],
+  ['odd_punch', 'In-punch hours before the shift — not assessed', 'Usually a wrong master shift or a stray punch.'],
+  ['half_day', 'Half days — not checked for late / early', 'Already paid as half a day.'],
+  ['gate_register', 'Miss-punch days fixed from the gate register — assessed with those times', ''],
+  ['out_not_verified', 'Of those, out written as exactly the shift end — "out not verified"', 'No early exit measured; the out excuses nothing. Ask the gate to write the real time.'],
+  ['gate_pass', 'Early exits reduced by a gate pass', ''],
+  ['miss_punch_open', 'Miss-punch days not yet fixed — skipped', ''],
+]
+
+function QualitySection({ q }) {
+  const rows = QUALITY_ROWS.map(([k, label, hint]) => ({ key: k, label, hint, days: q[k]?.days || 0, people: q[k]?.people?.length || 0,
+    codes: (q[k]?.people || []).slice(0, 12).map((p) => `${p.code} (${p.days})`).join(', ') + ((q[k]?.people?.length || 0) > 12 ? ' …' : '') }))
+  return (
+    <Section title="What the master-shift basis left out" count={q.unassessable_days} defaultOpen={false}
+      note="Count = worked days that could not be assessed (no master, night on a day master, odd punch). Other rows are for information.">
+      <Table rows={rows} cols={[{ k: 'label', h: 'What' }, { k: 'days', h: 'Days', right: true }, { k: 'people', h: 'People', right: true },
+        { k: 'codes', h: 'Codes (days)' }, { k: 'hint', h: 'Note' }]} />
+    </Section>
+  )
+}
+
 function Table({ cols, rows, empty = 'None this month.', rowClass }) {
   if (!rows?.length) return <p className="px-4 py-4 text-sm text-slate-400">{empty}</p>
   return (
@@ -329,6 +352,11 @@ export default function AttendanceReviewTab({ selectedMonth, selectedYear }) {
             <Stat label="Early notice" value={num(data.noticeEarly?.length)} sub="names on the board" tone="blue" />
           </div>
           {!showingStored && runMeta && !isFinal && <p className="text-xs text-amber-700">Showing a live preview with your unsaved changes — regenerate the draft to save it.</p>}
+          <p className="text-xs text-slate-600" data-testid="ar-basis">
+            {data.criteria?.assessment_basis === 'master'
+              ? <>Measured on each person's <strong>current master shift</strong>{data.criteria?.assess_fixed_miss_punch === false ? '' : '; miss-punch days fixed from the gate register are included'}.</>
+              : <>Measured on the shift the import matched each day (import basis).</>}
+          </p>
 
           {(data.meta?.missing_shift_hours?.length > 0 || data.meta?.not_in_employee_master?.length > 0) && (
             <div className="card p-3 text-xs text-amber-800 bg-amber-50">
@@ -336,6 +364,8 @@ export default function AttendanceReviewTab({ selectedMonth, selectedYear }) {
               {data.meta.not_in_employee_master?.length > 0 && <div>Not in employee master: {data.meta.not_in_employee_master.join(', ')}</div>}
             </div>
           )}
+
+          {data.assessment?.quality && <QualitySection q={data.assessment.quality} />}
 
           <Section title="Trend vs last month">
             <TrendBlock trend={data.trend} ym={data.meta?.ym || ym} prevYm={data.meta?.prev_ym || ''} />
