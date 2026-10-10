@@ -148,9 +148,9 @@ compensatory_off_requests (comp-off / OD — HR creates, finance approves)
   month INTEGER, year INTEGER, company TEXT, reason TEXT, hr_remark TEXT,
   finance_status TEXT ('pending'/'approved'/'rejected'), finance_remark TEXT
 
-short_leaves (gate passes — quota 2 per employee per calendar month)
+short_leaves (gate passes — monthly allowance 2 Short Leaves (2 h) OR 1 Half Day per employee; leave_type short_leave|half_day)
   employee_code TEXT, date TEXT, company TEXT, duration_hours REAL,
-  authorized_leave_until TEXT, quota_breach INTEGER, cancelled_at TEXT
+  authorized_leave_until TEXT, quota_breach INTEGER, breach_reason TEXT, cancelled_at TEXT
 
 audit_log (change audit trail)
   table_name TEXT, record_id INTEGER, field_name TEXT,
