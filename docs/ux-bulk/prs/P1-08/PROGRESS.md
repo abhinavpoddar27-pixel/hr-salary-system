@@ -15,10 +15,10 @@
 |---|---|---|---|
 | 0 | Phase 0 plan + progress | done | 87d9e5b |
 | 1 | jest before | done | 85 suites / 1377 pass (branch = 2d96842 + docs) |
-| 2 | Source edit (updateMutation + recalcMutation invalidate prefix) | pending | |
+| 2 | Source edit (updateMutation + recalcMutation invalidate prefix) | done | grid prefix + edited employee's ['daily-attendance'] (update); grid prefix + ['daily-attendance'] prefix (recalc — calendar shows NH from is_night_shift); mutate passes code; 9cf… see git log |
 | 3 | dist rebuild (own commit) | pending | |
-| 4 | check script written | pending | |
-| 5 | script on branch dist (incl. fast-save / 5 s cache case) | pending | |
+| 4 | check script written | done | backend/scripts/stage5-grid-refresh-check.py — cases A–F, fictional T9801/T9802, weekday-aware days, port 3108 |
+| 5 | script on branch dist (incl. fast-save / 5 s cache case) | in progress | invalidate-only build: 30/31 — B FAILS (quick save 1.0 s after grid GET → cell stale: browser served the max-age=5 copy). Q1 proven → add `fresh` |
 | 6 | `--base` on origin/main dist (worktree /tmp) | pending | |
 | 7 | self-debug + user simulation + v2 | pending | |
 | 8 | jest after | pending | |
