@@ -1,5 +1,5 @@
 ## Last Session — 2026-10-10 (Loans PR-10: import of the accounts-Excel loans)
-**Branch `feat/loans-pr10` (origin/main #70 merged in), PR open, NOT merged.** Plan + rulings: `docs/loans/PROGRESS.md` (PR-10 rulings).
+**Branch `feat/loans-pr10` (origin/main #71 merged in), PR open, NOT merged.** Plan + rulings: `docs/loans/PROGRESS.md` (PR-10 rulings).
 - **What:** Loans → Import. HR/finance upload the accounts Excel (template, or any layout via a column-mapping step); names are
   matched to codes (exact → shared name/department → close spelling → Left → none; proposals only); **HR confirms each match,
   finance confirms or corrects each balance (note required), the admin approves the batch** (never one they uploaded or confirmed
@@ -22,6 +22,26 @@
 
 ---
 
+## Last Session — 2026-10-10 (Leave Management: employee search + Apply Leave never saved)
+**Branch `fix/leave-employee-search`, NOT merged.** Frontend only; no backend file changed.
+- **Ask:** type-to-search employee instead of a 300-row dropdown. New `components/shared/EmployeeSearchSelect.jsx`
+  (code or name, case-insensitive, code-prefix first, first 50 shown, ↑/↓/Enter/Esc, ✕ clears) in Apply Leave,
+  Adjustments and Comp-Off / OD. Esc with the list open closes ONLY the list (stopPropagation — Modal.jsx closes on a
+  document-level Escape); typing right after a pick starts a fresh search (no "code – name" + text).
+- **Found while testing — Apply Leave never saved anything:** the form sent snake_case, `POST /api/leaves` reads
+  camelCase → "Missing required fields" every time since Mar 2026 (prod usage_logs: hr1 tried 16 times 30 Aug–9 Oct; 0
+  rows). Mapped in the mutation; route untouched.
+- **Approve window showed 0 balance and blocked approval** on every tab except Leave Balances (it read the balances
+  list, fetched only on that tab). Now its own `GET /leaves/balances/:code?year=<leave year>` (loading state, Approve
+  disabled while loading). `getEmployeeLeaveBalance(code, params?)` gained an optional params arg.
+- **List stayed "Pending" after approve** (server.js 5s GET cache): leave applications / summary / balances list /
+  single balance now send `no-cache` (`fresh`).
+- **Not a bug — 23673 EL 0:** Feb–Aug Stage 6 rows still the cut ones from the 10 Oct 03:30 sweep (heal on Recalculate
+  Days "All Companies" or the next sweep); even repaired ≈165 worked days < 180. DOJ 2026-02-02 but 22 punched days in
+  Jan 2026 and no Jan salary row — owner/HR to confirm DOJ.
+- **Verified:** Chromium, scratch DB (320 employees), hr login: 30/30 — search/keys/Esc/clear, submit → Pending,
+  approve window CL 4→3, Approved in list + counter, DB CL 4→3, balances tab EL 8, adjustments + comp-off pickers,
+  0 page errors, 0 API 4xx/5xx. **Not tested:** Railway; mobile widths.
 ## Last Session — 2026-10-10 (Statutory flags PR-2: plant LWF)
 **Plant LWF ₹5 employee / ₹20 employer per month. Branch `feat/lwf-deduction` (origin/main 66c6a08 merged in),
 NOT pushed, NOT merged.** Plan: `docs/statutory-flags/IMPL_PR2.md` (REVIEW CORRECTIONS C1–C5 binding); log + decisions D-7/D-8:
