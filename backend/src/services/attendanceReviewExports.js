@@ -83,7 +83,7 @@ function buildWorkbook(result, run = {}) {
     { k: 'code', h: 'Code' }, { k: 'name', h: 'Name', w: 26 }, { k: 'department', h: 'Department', w: 18 }, { k: 'group', h: 'Group' },
     { k: 'worked_days', h: 'Worked days' }, { k: 'late_days', h: 'Late days' }, { k: 'early_days', h: 'Early exits' }, { k: 'late_min', h: 'Late min' },
     { k: 'early_min', h: 'Early min' }, { k: 'workdays_lost', h: 'Workdays lost' }, { k: 'newcomer', h: 'Newcomer', v: (r) => (r.newcomer ? 'yes' : '') },
-    { k: 'remeasured', h: 'Re-measured', v: (r) => (r.remeasured ? 'yes' : '') }, { k: 'categories', h: 'Why selected', v: cats, w: 30 },
+    { k: 'remeasured', h: 'Re-measured', v: (r) => (r.remeasured ? 'yes' : '') }, { k: 'hours_excused', h: 'Excused: full hours worked', v: (r) => r.hours_excused || '' }, { k: 'categories', h: 'Why selected', v: cats, w: 30 },
   ]), 'All with late or early');
   XLSX.utils.book_append_sheet(wb, sheet(result.shiftIssues || [], [
     { k: 'code', h: 'Code' }, { k: 'department', h: 'Department', w: 18 }, { k: 'master_shift', h: 'Master shift', w: 16 }, { k: 'used_shift', h: 'Shift used', w: 16 },
@@ -95,6 +95,9 @@ function buildWorkbook(result, run = {}) {
   const crit = Object.entries(result.criteria?.thresholds || {}).map(([k, v]) => [k, v]);
   const cs = XLSX.utils.aoa_to_sheet([['Rule', 'Value'], ['stayed_late_mode', result.criteria?.stayed_late_mode], ['early_exit_rule', result.criteria?.early_exit_rule],
     ['loading_designation_patterns', (result.criteria?.loading_designation_patterns || []).join(', ')], ...crit,
+    ...Object.entries(result.criteria?.remeasure || {}).map(([code, r]) => [`re-measure ${code}`,
+      `${r.start}–${r.end}, late grace ${r.late_grace ?? 9} min, early grace ${r.early_grace ?? 15} min, stayed-late ${r.left_late || 'system'}`
+      + (r.hours_complete ? `, full shift hours excuse a late or early exit (tolerance ${r.hours_grace ?? 10} min)` : '')]),
     ...(result.overridesApplied || []).map((o) => [`override ${o.code}`, `${o.action}: ${o.reason} → ${o.effect}`])]);
   cs['!cols'] = [{ wch: 30 }, { wch: 60 }];
   XLSX.utils.book_append_sheet(wb, cs, 'Rules used');
@@ -157,7 +160,7 @@ function buildDocx(result, run = {}, { now = new Date() } = {}) {
         { v: p.late_days, align: C }, { v: p.early_days, align: C }, hm(p.late_min + p.early_min), { v: Number(p.workdays_lost).toFixed(2), align: C },
         { v: p.action === 'deduction' ? 'Deduction note' : (p.newcomer ? 'Warning note (newcomer)' : 'Warning note'), fill: p.action === 'deduction' ? 'FCE4D6' : 'FFF2CC' },
         { v: p.deduction_days ? days(p.deduction_days) : '—', align: C, bold: true }, { v: p.indicative_amount ? inr(p.indicative_amount) : '—', align: R },
-        p.override ? `Override: ${p.override.reason}` : (p.remeasured ? 'Re-measured on the master shift' : '')])
+        p.override ? `Override: ${p.override.reason}` : (p.remeasured ? `Re-measured on the master shift${p.hours_excused ? `; ${days(p.hours_excused)} not counted (full shift hours worked)` : ''}` : '')])
         .concat([['', '', { v: 'TOTAL', bold: true }, '', '', '', '', '', '', { v: days(tot.deduction_days || 0), align: C, bold: true }, { v: inr(tot.indicative_amount), align: R, bold: true }, '']]),
       [380, 680, 1750, 2750, 600, 600, 1150, 950, 1300, 950, 1050, 3450], 15, true),
     para([tr(`Early-exit ${optionC ? 'deductions and warnings' : 'warning notes'} (${people(ew.length)})`, { size: 24, bold: true })], { before: 240, after: 60 }),

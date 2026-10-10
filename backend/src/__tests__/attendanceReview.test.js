@@ -182,6 +182,22 @@ describe('exclusions, re-measure, overrides, rule switch', () => {
     expect(S.validateConfig(rm('maybe'))[0]).toMatch(/left_late/);
   });
 
+  test('re-measure full-hours excuse: a late or early exit is not counted when the shift length was still worked', () => {
+    const db = F.newDb(); F.emp(db, 'ARF'); F.month(db, 'ARF', 2026, 9, 20);
+    F.day(db, 'ARF', '2026-10-01', { it: '09:40', ot: '19:45' });   // late 40, worked 10 h 05 → excused
+    F.day(db, 'ARF', '2026-10-02', { it: '09:40', ot: '19:20' });   // late 40, worked 9 h 40 → counted
+    F.day(db, 'ARF', '2026-10-03', { it: '09:15', ot: '19:06' });   // late 15, worked 9 h 51 → excused only with the 10-min tolerance
+    F.day(db, 'ARF', '2026-10-05', { it: '08:00', ot: '18:00' });   // early 60, worked 10 h → excused
+    F.day(db, 'ARF', '2026-10-06', { it: '09:00', ot: '18:00' });   // early 60, worked 9 h → counted
+    const rm = (extra) => ({ remeasure: { ARF: { start: '09:00', end: '19:00', left_late: 'off', ...extra } } });
+    expect(person(run(db, { config: rm({}) }), 'ARF')).toMatchObject({ late_days: 3, early_days: 2, hours_excused: 0 });
+    expect(person(run(db, { config: rm({ hours_complete: true }) }), 'ARF')).toMatchObject({ late_days: 1, late_min: 40, early_days: 1, early_min: 60, hours_excused: 3 });
+    expect(person(run(db, { config: rm({ hours_complete: true, hours_grace: 0 }) }), 'ARF')).toMatchObject({ late_days: 2, early_days: 1, hours_excused: 2 });
+    expect(S.validateConfig(rm({ hours_complete: 'yes' }))[0]).toMatch(/hours_complete/);
+    expect(S.validateConfig(rm({ hours_complete: true, hours_grace: 500 }))[0]).toMatch(/hours_grace/);
+    expect(S.validateConfig(rm({ hours_complete: true, hours_grace: 10 }))).toEqual([]);
+  });
+
   test('overrides: include adds, exclude removes, warning downgrades — each with its reason', () => {
     const db = F.newDb(); heavy(db, 'AR7'); heavy(db, 'AR8'); F.emp(db, 'AR9'); sep(db, 'AR9'); F.month(db, 'AR9', 2026, 10, 20, (i) => ({ lm: i < 2 ? 30 : 0 }));
     const overrides = [{ code: 'AR7', action: 'exclude', reason: 'owner ruling' }, { code: 'AR8', action: 'warning', reason: 'confirm shift' },

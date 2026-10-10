@@ -43,7 +43,7 @@ const DEFAULT_CONFIG = Object.freeze({
   excluded_departments: Object.freeze([]),  // left out of every output (e.g. piece-rate contractors)
   early_excluded_codes: Object.freeze([]),  // early exits not assessed (wrong shift in master)
   held_codes: Object.freeze([]),            // listed as held, no action / notice
-  remeasure: Object.freeze({}),             // { code: { start, end 'HH:MM', late_grace 9, early_grace 15, left_late 'system'|'shift'|'off', left_late_minutes 20 } }
+  remeasure: Object.freeze({}),             // { code: { start, end 'HH:MM', late_grace 9, early_grace 15, left_late 'system'|'shift'|'off', left_late_minutes 20, hours_complete false, hours_grace 10 } }
 });
 
 const MODES = { worked: 0, calendar: 1, either: 2 };
@@ -98,6 +98,8 @@ function validateConfig(c) {
       else if (toMin(r.end) <= toMin(r.start)) errs.push(`remeasure ${code}: end must be after start (day shifts only)`);
       for (const g of ['late_grace', 'early_grace', 'left_late_minutes']) if (r && r[g] !== undefined && (typeof r[g] !== 'number' || r[g] < 0)) errs.push(`remeasure ${code}: ${g} must be a non-negative number`);
       if (r && r.left_late !== undefined && !['system', 'shift', 'off'].includes(r.left_late)) errs.push(`remeasure ${code}: left_late must be system | shift | off`);
+      if (r && r.hours_complete !== undefined && typeof r.hours_complete !== 'boolean') errs.push(`remeasure ${code}: hours_complete must be true or false`);
+      if (r && r.hours_grace !== undefined && (typeof r.hours_grace !== 'number' || r.hours_grace < 0 || r.hours_grace > 120)) errs.push(`remeasure ${code}: hours_grace must be 0–120 minutes`);
     }
   }
   return errs;
@@ -261,6 +263,8 @@ function loadPersonMonth(db, month, year, cfg, releaseDays, prevReleaseDays) {
  * Re-measures the configured codes on the shift given in config (both months), from the final punches.
  * Late = in > start + late_grace (minutes counted from start); early = out < end − early_grace, Mon–Sat, release days out.
  * Stayed-late exemption per code: left_late 'system' (stored flag, default), 'shift' (recomputed on this shift), 'off' (none).
+ * Full-hours rule per code (hours_complete): a late or an early exit is not counted on a day where
+ * out − in ≥ the shift's length (half for ½P) − hours_grace minutes (default 10). Counted in hours_excused.
  */
 function remeasureRows(db, month, year, cfg, releaseDays, prevReleaseDays) {
   const codes = Object.keys(cfg.remeasure || {});
@@ -293,18 +297,23 @@ function remeasureRows(db, month, year, cfg, releaseDays, prevReleaseDays) {
     const exc = cfg.stayed_late_mode === 'worked' ? pll === 1 : cfg.stayed_late_mode === 'calendar' ? cll === 1 : (pll === 1 || cll === 1);
     const h = (toMin(rm.end) - toMin(rm.start)) / 60; const f = ['½P', 'WO½P'].includes(r.st) ? 0.5 : 1;
     const key = `${code}|${ym}`;
-    const a = out.get(key) || { code, ym, worked_days: 0, worked_units: 0, sched_min: 0, shift_h: h, shift_h_missing: 0, late_raw: 0, late_excused: 0, lates: 0, late_min: 0, early_exits: 0, early_min: 0, early_long: 0, remeasured: true };
+    const a = out.get(key) || { code, ym, worked_days: 0, worked_units: 0, sched_min: 0, shift_h: h, shift_h_missing: 0, late_raw: 0, late_excused: 0, lates: 0, late_min: 0, early_exits: 0, early_min: 0, early_long: 0, hours_excused: 0, remeasured: true };
     a.worked_days += 1; a.worked_units += f; a.sched_min += f * h * 60;
     const inM = toMin(r.it); const outM = toMin(r.ot);
+    const fullHours = rm.hours_complete === true && inM !== null && outM !== null && outM > inM
+      && outM - inM >= f * h * 60 - (rm.hours_grace ?? 10);
     const lateBy = inM === null ? 0 : inM - toMin(rm.start);
     if (lateBy > (rm.late_grace ?? 9) && lateBy >= t.late_min_minutes && lateBy < t.misread_minutes) {
       a.late_raw += 1;
-      if (exc) a.late_excused += 1; else { a.lates += 1; a.late_min += lateBy; }
+      if (exc) a.late_excused += 1;
+      else if (fullHours) { a.late_excused += 1; a.hours_excused += 1; }
+      else { a.lates += 1; a.late_min += lateBy; }
     }
     const earlyBy = outM === null ? 0 : toMin(rm.end) - outM;
     const dow = new Date(`${r.d}T00:00:00Z`).getUTCDay();
     if (earlyBy > (rm.early_grace ?? t.early_min_exclusive) && earlyBy < t.early_max_exclusive && (!t.early_weekdays_only || dow !== 0) && !rel[ym].has(r.d)) {
-      a.early_exits += 1; a.early_min += earlyBy; if (earlyBy >= t.option_c_long_minutes) a.early_long += 1;
+      if (fullHours) a.hours_excused += 1;
+      else { a.early_exits += 1; a.early_min += earlyBy; if (earlyBy >= t.option_c_long_minutes) a.early_long += 1; }
     }
     out.set(key, a);
   }
@@ -414,7 +423,7 @@ function personLine(p, monthDays) {
     late_min: c.late_min_counted || 0, early_min: c.early_min_counted || 0, shift_h: c.shift_h || null,
     workdays_lost: r2(p.workdays_lost || 0),
     last_month: p.prev ? { worked_days: p.prev.worked_days, late_days: p.prev.lates_counted, early_days: p.prev.early_counted } : null,
-    newcomer: p.newcomer, categories: p.categories || [], remeasured: !!c.remeasured,
+    newcomer: p.newcomer, categories: p.categories || [], remeasured: !!c.remeasured, hours_excused: c.hours_excused || 0,
     gross_salary: p.gross_salary, _monthDays: monthDays,
   };
 }
@@ -581,7 +590,7 @@ function computeAttendanceReview(db, { month, year, config, releaseDays = [], pr
     meta: { month, year, ym: cur, prev_ym: prev, days_in_month: md, release_days: releaseDays, prev_release_days: prevReleaseDays,
       excluded_people: excludedCount, people_assessed: live.length, missing_shift_hours: live.filter((p) => p.cur.shift_h_missing).map((p) => p.code),
       not_in_employee_master: live.filter((p) => !p.in_employee_master).map((p) => p.code) },
-    criteria: { thresholds: cfg.thresholds, stayed_late_mode: cfg.stayed_late_mode, early_exit_rule: cfg.early_exit_rule, loading_designation_patterns: cfg.loading_designation_patterns },
+    criteria: { thresholds: cfg.thresholds, stayed_late_mode: cfg.stayed_late_mode, early_exit_rule: cfg.early_exit_rule, loading_designation_patterns: cfg.loading_designation_patterns, remeasure: cfg.remeasure || {} },
     releaseDaysDetected: detectReleaseDays(db, month, year, cfg),
     shiftIssues: detectShiftIssues(db, month, year).filter((r) => !cfg.excluded_codes.includes(r.code)
       && !cfg.excluded_departments.map((d) => d.toUpperCase()).includes(String(r.department || '').toUpperCase())),
