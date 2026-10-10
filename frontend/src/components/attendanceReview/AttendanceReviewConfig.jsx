@@ -47,7 +47,7 @@ export default function AttendanceReviewConfig({ month, year }) {
       thresholds: { ...c.thresholds },
       stayed_late_mode: c.stayed_late_mode, early_exit_rule: c.early_exit_rule,
       lists: Object.fromEntries(LISTS.map(([k]) => [k, (c[k] || []).join('\n')])),
-      remeasure: Object.entries(c.remeasure || {}).map(([code, r]) => ({ code, start: r.start, end: r.end, late_grace: r.late_grace ?? 9, early_grace: r.early_grace ?? 15, left_late: r.left_late || 'system' })),
+      remeasure: Object.entries(c.remeasure || {}).map(([code, r]) => ({ code, start: r.start, end: r.end, late_grace: r.late_grace ?? 9, early_grace: r.early_grace ?? 15, left_late: r.left_late || 'system', hours_complete: r.hours_complete === true, hours_grace: r.hours_grace ?? 10 })),
     })
     setEffectiveFrom(thisYm(month, year))
   }, [res, month, year])
@@ -58,7 +58,8 @@ export default function AttendanceReviewConfig({ month, year }) {
         thresholds: form.thresholds, stayed_late_mode: form.stayed_late_mode, early_exit_rule: form.early_exit_rule,
         ...Object.fromEntries(LISTS.map(([k]) => [k, toList(form.lists[k])])),
         remeasure: Object.fromEntries(form.remeasure.filter((r) => r.code.trim()).map((r) => [r.code.trim(), {
-          start: r.start, end: r.end, late_grace: Number(r.late_grace), early_grace: Number(r.early_grace), left_late: r.left_late }])),
+          start: r.start, end: r.end, late_grace: Number(r.late_grace), early_grace: Number(r.early_grace), left_late: r.left_late,
+          hours_complete: !!r.hours_complete, hours_grace: Number(r.hours_grace) }])),
       }
       return attendanceReviewSaveConfig(effectiveFrom, config)
     },
@@ -110,7 +111,9 @@ export default function AttendanceReviewConfig({ month, year }) {
         <div className="text-xs font-semibold text-slate-600 mb-1">Re-measure on a different shift (when the system matched the wrong shift)</div>
         <table className="text-sm">
           <thead><tr className="text-xs text-slate-500"><th className="text-left pr-2">Code</th><th className="text-left pr-2">Start</th><th className="text-left pr-2">End</th>
-            <th className="text-left pr-2">Late grace</th><th className="text-left pr-2">Early grace</th><th className="text-left pr-2">Stayed-late exemption</th><th /></tr></thead>
+            <th className="text-left pr-2">Late grace</th><th className="text-left pr-2">Early grace</th><th className="text-left pr-2">Stayed-late exemption</th>
+            <th className="text-left pr-2" title="A late or early exit is not counted on a day the person still worked the full shift length (in to out)">Full hours excuse</th>
+            <th className="text-left pr-2">Tolerance (min)</th><th /></tr></thead>
           <tbody>
             {form.remeasure.map((r, i) => (
               <tr key={i}>
@@ -121,13 +124,16 @@ export default function AttendanceReviewConfig({ month, year }) {
                 <td className="pr-2"><input aria-label="Early grace" type="number" min="0" className="input w-20" value={r.early_grace} onChange={(e) => setRm(i, 'early_grace', e.target.value)} /></td>
                 <td className="pr-2"><select aria-label="Re-measure stayed-late" className="input" value={r.left_late} onChange={(e) => setRm(i, 'left_late', e.target.value)}>
                   <option value="system">System flag</option><option value="shift">Measured on this shift</option><option value="off">No exemption</option></select></td>
+                <td className="pr-2 text-center"><input aria-label="Full hours excuse" type="checkbox" checked={!!r.hours_complete} onChange={(e) => setRm(i, 'hours_complete', e.target.checked)} /></td>
+                <td className="pr-2"><input aria-label="Full hours tolerance" type="number" min="0" max="120" className="input w-20" disabled={!r.hours_complete} value={r.hours_grace} onChange={(e) => setRm(i, 'hours_grace', e.target.value)} /></td>
                 <td><button type="button" className="text-xs text-red-600 hover:underline" onClick={() => setForm((f) => ({ ...f, remeasure: f.remeasure.filter((_, j) => j !== i) }))}>remove</button></td>
               </tr>
             ))}
           </tbody>
         </table>
         <button type="button" className="text-xs text-blue-600 hover:underline mt-1"
-          onClick={() => setForm((f) => ({ ...f, remeasure: [...f.remeasure, { code: '', start: '09:00', end: '18:00', late_grace: 9, early_grace: 15, left_late: 'system' }] }))}>+ add re-measure</button>
+          onClick={() => setForm((f) => ({ ...f, remeasure: [...f.remeasure, { code: '', start: '09:00', end: '18:00', late_grace: 9, early_grace: 15, left_late: 'system', hours_complete: false, hours_grace: 10 }] }))}>+ add re-measure</button>
+        <div className="text-[11px] text-slate-400 mt-1">Full hours excuse: a late arrival or early exit is not counted on a day the person still worked the whole shift length (half for a half day), less the tolerance.</div>
       </div>
 
       <details>
