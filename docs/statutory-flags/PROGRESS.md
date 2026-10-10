@@ -50,12 +50,13 @@
 - PR-2 STEP 1 — 0a2f12a `feat(lwf): LWF columns, policy keys 5/20, AI cache trigger includes LWF`. lwfSchema.test.js S1–S4 (7 tests; 7/7 fail on the previous schema.js, swap-verified).
 - PR-2 STEP 2 — 93302ab `feat(lwf): plant Stage 7 LWF ₹5/₹20 (flagged, earned gross > 0), counted in the loan headroom`. salaryComputation.js edits 1–4 exactly as IMPL_PR2 (LWF after the ESI block, before planStage7Loans; lwf_employee in the loan salary object; + lwfEmployee in totalDeductions before the cap; lwfEmployee/lwfEmployer returned); UPSERT 56/56/56/53 → 58/58/58/55. generatePayslipData NOT done here — moved with its test O1 to STEP 4 (as the plan lists it). headroom.js: 'lwf_employee' appended to plant + sales PRIOR_DEDUCTION_COMPONENTS (sales inert: the sales salary object has no lwf_employee → 0). lwfPlant.test.js P1–P10 = 18 tests (14 fail on the pre-STEP-2 files, swap-verified; the 4 that pass are flag-off / zero-gross / zero-attendance, which assert unchanged behaviour). P9 adds a control DB (same people, no upload): the unflagged colleague's September row is identical in every column; the flagged employee's row differs ONLY in lwf_employee, lwf_employer, total_deductions (+5), net_salary, total_payable, take_home (−5). P10: two DBs (LWF on/off, PF+ESI on, ₹6,000 advance) → loan_recovery 2645 vs 2650, ledger provisional = loan_recovery, reconcileLoan ok. T12 (statutoryLoans.test.js, N3): asserts lwf_employee 5 and adds it to `before`; the unedited T12 fails by exactly ₹5 on the new code. No runtime invariant sums the deduction components (driftMonitor/close/financeRedFlags checked) — only the docs SQL + sim scripts (N2, STEP 7).
 - PR-2 STEP 4 — a90f488 `feat(lwf): LWF on the plant payslip, register totals, finance report, AI prompt`. generatePayslipData: 'LWF (Employee)' deductions line (after Early Exit; filtered when 0) + lwfEmployer; payroll.js /salary-register totals totalLWFEmployee/totalLWFEmployer only (no other payroll.js line in this step); financeAudit.js /report SELECT + row map (re-located by anchor: main changed this file); ai.js prompt line + `lwf` summary key; schemaReference.js. lwfOutputs.test.js O1 ×3 (payslip unit + GET /payslip/:code) + O5 ×2 (/finance-audit/report, /salary-register totals incl. held) via real JWT auth — 5/5 fail on the previous sources (swap-verified).
+- PR-2 STEP 5 — e4e48ad `feat(lwf): LWF columns in the payroll register and salary slip summary Excel`. payroll.js — ONLY the two Excel handlers. BEFORE/AFTER: register HEADERS `… 'ESI(EE)', 'ESI(ER)', 'PT', 'TDS', …` (37) → `… 'ESI(EE)', 'ESI(ER)', 'LWF(EE)', 'LWF(ER)', 'PT', 'TDS', …` (39); NUM_COLS = HEADERS.length (comment 37 → 39); data row + totals row + `!cols` (+2 × wch 8 after the four PF/ESI widths) at the same position; SUMMARY sheet + 'LWF (Employee)' / 'LWF (Employer)' rows; CTC label/amount + LWF(ER). Slip summary: inline 19-element header + `SUMMARY_COLS = 19` → `SUMMARY_HEADER` (20, 'LWF' after 'ESI') + `SUMMARY_COLS = SUMMARY_HEADER.length`; data row / reducer `lwf` / totals / `!cols` (+1 × wch 8); `CAUTION_COLS = [15, 16, 17]` → `['TOT DED','NET PAYABLE','TAKE HOME'].map(h => SUMMARY_HEADER.indexOf(h))` = [16, 17, 18] (L15). O3 ×2 in lwfOutputs.test.js (header = data = totals = `!cols` = 39 / 20, every post-insert column still aligned with the DB row, LWF 5/20 and totals 10/40, CTC, held-row comments on exactly cols 16/17/18) — both fail on the pre-STEP-5 payroll.js. Test note: SheetJS only reads `!cols` back with `cellStyles: true`.
 
 ## LAST STEP
-PR-2 STEP 4 (payslip + readers) — a90f488.
+PR-2 STEP 5 (plant Excel exports) — e4e48ad.
 
 ## NEXT STEP
-PR-2 STEP 5 — both plant Excel handlers in payroll.js (+ O3). Then STEP 6 UI, STEP 7 dist/docs, C3 --dump check, C4 sim.
+PR-2 STEP 6 — UI (SalaryComputation.jsx, payslipPdf.js, FinanceAudit.jsx) + npm run build + dist in the same commit. Then STEP 7, C3, C4.
 
 ## OWNER RULINGS ADDED DURING THE BUILD
 (record date + ruling; BUILD_PLAN §1 holds the original set)
@@ -117,6 +118,7 @@ PR-2 STEP 5 — both plant Excel handlers in payroll.js (+ O3). Then STEP 6 UI, 
 - docs/statutory-flags/sim/run.py, seed.js (new, PHASE 3; review checks added)
 - REVIEW FIXES: backend/src/services/statutoryFlags.js, routes/sales.js, routes/salary-input.js, __tests__/statutoryWriters.test.js, statutoryFlagsService.test.js, statutoryWriterGuard.test.js, frontend/src/pages/StatutoryFlags.jsx (+ dist), docs/statutory-flags/RUNBOOK.md, OPEN_ITEMS.md, CLAUDE.md
 - PR-2 STEP 4: salaryComputation.js (generatePayslipData), routes/payroll.js (/salary-register totals), routes/financeAudit.js (/report), routes/ai.js, config/schemaReference.js, __tests__/lwfOutputs.test.js (new)
+- PR-2 STEP 5: routes/payroll.js (two Excel handlers), __tests__/lwfOutputs.test.js (O3)
 
 ## FRAGILE-FILE EDITS (before / after)
 - PR-2 STEP 2 salaryComputation.js (lines on 66c6a08 = 8b9561d, file unchanged on main) —
@@ -227,3 +229,4 @@ PR-2 baseline after merging origin/main 66c6a08: 60 / 1004, 0 failures.
 PR-2 STEP 1: lwfSchema 7/7 (+ statutorySchema, loansSchema green).
 PR-2 STEP 2: lwfPlant 18/18, T12 green; full suite 62 / 1029, 0 failures (= baseline 60 / 1004 + 2 suites / 25 tests).
 PR-2 STEP 4: lwfOutputs 5/5; suites touching STEP 4 files 8 / 142 green.
+PR-2 STEP 5: lwfOutputs 7/7 (+ holdReleaseRoute, manualDeductionsRetired green).
