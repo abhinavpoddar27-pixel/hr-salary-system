@@ -1,3 +1,15 @@
+## Last Session — 2026-10-10 (Attendance Review PR-1: engine + admin API, backend only)
+**Branch `feat/attendance-review-engine` (on `docs/attendance-review-handoff`), pushed, PR NOT opened.** Read `docs/attendance-review/PROGRESS.md` first.
+- **What:** `services/attendanceReviewService.js` (read-only monthly late/early review engine, every threshold in config),
+  `routes/attendanceReview.js` at `/api/analytics/attendance-review` (admin only: preview, config versions, draft/final runs),
+  `server.js` +1 mount line, `schema.js` +2 tables (`attendance_review_config`, `attendance_review_runs`), no seed rows.
+- **Rule (D2 Option 2):** release days excluded from early exits everywhere; selected = late-regular ∪ early-regular ∪ double;
+  improved = fell 40%+; early-regular/double need ≥ 0.9 workdays lost; per-run admin overrides with reason.
+- **Fragile:** repo is PUBLIC — exclusion codes are admin config rows only. Re-measure `left_late` mode for a re-measured person
+  is an owner decision (fixture used 'off'). Engine never writes payroll tables (PR-4 write-back blocked on the day-calc bug).
+- **Verified:** jest 83/1360; live server.js simulation 16/16; Sep acceptance via SQL Console PASS (17/14/12.5; notices exact);
+  payroll checks = the 3 known Aug errors; salary drift unchanged. **Not tested:** Railway; frontend (PR-2).
+
 ## Last Session — 2026-10-10 (Attendance Review: monthly late/early report → Analytics tab, DESIGN ONLY)
 **Branch `docs/attendance-review-handoff` (docs only), NOT merged. No app code changed.** Read `docs/attendance-review/HANDOFF_attendance_review_10Oct2026.md` first.
 - **Done by hand for Sep 2026:** late coming / early exit / double-defaulter review vs Aug (company late 27.7% → 14.4%; early
