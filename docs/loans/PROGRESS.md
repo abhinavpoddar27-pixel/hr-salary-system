@@ -8,10 +8,9 @@ after a context compaction or a new session there is a file to read and build fr
 - **As of:** 2026-10-10.
 - **Current state:** P1–P3 and Loans PR-0 … PR-6 (#48–#54, #56, #58, #61) are merged. PR-5 verified on production (gate '0',
   loans 0, loan_deductions 0, no salary row with loan_recovery, drift = 1 known row, component-short = 5 known rows).
-  Loans PR-6b (close screen) is in progress in parallel. Loans PR-7 (exit recovery, backend only) is open on
-  `feat/loans-pr7`, waiting for review.
-- **Next PR:** after PR-7 → plant pilot. Loans PR-8 (sales) is built on `feat/loans-pr8` (based on PR-7); its
-  `frontend/dist` is rebuilt once on the merged tree after PR-6b / PR-7 land, then it is opened for review.
+  Loans PR-7 (exit recovery, #63) and Loans PR-6b (close screen, reversal, Mark Left outstanding, #64) are merged
+  (10 Oct 2026). Loans PR-8 (sales borrowers) is open on `feat/loans-pr8`, waiting for review.
+- **Next PR:** plant pilot; sales go-live after PR-8 + PR-9.
 - **Blockers:**
   - The PR-6 check below (nil loan impact: the 13 Oct run writes nothing); then the PR-7 check.
   - Finance is checking the 35 re-held rows that were released to be paid, against what was
@@ -53,10 +52,10 @@ after a context compaction or a new session there is a file to read and build fr
 | Loans PR-3 | `feat/loans-pr3` | Merged | #54 | 2026-10-09 | verified (planner) |
 | Loans PR-4 | `feat/loans-pr4` | Merged | #56 | 2026-10-10 | browser look on Railway preview |
 | Loans PR-5 | `feat/loans-pr5` | Merged | #58 | 2026-10-10 | verified (planner) |
-| Loans PR-6 | `feat/loans-pr6` | Merged | #61 | 2026-10-10 | PR-6 check below + checks 1–3 |
-| Loans PR-6b | `feat/loans-pr6b` | Not started (close screen) | — | — | — |
-| Loans PR-7 | `feat/loans-pr7` | Open | see GitHub | — | PR-7 check below + checks 1–3 |
-| Loans PR-8 | `feat/loans-pr8` | Built, not pushed (dist pending the merge of PR-6b / PR-7) | — | — | PR-8 check below + checks 1–3 |
+| Loans PR-6 | `feat/loans-pr6` | Merged | #61 | 2026-10-10 | verified (planner) |
+| Loans PR-6b | `feat/loans-pr6b` | Merged | #64 | 2026-10-10 | verified (planner) |
+| Loans PR-7 | `feat/loans-pr7` | Merged | #63 | 2026-10-10 | verified (planner) |
+| Loans PR-8 | `feat/loans-pr8` | Open | see GitHub | — | PR-8 check below + checks 1–3 |
 | Loans PR-9 | `feat/loans-pr9` | Not started | — | — | — |
 | Loans PR-10 | `feat/loans-pr10` | Not started | — | — | — |
 | PR-F | `feat/loans-prF` | Not started (after pilot) | — | — | — |
@@ -288,6 +287,18 @@ Then drift check 1 (still the 1 known row). No salary code changed.
 `NOT_NEEDED`, `STAGE7_NOT_COMPUTED`, `EARLIER_MONTH_OPEN`, `MONTH_NOT_ENDED`), `GET /api/loans/closes` (history, notes
 parsed), `POST /api/loans/deductions/:id/reverse` (admin). Company-restricted users get 403 on preview / close.
 
+## Loans PR-6b rulings (coordinator, 10 Oct 2026)
+
+- **Q1 = A:** the only backend change — `GET /api/loans/:id` also returns `deductions` (each with `adjusted` and
+  `effective_posted`) and `adjustments`. Read-only, confined to the `/:id` handler body (PR-7 adds routes above it).
+- Close screen = a "Monthly close" tab on `/loans` (`?tab=close`); HR and viewer read-only; plant payroll only.
+- Mark Left dialog shows the leaver's live loans and outstanding with the SPEC §5 r11 wording (true once PR-7 is
+  merged, which happens before any loan can exist) plus the exit-month line (marked after that month's close → the
+  whole balance is a residual for finance to collect in cash or write off).
+- Held tile on the Loans page: not done (no existing API gives a ledger-wide held count; none added).
+- `ReasonModal` gains an optional `minLength` (reversal: 10). Browser check extended (Pass 3).
+- Screens: `docs/loans/screens/pr6b/`. Repeat: `python3 backend/scripts/loans-ui-browser-check.py <dir>` (Pass 3 shots go to `<dir>/pr6b`).
+
 ### Loans PR-6 check (read-only, after deploy)
 
 ```sql
@@ -462,4 +473,5 @@ FROM sales_salary_computations WHERE month = ? AND year = ?;
 | 2026-10-10 | Loans PR-5 | Built | Q1 earned-base fix, per-employee savepoint, Stage 7 loan step (`services/loans/stage7.js`), simulation. Suite 692 → 713 (36 suites). No-loan simulation dump byte-identical on origin/main and the branch (210 rows); full mode (5 loans, re-run, reimport) all checks pass, drift 0, component-short 0. |
 | 2026-10-10 | Loans PR-6 | Built | Loan close, sweep, daily job, opposite entries, hold-release guard, close API, drift invariants. Suite 713 → 753 (41 suites). Close simulation 7 loans × 4 months PASS; `--empty` 84 tables unchanged. |
 | 2026-10-10 | Loans PR-7 | Built | Exit recovery: schedule collapses into the final month at Mark Left; residual after it; exit-residual and write-off (TDS) endpoints; Mark Left reply summary. Merged origin/main (#61). Suite 769 → 792 (44 suites). Exit simulation 5 leavers × 5 months PASS (reconciles daily, drift 0, component-short 0, payslip = ledger); `--empty` 84 tables unchanged. |
-| 2026-10-10 | Loans PR-8 | Built (dist pending) | Sales borrowers: eligibility (structure gross, company-scoped), cycle first EMI, borrower search; sales Stage 7 within headroom matched on code + company; loan-only ₹0 floor; K30 edits, K31 hold block, K28 release guard; sales close / sweep / payslip check; sales exit hook. Suite 792 → 849 (49 suites, 3 clean runs). `loans-sales-simulation.js` 7 loans × 5 sales months PASS; `--dump` byte-identical vs PR-7 base (232 rows); `--empty` writes nothing. |
+| 2026-10-10 | Loans PR-6b | Built | Close tab, admin reversal on the loan page, Mark Left outstanding; `GET /:id` gains `deductions` + `adjustments`. Suite 769 → 771 (42 suites). Browser check 103/103 (63 PR-4 + 40 Pass 3), 0 page errors. |
+| 2026-10-10 | Loans PR-8 | Built | Sales borrowers: eligibility (structure gross, company-scoped), cycle first EMI, borrower search; sales Stage 7 within headroom matched on code + company; loan-only ₹0 floor; K30 edits, K31 hold block, K28 release guard; sales close / sweep / payslip check; sales exit hook. Suite 792 → 849 (49 suites, 3 clean runs). `loans-sales-simulation.js` 7 loans × 5 sales months PASS; `--dump` byte-identical vs PR-7 base (232 rows); `--empty` writes nothing. |

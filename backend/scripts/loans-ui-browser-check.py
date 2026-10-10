@@ -13,10 +13,17 @@ REAL logins, on a SCRATCH database. Never point it at a real database.
   * Pass 2 — gate flipped to '1' IN THE TEMP DB ONLY: disburse, receipt, defer,
     restructure + withdraw, write-off + reject, cancel, policy edit, due list,
     statement print window, Employees → Loans tab, Mark Left text, viewer read-only.
+  * Pass 3 (Loans PR-6b) — the monthly loan close and the admin reversal. Seeded AFTER
+    boot (the start-up catch-up would otherwise close the months first): 3 borrowers
+    disbursed in Jun 2026 through the engine, a REAL Stage 7 run for Jul 2026, then one
+    salary held and one payslip that no longer matches the ledger. Readiness codes,
+    close by finance (201), a stale second tab (409), history notes, hr / viewer
+    read-only, a company-restricted finance user, the admin reversal on the loan page,
+    and the Mark Left dialog's outstanding. Screens go to <screenshot_dir>/pr6b/.
 
 Usage:  python3 backend/scripts/loans-ui-browser-check.py [screenshot_dir]
 Needs Python Playwright and Chromium (PLAYWRIGHT_BROWSERS_PATH, e.g. /opt/pw-browsers).
-Uses 4 logins (the login limiter allows 5 per 15 minutes per server start).
+Uses 5 logins (the login limiter allows 5 per 15 minutes per server start).
 Exit code 0 = every check passed.
 """
 import json
@@ -34,6 +41,7 @@ from playwright.sync_api import sync_playwright
 
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
 OUT = os.path.abspath(sys.argv[1]) if len(sys.argv) > 1 else os.path.join(ROOT, 'screenshots')
+OUT6B = os.path.join(OUT, 'pr6b')
 PORT = int(os.environ.get('PORT', '3997'))
 BASE = f'http://127.0.0.1:{PORT}'
 COMPANY = 'Indriyan Beverages Pvt Ltd'
@@ -56,6 +64,9 @@ def main():
     if not os.path.exists(os.path.join(ROOT, 'frontend', 'dist', 'index.html')):
         sys.exit('frontend/dist is missing — run `npm run build` in frontend first')
     os.makedirs(OUT, exist_ok=True)
+    utc = datetime.now(timezone.utc)
+    if abs((utc.hour * 60 + utc.minute) - 45) < 10:
+        sys.exit('within 10 minutes of the daily loan job (00:45 UTC = 06:15 IST) — run it a little later')
     work = tempfile.mkdtemp(prefix='loans-ui-')
     env = dict(os.environ, DATA_DIR=work, JWT_SECRET='ui-check-secret', PORT=str(PORT), NODE_ENV='production',
                ADMIN_PASSWORD='Admin@123', HR_PASSWORD='Indriyan@2025', FINANCE_PASSWORD='Finance@2025')
@@ -142,11 +153,12 @@ def set_gate(db_path, value):
     con.close()
 
 
-def shot(page, name, full=False, element=None):
+def shot(page, name, full=False, element=None, out=None):
     """Waits out the page fade-in animation first. `element` = a test id to capture whole
     (the app scrolls inside <main>, so a full-page shot would not include it)."""
     page.wait_for_timeout(800)
-    path = os.path.join(OUT, f'{name}.png')
+    os.makedirs(out or OUT, exist_ok=True)
+    path = os.path.join(out or OUT, f'{name}.png')
     if element:
         # The app scrolls inside <main>; grow the viewport so the whole element shows.
         h = page.evaluate("() => (document.querySelector('main') || document.body).scrollHeight")
@@ -511,7 +523,225 @@ def run_browser(db_path, admin_loan_id):
         hr.wait_for_timeout(1500)
         check('sidebar: no waiting count for hr', hr.locator('a[href="/loans"] span[title*="waiting"]').count() == 0)
 
+        run_close_pass(browser, db_path, hr, admin, fin, viewer)
+
         browser.close()
+
+
+# ── Pass 3 (Loans PR-6b): the monthly loan close ────────────────────────────
+
+SEED_CLOSE_JS = r"""
+// Scratch DB only. argv: ROOT DB_PATH. Writes through the loan engine and a REAL Stage 7 run.
+const [ROOT, DB] = process.argv.slice(2);
+const Database = require(`${ROOT}/backend/node_modules/better-sqlite3`);
+const db = new Database(DB);
+db.pragma('busy_timeout = 10000');
+const L = require(`${ROOT}/backend/src/services/loans`);
+const { recomputeSalary } = require(`${ROOT}/backend/src/services/recompute`);
+const COMPANY = 'Indriyan Beverages Pvt Ltd';
+const out = {};
+const quiet = (fn) => { const l = console.log; const w = console.warn; console.log = () => {}; console.warn = () => {}; try { return fn(); } finally { console.log = l; console.warn = w; } };
+for (const [code, name] of [['E110', 'Jaspreet Sandhu'], ['E111', 'Kiran Bala'], ['E112', 'Lakhvir Dhillon']]) {
+  db.prepare(`INSERT INTO employees (code, name, department, company, status, employment_type, is_contractor, gross_salary, date_of_joining)
+              VALUES (?, ?, 'PRODUCTION', ?, 'Active', 'Permanent', 0, 24000, '2020-04-01')`).run(code, name, COMPANY);
+  const r = L.requestLoan(db, { borrowerType: 'plant', employeeCode: code, company: COMPANY, loanType: 'Personal', principal: 12000, tenure: 4, reason: 'UI check: close month' }, { username: 'hr', role: 'hr' }, { asOf: '2026-06-10' });
+  if (!r.ok) throw new Error(`request ${code}: ${r.code} ${r.message}`);
+  const a = L.approveLoan(db, r.loanId, { username: 'admin', role: 'admin' }, { asOf: '2026-06-10' });
+  if (!a.ok) throw new Error(`approve ${code}: ${a.code}`);
+  const d = L.disburseLoan(db, r.loanId, { username: 'finance', role: 'finance' }, { mode: 'Bank transfer', reference: `UTR-${code}`, disbursedOn: '2026-06-15', agreementFilePath: `DMS-${code}` }, { asOf: '2026-06-20' });
+  if (!d.ok) throw new Error(`disburse ${code}: ${d.code} ${d.message}`);
+  out[code] = r.loanId;
+  db.prepare(`INSERT INTO day_calculations (employee_code, month, year, company, days_present, total_payable_days) VALUES (?, 7, 2026, ?, 27, 27)`).run(code, COMPANY);
+  // Present at month end, so the end-of-month absence rule does not hold the salary.
+  const ins = db.prepare("INSERT OR IGNORE INTO attendance_processed (employee_code, date, status_original, status_final, company, month, year) VALUES (?, ?, 'P', 'P', ?, 7, 2026)");
+  for (let day = 24; day <= 31; day++) ins.run(code, `2026-07-${day}`, COMPANY);
+}
+quiet(() => recomputeSalary(db, { month: 7, year: 2026, company: COMPANY, requestId: 'ui-check' }));
+// E111: salary on hold. E112: the payslip no longer agrees with the loan ledger.
+db.prepare("UPDATE salary_computations SET salary_held = 1, hold_reason = 'UI check: held' WHERE employee_code = 'E111' AND month = 7 AND year = 2026").run();
+db.prepare("UPDATE salary_computations SET loan_recovery = loan_recovery - 500 WHERE employee_code = 'E112' AND month = 7 AND year = 2026").run();
+// Aug 2026: the attendance file is imported but Stage 7 has not run yet.
+db.prepare("INSERT INTO monthly_imports (month, year, file_name, company, stage_1_done) VALUES (8, 2026, 'ui-check-aug.xls', ?, 1)").run(COMPANY);
+out.provisional = db.prepare("SELECT id, employee_code, amount FROM loan_deductions WHERE month = 7 AND year = 2026 AND state = 'provisional' ORDER BY employee_code").all();
+const restrictedHash = require(`${ROOT}/backend/node_modules/bcryptjs`).hashSync('Asian@2025', 10);
+db.prepare("INSERT INTO users (username, password_hash, role, is_active, allowed_companies) VALUES ('finasian', ?, 'finance', 1, 'Asian Lakto Ind Ltd')").run(restrictedHash);
+process.stdout.write(JSON.stringify(out));
+"""
+
+
+def seed_close_month(db_path):
+    js = os.path.join(os.path.dirname(db_path), 'seed-close.js')
+    with open(js, 'w') as f:
+        f.write(SEED_CLOSE_JS)
+    return json.loads(subprocess.check_output(['node', js, ROOT, db_path]).decode())
+
+
+def pick_month(page, month, year, code, timeout=10000):
+    """Sets the close screen's month picker; True once the readiness panel shows `code`."""
+    page.get_by_test_id('close-year').select_option(str(year))
+    page.get_by_test_id('close-month').select_option(str(month))
+    return readiness_is(page, code, timeout)
+
+
+def readiness_is(page, code, timeout=10000):
+    try:
+        page.locator(f'[data-testid="close-readiness"][data-code="{code}"]').wait_for(timeout=timeout)
+        return True
+    except Exception:
+        return False
+
+
+def tile(page, testid):
+    return page.get_by_test_id(testid).inner_text()
+
+
+def run_close_pass(browser, db_path, hr, admin, fin, viewer):
+    print('\n— Pass 3: monthly loan close (Loans PR-6b) —')
+    seeded = seed_close_month(db_path)
+    prov = {r['employee_code']: r for r in seeded['provisional']}
+    check('seed: a real Stage 7 run for Jul 2026 left 3 provisional ₹3,000 deductions',
+          sorted(prov) == ['E110', 'E111', 'E112'] and all(r['amount'] == 3000 for r in prov.values()), seeded)
+    l110, l111 = seeded['E110'], seeded['E111']
+    d110 = prov['E110']['id']
+
+    # Finance: readiness codes.
+    fin.goto(f'{BASE}/loans?tab=close')
+    fin.get_by_test_id('loan-close').wait_for()
+    check('finance: "Monthly close" tab with the 06:15 IST automatic-close note',
+          '06:15 IST' in fin.get_by_test_id('close-auto-note').inner_text())
+    check('finance: Jan 2026 → NOT_NEEDED in plain English',
+          pick_month(fin, 1, 2026, 'NOT_NEEDED') and 'Nothing to close for Jan 2026' in fin.get_by_test_id('close-readiness').inner_text())
+    check('finance: Oct 2026 → MONTH_NOT_ENDED', pick_month(fin, 10, 2026, 'MONTH_NOT_ENDED')
+          and 'has not ended yet' in fin.get_by_test_id('close-readiness').inner_text())
+    shot(fin, 'close-month-not-ended', element='loan-close', out=OUT6B)
+    check('finance: Aug 2026 → EARLIER_MONTH_OPEN with a link to Jul', pick_month(fin, 8, 2026, 'EARLIER_MONTH_OPEN')
+          and visible(fin, 'close-earlier-7-2026'))
+    check('finance: Close disabled while an earlier month is open', fin.get_by_test_id('close-run').is_disabled())
+    shot(fin, 'close-earlier-month-open', element='loan-close', out=OUT6B)
+    fin.get_by_test_id('close-earlier-7-2026').click()
+    check('finance: the link switches to Jul 2026, ready to close', readiness_is(fin, 'READY'))
+    check('finance: would post 1 (₹3,000) — E111 held, E112 mismatched',
+          '1' in tile(fin, 'close-tile-post') and '₹3,000' in tile(fin, 'close-tile-post'), tile(fin, 'close-tile-post'))
+    check('finance: held 1', tile(fin, 'close-tile-held').split('\n')[1].strip() == '1', tile(fin, 'close-tile-held'))
+    check('finance: provisional 3 (₹9,000)', '3' in tile(fin, 'close-tile-provisional') and '₹9,000' in tile(fin, 'close-tile-provisional'))
+    check('finance: due this month 3', tile(fin, 'close-tile-due').split('\n')[1].strip() == '3', tile(fin, 'close-tile-due'))
+    mm = fin.get_by_test_id('close-mismatches').inner_text()
+    check('finance: mismatch table names E112 (payslip ₹2,500, ledger ₹3,000)', 'E112' in mm and '₹2,500' in mm and '₹3,000' in mm, mm)
+    check('finance: Close enabled', fin.get_by_test_id('close-run').is_enabled())
+    shot(fin, '01-close-preview-ready', element='loan-close', out=OUT6B)
+
+    # A second finance tab holding the same (soon stale) preview → 409 later.
+    fin2 = fin.context.new_page()
+    fin2.on('pageerror', lambda e: PAGE_ERRORS.append(f'finance tab 2: {e}'))
+    fin2.goto(f'{BASE}/loans?tab=close')
+    fin2.get_by_test_id('loan-close').wait_for()
+    pick_month(fin2, 7, 2026, 'READY')
+
+    fin.get_by_test_id('close-run').click()
+    conf = fin.get_by_test_id('close-confirm')
+    conf.wait_for()
+    ct = conf.inner_text()
+    check('finance: confirm dialog spells out post / held / mismatch',
+          'Posts 1 deduction totalling ₹3,000' in ct and '1 held salary stays provisional' in ct and 'Payslip and ledger disagree for 1 employee' in ct, ct)
+    shot(fin, '02-close-confirm', out=OUT6B)
+    fin.get_by_test_id('close-confirm-run').click()
+    check('finance: close → 201 toast "Closed Jul 2026: posted 1 (₹3,000)"', toast(fin, 'Closed Jul 2026: posted 1 (₹3,000)'))
+    check('finance: Jul 2026 now ALREADY_CLOSED, by finance (Manual)', readiness_is(fin, 'ALREADY_CLOSED')
+          and 'by finance (Manual)' in fin.get_by_test_id('close-done').inner_text())
+    check('finance: still waiting for the sweep — held 1, mismatch 1',
+          tile(fin, 'close-tile-held').split('\n')[1].strip() == '1' and tile(fin, 'close-tile-mismatch').split('\n')[1].strip() == '1')
+    row = fin.get_by_test_id('close-row-7-2026')
+    row.wait_for()
+    check('finance: history row for Jul 2026 (posted 1 · ₹3,000, held 1)', '1 · ₹3,000' in row.inner_text(), row.inner_text())
+    fin.locator('[data-testid^="close-notes-"]').first.click()
+    notes = fin.locator('[data-testid^="close-notes-body-"]').first.inner_text()
+    check('finance: history notes list the held E111 and mismatched E112', 'E111' in notes and 'E112' in notes, notes)
+    fin.wait_for_timeout(5000)  # let the toasts clear
+    shot(fin, '03-close-done-history', element='loan-close', out=OUT6B)
+
+    fin2.get_by_test_id('close-run').click()
+    fin2.get_by_test_id('close-confirm-run').click()
+    check('finance (stale tab): second close → 409 shown as "already closed"', toast(fin2, 'was closed on'))
+    check('finance (stale tab): refreshes to ALREADY_CLOSED', readiness_is(fin2, 'ALREADY_CLOSED'))
+    fin2.close()
+
+    check('finance: Aug 2026 (imported, Stage 7 not run) → STAGE7_NOT_COMPUTED once Jul is closed', pick_month(fin, 8, 2026, 'STAGE7_NOT_COMPUTED')
+          and 'not computed yet' in fin.get_by_test_id('close-readiness').inner_text())
+    shot(fin, 'close-stage7-not-computed', element='loan-close', out=OUT6B)
+
+    # HR and viewer: read-only.
+    for who, page in (('hr', hr), ('viewer', viewer)):
+        page.goto(f'{BASE}/loans?tab=close')
+        page.get_by_test_id('loan-close').wait_for()
+        ok = pick_month(page, 7, 2026, 'ALREADY_CLOSED')
+        check(f'{who}: close screen readable, no Close button', ok and page.get_by_test_id('close-run').count() == 0
+              and visible(page, 'close-readonly'))
+        if who == 'hr':
+            shot(page, '04-close-hr-read-only', element='loan-close', out=OUT6B)
+
+    # Company-restricted finance user (5th login).
+    ra = login(browser, 'finasian', 'Asian@2025')
+    ra.goto(f'{BASE}/loans?tab=close')
+    ra.get_by_test_id('loan-close').wait_for()
+    check('restricted finance: explains the close covers both companies, no Close button',
+          visible(ra, 'close-restricted') and ra.get_by_test_id('close-run').count() == 0)
+    check('restricted finance: history still readable', visible(ra, 'close-row-7-2026'))
+    shot(ra, '05-close-company-restricted', element='loan-close', out=OUT6B)
+
+    # Admin reversal on the loan page.
+    fin.goto(f'{BASE}/loans/{l110}')
+    fin.get_by_test_id('deductions').wait_for()
+    check('finance: deductions listed, no Reverse button (admin only)', fin.locator('[data-testid^="reverse-"]').count() == 0)
+    admin.goto(f'{BASE}/loans/{l111}')
+    admin.get_by_test_id('deductions').wait_for()
+    check('admin: a provisional (held) deduction has no Reverse button', admin.locator('[data-testid^="reverse-"]').count() == 0)
+    admin.goto(f'{BASE}/loans/{l110}')
+    rb = admin.get_by_test_id(f'reverse-{d110}')
+    rb.wait_for()
+    dt = admin.get_by_test_id('deductions').inner_text()
+    check('admin: Jul 2026 deduction posted ₹3,000, standing ₹3,000, Reverse enabled', 'Posted' in dt and '₹3,000' in dt and rb.is_enabled(), dt)
+    rb.click()
+    admin.get_by_test_id('reason-input').fill('short')
+    check('admin: reason under 10 characters → confirm disabled', admin.get_by_test_id('reason-confirm').is_disabled()
+          and '5 / 10' in admin.get_by_test_id('reason-length').inner_text())
+    admin.get_by_test_id('reason-input').fill('July salary was not actually paid')
+    shot(admin, '06-reverse-modal', out=OUT6B)
+    admin.get_by_test_id('reason-confirm').click()
+    check('admin: reversal toast tells to re-run Stage 7', toast(admin, 'reversed — re-run Stage 7 for E110 Jul 2026'))
+    admin.get_by_test_id('adjustments').wait_for()
+    at = admin.get_by_test_id('adjustments').inner_text()
+    check('admin: opposite entry listed (Admin reversal, ₹3,000, by admin, back as #5)',
+          'Admin reversal' in at and '₹3,000' in at and 'admin' in at and '#5' in at, at)
+    sched = admin.get_by_test_id('schedule').inner_text()
+    check('admin: schedule gains a "Reversal" instalment', 'Reversal' in sched, sched)
+    rec = admin.get_by_test_id('reconciliation').inner_text()
+    check('admin: still reconciles, with opposite entries ₹3,000 in the formula', 'Reconciles' in rec and 'opposite entries ₹3,000' in rec, rec)
+    rb = admin.get_by_test_id(f'reverse-{d110}')
+    check('admin: Reverse now disabled — already reversed in full', rb.is_disabled()
+          and 'Already reversed in full' in (rb.get_attribute('data-disabled-reason') or ''))
+    admin.wait_for_timeout(4500)
+    shot(admin, '07-loan-detail-after-reversal', element='loan-detail', out=OUT6B)
+
+    # Mark Left dialog: the leaver's outstanding.
+    hr.goto(f'{BASE}/employees')
+    hr.get_by_placeholder('Search by name or code...').fill('E110')
+    hr.get_by_role('button', name='Mark Left').first.click()
+    ml = hr.get_by_test_id('markleft-loans')
+    ml.wait_for()
+    hr.locator('[data-testid="markleft-loans"][data-state="loans"]').wait_for(timeout=10000)
+    mt = ml.inner_text()
+    check('Mark Left: E110 loan and outstanding ₹12,000 shown', 'Outstanding loan balance: ₹12,000' in mt, mt)
+    check('Mark Left: final-payroll / receipt / write-off wording',
+          'falls due from the final monthly payroll; any remainder is settled by cash receipt or an admin-approved write-off' in mt, mt)
+    check('Mark Left: exit-month warning line', 'Mark Left in the exit month' in mt and 'residual for finance to collect in cash or write off' in mt, mt)
+    shot(hr, '08-mark-left-outstanding', out=OUT6B)
+    hr.get_by_role('button', name='Cancel', exact=True).last.click()
+    hr.goto(f'{BASE}/employees')
+    hr.get_by_placeholder('Search by name or code...').fill('E105')
+    hr.get_by_role('button', name='Mark Left').first.click()
+    hr.locator('[data-testid="markleft-loans"][data-state="none"]').wait_for(timeout=10000)
+    check('Mark Left: a non-borrower shows "No open loans."', 'No open loans.' in hr.get_by_test_id('markleft-loans').inner_text())
+    hr.get_by_role('button', name='Cancel', exact=True).last.click()
 
 
 if __name__ == '__main__':

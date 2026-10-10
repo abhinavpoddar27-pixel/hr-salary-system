@@ -91,3 +91,29 @@ test('preview → manual close by finance → 409 on a second close → admin re
   const loan = await api.request('GET', `/api/loans/${loanId}`, { as: 'view1' });
   expect(loan.body.data.reconciliation).toMatchObject({ ok: true, adjusted: 3334, balance: 10000 });
 });
+
+test('loan detail lists payroll deductions with their opposite entries (PR-6b)', async () => {
+  const loanId = db.prepare("SELECT loan_id FROM loan_adjustments WHERE kind = 'reversal' ORDER BY id LIMIT 1").get().loan_id;
+  const r = await api.request('GET', `/api/loans/${loanId}`, { as: 'view1' });
+  expect(r.status).toBe(200);
+  const ded = db.prepare('SELECT id FROM loan_deductions WHERE loan_id = ?').get(loanId).id;
+  expect(r.body.data.deductions).toEqual([expect.objectContaining({
+    id: ded, month: 9, year: 2026, state: 'posted', amount: 3334, adjusted: 3334, effective_posted: 0,
+  })]);
+  expect(r.body.data.adjustments).toEqual([expect.objectContaining({
+    deduction_id: ded, kind: 'reversal', amount: 3334, actor: 'boss', reason: 'salary was not paid',
+  })]);
+  // the reversal returned the amount as a new last instalment
+  const added = r.body.data.adjustments[0].added_instalment_id;
+  expect(r.body.data.instalments.find((i) => i.id === added)).toMatchObject({ origin: 'reversal', amount_due: 3334 });
+});
+
+test('a loan with no payroll activity returns empty deductions and adjustments', async () => {
+  const code = `R${Math.floor(Math.random() * 1e6)}`;
+  db.prepare(`INSERT INTO employees (code, name, department, company, employment_type, status, date_of_joining, is_contractor, gross_salary)
+              VALUES (?, 'TEST EMP', 'PRODUCTION', ?, 'Permanent', 'Active', '2024-01-01', 0, 20000)`).run(code, IND);
+  const q = L.requestLoan(db, { borrowerType: 'plant', employeeCode: code, company: IND, loanType: 'Personal', principal: 5000, tenure: 2, reason: 'test' }, { username: 'hr1', role: 'hr' }, { asOf: '2026-08-10' });
+  const r = await api.request('GET', `/api/loans/${q.loanId}`, { as: 'hr1' });
+  expect(r.status).toBe(200);
+  expect(r.body.data).toMatchObject({ status: 'requested', deductions: [], adjustments: [] });
+});

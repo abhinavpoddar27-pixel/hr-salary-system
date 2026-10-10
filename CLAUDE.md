@@ -1,5 +1,5 @@
 ## Last Session — 2026-10-10 (Loans PR-8)
-**Loans PR-8: sales borrowers. Branch `feat/loans-pr8` (based on `feat/loans-pr7`), NOT merged. No schema change.**
+**Loans PR-8: sales borrowers. Branch `feat/loans-pr8` (merged with main after #63/#64), NOT merged. No schema change.**
 - **Identity:** a sales borrower is code + company (sales_employees UNIQUE on both). Stage 7, payslip↔ledger, hold
   guards, eligibility open count and history all key on BOTH (ruling Q2) — so K8 for sales = a loan deducts only in
   its own company's row, whatever the compute order. Plant still matches on code only.
@@ -16,7 +16,7 @@
   containing `dol` (Q4); day ≥ 26 → next month (`months.salesCycleMonthOf`).
 - **Exit:** sales mark-left and `PUT /employees/:code` status → Left/Exited (not Inactive) flag the loans in one txn (Q6).
 - **API/UI:** `GET /api/loans/borrowers` (both masters; plant rows typed Sales left out); request form, Loans list tag,
-  sales register Loan column + Hold disabled. **`frontend/dist` NOT rebuilt yet** — once, on the merged tree.
+  sales register Loan column + Hold disabled. `frontend/dist` rebuilt once on the merged tree (own commit).
 - **Fragile:** a sales month with NO upload blocks every later sales close (Q8, no override). Stale salary rows
   (employee dropped from the active upload) keep their loan → payslip ≠ ledger until recomputed (finance notified).
 - **Verified:** suite 792 → 849 (49 suites, 3 clean runs); `scripts/loans-sales-simulation.js` 7 loans × 5 sales months
@@ -25,6 +25,29 @@
 - **NOT tested:** dist/browser; real two-company sales payroll (production has one company); multi-process races.
 
 ---
+
+## Last Session — 2026-10-10 (Loans PR-6b)
+**Loans PR-6b: close screen, admin reversal, Mark Left outstanding. Branch `feat/loans-pr6b` (based on `feat/loans-pr6`), NOT pushed/merged.**
+- **Close screen:** new `components/loans/LoanClose.jsx` = "Monthly close" tab on `/loans?tab=close` (no new route).
+  Plant only. Month picker (local state, defaults to the previous IST month), readiness codes in plain English,
+  tiles (due / provisional / would post / held / shortfalls / no salary / payslip≠ledger), mismatch table, Close
+  (finance + admin, confirm dialog) → `POST /loans/close`, history from `/loans/closes` with parsed notes.
+  HR / viewer read-only. A company-restricted user is told the close covers both companies (preview not called).
+- **Reversal:** LoanDetail "Payroll deductions" + "Opposite entries" sections; admin-only Reverse (reason ≥ 10,
+  `ReasonModal minLength`). Reconciliation line shows "(posted − opposite entries)".
+- **Only backend change:** `GET /api/loans/:id` also returns `deductions` (+ `adjusted`, `effective_posted`) and
+  `adjustments`. Read-only, inside the `/:id` handler body only (PR-7 adds routes above it — keep it that way).
+- **Mark Left dialog** (`Employees.jsx` `MarkLeftLoans`): live loans + total outstanding via `/loans/employee/:code`,
+  the final-payroll / receipt / write-off wording (PR-7's rule) and the exit-month line. Never blocks Confirm.
+- **Fragile:** the readiness text map lives in `loanUi.js closeReadinessText` — a new readiness code in `close.js`
+  falls through to the server message. `companyRestricted()` reads `allowedCompanies` (`['*']` = all).
+  PR-7 may also edit `MarkLeftModal` — expect a merge there.
+- **Verified:** jest 769 → 771 (42 suites). Browser check `backend/scripts/loans-ui-browser-check.py` 103/103
+  (Pass 3 = a real Stage 7 run for Jul 2026 seeded after boot; held + mismatch; close 201; stale tab 409;
+  admin reversal; Mark Left), 0 page errors. Screens: `docs/loans/screens/pr6b/`.
+- **NOT tested:** Railway preview; sales payroll close (PR-8); the daily 06:15 IST job from the screen's point of
+  view (only its note is shown); a restricted user's 403 from the server (the client never calls preview for them).
+- **Held tile on the Loans page: not done** (ruling: no `/stats` change).
 
 ## Last Session — 2026-10-10 (Loans PR-7)
 **Loans PR-7: exit recovery. Branch `feat/loans-pr7` (on main after #61).** Backend only, no schema change, no dist.
