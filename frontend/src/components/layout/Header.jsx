@@ -9,6 +9,8 @@ export default function Header({ title }) {
   const { user, clearAuth } = useAppStore()
   const navigate = useNavigate()
   const [showUserMenu, setShowUserMenu] = useState(false)
+  // P1-12: read here, not inside the conditional company-selector block below.
+  const selectedCompany = useAppStore(s => s.selectedCompany)
 
   async function handleLogout() {
     try { await logout() } catch {}
@@ -43,7 +45,7 @@ export default function Header({ title }) {
         if (!showSelector) return null
         return (
           <select
-            value={useAppStore(s => s.selectedCompany)}
+            value={selectedCompany}
             onChange={e => useAppStore.getState().setSelectedCompany(e.target.value)}
             className="text-xs bg-slate-50 border border-slate-200 rounded-lg px-2 py-1.5 text-slate-700 focus:outline-none focus:ring-1 focus:ring-blue-300"
           >

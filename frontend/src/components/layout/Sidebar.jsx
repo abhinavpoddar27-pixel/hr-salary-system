@@ -201,25 +201,31 @@ function NavItem({ item, collapsed, depth = 0, userRole, onNavigate, onAction })
   const isActive = item.to ? (location.pathname === item.to || location.pathname.startsWith(item.to + '/')) : false
   const hasChildren = item.children && item.children.length > 0
 
-  // Hide admin-only items from non-admin users
-  if (item.adminOnly && userRole !== 'admin') return null
-  // Hide finance-only items from non-finance/non-admin users
-  if (item.financeOnly && userRole !== 'finance' && userRole !== 'admin') return null
-  // Hide HR/Finance/Admin-only items from other roles (Salary Explainer)
-  if (item.hrFinanceOrAdmin && !['hr', 'finance', 'admin'].includes(userRole)) return null
-  // Hide Sales section from roles without 'sales-employees' permission (hr + admin)
-  if (item.salesAllowed && !['hr', 'admin'].includes(userRole)) return null
-  // Phase 2: TA/DA Approvals — finance and admin see it (HR can request via
-  // employee master, but cannot approve, so the approval queue is hidden
-  // from HR to avoid clutter).
-  if (item.tadaApprover && !['finance', 'admin'].includes(userRole)) return null
-  // Loans PR-4: hide the Loans entry from roles the loan API refuses.
-  if (item.loansRead && !LOAN_READ_ROLES.includes(userRole)) return null
+  const hidden =
+    // Hide admin-only items from non-admin users
+    (item.adminOnly && userRole !== 'admin') ||
+    // Hide finance-only items from non-finance/non-admin users
+    (item.financeOnly && userRole !== 'finance' && userRole !== 'admin') ||
+    // Hide HR/Finance/Admin-only items from other roles (Salary Explainer)
+    (item.hrFinanceOrAdmin && !['hr', 'finance', 'admin'].includes(userRole)) ||
+    // Hide Sales section from roles without 'sales-employees' permission (hr + admin)
+    (item.salesAllowed && !['hr', 'admin'].includes(userRole)) ||
+    // Phase 2: TA/DA Approvals — finance and admin see it (HR can request via
+    // employee master, but cannot approve, so the approval queue is hidden
+    // from HR to avoid clutter).
+    (item.tadaApprover && !['finance', 'admin'].includes(userRole)) ||
+    // Loans PR-4: hide the Loans entry from roles the loan API refuses.
+    (item.loansRead && !LOAN_READ_ROLES.includes(userRole))
 
   // Auto-open active parent
   React.useEffect(() => {
     if (isActive && hasChildren) setOpen(true)
   }, [isActive])
+
+  // P1-12: every hook of NavItem must stay ABOVE this line. A hook after a
+  // role-based return changes the hook count when the role changes in place
+  // (e.g. the /auth/me refresh) and React crashes the whole layout.
+  if (hidden) return null
 
   // Action items (no route, just trigger a handler in the parent)
   if (item.action) {

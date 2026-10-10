@@ -302,10 +302,13 @@ export default function AttendanceRegister() {
   /* ── Mutations ── */
   const updateMutation = useMutation({
     mutationFn: ({ id, data }) => updateAttendanceRecord(id, data),
-    onSuccess: () => {
+    onSuccess: (_r, vars) => {
       toast.success('Record updated')
       setEditRecord(null)
       refetchSummary()
+      // P1-08: the open daily grid(s) + this employee's calendar show the saved status without a reload
+      qc.invalidateQueries({ queryKey: ['attendance-register', month, year] })
+      if (vars?.code) qc.invalidateQueries({ queryKey: ['daily-attendance', vars.code, month, year] })
     },
   })
 
@@ -314,6 +317,9 @@ export default function AttendanceRegister() {
     onSuccess: (r) => {
       toast.success(`Recalculated metrics for ${r.data.updated} records`)
       refetchSummary()
+      // P1-08: recalc rewrites is_night_shift → grid colour / calendar "NH" can change for every employee
+      qc.invalidateQueries({ queryKey: ['attendance-register', month, year] })
+      qc.invalidateQueries({ queryKey: ['daily-attendance'] })
     },
   })
 
@@ -622,7 +628,7 @@ export default function AttendanceRegister() {
       {editRecord && (
         <CellEditor
           record={editRecord}
-          onSave={(data) => updateMutation.mutate({ id: editRecord.id, data })}
+          onSave={(data) => updateMutation.mutate({ id: editRecord.id, data, code: editRecord.employee_code })}
           onClose={() => setEditRecord(null)}
         />
       )}
