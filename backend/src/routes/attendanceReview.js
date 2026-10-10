@@ -40,14 +40,21 @@ function runSummary(r) {
     finalised_by: r.finalised_by, finalised_at: r.finalised_at, release_days: JSON.parse(r.release_days || '[]'), overrides: JSON.parse(r.overrides || '[]') };
 }
 
-// GET /?month&year[&releaseDays=a,b] — preview, nothing saved
+// GET /?month&year[&releaseDays=a,b][&overrides=<JSON list>] — preview, nothing saved
 router.get('/', (req, res) => {
   const my = parseMonth(req.query); if (!my) return res.status(400).json({ success: false, error: 'month and year required' });
   const rd = parseReleaseDays(req.query.releaseDays, my.month, my.year); if (rd.error) return res.status(400).json({ success: false, error: rd.error });
+  let overrides = [];
+  if (req.query.overrides) {
+    try { overrides = JSON.parse(req.query.overrides); } catch { return res.status(400).json({ success: false, error: 'overrides must be a JSON list' }); }
+    const oerr = svc.validateOverrides(overrides);
+    if (oerr.length) return res.status(400).json({ success: false, error: 'Invalid overrides', details: oerr });
+    overrides = overrides.map((o) => ({ code: String(o.code).trim(), action: o.action, reason: String(o.reason).trim() }));
+  }
   try {
     const db = getDb();
     const { config, source } = svc.loadConfig(db, `${my.year}-${String(my.month).padStart(2, '0')}`);
-    const data = svc.computeAttendanceReview(db, { ...my, config, releaseDays: rd.list, prevReleaseDays: prevReleaseDays(db, my.month, my.year) });
+    const data = svc.computeAttendanceReview(db, { ...my, config, releaseDays: rd.list, prevReleaseDays: prevReleaseDays(db, my.month, my.year), overrides });
     res.json({ success: true, data: { ...data, configSource: source } });
   } catch (err) {
     console.error('Attendance review preview error:', err.message);

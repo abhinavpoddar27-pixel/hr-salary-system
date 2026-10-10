@@ -26,6 +26,8 @@ import DepartmentQuickView from '../components/ui/DepartmentQuickView'
 import CompanyFilter from '../components/shared/CompanyFilter'
 import { useAppStore } from '../store/appStore'
 import EarlyExitDetection from '../components/EarlyExitDetection'
+import AttendanceReviewTab from '../components/attendanceReview/AttendanceReviewTab'
+import { normalizeRole } from '../utils/role'
 import clsx from 'clsx'
 
 const CHART_COLORS = ['#3b82f6', '#22c55e', '#f59e0b', '#ef4444', '#8b5cf6', '#06b6d4', '#ec4899', '#14b8a6']
@@ -107,6 +109,7 @@ const TABS = [
   { id: 'overtime', label: 'Overtime', path: '/analytics/overtime' },
   { id: 'hours', label: 'Working Hours', path: '/analytics/hours' },
   { id: 'early-exit', label: 'Early Exit', path: '/analytics/early-exit' },
+  { id: 'attendance-review', label: 'Attendance Review', path: '/analytics/attendance-review', adminOnly: true },
 ]
 
 // ═══════════════════════════════════════════════════════════
@@ -1273,7 +1276,8 @@ function WorkingHoursTab({ selectedMonth, selectedYear, dateRangeMode, dateRange
 // ═══════════════════════════════════════════════════════════
 export default function Analytics() {
   const { month, year, dateRangeMode, dateRangeStart, dateRangeEnd, dateProps } = useDateSelector({ mode: 'range', syncToStore: true })
-  const { selectedCompany } = useAppStore()
+  const { selectedCompany, user } = useAppStore()
+  const isAdmin = normalizeRole(user?.role) === 'admin'
   const dp = { selectedMonth: month, selectedYear: year, dateRangeMode, dateRangeStart, dateRangeEnd, selectedCompany }
 
   return (
@@ -1287,7 +1291,7 @@ export default function Analytics() {
         <DateSelector {...dateProps} />
       </div>
       <div className="border-b border-slate-200 flex gap-0 overflow-x-auto">
-        {TABS.map(t => (
+        {TABS.filter(t => !t.adminOnly || isAdmin).map(t => (
           <NavLink key={t.id} to={t.path}
             className={({ isActive }) => clsx('px-5 py-2.5 text-sm font-medium border-b-2 transition-colors whitespace-nowrap',
               isActive ? 'border-blue-600 text-blue-600' : 'border-transparent text-slate-500 hover:text-slate-700'
@@ -1302,6 +1306,9 @@ export default function Analytics() {
         <Route path="overtime" element={<OvertimeTab {...dp} />} />
         <Route path="hours" element={<WorkingHoursTab {...dp} />} />
         <Route path="early-exit" element={<EarlyExitDetection {...dp} />} />
+        <Route path="attendance-review" element={isAdmin
+          ? <AttendanceReviewTab {...dp} />
+          : <div className="card p-6 text-sm text-slate-500">The Attendance Review is available to admin only.</div>} />
       </Routes>
     </div>
   )
