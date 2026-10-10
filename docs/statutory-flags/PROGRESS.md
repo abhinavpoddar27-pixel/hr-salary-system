@@ -8,10 +8,10 @@
 4. Continue from NEXT STEP. Update this file after every small step (state, done, next) and commit it.
 
 ## PR STATUS
-- PR-1 feat/statutory-flags — DONE: merged as PR #65 (merge 8b9561d, head a577c73), deployed; production post-merge checks passed 10 Oct 09:06 IST. Owner applies T4 (plant) / T5 (sales) on the live page.
-- PR-2 feat/lwf-deduction — BUILT locally (plant LWF, C1): STEPs 1, 2, 4, 5, 6, 7 + C3 + C4 done; suite 63 / 1036; NOT pushed (coordinator pushes). Plan `docs/statutory-flags/IMPL_PR2.md`. Base 8b9561d + origin/main 66c6a08 merged (4363d64).
-- PR-2b feat/lwf-sales — NOT STARTED. Sales LWF compute/save/rebuild/totals/export/UI (IMPL_PR2 C1). Before the 25 Oct sales close.
-- PR-3 feat/statutory-filing — NOT STARTED
+- PR-1 feat/statutory-flags — DONE: merged #65 (8b9561d). T4/T5 applied 10 Oct 10:59 IST (batches 1 and 2): V1 24/6/118, V6 57/0/139, V10 248/270.
+- PR-2 feat/lwf-deduction — DONE: merged #70 (ad96604) 11:11 IST. Plant September recomputed 11:17 IST: LWF 113 / ₹565 / ₹2,260; ESI 23 / ₹2,469.06 / ₹10,699.18; PF 6 / ₹9,762.86. V3/V5/V12 0 rows; V11 only the 5 known March–May rows. Against the snapshot: 113 rows exactly −₹5, 98 identical.
+- PR-2b feat/lwf-sales — BUILT locally (base ad96604, no drift): STEPs 0–5 + C3 + C4 + CLAUDE.md; suite 65 / 1076 twice; NOT pushed (the chat reviews and pushes). Plan `docs/statutory-flags/IMPL_PR2b.md`. Live before HR computes October sales (close 25 Oct).
+- PR-3 feat/statutory-filing — BUILT locally (base origin/feat/lwf-sales dcad556 = PR #73, still open; merge #73 first): STEPs 0–8 + C4 + sim fix + docs. Plan `docs/statutory-flags/IMPL_PR3.md` (REVIEW CORRECTIONS C1–C7 binding). NOT pushed (the chat reviews and pushes). Before deploy: VERIFY V16 on production (who will be left out); file only when missing = 0 (RUNBOOK T7); PR-3b formats before 15 Nov.
 
 ## STEPS DONE
 - Phase 0 — dd1d849 (rebased on d1ad7bf; baseline 42/769 green)
@@ -57,11 +57,195 @@
 - PR-2 C4 (simulation) — 62d9318 `test(lwf): PR-2 simulation - synthetic mirror of the plant September run`. docs/statutory-flags/sim/run_pr2.py + seed_pr2.js (PR-1 harness pattern: real server.js on a throwaway DATA_DIR, real logins, real upload preview → apply effective 2026-09, real Stage 6/7 over HTTP, HTTP outputs; no browser). Branch 25/25: N = 8 flagged with pay (incl. held F08, contractor F07) → 40 / 160; Z01 flagged zero-gross → row saved, 0/0; Z02 flagged, no Sep attendance → no row; U01–U05 unflagged 0/0; August re-run after the upload byte-identical; V5 drift / V11 / V12 (SQL read from VERIFY.sql) 0 rows; payslip, register totals (finance login), finance report, register Excel (39), slip Excel (20, held comments on 16/17/18). `--base` on the 66c6a08 worktree: 8/8; dump comparison → every unflagged row identical in every column (Aug + Sep, 6 Sep + 15 Aug rows), flagged Sep rows differ ONLY in total_deductions +5 and net_salary / total_payable / take_home −5.
 - PR-2 FINAL — full jest twice: 63 / 1036, 0 failures (baseline after merging main 60 / 1004; +3 suites / +32 tests). node --check clean on the 7 touched backend files. DO-NOT-MODIFY diff vs 66c6a08: 0 files (dayCalculation, statutoryFlags service/route, stage7, recompute, exportFormats, all PR-2b sales files, scripts, structure writers). UPSERT plant 58/58/58/55, sales 45/45/45/42. CLAUDE.md Section 0 entry prepended. NOT pushed (the coordinator pushes, C5).
 
+- PR-2b PHASE 0 + STEP 0 — branch `feat/lwf-sales` = origin/main ad96604 (`git fetch`; `git log ad96604..origin/main` empty → no drift, no merge). Baseline jest 64 suites / 1047 tests green. Base worktree `<scratch>/base` at ad96604 (backend + frontend node_modules symlinked): `loans-sales-simulation.js --dump` 232 rows, md5 9a42643837639876b6c3c76eeb48afd0 (= the planner's prototype); `loans-stage7-simulation.js --dump` 210 rows, md5 27287253ee75da0df643340a696e8bce. Plan copied to `docs/statutory-flags/IMPL_PR2b.md` (REVIEW CORRECTIONS C1–C5 binding).
+
+- PR-2b STEP 0 — 1601698 `docs(statutory): PR-2b plan; PR-1 and PR-2 done in production`.
+- PR-2b STEP 1 — a099ed3 `feat(lwf): sales LWF ₹5/₹20 (flagged, earned gross > 0) in total_deductions and the loan headroom`. salesSalaryComputation.js exactly as IMPL_PR2b: LWF block after the ESI `}` (getPolicyNumber + `>= 0`, E7); `lwf_employee: lwfEmployee` in the loan salary object; `+ lwfEmployee` in total_deductions (comment updated); `lwf_employee`/`lwf_employer` in the return object. UPSERT (static parser, base vs branch): sales **45/45/45/42 → 47/47/47/44** (cols / placeholders / params / SET; both columns appended last; params `comp.lwf_employee || 0`, `comp.lwf_employer || 0`); plant 58/58/58/55 unchanged. Tests: lwfSales.test.js 21 (Q1 ×2, Q2 ×4, C5/N5 pin, Q3 ×5, Q4 ×5 + route compute over a paid+NEFT row, Q5 ×2, M1 pin) — **15 of 21 FAIL on the ad96604 file** (swap-verified); the 6 that pass assert unchanged behaviour (flag off, 0 days, zero gross, policy '0', headroom unit, M1 pin). salesLoanFixture SALES_SHORT_SQL + `COALESCE(lwf_employee,0)` (N6; scripts' componentShort stays 7-term). Proof: sales `--dump` on the branch 232 rows, md5 9a42643837639876b6c3c76eeb48afd0 = base. Neighbour suites loansSales*/statutory*/lwf* 17 / 233 green. `node --check` clean.
+
+- PR-2b STEP 2 — 3fa385d `feat(lwf): sales salary edit keeps LWF in the total and the loan re-plan; register totals`. sales.js `git diff -U0` hunks @@ 2943 (register totals + lwf_employee / lwf_employer), @@ 3010 (PUT loan salary object + `lwf_employee: existing.lwf_employee || 0`), @@ 3015/3020 (rebuild comment + `(existing.lwf_employee || 0)` in fixedDeductions) — nothing else in sales.js. Tests: Q6 ×5 (flagged no-loan edit other 100 → total = PF + ESI + 5 + 100, recompute = same row; loan edit other 9000 → loan 995, total 10000, net 10000, compute → same row, same ledger row, no new loan events, reconcile ok; unflagged edit = old formula; paid → 409, row unchanged; register totals 5×N / 20×N). Proof: dropping ONLY the 3010 term → Q6 loan test fails with loan 1000 / total 10005 / net 9995 (= the prototype); whole ad96604 sales.js → 3 of 5 Q6 fail (the 2 that pass pin unchanged behaviour). Suite file 26/26. Decision D-9 (test harness): one file-level startJwtApi (a second one in the same file gets getDb's closed singleton). `node --check` clean.
+
+- PR-2b STEP 3 — db3019e `feat(lwf): LWF on the sales payslip and the sales register Excel (39 columns)`. generateSalesPayslipData: `{ label: 'LWF (Employee)', amount: comp.lwf_employee }` after Loan EMI (the existing filter drops 0) + `lwfEmployer: comp.lwf_employer || 0` after netSalary (API only, E6 — SalesPayslip.jsx / salesPayslipPdf.js map `deductions` generically, not edited). salesExportFormats.js generateSalesExcel only: header `'ESI Employee', 'LWF Employee', 'PT'` (38 → 39, index 25), data cell `round2(r.lwf_employee)`, `!cols` `{ wch: 8 }` after the PF/ESI `{ wch: 10 }`s (39 entries), JSON totals lwf_employee / lwf_employer. NEFT / TA-DA generators untouched. Tests O2 (function + GET /api/sales/payslip/:code; unflagged → no line, lwfEmployer 0; deductions sum = total) + O4 ×2 (real download route read with `cellStyles: true`: header = every row = `!cols` = width = 39, 18 header→DB-column checks per row; JSON preview + /salary-register totals 10 / 40 for N = 2) — all 3 FAIL with the pre-step files (STEP 1 service + ad96604 export file). Nothing else reads the sales Excel (grep: tests, scripts, sims). loansSales*/loansReports* 8 / 84 green. `node --check` clean.
+
+- PR-2b STEP 4 — 62d80ec `feat(lwf): LWF column and total in the sales salary register`. Before editing, a clean `npm run build` of 18ff118 reproduced the committed dist byte-identically (0 changes), so the environment is deterministic. SalesSalaryCompute.jsx: `min-w-[1480px]` → `min-w-[1540px]`; LWF th after ESI (title explains employer share); td `fmtINR(r.lwf_employee)` with `title` "Employer LWF: …"; tfoot `colSpan={3}` → `colSpan={2}` + LWF total td (`totals.lwf_employee`, employer total in title) + empty td under TDS. Cell count by script: header 21 = body 21 = tfoot 21 (was 20). dist rebuilt and committed in the same commit (80 paths). Proof: `SalesSalaryCompute-PJwJp7me.js` contains `lwf_employee` ×2, `Employer LWF` ×2, `min-w-[1540px]`, `children:"LWF"`; `rm -rf frontend/dist && npm run build` after the commit → git status clean (byte-identical). Not done: a browser pass of the page (bundle grep only, same as PR-2).
+
+- PR-2b STEP 5 — 87d4f08 `docs(lwf): sales component and LWF rule checks; PR-2b simulation`. VERIFY.sql (C3 numbering): V12 now reads `COALESCE((SELECT CAST(value AS REAL) FROM policy_config WHERE key='lwf_employee_amount'),5)` / employer 20 (M6); V13 sales component check (7 components + LWF(EE), every month, within ₹1 — run on production BEFORE deploy as the baseline); V14 sales LWF rule for one cycle month (V7's join, policy amounts; literal 10 / '2026-10', change both to 9 / '2026-09' for 6A). All six of V5/V8/V11–V14 prepare and run on a fresh schema. OPEN_ITEMS: N3, N5 (C5), N9, N10. sim/seed_pr2b.js + run_pr2b.py (below).
+- PR-2b C3 (byte-identical for the unflagged, mandatory) — worktree `<scratch>/base` at ad96604 (node_modules symlinked). On the final branch code: `loans-sales-simulation.js --dump` 232 rows, md5 **9a42643837639876b6c3c76eeb48afd0 = base** (a second base run gives the same md5 → deterministic); `loans-stage7-simulation.js --dump` 210 rows, md5 **27287253ee75da0df643340a696e8bce = base** (drift 0, component-short 0). Full `loans-sales-simulation.js` on the branch: PASS (1125 non-borrower rows identical; its 7-term componentShort stays valid — N6).
+- PR-2b C4 (simulation) — `python3 docs/statutory-flags/sim/run_pr2b.py <repo>`: real server.js on a throwaway DATA_DIR (sales bootstrap skipped), real logins, sales compute over HTTP Aug + Sep BEFORE the upload; Sep holds (F04, U03), NEFT export (download), F05 → reviewed → finalized → paid; the real sales statutory upload (preview → apply, 2026-09: LWF Y for F01–F06/Z01/Z02, ESI Y for F02/U01); Aug re-run, Sep re-run (6A shape), Oct (first live month); HR edits; payslip; register totals; Excel. **Branch 54/54**: N = 6 flagged with pay → 30 / 120 in Sep and Oct; Z01 (0 days) row saved 0/0; Z02 (zero-gross) excluded; Aug re-run byte-identical; F05 paid + NEFT kept, net −5, `finalizedRecomputeWarnings` = [F05 paid −5] only; every NEFT stamp kept; F04 held charged; U02/U03 identical in every column; LWF-only reps differ only in lwf_*/total/net; F02 / U01 only add the ESI lines; F06 loan 3334 unchanged where the cap does not bind; edits F06 other 9000 → loan 995 / total 10000 (ledger 995), F01 → 105, U02 → 100, paid Sep row → 409; Oct compute after the edits reproduces the edited rows; payslip F01 LWF 5 + lwfEmployer 20, U02 no line; register + Excel JSON totals 30 / 120; Excel 39 everywhere, LWF at 25; V8 (Aug/Sep/Oct) / V13 / V14 (as written for Oct + rewritten for Sep) 0 rows. **`--base` on ad96604: 23/23**; `--compare branch base`: **18 unflagged rows identical in every column, 12 flagged rows differ only by the LWF lines** (total +5 / net −5; F06 Oct: loan 1000 → 995 with total and net equal). Negative control: a 1-paisa change on an unflagged row and an ESI change on a flagged row are both reported. Payslip HTML: scratch copy of `backend/scripts/loans-payslip-html-check.mjs` vs ad96604 + 2 sales LWF fixtures → **107/107** (the LWF line renders once with 5.00; no employer LWF printed; unflagged payslips byte-identical — renderers unchanged).
+- PR-2b FINAL — full jest twice: **65 suites / 1076 tests, 0 failures** (baseline 64 / 1047; + lwfSales.test.js 29). `node --check` clean: salesSalaryComputation.js, sales.js, salesExportFormats.js. DO-NOT-MODIFY diff vs ad96604: 0 files (dayCalculation, salaryComputation, schema, payroll, loans/*, recompute, statutory flags service/route/guard, exportFormats, settings, employeeProfileService, EmployeeQuickView, sales/plant payslip renderers, cycleUtil, sundayRule, driftMonitor, TA/DA, backend/scripts). No xlsx/csv/db in the diff. sales.js: the 3 planned hunks only. UPSERT sales 47/47/47/44, plant 58/58/58/55. CLAUDE.md Section 0 entry prepended. Code head before this PROGRESS commit: 87d4f08.
+
+- PR-3 PHASE 0 + STEP 0 — `git fetch origin`: PR #73 (feat/lwf-sales, dcad556) still OPEN (GitHub REST: merged=false) → C1: branch
+  `feat/statutory-filing` from `origin/feat/lwf-sales` dcad556 (upstream unset; never pushed). Drift: origin/main moved ad96604 → 3a7630f
+  (#71 leave employee search: `frontend/src/components/shared/EmployeeSearchSelect.jsx`, `pages/LeaveManagement.jsx`, `utils/api.js` +11 lines,
+  `frontend/dist`). None of PR-3's backend FILES / DO NOT MODIFY files moved. `utils/api.js` + `frontend/dist` are on PR-3's FILES list → they
+  merge (api.js) / rebuild (dist) when #73 and PR-3 land on main; nothing to do on this branch. Baseline jest on dcad556: **65 suites / 1076
+  tests**, 0 failures. Base worktree `<scratch>/base` moved to dcad556 (backend + frontend node_modules symlinked) for filing_identity.js.
+  Plan copied to `docs/statutory-flags/IMPL_PR3.md`. Commit af5fffe.
+  (PR-3 PROGRESS lines ride in the NEXT step's commit, so the step SHA can be quoted.)
+- PR-3 STEP 1 — dd37aa9 `refactor(statutory): export ESI/UAN rules for reuse`. statutoryFlags.js: the exports line only
+  (`ESI_NUMBER_RE, UAN_RE, numberInUse` appended to the first line). statutoryNumbers.test.js F12 ×4: regex sources, planner
+  verdict = exported-regex verdict over 8 ESI / 6 UAN samples (spaces, 9/11/13 digits, letters, Arabic-Indic digits, hyphen),
+  numberInUse holder (same master, across sales companies = N3, never self, plant master separate). **4/4 FAIL on dcad556's
+  file** (swap-verified). Guard + service suites green (57).
+
+- PR-3 STEP 2 — 7ee1ede `feat(filing): ECR and ESI list missing UAN / ESI numbers instead of writing blanks`. exportFormats.js: ECR loop
+  skips a row whose UAN (spaces stripped) fails UAN_RE, ESI loop one whose IP number fails ESI_NUMBER_RE → `missing[]`
+  {employee_code, employee_name, ee, er (2-dp), reason none|malformed}; `employees` = rows written; totals over written rows +
+  missingCount / missingEE / missingER; helpers missingRow / missingTotals / missingCodesHeader exported (reused by the sales file).
+  SQL, ORDER BY, line builders, filenames, generateBankFile byte-unchanged. reports.js: `/pf-ecr`, `/esi-contribution` JSON gains
+  `missing`; `X-Missing-UAN` / `X-Missing-ESI-Number` (codes reduced to [A-Za-z0-9_-], N6) on JSON + download when missing > 0.
+  statutoryFilingPlant.test.js F1 (golden strings = the dcad556 loops copied verbatim; A / B / all; old totals deep-equal),
+  F2 ECR (blank / spaces / 11 digits → none/none/malformed; no line starts with '|'), F3 ESI (blank / spaces / 9 digits), F4 bank
+  md5 = golden of the dcad556 generator, route header on JSON + download (code 'PW 02' → 'PW02'), no header when nothing missing:
+  **6 of 7 FAIL on dcad556** (F4 passes = unchanged). `docs/statutory-flags/sim/filing_identity.js` (new): run 1 (2 companies, 8 PF /
+  12 ESI / 20 bank, all valid) branch vs dcad556 worktree **106/106** — content md5, filenames, employees, route download + JSON rows
+  identical, old totals equal, only missing* keys added (all 0), no header; run 2 (3 bad UANs, 2 blank ESI numbers) **79/79** — base
+  lines − branch lines = exactly the bad rows = `missing` = header codes, bank identical. Negative control: a changed md5 / a 0.5 in
+  missingEE / a wrong header code each FAIL the compare.
+- PR-3 C4 — 08909f7 `feat(filing): reports serving UANs / ESI numbers / bank accounts limited to hr / finance / admin`. reports.js:
+  the existing `requireHrFinanceOrAdmin` (JWT roles are normalised at login) on `/pf-ecr`, `/esi-contribution`, `/bank-salary-file`
+  (the three filing downloads) + `/pf-statement`, `/esi-statement` (UAN / PF no. / ESI no.), `/bank-transfer` (account + IFSC),
+  `/audit-trail` (old/new values of master edits incl. bank accounts and, from STEP 4, ESI numbers / UANs), GET `/company-config`
+  (company bank account / PAN / TAN; no UI caller). Open to the viewer as before: attendance-summary, miss-punch-report, late-coming,
+  overtime, headcount, department-payroll. 12 tests: viewer 403 (no X-Missing-* leaks), hr / finance / admin 200, no token 401 on
+  all 11 URLs (incl. the 3 downloads); **11 of 12 FAIL on the STEP 2 file** (the open-reports test passes = unchanged).
+
+- PR-3 STEP 3 — e097a32 `feat(filing): sales ESI contribution file`. salesExportFormats.js: NEW `generateSalesESIFile` (before
+  module.exports): `sales_salary_computations c LEFT JOIN sales_employees e` (code + company), month/year/company, ORDER BY e.name, code;
+  rows = ESI (EE + ER) > 0, OR the in-force structure (`carryFlags(db,'sales',e.id,monthKey('sales',YYYY-MM))`) has ESI on and
+  `gross_monthly <= esi_threshold` (policy, parsed like compute's getPolicyNumber; default 21000); hold rows in. Line = the plant builder
+  on [IP, NAME, round(total_days), round(gross_earned), round(esi_employee), reason]; reason 1 = DOJ inside cycle_start..cycle_end
+  (NULL → deriveCycle). `missing` / totals = plant helpers. Filename `Sales_ESI_<Mon>_<YYYY>_<Company_>.txt`. sales.js: NEW
+  `GET /export/esi-contribution` registered BEFORE `router.use(requireHrOrAdmin)` with its own hr/finance/admin check (C4 — see D-11);
+  400 without month (1–12) / year / company; header `X-Missing-ESI-Number`; JSON `{filename, employees, missing, totals}` or a
+  text/plain download; read-only. statutoryFilingSales.test.js F5 ×2 (IN: flagged ESI>0, flagged 0 days → `|0|0|0|0`, flag off at file
+  time with ESI>0 (N4), hold; OUT: >₹21k, unflagged, other company; spaces in an IP stripped; DOJ 28 Sep → reason 1, DOJ 27 Oct → 0;
+  NULL cycle → same; threshold policy 17000 drops the 0-wage flagged rep only; blank / 5-digit IP → missing none/malformed) + F6 ×4
+  (400 ×4, JSON, download = generator content + header + DB snapshot unchanged incl. audit_log count, hr/finance/admin 200, viewer
+  403, no token 401, rest of the sales router still finance 403). **6/6 FAIL on dcad556's files**. Guard unedited, 86 neighbour tests green.
+
+- PR-3 STEP 4 — e70339c `feat(filing): sales master edits ESI number / UAN under the upload's rules`. sales.js only: UPDATABLE_FIELDS
+  += `'esi_number', 'uan'` (never in STATUTORY_FLAG_FIELDS); the statutoryFlags require += `ESI_NUMBER_RE, UAN_RE, numberInUse`; NEW
+  `checkStatutoryNumbers(db, body, existing)` (spaces stripped, '' → NULL; unchanged vs stored (normalised) → removed from the body
+  (N2); malformed → 400 `INVALID_ESI_NUMBER` / `INVALID_UAN`; `numberInUse(db,'sales',col,v,existing?.id ?? -1)` → 409
+  `NUMBER_IN_USE` + `heldBy` + `field`); called in POST `/employees` after the doj check and in PUT `/employees/:code` after the status
+  check — both before any write; the existing writeAudit logs the change (stage `sales_employee_master`). PUT loop line
+  `if (STATUTORY_FLAG_FIELDS.includes(field)) continue;` untouched (N8). statutoryNumbers.test.js F7 ×6 (valid with spaces → stored
+  normalised + 2 audit rows; 4 malformed → 400 with the other fields NOT written; held → 409 heldBy, also from the other company (N3),
+  nothing written; legacy bad '12345' re-sent with a name edit → 200 + only the name audited, a changed value still checked; '' / spaces
+  → NULL audited; flags → ignoredFields, master flags + structures unchanged, number written) + F8 ×2 (valid 201 normalised; 400 / 409
+  create nothing). **8/8 FAIL on the STEP 3 sales.js.** statutoryWriterGuard.test.js **unedited, 9/9**; 98 neighbour tests green.
+
+- PR-3 STEP 5 — 9fc5492 `feat(filing): LWF register (plant + sales) for the Punjab remittance`. NEW `services/lwfRegister.js`:
+  `buildLwfRegister(db, {month, year, company})` — plant `salary_computations` LEFT JOIN employees (code) + sales
+  `sales_salary_computations` LEFT JOIN sales_employees (code + company), rows with LWF EE or ER > 0; columns payroll / company / code /
+  name / EE / ER; plant rows `shortfall` = V11 component sum − total_deductions, `capped` = shortfall > ₹1 (sales null, E8); order company,
+  payroll, name, code; company subtotals (count, plant, sales, EE, ER, capped, shortfall) + total. `lwfRegisterWorkbook` — per company its
+  rows then a subtotal row, a total last; every row 8 cells, `!cols` 8, frozen header. reports.js: NEW `GET /lwf-register?month&year
+  [&company][&download=xlsx]` behind `requireHrFinanceOrAdmin` (400 without month 1–12 / year). Filenames that go into a header drop
+  everything outside [A-Za-z0-9_.-] (N6) — here and in the STEP 3 sales ESI filename (`Sales_ESI_…`; real company names unchanged). An odd
+  company ('Wëird "Co" Ltd') made the STEP 3 route 500 on setHeader — test added, fails on the STEP 3 file. lwfRegister.test.js F10 ×2
+  (real plant + sales computes: L1/L2/L3 + SL1/SL2 5/20, U1/SU1 absent, subtotals per company, company filter, other month empty; XLSX
+  header = data = subtotal = total = `!cols` = 8) + F11 ×1 (M2: C1 flagged with a ₹40,000 advance → lwf_employee 5, total = gross,
+  register capped 1 + shortfall = sum − total; L1–L3 capped 0; ECR / ESI lines carry round(pf_employee) / round(esi_employee) as
+  computed) + 3 route tests (JSON, filter, 400 ×3, xlsx download 8 wide, odd company, hr/finance/admin 200, viewer 403, 401). Without
+  the route 3 of 6 fail; without the service the suite cannot load.
+
+- PR-3 STEP 6 — f5c2d4a `feat(filing): ESI/UAN fields + sales ESI export`. Before editing, a clean `npm run build` of 9fc5492
+  reproduced the committed dist byte-identically. api.js: `salesExportESI(params, download)` (preview + download send `fresh`),
+  `getLWFRegister` / `downloadLWFRegister` (`fresh`), `getPFECR` / `getESIContribution` + their two downloads send `fresh` (N7 — D-13).
+  SalesEmployeeMaster.jsx: ESI number / UAN inputs in Salary & Statutory; `validate()` applies 10 / 12 digits (spaces ignored) only
+  when the value differs from the stored one (N2, same as the server); `handleSubmit` strips spaces, '' → null; list badge
+  "ESI no. missing" when `esi_applicable` and no valid 10-digit number (= the file's rule). NEW `components/sales/SalesEsiExportButton.jsx`:
+  preview → when `missing` > 0 a modal lists code / name / none|not 10 digits / EE ₹ / ER ₹ with "NOT in the file" and the missing
+  totals → "Download anyway" → blob download; after any download the `X-Missing-ESI-Number` header is read again and toasted (and a
+  changed count is flagged). SalesSalaryCompute.jsx: one import + one `<SalesEsiExportButton/>` after the NEFT button. dist rebuilt:
+  `SalesSalaryCompute-MvaLhnaN.js` has `sales-esi-export` + "NOT in the file"; `SalesEmployeeMaster-C0fHZH1-.js` has "ESI no. missing";
+  `index-BAT0ma5J.js` has `esi-contribution` + `lwf-register`.
+
+- PR-3 STEP 7 — 99bad8f `feat(filing): missing lists + LWF register on Reports`. Reports.jsx: ECR + ESI panels — cards show
+  "In the file" (written count) + an amber "NOT in the file · EE ₹" card; NEW `MissingPanel` (amber, bank-panel pattern) lists code /
+  name / EE / ER / No-or-malformed UAN|ESI number with the missing totals; downloads go through NEW `handleFilingDownload` —
+  `window.confirm` naming the codes and the ₹ when the preview has missing rows, then re-reads `X-Missing-UAN` / `X-Missing-ESI-Number`
+  on the download and toasts who is NOT in it; empty-table text says "see the list above" when everyone is missing. NEW `LWF Register`
+  list item + panel (cards rows / EE / ER / to remit, capped-rows note with the shortfall, table with Capped column, tfoot company
+  subtotals + total, xlsx download). C4 on the page: `FILING_REPORTS` (bank, pf, esi, pf-ecr, esi-contrib, bank-file, audit,
+  leave-register, lwf-register) — for a role outside admin/hr/finance the queries stay disabled and the panel is replaced by a plain
+  "HR, finance or admin only" card (no 403 toast, no empty table); hr / finance / admin see every panel and button exactly as before.
+  dist rebuilt: `Reports-C69Dm5ui.js` contains lwf-register ×5, filing-restricted, filing-missing, "NOT in the file" ×3, both header
+  names.
+
+- PR-3 SIM FIX — 5c3acef `fix(filing): sales master list refetches past the 5 s GET cache`. Caught by run_pr3.py: after HR saved
+  an ESI number through the sales master form the list refetch came from the browser's 5 s GET cache, so the "ESI no. missing"
+  badge stayed on the fixed row. `getSalesEmployees` sends `fresh` (D-14). dist rebuilt in the same commit.
+- PR-3 STEP 8 — 68f848e `docs(filing): fix list and capped-LWF checks, filing runbook, PR-3 simulation`. VERIFY.sql **V15**
+  (capped LWF rows: lwf_employee > 0 and V11 sum − total > ₹1; expect 0 on production) and **V16** (fix list per payroll / month /
+  company: PF without a 12-digit UAN, ESI without a 10-digit ESI number, spaces / tabs ignored, GLOB — no REGEXP in SQLite); both
+  prepare and run on a fresh schema (C6: PR-2b owns V13 / V14). RUNBOOK T7: the "missing must be 0 before filing" rule, where each
+  file is, who may download, V16 + how to fix numbers. OPEN_ITEMS: PR-3b (C2 format findings) + PR-3 notes incl. the unguarded PUT
+  company-config (decision). CLAUDE.md Section 0 entry. NEW `sim/seed_pr3.js` + `sim/run_pr3.py`.
+  - **Final identity** (HEAD 5c3acef vs the dcad556 worktree): run 1 **106/106**, run 2 **79/79**.
+  - **run_pr3.py 51/51** (real server.js, NODE_ENV=production, built dist, throwaway DATA_DIR, sales bootstrap skipped, real
+    logins admin / hr / finance / viewer1, real plant + sales statutory uploads effective 2026-10, real Stage 6 / 7 for both
+    companies and sales compute): ECR P01/P02 written, P03 none / P04 malformed missing + header, ESI A P06 missing, ESI B clean
+    (no header), bank file untouched; sales ESI (finance 200) S01 / S03 `|0|0|0|0` / S05 hold written, S02 missing, read-only (rows
+    + audit count unchanged); HR number edits 400 / 409 heldBy / 400, nothing written; LWF register rows, P07 capped with the V11
+    shortfall, subtotals B then A, xlsx 8 wide; C4 viewer 403 ×10 (incl. sales ESI), finance 200 ×8, viewer keeps attendance;
+    V5 / V8 drift 0; V11 only P07; V13 0; V15 = P07; V16 plant A 2/1 + sales S02, after the UI fix sales clean. Chromium: ECR
+    missing panel, confirm dialog text (codes + ₹), download after accepting, LWF tab (company A rows + subtotal + capped note),
+    sales Export ESI modal (S02 NOT in the file), master badge on S02 only, 4-digit number refused in the form, S02 saved through
+    the form (stored normalised + audited as hr), badge gone, Export ESI then downloads straight away with S02 in the file, viewer
+    (fresh context) sees "HR, finance or admin only" on PF ECR + LWF, no /api/reports 4xx from the page, 0 page errors.
+  - Harness notes (not product changes): server.js allows 5 logins / 15 min per IP, so the browser reuses the HTTP tokens; the hr
+    browser session's 401s on `/api/session-analytics/events` come from the /login page before the token is injected and are
+    excluded; switching hr → viewer by token injection in ONE browser tab hits React #310 on dcad556 too (a form login does not),
+    so the viewer runs in a fresh context.
+  - Clean `rm -rf frontend/dist && npm run build` → git status clean (byte-identical). `node --check` clean on statutoryFlags.js,
+    exportFormats.js, reports.js, salesExportFormats.js, sales.js, lwfRegister.js. DO-NOT-MODIFY diff vs dcad556: **0 files**
+    (dayCalculation, salaryComputation, salesSalaryComputation, schema, payroll, loans/**, recompute, employees, salary-input,
+    import, statutory route, statutoryWriterGuard.test.js, backend/scripts, sales payslip files); statutoryFlags.js = the exports
+    line only; sales.js hunks = pre-gate route + UPDATABLE_FIELDS + require/checkStatutoryNumbers + 2 call sites. UPSERTs
+    untouched (plant 58/58/58/55, sales 47/47/47/44 — files unchanged). No xlsx / csv / db in the diff.
+  - Full jest twice: 69 suites / 1120 tests, 0 failures (baseline 65 / 1076).
+
+- PR-3 REVIEW FIX 1 — c845cc2 `fix(filing): company config write admin only`. Independent review: SHIP WITH FIXES. reports.js
+  `PUT /company-config/:id` had no role check while GET is now restricted. No screen edits it (`updateCompanyConfig` in api.js has no
+  caller); the company master write in Settings (`POST /settings/companies`) is `requireAdmin` → admin only (D-16; the gate is
+  a local `requireAdmin` in reports.js since REVIEW FIX 1b). statutoryFilingPlant.test.js +1: viewer / hr / finance 403 ('Admin access required') with company_config byte-unchanged,
+  no token 401, admin 200 writes the three fields; fails on the previous reports.js. OPEN_ITEMS entry marked fixed.
+
+- PR-3 REVIEW FIX 2 — d164fd0 `docs(filing): only missing rows with a contribution block filing`. RUNBOOK T7 rule now: missing
+  rows that carry a contribution (EE + ER > 0) must be 0 before filing; ₹0 rows (sales: ESI on, no wages, no number) are
+  informational — matches VERIFY V16, which counts contribution rows only. UI (no server / file / line-builder change; `missing[]`
+  already carries ee / er): SalesEsiExportButton opens the confirm modal only when a row with a contribution is missing, marks ₹0
+  rows "₹0 due (informational)", counts them apart in the header and the button; only-₹0 missing → straight download + an info
+  toast naming them. Reports.jsx: MissingPanel marks ₹0 rows; the confirm fires only for rows with a contribution and mentions the
+  ₹0 ones. OPEN_ITEMS D-F6 note updated. dist rebuilt.
+
+- PR-3 REVIEW FIX 3 — 06efa5c `docs(statutory): open items from the PR-3 review`. OPEN_ITEMS, not fixed here: (a) the viewer
+  can read UAN / ESI / bank via `GET /api/employees` (employees.js:179 `SELECT e.*`), `GET /api/employees/:code` and
+  `GET /api/payroll/payslip/:code` (all requireAuth only; checked); `/payslips/bulk` is 403 for everyone by policy (checked, not
+  listed as an exposure). (b) numberInUse counts Left / Exited rows, returns the code without the company, and compares raw stored
+  values (legacy spaced numbers slip through); none in production today.
+
+- PR-3 MERGE — 9f70de9 `Merge origin/feat/lwf-sales (7eed259 …)` (`git fetch origin`; PR-2b now carries origin/main 3a7630f, #71
+  leave employee search). Auto-merged with no conflict hunks: CLAUDE.md (every entry kept; PR-3 on top, then PR-2b, #71, PR-2 … as
+  7eed259 ordered them) and frontend/src/utils/api.js (= 7eed259 + PR-3's own lines: fresh on the filing helpers, LWF register,
+  salesExportESI, getSalesEmployees). frontend/dist: 221 rename/content conflicts → 7eed259's dist taken wholesale. No other file
+  conflicted; no backend file changed on 7eed259. d2b07d3 `build(frontend): rebuild dist after merging origin/feat/lwf-sales` —
+  bundle has PR-3's chunks and #71's "Type code or name…" (LeaveManagement); a second `rm -rf dist && npm run build` → git status
+  clean.
+- PR-3 REVIEW FIX 1b — b3d2c7e `fix(filing): reports.js keeps a local admin gate`. Found by re-running filing_identity.js after
+  the merge: importing `requireAdmin` from middleware/roles made reports.js pull routes/auth → middleware/auth, which throws at load
+  without JWT_SECRET (filing_identity.js loads the router standalone). Now a local `requireAdmin` beside `requireHrFinanceOrAdmin`
+  (raw role; JWT roles are normalised at login). D-16 test unchanged and still fails on e3af923's file; identity 106/106 + 79/79.
+
 ## LAST STEP
-PR-2 built: STEPs 1, 2, 4, 5, 6, 7 + C3 + C4 + CLAUDE.md. Local only, not pushed.
+PR-3 review fixes 1–4 + merge of origin/feat/lwf-sales 7eed259.
 
 ## NEXT STEP
-Coordinator: review, push feat/lwf-deduction, owner opens the PR in the GitHub UI and merges; deploy; then the owner computes plant September (VERIFY V4/V5/V11/V12 after Stage 7). PR-2b (sales LWF) before the 25 Oct sales close. Do NOT recompute sales September (D3).
+chat: push, PR (merge PR #73 first)
+
+
 
 ## OWNER RULINGS ADDED DURING THE BUILD
 (record date + ruling; BUILD_PLAN §1 holds the original set)
@@ -92,6 +276,34 @@ Coordinator: review, push feat/lwf-deduction, owner opens the PR in the GitHub U
   payslip without LWF stays byte-identical (verified 77/77). Stage 7 table: the header and tfoot were one cell short
   of the body rows (status + actions = 2 cells, 1 header cell) — one empty trailing th + tfoot colSpan 2 added so
   header, body, tfoot and the DrillDownRow colSpan are all 25.
+- D-9 (PR-2b STEP 2) lwfSales.test.js uses ONE file-level `startJwtApi` for every route test (Q4 route, Q6, O2/O4),
+  isolated by company + month: `getDb()` is a per-module singleton, so a second harness in the same file got the closed
+  handle. Test-only; no product code.
+- D-10 (PR-2b STEP 5) The plan's "PR-2's scratch copy of the payslip HTML check" was never committed; recreated in the
+  scratchpad (the committed script still fails against a post-PR-9 base with 'Duplicate export', as PR-2 found) and
+  run vs ad96604 with 2 sales LWF fixtures (107/107). `backend/scripts/*` stays untouched (DO NOT MODIFY). The C4 sim goes
+  beyond the plan's "Aug + Sep" by also computing October so V14 runs exactly as written; sales sheet uploads are seeded
+  in SQL (as salesLoanFixture.setUpload / the PR-8 sales sim do), the statutory upload goes through the real route.
+  OPEN_ITEMS also records N9 (plan named N3 + N10; C5 added N5).
+- D-11 (PR-3 STEP 3) The sales ESI route sits BEFORE `router.use(requireHrOrAdmin)` (sales.js ~1100) with its own hr/finance/admin
+  check, not after `/export/bank-neft` as IMPL_PR3 says: C4 (owner) gives finance the filing downloads, and after the router gate
+  finance gets 403 (IMPL F6 said "finance 403" — superseded by C4). Same pattern as the TA/DA exports; inline require of the generator
+  there, so the 2531–2534 require block is untouched. The rest of the sales router stays HR/admin (tested). Finance reaches this file
+  through the API only — the button lives on the sales register page, which finance's sidebar does not show.
+- D-12 (PR-3 STEP 3) `generateSalesESIFile` uses LEFT JOIN (plan: JOIN) and selects on ESI EE + ER > 0 (plan: EE > 0): a
+  contribution row whose master is missing, or with only an employer share, is listed in `missing` instead of vanishing from the file.
+  Identical output whenever every row has a master and both shares (always true for compute's rows).
+- D-13 (PR-3 STEP 6) The two plant filing DOWNLOAD helpers (`downloadPFECR`, `downloadESIContribution`) also send `fresh` (plan named
+  only the previews): within 5 s of fixing a number, a cached download would still leave that person out. Frontend only; no server change.
+- D-14 (PR-3 sim) `getSalesEmployees` sends `fresh` (no-cache): without it, the sales master list kept showing the "ESI no. missing"
+  badge for up to 5 s after HR saved the number (browser GET cache). Frontend only; outside the plan's file hunks for api.js.
+- D-15 (PR-3 C4) Besides the three filing downloads, C4's "any other export serving those identifiers" was read as every reports.js
+  route returning UANs / PF numbers / ESI numbers / bank accounts: pf-statement, esi-statement, bank-transfer, audit-trail (old /
+  new values of master edits — bank accounts, and from STEP 4 ESI numbers / UANs) and GET company-config (company bank account /
+  PAN / TAN; no UI caller). PUT company-config (unguarded write) left alone — OPEN_ITEMS decision.
+- D-16 (PR-3 review) `PUT /api/reports/company-config/:id` → `requireAdmin` (not hr/finance/admin): no screen edits company_config
+  (api.js `updateCompanyConfig` has no caller), the Settings company master write is admin-only, and the row heads every filing
+  file (PF / ESI establishment codes, PAN / TAN, company bank account). Nobody loses a button.
 - D-4 (STEP 4) The undo file carries the flags that were IN FORCE AT E before the batch (what September compute
   used), not the master's flags; numbers are left blank (blank = unchanged, per §4.2). Not a full restore (review
   minor 1, wording fixed in REVIEW FIX 4): a later row whose flags differed before the batch ends at the E value.
@@ -131,6 +343,23 @@ Coordinator: review, push feat/lwf-deduction, owner opens the PR in the GitHub U
 - PR-2 STEP 6: frontend/src/pages/SalaryComputation.jsx, frontend/src/utils/payslipPdf.js, frontend/src/pages/FinanceAudit.jsx, frontend/dist
 - PR-2 STEP 7: docs/statutory-flags/VERIFY.sql (V11, V12), docs/loans/PROGRESS.md (§2)
 - PR-2 C4: docs/statutory-flags/sim/run_pr2.py, seed_pr2.js (new); CLAUDE.md (Section 0 entry)
+- PR-2b STEP 0: docs/statutory-flags/IMPL_PR2b.md (new), PROGRESS.md
+- PR-2b STEP 1: backend/src/services/salesSalaryComputation.js (compute + save), backend/src/__tests__/lwfSales.test.js (new), backend/src/__tests__/helpers/salesLoanFixture.js (SALES_SHORT_SQL)
+- PR-2b STEP 2: backend/src/routes/sales.js (3 hunks), lwfSales.test.js (Q6)
+- PR-2b STEP 3: salesSalaryComputation.js (generateSalesPayslipData), backend/src/services/salesExportFormats.js (generateSalesExcel), lwfSales.test.js (O2, O4)
+- PR-2b STEP 4: frontend/src/pages/Sales/SalesSalaryCompute.jsx, frontend/dist
+- PR-2b STEP 5: docs/statutory-flags/VERIFY.sql (V12, V13, V14), OPEN_ITEMS.md, sim/run_pr2b.py + seed_pr2b.js (new); CLAUDE.md (Section 0 entry)
+- PR-3 STEP 0: docs/statutory-flags/IMPL_PR3.md (new), PROGRESS.md
+- PR-3 STEP 1: backend/src/services/statutoryFlags.js (exports line), backend/src/__tests__/statutoryNumbers.test.js (new, F12)
+- PR-3 STEP 2: backend/src/services/exportFormats.js, backend/src/routes/reports.js, __tests__/statutoryFilingPlant.test.js (new), docs/statutory-flags/sim/filing_identity.js (new)
+- PR-3 C4: backend/src/routes/reports.js (role gates), statutoryFilingPlant.test.js (C4 tests)
+- PR-3 STEP 3: backend/src/services/salesExportFormats.js (generateSalesESIFile), backend/src/routes/sales.js (pre-gate route), __tests__/statutoryFilingSales.test.js (new)
+- PR-3 STEP 4: backend/src/routes/sales.js (UPDATABLE_FIELDS, require, checkStatutoryNumbers, 2 call sites), statutoryNumbers.test.js (F7, F8)
+- PR-3 STEP 5: backend/src/services/lwfRegister.js (new), backend/src/routes/reports.js (/lwf-register), salesExportFormats.js (filename sanitising), __tests__/lwfRegister.test.js (new), statutoryFilingSales.test.js (+1)
+- PR-3 STEP 6: frontend/src/utils/api.js, pages/Sales/SalesEmployeeMaster.jsx, components/sales/SalesEsiExportButton.jsx (new), pages/Sales/SalesSalaryCompute.jsx, frontend/dist
+- PR-3 STEP 7: frontend/src/pages/Reports.jsx, frontend/dist
+- PR-3 SIM FIX: frontend/src/utils/api.js (getSalesEmployees fresh), frontend/dist
+- PR-3 STEP 8: docs/statutory-flags/VERIFY.sql (V15, V16), RUNBOOK.md (T7), OPEN_ITEMS.md, sim/seed_pr3.js + run_pr3.py (new), PROGRESS.md; CLAUDE.md (Section 0 entry)
 
 ## FRAGILE-FILE EDITS (before / after)
 - PR-2 STEP 2 salaryComputation.js (lines on 66c6a08 = 8b9561d, file unchanged on main) —
@@ -245,3 +474,18 @@ PR-2 STEP 5: lwfOutputs 7/7 (+ holdReleaseRoute, manualDeductionsRetired green).
 PR-2 STEP 6: npm run build OK; payslip HTML byte check 77/77.
 PR-2 STEP 7: dist clean rebuild byte-identical.
 PR-2 C4 sim: branch 25/25, base 8/8 + dump comparison clean. PR-2 final: 63 / 1036, 0 failures, 2 clean runs.
+PR-2b baseline on ad96604: 64 / 1047, 0 failures.
+PR-2b STEP 1: lwfSales 21/21 (15 fail on the old file); loansSales*/statutory*/lwf* 17 / 233.
+PR-2b STEP 2: lwfSales 26/26 (Q6 3 of 5 fail on the old sales.js; dropping only the loan-object term fails the loan case).
+PR-2b STEP 3: lwfSales 29/29 (O2/O4 3/3 fail on the pre-step files); loansSales*/loansReports* 8 / 84.
+PR-2b STEP 4: npm run build OK; clean rebuild byte-identical.
+PR-2b C3: sales + plant --dump md5 = base. C4 sim: branch 54/54, base 23/23, compare clean. Payslip HTML 107/107.
+PR-2b final: 65 / 1076, 0 failures, 2 clean runs.
+PR-3 baseline on dcad556 (origin/feat/lwf-sales): 65 / 1076, 0 failures.
+PR-3 STEP 1: statutoryNumbers 4/4 (4 fail on dcad556). STEP 2: statutoryFilingPlant 7/7 (6 fail on dcad556). C4: +12 (11 fail on the STEP 2 file).
+PR-3 STEP 3: statutoryFilingSales 6/6 (6 fail on dcad556). STEP 4: statutoryNumbers 12/12 (F7/F8 8 fail on the STEP 3 sales.js); guard 9/9 unedited.
+PR-3 STEP 5: lwfRegister 6/6 (3 route tests fail without the route); statutoryFilingSales 7/7 (the odd-company test fails on the STEP 3 file).
+PR-3 after STEP 5: 69 / 1120, 0 failures. STEP 6 / 7: npm run build OK. Identity 106/106 + 79/79. run_pr3.py 51/51. Clean dist rebuild identical.
+PR-3 final: **69 suites / 1120 tests, 0 failures, 2 clean runs** (baseline 65 / 1076: +4 suites, +44 tests).
+PR-3 review (after REVIEW FIX 1 / 1b / 2 / 3 + the 7eed259 merge + dist rebuild): **69 suites / 1121 tests, 0 failures, 2 clean runs** (+1 = D-16).
+Guard 9/9 unedited; node --check clean (6 backend files); clean `rm -rf dist && npm run build` → identical; identity 106/106 + 79/79; run_pr3.py 51/51.

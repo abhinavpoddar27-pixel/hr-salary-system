@@ -5,6 +5,27 @@
 
 const MONTHS_SHORT = ['', 'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 
+// Statutory flags PR-3: a filing row needs a valid identifier (the statutory upload's
+// own rules). A row without one is never written as a blank / bad line; it is listed in
+// `missing` with what was due, and the route names it in a header (RUNBOOK T7: file only
+// when missing is 0).
+const { ESI_NUMBER_RE, UAN_RE } = require('./statutoryFlags');
+const round2 = (n) => Math.round((n || 0) * 100) / 100;
+function missingRow(emp, ee, er, id) {
+  return { employee_code: emp.employee_code, employee_name: emp.employee_name, ee: round2(ee), er: round2(er), reason: id ? 'malformed' : 'none' };
+}
+function missingTotals(missing) {
+  return {
+    missingCount: missing.length,
+    missingEE: round2(missing.reduce((s, m) => s + m.ee, 0)),
+    missingER: round2(missing.reduce((s, m) => s + m.er, 0)),
+  };
+}
+/** Header value naming the left-out codes: comma-joined, each code reduced to [A-Za-z0-9_-] (N6). */
+function missingCodesHeader(missing) {
+  return (missing || []).map((m) => String(m.employee_code ?? '').replace(/[^A-Za-z0-9_-]/g, '')).filter(Boolean).join(',');
+}
+
 /**
  * Generate PF ECR (Electronic Challan cum Return) text file
  * EPFO format: pipe-delimited, one row per employee
@@ -27,8 +48,12 @@ function generatePFECR(db, month, year, company) {
   `).all(...[month, year, company].filter(Boolean));
 
   const lines = [];
+  const written = [];
+  const missing = [];
   for (const emp of employees) {
     const uan = (emp.uan || '').replace(/\s/g, '');
+    if (!UAN_RE.test(uan)) { missing.push(missingRow(emp, emp.pf_employee, emp.pf_employer, uan)); continue; }
+    written.push(emp);
     const name = (emp.employee_name || '').toUpperCase().replace(/\|/g, ' ');
     const grossWages = Math.round(emp.gross_earned || 0);
     const epfWages = Math.round(emp.pf_wages || 0);
@@ -53,14 +78,15 @@ function generatePFECR(db, month, year, company) {
   }
 
   const totals = {
-    count: employees.length,
-    totalEPFWages: employees.reduce((s, e) => s + Math.round(e.pf_wages || 0), 0),
-    totalEEPF: employees.reduce((s, e) => s + Math.round(e.pf_employee || 0), 0),
-    totalEPS: employees.reduce((s, e) => s + Math.round(e.eps || 0), 0),
-    totalERPF: employees.reduce((s, e) => s + Math.round((e.pf_employer || 0) - (e.eps || 0)), 0),
+    count: written.length,
+    totalEPFWages: written.reduce((s, e) => s + Math.round(e.pf_wages || 0), 0),
+    totalEEPF: written.reduce((s, e) => s + Math.round(e.pf_employee || 0), 0),
+    totalEPS: written.reduce((s, e) => s + Math.round(e.eps || 0), 0),
+    totalERPF: written.reduce((s, e) => s + Math.round((e.pf_employer || 0) - (e.eps || 0)), 0),
+    ...missingTotals(missing),
   };
 
-  return { content: lines.join('\n'), employees, totals, filename: `ECR_${MONTHS_SHORT[month]}_${year}.txt` };
+  return { content: lines.join('\n'), employees: written, missing, totals, filename: `ECR_${MONTHS_SHORT[month]}_${year}.txt` };
 }
 
 /**
@@ -84,8 +110,12 @@ function generateESIFile(db, month, year, company) {
   `).all(...[month, year, company].filter(Boolean));
 
   const lines = [];
+  const written = [];
+  const missing = [];
   for (const emp of employees) {
     const ipNumber = (emp.esi_number || '').replace(/\s/g, '');
+    if (!ESI_NUMBER_RE.test(ipNumber)) { missing.push(missingRow(emp, emp.esi_employee, emp.esi_employer, ipNumber)); continue; }
+    written.push(emp);
     const name = (emp.employee_name || '').toUpperCase().replace(/\|/g, ' ');
     const calDays = emp.total_calendar_days || 30;
     const noDays = Math.round(emp.payable_days || 0);
@@ -105,13 +135,14 @@ function generateESIFile(db, month, year, company) {
   }
 
   const totals = {
-    count: employees.length,
-    totalWages: employees.reduce((s, e) => s + Math.round(e.esi_wages || 0), 0),
-    totalEEESI: employees.reduce((s, e) => s + Math.round(e.esi_employee || 0), 0),
-    totalERESI: employees.reduce((s, e) => s + Math.round(e.esi_employer || 0), 0),
+    count: written.length,
+    totalWages: written.reduce((s, e) => s + Math.round(e.esi_wages || 0), 0),
+    totalEEESI: written.reduce((s, e) => s + Math.round(e.esi_employee || 0), 0),
+    totalERESI: written.reduce((s, e) => s + Math.round(e.esi_employer || 0), 0),
+    ...missingTotals(missing),
   };
 
-  return { content: lines.join('\n'), employees, totals, filename: `ESI_${MONTHS_SHORT[month]}_${year}.txt` };
+  return { content: lines.join('\n'), employees: written, missing, totals, filename: `ESI_${MONTHS_SHORT[month]}_${year}.txt` };
 }
 
 /**
@@ -184,4 +215,4 @@ function generateBankFile(db, month, year, company) {
   };
 }
 
-module.exports = { generatePFECR, generateESIFile, generateBankFile };
+module.exports = { generatePFECR, generateESIFile, generateBankFile, missingCodesHeader, missingTotals, missingRow };

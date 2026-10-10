@@ -63,10 +63,10 @@ const salaryRow = (db, code, month, year, company = IND) => db.prepare(
 const SALES_DRIFT_SQL = `SELECT COUNT(*) AS n FROM sales_salary_computations
   WHERE ABS(net_salary - (gross_earned + COALESCE(diwali_bonus,0) + COALESCE(incentive_amount,0) - total_deductions)) > 1`;
 
-/** Sales rows whose total_deductions is not the sum of its components. */
+/** Sales rows whose total_deductions is not the sum of its components (LWF(EE) since statutory flags PR-2b). */
 const SALES_SHORT_SQL = `SELECT COUNT(*) AS n FROM sales_salary_computations
   WHERE ABS(total_deductions - (COALESCE(pf_employee,0) + COALESCE(esi_employee,0) + COALESCE(professional_tax,0) + COALESCE(tds,0)
-        + COALESCE(advance_recovery,0) + COALESCE(loan_recovery,0) + COALESCE(other_deductions,0))) > 0.005`;
+        + COALESCE(advance_recovery,0) + COALESCE(loan_recovery,0) + COALESCE(other_deductions,0) + COALESCE(lwf_employee,0))) > 0.005`;
 
 /**
  * Direct (no-HTTP) sales Stage 7 for one company-month on a bare database —

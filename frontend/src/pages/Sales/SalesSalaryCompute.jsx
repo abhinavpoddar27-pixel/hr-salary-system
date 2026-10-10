@@ -18,6 +18,7 @@ import CompanyFilter from '../../components/shared/CompanyFilter'
 import DateSelector from '../../components/common/DateSelector'
 import useDateSelector from '../../hooks/useDateSelector'
 import ConfirmDialog from '../../components/ui/ConfirmDialog'
+import SalesEsiExportButton from '../../components/sales/SalesEsiExportButton'
 
 function triggerBlobDownload(blob, filename) {
   const url = URL.createObjectURL(blob)
@@ -332,6 +333,7 @@ export default function SalesSalaryCompute() {
             className="px-3 py-2 text-sm bg-indigo-100 text-indigo-700 rounded-lg hover:bg-indigo-200 transition-colors font-medium disabled:opacity-50 disabled:cursor-not-allowed">
             {exportBusy ? 'Exporting…' : 'Export Bank NEFT'}
           </button>
+          <SalesEsiExportButton month={selectedMonth} year={selectedYear} company={selectedCompany} disabled={exportBusy || !hasRows} />
           <button
             onClick={handleCompute}
             disabled={computeMut.isPending}
@@ -453,7 +455,7 @@ export default function SalesSalaryCompute() {
             </div>
           </div>
           <div className="overflow-x-auto">
-          <table className="min-w-[1480px] w-full text-sm">
+          <table className="min-w-[1540px] w-full text-sm">
             <thead className="bg-slate-50 text-[11px] font-bold text-slate-400 uppercase tracking-wider">
               <tr>
                 <th className="px-2 py-2 text-left">Code</th>
@@ -468,6 +470,7 @@ export default function SalesSalaryCompute() {
                 <th className="px-2 py-2 text-right">Earned ₹</th>
                 <th className="px-2 py-2 text-right">PF</th>
                 <th className="px-2 py-2 text-right">ESI</th>
+                <th className="px-2 py-2 text-right" title="Labour Welfare Fund — employee share (employer share in each cell's tooltip)">LWF</th>
                 <th className="px-2 py-2 text-right">TDS</th>
                 <th className="px-2 py-2 text-right" title="Loan EMI — set by the loan engine within the 50% cap (read-only)">Loan</th>
                 <th className="px-2 py-2 text-right bg-amber-50">Incentive</th>
@@ -496,6 +499,7 @@ export default function SalesSalaryCompute() {
                     <td className="px-2 py-1.5 text-right font-mono">{fmtINR(r.gross_earned)}</td>
                     <td className="px-2 py-1.5 text-right font-mono">{fmtINR(r.pf_employee)}</td>
                     <td className="px-2 py-1.5 text-right font-mono">{fmtINR(r.esi_employee)}</td>
+                    <td className="px-2 py-1.5 text-right font-mono" title={`Employer LWF: ${fmtINR(r.lwf_employer)}`}>{fmtINR(r.lwf_employee)}</td>
                     <td className="px-2 py-1.5 text-right font-mono">{fmtINR(r.tds)}</td>
                     <td className="px-2 py-1.5 text-right font-mono" data-testid={`sales-loan-${r.employee_code}`}>
                       {fmtINR(r.loan_recovery)}
@@ -573,7 +577,9 @@ export default function SalesSalaryCompute() {
                   {fmtINR(rows.reduce((s, r) => s + (r.gross_monthly || 0), 0))}
                 </td>
                 <td className="px-2 py-2 text-right font-mono">{fmtINR(totals.gross_earned)}</td>
-                <td colSpan={3}></td>
+                <td colSpan={2}></td>
+                <td className="px-2 py-2 text-right font-mono" title={`Employer LWF: ${fmtINR(totals.lwf_employer)}`}>{fmtINR(totals.lwf_employee)}</td>
+                <td></td>
                 <td className="px-2 py-2 text-right font-mono">{fmtINR(rows.reduce((s, r) => s + (r.loan_recovery || 0), 0))}</td>
                 <td className="px-2 py-2 text-right font-mono">{fmtINR(totals.incentive_amount)}</td>
                 <td className="px-2 py-2 text-right font-mono">{fmtINR(totals.diwali_bonus)}</td>
