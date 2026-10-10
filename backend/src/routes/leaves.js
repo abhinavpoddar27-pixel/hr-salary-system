@@ -364,10 +364,11 @@ router.get('/balances', (req, res) => {
   const { company, year, department, search } = req.query;
   const currentYear = year || new Date().getFullYear();
 
+  // No ELSE 0 inside MAX: with it a negative EL (over-used) showed as 0.
   let query = `
     SELECT e.code as employee_code, e.name, e.department, e.company,
-           MAX(CASE WHEN lb.leave_type = 'CL' THEN lb.balance ELSE 0 END) as CL,
-           MAX(CASE WHEN lb.leave_type = 'EL' THEN lb.balance ELSE 0 END) as EL
+           COALESCE(MAX(CASE WHEN lb.leave_type = 'CL' THEN lb.balance END), 0) as CL,
+           COALESCE(MAX(CASE WHEN lb.leave_type = 'EL' THEN lb.balance END), 0) as EL
     FROM employees e
     LEFT JOIN leave_balances lb ON lb.employee_id = e.id AND lb.year = ?
     WHERE e.status = 'Active'
