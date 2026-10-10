@@ -150,7 +150,7 @@
   computed) + 3 route tests (JSON, filter, 400 ×3, xlsx download 8 wide, odd company, hr/finance/admin 200, viewer 403, 401). Without
   the route 3 of 6 fail; without the service the suite cannot load.
 
-- PR-3 STEP 6 — (next commit) `feat(filing): ESI/UAN fields + sales ESI export`. Before editing, a clean `npm run build` of 9fc5492
+- PR-3 STEP 6 — f5c2d4a `feat(filing): ESI/UAN fields + sales ESI export`. Before editing, a clean `npm run build` of 9fc5492
   reproduced the committed dist byte-identically. api.js: `salesExportESI(params, download)` (preview + download send `fresh`),
   `getLWFRegister` / `downloadLWFRegister` (`fresh`), `getPFECR` / `getESIContribution` + their two downloads send `fresh` (N7 — D-13).
   SalesEmployeeMaster.jsx: ESI number / UAN inputs in Salary & Statutory; `validate()` applies 10 / 12 digits (spaces ignored) only
@@ -162,11 +162,23 @@
   `SalesSalaryCompute-MvaLhnaN.js` has `sales-esi-export` + "NOT in the file"; `SalesEmployeeMaster-C0fHZH1-.js` has "ESI no. missing";
   `index-BAT0ma5J.js` has `esi-contribution` + `lwf-register`.
 
+- PR-3 STEP 7 — (next commit) `feat(filing): missing lists + LWF register on Reports`. Reports.jsx: ECR + ESI panels — cards show
+  "In the file" (written count) + an amber "NOT in the file · EE ₹" card; NEW `MissingPanel` (amber, bank-panel pattern) lists code /
+  name / EE / ER / No-or-malformed UAN|ESI number with the missing totals; downloads go through NEW `handleFilingDownload` —
+  `window.confirm` naming the codes and the ₹ when the preview has missing rows, then re-reads `X-Missing-UAN` / `X-Missing-ESI-Number`
+  on the download and toasts who is NOT in it; empty-table text says "see the list above" when everyone is missing. NEW `LWF Register`
+  list item + panel (cards rows / EE / ER / to remit, capped-rows note with the shortfall, table with Capped column, tfoot company
+  subtotals + total, xlsx download). C4 on the page: `FILING_REPORTS` (bank, pf, esi, pf-ecr, esi-contrib, bank-file, audit,
+  leave-register, lwf-register) — for a role outside admin/hr/finance the queries stay disabled and the panel is replaced by a plain
+  "HR, finance or admin only" card (no 403 toast, no empty table); hr / finance / admin see every panel and button exactly as before.
+  dist rebuilt: `Reports-C69Dm5ui.js` contains lwf-register ×5, filing-restricted, filing-missing, "NOT in the file" ×3, both header
+  names.
+
 ## LAST STEP
-PR-3 STEP 6 (UI-a).
+PR-3 STEP 7 (UI-b).
 
 ## NEXT STEP
-PR-3 STEP 7 (UI-b: Reports missing panels + LWF tab + viewer message, dist). Carried from PR-2b: run VERIFY V13 on production before PR-2b deploys; do NOT recompute sales September until D3 is answered.
+PR-3 STEP 8 (final identity, run_pr3.py, VERIFY V15/V16, RUNBOOK T7, clean rebuild, docs). Carried from PR-2b: run VERIFY V13 on production before PR-2b deploys; do NOT recompute sales September until D3 is answered.
 
 ## OWNER RULINGS ADDED DURING THE BUILD
 (record date + ruling; BUILD_PLAN §1 holds the original set)

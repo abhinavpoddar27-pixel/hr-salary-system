@@ -7,19 +7,51 @@ import {
   getHeadcountReport, getPFECR, downloadPFECR, getESIContribution,
   downloadESIContribution, getBankSalaryFile, downloadBankSalaryFile,
   getBulkPayslips, getCompanyConfig, getDepartmentPayroll,
-  getLeaveRegisterReport, downloadLeaveRegisterReport
+  getLeaveRegisterReport, downloadLeaveRegisterReport,
+  getLWFRegister, downloadLWFRegister
 } from '../utils/api'
 import { useAppStore } from '../store/appStore'
+import { normalizeRole } from '../utils/role'
 import DateSelector from '../components/common/DateSelector'
 import useDateSelector from '../hooks/useDateSelector'
 import CompanyFilter from '../components/shared/CompanyFilter'
-import { fmtINR, fmtDate } from '../utils/formatters'
+import { fmtINR, fmtINR2, fmtDate } from '../utils/formatters'
 import useExpandableRows from '../hooks/useExpandableRows'
 import DrillDownRow, { DrillDownChevron } from '../components/ui/DrillDownRow'
 import EmployeeQuickView from '../components/ui/EmployeeQuickView'
 import { downloadBulkPayslipsPDF } from '../utils/payslipPdf'
 
 const MONTH_NAMES = ['', 'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
+
+// Statutory flags PR-3 (owner ruling C4): reports that carry UANs, ESI numbers or bank accounts
+// are served to HR / finance / admin only (backend requireHrFinanceOrAdmin). Other roles keep the
+// list item but see a plain message instead of an empty table and a 403 toast.
+const FILING_REPORTS = new Set(['bank', 'pf', 'esi', 'pf-ecr', 'esi-contrib', 'bank-file', 'audit', 'leave-register', 'lwf-register'])
+const FILING_ROLES = ['admin', 'hr', 'finance']
+
+// Amber "NOT in the file" panel for the ECR / ESI files (rows without a valid UAN / ESI number).
+function MissingPanel({ missing, totals, idLabel }) {
+  if (!missing || missing.length === 0) return null
+  return (
+    <div className="card p-4 bg-amber-50 border-amber-200" data-testid="filing-missing">
+      <h4 className="text-sm font-semibold text-amber-800 mb-1">
+        {missing.length} employee(s) NOT in the file — no valid {idLabel}
+      </h4>
+      <p className="text-xs text-amber-700 mb-2">
+        Their contributions (EE {fmtINR2(totals?.missingEE)} · ER {fmtINR2(totals?.missingER)}) would not reach the portal.
+        Fix the numbers and download again — file only when this list is empty.
+      </p>
+      <div className="space-y-1">
+        {missing.map(m => (
+          <div key={m.employee_code} className="text-xs text-amber-700">
+            <span className="font-mono">{m.employee_code}</span> — {m.employee_name} — EE {fmtINR2(m.ee)} · ER {fmtINR2(m.er)}
+            <span className="ml-1 badge badge-red text-xs">{m.reason === 'malformed' ? `${idLabel} malformed` : `No ${idLabel}`}</span>
+          </div>
+        ))}
+      </div>
+    </div>
+  )
+}
 
 // Helper: Export table data to CSV
 function exportToCSV(data, columns, filename) {
@@ -57,7 +89,9 @@ function ReportCard({ title, description, icon, children }) {
 
 export default function Reports() {
   const { month, year, dateProps } = useDateSelector({ mode: 'month', syncToStore: true })
-  const { selectedCompany } = useAppStore()
+  const { selectedCompany, user } = useAppStore()
+  const canFile = FILING_ROLES.includes(normalizeRole(user?.role))
+  const filingAllowed = (id) => canFile || !FILING_REPORTS.has(id)
   const [activeReport, setActiveReport] = useState('attendance')
   const [leaveRegFormat, setLeaveRegFormat] = useState('monthly')
   const companyFilter = selectedCompany
@@ -98,7 +132,7 @@ export default function Reports() {
   const { data: bankRes, isLoading: bankLoading } = useQuery({
     queryKey: ['bank-neft', month, year, companyFilter],
     queryFn: () => getBankTransferSheet(month, year, companyFilter),
-    enabled: activeReport === 'bank',
+    enabled: activeReport === 'bank' && canFile,
     retry: 0
   })
   const bankData = bankRes?.data?.data || []
@@ -107,7 +141,7 @@ export default function Reports() {
   const { data: pfRes, isLoading: pfLoading } = useQuery({
     queryKey: ['pf-report', month, year, companyFilter],
     queryFn: () => getPFStatement(month, year, companyFilter),
-    enabled: activeReport === 'pf',
+    enabled: activeReport === 'pf' && canFile,
     retry: 0
   })
   const pfData = pfRes?.data?.data || {}
@@ -116,7 +150,7 @@ export default function Reports() {
   const { data: esiRes, isLoading: esiLoading } = useQuery({
     queryKey: ['esi-report', month, year, companyFilter],
     queryFn: () => getESIStatement(month, year, companyFilter),
-    enabled: activeReport === 'esi',
+    enabled: activeReport === 'esi' && canFile,
     retry: 0
   })
   const esiData = esiRes?.data?.data || {}
@@ -125,7 +159,7 @@ export default function Reports() {
   const { data: auditRes, isLoading: auditLoading } = useQuery({
     queryKey: ['audit-trail', month, year, companyFilter],
     queryFn: () => getAuditTrail(month, year, companyFilter),
-    enabled: activeReport === 'audit',
+    enabled: activeReport === 'audit' && canFile,
     retry: 0
   })
   const auditData = auditRes?.data?.data || []
@@ -134,27 +168,29 @@ export default function Reports() {
   const { data: ecrRes, isLoading: ecrLoading } = useQuery({
     queryKey: ['pf-ecr', month, year, companyFilter],
     queryFn: () => getPFECR(month, year, companyFilter),
-    enabled: activeReport === 'pf-ecr',
+    enabled: activeReport === 'pf-ecr' && canFile,
     retry: 0
   })
   const ecrData = ecrRes?.data?.data || []
   const ecrTotals = ecrRes?.data?.totals || {}
+  const ecrMissing = ecrRes?.data?.missing || []
 
   // ESI Contribution
   const { data: esiContribRes, isLoading: esiContribLoading } = useQuery({
     queryKey: ['esi-contrib', month, year, companyFilter],
     queryFn: () => getESIContribution(month, year, companyFilter),
-    enabled: activeReport === 'esi-contrib',
+    enabled: activeReport === 'esi-contrib' && canFile,
     retry: 0
   })
   const esiContribData = esiContribRes?.data?.data || []
   const esiContribTotals = esiContribRes?.data?.totals || {}
+  const esiContribMissing = esiContribRes?.data?.missing || []
 
   // Bank Salary File
   const { data: bankFileRes, isLoading: bankFileLoading } = useQuery({
     queryKey: ['bank-file', month, year, companyFilter],
     queryFn: () => getBankSalaryFile(month, year, companyFilter),
-    enabled: activeReport === 'bank-file',
+    enabled: activeReport === 'bank-file' && canFile,
     retry: 0
   })
   const bankFileData = bankFileRes?.data?.data || []
@@ -174,11 +210,37 @@ export default function Reports() {
   const { data: leaveRegRes, isLoading: leaveRegLoading } = useQuery({
     queryKey: ['leave-register', leaveRegFormat, month, year, companyFilter],
     queryFn: () => getLeaveRegisterReport({ format: leaveRegFormat, month, year, company: companyFilter }),
-    enabled: activeReport === 'leave-register',
+    enabled: activeReport === 'leave-register' && canFile,
     retry: 0
   })
   const leaveRegData = leaveRegRes?.data?.data || []
   const leaveRegTotals = leaveRegRes?.data?.totals || {}
+
+  // LWF Register (statutory flags PR-3) — plant + sales rows carrying LWF, company subtotals
+  const { data: lwfRegRes, isLoading: lwfRegLoading } = useQuery({
+    queryKey: ['lwf-register', month, year, companyFilter],
+    queryFn: () => getLWFRegister({ month, year, ...(companyFilter ? { company: companyFilter } : {}) }),
+    enabled: activeReport === 'lwf-register' && canFile,
+    retry: 0
+  })
+  const lwfRegData = lwfRegRes?.data?.data || []
+  const lwfRegSubtotals = lwfRegRes?.data?.subtotals || []
+  const lwfRegTotals = lwfRegRes?.data?.totals || {}
+
+  async function handleDownloadLWFRegister() {
+    try {
+      const response = await downloadLWFRegister({ month, year, ...(companyFilter ? { company: companyFilter } : {}) })
+      const m = (response.headers['content-disposition'] || '').match(/filename="?(.+?)"?$/i)
+      const filename = m ? m[1] : `LWF_Register_${MONTH_NAMES[month]}_${year}.xlsx`
+      const blob = new Blob([response.data], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' })
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a'); a.href = url; a.download = filename; a.click()
+      URL.revokeObjectURL(url)
+      toast.success(`Downloaded ${filename}`)
+    } catch (err) {
+      toast.error('Download failed')
+    }
+  }
 
   async function handleDownloadLeaveRegister() {
     try {
@@ -215,6 +277,35 @@ export default function Reports() {
     }
   }
 
+  // ECR / ESI download: confirm first when the preview lists people NOT in the file, then
+  // re-read the server's X-Missing-* header on the download itself (RUNBOOK T7: missing must be 0).
+  async function handleFilingDownload(downloadFn, missing, idLabel, headerName) {
+    if (missing.length > 0) {
+      const codes = missing.map(m => m.employee_code).join(', ')
+      const ee = missing.reduce((s, m) => s + (m.ee || 0), 0)
+      const er = missing.reduce((s, m) => s + (m.er || 0), 0)
+      const ok = window.confirm(
+        `${missing.length} employee(s) have no valid ${idLabel} and are NOT in this file:\n${codes}\n\n` +
+        `Their contributions (EE ${fmtINR2(ee)}, ER ${fmtINR2(er)}) would not be filed.\n\nDownload the file without them?`
+      )
+      if (!ok) return
+    }
+    try {
+      const response = await downloadFn(month, year, companyFilter)
+      const m = (response.headers['content-disposition'] || '').match(/filename="?(.+?)"?$/i)
+      const filename = m ? m[1] : 'export.txt'
+      const blob = new Blob([response.data])
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a'); a.href = url; a.download = filename; a.click()
+      URL.revokeObjectURL(url)
+      const left = (response.headers[headerName] || '').split(',').filter(Boolean)
+      if (left.length > 0) toast(`Downloaded ${filename} — ${left.length} employee(s) NOT in it: ${left.join(', ')}`, { icon: '⚠', duration: 8000 })
+      else toast.success(`Downloaded ${filename}`)
+    } catch (err) {
+      toast.error('Download failed')
+    }
+  }
+
   async function handleBulkPayslips() {
     setBulkPdfLoading(true)
     try {
@@ -245,6 +336,7 @@ export default function Reports() {
     { id: 'audit', label: 'Audit Trail', desc: 'All field-level changes with before/after' },
     { id: 'department-payroll', label: 'Department Payroll', desc: 'Dept-wise payroll cost centre' },
     { id: 'leave-register', label: 'Leave Reports', desc: 'Monthly leave register + annual CL/EL summary' },
+    { id: 'lwf-register', label: 'LWF Register', desc: 'Plant + sales LWF for the Punjab remittance' },
   ]
 
   const monthLabel = `${MONTH_NAMES[month]}_${year}`
@@ -277,6 +369,16 @@ export default function Reports() {
 
         {/* Right: report content */}
         <div className="flex-1 space-y-4">
+          {!filingAllowed(activeReport) && (
+            <div className="card p-6 text-center" data-testid="filing-restricted">
+              <h3 className="font-semibold text-slate-700 mb-1">HR, finance or admin only</h3>
+              <p className="text-sm text-slate-500">
+                This report carries UANs, ESI numbers or bank accounts, so it is limited to HR, finance and admin.
+                Ask one of them if you need it.
+              </p>
+            </div>
+          )}
+
           {/* Attendance Summary */}
           {activeReport === 'attendance' && (
             <div className="space-y-4">
@@ -534,7 +636,7 @@ export default function Reports() {
           )}
 
           {/* Bank NEFT */}
-          {activeReport === 'bank' && (
+          {activeReport === 'bank' && canFile && (
             <div className="space-y-4">
               <div className="flex items-center justify-between">
                 <h3 className="text-base font-bold text-slate-800">Bank Transfer Sheet — {MONTH_NAMES[month]} {year}</h3>
@@ -606,7 +708,7 @@ export default function Reports() {
           )}
 
           {/* PF Report */}
-          {activeReport === 'pf' && (
+          {activeReport === 'pf' && canFile && (
             <div className="space-y-4">
               <div className="flex items-center justify-between">
                 <h3 className="text-base font-bold text-slate-800">PF Statement — {MONTH_NAMES[month]} {year}</h3>
@@ -676,7 +778,7 @@ export default function Reports() {
           )}
 
           {/* ESI Report */}
-          {activeReport === 'esi' && (
+          {activeReport === 'esi' && canFile && (
             <div className="space-y-4">
               <div className="flex items-center justify-between">
                 <h3 className="text-base font-bold text-slate-800">ESI Statement — {MONTH_NAMES[month]} {year}</h3>
@@ -741,25 +843,29 @@ export default function Reports() {
           )}
 
           {/* PF ECR File */}
-          {activeReport === 'pf-ecr' && (
+          {activeReport === 'pf-ecr' && canFile && (
             <div className="space-y-4">
               <div className="flex items-center justify-between">
                 <h3 className="text-base font-bold text-slate-800">PF ECR File — {MONTH_NAMES[month]} {year}</h3>
                 <button
-                  onClick={() => handleDownloadFile(downloadPFECR, month, year, companyFilter)}
+                  onClick={() => handleFilingDownload(downloadPFECR, ecrMissing, 'UAN', 'x-missing-uan')}
                   className="btn-primary text-sm"
                 >
                   Download ECR (.txt)
                 </button>
               </div>
-              {ecrData.length > 0 && (
-                <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-                  <div className="card p-3 text-center"><div className="font-bold text-slate-700">{ecrTotals.count}</div><div className="text-xs text-slate-500">Employees</div></div>
+              {(ecrData.length > 0 || ecrMissing.length > 0) && (
+                <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
+                  <div className="card p-3 text-center"><div className="font-bold text-slate-700">{ecrTotals.count}</div><div className="text-xs text-slate-500">In the file</div></div>
+                  {ecrMissing.length > 0 && (
+                    <div className="card p-3 text-center bg-amber-50 border-amber-200"><div className="font-bold text-amber-700">{ecrTotals.missingCount}</div><div className="text-xs text-amber-700">NOT in the file · EE {fmtINR2(ecrTotals.missingEE)}</div></div>
+                  )}
                   <div className="card p-3 text-center"><div className="font-bold text-blue-600">{fmtINR(ecrTotals.totalEEPF)}</div><div className="text-xs text-slate-500">EE PF</div></div>
                   <div className="card p-3 text-center"><div className="font-bold text-green-600">{fmtINR(ecrTotals.totalEPS)}</div><div className="text-xs text-slate-500">EPS</div></div>
                   <div className="card p-3 text-center"><div className="font-bold text-purple-600">{fmtINR(ecrTotals.totalERPF)}</div><div className="text-xs text-slate-500">ER PF Diff</div></div>
                 </div>
               )}
+              <MissingPanel missing={ecrMissing} totals={ecrTotals} idLabel="UAN" />
               {ecrLoading ? <div className="card p-8 text-center text-slate-400">Loading...</div> : (
                 <div className="card overflow-hidden">
                   <div className="overflow-x-auto">
@@ -769,7 +875,7 @@ export default function Reports() {
                       </thead>
                       <tbody>
                         {ecrData.length === 0 ? (
-                          <tr><td colSpan={8} className="text-center py-6 text-slate-400">No PF data. Run salary computation first.</td></tr>
+                          <tr><td colSpan={8} className="text-center py-6 text-slate-400">{ecrMissing.length > 0 ? 'Nobody with a valid UAN — see the list above.' : 'No PF data. Run salary computation first.'}</td></tr>
                         ) : ecrData.map((e, i) => (
                           <tr key={e.employee_code || i}>
                             <td className="font-mono text-xs">{e.uan || <span className="text-red-400">Missing</span>}</td>
@@ -791,24 +897,28 @@ export default function Reports() {
           )}
 
           {/* ESI Contribution File */}
-          {activeReport === 'esi-contrib' && (
+          {activeReport === 'esi-contrib' && canFile && (
             <div className="space-y-4">
               <div className="flex items-center justify-between">
                 <h3 className="text-base font-bold text-slate-800">ESI Contribution File — {MONTH_NAMES[month]} {year}</h3>
                 <button
-                  onClick={() => handleDownloadFile(downloadESIContribution, month, year, companyFilter)}
+                  onClick={() => handleFilingDownload(downloadESIContribution, esiContribMissing, 'ESI number', 'x-missing-esi-number')}
                   className="btn-primary text-sm"
                 >
                   Download ESI File (.txt)
                 </button>
               </div>
-              {esiContribData.length > 0 && (
-                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-                  <div className="card p-3 text-center"><div className="font-bold text-slate-700">{esiContribTotals.count}</div><div className="text-xs text-slate-500">Employees</div></div>
+              {(esiContribData.length > 0 || esiContribMissing.length > 0) && (
+                <div className="grid grid-cols-1 sm:grid-cols-4 gap-3">
+                  <div className="card p-3 text-center"><div className="font-bold text-slate-700">{esiContribTotals.count}</div><div className="text-xs text-slate-500">In the file</div></div>
+                  {esiContribMissing.length > 0 && (
+                    <div className="card p-3 text-center bg-amber-50 border-amber-200"><div className="font-bold text-amber-700">{esiContribTotals.missingCount}</div><div className="text-xs text-amber-700">NOT in the file · EE {fmtINR2(esiContribTotals.missingEE)}</div></div>
+                  )}
                   <div className="card p-3 text-center"><div className="font-bold text-blue-600">{fmtINR(esiContribTotals.totalEEESI)}</div><div className="text-xs text-slate-500">IP Contribution</div></div>
                   <div className="card p-3 text-center"><div className="font-bold text-green-600">{fmtINR(esiContribTotals.totalERESI)}</div><div className="text-xs text-slate-500">ER Contribution</div></div>
                 </div>
               )}
+              <MissingPanel missing={esiContribMissing} totals={esiContribTotals} idLabel="ESI number" />
               {esiContribLoading ? <div className="card p-8 text-center text-slate-400">Loading...</div> : (
                 <div className="card overflow-hidden">
                   <div className="overflow-x-auto">
@@ -818,7 +928,7 @@ export default function Reports() {
                       </thead>
                       <tbody>
                         {esiContribData.length === 0 ? (
-                          <tr><td colSpan={6} className="text-center py-6 text-slate-400">No ESI data</td></tr>
+                          <tr><td colSpan={6} className="text-center py-6 text-slate-400">{esiContribMissing.length > 0 ? 'Nobody with a valid ESI number — see the list above.' : 'No ESI data'}</td></tr>
                         ) : esiContribData.map((e, i) => (
                           <tr key={e.employee_code || i}>
                             <td className="font-mono text-xs">{e.esi_number || <span className="text-red-400">Missing</span>}</td>
@@ -838,7 +948,7 @@ export default function Reports() {
           )}
 
           {/* Bank Salary File */}
-          {activeReport === 'bank-file' && (
+          {activeReport === 'bank-file' && canFile && (
             <div className="space-y-4">
               <div className="flex items-center justify-between">
                 <h3 className="text-base font-bold text-slate-800">Bank Salary Upload File — {MONTH_NAMES[month]} {year}</h3>
@@ -920,7 +1030,7 @@ export default function Reports() {
           )}
 
           {/* Audit Trail */}
-          {activeReport === 'audit' && (
+          {activeReport === 'audit' && canFile && (
             <div className="space-y-4">
               <div className="flex items-center justify-between">
                 <h3 className="text-base font-bold text-slate-800">Audit Trail — {MONTH_NAMES[month]} {year}</h3>
@@ -1087,8 +1197,76 @@ export default function Reports() {
             </div>
           )}
 
+          {/* LWF Register (statutory flags PR-3) */}
+          {activeReport === 'lwf-register' && canFile && (
+            <div className="space-y-4">
+              <div className="flex items-center justify-between flex-wrap gap-3">
+                <h3 className="text-base font-bold text-slate-800">LWF Register — {MONTH_NAMES[month]} {year}</h3>
+                <button onClick={handleDownloadLWFRegister} className="btn-primary text-sm" disabled={lwfRegData.length === 0}>
+                  Download LWF Register (.xlsx)
+                </button>
+              </div>
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+                <div className="card p-3 text-center"><div className="font-bold text-slate-700">{lwfRegTotals.count || 0}</div><div className="text-xs text-slate-500">Rows (plant {lwfRegTotals.plant || 0} · sales {lwfRegTotals.sales || 0})</div></div>
+                <div className="card p-3 text-center"><div className="font-bold text-blue-600">{fmtINR2(lwfRegTotals.lwf_employee)}</div><div className="text-xs text-slate-500">Employee share</div></div>
+                <div className="card p-3 text-center"><div className="font-bold text-green-600">{fmtINR2(lwfRegTotals.lwf_employer)}</div><div className="text-xs text-slate-500">Employer share</div></div>
+                <div className="card p-3 text-center"><div className="font-bold text-slate-700">{fmtINR2((lwfRegTotals.lwf_employee || 0) + (lwfRegTotals.lwf_employer || 0))}</div><div className="text-xs text-slate-500">To remit</div></div>
+              </div>
+              {(lwfRegTotals.capped || 0) > 0 && (
+                <div className="card p-3 bg-amber-50 border-amber-200 text-xs text-amber-800" data-testid="lwf-capped">
+                  {lwfRegTotals.capped} plant row(s) hit the deductions cap (deductions above earned pay). The LWF due is still listed;
+                  the part the cap did not recover ({fmtINR2(lwfRegTotals.shortfall)} across those rows) is borne by the employer.
+                </div>
+              )}
+              {lwfRegLoading ? <div className="card p-8 text-center text-slate-400">Loading...</div> : (
+                <div className="card overflow-hidden">
+                  <div className="overflow-x-auto">
+                    <table className="table-compact w-full text-xs">
+                      <thead>
+                        <tr><th>Payroll</th><th>Company</th><th>Code</th><th>Name</th><th className="text-right">LWF (EE)</th><th className="text-right">LWF (ER)</th><th className="text-center">Capped</th></tr>
+                      </thead>
+                      <tbody>
+                        {lwfRegData.length === 0 ? (
+                          <tr><td colSpan={7} className="text-center py-6 text-slate-400">No LWF deducted this month</td></tr>
+                        ) : lwfRegData.map((r) => (
+                          <tr key={`${r.payroll}-${r.company}-${r.employee_code}`}>
+                            <td>{r.payroll}</td>
+                            <td className="text-slate-500">{r.company}</td>
+                            <td className="font-mono">{r.employee_code}</td>
+                            <td className="font-medium">{r.employee_name}</td>
+                            <td className="text-right">{fmtINR2(r.lwf_employee)}</td>
+                            <td className="text-right">{fmtINR2(r.lwf_employer)}</td>
+                            <td className="text-center">{r.capped == null ? '—' : r.capped ? <span className="badge badge-yellow text-xs" title={`Shortfall ${fmtINR2(r.shortfall)}`}>Yes</span> : 'No'}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                      {lwfRegSubtotals.length > 0 && (
+                        <tfoot>
+                          {lwfRegSubtotals.map((st) => (
+                            <tr key={st.company} className="bg-slate-50 font-semibold">
+                              <td colSpan={4}>Subtotal — {st.company} ({st.count})</td>
+                              <td className="text-right">{fmtINR2(st.lwf_employee)}</td>
+                              <td className="text-right">{fmtINR2(st.lwf_employer)}</td>
+                              <td className="text-center">{st.capped || ''}</td>
+                            </tr>
+                          ))}
+                          <tr className="bg-slate-100 font-bold">
+                            <td colSpan={4}>Total ({lwfRegTotals.count})</td>
+                            <td className="text-right">{fmtINR2(lwfRegTotals.lwf_employee)}</td>
+                            <td className="text-right">{fmtINR2(lwfRegTotals.lwf_employer)}</td>
+                            <td className="text-center">{lwfRegTotals.capped || ''}</td>
+                          </tr>
+                        </tfoot>
+                      )}
+                    </table>
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+
           {/* Leave Register (Monthly / Annual) */}
-          {activeReport === 'leave-register' && (
+          {activeReport === 'leave-register' && canFile && (
             <div className="space-y-4">
               <div className="flex items-center justify-between flex-wrap gap-3">
                 <h3 className="text-base font-bold text-slate-800">
