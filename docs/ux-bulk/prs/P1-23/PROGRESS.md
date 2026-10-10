@@ -13,10 +13,10 @@
 | 1 | jest baseline on 18bef07 | done | worktree /tmp/claude-0/p123-base: 89 suites / 1430 pass, 0 red |
 | 2 | backend guard (approve + reject) | done | salary-input.js +12 lines (helper + 2 guard lines) |
 | 3 | jest salaryChangeSelfApproval.test.js (fails on base, passes on branch) | done | branch 9/9; on 18bef07 4 fail (the 4 self-block tests) / 5 pass |
-| 4 | SalaryInput.jsx buttons | todo | |
-| 5 | dist rebuild (own commit) | todo | |
-| 6 | browser check script + run (branch) | todo | |
-| 7 | `--base` run on 18bef07 worktree | todo | |
+| 4 | SalaryInput.jsx buttons | done | +18/−1; reason text + title; existing class only (max-w-xs) so no CSS churn |
+| 5 | dist rebuild (own commit) | done | 02d48a1 (carries the one-word class tweak too); vs fresh 18bef07 build only SalaryInput chunk differs (hash-normalised); rest = Vite filename cascade |
+| 6 | browser check script + run (branch) | done | backend/scripts/salary-change-self-approval-check.py 36/36 (admin locked + API 403, admin2 approves, finance rejects, hr unchanged, 390px), 0 page/console errors |
+| 7 | `--base` run on 18bef07 worktree | done | 3/3: admin approves own request, gross applied — bug proved |
 | 8 | full jest after | todo | |
 | 9 | self-debug + user simulation | todo | |
 | 10 | CLAUDE.md Last Session entry | todo | |
