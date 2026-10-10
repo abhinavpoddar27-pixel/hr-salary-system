@@ -85,7 +85,7 @@ def open_register(pg):
 
 
 def table(sec):
-    heads = [h.inner_text().strip() for h in sec.locator('table thead th').all()]
+    heads = [h.text_content().strip() for h in sec.locator('table thead th').all()]
     rows = {}
     for tr in sec.locator('table tbody > tr:not(.drill-down-row)').all():
         cells = [td.inner_text().strip() for td in tr.locator('td').all()]
