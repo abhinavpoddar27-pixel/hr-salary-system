@@ -7,7 +7,7 @@
  *   ₹10,000 over 3 → ₹3,334, ₹3,334, ₹3,332.
  * Pure functions on integer paise, except closedMonths() which reads loan_closes.
  */
-const { addMonths, compareMonth, monthIndex, dateToMonth, isValidMonth } = require('./months');
+const { addMonths, compareMonth, monthIndex, payrollMonthOf, isValidMonth } = require('./months');
 
 /** EMI in paise for a principal (paise) over n months: ceil to the whole rupee. */
 function emiFor(principalPaise, tenure) {
@@ -84,10 +84,13 @@ function closedMonths(db, payroll) {
  * First EMI month (K11, coordinator ruling Q2): the first month AFTER the
  * disbursement month whose loan close has not happened for the borrower's
  * payroll. Finance may ask for a later month, never an earlier one.
+ * Loans PR-8: for a sales loan (`payroll: 'sales'`) "the disbursement month" is
+ * the sales CYCLE month of the date (day ≥ 26 → next month), so a loan paid on
+ * 28 Oct is first deducted in the Dec cycle, never the cycle that began 26 Oct.
  * @returns {{ok:true, month:{month,year}, earliest:{month,year}} | {ok:false, code, message, earliest?}}
  */
-function firstEmiMonth({ disbursedOn, closed, requested }) {
-  const dm = dateToMonth(disbursedOn);
+function firstEmiMonth({ disbursedOn, closed, requested, payroll = 'plant' }) {
+  const dm = payrollMonthOf(disbursedOn, payroll);
   if (!dm) return { ok: false, code: 'DATE_INVALID', message: 'disbursement date must be YYYY-MM-DD' };
   let earliest = addMonths(dm, 1);
   while (closed && closed.has(monthIndex(earliest))) earliest = addMonths(earliest, 1);

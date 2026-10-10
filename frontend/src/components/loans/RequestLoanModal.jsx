@@ -1,4 +1,6 @@
 // Loans PR-4 — request form (HR / finance). SPEC §7 screen 2.
+// Loans PR-8 — one search across the plant and sales masters; a sales
+// borrower is code + company, so the company is locked to the sales master.
 // The eligibility panel and the schedule preview come from the engine
 // (POST /api/loans/eligibility), never from a client-side formula.
 import React, { useEffect, useMemo, useState } from 'react'
@@ -6,7 +8,7 @@ import { useMutation, useQuery } from '@tanstack/react-query'
 import toast from 'react-hot-toast'
 import clsx from 'clsx'
 import Modal from '../ui/Modal'
-import { getEmployees, getLoanTypes, checkLoanEligibility, createLoan } from '../../utils/api'
+import { searchLoanBorrowers, getLoanTypes, checkLoanEligibility, createLoan } from '../../utils/api'
 import { LOAN_COMPANIES, rupees, errText } from './loanUi'
 
 function useDebounced(value, ms) {
@@ -18,6 +20,15 @@ function useDebounced(value, ms) {
   return v
 }
 
+function BorrowerTag({ type }) {
+  return (
+    <span className={clsx('text-[10px] font-semibold px-1.5 py-0.5 rounded',
+      type === 'sales' ? 'bg-violet-100 text-violet-700' : 'bg-slate-100 text-slate-600')}>
+      {type === 'sales' ? 'Sales' : 'Plant'}
+    </span>
+  )
+}
+
 export default function RequestLoanModal({ onClose, onCreated }) {
   const [search, setSearch] = useState('')
   const [emp, setEmp] = useState(null)
@@ -26,12 +37,13 @@ export default function RequestLoanModal({ onClose, onCreated }) {
   const q = useDebounced(search.trim(), 300)
 
   const { data: empRes, isFetching: searching } = useQuery({
-    queryKey: ['loan-emp-search', q],
-    queryFn: () => getEmployees({ search: q, status: 'Active', page: 1, limit: 15 }),
+    queryKey: ['loan-borrower-search', q],
+    queryFn: () => searchLoanBorrowers(q),
     enabled: !emp && q.length >= 2,
     retry: 0,
   })
   const results = empRes?.data?.data || []
+  const isSales = emp?.borrowerType === 'sales'
 
   const { data: typesRes } = useQuery({ queryKey: ['loan-types'], queryFn: getLoanTypes, retry: 0 })
   const loanTypes = typesRes?.data?.data || []
@@ -48,7 +60,7 @@ export default function RequestLoanModal({ onClose, onCreated }) {
 
   // ── live eligibility ────────────────────────────────────────────────────
   const eligInput = useMemo(() => ({
-    borrowerType: 'plant',
+    borrowerType: emp?.borrowerType || 'plant',
     employeeCode: emp?.code || '',
     company: form.company,
     loanType: form.loanType,
@@ -90,19 +102,21 @@ export default function RequestLoanModal({ onClose, onCreated }) {
     <Modal title="Request a loan" onClose={onClose} size="xl">
       <div className="space-y-4" data-testid="request-loan-form">
         <div className="text-xs text-slate-500">
-          Plant employees only. Loans for sales staff arrive with Loans PR-8. The admin approves every loan;
-          finance records the payout once a signed agreement is on file.
+          Plant and sales staff (not contract workers). The admin approves every loan;
+          finance records the payout once a signed agreement is on file. A sales loan is deducted in the
+          sales cycle (26th to 25th) of each due month.
         </div>
 
         {/* Employee */}
         <div>
-          <label className="label">Employee (plant)</label>
+          <label className="label">Employee (plant or sales)</label>
           {emp ? (
             <div className="flex items-center justify-between bg-slate-50 border border-slate-200 rounded-lg px-3 py-2">
               <div className="text-sm">
+                <BorrowerTag type={emp.borrowerType} />{' '}
                 <span className="font-semibold">{emp.name}</span>{' '}
                 <span className="font-mono text-slate-500">{emp.code}</span>
-                <span className="text-slate-500"> · {emp.department || '—'} · {emp.employment_type || 'type not set'} · master company: {emp.company || '—'}</span>
+                <span className="text-slate-500"> · {(isSales ? emp.designation : emp.department) || '—'} · {emp.employmentType || 'type not set'} · {isSales ? 'company' : 'master company'}: {emp.company || '—'}</span>
               </div>
               <button className="btn-ghost text-xs" onClick={() => { setEmp(null); set('company', '') }}>Change</button>
             </div>
@@ -113,12 +127,13 @@ export default function RequestLoanModal({ onClose, onCreated }) {
               {q.length >= 2 && (
                 <div className="absolute z-10 mt-1 w-full bg-white border border-slate-200 rounded-lg shadow-lg max-h-64 overflow-y-auto">
                   {searching && <div className="px-3 py-2 text-xs text-slate-400">Searching…</div>}
-                  {!searching && results.length === 0 && <div className="px-3 py-2 text-xs text-slate-400">No active plant employee matches</div>}
+                  {!searching && results.length === 0 && <div className="px-3 py-2 text-xs text-slate-400">No active plant or sales employee matches</div>}
                   {results.map((e) => (
-                    <button key={e.code} type="button" onClick={() => pickEmployee(e)}
-                      className="w-full text-left px-3 py-2 text-sm hover:bg-blue-50 border-b border-slate-50">
+                    <button key={`${e.borrowerType}|${e.code}|${e.company || ''}`} type="button" onClick={() => pickEmployee(e)}
+                      className="w-full text-left px-3 py-2 text-sm hover:bg-blue-50 border-b border-slate-50" data-testid="loan-emp-result">
+                      <BorrowerTag type={e.borrowerType} />{' '}
                       <span className="font-medium">{e.name}</span> <span className="font-mono text-xs text-slate-500">{e.code}</span>
-                      <span className="text-xs text-slate-400"> · {e.department || '—'} · {e.employment_type || '—'}</span>
+                      <span className="text-xs text-slate-400"> · {(e.borrowerType === 'sales' ? e.designation : e.department) || '—'} · {e.employmentType || '—'}{e.borrowerType === 'sales' ? ` · ${e.company}` : ''}</span>
                     </button>
                   ))}
                 </div>
@@ -130,11 +145,14 @@ export default function RequestLoanModal({ onClose, onCreated }) {
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           <div>
             <label className="label">Loan company</label>
-            <select className="select" value={form.company} onChange={(e) => set('company', e.target.value)} data-testid="loan-company">
+            <select className="select" value={form.company} onChange={(e) => set('company', e.target.value)} data-testid="loan-company"
+              disabled={isSales} title={isSales ? 'A sales loan belongs to the sales-master company of this person' : ''}>
               <option value="">— pick the company that lends —</option>
               {LOAN_COMPANIES.map((c) => <option key={c} value={c}>{c}</option>)}
             </select>
-            <div className="text-[11px] text-slate-400 mt-1">Picked explicitly; the employee master company is often blank.</div>
+            <div className="text-[11px] text-slate-400 mt-1">
+              {isSales ? 'Fixed: a sales person is identified by code and company.' : 'Picked explicitly; the employee master company is often blank.'}
+            </div>
           </div>
           <div>
             <label className="label">Loan type</label>

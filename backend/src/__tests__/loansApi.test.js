@@ -243,9 +243,12 @@ describe('raise', () => {
     expect(counts()).toEqual(before);
   });
 
-  test('sales borrowers wait for PR-8', async () => {
+  test('sales borrowers (Loans PR-8): company required; looked up in the sales master by code + company', async () => {
+    const noCo = await api.request('POST', '/api/loans', { as: 'hr1', body: body({ borrowerType: 'sales', company: '' }) });
+    expect([noCo.status, noCo.body.code]).toEqual([400, 'COMPANY_REQUIRED']);
     const r = await api.request('POST', '/api/loans', { as: 'hr1', body: body({ borrowerType: 'sales' }) });
-    expect([r.status, r.body.code]).toEqual([400, 'SALES_LOANS_NOT_YET_ENABLED']);
+    expect(r.status).toBe(400);
+    expect(r.body.refusals.map((x) => x.code)).toContain('EMPLOYEE_NOT_FOUND');
   });
 
   test('eligibility refusals come back as a list; missing reason refused', async () => {

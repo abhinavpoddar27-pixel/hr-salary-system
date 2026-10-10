@@ -13,9 +13,11 @@
  *
  * Plant tables reused (no sales-specific tables for these yet):
  *   - salary_advances        — shared advance table
- *   - loan_repayments        — shared loan repayments
  *   - tax_declarations       — shared tax declarations
  *   - policy_config          — rates, ceilings, PF ceiling
+ * Loan EMI (Loans PR-8): services/loans/stage7.js — the LAST deduction, within
+ *   the cap's headroom, matched on code + the loan's company; its provisional
+ *   ledger row is written right after the salary row is saved.
  *
  * UPSERT completeness (load-bearing — see CLAUDE.md):
  *   Every mutable column on sales_salary_computations MUST appear as
@@ -29,6 +31,7 @@
 
 const { calculateSundayCredit } = require('./sundayRule');
 const { cycleLengthDays, countSundaysInCycle, dateInCycle } = require('./cycleUtil');
+const { planStage7Loans, applyStage7Loans } = require('./loans/stage7');
 
 const DIVISOR_MODE_SUPPORTED = new Set(['calendar']);
 
@@ -57,17 +60,6 @@ function getAdvanceRecovery(db, employeeCode, month, year) {
   } catch (e) { return 0; }
 }
 
-function getLoanRecovery(db, employeeCode, month, year) {
-  try {
-    const row = db.prepare(`
-      SELECT COALESCE(SUM(emi_amount), 0) AS emi
-        FROM loan_repayments
-       WHERE employee_code = ? AND month = ? AND year = ? AND status = 'Pending'
-    `).get(employeeCode, month, year);
-    return row ? (row.emi || 0) : 0;
-  } catch (e) { return 0; }
-}
-
 function getDeclaredTds(db, employeeCode, month, year) {
   // Plant uses financial year; sales has no separate tax_declarations table
   // in Phase 3 per design §9 Step 6. If a declaration exists we reuse it;
@@ -84,6 +76,12 @@ function getDeclaredTds(db, employeeCode, month, year) {
     // Monthly TDS = annual / 12, rounded
     return Math.round((decl.estimated_annual_tds / 12) * 100) / 100;
   } catch (e) { return 0; }
+}
+
+/** Net rounded to the paisa; floored at ₹0 only when the row carries a loan deduction (K22, PR-8 Q1). */
+function salesNetWithLoanFloor(rawNet, loanRecovery) {
+  const net = Math.round(rawNet * 100) / 100;
+  return Number(loanRecovery || 0) > 0 ? Math.max(0, net) : net;
 }
 
 // ── Calendar helpers ──────────────────────────────────────────────────
@@ -294,7 +292,19 @@ function computeSalesEmployee(db, { salesEmployee, monthlyInputRow, cycleStart, 
 
   const tds = getDeclaredTds(db, salesEmployee.code, month, year);
   const advanceRecovery = getAdvanceRecovery(db, salesEmployee.code, month, year);
-  const loanRecovery = getLoanRecovery(db, salesEmployee.code, month, year);
+  // Loan EMI (Loans PR-8) — LAST deduction (D-12), within the room left under the
+  // cap after every deduction above it (D-11; sales earned base = gross_earned).
+  // Read-only here; the provisional ledger row is written after the save.
+  const loanPlan = planStage7Loans(db, {
+    employeeCode: salesEmployee.code, month, year, payroll: 'sales', company,
+    salary: {
+      gross_earned: grossEarned, pf_employee: pfEmployee, esi_employee: esiEmployee,
+      professional_tax: professionalTax, tds, advance_recovery: advanceRecovery,
+      diwali_recovery: diwaliRecovery, other_deductions: otherDeductions,
+    },
+  });
+  for (const w of loanPlan.warnings) console.warn(`${RID} ${salesEmployee.code} ${month}/${year}: ${w}`);
+  const loanRecovery = loanPlan.totalRupees;
 
   // Q5 reversal: total_deductions = PF_e + ESI_e + PT + TDS + advance + loan + other
   // (diwali_recovery term removed — Diwali is now only a bonus in Step 7).
@@ -304,9 +314,12 @@ function computeSalesEmployee(db, { salesEmployee, monthlyInputRow, cycleStart, 
   ) * 100) / 100;
 
   // ── Step 7 — Net salary ──
-  const netSalary = Math.round((
-    grossEarned + diwaliBonus + incentiveAmount - totalDeductions
-  ) * 100) / 100;
+  // Loans PR-8 (K22, planner ruling Q1): ₹0 floor only on a row that carries a
+  // loan deduction. Under the cap's headroom a live loan can never take net
+  // below ₹0, so this bites only for a posted month of a loan no longer live
+  // that pay can no longer bear (Stage 7 alerts finance). A row with NO loan is
+  // left exactly as before — even a negative one (HR master data to fix).
+  const netSalary = salesNetWithLoanFloor(grossEarned + diwaliBonus + incentiveAmount - totalDeductions, loanRecovery);
 
   // ── Step 8 — Assemble the compute object ──
   const sundayRuleTrace = JSON.stringify({
@@ -371,13 +384,15 @@ function computeSalesEmployee(db, { salesEmployee, monthlyInputRow, cycleStart, 
     payslip_generated_at: preservedPayslipGeneratedAt,
     // Carry forward the previous netSalary for the frontend "finalized recompute warning"
     _prevNetSalary: prev ? undefined : null, // set after the fact if you want to detect drift
+    // Loans PR-8: not a column — saveSalesSalaryComputation writes it to the loan ledger.
+    _loanPlan: loanPlan,
   };
 }
 
 // ══════════════════════════════════════════════════════════════════════
 // saveSalesSalaryComputation — full-column UPSERT
 // ══════════════════════════════════════════════════════════════════════
-function saveSalesSalaryComputation(db, comp) {
+function saveSalesSalaryComputation(db, comp, { runId = null } = {}) {
   const info = db.prepare(`
     INSERT INTO sales_salary_computations (
       employee_code, month, year, company,
@@ -467,6 +482,15 @@ function saveSalesSalaryComputation(db, comp) {
     comp.neft_exported_at, comp.payslip_generated_at
   );
 
+  // Loans PR-8: this month's provisional loan deduction(s), AFTER the salary row —
+  // keyed loan + month + payroll, never the row id. Not wrapped in try/catch on
+  // purpose: a ledger refusal throws and the caller's per-employee transaction
+  // rolls the salary row back with it, so the payslip and the ledger never disagree.
+  comp.loanApplied = applyStage7Loans(db, {
+    employeeCode: comp.employee_code, month: comp.month, year: comp.year, payroll: 'sales',
+    company: comp.company, plan: comp._loanPlan, runId,
+  });
+
   // Return the row id (on update, need to SELECT since lastInsertRowid=0)
   const row = db.prepare(
     'SELECT id FROM sales_salary_computations WHERE employee_code=? AND month=? AND year=? AND company=?'
@@ -553,4 +577,5 @@ module.exports = {
   saveSalesSalaryComputation,
   generateSalesPayslipData,
   countGazettedHolidaysInCycle,
+  salesNetWithLoanFloor,
 };

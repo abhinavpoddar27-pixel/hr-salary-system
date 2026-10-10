@@ -20,6 +20,13 @@ REAL logins, on a SCRATCH database. Never point it at a real database.
     close by finance (201), a stale second tab (409), history notes, hr / viewer
     read-only, a company-restricted finance user, the admin reversal on the loan page,
     and the Mark Left dialog's outstanding. Screens go to <screenshot_dir>/pr6b/.
+  * Pass 4 (Loans PR-8) — sales borrowers. Seeds 3 sales reps, two with sales loans
+    (disbursed 15 Jun 2026 → first EMI the Jul 2026 sales cycle), runs the sales
+    Stage 7 for Jul 2026 and posts one rep's deduction. Then: the request form's one
+    search across both masters (Plant / Sales tags, a plant row typed Sales left out),
+    a sales loan raised through the form with the company locked, the Loans list
+    "Sales" tag, and the sales register's Loan column with Hold disabled on the row
+    whose loan is posted. Screens go to <screenshot_dir>/pr8/.
 
 Usage:  python3 backend/scripts/loans-ui-browser-check.py [screenshot_dir]
 Needs Python Playwright and Chromium (PLAYWRIGHT_BROWSERS_PATH, e.g. /opt/pw-browsers).
@@ -42,6 +49,7 @@ from playwright.sync_api import sync_playwright
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
 OUT = os.path.abspath(sys.argv[1]) if len(sys.argv) > 1 else os.path.join(ROOT, 'screenshots')
 OUT6B = os.path.join(OUT, 'pr6b')
+OUT8 = os.path.join(OUT, 'pr8')
 PORT = int(os.environ.get('PORT', '3997'))
 BASE = f'http://127.0.0.1:{PORT}'
 COMPANY = 'Indriyan Beverages Pvt Ltd'
@@ -524,6 +532,7 @@ def run_browser(db_path, admin_loan_id):
         check('sidebar: no waiting count for hr', hr.locator('a[href="/loans"] span[title*="waiting"]').count() == 0)
 
         run_close_pass(browser, db_path, hr, admin, fin, viewer)
+        run_sales_pass(db_path, hr)
 
         browser.close()
 
@@ -742,6 +751,119 @@ def run_close_pass(browser, db_path, hr, admin, fin, viewer):
     hr.locator('[data-testid="markleft-loans"][data-state="none"]').wait_for(timeout=10000)
     check('Mark Left: a non-borrower shows "No open loans."', 'No open loans.' in hr.get_by_test_id('markleft-loans').inner_text())
     hr.get_by_role('button', name='Cancel', exact=True).last.click()
+
+
+
+# ── Pass 4 (Loans PR-8): sales borrowers ────────────────────────────────────
+
+SEED_SALES_JS = r"""
+// Scratch DB only. argv: ROOT DB_PATH. Sales reps, loans through the engine, a sales Stage 7 for Jul 2026.
+const [ROOT, DB] = process.argv.slice(2);
+const Database = require(`${ROOT}/backend/node_modules/better-sqlite3`);
+const db = new Database(DB);
+db.pragma('busy_timeout = 10000');
+const S = require(`${ROOT}/backend/src/__tests__/helpers/salesLoanFixture`);
+const L = require(`${ROOT}/backend/src/services/loans`);
+const COMPANY = 'Indriyan Beverages Pvt Ltd';
+const out = {};
+S.addRep(db, { code: 'S901', name: 'Mona Brar', gross: 24000 });
+S.addRep(db, { code: 'S902', name: 'Navdeep Toor', gross: 24000 });
+S.addRep(db, { code: 'S903', name: 'Ojas Bedi', gross: 24000 });
+db.prepare(`INSERT INTO employees (code, name, department, company, status, employment_type, is_contractor, gross_salary, date_of_joining)
+            VALUES ('E120', 'Ojas Salestyped', 'SALES', ?, 'Active', 'Sales', 0, 20000, '2020-01-01')`).run(COMPANY);
+for (const code of ['S901', 'S902']) out[code] = S.salesLoan(db, { code, principal: 9000, tenure: 3, disbursedOn: '2026-06-15', asOf: '2026-06-20' });
+S.setUpload(db, { month: 7, year: 2026, rows: [{ code: 'S901', days: 31 }, { code: 'S902', days: 31 }, { code: 'S903', days: 31 }] });
+S.computeSalesMonth(db, { month: 7, year: 2026, runId: 'ui-check-sales' });
+const d = db.prepare("SELECT id FROM loan_deductions WHERE payroll = 'sales' AND employee_code = 'S901' AND month = 7 AND year = 2026").get();
+const p = L.postDeduction(db, { deductionId: d.id }, { username: 'system', role: 'system' });
+if (!p.ok) throw new Error(`post: ${p.code}`);
+out.rows = db.prepare("SELECT employee_code, loan_recovery FROM sales_salary_computations WHERE month = 7 AND year = 2026 ORDER BY employee_code").all();
+process.stdout.write(JSON.stringify(out));
+"""
+
+
+def run_sales_pass(db_path, hr):
+    print('\n— Pass 4: sales borrowers (Loans PR-8) —')
+    js = os.path.join(os.path.dirname(db_path), 'seed-sales.js')
+    with open(js, 'w') as f:
+        f.write(SEED_SALES_JS)
+    seeded = json.loads(subprocess.check_output(['node', js, ROOT, db_path]).decode())
+    rows = {r['employee_code']: r['loan_recovery'] for r in seeded['rows']}
+    check('seed: sales Stage 7 Jul 2026 deducted ₹3,000 for S901 and S902, ₹0 for S903',
+          rows == {'S901': 3000, 'S902': 3000, 'S903': 0}, seeded)
+
+    # Request form: one search across both masters.
+    hr.goto(f'{BASE}/loans?tab=loans')
+    hr.get_by_test_id('new-loan').click()
+    hr.get_by_test_id('loan-emp-search').fill('Ojas')
+    hr.get_by_test_id('loan-emp-result').first.wait_for(timeout=10000)
+    res = [hr.get_by_test_id('loan-emp-result').nth(i).inner_text() for i in range(hr.get_by_test_id('loan-emp-result').count())]
+    check('request form: search finds the sales rep, tagged Sales', any('Sales' in r and 'S903' in r for r in res), res)
+    check('request form: a plant row typed Sales is left out of the search', not any('E120' in r for r in res), res)
+    hr.get_by_test_id('loan-emp-search').fill('Asha')
+    plant_row = hr.get_by_test_id('loan-emp-result').filter(has_text='E101')
+    try:
+        plant_row.first.wait_for(timeout=10000)   # the 300 ms debounce: wait for the new results
+        txt = plant_row.first.inner_text()
+    except Exception:
+        txt = ''
+    check('request form: plant employees still found, tagged Plant', 'Plant' in txt, txt)
+    hr.get_by_test_id('loan-emp-search').fill('S903')
+    hr.get_by_role('button', name='S903').first.click()
+    company = hr.get_by_test_id('loan-company')
+    check('request form: sales borrower → company locked to the sales-master company',
+          company.is_disabled() and company.input_value() == COMPANY, company.input_value())
+    hr.get_by_test_id('loan-type').select_option('Personal')
+    hr.get_by_test_id('loan-principal').fill('6000')
+    hr.get_by_test_id('loan-tenure').fill('3')
+    panel = hr.get_by_test_id('eligibility-panel')
+    ok = True
+    try:
+        panel.get_by_text('✓ Eligible').wait_for(timeout=10000)
+    except Exception:
+        ok = False
+    check('request form: sales borrower eligible (engine verdict)', ok, panel.inner_text())
+    hr.get_by_test_id('loan-reason').fill('UI check: sales loan')
+    shot(hr, '01-request-sales-borrower', out=OUT8)
+    hr.get_by_test_id('loan-submit').click()
+    hr.wait_for_url(lambda u: '/loans/' in u and '?' not in u, timeout=10000)
+    new_id = int(hr.url.rstrip('/').split('/')[-1])
+    con = sqlite3.connect(db_path, timeout=10)
+    row = con.execute('SELECT borrower_type, employee_code, company, status FROM loans WHERE id = ?', (new_id,)).fetchone()
+    con.close()
+    check('request form: the loan is raised as a sales loan for S903', row == ('sales', 'S903', COMPANY, 'requested'), row)
+
+    # Loans list: Sales tag.
+    hr.goto(f'{BASE}/loans?tab=loans')
+    lr = hr.get_by_test_id(f'loan-row-{new_id}')
+    lr.wait_for(timeout=10000)
+    check('Loans list: sales borrower row shows the "Sales" tag', 'Sales' in lr.inner_text() and 'Ojas Bedi' in lr.inner_text(), lr.inner_text())
+
+    # Sales register: Loan column, Hold disabled where the loan is posted.
+    hr.goto(f'{BASE}/sales/compute')
+    hr.locator(f'select:has(option[value="{COMPANY}"])').first.select_option(COMPANY)
+    hr.locator('select:has(option[value="2026"])').first.select_option('2026')
+    hr.locator('select:has(option[value="12"]):not(:has(option[value="2026"]))').first.select_option('7')
+    ok = True
+    try:
+        hr.get_by_test_id('sales-loan-S901').wait_for(timeout=15000)
+    except Exception:
+        ok = False
+    check('sales register: Loan column present', ok)
+    if ok:
+        c1 = hr.get_by_test_id('sales-loan-S901').inner_text()
+        c2 = hr.get_by_test_id('sales-loan-S902').inner_text()
+        check('sales register: S901 loan ₹3,000 marked posted', '3,000' in c1 and 'posted' in c1, c1)
+        check('sales register: S902 loan ₹3,000, not posted', '3,000' in c2 and 'posted' not in c2, c2)
+        r1 = hr.locator('tr', has=hr.get_by_test_id('sales-loan-S901'))
+        r2 = hr.locator('tr', has=hr.get_by_test_id('sales-loan-S902'))
+        h1 = r1.locator('option', has_text='hold')
+        h2 = r2.locator('option', has_text='hold')
+        check('sales register: "→ hold" disabled with "(loan posted)" on the posted row',
+              h1.count() == 1 and h1.is_disabled() and 'loan posted' in h1.inner_text(), h1.count() and h1.inner_text())
+        check('sales register: "→ hold" still allowed on the row whose loan is not posted',
+              h2.count() == 1 and not h2.is_disabled(), h2.count())
+        shot(hr, '02-sales-register-loan-column', out=OUT8)
 
 
 if __name__ == '__main__':

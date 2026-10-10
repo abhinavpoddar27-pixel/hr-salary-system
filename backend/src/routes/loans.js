@@ -310,10 +310,16 @@ router.get('/due', allow(READ_ROLES), handle((req, res) => {
   return res.json({ success: true, data: rows, totalOpen: toRupees(totalOpen) });
 }));
 
-/** Request body → engine input. Sales borrowers wait for Loans PR-8 (ruling Q6). */
+/**
+ * Request body → engine input. Loans PR-8: sales borrowers are enabled; a sales
+ * borrower is code + company (sales_employees is unique on both), so the company
+ * is required up front.
+ */
 function loanInput(body = {}) {
   const borrowerType = text(body.borrowerType) || 'plant';
-  if (borrowerType === 'sales') return { ok: false, code: 'SALES_LOANS_NOT_YET_ENABLED', message: 'loans for sales staff arrive with Loans PR-8' };
+  if (borrowerType === 'sales' && !text(body.company)) {
+    return { ok: false, code: 'COMPANY_REQUIRED', message: 'a sales borrower is identified by code and company; give the company' };
+  }
   return {
     ok: true,
     input: {
@@ -328,18 +334,44 @@ router.post('/eligibility', allow(['hr', 'finance', 'admin']), handle((req, res)
   const p = loanInput(req.body || {});
   if (!p.ok) return refuse(res, p);
   if (p.input.company && !companyAllowed(req, p.input.company)) return refuse(res, notAllowedCompany);
-  const facts = L.loadBorrowerFacts(db, p.input);
+  const facts = L.loadBorrowerFacts(db, { ...p.input, asOf: todayIst() });
   const verdict = L.evaluateEligibility(facts, { ...p.input, asOf: todayIst() }, L.readLoanPolicy(db));
   const { emiPaise: _e, ...data } = verdict;
   return res.json({ success: true, data: { ...data, history: facts.history || null } });
+}));
+
+/**
+ * One borrower search across both masters (SPEC §7 screen 2; Loans PR-8). Lives
+ * here, not under /api/sales, because finance raises loans and cannot reach the
+ * sales routes. Active only. Plant rows typed "Sales" are left out: a loan on one
+ * would be deducted nowhere (SPEC §8.3) — the sales-master row is the borrower.
+ */
+router.get('/borrowers', allow(['hr', 'finance', 'admin']), handle((req, res) => {
+  const db = getDb();
+  const q = text(req.query.q);
+  if (q.length < 2) return res.json({ success: true, data: [] });
+  const like = `%${q}%`;
+  const plant = db.prepare(`SELECT code, name, company, department, employment_type FROM employees
+                             WHERE status = 'Active' AND (code LIKE ? OR name LIKE ?)
+                               AND LOWER(TRIM(COALESCE(employment_type, ''))) <> 'sales'
+                             ORDER BY name LIMIT 15`).all(like, like)
+    .map((e) => ({ borrowerType: 'plant', code: e.code, name: e.name, company: e.company || null, department: e.department || null, employmentType: e.employment_type || null }));
+  const ac = allowedCompanies(req);
+  const sales = db.prepare(`SELECT code, name, company, designation, headquarters FROM sales_employees
+                             WHERE status = 'Active' AND (code LIKE ? OR name LIKE ?)${ac ? ` AND company IN (${ac.map(() => '?').join(',')})` : ''}
+                             ORDER BY name LIMIT 15`).all(like, like, ...(ac || []))
+    .map((e) => ({ borrowerType: 'sales', code: e.code, name: e.name, company: e.company, designation: e.designation || null, headquarters: e.headquarters || null, employmentType: 'Sales' }));
+  res.json({ success: true, data: [...plant, ...sales] });
 }));
 
 router.get('/employee/:code', allow(READ_ROLES), handle((req, res) => {
   const db = getDb();
   const borrowerType = text(req.query.borrowerType) || 'plant';
   const cc = companyClause(req);
-  const loans = db.prepare(`${LIST_SQL} AND l.employee_code = ? AND l.borrower_type = ?${cc.sql} ORDER BY l.requested_at DESC, l.id DESC`)
-    .all(text(req.params.code), borrowerType, ...cc.args);
+  // Loans PR-8: a sales borrower is code + company — ?company narrows to one person.
+  const co = text(req.query.company) ? { sql: ' AND l.company = ?', args: [text(req.query.company)] } : { sql: '', args: [] };
+  const loans = db.prepare(`${LIST_SQL} AND l.employee_code = ? AND l.borrower_type = ?${co.sql}${cc.sql} ORDER BY l.requested_at DESC, l.id DESC`)
+    .all(text(req.params.code), borrowerType, ...co.args, ...cc.args);
   for (const l of loans) {
     // Recovered = posted payroll deductions + cash receipts (D12: the old tab ignored cash).
     const paid = db.prepare(`SELECT COUNT(*) AS n, COALESCE(SUM(CASE WHEN status = 'posted' THEN posted_amount ELSE 0 END), 0) AS posted

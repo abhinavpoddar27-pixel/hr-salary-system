@@ -40,6 +40,29 @@ const LOAN_PAYSLIP_SQL = `
           UNION
           SELECT employee_code, month, year FROM loan_deductions WHERE payroll = 'plant' AND state IN ('provisional','posted')) k`;
 
+// Loans PR-8: the sales half — a sales person is code + company, so the sales
+// payslip (sales_salary_computations.loan_recovery of that company's row) is
+// matched against the sales deductions of that company.
+const LOAN_SALES_PAYSLIP_SQL = `
+  SELECT k.employee_code, k.month, k.year, k.company,
+         COALESCE((SELECT SUM(s.loan_recovery) FROM sales_salary_computations s
+                    WHERE s.employee_code = k.employee_code AND s.month = k.month AND s.year = k.year AND s.company = k.company), 0) AS payslip,
+         COALESCE((SELECT SUM(CASE WHEN d.state = 'posted'
+                                   THEN d.amount - COALESCE((SELECT SUM(a.amount) FROM loan_adjustments a WHERE a.deduction_id = d.id), 0)
+                                   ELSE d.amount END)
+                     FROM loan_deductions d
+                    WHERE d.payroll = 'sales' AND d.state IN ('provisional','posted')
+                      AND d.employee_code = k.employee_code AND d.month = k.month AND d.year = k.year AND d.company = k.company), 0) AS ledger
+    FROM (SELECT employee_code, month, year, company FROM sales_salary_computations WHERE COALESCE(loan_recovery, 0) <> 0
+          UNION
+          SELECT employee_code, month, year, company FROM loan_deductions WHERE payroll = 'sales' AND state IN ('provisional','posted')) k`;
+
+/** Plant and sales payslip ↔ ledger rows, one shape (company is NULL for plant). */
+const LOAN_ALL_PAYSLIP_SQL = `
+  SELECT 'plant' AS payroll, employee_code, month, year, NULL AS company, payslip, ledger FROM (${LOAN_PAYSLIP_SQL})
+  UNION ALL
+  SELECT 'sales' AS payroll, employee_code, month, year, company, payslip, ledger FROM (${LOAN_SALES_PAYSLIP_SQL})`;
+
 
 const INVARIANTS = [
   // The trailing NOT clause excludes the deliberate Math.max(0, ...)
@@ -158,15 +181,16 @@ const INVARIANTS = [
     countSql: `SELECT COUNT(*) AS c FROM (${LOAN_RECON_SQL}) WHERE ABS(balance - expected) > 0.005`,
     exampleSql: `SELECT * FROM (${LOAN_RECON_SQL}) WHERE ABS(balance - expected) > 0.005 ORDER BY loan_id LIMIT 20`,
   },
-  // Loans PR-6 (§5.2 r7, K8, K28): a plant payslip's loan_recovery equals the
+  // Loans PR-6 (§5.2 r7, K8, K28): a payslip's loan_recovery equals the
   // loan ledger (provisional + effective posted) for the employee-month.
+  // Loans PR-8: plant and sales (sales per code + company).
   // Medium, not critical: it is legitimately non-zero between a held
   // instalment moving to the end and the Stage 7 re-run that follows.
   {
     name: 'loan_payslip_matches_ledger',
     severity: 'medium',
-    countSql: `SELECT COUNT(*) AS c FROM (${LOAN_PAYSLIP_SQL}) WHERE ABS(payslip - ledger) > 0.005`,
-    exampleSql: `SELECT * FROM (${LOAN_PAYSLIP_SQL}) WHERE ABS(payslip - ledger) > 0.005 ORDER BY year DESC, month DESC LIMIT 20`,
+    countSql: `SELECT COUNT(*) AS c FROM (${LOAN_ALL_PAYSLIP_SQL}) WHERE ABS(payslip - ledger) > 0.005`,
+    exampleSql: `SELECT * FROM (${LOAN_ALL_PAYSLIP_SQL}) WHERE ABS(payslip - ledger) > 0.005 ORDER BY year DESC, month DESC LIMIT 20`,
   },
 ];
 

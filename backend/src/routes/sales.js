@@ -13,6 +13,9 @@ const crypto = require('crypto');
 const multer = require('multer');
 const { getDb } = require('../database/db');
 const { requireHrOrAdmin, requirePermission, requireAdmin } = require('../middleware/roles');
+const { normalizeRole } = require('./auth');
+const { flagSalesBorrowerForExit } = require('../services/loans/lifecycle');
+const { notifyAlerts: notifyLoanAlerts } = require('../services/loans/notify');
 const {
   parseSalesCoordinatorFile,
   normalizeName,
@@ -1507,6 +1510,10 @@ router.put('/employees/:code', (req, res) => {
   params.push(req.params.code, company);
 
   const grossChanged = changedFields.some(c => c.field === 'gross_salary');
+  // Loans PR-8 (ruling Q6): status → Left / Exited here is an exit too (Inactive is not).
+  const EXIT_STATUSES = ['Left', 'Exited'];
+  const becameExit = body.status !== undefined && EXIT_STATUSES.includes(body.status) && !EXIT_STATUSES.includes(existing.status);
+  let loanExit = { loans: [], alerts: [] };
 
   // Resolve the structure version's effective_from (only used when gross
   // changes). Default = current calendar month, zero-padded YYYY-MM (matches
@@ -1572,6 +1579,13 @@ router.put('/employees/:code', (req, res) => {
           + `effective_from=${effectiveFrom}; prior open row closed at effective_to=${structureResult.closedPriorTo})`,
       });
     }
+
+    // Loans PR-8: the rep's open sales loans are flagged for exit recovery (code + company).
+    if (becameExit) {
+      const exitDate = (body.dol && String(body.dol).trim()) || existing.dol || new Date().toISOString().split('T')[0];
+      loanExit = flagSalesBorrowerForExit(db, { employeeCode: existing.code, company, exitDate, reason: `status ${existing.status} → ${body.status}` },
+        { username: user, role: normalizeRole(req.user?.role) });
+    }
   });
 
   try {
@@ -1580,10 +1594,11 @@ router.put('/employees/:code', (req, res) => {
     if (e.statutory) return res.status(e.statutory.status).json({ success: false, error: e.statutory.error, code: e.statutory.code, latestDate: e.statutory.latestDate });
     return res.status(500).json({ success: false, error: e.message });
   }
+  notifyLoanAlerts(db, loanExit.alerts);   // after the commit, best effort
 
   const updated = db.prepare('SELECT * FROM sales_employees WHERE code = ? AND company = ?')
                     .get(req.params.code, company);
-  res.json({ success: true, data: updated, structure: structureResult, ...(ignoredFields.length ? { ignoredFields } : {}) });
+  res.json({ success: true, data: updated, structure: structureResult, ...(ignoredFields.length ? { ignoredFields } : {}), ...(becameExit ? { loans: loanExit.loans } : {}) });
 });
 
 // ── PUT /api/sales/employees/:code/mark-left?company=X ─────────────
@@ -1605,29 +1620,45 @@ router.put('/employees/:code/mark-left', (req, res) => {
   const dol = body.dol || new Date().toISOString().split('T')[0];
   const reason = body.reason || '';
 
-  db.prepare(`
-    UPDATE sales_employees
-       SET status = 'Left',
-           dol = ?,
-           updated_by = ?,
-           updated_at = datetime('now')
-     WHERE code = ? AND company = ?
-  `).run(dol, user, req.params.code, company);
+  // Loans PR-8 (ruling Q6): the status change and the exit flag on the rep's open
+  // sales loans (code + company) commit together; the final payroll is the sales
+  // cycle containing dol (ruling Q4). Same semantics as the plant Mark Left.
+  let loanExit = { loans: [], alerts: [], skipped: false };
+  try {
+    db.transaction(() => {
+      db.prepare(`
+        UPDATE sales_employees
+           SET status = 'Left',
+               dol = ?,
+               updated_by = ?,
+               updated_at = datetime('now')
+         WHERE code = ? AND company = ?
+      `).run(dol, user, req.params.code, company);
 
-  writeAudit(db, {
-    recordId: existing.id,
-    empCode: existing.code,
-    field: 'status',
-    oldVal: existing.status,
-    newVal: 'Left',
-    user,
-    actionType: 'mark_left',
-    remark: `Marked as Left (dol=${dol})${reason ? `. Reason: ${reason}` : ''}`
-  });
+      loanExit = flagSalesBorrowerForExit(db, { employeeCode: existing.code, company, exitDate: dol, reason },
+        { username: user, role: normalizeRole(req.user?.role) });
+
+      writeAudit(db, {
+        recordId: existing.id,
+        empCode: existing.code,
+        field: 'status',
+        oldVal: existing.status,
+        newVal: 'Left',
+        user,
+        actionType: 'mark_left',
+        remark: `Marked as Left (dol=${dol})${reason ? `. Reason: ${reason}` : ''}`
+          + (loanExit.skipped ? '. loan schema not migrated — loans not flagged' : loanExit.loans.length ? `. ${loanExit.loans.length} loan(s) flagged for exit recovery` : ''),
+      });
+    })();
+  } catch (e) {
+    console.error(`[sales mark-left] ${existing.code}: ${e.message}`);
+    return res.status(500).json({ success: false, error: e.message });
+  }
+  notifyLoanAlerts(db, loanExit.alerts);   // after the commit, best effort
 
   const updated = db.prepare('SELECT * FROM sales_employees WHERE code = ? AND company = ?')
                     .get(req.params.code, company);
-  res.json({ success: true, data: updated, message: `Sales employee ${existing.code} marked as Left` });
+  res.json({ success: true, data: updated, message: `Sales employee ${existing.code} marked as Left`, loans: loanExit.loans });
 });
 
 // ── GET /api/sales/employees/:code/structures?company=X ────────────
@@ -2491,8 +2522,11 @@ const {
   computeSalesEmployee,
   saveSalesSalaryComputation,
   generateSalesPayslipData,
+  salesNetWithLoanFloor,
 } = require('../services/salesSalaryComputation');
 const { deriveCycle } = require('../services/cycleUtil');
+const { clearSalesNotComputed, planStage7Loans, applyStage7Loans } = require('../services/loans/stage7');
+const { loanHoldReleaseCheck, salesPostedLoanPaise, salesLoanPostedCodes } = require('../services/loans/close');
 
 const {
   generateSalesExcel,
@@ -2738,6 +2772,9 @@ router.post('/compute', (req, res) => {
   const excluded = [];
   const errors = [];
   const finalizedRecomputeWarnings = [];
+  // Loans PR-8: one run id for the provisional loan rows this compute writes.
+  const loanRunId = req.requestId || `sales-${new Date().toISOString()}`;
+  const loanTotals = { recorded: 0, cleared: 0, adjusted: 0 };
 
   for (const row of rows) {
     if (!row.sales_employee_id) {
@@ -2765,7 +2802,12 @@ router.post('/compute', (req, res) => {
           else errors.push({ employee_code: row.employee_code, error: comp.error });
           return;
         }
-        saveSalesSalaryComputation(db, comp);
+        saveSalesSalaryComputation(db, comp, { runId: loanRunId });
+        if (comp.loanApplied) {
+          loanTotals.recorded += comp.loanApplied.recorded || 0;
+          loanTotals.cleared += comp.loanApplied.cleared || 0;
+          loanTotals.adjusted += comp.loanApplied.adjusted || 0;
+        }
 
         // Flag recomputes that silently change money on a locked row.
         if (prev && ['finalized', 'paid'].includes(prev.status) &&
@@ -2792,6 +2834,21 @@ router.post('/compute', (req, res) => {
       if (perErr.stack) console.error(perErr.stack.split('\n').slice(0, 5).join('\n'));
       errors.push({ employee_code: row.employee_code, error: perErr.message });
     }
+  }
+
+  // Loans PR-8 (ruling Q7, mirrors plant PR-5 Q3): provisional sales loan rows of
+  // employees this run did not pay (excluded, or not in the active upload) are
+  // reversed. Employees whose compute failed keep their previous rows. Salary rows
+  // the run did not compute are never rewritten — reported as stale instead.
+  let loanSweep = { cleared: 0, staleRows: [] };
+  try {
+    const keepCodes = [...results.map((r) => r.employee_code), ...errors.map((e) => e.employee_code)];
+    loanSweep = db.transaction(() => clearSalesNotComputed(db, {
+      month, year, company, keepCodes, reason: `sales compute ${loanRunId}: not paid this run (excluded or not in the active upload)`,
+    }))();
+  } catch (loanErr) {
+    console.error(`[sales-compute] loan sweep ${month}/${year} ${company}: ${loanErr.message}`);
+    errors.push({ employee_code: null, error: `loan sweep: ${loanErr.message}` });
   }
 
   // Stamp the winning upload as the active pointer + status='computed'.
@@ -2846,6 +2903,11 @@ router.post('/compute', (req, res) => {
       excluded,
       errors,
       finalizedRecomputeWarnings,
+      loans: {
+        runId: loanRunId, ...loanTotals,
+        cleared: loanTotals.cleared + loanSweep.cleared,
+        staleRows: loanSweep.staleRows,
+      },
     },
     taDaSummary,
   });
@@ -2882,6 +2944,10 @@ router.get('/salary-register', (req, res) => {
 
   const round2 = (n) => Math.round(n * 100) / 100;
   Object.keys(totals).forEach(k => totals[k] = round2(totals[k]));
+
+  // Loans PR-8 (K31): flag rows carrying a posted loan deduction — they cannot go to Hold.
+  const loanPosted = salesLoanPostedCodes(db, { month, year, company });
+  for (const r of rows) r.loan_posted = loanPosted.has(r.employee_code) ? 1 : 0;
 
   res.json({ success: true, data: { rows, totals, count: rows.length } });
 });
@@ -2926,28 +2992,54 @@ router.put('/salary/:id', (req, res) => {
   const incentive   = updates.incentive_amount ?? existing.incentive_amount ?? 0;
   const diwaliBonus = updates.diwali_bonus     ?? existing.diwali_bonus     ?? 0;
   const otherDed    = updates.other_deductions ?? existing.other_deductions ?? 0;
-
-  // Rebuild total_deductions from the non-editable components + other_deductions.
-  // (diwali_recovery is 0 per Q5 reversal — not in the sum.)
-  const fixedDeductions =
-    (existing.pf_employee || 0) + (existing.esi_employee || 0) +
-    (existing.professional_tax || 0) + (existing.tds || 0) +
-    (existing.advance_recovery || 0) + (existing.loan_recovery || 0);
-  const newTotalDed = Math.round((fixedDeductions + otherDed) * 100) / 100;
-  const newNetSalary = Math.round(((existing.gross_earned || 0) + diwaliBonus + incentive - newTotalDed) * 100) / 100;
+  // Loans PR-8 (K30): a money edit re-runs the loan engine — the loan is the LAST
+  // deduction and takes only the headroom left after the edited figures.
+  const moneyChanged = ['incentive_amount', 'diwali_bonus', 'other_deductions'].some((k) => updates[k] !== undefined);
+  let newTotalDed;
+  let newNetSalary;
+  let loanRecovery = existing.loan_recovery || 0;
 
   const perTxn = db.transaction(() => {
+    let loanPlan = null;
+    if (moneyChanged) {
+      loanPlan = planStage7Loans(db, {
+        employeeCode: existing.employee_code, month: existing.month, year: existing.year, payroll: 'sales', company: existing.company,
+        salary: {
+          gross_earned: existing.gross_earned, pf_employee: existing.pf_employee, esi_employee: existing.esi_employee,
+          professional_tax: existing.professional_tax, tds: existing.tds, advance_recovery: existing.advance_recovery,
+          diwali_recovery: 0, other_deductions: otherDed,
+        },
+      });
+      if (!loanPlan.skipped) loanRecovery = loanPlan.totalRupees;
+    }
+    // Rebuild total_deductions from the non-editable components + loan + other_deductions.
+    // (diwali_recovery is 0 per Q5 reversal — not in the sum.)
+    const fixedDeductions =
+      (existing.pf_employee || 0) + (existing.esi_employee || 0) +
+      (existing.professional_tax || 0) + (existing.tds || 0) +
+      (existing.advance_recovery || 0) + loanRecovery;
+    newTotalDed = Math.round((fixedDeductions + otherDed) * 100) / 100;
+    newNetSalary = salesNetWithLoanFloor((existing.gross_earned || 0) + diwaliBonus + incentive - newTotalDed, loanRecovery);
+
     const sets = [];
     const params = [];
     for (const [k, v] of Object.entries(updates)) {
       sets.push(`${k} = ?`);
       params.push(v);
     }
+    if (moneyChanged) { sets.push('loan_recovery = ?'); params.push(loanRecovery); }
     sets.push('total_deductions = ?'); params.push(newTotalDed);
     sets.push('net_salary = ?');       params.push(newNetSalary);
     params.push(id);
 
     db.prepare(`UPDATE sales_salary_computations SET ${sets.join(', ')} WHERE id = ?`).run(...params);
+    if (loanPlan) {
+      // Throws on a ledger refusal → the whole edit rolls back (payslip = ledger).
+      applyStage7Loans(db, {
+        employeeCode: existing.employee_code, month: existing.month, year: existing.year, payroll: 'sales',
+        company: existing.company, plan: loanPlan, runId: `sales-edit-${id}-${new Date().toISOString()}`,
+      });
+    }
 
     writeAuditP2(db, 'sales_salary_computations', {
       recordId: id, field: Object.keys(updates).join(','),
@@ -2959,10 +3051,16 @@ router.put('/salary/:id', (req, res) => {
       }),
       newVal: JSON.stringify(updates),
       user, actionType: 'manual_override', empCode: existing.employee_code,
-      remark: `HR override: net ${existing.net_salary} → ${newNetSalary}`,
+      remark: `HR override: net ${existing.net_salary} → ${newNetSalary}`
+        + (moneyChanged && loanRecovery !== (existing.loan_recovery || 0) ? `; loan ${existing.loan_recovery || 0} → ${loanRecovery} (re-planned within headroom)` : ''),
     });
   });
-  perTxn();
+  try {
+    perTxn();
+  } catch (e) {
+    console.error(`[sales/salary/${id}] edit failed: ${e.message}`);
+    return res.status(500).json({ success: false, error: `Edit not saved: ${e.message}` });
+  }
 
   const updated = db.prepare('SELECT * FROM sales_salary_computations WHERE id = ?').get(id);
   res.json({ success: true, data: updated });
@@ -2993,6 +3091,24 @@ router.put('/salary/:id/status', (req, res) => {
       success: false,
       error: `Invalid transition: ${existing.status} → ${next}. Allowed from ${existing.status}: ${allowed.join(', ') || '(terminal)'}`,
     });
+  }
+
+  // Loans PR-8 (K31): a row whose loan deduction is posted (balance already moved)
+  // cannot be held — the payslip and the loan ledger would disagree.
+  if (next === 'hold' && existing.status !== 'hold') {
+    const posted = salesPostedLoanPaise(db, { employeeCode: existing.employee_code, month: existing.month, year: existing.year, company: existing.company });
+    if (posted > 0) {
+      return res.status(409).json({
+        success: false, code: 'LOAN_POSTED_NO_HOLD',
+        error: `Cannot hold: this row carries a loan EMI of ₹${(posted / 100).toFixed(2)} already posted at the loan close. Pay the salary, or ask the admin to reverse the posted deduction first.`,
+      });
+    }
+  }
+  // Loans PR-8 (K28): releasing a hold whose instalment moved to the end (held
+  // past the wait) is refused until this employee is recomputed.
+  if (existing.status === 'hold' && next !== 'hold') {
+    const g = loanHoldReleaseCheck(db, existing.employee_code, existing.month, existing.year, { payroll: 'sales', company: existing.company });
+    if (!g.ok) return res.status(409).json({ success: false, code: g.code, error: g.message });
   }
 
   // Phase 4 guardrail: cannot flip to paid until the NEFT file has been

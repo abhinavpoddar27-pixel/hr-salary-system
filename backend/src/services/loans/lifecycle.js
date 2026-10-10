@@ -33,7 +33,7 @@ function requestLoan(db, input, actor, { asOf } = {}) {
     borrowerType: input.borrowerType, company: text(input.company), loanType: input.loanType,
     principal: input.principal, tenure: input.tenure, asOf: asOf || todayIst(),
   };
-  const facts = loadBorrowerFacts(db, { borrowerType: input.borrowerType, employeeCode: input.employeeCode, company: req.company });
+  const facts = loadBorrowerFacts(db, { borrowerType: input.borrowerType, employeeCode: input.employeeCode, company: req.company, asOf: req.asOf });
   const verdict = evaluateEligibility(facts, req, policy);
   if (!verdict.eligible) {
     return fail('NOT_ELIGIBLE', verdict.refusals.map((r) => r.message).join('; '), { refusals: verdict.refusals, warnings: verdict.warnings, limits: verdict.limits });
@@ -65,7 +65,7 @@ function approveLoan(db, loanId, actor, { reason, asOf } = {}) {
   if (loan.status !== 'requested') return fail('ILLEGAL_TRANSITION', `loan is ${loan.status}, not requested`);
   if (loan.exit_flag === 1) return fail('LOAN_EXIT_FLAGGED', 'the borrower has been marked Left; this loan cannot be approved');
   const policy = readLoanPolicy(db);
-  const facts = loadBorrowerFacts(db, { borrowerType: loan.borrower_type, employeeCode: loan.employee_code, company: loan.company, excludeLoanId: loan.id });
+  const facts = loadBorrowerFacts(db, { borrowerType: loan.borrower_type, employeeCode: loan.employee_code, company: loan.company, excludeLoanId: loan.id, asOf: asOf || todayIst() });
   const verdict = evaluateEligibility(facts, {
     borrowerType: loan.borrower_type, company: loan.company, loanType: loan.loan_type,
     principal: loan.principal_amount, tenure: loan.tenure_months, asOf: asOf || todayIst(),
@@ -132,7 +132,7 @@ function disburseLoan(db, loanId, actor, d = {}, { asOf } = {}) {
   const agreement = text(d.agreementFilePath) || text(loan.agreement_file_path);
   if (policy.agreementRequired && !agreement) return fail('AGREEMENT_REQUIRED', 'attach the scanned signed agreement before disbursement');
 
-  const first = firstEmiMonth({ disbursedOn: d.disbursedOn, closed: closedMonths(db, loan.borrower_type), requested: d.firstEmiMonth || null });
+  const first = firstEmiMonth({ disbursedOn: d.disbursedOn, closed: closedMonths(db, loan.borrower_type), requested: d.firstEmiMonth || null, payroll: loan.borrower_type });
   if (!first.ok) return first;
   const sched = buildSchedule({ principalPaise, tenure: loan.tenure_months, firstMonth: first.month });
   if (!sched.ok) return sched;
@@ -219,4 +219,38 @@ function flagForExit(db, loanId, actor, { exitDate, reason } = {}) {
   });
 }
 
-module.exports = { getLoan, inTxn, requestLoan, approveLoan, rejectLoan, cancelLoan, disburseLoan, flagForExit };
+/**
+ * Sales exit (Loans PR-8, ruling Q6): flags every open sales loan of one sales
+ * person (code + company) — the same as the plant Mark Left block. Called by the
+ * sales mark-left route and by the sales employee edit when status becomes Left
+ * or Exited, INSIDE their transaction; throws on a refusal so the status change
+ * rolls back with it. The final payroll is the sales cycle containing the exit
+ * date (common.js finalMonthOf, ruling Q4). Loan schema not migrated → skipped.
+ * @returns {{skipped:boolean, loans:Array, alerts:Array}}
+ */
+function flagSalesBorrowerForExit(db, { employeeCode, company, exitDate, reason }, actor) {
+  if (!db.prepare("SELECT 1 FROM policy_config WHERE key = 'migration_loans_schema_v2_done' AND value = '1'").get()) {
+    console.warn(`[sales mark-left] ${employeeCode}: loan schema not migrated — sales loans not flagged`);
+    return { skipped: true, loans: [], alerts: [] };
+  }
+  const open = db.prepare(`SELECT id FROM loans WHERE borrower_type = 'sales' AND employee_code = ? AND company = ?
+                              AND status IN ('requested','approved','active') AND exit_flag = 0 ORDER BY id`)
+    .all(String(employeeCode), String(company || '').trim());
+  const loans = [];
+  const alerts = [];
+  for (const { id } of open) {
+    const r = flagForExit(db, id, actor, { exitDate, reason: `Marked Left (exit ${exitDate}). ${text(reason) || 'No reason given'}` });
+    if (!r.ok) throw new Error(`sales exit: loan ${id} could not be flagged: ${r.code} — ${r.message}`);
+    const after = getLoan(db, id);
+    const x = r.exit || {};
+    loans.push({
+      loanId: id, status: r.status, outstanding: r.status === 'recover_at_exit' ? after.remaining_balance : 0,
+      finalMonth: x.finalMonth || null, finalMonthPast: r.status === 'recover_at_exit' ? !!x.finalMonthPast : null,
+      dueInFinalPayroll: x.dueInFinalPayroll || 0, residual: x.residual || 0,
+    });
+    alerts.push(...(r.alerts || []));
+  }
+  return { skipped: false, loans, alerts };
+}
+
+module.exports = { getLoan, inTxn, requestLoan, approveLoan, rejectLoan, cancelLoan, disburseLoan, flagForExit, flagSalesBorrowerForExit };

@@ -453,7 +453,7 @@ export default function SalesSalaryCompute() {
             </div>
           </div>
           <div className="overflow-x-auto">
-          <table className="min-w-[1400px] w-full text-sm">
+          <table className="min-w-[1480px] w-full text-sm">
             <thead className="bg-slate-50 text-[11px] font-bold text-slate-400 uppercase tracking-wider">
               <tr>
                 <th className="px-2 py-2 text-left">Code</th>
@@ -469,6 +469,7 @@ export default function SalesSalaryCompute() {
                 <th className="px-2 py-2 text-right">PF</th>
                 <th className="px-2 py-2 text-right">ESI</th>
                 <th className="px-2 py-2 text-right">TDS</th>
+                <th className="px-2 py-2 text-right" title="Loan EMI — set by the loan engine within the 50% cap (read-only)">Loan</th>
                 <th className="px-2 py-2 text-right bg-amber-50">Incentive</th>
                 <th className="px-2 py-2 text-right bg-amber-50">Diwali Bonus</th>
                 <th className="px-2 py-2 text-right bg-amber-50">Other Ded</th>
@@ -496,6 +497,10 @@ export default function SalesSalaryCompute() {
                     <td className="px-2 py-1.5 text-right font-mono">{fmtINR(r.pf_employee)}</td>
                     <td className="px-2 py-1.5 text-right font-mono">{fmtINR(r.esi_employee)}</td>
                     <td className="px-2 py-1.5 text-right font-mono">{fmtINR(r.tds)}</td>
+                    <td className="px-2 py-1.5 text-right font-mono" data-testid={`sales-loan-${r.employee_code}`}>
+                      {fmtINR(r.loan_recovery)}
+                      {r.loan_posted ? <div className="text-[10px] text-indigo-600" title="Posted at the monthly loan close">posted</div> : null}
+                    </td>
                     <td className="px-2 py-1.5 text-right bg-amber-50">
                       <EditRowCell
                         value={r.incentive_amount}
@@ -539,9 +544,11 @@ export default function SalesSalaryCompute() {
                               <option value="">Change status…</option>
                               {allowedNext.map(s => {
                                 const paidBlocked = s === 'paid' && !r.neft_exported_at
+                                // Loans PR-8 (K31): a posted loan deduction cannot be held (the server refuses too).
+                                const holdBlocked = s === 'hold' && !!r.loan_posted
                                 return (
-                                  <option key={s} value={s} disabled={paidBlocked}>
-                                    → {s}{paidBlocked ? ' (export NEFT first)' : ''}
+                                  <option key={s} value={s} disabled={paidBlocked || holdBlocked}>
+                                    → {s}{paidBlocked ? ' (export NEFT first)' : ''}{holdBlocked ? ' (loan posted)' : ''}
                                   </option>
                                 )
                               })}
@@ -567,6 +574,7 @@ export default function SalesSalaryCompute() {
                 </td>
                 <td className="px-2 py-2 text-right font-mono">{fmtINR(totals.gross_earned)}</td>
                 <td colSpan={3}></td>
+                <td className="px-2 py-2 text-right font-mono">{fmtINR(rows.reduce((s, r) => s + (r.loan_recovery || 0), 0))}</td>
                 <td className="px-2 py-2 text-right font-mono">{fmtINR(totals.incentive_amount)}</td>
                 <td className="px-2 py-2 text-right font-mono">{fmtINR(totals.diwali_bonus)}</td>
                 <td></td>

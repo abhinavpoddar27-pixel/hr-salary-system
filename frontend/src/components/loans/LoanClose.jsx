@@ -2,7 +2,8 @@
 //   GET  /api/loans/close/preview?month&year   read roles; company-restricted users get 403
 //   POST /api/loans/close {month, year}        finance / admin; 201, 409 ALREADY_CLOSED
 //   GET  /api/loans/closes                     read roles (history, notes parsed)
-// Plant payroll only: the sales loan close arrives with Loans PR-8.
+// Plant payroll on screen. The sales payroll (Loans PR-8) closes through the same daily job;
+// a sales tab on this screen is a follow-up.
 import React, { useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import toast from 'react-hot-toast'
@@ -117,7 +118,7 @@ export default function LoanClose() {
       <div className="flex items-start justify-between flex-wrap gap-3">
         <div className="text-sm text-slate-600 max-w-3xl space-y-1">
           <div>
-            The loan close posts each month's payroll loan deductions to the loan balances (plant payroll; sales arrives with Loans PR-8).
+            The loan close posts each month's payroll loan deductions to the loan balances. This screen shows the plant payroll; the sales payroll closes automatically (see below) once that month's sales upload is computed.
           </div>
           <div className="text-xs text-slate-500" data-testid="close-auto-note">
             It also runs <strong>automatically every day at 06:15 IST</strong>. From the 13th it closes last month, and any earlier open

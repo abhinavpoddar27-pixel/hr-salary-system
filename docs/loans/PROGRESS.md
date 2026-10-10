@@ -8,9 +8,9 @@ after a context compaction or a new session there is a file to read and build fr
 - **As of:** 2026-10-10.
 - **Current state:** P1–P3 and Loans PR-0 … PR-6 (#48–#54, #56, #58, #61) are merged. PR-5 verified on production (gate '0',
   loans 0, loan_deductions 0, no salary row with loan_recovery, drift = 1 known row, component-short = 5 known rows).
-  Loans PR-7 (exit recovery, #63) is merged and verified. Loans PR-6b (close screen, reversal, Mark Left outstanding)
-  is open on `feat/loans-pr6b`, waiting for review.
-- **Next PR:** PR-8 (sales), built on `feat/loans-pr8`, pushed after PR-6b merges; then the plant pilot.
+  Loans PR-7 (exit recovery, #63) and Loans PR-6b (close screen, reversal, Mark Left outstanding, #64) are merged
+  (10 Oct 2026). Loans PR-8 (sales borrowers) is open on `feat/loans-pr8`, waiting for review.
+- **Next PR:** plant pilot; sales go-live after PR-8 + PR-9.
 - **Blockers:**
   - The PR-6 check below (nil loan impact: the 13 Oct run writes nothing); then the PR-7 check.
   - Finance is checking the 35 re-held rows that were released to be paid, against what was
@@ -53,9 +53,9 @@ after a context compaction or a new session there is a file to read and build fr
 | Loans PR-4 | `feat/loans-pr4` | Merged | #56 | 2026-10-10 | browser look on Railway preview |
 | Loans PR-5 | `feat/loans-pr5` | Merged | #58 | 2026-10-10 | verified (planner) |
 | Loans PR-6 | `feat/loans-pr6` | Merged | #61 | 2026-10-10 | verified (planner) |
-| Loans PR-6b | `feat/loans-pr6b` | Open | #64 | — | browser look on Railway preview |
+| Loans PR-6b | `feat/loans-pr6b` | Merged | #64 | 2026-10-10 | verified (planner) |
 | Loans PR-7 | `feat/loans-pr7` | Merged | #63 | 2026-10-10 | verified (planner) |
-| Loans PR-8 | `feat/loans-pr8` | Not started | — | — | — |
+| Loans PR-8 | `feat/loans-pr8` | Open | see GitHub | — | PR-8 check below + checks 1–3 |
 | Loans PR-9 | `feat/loans-pr9` | Not started | — | — | — |
 | Loans PR-10 | `feat/loans-pr10` | Not started | — | — | — |
 | PR-F | `feat/loans-prF` | Not started (after pilot) | — | — | — |
@@ -346,6 +346,48 @@ SELECT COUNT(*) FROM notifications WHERE type IN ('LOAN_EXIT_RESIDUAL', 'LOAN_EX
 ```
 Then checks 1–3 below (no salary code changed; Stage 7 untouched). `GET /api/loans/exit-residuals` → empty lists.
 
+## Loans PR-8 rulings (planner, 10 Oct 2026 — all Phase 0 defaults approved)
+
+- **Q1** ₹0 net floor (K22) only on a sales row that carries a loan deduction (`salesNetWithLoanFloor`). A blanket
+  floor would change production row 8/2026 (other deductions ₹60,000 > earnings, net −₹1,935.48, no loan) on the next
+  recompute. No-loan rows are byte-identical (simulation `--dump`).
+- **Q2** a sales borrower is code + company: Stage 7 matches a sales loan on code AND the loan's company (the K8 guard
+  for sales — never first-come by compute order); payslip ↔ ledger, the hold guards, the eligibility open-loan count and
+  the 3-month history are scoped the same way.
+- **Q3** sales first EMI = the sales cycle month after the disbursement's cycle month (day ≥ 26 → next month): paid
+  28 Oct → first EMI Dec.
+- **Q4** a sales exit's final payroll = the sales cycle containing the leaving date (`finalMonthOf`, sales only).
+- **Q5** sales gross for eligibility = latest `sales_salary_structures` (effective by the as-of month, else latest);
+  the master gross only as a fallback.
+- **Q6** exit hook: `PUT /api/sales/employees/:code/mark-left` and `PUT /api/sales/employees/:code` with status Left /
+  Exited (not Inactive) flag the rep's open sales loans in the same transaction.
+- **Q7** mirrors plant PR-5 Q3: provisional rows of employees the sales compute did not pay (excluded, or not in the
+  active upload) are reversed and listed (`loans.staleRows`); salary rows the run did not compute are never rewritten.
+- **Q8 — risk, no override:** a sales month with NO sales upload at all (as 3/2026 in production) never becomes ready,
+  so a sales instalment due in it makes that close wait — and every later sales close waits behind it
+  (`EARLIER_MONTH_OPEN`), as plant does when Stage 7 never runs. Plant never waits for sales. If it happens, the way out
+  today is a defer / restructure of that instalment (admin) before the close; an override would be its own PR.
+
+**Pre-existing, report only (found in PR-8 Phase 0):** 5/2026 Indriyan has 58 `sales_salary_computations` rows whose
+employee is not in the active upload (left behind by a superseded upload). Sales compute never deletes a row, so they
+still appear in the register and the NEFT export.
+
+### Loans PR-8 check (read-only, after deploy)
+
+```sql
+SELECT COUNT(*) FROM loans WHERE borrower_type = 'sales';                                        -- 0 until the first sales loan
+SELECT COUNT(*) FROM loan_deductions WHERE payroll = 'sales';                                    -- 0
+SELECT COUNT(*) FROM loan_closes WHERE payroll = 'sales';                                        -- 0 (empty ledger writes nothing)
+SELECT COUNT(*) FROM notifications WHERE message LIKE '%SALES_CLOSE_NOT_WIRED%';                 -- 0
+-- sales drift (formula verified in PR-8): expect 0 rows
+SELECT month, year, company, COUNT(*) FROM sales_salary_computations
+ WHERE ABS(net_salary - (gross_earned + COALESCE(diwali_bonus,0) + COALESCE(incentive_amount,0) - total_deductions)) > 1
+ GROUP BY month, year, company;
+-- the no-loan negative-net row is untouched (Q1): still 1 row, 8/2026
+SELECT COUNT(*) FROM sales_salary_computations WHERE net_salary < 0;
+```
+Then checks 1–3 below (record one sales month total before and after: identical).
+
 ## Post-merge checks
 
 Run after every PR that touches salary, and after every deploy. Both queries are read-only;
@@ -432,3 +474,4 @@ FROM sales_salary_computations WHERE month = ? AND year = ?;
 | 2026-10-10 | Loans PR-6 | Built | Loan close, sweep, daily job, opposite entries, hold-release guard, close API, drift invariants. Suite 713 → 753 (41 suites). Close simulation 7 loans × 4 months PASS; `--empty` 84 tables unchanged. |
 | 2026-10-10 | Loans PR-7 | Built | Exit recovery: schedule collapses into the final month at Mark Left; residual after it; exit-residual and write-off (TDS) endpoints; Mark Left reply summary. Merged origin/main (#61). Suite 769 → 792 (44 suites). Exit simulation 5 leavers × 5 months PASS (reconciles daily, drift 0, component-short 0, payslip = ledger); `--empty` 84 tables unchanged. |
 | 2026-10-10 | Loans PR-6b | Built | Close tab, admin reversal on the loan page, Mark Left outstanding; `GET /:id` gains `deductions` + `adjustments`. Suite 769 → 771 (42 suites). Browser check 103/103 (63 PR-4 + 40 Pass 3), 0 page errors. |
+| 2026-10-10 | Loans PR-8 | Built | Sales borrowers: eligibility (structure gross, company-scoped), cycle first EMI, borrower search; sales Stage 7 within headroom matched on code + company; loan-only ₹0 floor; K30 edits, K31 hold block, K28 release guard; sales close / sweep / payslip check; sales exit hook. Suite 792 → 849 (49 suites, 3 clean runs). `loans-sales-simulation.js` 7 loans × 5 sales months PASS; `--dump` byte-identical vs PR-7 base and vs main after #63/#64 (232 rows); `--empty` writes nothing. Merged main (up to #65): suite 972 / 56; dist rebuilt on the merged tree; browser check 116/116 (Pass 4 sales, 13), 0 page errors. |

@@ -165,9 +165,9 @@ function evaluateEligibility(facts, request, policy) {
 /**
  * Reads everything evaluateEligibility needs. Read-only.
  * Plant: employees by code; sales: sales_employees by code AND company (that
- * table is unique on code + company).
+ * table is unique on code + company). Sales gross = latest structure (PR-8 Q5).
  */
-function loadBorrowerFacts(db, { borrowerType, employeeCode, company, excludeLoanId = null }) {
+function loadBorrowerFacts(db, { borrowerType, employeeCode, company, excludeLoanId = null, asOf = null }) {
   const code = String(employeeCode == null ? '' : employeeCode).trim();
   const facts = { found: false, borrowerType };
   if (!code) return facts;
@@ -193,12 +193,17 @@ function loadBorrowerFacts(db, { borrowerType, employeeCode, company, excludeLoa
     row = db.prepare(`SELECT id, code, status, company, gross_salary, doj
                         FROM sales_employees WHERE code = ? AND company = ?`).get(code, String(company || '').trim());
     if (row) {
-      grossPaise = toPaise(row.gross_salary || 0);
-      if (!(grossPaise > 0)) {
-        const s = db.prepare(`SELECT gross_salary FROM sales_salary_structures WHERE employee_id = ?
-                               ORDER BY effective_from DESC, id DESC LIMIT 1`).get(row.id);
-        grossPaise = s ? toPaise(s.gross_salary || 0) : 0;
-      }
+      // Loans PR-8 (ruling Q5): the gross sales compute actually pays — the latest
+      // structure effective on or before the as-of month (else the latest one, the
+      // same fallback as salesSalaryComputation getLatestStructure); the master
+      // gross only when there is no structure.
+      const asOfMonth = String(asOf || todayIst()).slice(0, 7);
+      const s = db.prepare(`SELECT gross_salary FROM sales_salary_structures WHERE employee_id = ? AND effective_from <= ?
+                             ORDER BY effective_from DESC, id DESC LIMIT 1`).get(row.id, asOfMonth)
+        || db.prepare(`SELECT gross_salary FROM sales_salary_structures WHERE employee_id = ?
+                        ORDER BY effective_from DESC, id DESC LIMIT 1`).get(row.id);
+      grossPaise = s ? toPaise(s.gross_salary || 0) : 0;
+      if (!(grossPaise > 0)) grossPaise = toPaise(row.gross_salary || 0);
       Object.assign(facts, {
         found: true, status: row.status, employmentType: 'Sales', isContractor: 0,
         masterCompany: row.company, doj: row.doj,
@@ -208,20 +213,25 @@ function loadBorrowerFacts(db, { borrowerType, employeeCode, company, excludeLoa
   if (!facts.found) return facts;
   facts.grossPaise = Number.isFinite(grossPaise) ? grossPaise : 0;
 
+  // Loans PR-8 (ruling Q2): a sales borrower is code + company, so the sales
+  // open-loan count and deduction history are scoped to the company.
+  const salesCo = borrowerType === 'sales' ? String(company || '').trim() : null;
   facts.openLoanCount = db.prepare(`
     SELECT COUNT(*) AS n FROM loans
      WHERE borrower_type = ? AND employee_code = ? AND status IN (${OPEN_LOAN_STATES.map(() => '?').join(',')})
-       AND id IS NOT ?
-  `).get(borrowerType, code, ...OPEN_LOAN_STATES, excludeLoanId).n;
+       AND id IS NOT ?${salesCo !== null ? ' AND company = ?' : ''}
+  `).get(borrowerType, code, ...OPEN_LOAN_STATES, excludeLoanId, ...(salesCo !== null ? [salesCo] : [])).n;
 
-  facts.history = loadDeductionHistory(db, borrowerType, code);
+  facts.history = loadDeductionHistory(db, borrowerType, code, salesCo);
   return facts;
 }
 
 /** Last 3 computed salary months (all companies summed per month). */
-function loadDeductionHistory(db, borrowerType, code) {
+function loadDeductionHistory(db, borrowerType, code, company = null) {
   const table = borrowerType === 'sales' ? 'sales_salary_computations' : 'salary_computations';
-  const rows = db.prepare(`SELECT * FROM ${table} WHERE employee_code = ? ORDER BY year DESC, month DESC`).all(code);
+  const rows = borrowerType === 'sales' && company !== null
+    ? db.prepare(`SELECT * FROM ${table} WHERE employee_code = ? AND company = ? ORDER BY year DESC, month DESC`).all(code, company)
+    : db.prepare(`SELECT * FROM ${table} WHERE employee_code = ? ORDER BY year DESC, month DESC`).all(code);
   const months = [];
   const byMonth = new Map();
   for (const r of rows) {
