@@ -384,3 +384,22 @@ describe('finance apply-leave rewrite (defect h)', () => {
     expect(res.status).toBe(400);
   });
 });
+
+describe('GET /api/leaves/balances — list shows EL as stored', () => {
+  test('a negative EL balance is shown, not masked as 0', async () => {
+    const e = addEmployee('BL01');
+    db.prepare('INSERT INTO leave_balances (employee_id, year, leave_type, opening, balance) VALUES (?, ?, ?, 4, 4)').run(e.id, YEAR, 'CL');
+    db.prepare('INSERT INTO leave_balances (employee_id, year, leave_type, opening, balance) VALUES (?, ?, ?, 0, -5)').run(e.id, YEAR, 'EL');
+    const e2 = addEmployee('BL02');
+    db.prepare('INSERT INTO leave_balances (employee_id, year, leave_type, opening, balance) VALUES (?, ?, ?, 4, 3)').run(e2.id, YEAR, 'CL');
+    db.prepare('INSERT INTO leave_balances (employee_id, year, leave_type, opening, balance) VALUES (?, ?, ?, 0, 9)').run(e2.id, YEAR, 'EL');
+    addEmployee('BL03'); // no balance rows at all
+
+    const res = await api.request('GET', `/api/leaves/balances?year=${YEAR}`, { role: 'hr' });
+    expect(res.status).toBe(200);
+    const by = Object.fromEntries(res.body.data.map((r) => [r.employee_code, r]));
+    expect(by.BL01).toMatchObject({ CL: 4, EL: -5 });
+    expect(by.BL02).toMatchObject({ CL: 3, EL: 9 });
+    expect(by.BL03).toMatchObject({ CL: 0, EL: 0 });
+  });
+});

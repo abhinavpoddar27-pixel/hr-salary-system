@@ -25,6 +25,28 @@ NOT pushed, NOT merged.** Plan: `docs/statutory-flags/IMPL_PR2.md` (REVIEW CORRE
   66c6a08: every unflagged row identical, flagged rows differ only by ₹5. Payslip HTML check vs main 77/77.
 - **Not tested:** Railway; production data; a browser pass of the Stage 7 column (bundle grep only); sales LWF (PR-2b).
 
+## Last Session — 2026-10-10 (Nightly sweep corrupted Stage 6 → EL empty)
+**Branch `fix/auto-stage6-company-scope`, NOT merged.** Backend only (no dist change).
+- **Symptom:** Leave Management showed EL ≈ 0 for everyone. Prod: 2026 EL 29 of 1,016 rows non-zero.
+- **Cause:** the first nightly leave sweep (03:30 IST 10 Oct, automation ON since 9 Oct) ran Stage 6 once per
+  `monthly_imports` ROW, filtering attendance by that row's company label. A month arrives under several labels
+  ('Asian Lakto Ind Ltd', 'Default', 'null', 'Sheet1'…) but `day_calculations` is UNIQUE(code, month, year), so the
+  last label overwrote the whole-month row with a partial one (14686 Sept: 33 payable → 4). Feb–Sep rewritten; vs saved
+  salaries ~880 employee-months differ (Jun 2,873 / Jul 2,262 / Sep 3,816 payable days short). The leave engine read
+  those rows → nobody reached 180 days → no EL. Saved salary rows were NOT touched (Stage 7 not re-run).
+- **Fix (`services/jobQueue.js` only):** job body pulled into exported `executeJob(db, type, params, id)`.
+  `leave_nightly` refreshes Stage 6 ONCE per month across all labels (skips a month if any label is finalized or none
+  has stage_6_done). `leave_recalc` / `day_calculate` use the company only to choose WHO
+  (`employeesForCompanyMonth`), then recompute them with no company filter — same shape as HR's "All companies" run.
+  Empty population → recompute nobody (recomputeDays treats [] as everyone). recompute.js untouched.
+- **Also:** `GET /api/leaves/balances` used `MAX(CASE … ELSE 0)`, masking a negative EL as 0 → COALESCE(MAX(…)).
+- **Fragile / open:** HR's own Stage 6 button still sends the top-bar company (payroll.js/recompute.js, DO-NOT-MODIFY):
+  run Stage 6 with "All companies" or it cuts rows the same way. Rows heal on the next 03:30 IST sweep after deploy.
+  Until then do NOT Compute Salary for Feb–Sep (rows are salary_stale with wrong days).
+- **Verified:** new `autoStage6CompanyScope.test.js` 10 tests (7 fail on old code); +1 in leaveApi; suite 61/1015.
+  Real worker on a scratch server: 9 months refreshed once each, full rows, EL accrued, drift 0.
+- **Not tested:** production repair itself (happens at 03:30 IST after deploy); post-repair payable vs saved salary.
+
 ## Last Session — 2026-10-10 (Loans PR-9)
 **Loans PR-9: reports, payslip balance line, Finance Audit hooks, perquisite list, sales close tab. Branch `feat/loans-pr9`, NOT merged.**
 - **New `services/loans/reports.js` (read-only):** outstanding register (payroll → company → department), 12-month forecast
