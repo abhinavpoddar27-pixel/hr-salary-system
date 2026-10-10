@@ -8,8 +8,9 @@
 4. Continue from NEXT STEP. Update this file after every small step (state, done, next) and commit it.
 
 ## PR STATUS
-- PR-1 feat/statutory-flags — BUILT LOCALLY — ready to push (owner decision 10 Oct 08:53: repo stays public, open the PR now; the coordinator pushes). Independent review: SHIP (fixes 1–5 in). origin/main f4b3b2f (loans PR-6b + PR-7) MERGED in (66f34d6, no-ff) + dist rebuilt (322a75d). Base f4b3b2f. Code head 322a75d (+ this PROGRESS commit on top), 51 suites / 915 tests green ×2, guard 9/9, sim 68/68.
-- PR-2 feat/lwf-deduction — NOT STARTED
+- PR-1 feat/statutory-flags — DONE: merged as PR #65 (merge 8b9561d, head a577c73), deployed; production post-merge checks passed 10 Oct 09:06 IST. Owner applies T4 (plant) / T5 (sales) on the live page.
+- PR-2 feat/lwf-deduction — BUILT locally (plant LWF, C1): STEPs 1, 2, 4, 5, 6, 7 + C3 + C4 done; suite 63 / 1036; NOT pushed (coordinator pushes). Plan `docs/statutory-flags/IMPL_PR2.md`. Base 8b9561d + origin/main 66c6a08 merged (4363d64).
+- PR-2b feat/lwf-sales — NOT STARTED. Sales LWF compute/save/rebuild/totals/export/UI (IMPL_PR2 C1). Before the 25 Oct sales close.
 - PR-3 feat/statutory-filing — NOT STARTED
 
 ## STEPS DONE
@@ -45,11 +46,22 @@
   - No fragile file (salaryComputation.js, schema.js, payroll.js, dayCalculation.js) changed on main; main's loans code writes no pf/esi/lwf (grep + guard). UPSERT counts unchanged 56/56/56/53, 45/45/45/42.
   After the merge: jest 51 / 915 twice (main added 2 suites / 25 tests), statutoryWriterGuard 9/9, node --check clean (employees.js, loans.js, sales.js, salary-input.js, statutoryFlags.js, loans/exit.js), sim 68/68 on a throwaway DB.
 
+- PR-2 PHASE 0 — 4363d64 `Merge origin/main (66c6a08: loans PR-8 + PR-9) into feat/lwf-deduction`. Drift: main moved 8b9561d -> 66c6a08 (loans PR-8 sales borrowers + PR-9 reports). No conflicts. IMPL_PR2 files touched on main: schema.js (+1 policy line at ~3692, outside every LWF site), headroom.js (comment only), financeAudit.js, SalaryComputation.jsx, payslipPdf.js (STEP 4/6 cited line numbers shift — re-locate by anchor text); salaryComputation.js and payroll.js unchanged on main; salesSalaryComputation.js changed (PR-2b file, not touched here). Baseline after the merge: 60 suites / 1004 tests green (was 51 / 915 on 8b9561d; main added 9 suites / 89 tests).
+- PR-2 STEP 1 — 0a2f12a `feat(lwf): LWF columns, policy keys 5/20, AI cache trigger includes LWF`. lwfSchema.test.js S1–S4 (7 tests; 7/7 fail on the previous schema.js, swap-verified).
+- PR-2 STEP 2 — 93302ab `feat(lwf): plant Stage 7 LWF ₹5/₹20 (flagged, earned gross > 0), counted in the loan headroom`. salaryComputation.js edits 1–4 exactly as IMPL_PR2 (LWF after the ESI block, before planStage7Loans; lwf_employee in the loan salary object; + lwfEmployee in totalDeductions before the cap; lwfEmployee/lwfEmployer returned); UPSERT 56/56/56/53 → 58/58/58/55. generatePayslipData NOT done here — moved with its test O1 to STEP 4 (as the plan lists it). headroom.js: 'lwf_employee' appended to plant + sales PRIOR_DEDUCTION_COMPONENTS (sales inert: the sales salary object has no lwf_employee → 0). lwfPlant.test.js P1–P10 = 18 tests (14 fail on the pre-STEP-2 files, swap-verified; the 4 that pass are flag-off / zero-gross / zero-attendance, which assert unchanged behaviour). P9 adds a control DB (same people, no upload): the unflagged colleague's September row is identical in every column; the flagged employee's row differs ONLY in lwf_employee, lwf_employer, total_deductions (+5), net_salary, total_payable, take_home (−5). P10: two DBs (LWF on/off, PF+ESI on, ₹6,000 advance) → loan_recovery 2645 vs 2650, ledger provisional = loan_recovery, reconcileLoan ok. T12 (statutoryLoans.test.js, N3): asserts lwf_employee 5 and adds it to `before`; the unedited T12 fails by exactly ₹5 on the new code. No runtime invariant sums the deduction components (driftMonitor/close/financeRedFlags checked) — only the docs SQL + sim scripts (N2, STEP 7).
+- PR-2 STEP 4 — a90f488 `feat(lwf): LWF on the plant payslip, register totals, finance report, AI prompt`. generatePayslipData: 'LWF (Employee)' deductions line (after Early Exit; filtered when 0) + lwfEmployer; payroll.js /salary-register totals totalLWFEmployee/totalLWFEmployer only (no other payroll.js line in this step); financeAudit.js /report SELECT + row map (re-located by anchor: main changed this file); ai.js prompt line + `lwf` summary key; schemaReference.js. lwfOutputs.test.js O1 ×3 (payslip unit + GET /payslip/:code) + O5 ×2 (/finance-audit/report, /salary-register totals incl. held) via real JWT auth — 5/5 fail on the previous sources (swap-verified).
+- PR-2 STEP 5 — e4e48ad `feat(lwf): LWF columns in the payroll register and salary slip summary Excel`. payroll.js — ONLY the two Excel handlers. BEFORE/AFTER: register HEADERS `… 'ESI(EE)', 'ESI(ER)', 'PT', 'TDS', …` (37) → `… 'ESI(EE)', 'ESI(ER)', 'LWF(EE)', 'LWF(ER)', 'PT', 'TDS', …` (39); NUM_COLS = HEADERS.length (comment 37 → 39); data row + totals row + `!cols` (+2 × wch 8 after the four PF/ESI widths) at the same position; SUMMARY sheet + 'LWF (Employee)' / 'LWF (Employer)' rows; CTC label/amount + LWF(ER). Slip summary: inline 19-element header + `SUMMARY_COLS = 19` → `SUMMARY_HEADER` (20, 'LWF' after 'ESI') + `SUMMARY_COLS = SUMMARY_HEADER.length`; data row / reducer `lwf` / totals / `!cols` (+1 × wch 8); `CAUTION_COLS = [15, 16, 17]` → `['TOT DED','NET PAYABLE','TAKE HOME'].map(h => SUMMARY_HEADER.indexOf(h))` = [16, 17, 18] (L15). O3 ×2 in lwfOutputs.test.js (header = data = totals = `!cols` = 39 / 20, every post-insert column still aligned with the DB row, LWF 5/20 and totals 10/40, CTC, held-row comments on exactly cols 16/17/18) — both fail on the pre-STEP-5 payroll.js. Test note: SheetJS only reads `!cols` back with `cellStyles: true`.
+- PR-2 STEP 6 — 13d1e35 `feat(lwf): LWF column + totals in Stage 7; employer LWF on payslip`. SalaryComputation.jsx: LWF th/td after ESI (sortable, '—' when 0, employer share in tooltip), tfoot total, drill-down 'LWF (Emp)'/'LWF (Empr)', payslip modal '| Employer LWF' only when > 0. DrillDownRow colSpan 22 → 25 = real body-row cell count (rows had 24 cells before LWF; header + tfoot had 23 — D-8). payslipPdf.js: `wlf` from the 'LWF' deductions line; employer line + '| Employer LWF' only when > 0. FinanceAudit.jsx: LWF line in the report row detail when > 0. dist rebuilt + committed in the same commit. Proof: bundle grep 'LWF (Emp)', 'LWF (Empr)', 'lwf_employee', colSpan:25 (SalaryComputation-D-Vfju47.js); 'Employer LWF' + includes("LWF") (payslipPdf-CnuA1dGI.js); lwfEmployee (FinanceAudit-DEqbdIQB.js). Payslip HTML byte check vs origin/main (backend/scripts/loans-payslip-html-check.mjs, run from a scratchpad copy because the script assumes a pre-PR-9 base that lacks the export; base import path also made `.js`): 77/77 — a payslip without LWF renders byte-identical HTML; a flagged one shows both lines.
+- PR-2 STEP 7 — b702d50 `docs(lwf): component check includes LWF`. Clean `rm -rf frontend/dist && npm run build` reproduces the committed dist byte-identically (git status clean → no dist commit). VERIFY.sql + V11 (10 components + lwf_employee within ₹1; expect only the 5 known capped rows) + V12 (September LWF rule; expect 0 rows). docs/loans/PROGRESS.md §2: both sums + COALESCE(lwf_employee,0) (N2) + note (sim scripts' componentShort stays 10-component; their employees are unflagged). V11/V12 run on the C4 sim DB — see C4.
+- PR-2 C3 (byte-identical for the unflagged, mandatory) — `git worktree add <scratch>/base 66c6a08` (backend/node_modules symlinked); `node backend/scripts/loans-stage7-simulation.js --dump` in both trees (script options unchanged on main): 210 rows each, python3 comparison ignoring lwf_employee/lwf_employer → **0 differences**; lwf_* = 0 on every branch row; drift 0, component-short 0 both. Extra (headroom.js sales array): `loans-sales-simulation.js --dump` both trees → 232 rows, **0 differences**, lwf_* all 0. Full-mode stage7 simulation on the branch (5 loans, re-run, reimport): ALL CHECKS PASSED, drift 0, component-short 0.
+- PR-2 C4 (simulation) — 62d9318 `test(lwf): PR-2 simulation - synthetic mirror of the plant September run`. docs/statutory-flags/sim/run_pr2.py + seed_pr2.js (PR-1 harness pattern: real server.js on a throwaway DATA_DIR, real logins, real upload preview → apply effective 2026-09, real Stage 6/7 over HTTP, HTTP outputs; no browser). Branch 25/25: N = 8 flagged with pay (incl. held F08, contractor F07) → 40 / 160; Z01 flagged zero-gross → row saved, 0/0; Z02 flagged, no Sep attendance → no row; U01–U05 unflagged 0/0; August re-run after the upload byte-identical; V5 drift / V11 / V12 (SQL read from VERIFY.sql) 0 rows; payslip, register totals (finance login), finance report, register Excel (39), slip Excel (20, held comments on 16/17/18). `--base` on the 66c6a08 worktree: 8/8; dump comparison → every unflagged row identical in every column (Aug + Sep, 6 Sep + 15 Aug rows), flagged Sep rows differ ONLY in total_deductions +5 and net_salary / total_payable / take_home −5.
+- PR-2 FINAL — full jest twice: 63 / 1036, 0 failures (baseline after merging main 60 / 1004; +3 suites / +32 tests). node --check clean on the 7 touched backend files. DO-NOT-MODIFY diff vs 66c6a08: 0 files (dayCalculation, statutoryFlags service/route, stage7, recompute, exportFormats, all PR-2b sales files, scripts, structure writers). UPSERT plant 58/58/58/55, sales 45/45/45/42. CLAUDE.md Section 0 entry prepended. NOT pushed (the coordinator pushes, C5).
+
 ## LAST STEP
-MERGE origin/main f4b3b2f (66f34d6) + dist rebuild (322a75d). 51 / 915 ×2, guard 9/9, sim 68/68. NOT PUSHED by the build agent (the coordinator pushes).
+PR-2 built: STEPs 1, 2, 4, 5, 6, 7 + C3 + C4 + CLAUDE.md. Local only, not pushed.
 
 ## NEXT STEP
-Coordinator: push feat/statutory-flags and open the PR (compare main...feat/statutory-flags); fetch again first — if main moved, merge it in the same way. Owner: confirm the 10 Oct planner ruling (structure writes dated before a later row → 409; same date → in place); decide OPEN_ITEMS 'plant compute gross source' and 'same-gross split edit / latest row'. RUNBOOK T4/T5 only after PR-2 is live too.
+Coordinator: review, push feat/lwf-deduction, owner opens the PR in the GitHub UI and merges; deploy; then the owner computes plant September (VERIFY V4/V5/V11/V12 after Stage 7). PR-2b (sales LWF) before the 25 Oct sales close. Do NOT recompute sales September (D3).
 
 ## OWNER RULINGS ADDED DURING THE BUILD
 (record date + ruling; BUILD_PLAN §1 holds the original set)
@@ -59,6 +71,8 @@ Coordinator: push feat/statutory-flags and open the PR (compare main...feat/stat
 - 10 Oct 2026: the repo was confirmed PUBLIC (GitHub API, raw file 200). Nothing on this branch is pushed until the owner makes it private (T0 prerequisite). Build and commit locally; push is the last step.
 - 10 Oct 2026 08:53 (owner): keep the repo public and open the PR now (supersedes the line above); push access granted to the coordinator, who pushes. Merge origin/main into the branch (not rebase).
 - 10 Oct 2026 (planner, after independent review; owner to confirm): in every writer that can insert a structure row for an existing employee (sales versionSalesStructureForGross / PUT /sales/employees/:code, sales POST /sales/employees/:code/structures, plant salary-input approve; employees.js inserts only fire when no structure exists): (a) if any structure row for that employee is dated AFTER the new row's date → refuse with 409 {error: 'A salary structure dated <latest date> already exists; date this change on or after <latest date>.'}, nothing written (whole request rolls back, master included); (b) if a row exists dated EXACTLY at the new date → update that row's gross/components in place and keep that row's own flags; (c) new date after every existing row (the normal case) → unchanged.
+
+- 10 Oct 2026 10:00 (planner): PR-2 split — plant LWF ships first (today's plant September release); sales LWF moves to PR-2b before the 25 Oct sales close. Loan headroom (headroom.js) counts LWF for both payrolls now (sales rows stay 0 until PR-2b).
 
 ## DECISIONS TAKEN BY CLAUDE CODE (safest option, owner to review)
 - D-1 (STEP 4) Structure rows are touched only when a structure actually needs new flags (forE or a row >= E
@@ -72,11 +86,19 @@ Coordinator: push feat/statutory-flags and open the PR (compare main...feat/stat
   read-only LWF box in SalaryInput.jsx shows the real value. Not in the IMPL file list; additive read.
 - D-6 (PHASE 2) integrity-fix repairs gross only (pt included in 'reported, not written'), per IMPL
   'fix syncs gross only'. Sales company match in the upload ignores case/spacing.
+- D-7 (PR-2 STEP 1) The AI-cache trigger DROP + CREATE runs inside one db.transaction() (plan: plain db.exec), so a
+  failed CREATE rolls the DROP back and the cache never runs without its trigger. Same SQL otherwise.
+- D-8 (PR-2 STEP 6) Employer LWF is shown on the payslip modal / PDF only when > 0 (plan: always), so every
+  payslip without LWF stays byte-identical (verified 77/77). Stage 7 table: the header and tfoot were one cell short
+  of the body rows (status + actions = 2 cells, 1 header cell) — one empty trailing th + tfoot colSpan 2 added so
+  header, body, tfoot and the DrillDownRow colSpan are all 25.
 - D-4 (STEP 4) The undo file carries the flags that were IN FORCE AT E before the batch (what September compute
   used), not the master's flags; numbers are left blank (blank = unchanged, per §4.2). Not a full restore (review
   minor 1, wording fixed in REVIEW FIX 4): a later row whose flags differed before the batch ends at the E value.
 
 ## FILES TOUCHED
+- PR-2: backend/src/database/schema.js (STEP 1), backend/src/__tests__/lwfSchema.test.js (new, STEP 1)
+- PR-2: backend/src/services/salaryComputation.js, backend/src/services/loans/headroom.js, backend/src/__tests__/lwfPlant.test.js (new), backend/src/__tests__/statutoryLoans.test.js (T12) (STEP 2)
 - backend/src/database/schema.js (STEP 1)
 - backend/src/__tests__/helpers/statutoryFixture.js (new, STEP 1)
 - backend/src/__tests__/statutorySchema.test.js (new, STEP 1; T8 added STEP 2)
@@ -104,8 +126,39 @@ Coordinator: push feat/statutory-flags and open the PR (compare main...feat/stat
 - backend/src/routes/salary-input.js GET /all (+ss.lwf_applicable, STEP 12)
 - docs/statutory-flags/sim/run.py, seed.js (new, PHASE 3; review checks added)
 - REVIEW FIXES: backend/src/services/statutoryFlags.js, routes/sales.js, routes/salary-input.js, __tests__/statutoryWriters.test.js, statutoryFlagsService.test.js, statutoryWriterGuard.test.js, frontend/src/pages/StatutoryFlags.jsx (+ dist), docs/statutory-flags/RUNBOOK.md, OPEN_ITEMS.md, CLAUDE.md
+- PR-2 STEP 4: salaryComputation.js (generatePayslipData), routes/payroll.js (/salary-register totals), routes/financeAudit.js (/report), routes/ai.js, config/schemaReference.js, __tests__/lwfOutputs.test.js (new)
+- PR-2 STEP 5: routes/payroll.js (two Excel handlers), __tests__/lwfOutputs.test.js (O3)
+- PR-2 STEP 6: frontend/src/pages/SalaryComputation.jsx, frontend/src/utils/payslipPdf.js, frontend/src/pages/FinanceAudit.jsx, frontend/dist
+- PR-2 STEP 7: docs/statutory-flags/VERIFY.sql (V11, V12), docs/loans/PROGRESS.md (§2)
+- PR-2 C4: docs/statutory-flags/sim/run_pr2.py, seed_pr2.js (new); CLAUDE.md (Section 0 entry)
 
 ## FRAGILE-FILE EDITS (before / after)
+- PR-2 STEP 2 salaryComputation.js (lines on 66c6a08 = 8b9561d, file unchanged on main) —
+  (1) after 583 (ESI block `}`), NEW:
+        const lwfAmt = (k, d) => { const v = parseFloat(getPolicyValue(db, k, d)); return Number.isFinite(v) && v >= 0 ? v : d; };
+        const lwfOn = !!salStruct.lwf_applicable && grossEarned > 0;
+        const lwfEmployee = lwfOn ? Math.round(lwfAmt('lwf_employee_amount', 5) * 100) / 100 : 0;
+        const lwfEmployer = lwfOn ? Math.round(lwfAmt('lwf_employer_amount', 20) * 100) / 100 : 0;
+  (2) 691 BEFORE `late_coming_deduction: lateComingDeduction, early_exit_deduction: earlyExitDeduction,`
+          AFTER  `late_coming_deduction: lateComingDeduction, early_exit_deduction: earlyExitDeduction, lwf_employee: lwfEmployee,`
+  (3) 697 BEFORE `… + loanRecovery + lateComingDeduction + earlyExitDeduction;`  AFTER `… + earlyExitDeduction + lwfEmployee;` (cap unchanged)
+  (4) 807 BEFORE `esiEmployee, esiEmployer,`  AFTER `esiEmployee, esiEmployer, lwfEmployee, lwfEmployer,`
+  UPSERT (saveSalaryComputation): column `lwf_employee, lwf_employer,` after `early_exit_deduction,`; placeholders `?, ?,` after the
+  early-exit `?,`; SET `lwf_employee = excluded.lwf_employee, lwf_employer = excluded.lwf_employer,` after early_exit; params
+  `comp.lwfEmployee || 0, comp.lwfEmployer || 0,` after `comp.earlyExitDeduction || 0,`.
+  UPSERT counts BEFORE plant 56 cols / 56 placeholders / 56 params / 53 SET → AFTER 58 / 58 / 58 / 55 (counted by script + P7 static test).
+  Sales UPSERT untouched: 45 / 45 / 45 / 42 before and after.
+  headroom.js 30/32: `'early_exit_deduction']` → `'early_exit_deduction', 'lwf_employee']`; `'other_deductions']` → `'other_deductions', 'lwf_employee']`.
+- PR-2 STEP 1 schema.js (lines on 66c6a08) — BEFORE 1705–1735:
+    safeAddColumn('salary_computations', 'early_exit_deduction', 'REAL DEFAULT 0');
+    … ai_explanation / ai_explanation_at safeAddColumn …
+    try { db.exec(`CREATE TRIGGER IF NOT EXISTS invalidate_salary_ai_cache AFTER UPDATE OF <29 columns … salary_held,
+          hold_reason, gross_changed> ON salary_computations FOR EACH ROW WHEN NEW.ai_explanation IS NOT NULL BEGIN … END;`); }
+  AFTER: after the early_exit_deduction line: safeAddColumn salary_computations lwf_employee / lwf_employer REAL DEFAULT 0;
+    insertPolicyIfMissing lwf_employee_amount '5', lwf_employer_amount '20'. Trigger: db.transaction(() => { DROP TRIGGER
+    IF EXISTS invalidate_salary_ai_cache; CREATE TRIGGER invalidate_salary_ai_cache AFTER UPDATE OF <same 29>,
+    lwf_employee, lwf_employer ON salary_computations … (WHEN/BEGIN body unchanged) })(). After cycle_end_date (~2578):
+    safeAddColumn sales_salary_computations lwf_employee / lwf_employer REAL DEFAULT 0. Force-reset list untouched.
 - STEP 1 schema.js — BEFORE (lines 2214–2218 on d1ad7bf):
     safeCreateIndex('...idx_sales_salary_structures_emp ON sales_salary_structures(employee_id, effective_from)');
     <blank>
@@ -184,3 +237,11 @@ After REVIEW FIX 4: 49 / 886, 0 failures; frontend build OK.
 After REVIEW PHASE 2: 49 / 886, 0 failures, 2 clean runs. Review sim: 68/68.
 After REVIEW FIX 5: 49 / 890, 0 failures.
 After MERGE origin/main f4b3b2f: 51 / 915, 0 failures, 2 clean runs; guard 9/9; sim 68/68.
+PR-2 baseline after merging origin/main 66c6a08: 60 / 1004, 0 failures.
+PR-2 STEP 1: lwfSchema 7/7 (+ statutorySchema, loansSchema green).
+PR-2 STEP 2: lwfPlant 18/18, T12 green; full suite 62 / 1029, 0 failures (= baseline 60 / 1004 + 2 suites / 25 tests).
+PR-2 STEP 4: lwfOutputs 5/5; suites touching STEP 4 files 8 / 142 green.
+PR-2 STEP 5: lwfOutputs 7/7 (+ holdReleaseRoute, manualDeductionsRetired green).
+PR-2 STEP 6: npm run build OK; payslip HTML byte check 77/77.
+PR-2 STEP 7: dist clean rebuild byte-identical.
+PR-2 C4 sim: branch 25/25, base 8/8 + dump comparison clean. PR-2 final: 63 / 1036, 0 failures, 2 clean runs.

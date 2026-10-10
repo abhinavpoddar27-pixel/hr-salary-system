@@ -27,9 +27,9 @@ const EARNED_BASE_DEFINITION = Object.freeze({
 /** Every deduction that ranks above the loan (D-12) — i.e. every component except loan_recovery. */
 const PRIOR_DEDUCTION_COMPONENTS = Object.freeze({
   plant: Object.freeze(['pf_employee', 'esi_employee', 'professional_tax', 'tds', 'advance_recovery',
-    'lop_deduction', 'other_deductions', 'late_coming_deduction', 'early_exit_deduction']),
+    'lop_deduction', 'other_deductions', 'late_coming_deduction', 'early_exit_deduction', 'lwf_employee']),
   sales: Object.freeze(['pf_employee', 'esi_employee', 'professional_tax', 'tds', 'advance_recovery',
-    'diwali_recovery', 'other_deductions']),
+    'diwali_recovery', 'other_deductions', 'lwf_employee']),
 });
 
 const p = (v) => { const x = toPaise(v || 0); return Number.isFinite(x) ? x : 0; };

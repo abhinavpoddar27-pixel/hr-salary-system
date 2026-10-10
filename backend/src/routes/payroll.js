@@ -227,6 +227,8 @@ router.get('/salary-register', (req, res) => {
     totalPFEmployee: records.reduce((s, r) => s + (r.pf_employee || 0), 0),
     totalPFLiability: records.reduce((s, r) => s + (r.pf_employee || 0) + (r.pf_employer || 0), 0),
     totalESI: records.reduce((s, r) => s + (r.esi_employee || 0) + (r.esi_employer || 0), 0),
+    totalLWFEmployee: records.reduce((s, r) => s + (r.lwf_employee || 0), 0),
+    totalLWFEmployer: records.reduce((s, r) => s + (r.lwf_employer || 0), 0),
     totalLoanRecovery: records.reduce((s, r) => s + (r.loan_recovery || 0), 0),
     totalAdvanceRecovery: records.reduce((s, r) => s + (r.advance_recovery || 0), 0),
     totalOTPay: records.reduce((s, r) => s + (r.ot_pay || 0), 0),
@@ -285,6 +287,8 @@ router.get('/salary-register-excel', (req, res) => {
         sc.pf_employer,
         sc.esi_employee,
         sc.esi_employer,
+        sc.lwf_employee,
+        sc.lwf_employer,
         sc.professional_tax,
         sc.tds,
         sc.advance_recovery,
@@ -334,11 +338,11 @@ router.get('/salary-register-excel', (req, res) => {
       'S.No', 'Code', 'Name', 'Dept', 'Desig', 'DOJ', 'Type', 'Gross',
       'Days Payable', 'Basic', 'DA', 'HRA', 'Conv', 'Other', 'Gross Earned',
       'OT Days', 'OT Pay', 'ED Days', 'ED Pay', 'Hol Duty',
-      'PF(EE)', 'PF(ER)', 'ESI(EE)', 'ESI(ER)', 'PT', 'TDS',
+      'PF(EE)', 'PF(ER)', 'ESI(EE)', 'ESI(ER)', 'LWF(EE)', 'LWF(ER)', 'PT', 'TDS',
       'Advance', 'Loan', 'Late Ded', 'LOP', 'Other Ded', 'Total Ded',
       'Net Salary', 'Total Payable', 'Take Home', 'Held', 'Hold Reason'
     ];
-    const NUM_COLS = HEADERS.length; // 37
+    const NUM_COLS = HEADERS.length; // 39 (LWF(EE)/LWF(ER) added, statutory flags PR-2)
 
     const regData = [
       [companyName],
@@ -374,6 +378,8 @@ router.get('/salary-register-excel', (req, res) => {
         Math.round(r.pf_employer || 0),
         Math.round(r.esi_employee || 0),
         Math.round(r.esi_employer || 0),
+        Math.round(r.lwf_employee || 0),
+        Math.round(r.lwf_employer || 0),
         Math.round(r.professional_tax || 0),
         Math.round(r.tds || 0),
         Math.round(r.advance_recovery || 0),
@@ -400,6 +406,7 @@ router.get('/salary-register-excel', (req, res) => {
       sum('conveyance_earned'), sum('other_allowances_earned'), sum('gross_earned'),
       '', sum('ot_pay'), '', sum('ed_pay'), sum('holiday_duty_pay'),
       sum('pf_employee'), sum('pf_employer'), sum('esi_employee'), sum('esi_employer'),
+      sum('lwf_employee'), sum('lwf_employer'),
       sum('professional_tax'), sum('tds'), sum('advance_recovery'), sum('loan_recovery'),
       sum('late_coming_deduction'), sum('lop_deduction'), sum('other_deductions'),
       sum('total_deductions'), sum('net_salary'), sum('total_payable'),
@@ -414,7 +421,7 @@ router.get('/salary-register-excel', (req, res) => {
       { wch: 10 }, { wch: 8 },
       { wch: 10 }, { wch: 8 }, { wch: 8 }, { wch: 8 }, { wch: 8 }, { wch: 12 },
       { wch: 6 }, { wch: 10 }, { wch: 6 }, { wch: 10 }, { wch: 10 },
-      { wch: 10 }, { wch: 10 }, { wch: 10 }, { wch: 10 }, { wch: 6 }, { wch: 8 },
+      { wch: 10 }, { wch: 10 }, { wch: 10 }, { wch: 10 }, { wch: 8 }, { wch: 8 }, { wch: 6 }, { wch: 8 },
       { wch: 10 }, { wch: 10 }, { wch: 8 }, { wch: 8 }, { wch: 8 },
       { wch: 10 }, { wch: 12 }, { wch: 12 }, { wch: 12 },
       { wch: 6 }, { wch: 30 }
@@ -440,6 +447,8 @@ router.get('/salary-register-excel', (req, res) => {
     const sumPFER = sum('pf_employer');
     const sumESIEE = sum('esi_employee');
     const sumESIER = sum('esi_employer');
+    const sumLWFEE = sum('lwf_employee');
+    const sumLWFER = sum('lwf_employer');
     const sumPT = sum('professional_tax');
     const sumTDS = sum('tds');
     const sumAdv = sum('advance_recovery');
@@ -471,6 +480,8 @@ router.get('/salary-register-excel', (req, res) => {
       ['PF (Employer)', sumPFER],
       ['ESI (Employee)', sumESIEE],
       ['ESI (Employer)', sumESIER],
+      ['LWF (Employee)', sumLWFEE],
+      ['LWF (Employer)', sumLWFER],
       ['Professional Tax', sumPT],
       ['TDS', sumTDS],
       ['Advance Recovery', sumAdv],
@@ -484,7 +495,7 @@ router.get('/salary-register-excel', (req, res) => {
       ['TOTAL PAYABLE', sumTotalPayable],
       ['TAKE HOME (incl. ED)', sumTakeHome],
       [],
-      ['Total CTC (Gross + PF(ER) + ESI(ER))', sumGross + sumPFER + sumESIER]
+      ['Total CTC (Gross + PF(ER) + ESI(ER) + LWF(ER))', sumGross + sumPFER + sumESIER + sumLWFER]
     ];
 
     const summarySheet = XLSX.utils.aoa_to_sheet(summaryData);
@@ -1248,13 +1259,16 @@ router.get('/salary-slip-excel', (req, res) => {
 
   // ── Sheet 1: SUMMARY ──────────────────────────────────────
 
-  const SUMMARY_COLS = 19; // S.No … DAYS
+  // Header list is the single source: SUMMARY_COLS and CAUTION_COLS derive from it
+  // (LWF added after ESI — statutory flags PR-2; 19 → 20 columns).
+  const SUMMARY_HEADER = ['S.No', 'EMP', 'NAME', 'DEPARTMENT', 'DESIGNATION', 'DOJ', 'GROSS', 'EARNED', 'OT PAY', 'ED PAY',
+    'PF', 'ESI', 'LWF', 'ADVANCE', 'LOAN', 'LOP', 'TOT DED', 'NET PAYABLE', 'TAKE HOME', 'DAYS'];
+  const SUMMARY_COLS = SUMMARY_HEADER.length; // S.No … DAYS
   const summaryData = [
     [companyName],
     [`SALARY SUMMARY — ${MONTHS[parseInt(month)]} ${year}`],
     [],
-    ['S.No', 'EMP', 'NAME', 'DEPARTMENT', 'DESIGNATION', 'DOJ', 'GROSS', 'EARNED', 'OT PAY', 'ED PAY',
-     'PF', 'ESI', 'ADVANCE', 'LOAN', 'LOP', 'TOT DED', 'NET PAYABLE', 'TAKE HOME', 'DAYS']
+    SUMMARY_HEADER
   ];
   // Track rows that need merge/note styling. Header is rows 0..3, data starts at row 4.
   const summaryMerges = [
@@ -1280,7 +1294,7 @@ router.get('/salary-slip-excel', (req, res) => {
       fmtDOJ(r.date_of_joining),
       r.gross_salary || 0, r.gross_earned || 0,
       r.ot_pay || 0, r.ed_pay || 0,
-      r.pf_employee || 0, r.esi_employee || 0,
+      r.pf_employee || 0, r.esi_employee || 0, r.lwf_employee || 0,
       r.advance_recovery || 0, r.loan_recovery || 0, r.lop_deduction || 0,
       r.total_deductions || 0, r.net_salary || 0, takeHome, r.total_payable_days || 0
     ]);
@@ -1306,18 +1320,18 @@ router.get('/salary-slip-excel', (req, res) => {
   const totals = rows.reduce((t, r) => {
     t.gross += r.gross_salary || 0; t.earned += r.gross_earned || 0;
     t.ot += r.ot_pay || 0; t.ed += r.ed_pay || 0;
-    t.pf += r.pf_employee || 0; t.esi += r.esi_employee || 0;
+    t.pf += r.pf_employee || 0; t.esi += r.esi_employee || 0; t.lwf += r.lwf_employee || 0;
     t.adv += r.advance_recovery || 0; t.loan += r.loan_recovery || 0; t.lop += r.lop_deduction || 0;
     t.ded += r.total_deductions || 0; t.net += r.net_salary || 0;
     t.takeHome += r.take_home || ((r.total_payable || r.net_salary || 0) + (r.ed_pay || 0));
     return t;
-  }, { gross: 0, earned: 0, ot: 0, ed: 0, pf: 0, esi: 0, adv: 0, loan: 0, lop: 0, ded: 0, net: 0, takeHome: 0 });
+  }, { gross: 0, earned: 0, ot: 0, ed: 0, pf: 0, esi: 0, lwf: 0, adv: 0, loan: 0, lop: 0, ded: 0, net: 0, takeHome: 0 });
 
   summaryData.push([
     '', '', 'TOTAL', '', '', '',
     Math.round(totals.gross), Math.round(totals.earned),
     Math.round(totals.ot), Math.round(totals.ed),
-    Math.round(totals.pf), Math.round(totals.esi),
+    Math.round(totals.pf), Math.round(totals.esi), Math.round(totals.lwf),
     Math.round(totals.adv), Math.round(totals.loan), Math.round(totals.lop),
     Math.round(totals.ded), Math.round(totals.net), Math.round(totals.takeHome), ''
   ]);
@@ -1335,7 +1349,7 @@ router.get('/salary-slip-excel', (req, res) => {
   summarySheet['!cols'] = [
     { wch: 5 }, { wch: 8 }, { wch: 28 }, { wch: 18 }, { wch: 16 }, { wch: 11 },
     { wch: 10 }, { wch: 10 }, { wch: 9 }, { wch: 9 },
-    { wch: 8 }, { wch: 8 }, { wch: 8 },
+    { wch: 8 }, { wch: 8 }, { wch: 8 }, { wch: 8 },
     { wch: 10 }, { wch: 8 }, { wch: 8 }, { wch: 10 }, { wch: 12 }, { wch: 6 }
   ];
   summarySheet['!merges'] = summaryMerges;
@@ -1346,7 +1360,7 @@ router.get('/salary-slip-excel', (req, res) => {
   // scanning the TOT DED / NET PAYABLE / TAKE HOME columns. The xlsx community
   // edition does not write fill colours, so cell comments are the most
   // reliable visual indicator across versions.
-  const CAUTION_COLS = [15, 16, 17]; // TOT DED, NET PAYABLE, TAKE HOME (0-indexed)
+  const CAUTION_COLS = ['TOT DED', 'NET PAYABLE', 'TAKE HOME'].map((h) => SUMMARY_HEADER.indexOf(h)); // [16, 17, 18] (was literal [15, 16, 17], L15)
   for (const { rowIdx, note } of heldCautionRows) {
     for (const colIdx of CAUTION_COLS) {
       const cellRef = XLSX.utils.encode_cell({ r: rowIdx, c: colIdx });
