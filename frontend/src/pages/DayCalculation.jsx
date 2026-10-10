@@ -108,9 +108,13 @@ export default function DayCalculation() {
   }
 
   const calcMutation = useMutation({
-    mutationFn: () => calculateDays({ month, year, company: selectedCompany }),
+    // P1-04 (finding P-2): Stage 6 always runs for ALL companies. day_calculations is
+    // UNIQUE(code, month, year), so a run filtered to one company label rewrote whole-month
+    // rows from a partial attendance set (an employee whose month spans two labels lost days).
+    // The register list below still follows the top-bar company filter.
+    mutationFn: () => calculateDays({ month, year, company: '' }),
     onSuccess: (res) => {
-      toast.success(`Day calculation complete for ${res.data.processed} employees`)
+      toast.success(`Day calculation complete for ${res.data.processed} employees (all companies)`)
       refetch()
       queryClient.invalidateQueries(['org-overview'])
       queryClient.invalidateQueries(['day-calc-staleness'])
@@ -251,13 +255,20 @@ export default function DayCalculation() {
             <CompanyFilter />
             <DateSelector {...dateProps} />
           </div>
-          <button
-            onClick={() => calcMutation.mutate()}
-            disabled={calcMutation.isPending}
-            className="btn-primary"
-          >
-            {calcMutation.isPending ? '⏳ Calculating...' : '▶ Run Day Calculation'}
-          </button>
+          <div className="flex flex-col items-end gap-1">
+            <button
+              onClick={() => calcMutation.mutate()}
+              disabled={calcMutation.isPending}
+              className="btn-primary"
+            >
+              {calcMutation.isPending ? '⏳ Calculating...' : '▶ Run Day Calculation'}
+            </button>
+            {selectedCompany && (
+              <p data-testid="stage6-all-companies-note" className="text-xs text-slate-500 max-w-xs text-right">
+                Day calculation always runs for all companies, so no employee's days are cut. The list below still shows {selectedCompany} only.
+              </p>
+            )}
+          </div>
         </div>
 
         {/* April 2026: stale-data banner. Surfaces when finance has

@@ -11,8 +11,8 @@ calcMutation + header (plus the new check script + docs + dist).
       payroll.js /calculate-days, recompute.js company handling — '' / omitted = all companies (confirmed by reading).
 - [x] P0.3 jest baseline: 85 suites / 1377 tests pass.
 - [x] P0.4 PLAN.md + PROGRESS.md written, committed, pushed. **STOP — waiting for planner "go".**
-- [ ] P1 calcMutation company '' + toast
-- [ ] P2 note under Run button
+- [x] P1 calcMutation company '' + toast
+- [x] P2 note under Run button
 - [ ] P3 build dist (own commit)
 - [ ] P4 stage6-all-companies-check.py on branch
 - [ ] P5 --base on origin/main worktree
@@ -22,3 +22,4 @@ calcMutation + header (plus the new check script + docs + dist).
 
 ## Owner / planner rulings
 - Q4 (planner default): always run for All companies, one-line note on screen.
+- GO 10 Oct (planner, on 01aaf4d). Q1: accept — restricted user's run also recalculates the other company; add a line to CLAUDE.md fragile. Q2: PROMPT wording as-is.
