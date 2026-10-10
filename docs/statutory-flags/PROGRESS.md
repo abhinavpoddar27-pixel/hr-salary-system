@@ -62,11 +62,13 @@
 - PR-2b STEP 0 — 1601698 `docs(statutory): PR-2b plan; PR-1 and PR-2 done in production`.
 - PR-2b STEP 1 — a099ed3 `feat(lwf): sales LWF ₹5/₹20 (flagged, earned gross > 0) in total_deductions and the loan headroom`. salesSalaryComputation.js exactly as IMPL_PR2b: LWF block after the ESI `}` (getPolicyNumber + `>= 0`, E7); `lwf_employee: lwfEmployee` in the loan salary object; `+ lwfEmployee` in total_deductions (comment updated); `lwf_employee`/`lwf_employer` in the return object. UPSERT (static parser, base vs branch): sales **45/45/45/42 → 47/47/47/44** (cols / placeholders / params / SET; both columns appended last; params `comp.lwf_employee || 0`, `comp.lwf_employer || 0`); plant 58/58/58/55 unchanged. Tests: lwfSales.test.js 21 (Q1 ×2, Q2 ×4, C5/N5 pin, Q3 ×5, Q4 ×5 + route compute over a paid+NEFT row, Q5 ×2, M1 pin) — **15 of 21 FAIL on the ad96604 file** (swap-verified); the 6 that pass assert unchanged behaviour (flag off, 0 days, zero gross, policy '0', headroom unit, M1 pin). salesLoanFixture SALES_SHORT_SQL + `COALESCE(lwf_employee,0)` (N6; scripts' componentShort stays 7-term). Proof: sales `--dump` on the branch 232 rows, md5 9a42643837639876b6c3c76eeb48afd0 = base. Neighbour suites loansSales*/statutory*/lwf* 17 / 233 green. `node --check` clean.
 
+- PR-2b STEP 2 — 3fa385d `feat(lwf): sales salary edit keeps LWF in the total and the loan re-plan; register totals`. sales.js `git diff -U0` hunks @@ 2943 (register totals + lwf_employee / lwf_employer), @@ 3010 (PUT loan salary object + `lwf_employee: existing.lwf_employee || 0`), @@ 3015/3020 (rebuild comment + `(existing.lwf_employee || 0)` in fixedDeductions) — nothing else in sales.js. Tests: Q6 ×5 (flagged no-loan edit other 100 → total = PF + ESI + 5 + 100, recompute = same row; loan edit other 9000 → loan 995, total 10000, net 10000, compute → same row, same ledger row, no new loan events, reconcile ok; unflagged edit = old formula; paid → 409, row unchanged; register totals 5×N / 20×N). Proof: dropping ONLY the 3010 term → Q6 loan test fails with loan 1000 / total 10005 / net 9995 (= the prototype); whole ad96604 sales.js → 3 of 5 Q6 fail (the 2 that pass pin unchanged behaviour). Suite file 26/26. Decision D-9 (test harness): one file-level startJwtApi (a second one in the same file gets getDb's closed singleton). `node --check` clean.
+
 ## LAST STEP
-PR-2b STEP 1 (sales compute + save).
+PR-2b STEP 2 (sales.js hunks).
 
 ## NEXT STEP
-PR-2b STEP 2 (sales.js: PUT /salary/:id loan object + rebuild, register totals; Q6). Keep: do NOT recompute sales September until D3 is answered.
+PR-2b STEP 3 (payslip data + sales register Excel 39 cols; O2, O4). Keep: do NOT recompute sales September until D3 is answered.
 
 ## OWNER RULINGS ADDED DURING THE BUILD
 (record date + ruling; BUILD_PLAN §1 holds the original set)
