@@ -9,8 +9,8 @@ Read PROMPT.md + PLAN.md. Never redo a ticked step. Phase 0 done; planner GO rec
       finance reject (financeAudit.js ~L1972), HR re-resolve (missPunch.js L119), Stage-6 backlog (leaveTriggers.js).
 - [x] P0.2 jest baseline: 85 suites / 1380 tests, all pass.
 - [x] P0.3 PLAN.md + PROGRESS.md committed + pushed.
-- [ ] P1 Edit MissPunch.jsx banner condition (after planner go).
-- [ ] P2 Build dist (own commit).
+- [x] P1 Edit MissPunch.jsx banner condition (after planner go).
+- [x] P2 Build dist (own commit). vs a fresh 3d20021 build only MissPunch differs in content (rest = hash refs).
 - [ ] P3 misspunch-banner-check.py on branch; `--base` on a 3d20021 build.
 - [ ] P4 jest after; self-debug + user-simulation pass.
 - [ ] P5 CLAUDE.md Last Session entry; push; HEAD == origin.
