@@ -68,10 +68,13 @@ export const getNightShifts = (params) => api.get('/attendance/night-shifts', { 
 export const confirmNightShift = (id) => api.post(`/attendance/night-shifts/${id}/confirm`)
 export const rejectNightShift = (id) => api.post(`/attendance/night-shifts/${id}/reject`)
 export const updateAttendanceRecord = (id, data) => api.put(`/attendance/record/${id}`, data)
-export const getAttendanceRegister = (params) => api.get('/attendance/register', { params })
+// fresh (P1-08): a Stage 5 save refetches this within the server's 5 s GET cache — no-cache so the grid shows the saved day
+// (`fresh` is declared further down; it is read only when this is called, after the module has loaded)
+export const getAttendanceRegister = (params) => api.get('/attendance/register', { params, ...fresh })
 export const getMonthlyAttendanceSummary = (month, year, company) => api.get('/attendance/monthly-summary', { params: { month, year, ...(company ? { company } : {}) } })
 export const getValidationStatus = (params) => api.get('/attendance/validation-status', { params })
-export const getEmployeeDailyAttendance = (code, month, year) => api.get(`/attendance/daily/${code}`, { params: { month, year } })
+// fresh (P1-08): Calendar View re-reads this right after a Stage 5 save — no-cache past the server's 5 s GET cache
+export const getEmployeeDailyAttendance = (code, month, year) => api.get(`/attendance/daily/${code}`, { params: { month, year }, ...fresh })
 export const updateRecordShift = (id, data) => api.put(`/attendance/record/${id}/shift`, data)
 export const recalculateMetrics = (month, year) => api.post('/attendance/recalculate-metrics', { month, year })
 
@@ -97,7 +100,6 @@ export const markEmployeeLeft = (code, data) => api.put(`/employees/${code}/mark
 export const calculateDays = (data) => api.post('/payroll/calculate-days', data)
 export const getDayCalculations = (params) => api.get('/payroll/day-calculations', { params })
 export const getDayCalculation = (code, month, year) => api.get(`/payroll/day-calculations/${code}`, { params: { month, year } })
-export const applyLateDeduction = (code, data) => api.put(`/payroll/day-calculations/${code}/late-deduction`, data)
 export const computeSalary = (data) => api.post('/payroll/compute-salary', data)
 export const getSalaryRegister = (month, year, company) => api.get('/payroll/salary-register', { params: { month, year, company } })
 export const getPayslip = (code, month, year) => api.get(`/payroll/payslip/${code}`, { params: { month, year } })
@@ -461,9 +463,8 @@ export const getSessionPages = (days) => api.get('/session-analytics/pages', { p
 export const getSessionErrors = (days) => api.get('/session-analytics/errors', { params: { days } })
 
 // ── Late Coming Management (Phase 1) ───────────────────
-// NOTE: the existing `applyLateDeduction` helper (line ~88) hits the Stage 6
-// day-calculations late-deduction endpoint. The new late-coming workflow uses
-// `applyLateComingDeduction` to avoid colliding with that legacy name.
+// NOTE: the legacy Stage 6 day-calculations late-deduction endpoint (and its
+// `applyLateDeduction` helper) was retired in Oct 2026 — it now answers 410.
 export const getLateComingAnalytics = (month, year, params) =>
   api.get('/late-coming/analytics', { params: { month, year, ...params } })
 export const getLateComingDeptSummary = (month, year, company) =>
@@ -660,7 +661,7 @@ export const salesExportNEFT = (params, download = false) =>
   api.get('/sales/export/bank-neft',
     download
       ? { params: { ...params, download: 'true' }, responseType: 'blob' }
-      : { params }
+      : { params, ...fresh }   // P1-03: preview counts must not come from the 5 s GET cache
   )
 // Statutory flags PR-3: sales ESI contribution file (read-only; preview skips the GET cache, N7).
 export const salesExportESI = (params, download = false) =>

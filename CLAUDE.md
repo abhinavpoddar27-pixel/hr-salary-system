@@ -1,5 +1,212 @@
+## Last Session — 2026-10-11 (Attendance enforcement PR-1: legacy Stage 6 late-deduction route closed)
+**Branch `fix/close-legacy-late-deduction` (on origin/main 8237205, main 18bef07 merged in), NOT merged.** Plan: private project `claude/attendance-review/PLAN_enforcement_v2.md`.
+- **Owner rulings 10 Oct:** D-1 the Attendance Review is the only place late/early deductions are decided; D-2 the August
+  legacy cuts stay as they are.
+- **Change:** `PUT /api/payroll/day-calculations/:code/late-deduction` answers 410 and writes nothing (same pattern as the
+  retired manual-deductions route; "Remove" with 0 days is refused too). Stage 6 drill-down: Apply/Remove buttons and the
+  mutation gone; a read-only note shows any stored legacy cut + remark, or "Late N times", and points to Analytics →
+  Attendance Review. `applyLateDeduction` helper removed from `utils/api.js` (no other caller). dist rebuilt.
+- **Deliberately NOT changed:** `services/recompute.js` still re-applies a stored `late_deduction_days` on a Stage 6 re-run.
+  The plan text said stop re-applying, but D-2 (later) keeps August as is — removing it would hand those days back on the
+  next August re-run. No new value can be written now, so the re-apply only ever holds old cuts. dayCalculation.js,
+  salaryComputation.js, schema.js untouched.
+- **Verified:** new `legacyLateDeductionRetired.test.js` 4 (all 4 fail on the old route); jest 88 suites / 1421;
+  `scripts/legacy-late-deduction-browser-check.py` 15/15 (hr on Stage 6: note for 9 lates, legacy 2-day cut shown read-only,
+  no panel for 2 lates, no Apply/Remove, PUT from the page → 410, all day_calculations rows byte-identical, 0 page errors).
+  **Not tested:** Railway.
+
+## Last Session — 2026-10-10 (P1-12: Sidebar/Header hooks after early returns → layout crash on role change)
+**Branch `fix/sidebar-header-hook-order`, NOT merged.** Frontend only (`components/layout/Sidebar.jsx`, `Header.jsx`). Plan + log:
+`docs/ux-bulk/prs/P1-12/PLAN.md`, `PROGRESS.md`. Finding X-1.
+- **Bug:** `NavItem` ran `React.useEffect` AFTER six role-based `return null`s; `Header` read `selectedCompany` with a hook
+  inside the conditional company-selector block. When the role or `allowedCompanies` changes IN PLACE — the `RequireAuth`
+  `/auth/me` refresh swaps the stored user without remounting the layout (stale localStorage role, admin changed the
+  user's role/companies) — the hook count changed and React threw #300/#310. Layout sits outside the page ErrorBoundary,
+  so the whole app went to the Sentry "Something went wrong" screen. Logout → login remounts Layout (no crash there).
+- **Fix:** NavItem computes `const hidden = <same 6 conditions>`, runs its hooks, then `if (hidden) return null` (useEffect
+  unchanged, planner Q1); Header's selector read lifted to the top (the two `useAppStore()` calls left as is, Q3). dist
+  rebuilt (own commit; vs a fresh 3d20021 build only the index chunk differs).
+- **Fragile:** every NavItem hook must stay ABOVE `if (hidden) return null` (comment at that line). No ESLint in the repo, so
+  `react-hooks/rules-of-hooks` catches nothing — FOLLOW-UP: add ESLint with that rule (would have caught both).
+- **Verified:** `backend/scripts/layout-hook-order-check.py` (Chromium, built dist, real admin/hr/finance + fictional
+  `test_viewer` logins, port 3112) 58/58 — per-role labels + selector, 6 in-place switches via an intercepted `/auth/me`
+  (admin→viewer, admin→hr, hr→admin, viewer→finance, all→one company ×2): no hook error, labels = target role, selector
+  right, a menu link still opens; 390px drawer; 0 page/console errors; 0 API ≥ 400 in the real-session parts. `--base` on
+  a 3d20021 worktree 15/15: all 6 switches crash (React #300/#310). Per-role labels + selector identical main vs branch.
+  jest 85 suites / 1380 before and after.
+- **Not tested:** Railway; Safari/Firefox; a chained switch in one page load (the refresh fires once per token per load —
+  one switch per load per pair, planner Q2).
+- **Found, not fixed:** the page reload sends a `session-analytics/events` beacon without a token → 401 (pre-existing).
+  NavItem `isActive` uses `item.to`, so a parent without `to` never auto-opens (pre-existing, not changed).
+## Last Session — 2026-10-10 (P1-11: Dashboard showed "All clear" when a check failed)
+**Branch `fix/dashboard-failed-call-not-all-clear`, NOT merged.** Frontend only (`pages/Dashboard.jsx`, action items). Plan + log:
+`docs/ux-bulk/prs/P1-11/PLAN.md`, `PROGRESS.md`. Finding H-4. Rulings Q1 (finance workbench too), Q2 (held retry = count only), Q3 (200 + success:false = failed).
+- **Bug:** the finance view's 4 action calls (salary-register held count, salary-manual-flags, late-coming deductions, miss-punches)
+  each `.catch(() => ({ success: false }))` → count 0 → admin "Pending Actions" read "{label}: All clear" and the finance workbench
+  showed a green 0 card + "All caught up — nothing pending". A failed check looked like nothing to do.
+- **Fix:** `financeData.actionsFailed` (per item, `success !== true`). Admin list: failed item → amber dot, "Couldn't check {label}" +
+  Retry. Finance cards: "—", amber border, "Couldn't check — Retry" (button stops the card's link); banner never "All caught up"
+  while a check failed ("{n} check(s) couldn't load — retry above"), failed items excluded from the pending total.
+  `retryAction(key)` re-calls ONLY that API (no page blank); held retry updates only the held count (Q2). A retry answer that lands
+  after a month/company reload is dropped (`financeFetchSeq` ref). Loaded items unchanged. dist rebuilt (own commit; vs a fresh
+  3d20021 build only the Dashboard chunk differs, index only by chunk hashes).
+- **Fragile:** the four item keys (`heldSalaries`, `manualFlags`, `lateDeductions`, `missPunchFinance`) must match in `actions`,
+  `actionsFailed`, the `retryAction` loaders and both render lists — a fifth action item needs all four. Retry loaders repeat the
+  Promise.all params by hand. The check script reads `data-action-failed` attributes.
+- **Verified:** `backend/scripts/dashboard-failed-call-check.py` (Chromium, built dist, admin + finance, fictional T97xx, port 3111)
+  66/66 — control (all real), each of the 4 calls → 500: that item "Couldn't check", other 3 real, Retry → real value; finance
+  200 {success:false} → "—" + banner, Retry no navigation; all 4 fail + retry-while-failing stays failed; 390px; 0 page errors,
+  console errors only from the intercepted call. `--base` on a 3d20021 worktree 3/3: "All clear", green 0s, "All caught up".
+  jest 85 suites / 1380 before and after.
+- **Not tested:** Railway; Safari/Firefox; the stale-retry guard (month changed while a Retry is in flight) in a browser.
+- **Found, not fixed:** (1) salary-register failure makes the admin KPI cards read "Pending" / "0 employees" / PF+ESI ₹0.0L — same as
+  "not computed yet"; (2) readiness failure shows score 0 "Not Ready" with an empty checklist; (3) Department Cost table silently
+  hidden when its call fails; (4) the finance-view KPI half has no error UI at all; (5) backend `GET /finance-audit/salary-manual-flags`
+  catch returns `success: true` with zero counts on a SQL error, so a server-side failure there still reads 0 (the UI can't tell).
+## Last Session — 2026-10-10 (P1-10: Night Shift "Undo" actually rejected the pairing)
+**Branch `fix/nightshift-undo-relabel`, NOT merged.** Frontend only (`pages/NightShift.jsx`). Plan + log:
+`docs/ux-bulk/prs/P1-10/PLAN.md`, `PROGRESS.md`. Finding P-6.
+- **Bug:** on a confirmed medium/low pair the "Undo" button called the reject route (not back to Pending), and the
+  pending-row "✕" also rejected in one click, with no label or confirm. Reject (`attendance.js` L249–270) marks the pair
+  rejected, clears the IN day's OUT time and sends it back to Miss Punches as MISSING_OUT; the next-morning OUT stands alone.
+  No UI path back.
+- **Fix:** "Undo" → "Reject pairing"; "✕" kept, with aria-label + title "Reject pairing". Both open the existing
+  `ConfirmDialog` naming the employee, code, IN/OUT dates + times, the consequence and "This cannot be undone here"
+  (+ "confirmed earlier" for a confirmed pair); "Keep pairing" / backdrop sends nothing. stopPropagation on both buttons
+  (row no longer expands on click). Confirm untouched. dist rebuilt (own commit; vs a fresh 3d20021 build only the
+  NightShift chunk + the index preload list differ).
+- **Fragile:** the dialog wording describes the backend reject route — change both together.
+- **Verified:** `backend/scripts/nightshift-reject-confirm-check.py` (Chromium, built dist, hr, fictional T9601–T9605,
+  port 3110) 44/44 — labels/aria, cancel = 0 POST + DB unchanged, reject = is_rejected 1 + MISSING_OUT, confirmed pair,
+  high pair no button, double-click, backdrop, 390px, 0 page/console errors, 0 API ≥ 400. `--base` on 3d20021 9/9:
+  one click rejects, no dialog. jest 85 suites / 1380 before and after.
+- **Not tested:** Railway; Safari/Firefox; keyboard Escape (ConfirmDialog has none).
+- **Found, not fixed:** F-a no un-reject (confirm route clears the flag but restores no attendance field); F-b reject
+  leaves `actual_hours` + shift metrics; F-c confirm/reject have no role guard (→ P2-11); F-d re-import INSERT OR REPLACE
+  may revive a rejected pair (unverified); F-e after reject/confirm the row still shows Pending until reload —
+  `getNightShifts` lacks `fresh` (server GET max-age=5), same on main.
+## Last Session — 2026-10-10 (P1-09: Miss Punch "all resolved" banner followed the filter, not real work)
+**Branch `fix/misspunch-all-resolved-banner`, NOT merged.** Frontend only (`pages/MissPunch.jsx`, banner + progress label).
+Plan + log: `docs/ux-bulk/prs/P1-09/PLAN.md`, `PROGRESS.md`. Finding P-5. Planner rulings Q1–Q3 (10 Oct).
+- **Bug:** the green "All miss punches resolved! Proceed to Stage 3" card used `pendingCount === 0 && records.length > 0`,
+  counted over the CURRENT status chip. On Approved / Finance Pending every row is resolved, so the card showed while HR
+  and finance still had work.
+- **Fix:** card shows only when the miss-punch query succeeded (`!isError`, summary present), `summary.total > 0`,
+  `summary.pending + summary.financePending === 0`, and no department filter (the summary is department-scoped; the
+  card is a month claim). `summary.pending` (= resolved 0) is used, NOT `hrPending`: a finance REJECT sets resolved 0 +
+  status 'rejected', which `classify()` files under `rejected` though it is back with HR (Q1). Progress label gets
+  " (this filter)" when a status chip other than All is active (Q3). dist rebuilt (own commit; vs a fresh 3d20021 build
+  only the MissPunch chunk differs in content; the rest is hash references).
+- **Fragile:** the rule depends on the server summary ignoring `state` and including legacy `pending`
+  (`routes/attendance.js` GET /miss-punches). If someone makes the summary follow the chip, the card is wrong again.
+- **Verified:** `backend/scripts/misspunch-banner-check.py` (Chromium, built dist, real hr + finance logins, fictional T97xx,
+  routes driven over HTTP + one UI approve) 33/33, two runs: no card on All / Approved / Finance Pending / Rejected while
+  work is open, none while only a finance-rejected row waits for HR, card on every chip once clear, hidden with a dept
+  filter, none on a 500, 0 page errors. `--base` on a fresh 3d20021 build 4/4 (card wrongly on Approved + Finance
+  Pending). jest 85 suites / 1380 before and after.
+- **Not tested:** Railway; production data; Safari/Firefox; mobile widths.
+- **Found, not fixed:** (1) stale data after the last approve: the mutation only `refetch()`es the current chip's query,
+  other chips come from react-query (global staleTime 30 s), and `getMissPunches` is not sent `no-cache` while server.js
+  answers GETs with max-age=5 — the card (and counts) appear only after a reload / ~30 s. Fix = `fresh` on the read +
+  invalidate the `['miss-punches']` prefix. (2) Finance opening Stage 2 gets a 403 + console error from
+  `GET /features/leave-automation/status` (hr/admin only) on every visit. (3) Stray "0" near L417 is P1-24.
+## Last Session — 2026-10-10 (P1-08: Stage 5 grid did not refresh after a correction)
+**Branch `fix/stage5-grid-refresh`, NOT merged.** Frontend only (`pages/AttendanceRegister.jsx`, `utils/api.js` 2 lines). Plan + log:
+`docs/ux-bulk/prs/P1-08/PLAN.md`, `PROGRESS.md`. Finding P-4. Rulings Q1 (no-cache on the register read), Q2 (calendar too).
+- **Bug:** Stage 5 → expand employee → click a day → Save. `updateMutation` only refetched the summary; the daily grid
+  query `['attendance-register', month, year, code]` was never invalidated, so the cell kept the old status/times/colour
+  until a reload (76 Stage 5 edits in 90 days in prod). Recalculate Metrics (rewrites `is_night_shift`) had the same gap.
+- **Fix:** update + recalc `onSuccess` invalidate `['attendance-register', month, year]` (prefix, copied from pbaMutation);
+  update also invalidates the edited employee's `['daily-attendance', code, month, year]` (Calendar View; mutate now
+  passes `code`), recalc every `['daily-attendance']` (calendar shows "NH" from is_night_shift). `getAttendanceRegister`
+  sends `no-cache` (`fresh`): a save < 5 s after the grid loaded refetched inside the server's `max-age=5` window and the
+  browser handed back the pre-save copy (proven: check case B failed without it). `getEmployeeDailyAttendance` (Calendar View;
+  also read by DayCalculation) sends `no-cache` too (case D2 failed without it: calendar opened < 5 s before a save). dist rebuilt (own commit; hash-normalised
+  vs a fresh 2d96842 build only the AttendanceRegister chunk + main index chunk differ).
+- **Fragile:** the page is an accordion (one grid open). The grid key and the calendar key are separate — a new view on the
+  expanded row needs its own invalidation. `fresh` is declared lower in api.js than `getAttendanceRegister` (read at call time — fine).
+- **Verified:** `backend/scripts/stage5-grid-refresh-check.py` (Chromium, built dist, hr login, fictional T9801/T9802,
+  weekday-aware days, port 3108) 34/34 twice — slow save, quick save + back-to-back edit, switch employee and back, calendar
+  after save, calendar opened < 5 s before a save, recalc turns a night cell purple, 390 px, 0 page/console errors, 0 API ≥ 400. `--base` on a 2d96842 worktree
+  5/5: PUT 200 + DB saved, cell still old after 3 s, right only after reload. jest 85 suites / 1377 before and after.
+- **Not tested:** Railway; Safari/Firefox (`no-cache` request header); real production data.
+- **Found, not fixed:** (1) An unresolved miss-punch cell edited through this editor stays red:
+  `PUT /attendance/record/:id` sets `stage_5_done` but not `miss_punch_resolved`, and `cellClass()` checks miss-punch first.
+  (2) `updateMutation` has no `onError` (a failed save shows only the global handler, editor stays open).
+## Last Session — 2026-10-10 (P1-06: leave rejection reason was dropped)
+**Branch `fix/leave-rejection-reason`, NOT merged.** Frontend only (`pages/LeaveManagement.jsx`). Plan + log:
+`docs/ux-bulk/prs/P1-06/PLAN.md`, `PROGRESS.md`. Finding H-3. Planner rulings: reason in the row + detail; F-a/F-b later.
+- **Bug:** the Reject window sent `{ rejection_reason, rejected_by }`; `PUT /api/leaves/:id/reject` reads `req.body.reason`
+  and stores `reason || ''` → every rejection from the screen was saved with an empty reason (prod: 1 rejected leave ever,
+  empty). The reason was also never shown anywhere. Sentry 0 issues (silent 200).
+- **Fix:** mutation sends `{ reason: trimmed }` (rejecter comes from the JWT, as before); Confirm Reject disabled (and
+  styled disabled) until the trimmed reason has ≥ 5 chars, hint + live count; Rejected rows show "by X: reason" under the
+  status pill (truncated, full text in tooltip) and "Rejection reason: … (rejected by X)" in the expanded detail; old
+  rows with '' show "—". Route unchanged (it already reads `reason`; list already returns `rejection_reason`). dist rebuilt.
+- **Fragile:** the 5-char minimum is a UI rule only (`REJECT_REASON_MIN`); the route still accepts '' from an API caller.
+  The rejecter is stored in `approved_by` (same column as the approver). The Reject button click bubbles to the row and
+  toggles its drill-down (pre-existing, harmless).
+- **Verified:** new `leaveRejectReason.test.js` 5/5 (real JWTs: hr + finance store the reason, the old body key stores '',
+  viewer 403, anon 401, list returns the field); jest 85/1377 → 86/1382. `backend/scripts/leave-reject-reason-check.py`
+  (Chromium, built dist, scratch DB, hr + finance, fictional T960x, port 3106) 29/29 — short/spaces-only → disabled,
+  valid → Rejected, DB = typed text trimmed, row + detail show it, reopen empty, legacy '' → "—", 390px, 0 page/console
+  errors, 0 API ≥ 400. `--base` on an origin/main worktree 3/3: Confirm enabled with 3 chars, DB reason ''.
+- **Not tested:** Railway; Safari/Firefox; real production data. Branch based on 2d96842 (main since moved to b8b9759 —
+  no overlap with these files).
+- **Found, not fixed:** F-a `PUT /:id/reject` returns success even when nothing changed (row not Pending / unknown id)
+  and writes no audit_log row; F-b the route has no server-side minimum, so an API caller can still store an empty reason.
+## Last Session — 2026-10-10 (P1-04: Stage 6 run with a company selected cut rows → always all companies)
+**Branch `fix/stage6-company-scope-guard`, NOT merged.** Frontend only (`pages/DayCalculation.jsx`: calcMutation + header).
+Plan + log: `docs/ux-bulk/prs/P1-04/PLAN.md`, `PROGRESS.md`. Finding P-2. Ruling Q4 (always all companies + note), Q1, Q2.
+- **Bug:** both Stage 6 buttons (header Run + stale-banner Recalculate) sent the top-bar company. `day_calculations` is
+  UNIQUE(code, month, year), so a run filtered to one label rewrote whole-month rows from that label's attendance only
+  (same mechanism as the 10 Oct nightly-sweep bug). Reproduced: T9605 with 1–15 under A + 16–30 under 'Default' → 30 → 15.
+- **Fix:** calcMutation always sends `company: ''` (backend: blank = every company, row company from the master via
+  normalizeCompany — same as HR's "All Companies" run). One line under Run when a company is selected ("Day calculation
+  always runs for all companies, so no employee's days are cut. The list below still shows {company} only."); toast says
+  "(all companies)". List / staleness / leave-request queries still follow the top-bar filter. Header row now
+  `flex-wrap gap-3` (Run button was off-screen at 390px). dist rebuilt (own commits; vs a fresh 2d96842 build only the
+  DayCalculation chunk differs). Backend untouched.
+- **Fragile:** (1) A company-restricted user (allowed one company, auto-selected) now recalculates the OTHER company's
+  employees too — accepted (Q1: correct and non-destructive; the route never checked company). (2) An employee whose
+  master company is non-canonical may get a different company tag after the run (normalizeCompany fallback) and drop out
+  of / into the filtered list — that is existing "All Companies" behaviour. (3) Any new Stage 6 trigger in the UI must
+  also send `company: ''`.
+- **Verified:** `backend/scripts/stage6-all-companies-check.py` (Chromium, built dist, scratch DB, fictional T960x in two
+  companies, hr + a restricted hr user) 28/28 — body company '', both companies' rows at 30 days incl. the split employee,
+  note only with a company, list filtered, toast, restricted user, 390px, 0 page/console errors, 0 API ≥ 400.
+  `--base` on a 2d96842 worktree 4/4: body = A, split employee 15 days, company B rows absent. jest 85 / 1377 before and after.
+- **Not tested:** Railway; production data; the stale-banner Recalculate button in the browser (needs finance miss-punch
+  changes; same mutation, read in code); Safari/Firefox.
+- **Found, not fixed:** after Run the register list can keep showing the pre-run rows — its GET carries the server's
+  `private, max-age=5` header and `getDayCalculations` does not send `no-cache` (same class as the loans/leave `fresh` fix);
+  re-opening the page shows the new rows.
+## Last Session — 2026-10-10 (P1-03: Sales NEFT file paid people again on every re-download)
+**Branch `fix/sales-neft-finalized-only`, NOT merged, no PR.** Plan + log: `docs/ux-bulk/prs/P1-03/PLAN.md`, `PROGRESS.md`.
+Finding S-1, ruling Q12 = C (keep computed/reviewed/finalized, exclude paid, always confirm; "finalized only" → P6-03).
+- **Bug:** `generateSalesNEFT` filtered `status != 'hold'`, so rows already marked `paid` went into every re-downloaded
+  bank file (double payment) and were re-stamped; the page downloaded with NO confirm when nobody lacked bank details.
+- **Fix:** `salesExportFormats.js generateSalesNEFT` only: `status NOT IN ('hold','paid')`; `totals` gains `byStatus`
+  {computed, reviewed, finalized}, `notFinalized`, `alreadyExported` (still in the file — lost-file re-download keeps
+  working), `excludedPaid`, `excludedPaidAmount`. CSV header/lines/filename/stamping/audit unchanged; `routes/sales.js`
+  untouched (totals pass through). `SalesSalaryCompute.jsx`: the confirm ALWAYS opens — "Download bank (NEFT) file?",
+  "N people · ₹X", lines only when > 0 (not finalized / already in an earlier NEFT file / marked paid — left out (₹) /
+  no bank account or IFSC — left out + the old table); no held count (ruling). `utils/api.js`: preview sends `fresh`
+  (no-cache). Review fixes: `downloadNEFT` has a `useRef` in-flight guard (two clicks → one file); button says
+  "Download NEFT (N people)"; the duplicate "Total to export" line is gone. Low-2 (preview/download race) is in the register. dist rebuilt (own commit; api.js lives in the index chunk, so most chunk hashes rotate).
+- **Fragile:** the preview counts and the file come from one function — keep the eligibility filter in ONE query. A paid
+  row keeps its original `neft_exported_at` (the paid guardrail only needs it set). A month with paid rows gets a shorter
+  file and new Sr numbers. Someone paid outside the app but not marked paid is still in the file (only the "earlier NEFT
+  file" line warns). Frontend `ALLOWED_MOVES` drift vs backend (`hold → finalized`) still pre-existing.
+- **Verified:** jest 81/1332 → 82/1340; new `salesNeftEligibility.test.js` 8 (6 fail on the 96ee482 service; the 2 that
+  pass: no-paid byte identity, finance 403). Plant bank file md5 and a no-paid sales NEFT md5 identical 96ee482 vs branch
+  on a scratch DB. `backend/scripts/sales-neft-confirm-check.py` (Chromium, built dist, hr, port 3103, fictional S9xx)
+  40/40 — counts/₹ lines exact, double click = 1 download request + 1 audit row (39/40 with the guard removed), Cancel = no download/stamp/audit, download = 7 lines without paid/hold, only file rows
+  stamped, paid stamp untouched, Nov (no missing) still confirms, preview no-cache, 390px, 0 page/console errors, 0 API ≥ 400.
+  `--base` on a 96ee482 archive 5/5: no confirm, paid row in the file and re-stamped.
+- **Not tested:** Railway; real production data (Jul–Sep have 0 paid rows, so those files are byte-identical); Safari/Firefox.
 ## Last Session — 2026-10-10 (Gate pass PR-2: early exits allow for gate passes everywhere; detection fixed for night shifts)
-**Branch `fix/gate-pass-early-exit-wiring` (on origin/main 69f00a3), NOT merged.** Spec: private project `claude/gate-pass-quota/SPEC.md`.
+**Branch `fix/gate-pass-early-exit-wiring` (on origin/main 69f00a3), MERGED (#96).** Spec: private project `claude/gate-pass-quota/SPEC.md`.
 - **Found:** `services/earlyExitDetection.js` compared every punch-out with the DAY end time (night 12HR in 19:58 / out 08:09 →
   "711 min early"); ~18–25% of all `early_exit_detections` rows were such misreads (Sep 1–15: 270 of 1,472). The 1 Oct reimport
   had overwritten detection's `attendance_processed` writes with import's (correct, gate-pass-blind) values, so Attendance
@@ -24,7 +231,7 @@
   Sep values = import's. **Not tested:** Railway; a full-month replay of production rows (SQL tool shows 100 rows).
 
 ## Last Session — 2026-10-10 (Gate pass modal: name the month)
-**Branch `fix/gate-pass-month-label` (on origin/main 139faa7), NOT merged.** Frontend only (`components/GatePasses.jsx`).
+**Branch `fix/gate-pass-month-label` (on origin/main 139faa7), MERGED (#95).** Frontend only (`components/GatePasses.jsx`).
 - **Report:** hr created a September Short Leave for 19222; the modal still said "Used: nothing yet". The data was right —
   the modal opens on today's date (October) and the list follows the page's month picker (October). Nothing said which month.
 - **Fix:** label "This month" → "Allowance for <Month YYYY>" of the chosen date; "Used:" → "Used in <Month>:". A pass dated
