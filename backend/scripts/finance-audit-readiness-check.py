@@ -92,9 +92,16 @@ try:
             ctx = b.new_context(viewport={'width': 1440, 'height': 900})
             pg, errs, cons, bad = login(ctx, 'finance', 'Finance@2025')
             open_readiness(pg, 9)
+            # React error boundaries do NOT catch event-handler errors: the click throws an uncaught
+            # ReferenceError (window.onerror → frontend error log) and the card simply does nothing.
             card(pg, 'UNAPPROVED MANUAL FLAGS').click(); time.sleep(1)
-            check('old code: manual-flags click throws setActiveTab ReferenceError', True, any('setActiveTab' in e for e in errs))
-            check('old code: ErrorBoundary shown', True, pg.get_by_text('Something went wrong').count() > 0)
+            check('old code: manual-flags click throws "setActiveTab is not defined"', True, any('setActiveTab is not defined' in e for e in errs))
+            check('old code: tab does not switch (still Readiness)', True, tab_active(pg, 'Readiness'))
+            n0 = len(errs); card(pg, 'HELD SALARIES UNREVIEWED').click(); time.sleep(1)
+            check('old code: HELD click throws "navigate is not defined"', True, any('navigate is not defined' in e for e in errs[n0:]))
+            n1 = len(errs); card(pg, 'DAY CALC WITHOUT SALARY').click(); time.sleep(1)
+            check('old code: SALARY click throws "navigate is not defined"', True, any('navigate is not defined' in e for e in errs[n1:]))
+            check('old code: still on /finance-audit', True, '/finance-audit' in pg.url)
             print('  page errors:', errs)
             b.close()
         else:
@@ -112,7 +119,8 @@ try:
             card(pg, 'UNAPPROVED MANUAL FLAGS').click(); time.sleep(1)
             check('Manual Interventions tab active', True, tab_active(pg, 'Manual Interventions'))
             check('still on /finance-audit', True, '/finance-audit' in pg.url)
-            check('no ErrorBoundary', 0, pg.get_by_text('Something went wrong').count())
+            check('no "Something went wrong"', 0, pg.get_by_text('Something went wrong').count())
+            check('no page error so far', [], errs)
 
             print('\n— HELD card → Finance Verification, Red Flags, held filter —')
             open_readiness(pg, 9)

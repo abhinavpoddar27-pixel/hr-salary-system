@@ -16,8 +16,8 @@
 | 2 | dist rebuild (own commit) | done | build clean 17 s; vs fresh a5aec9a build (worktree /tmp/p101-main) only the FinanceAudit chunk differs (hash-normalised); 4b0f406 |
 | 3 | jest before/after | done | before (a5aec9a worktree) 81 suites / 1332 pass, 0 red; after (branch) 81 / 1332 pass, 0 red (no backend change; TDS parked tests currently green) |
 | 4 | check script written | done | backend/scripts/finance-audit-readiness-check.py (fictional T900x data; `--base` + APP_ROOT for the old-code run) |
-| 5 | script on branch dist | done | 26/26 pass (finance + admin; manual-flags→Interventions, HELD→/finance-verification Red Flags + salary_held chip, DAY CALC→/pipeline/salary, no-action card inert, 0 page/console errors, 0 API ≥ 400). Seed fix: salary_manual_flags has no company column |
-| 6 | script on origin/main dist (worktree /tmp) — crash recorded | pending | |
+| 5 | script on branch dist | done | 26/26 (27/27 after step-6 script edit) pass (finance + admin; manual-flags→Interventions, HELD→/finance-verification Red Flags + salary_held chip, DAY CALC→/pipeline/salary, no-action card inert, 0 page/console errors, 0 API ≥ 400). Seed fix: salary_manual_flags has no company column |
+| 6 | script on origin/main dist (worktree /tmp) — crash recorded | done | a5aec9a worktree /tmp/p101-main, `--base` 5/5: page errors `setActiveTab is not defined` (manual flags), `navigate is not defined` ×2 (HELD, SALARY); tab never switches, URL never changes. NOTE: NOT an ErrorBoundary screen (React boundaries don't catch event-handler errors) — the card is silently dead. Branch re-run after script edit: 27/27 |
 | 7 | self-debug + user simulation + v2 notes | pending | |
 | 8 | CLAUDE.md Last Session entry | pending | |
 | 9 | final push + HEAD == origin | pending | |

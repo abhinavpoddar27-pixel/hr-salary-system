@@ -8,7 +8,7 @@ Status: **Phase 0 ready — waiting for "go". No code written.**
   L635 `() => navigate('/pipeline/salary')` — neither identifier is declared in ReadinessTab's scope.
 - L1269 `const navigate = useNavigate()`, L1272 `const [activeTab, setActiveTab] = useState(...)` — both inside `FinanceAudit()`.
 - L1367 `{activeTab === 'readiness' && <ReadinessTab />}` — rendered with no props.
-- `useNavigate` is already imported (L3). Any click on a card that has an action → ReferenceError → ErrorBoundary.
+- `useNavigate` is already imported (L3). Any click on a card that has an action → uncaught ReferenceError (event handler, so NOT caught by the ErrorBoundary — the card silently does nothing; confirmed in step 6).
 
 ## 2. Which cards are clickable today (FACT, backend `routes/financeAudit.js` readiness blockers)
 | Blocker type | Action branch | Target |
