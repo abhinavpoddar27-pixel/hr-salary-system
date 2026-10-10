@@ -121,6 +121,8 @@ try:
             check('still on /finance-audit', True, '/finance-audit' in pg.url)
             check('no "Something went wrong"', 0, pg.get_by_text('Something went wrong').count())
             check('no page error so far', [], errs)
+            kpi = pg.locator('div.card.p-3', has=pg.locator('div.uppercase', has_text='Pending'))
+            check('user sim: Pending KPI = 1 (the seeded flag finance came to approve)', '1', kpi.first.locator('div.text-xl').inner_text().strip())
 
             print('\n— HELD card → Finance Verification, Red Flags, held filter —')
             open_readiness(pg, 9)
@@ -131,6 +133,8 @@ try:
             chip = pg.locator('button.rounded-full', has_text='salary held')
             check('"salary held" chip selected', True, chip.count() == 1 and 'bg-blue-600' in (chip.get_attribute('class') or ''))
             check('held test employee listed', True, pg.get_by_text('TEST EMP 2').count() > 0)
+            pg.go_back(); pg.wait_for_load_state('networkidle'); time.sleep(.8)
+            check('user sim: browser Back returns to Finance Audit readiness', True, '/finance-audit' in pg.url and tab_active(pg, 'Readiness'))
 
             print('\n— SALARY card → Stage 7 —')
             open_readiness(pg, 9)
@@ -165,6 +169,14 @@ try:
             check('admin: 0 page errors', [], errs2)
             check('admin: 0 console errors', [], cons2)
             check('admin: 0 API ≥ 400', [], bad2)
+
+            print('\n— phone width 390px (finance): manual-flags card —')
+            ctx3 = b.new_context(viewport={'width': 390, 'height': 844})
+            pg3, errs3, cons3, bad3 = login(ctx3, 'finance', 'Finance@2025')
+            open_readiness(pg3, 9)
+            card(pg3, 'UNAPPROVED MANUAL FLAGS').click(); time.sleep(1)
+            check('phone: Manual Interventions tab active', True, tab_active(pg3, 'Manual Interventions'))
+            check('phone: 0 page errors', [], errs3)
             b.close()
 finally:
     srv.terminate(); shutil.rmtree(WORK, ignore_errors=True)

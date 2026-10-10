@@ -18,7 +18,7 @@
 | 4 | check script written | done | backend/scripts/finance-audit-readiness-check.py (fictional T900x data; `--base` + APP_ROOT for the old-code run) |
 | 5 | script on branch dist | done | 26/26 (27/27 after step-6 script edit) pass (finance + admin; manual-flags→Interventions, HELD→/finance-verification Red Flags + salary_held chip, DAY CALC→/pipeline/salary, no-action card inert, 0 page/console errors, 0 API ≥ 400). Seed fix: salary_manual_flags has no company column |
 | 6 | script on origin/main dist (worktree /tmp) — crash recorded | done | a5aec9a worktree /tmp/p101-main, `--base` 5/5: page errors `setActiveTab is not defined` (manual flags), `navigate is not defined` ×2 (HELD, SALARY); tab never switches, URL never changes. NOTE: NOT an ErrorBoundary screen (React boundaries don't catch event-handler errors) — the card is silently dead. Branch re-run after script edit: 27/27 |
-| 7 | self-debug + user simulation + v2 notes | pending | |
+| 7 | self-debug + user simulation + v2 notes | done | v2 script 31/31: + Pending KPI = 1 after the tab switch, browser Back from Finance Verification lands on Readiness, 390px phone click works. Self-debug: (a) step-6 bug proof showed the crash is a silent dead card, not an ErrorBoundary screen — PLAN wording corrected; (b) loose KPI locator tightened; (c) grep: no other frontend link to the non-existent `/finance-verify` page. No source change needed for v2. |
 | 8 | CLAUDE.md Last Session entry | pending | |
 | 9 | final push + HEAD == origin | pending | |
 
