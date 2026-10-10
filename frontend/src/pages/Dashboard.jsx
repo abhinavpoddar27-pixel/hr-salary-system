@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react'
+import React, { useState, useEffect, useCallback, useRef } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { Link } from 'react-router-dom'
 import { BarChart, Bar, LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell } from 'recharts'
@@ -63,8 +63,10 @@ export default function Dashboard() {
   }
 
   // ── Finance dashboard data fetch ──
+  const financeFetchSeq = useRef(0) // P1-11: a Retry that resolves after a month/company change is dropped
   const fetchFinanceDashboard = useCallback(async () => {
     if (!selectedMonth || !selectedYear) return
+    financeFetchSeq.current += 1
     setFinanceLoading(true)
     try {
       let prevMonth = parseInt(selectedMonth) - 1
@@ -130,14 +132,16 @@ export default function Dashboard() {
         .then(d => d.success === true ? { ok: true, count: d.summary?.financePending || 0 } : { ok: false }),
     }
     if (!loaders[key]) return
+    const seq = financeFetchSeq.current
     setRetrying(prev => ({ ...prev, [key]: true }))
     const res = await loaders[key]().catch(() => ({ ok: false }))
+    setRetrying(prev => ({ ...prev, [key]: false }))
+    if (seq !== financeFetchSeq.current) return // the page reloaded for another month — stale answer
     setFinanceData(prev => prev ? {
       ...prev,
       actions: { ...prev.actions, [key]: res.ok ? res.count : 0 },
       actionsFailed: { ...(prev.actionsFailed || {}), [key]: !res.ok },
     } : prev)
-    setRetrying(prev => ({ ...prev, [key]: false }))
   }, [selectedMonth, selectedYear, selectedCompany])
 
   useEffect(() => {
