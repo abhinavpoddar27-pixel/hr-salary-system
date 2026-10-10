@@ -1,3 +1,24 @@
+## Last Session — 2026-10-10 (Loans PR-11)
+**Loans PR-11: admin production dry run — the pre-pilot dress rehearsal. Branch `feat/loans-pr11` (origin/main ad96604 merged in), NOT merged.**
+- **`POST /api/loans/dry-run`** (admin, not company-restricted; ≤ 10 scenarios, one payroll, M before the current IST month)
+  runs the REAL engine on the live DB in ONE transaction that is ALWAYS rolled back: baseline Stage 7 (no loan) → raise /
+  approve / disburse (actors `dry-run-hr/admin/finance`) → Mark Left (loan side) → Stage 7 with loans → hold toggles →
+  real close of M (trigger `dry_run`) and M+1 if it has data → report → ROLLBACK. **`GET /api/loans/dry-run/pack`**
+  suggests real eligible borrowers (plant 3, sales 2). Screen: Loans → Dry run (admin only).
+- **Proof every run:** row counts of every table + SHA-256 of the touchable tables before BEGIN and after ROLLBACK →
+  `rollbackVerified`. Only surviving write: one `audit_log` row `loan_dry_run`, after the rollback.
+- **Fragile:** `dryRun.js salesStage7` repeats `routes/sales.js` L2779–2837 — change both. `logAudit()` is safe only because
+  production `getDb()` IS the dry run's handle (tests mock `getDb` to prove it). `db.inTransaction` at entry → 409 `DB_BUSY`
+  (SQL Console holds BEGIN IMMEDIATE up to 60 s). Synchronous: the whole app pauses for the run (sim: 21–108 ms).
+  Plant component check includes `lwf_employee` (#70) — add any new deduction column there too.
+- **Stale:** production has all 583 Sep `day_calculations` `salary_stale = 1`; the report separates stored→re-run
+  (stale difference) from the loan's effect, with a plain-English note.
+- **Verified:** suite 1047 → 1091 (66 suites, 3 clean runs); throw at each of 5 steps + inside the close + step budget →
+  every table identical; `ROLLBACK_GUARANTEE_LOST` detected → 500 + notification; simulation 42/42
+  (`backend/scripts/loans-dry-run-simulation.js`); browser 171/171 (Pass 6, 23 checks), 0 page errors.
+- **NOT tested:** a run on the real 257 MB DB (fingerprint time is an estimate until the planner's first run); true
+  multi-process concurrency; the 60-day held sweep (not simulated by design).
+
 ## Last Session — 2026-10-10 (P4: Mark Left role guard)
 **P4: Mark Left is hr + admin only; no exit via the general edit. Branch `fix/mark-left-role-guard`, NOT merged.**
 - **`PUT /api/employees/:code/mark-left` had no role guard** (router mounted behind `requireAuth` only), so viewer,
