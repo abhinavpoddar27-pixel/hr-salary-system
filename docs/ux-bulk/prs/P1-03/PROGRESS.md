@@ -17,7 +17,7 @@
 - [x] P1.1 jest baseline: 81 suites / 1332 pass (worktree: backend node_modules symlinked, frontend npm ci)
 - [x] P1.2 generateSalesNEFT: NOT IN (hold,paid) + totals byStatus/notFinalized/alreadyExported/excludedPaid/excludedPaidAmount
 - [x] P1.3 salesNeftEligibility.test.js: 8/8 pass; on the 96ee482 service 6 of 8 fail (the 2 that pass: no-paid byte identity, finance 403)
-- [ ] P1.4 frontend confirm modal + copy
+- [x] P1.4 frontend: modal always shown (title "Download bank (NEFT) file?", summary N people · ₹X, conditional lines), missing table only when missing; preview call no-cache (Q1)
 - [ ] P1.5 dist rebuild (own commit)
 - [ ] P1.6 plant bank md5 + browser check + --base run
 - [ ] P1.7 self-debug, v2, CLAUDE.md Last Session, push

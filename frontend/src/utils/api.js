@@ -658,7 +658,7 @@ export const salesExportNEFT = (params, download = false) =>
   api.get('/sales/export/bank-neft',
     download
       ? { params: { ...params, download: 'true' }, responseType: 'blob' }
-      : { params }
+      : { params, ...fresh }   // P1-03: preview counts must not come from the 5 s GET cache
   )
 // Statutory flags PR-3: sales ESI contribution file (read-only; preview skips the GET cache, N7).
 export const salesExportESI = (params, download = false) =>

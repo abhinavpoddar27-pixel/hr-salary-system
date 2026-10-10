@@ -226,17 +226,14 @@ export default function SalesSalaryCompute() {
       }, false)
       const d = resp?.data?.data
       if (!d || d.totals?.count === 0) {
-        toast(`Nothing to export — no eligible rows (net > 0 and not hold)`, { icon: 'ℹ' })
+        const paidOut = d?.totals?.excludedPaid || 0
+        toast(`Nothing to export — no eligible rows (net > 0, not on hold, not paid)${paidOut > 0 ? ` · ${paidOut} already paid, left out` : ''}`, { icon: 'ℹ' })
         setExportBusy(false)
         return
       }
-      if (d.missing && d.missing.length > 0) {
-        setNeftPreview(d)   // open confirmation modal
-        setExportBusy(false)
-        return
-      }
-      // No missing rows — go straight to download.
-      await downloadNEFT()
+      // P1-03: always confirm before the file is made (it marks rows as NEFT-exported).
+      setNeftPreview(d)
+      setExportBusy(false)
     } catch (err) {
       toast.error(err?.response?.data?.error || 'NEFT preview failed')
       setExportBusy(false)
@@ -629,17 +626,27 @@ export default function SalesSalaryCompute() {
         <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4">
           <div className="bg-white rounded-lg max-w-2xl w-full max-h-[90vh] overflow-y-auto shadow-xl">
             <div className="px-5 py-3 border-b border-slate-200">
-              <h3 className="text-lg font-bold text-slate-800">NEFT Export — Missing Bank Details</h3>
-              <p className="text-xs text-slate-500 mt-1">
-                {neftPreview.totals?.count || 0} employee(s) will be exported · {neftPreview.missing?.length || 0} will be skipped
+              <h3 className="text-lg font-bold text-slate-800">Download bank (NEFT) file?</h3>
+              <p className="text-sm text-slate-700 mt-1" data-testid="neft-summary">
+                <strong>{neftPreview.totals?.count || 0} people · ₹{fmtINR(neftPreview.totals?.totalAmount)}</strong>
               </p>
             </div>
             <div className="px-5 py-3 space-y-3">
-              <div className="text-sm text-amber-800 bg-amber-50 border border-amber-200 rounded p-3">
-                The following employees have a positive net salary but no bank account or IFSC on file.
-                They will <strong>not</strong> be included in the NEFT file. Fix them in Employee Master
-                and re-export, or proceed to download the file for the remaining {neftPreview.totals?.count || 0} employee(s).
-              </div>
+              {(() => {
+                const t = neftPreview.totals || {}
+                const lines = []
+                if (t.notFinalized > 0) lines.push({ k: 'nf', cls: 'text-amber-800', text: `${t.notFinalized} not finalized yet (computed or reviewed)` })
+                if (t.alreadyExported > 0) lines.push({ k: 'ae', cls: 'text-amber-800', text: `${t.alreadyExported} were already in an earlier NEFT file for this month — check the bank has not paid them` })
+                if (t.excludedPaid > 0) lines.push({ k: 'pd', cls: 'text-slate-600', text: `${t.excludedPaid} marked paid — left out (₹${fmtINR(t.excludedPaidAmount)})` })
+                if ((neftPreview.missing?.length || 0) > 0) lines.push({ k: 'mb', cls: 'text-rose-700', text: `${neftPreview.missing.length} have no bank account or IFSC — left out` })
+                if (lines.length === 0) return null
+                return (
+                  <ul className="text-sm list-disc pl-5 space-y-1" data-testid="neft-lines">
+                    {lines.map((l) => <li key={l.k} data-k={l.k} className={l.cls}>{l.text}</li>)}
+                  </ul>
+                )
+              })()}
+              {(neftPreview.missing?.length || 0) > 0 && (
               <div className="overflow-x-auto">
                 <table className="w-full text-xs">
                   <thead className="bg-slate-50 text-slate-600">
@@ -666,6 +673,7 @@ export default function SalesSalaryCompute() {
                   </tbody>
                 </table>
               </div>
+              )}
               <div className="text-sm bg-slate-50 border border-slate-200 rounded p-3">
                 <div><strong>File:</strong> <span className="font-mono text-xs">{neftPreview.filename}</span></div>
                 <div><strong>Total to export:</strong> ₹{fmtINR(neftPreview.totals?.totalAmount)}</div>
