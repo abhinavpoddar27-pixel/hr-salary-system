@@ -36,6 +36,13 @@ test('preview computes and saves nothing', async () => {
   expect(r.body.data.actionList.map((a) => a.code)).toEqual(['API1']);
   expect(r.body.data.earlyExitWarnings.map((a) => a.code)).toEqual(['API2']);
   expect(count()).toBe(before);
+  const ov = encodeURIComponent(JSON.stringify([{ code: 'API1', action: 'warning', reason: 'confirm first' }]));
+  const withOv = await api.request('GET', `${BASE}?month=10&year=2026&overrides=${ov}`, { as: 'adm' });
+  expect(withOv.body.data.actionList[0]).toMatchObject({ code: 'API1', action: 'warning', override: { reason: 'confirm first' } });
+  expect((await api.request('GET', `${BASE}?month=10&year=2026&overrides=nope`, { as: 'adm' })).status).toBe(400);
+  const badOv = encodeURIComponent(JSON.stringify([{ code: 'API1', action: 'drop', reason: 'x' }]));
+  expect((await api.request('GET', `${BASE}?month=10&year=2026&overrides=${badOv}`, { as: 'adm' })).status).toBe(400);
+  expect(count()).toBe(before);
   expect((await api.request('GET', `${BASE}?month=13&year=2026`, { as: 'adm' })).status).toBe(400);
   expect((await api.request('GET', `${BASE}?month=10&year=2026&releaseDays=2026-09-03`, { as: 'adm' })).status).toBe(400);
 });

@@ -1,3 +1,13 @@
+## Last Session — 2026-10-10 (Attendance Review PR-2: Analytics tab, admin only)
+**Branch `feat/attendance-review-tab` (on main a272f71 = PR-1 #82 merged), PR open.** Read `docs/attendance-review/PROGRESS.md` first.
+- **What:** `components/attendanceReview/AttendanceReviewTab.jsx` (preview / draft / final, release days, overrides, Finalise
+  only when the saved draft matches the screen, all report sections) + `AttendanceReviewConfig.jsx` (dated rule versions:
+  exclusion lists, re-measure rows, thresholds). `pages/Analytics.jsx` adds the admin-only tab + route; `Sidebar.jsx` child
+  link `adminOnly`; `utils/api.js` 7 helpers (no-cache reads). Backend: preview accepts `overrides=<json>` (validated). dist rebuilt.
+- **Fragile:** page uses the Analytics month picker (global store, L8). Indicative ₹ is admin-only display; nothing writes payroll.
+- **Verified:** `backend/scripts/attendance-review-tab-check.py` 34/34 (Chromium, built dist, admin + HR, phone 390);
+  jest 83/1360. **Not tested:** Railway; production data in the UI (no config entered yet).
+
 ## Last Session — 2026-10-10 (Attendance Review PR-1: engine + admin API, backend only)
 **Branch `feat/attendance-review-engine` (on `docs/attendance-review-handoff`), pushed, PR NOT opened.** Read `docs/attendance-review/PROGRESS.md` first.
 - **What:** `services/attendanceReviewService.js` (read-only monthly late/early review engine, every threshold in config),
