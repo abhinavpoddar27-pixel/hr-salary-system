@@ -1,3 +1,46 @@
+## Last Session — 2026-10-10 (P1-02: Reports → Salary Register showed ₹0)
+**Branch `fix/salary-register-report-fields`, NOT merged.** Frontend only (`pages/Reports.jsx`, Salary Register block). Plan + log:
+`docs/ux-bulk/prs/P1-02/PLAN.md`, `PROGRESS.md`. Finding H-1. Rulings R12 (drop CSV monthly Basic/HRA), R13 (held marker later).
+- **Bug:** the block read `total_earned`, `employee_pf`, `employee_esi`, `net_pay`, `professional_tax`; `GET /api/payroll/salary-register`
+  returns `sc.*` (`gross_earned`, `pf_employee`, `esi_employee`, `net_salary`) with no aliases → Earned / EE PF / EE ESI / Net Pay
+  rendered ₹0 for every row. The 4 total cards use server `totals` and were already right.
+- **Fix:** 4 keys mapped; PT column removed (PT disabled, always 0); `colSpan` 11 → 10 (empty row + DrillDownRow). CSV 15 → 12
+  columns: `basic_earned`, `hra_earned`, `gross_earned`, `pf_employee`, `esi_employee`, `net_salary`; monthly Basic/HRA dropped
+  (not on the salary row). Backend untouched (endpoint shared with Stage 7). dist rebuilt (own commit; vs a fresh 96ee482 build
+  only the Reports chunk differs).
+- **Fragile:** the register columns read raw `salary_computations` names — a column rename in the endpoint SELECT silently
+  shows ₹0 again (fmtINR(undefined) = ₹0). Σ Net Pay of ALL rows ≠ "Net Payroll" card (card excludes held; held rows are
+  not marked here — N-4, later).
+- **Verified:** `backend/scripts/salary-register-report-check.py` (Chromium, built dist, hr + finance, fictional T950x) 58/58 —
+  every row = DB, no PT, Σ Earned = Gross Payroll card, Σ non-held Net = Net Payroll card, CSV header + values, drill-down
+  full width, empty month, 390px, 0 page/console errors, 0 API ≥ 400. `--base` on a 96ee482 worktree 6/6: PT present, ₹0 cells.
+  jest 81 suites / 1332 before and after.
+- **Not tested:** Railway; real production data; Safari/Firefox.
+- **Found, not fixed:** N-1 Audit Trail reads `created_at` (column is `changed_at`) and ignores month/year; N-2 PF/ESI Statement
+  ignore `company`; N-3 Bank Transfer Sheet total includes held salaries; N-4 held rows unmarked / LWF + loan not separate.
+## Last Session — 2026-10-10 (Attendance Review PR-1: engine + admin API, backend only)
+**Branch `feat/attendance-review-engine` (on `docs/attendance-review-handoff`), pushed, PR NOT opened.** Read `docs/attendance-review/PROGRESS.md` first.
+- **What:** `services/attendanceReviewService.js` (read-only monthly late/early review engine, every threshold in config),
+  `routes/attendanceReview.js` at `/api/analytics/attendance-review` (admin only: preview, config versions, draft/final runs),
+  `server.js` +1 mount line, `schema.js` +2 tables (`attendance_review_config`, `attendance_review_runs`), no seed rows.
+- **Rule (D2 Option 2):** release days excluded from early exits everywhere; selected = late-regular ∪ early-regular ∪ double;
+  improved = fell 40%+; early-regular/double need ≥ 0.9 workdays lost; per-run admin overrides with reason.
+- **Fragile:** repo is PUBLIC — exclusion codes are admin config rows only. Re-measure `left_late` mode for a re-measured person
+  is an owner decision (fixture used 'off'). Engine never writes payroll tables (PR-4 write-back blocked on the day-calc bug).
+- **Verified:** jest 83/1360; live server.js simulation 16/16; Sep acceptance via SQL Console PASS (17/14/12.5; notices exact);
+  payroll checks = the 3 known Aug errors; salary drift unchanged. **Not tested:** Railway; frontend (PR-2).
+
+## Last Session — 2026-10-10 (Attendance Review: monthly late/early report → Analytics tab, DESIGN ONLY)
+**Branch `docs/attendance-review-handoff` (docs only), NOT merged. No app code changed.** Read `docs/attendance-review/HANDOFF_attendance_review_10Oct2026.md` first.
+- **Done by hand for Sep 2026:** late coming / early exit / double-defaulter review vs Aug (company late 27.7% → 14.4%; early
+  exits 23.3% → 18.7%; contract early exits got WORSE 16.0% → 19.1%). Rules locked in `docs/attendance-review/RUNBOOK.md`.
+- **Next:** build an admin-only Analytics → "Attendance Review" tab (`BUILD_PLAN.md`: PR-1 engine + 2 config/run tables,
+  PR-2 tab, PR-3 xlsx/docx exports, PR-4 write-back gated). Start with `PROMPT_PLAN.md` (Phase 0, plan only).
+- **Fragile:** repo is PUBLIC — named exclusions + the Sep acceptance fixture are in the private Claude Project
+  (`claude/attendance-review/`), and in the app must be admin-entered config rows, never source/seeds. Day calc applies HR
+  late days without finance approval (3 Aug cases) — no write-back until fixed. `short_leaves` has 0 rows ever.
+- **Not tested:** nothing built. Reference builders were sanitised (config-driven) and only syntax-checked.
+
 ## Last Session — 2026-10-10 (P1-01: Finance Audit Readiness cards did nothing on click)
 **Branch `fix/finance-audit-readiness-nav`, NOT merged.** Frontend only (`pages/FinanceAudit.jsx`, 4 lines). Plan + log:
 `docs/ux-bulk/prs/P1-01/PLAN.md`, `PROGRESS.md`. Finding F-5.
