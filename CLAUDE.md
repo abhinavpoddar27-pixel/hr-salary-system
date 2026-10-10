@@ -21,6 +21,30 @@
 - **Found, not fixed:** (1) An unresolved miss-punch cell edited through this editor stays red:
   `PUT /attendance/record/:id` sets `stage_5_done` but not `miss_punch_resolved`, and `cellClass()` checks miss-punch first.
   (2) `updateMutation` has no `onError` (a failed save shows only the global handler, editor stays open).
+## Last Session — 2026-10-10 (P1-03: Sales NEFT file paid people again on every re-download)
+**Branch `fix/sales-neft-finalized-only`, NOT merged, no PR.** Plan + log: `docs/ux-bulk/prs/P1-03/PLAN.md`, `PROGRESS.md`.
+Finding S-1, ruling Q12 = C (keep computed/reviewed/finalized, exclude paid, always confirm; "finalized only" → P6-03).
+- **Bug:** `generateSalesNEFT` filtered `status != 'hold'`, so rows already marked `paid` went into every re-downloaded
+  bank file (double payment) and were re-stamped; the page downloaded with NO confirm when nobody lacked bank details.
+- **Fix:** `salesExportFormats.js generateSalesNEFT` only: `status NOT IN ('hold','paid')`; `totals` gains `byStatus`
+  {computed, reviewed, finalized}, `notFinalized`, `alreadyExported` (still in the file — lost-file re-download keeps
+  working), `excludedPaid`, `excludedPaidAmount`. CSV header/lines/filename/stamping/audit unchanged; `routes/sales.js`
+  untouched (totals pass through). `SalesSalaryCompute.jsx`: the confirm ALWAYS opens — "Download bank (NEFT) file?",
+  "N people · ₹X", lines only when > 0 (not finalized / already in an earlier NEFT file / marked paid — left out (₹) /
+  no bank account or IFSC — left out + the old table); no held count (ruling). `utils/api.js`: preview sends `fresh`
+  (no-cache). Review fixes: `downloadNEFT` has a `useRef` in-flight guard (two clicks → one file); button says
+  "Download NEFT (N people)"; the duplicate "Total to export" line is gone. Low-2 (preview/download race) is in the register. dist rebuilt (own commit; api.js lives in the index chunk, so most chunk hashes rotate).
+- **Fragile:** the preview counts and the file come from one function — keep the eligibility filter in ONE query. A paid
+  row keeps its original `neft_exported_at` (the paid guardrail only needs it set). A month with paid rows gets a shorter
+  file and new Sr numbers. Someone paid outside the app but not marked paid is still in the file (only the "earlier NEFT
+  file" line warns). Frontend `ALLOWED_MOVES` drift vs backend (`hold → finalized`) still pre-existing.
+- **Verified:** jest 81/1332 → 82/1340; new `salesNeftEligibility.test.js` 8 (6 fail on the 96ee482 service; the 2 that
+  pass: no-paid byte identity, finance 403). Plant bank file md5 and a no-paid sales NEFT md5 identical 96ee482 vs branch
+  on a scratch DB. `backend/scripts/sales-neft-confirm-check.py` (Chromium, built dist, hr, port 3103, fictional S9xx)
+  40/40 — counts/₹ lines exact, double click = 1 download request + 1 audit row (39/40 with the guard removed), Cancel = no download/stamp/audit, download = 7 lines without paid/hold, only file rows
+  stamped, paid stamp untouched, Nov (no missing) still confirms, preview no-cache, 390px, 0 page/console errors, 0 API ≥ 400.
+  `--base` on a 96ee482 archive 5/5: no confirm, paid row in the file and re-stamped.
+- **Not tested:** Railway; real production data (Jul–Sep have 0 paid rows, so those files are byte-identical); Safari/Firefox.
 ## Last Session — 2026-10-10 (Gate pass PR-2: early exits allow for gate passes everywhere; detection fixed for night shifts)
 **Branch `fix/gate-pass-early-exit-wiring` (on origin/main 69f00a3), NOT merged.** Spec: private project `claude/gate-pass-quota/SPEC.md`.
 - **Found:** `services/earlyExitDetection.js` compared every punch-out with the DAY end time (night 12HR in 19:58 / out 08:09 →
