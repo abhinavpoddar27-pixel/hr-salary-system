@@ -2,7 +2,8 @@ import React, { useMemo, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { ResponsiveContainer, LineChart, Line, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, LabelList } from 'recharts'
 import clsx from 'clsx'
-import { attendanceReviewTrends } from '../../utils/api'
+import { attendanceReviewTrends, attendanceReviewTrendsExport } from '../../utils/api'
+import TrendsMore from './AttendanceReviewTrendsMore'
 
 /**
  * Attendance Review → Trends (T2/T3). Month by month for the chosen range, from each month's final review, else its draft,
@@ -143,6 +144,7 @@ function Heatmap({ months, onOpen }) {
 export default function AttendanceReviewTrends({ month, year, onOpenMonth, range: n = 6, onRange: setN }) {
   const [group, setGroup] = useState('all')
   const [tables, setTables] = useState(false)
+  const [exporting, setExporting] = useState(false)
   const { from, to } = rangeEnding(month, year, n)
   const q = useQuery({ queryKey: ['ar-trends', from, to], queryFn: () => attendanceReviewTrends(from, to), retry: 0, staleTime: 60_000 })
   const d = q.data?.data?.data
@@ -176,6 +178,15 @@ export default function AttendanceReviewTrends({ month, year, onOpenMonth, range
           ))}
         </div>
         <label className="flex items-center gap-1.5 ml-auto text-slate-600"><input type="checkbox" checked={tables} onChange={(e) => setTables(e.target.checked)} /> Show as tables</label>
+        <button type="button" className="btn-secondary" disabled={exporting || !d} data-testid="ar-trends-export" onClick={async () => {
+          setExporting(true)
+          try {
+            const res = await attendanceReviewTrendsExport(from, to)
+            const name = /filename="([^"]+)"/.exec(res.headers?.['content-disposition'] || '')?.[1] || 'Attendance_Trends.xlsx'
+            const url = URL.createObjectURL(res.data); const a = document.createElement('a'); a.href = url; a.download = name; document.body.appendChild(a); a.click(); a.remove()
+            setTimeout(() => URL.revokeObjectURL(url), 1000)
+          } catch { /* the API layer shows the error */ } finally { setExporting(false) }
+        }}>{exporting ? 'Preparing…' : 'Download Excel'}</button>
       </div>
 
       {q.isLoading && <div className="card p-6 text-sm text-slate-500">Working out {n} months… months without a final review are computed now, which takes a few seconds.</div>}
@@ -285,6 +296,8 @@ export default function AttendanceReviewTrends({ month, year, onOpenMonth, range
               </Card>
             </div>
           )}
+
+          <TrendsMore d={d} tables={tables} open={open} />
 
           <Card title={`On the list again (${d.repeaters.length})`} sub="People on the action list in two or more months of this range." testid="ar-trends-repeaters">
             {d.repeaters.length === 0 ? <p className="text-sm text-slate-500 px-1">No one was on the list more than once in this range.</p> : (
