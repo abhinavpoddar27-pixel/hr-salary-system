@@ -106,6 +106,62 @@ router.get('/trends', (req, res) => {
   }
 });
 
+// ── notice board (PR-5) ──────────────────────────────────────────────────────────────────────────
+// GET  /board?month&year&to=YYYY-MM-DD[&company][&skipDays=a,b] — the board as it would print + this month's print history
+// POST /board/prints { month, year, to, company?, skipDays? } — recomputes, records the print (audit_log), returns what to print
+const BOARD_TABLE = 'attendance_review_board';
+function parseBoard(src) {
+  const my = parseMonth(src); if (!my) return { error: 'month and year required' };
+  const ym = `${my.year}-${String(my.month).padStart(2, '0')}`;
+  const to = src.to || `${ym}-15`;
+  if (typeof to !== 'string' || !ISO.test(to) || to.slice(0, 7) !== ym || to.slice(8) < '01' || to.slice(8) > String(svc.daysInMonth(my.month, my.year))) {
+    return { error: `to must be a date in ${ym}` };
+  }
+  const sd = parseReleaseDays(src.skipDays, my.month, my.year); if (sd.error) return { error: sd.error.replace('release day', 'skip day') };
+  const company = src.company && String(src.company).trim() ? String(src.company).trim() : null;
+  return { ...my, ym, to, company, skipDays: sd.list };
+}
+function boardPrints(db, month, year) {
+  return db.prepare(`SELECT id, changed_by, changed_at, new_value, remark FROM audit_log
+    WHERE table_name = ? AND record_id = ? AND stage = 'ATTENDANCE_REVIEW_BOARD_PRINT' ORDER BY id DESC`).all(BOARD_TABLE, year * 100 + month)
+    .map((r) => { let s = {}; try { s = JSON.parse(r.new_value); } catch { s = {}; }
+      return { id: r.id, printed_by: r.changed_by, printed_at: r.changed_at, to: s.to, covered_to: s.covered_to, company: s.company || null,
+        listed: (s.listed || []).length, spotless: (s.spotless || []).length }; });
+}
+function buildBoard(db, b) {
+  const { config } = svc.loadConfig(db, b.ym);
+  return svc.noticeBoard(db, { month: b.month, year: b.year, to: b.to, config, company: b.company, skipDays: b.skipDays });
+}
+router.get('/board', (req, res) => {
+  const b = parseBoard(req.query); if (b.error) return res.status(400).json({ success: false, error: b.error });
+  try {
+    const db = getDb();
+    res.json({ success: true, data: { ...buildBoard(db, b), prints: boardPrints(db, b.month, b.year) } });
+  } catch (err) {
+    console.error('Attendance review board error:', err.message);
+    res.status(500).json({ success: false, error: 'Failed to build the notice board: ' + err.message });
+  }
+});
+router.post('/board/prints', (req, res) => {
+  const b = parseBoard(req.body || {}); if (b.error) return res.status(400).json({ success: false, error: b.error });
+  try {
+    const db = getDb();
+    const board = buildBoard(db, b);
+    if (!board.meta.last_data_date) return res.status(409).json({ success: false, error: 'No attendance for this period yet — nothing to print' });
+    const snap = JSON.stringify(svc.boardSnapshot(board));
+    const remark = `Notice board ${board.meta.from}..${board.meta.covered_to}${board.meta.company ? ` (${board.meta.company})` : ''}: ${board.counts.listed} named, ${board.counts.spotless} on time every day`;
+    // direct insert (not logAudit, which swallows errors): a print that was not recorded must not be printed
+    const info = db.prepare(`INSERT INTO audit_log (table_name, record_id, field_name, old_value, new_value, changed_by, stage, remark)
+      VALUES (?, ?, 'board_print', '', ?, ?, 'ATTENDANCE_REVIEW_BOARD_PRINT', ?)`).run(BOARD_TABLE, b.year * 100 + b.month, snap, user(req), remark);
+    const row = db.prepare('SELECT changed_at FROM audit_log WHERE id = ?').get(info.lastInsertRowid);
+    res.status(201).json({ success: true, data: { print_id: info.lastInsertRowid, printed_at: row.changed_at, printed_by: user(req),
+      number: boardPrints(db, b.month, b.year).length, board } });
+  } catch (err) {
+    console.error('Attendance review board print error:', err.message);
+    res.status(500).json({ success: false, error: 'Failed to record the print: ' + err.message });
+  }
+});
+
 // GET /config[?month&year] — effective config (defaults merged) + stored history
 router.get('/config', (req, res) => {
   const db = getDb();
