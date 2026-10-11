@@ -760,6 +760,7 @@ export const attendanceReviewGenerate = (body) => api.post(`${AR}/runs`, body)
 // PR-4: finalise past the quality checks needs a reason (acknowledge); the check itself is read first
 export const attendanceReviewFinalise = (id, acknowledge) => api.put(`${AR}/runs/${id}/finalise`, acknowledge ? { acknowledge } : {})
 export const attendanceReviewQuality = (id) => api.get(`${AR}/runs/${id}/quality`, { headers: arFresh })
+export const attendanceReviewPersonDays = (code, month, year) => api.get(`${AR}/person/${encodeURIComponent(code)}/days`, { params: { month, year }, headers: arFresh })
 // PR-7: one person's months, ladder steps, notice-board prints and review finance rows (from the ladder start to `to`)
 export const attendanceReviewPerson = (code, to) => api.get(`${AR}/person/${encodeURIComponent(code)}`, { params: { to }, headers: arFresh })
 export const attendanceReviewTrends = (from, to) => api.get(`${AR}/trends`, { params: { from, to }, headers: arFresh })
