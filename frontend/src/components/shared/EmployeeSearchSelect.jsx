@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react'
+import React, { useEffect, useId, useMemo, useRef, useState } from 'react'
 
 /**
  * Type-to-search employee picker. Replaces a <select> over hundreds of
@@ -27,6 +27,11 @@ export default function EmployeeSearchSelect({
   const [active, setActive] = useState(0)
   const boxRef = useRef(null)
   const listRef = useRef(null)
+  // Ids for aria-controls / aria-activedescendant. useId keeps them unique when
+  // several pickers are on one page (Leave Management has three).
+  const baseId = useId()
+  const listId = `${baseId}-list`
+  const optionId = (i) => `${baseId}-opt-${i}`
 
   const selected = useMemo(
     () => employees.find((e) => String(e.code) === String(value)) || null,
@@ -61,9 +66,10 @@ export default function EmployeeSearchSelect({
 
   // Keep the highlighted row in view.
   useEffect(() => {
-    const el = listRef.current?.children?.[active]
+    if (!open) return
+    const el = document.getElementById(optionId(active))
     if (el && el.scrollIntoView) el.scrollIntoView({ block: 'nearest' })
-  }, [active])
+  }, [active, open])
 
   const pick = (emp) => {
     onChange?.(emp ? String(emp.code) : '')
@@ -105,6 +111,8 @@ export default function EmployeeSearchSelect({
         role="combobox"
         aria-expanded={open}
         aria-autocomplete="list"
+        aria-controls={open ? listId : undefined}
+        aria-activedescendant={open && matches[active] ? optionId(active) : undefined}
         autoComplete="off"
         className={`${inputClassName} pr-8`}
         placeholder={selected ? `${selected.code} – ${selected.name}` : placeholder}
@@ -122,6 +130,9 @@ export default function EmployeeSearchSelect({
             typed = typed.startsWith(label) ? typed.slice(label.length) : typed
           }
           setQuery(typed)
+          // Reset in the same render as the new query, so the highlighted row
+          // (and aria-activedescendant) never points past the new match list.
+          setActive(0)
           setOpen(true)
         }}
         onKeyDown={onKeyDown}
@@ -139,14 +150,16 @@ export default function EmployeeSearchSelect({
       {open && (
         <ul
           ref={listRef}
+          id={listId}
           role="listbox"
           className="absolute z-50 mt-1 w-full max-h-64 overflow-auto rounded-md border border-slate-200 bg-white shadow-lg text-sm"
         >
           {matches.length === 0 ? (
-            <li className="px-3 py-2 text-slate-400">No employee matches “{query}”</li>
+            <li role="presentation" className="px-3 py-2 text-slate-400">No employee matches “{query}”</li>
           ) : matches.map((e, i) => (
             <li
               key={e.code}
+              id={optionId(i)}
               role="option"
               aria-selected={String(e.code) === String(value)}
               className={`px-3 py-1.5 cursor-pointer flex justify-between gap-2 ${
@@ -160,7 +173,7 @@ export default function EmployeeSearchSelect({
             </li>
           ))}
           {matches.length === MAX_RESULTS && (
-            <li className="px-3 py-1.5 text-[11px] text-slate-400 border-t">Showing the first {MAX_RESULTS} — type more to narrow.</li>
+            <li role="presentation" className="px-3 py-1.5 text-[11px] text-slate-400 border-t">Showing the first {MAX_RESULTS} — type more to narrow.</li>
           )}
         </ul>
       )}
