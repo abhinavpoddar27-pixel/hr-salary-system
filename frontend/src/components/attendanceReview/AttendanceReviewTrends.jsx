@@ -186,13 +186,15 @@ export default function AttendanceReviewTrends({ month, year, onOpenMonth, range
               className={clsx('px-3 py-1', group === k ? 'bg-slate-800 text-white' : 'bg-white text-slate-700 hover:bg-slate-50')}>{l}</button>
           ))}
         </div>
-        <span className="text-slate-600 ml-2">Measured on</span>
-        <div className="inline-flex rounded-md border border-slate-200 overflow-hidden" role="group" aria-label="Measured on" data-testid="ar-trends-basis">
-          {BASES.map(([k, l]) => (
-            <button key={k || 'saved'} type="button" aria-pressed={basis === k} onClick={() => setBasis(k)}
-              className={clsx('px-3 py-1', basis === k ? (k ? 'bg-amber-600 text-white' : 'bg-slate-800 text-white') : 'bg-white text-slate-700 hover:bg-slate-50')}>{l}</button>
-          ))}
-        </div>
+        <span className="inline-flex flex-wrap items-center gap-3 ml-2">
+          <span className="text-slate-600">Measured on</span>
+          <div className="inline-flex rounded-md border border-slate-200 overflow-hidden" role="group" aria-label="Measured on" data-testid="ar-trends-basis">
+            {BASES.map(([k, l]) => (
+              <button key={k || 'saved'} type="button" aria-pressed={basis === k} onClick={() => setBasis(k)}
+                className={clsx('px-3 py-1', basis === k ? (k ? 'bg-amber-600 text-white' : 'bg-slate-800 text-white') : 'bg-white text-slate-700 hover:bg-slate-50')}>{l}</button>
+            ))}
+          </div>
+        </span>
         <label className="flex items-center gap-1.5 ml-auto text-slate-600"><input type="checkbox" checked={tables} onChange={(e) => setTables(e.target.checked)} /> Show as tables</label>
         <button type="button" className="btn-secondary" disabled={exporting || !d} data-testid="ar-trends-export" onClick={async () => {
           setExporting(true)

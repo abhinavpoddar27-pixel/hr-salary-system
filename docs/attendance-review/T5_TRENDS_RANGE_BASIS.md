@@ -17,15 +17,17 @@ Branch `feat/attendance-review-trends-basis` on origin/main fa43014. Read only �
 ## Progress
 - [x] route: TREND_MAX 18, basis param, rules per row, export
 - [x] service trendRow `rules`; workbook column
-- [ ] jest `attendanceReviewTrendsBasis.test.js` (+ fail on fa43014)
-- [ ] UI: range 18, rules label, basis control + what-if line; api.js two lines
-- [ ] full jest before / after
+- [x] jest `attendanceReviewTrendsBasis.test.js` 11 (all 11 fail on fa43014's route/service/exports)
+- [x] UI: range 18, rules label, basis control + what-if line; api.js two lines (commit 7b78efd)
+- [x] full jest before (fa43014: 107 suites / 1669, 1 failing = statutoryWriters T9b, date-dependent, pre-existing)
+- [ ] full jest after
 - [ ] browser check `attendance-review-trends-basis-check.py` + re-run trends + trends-more checks
-- [ ] 18-month timing (~300 people)
+- [x] 18-month timing (~300 people)
 - [ ] self-debug, user simulation, v2
 
 ## Results
-(filled in as steps finish)
+- 18-month timing, scratch DB, 300 synthetic people × 18 months × 24 days (129,600 rows), every month live:
+  as saved (import basis) 12.6 s; `basis=import` 9.5 s; `basis=master` 61.6 s (~3.4 s a month — the master-basis SQL).
 
 ## Fragile
 - `storedRunRules` matches an old run's snapshot to a saved version by content (sorted-key JSON of the merged config).
