@@ -262,7 +262,8 @@ describe('T9b — salary approval carries the in-force flags', () => {
     const e = uploaded('W131');
     const id = pendingRequest('W131', { gross_salary: 16000, basic: 8000, hra: 3200, other_allowances: 4800, esi_applicable: 0 });
     await api.request('PUT', `/api/salary-input/approve/${id}`, { as: 'fin1', body: {} });
-    const today = new Date().toISOString().slice(0, 10);
+    // The route stamps the India (IST) date, not UTC — between 00:00 and 05:30 IST they differ.
+    const today = new Date(Date.now() + 330 * 60000).toISOString().slice(0, 10);
     const row = S.plantRows(db, e).find((x) => x.effective_from === today);
     expect(S.flags(row)).toEqual(SF.carryFlags(db, 'plant', e.id, today));
     expect(S.flags(row)).toEqual({ pf: 0, esi: 1, lwf: 1 }); // today is after 2026-09-01
