@@ -197,7 +197,6 @@ export default function Import() {
   const [uploading, setUploading] = useState(false)
   const [uploadResults, setUploadResults] = useState(null)
   const [selectedFiles, setSelectedFiles] = useState([])
-  const [overwrite, setOverwrite] = useState(false)
 
   const { data: historyRes, refetch: refetchHistory } = useQuery({
     queryKey: ['import-history', selectedCompany],
@@ -206,6 +205,13 @@ export default function Import() {
   })
 
   const history = historyRes?.data?.data || []
+
+  // P1-17: the upload is checked against the month picked above (server refuses a file for another month).
+  // A month already in the import history is re-imported: Stage 6 + 7 recompute, manual corrections replayed.
+  const MONTH_NAMES = ['', 'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
+  const selectedMonthLabel = `${MONTH_NAMES[month] || ''} ${year}`
+  const alreadyImported = history.filter(h => Number(h.month) === Number(month) && Number(h.year) === Number(year))
+  const alreadyImportedCompanies = [...new Set(alreadyImported.map(h => h.company).filter(Boolean))]
 
   const onDrop = useCallback((accepted) => {
     setSelectedFiles(prev => {
@@ -231,7 +237,9 @@ export default function Import() {
     try {
       const fd = new FormData()
       selectedFiles.forEach(f => fd.append('files', f))
-      fd.append('overwrite', String(overwrite))
+      // P1-17: send the picked month so the server refuses a file for another month (UI/file month mismatch)
+      fd.append('month', String(month))
+      fd.append('year', String(year))
 
       const res = await uploadFiles(fd)
       const results = res.data.results || []
@@ -307,12 +315,18 @@ export default function Import() {
         <div className="card">
           <div className="card-header">
             <h3 className="font-semibold text-slate-700">Upload EESL Files</h3>
-            <label className="flex items-center gap-2 text-sm text-slate-500 cursor-pointer">
-              <input type="checkbox" checked={overwrite} onChange={e => setOverwrite(e.target.checked)} className="rounded" />
-              Overwrite if month already imported
-            </label>
           </div>
           <div className="card-body space-y-4">
+            <p className="text-sm text-slate-600" data-testid="import-month-line">
+              Files will be checked against <span className="font-semibold">{selectedMonthLabel}</span> — a file for another month is refused.
+            </p>
+            {alreadyImported.length > 0 && (
+              <div className="rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-800" data-testid="reimport-warning">
+                <span className="font-semibold">This month is already imported</span>
+                {alreadyImportedCompanies.length > 0 && <> ({alreadyImportedCompanies.join(', ')})</>}
+                {' '}— Stage 6 and 7 will be recomputed and manual corrections replayed.
+              </div>
+            )}
             <div
               {...getRootProps()}
               className={clsx(
@@ -327,7 +341,7 @@ export default function Import() {
               ) : (
                 <>
                   <p className="text-slate-600 font-medium">Drag & drop EESL .xls files here</p>
-                  <p className="text-slate-400 text-sm mt-1">or click to browse — multiple files supported (one per month)</p>
+                  <p className="text-slate-400 text-sm mt-1">or click to browse — multiple files supported (all for the month selected above)</p>
                 </>
               )}
             </div>
@@ -336,6 +350,9 @@ export default function Import() {
             {selectedFiles.length > 0 && (
               <div className="space-y-2">
                 <p className="text-xs font-medium text-slate-600 uppercase tracking-wide">{selectedFiles.length} file(s) selected</p>
+                {selectedFiles.length > 1 && (
+                  <p className="text-xs text-amber-700" data-testid="multi-file-note">Only files for {selectedMonthLabel} will import.</p>
+                )}
                 {selectedFiles.map(f => (
                   <div key={f.name} className="flex items-center gap-3 bg-slate-50 rounded-lg px-3 py-2 text-sm">
                     <span className="text-lg">📄</span>
@@ -400,7 +417,7 @@ export default function Import() {
                           </div>
                         </div>
                       ) : (
-                        <p className="text-sm text-red-600 mt-1">{result.error}</p>
+                        <p className="text-sm text-red-600 mt-1" data-testid="import-error">{result.userMessage || result.error}</p>
                       )}
 
                       {result.success && result.summary && (
