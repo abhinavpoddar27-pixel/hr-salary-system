@@ -1632,88 +1632,22 @@ router.get('/payable-ot', (req, res) => {
 });
 
 /**
- * POST /api/payroll/grant-extra-duty
- * Finance grants extra duty days to an employee. Stored in day_corrections
- * with correction_type='extra_duty' + finance_verified=1. Reuses the existing
- * correction_delta column for the day count so the NOT NULL constraints on
- * the table are satisfied.
+ * POST /api/payroll/grant-extra-duty and DELETE /api/payroll/revoke-extra-duty/:id
+ * — RETIRED (Oct 2026, owner ruling Q5).
+ * They wrote day_corrections rows with correction_type='extra_duty', which no
+ * pay calculation reads (Stage 6 manualExtraDuty is 0; extra duty is paid only
+ * from extra_duty_grants with HR + finance approval). A "granted" message with
+ * no effect on pay, and the row blocked a real day correction for that
+ * employee-month. Extra duty is granted on the Extra Duty Grants page.
+ * Kept registered so a stale client gets an explicit 410. Writes nothing.
  */
+const LEGACY_ED_RETIRED =
+  'This has been retired: it never changed pay. Grant extra duty on the Extra Duty Grants page (HR raises, finance approves).';
 router.post('/grant-extra-duty', (req, res) => {
-  const db = getDb();
-  const { employeeCode, month, year, days, remark } = req.body;
-
-  if (!employeeCode || !month || !year || !days) {
-    return res.status(400).json({ success: false, error: 'employeeCode, month, year, days required' });
-  }
-  const n = parseFloat(days);
-  if (isNaN(n) || n <= 0 || n > 10) {
-    return res.status(400).json({ success: false, error: 'days must be a number 1..10' });
-  }
-
-  const emp = db.prepare('SELECT id, company FROM employees WHERE code = ?').get(employeeCode);
-  if (!emp) return res.status(404).json({ success: false, error: 'Employee not found' });
-  const user = req.user?.username || 'finance';
-
-  try {
-    // day_corrections has a UNIQUE(employee_code, month, year, company) constraint.
-    // To allow multiple extra-duty grants per employee/month, we must UPDATE the
-    // existing row's delta instead of inserting a duplicate. For a fresh employee,
-    // INSERT the row with correction_type='extra_duty'.
-    const existing = db.prepare(
-      "SELECT id, correction_delta, correction_type FROM day_corrections WHERE employee_code = ? AND month = ? AND year = ? AND COALESCE(company, '') = COALESCE(?, '')"
-    ).get(employeeCode, month, year, emp.company || '');
-
-    if (existing) {
-      // Only add to delta if the existing row is already an extra_duty grant;
-      // otherwise refuse to avoid clobbering an unrelated day correction.
-      if (existing.correction_type !== 'extra_duty') {
-        return res.status(409).json({
-          success: false,
-          error: 'An existing day correction (non-extra-duty) blocks this grant. Review the Corrections page first.'
-        });
-      }
-      db.prepare(`
-        UPDATE day_corrections SET
-          correction_delta = COALESCE(correction_delta, 0) + ?,
-          corrected_days = COALESCE(corrected_days, 0) + ?,
-          remark = ?,
-          finance_verified = 1,
-          correction_type = 'extra_duty'
-        WHERE id = ?
-      `).run(n, n, remark || `Extra duty: +${n} day(s) granted by ${user}`, existing.id);
-    } else {
-      db.prepare(`
-        INSERT INTO day_corrections (
-          employee_id, employee_code, month, year, company,
-          original_system_days, corrected_days, correction_delta,
-          correction_reason, correction_notes, corrected_by,
-          correction_type, finance_verified, remark
-        ) VALUES (?, ?, ?, ?, ?, 0, ?, ?, 'EXTRA_DUTY', ?, ?, 'extra_duty', 1, ?)
-      `).run(
-        emp.id, employeeCode, month, year, emp.company || '',
-        n, n,
-        remark || `Extra duty: ${n} day(s) granted by finance`,
-        user,
-        remark || `Extra duty: ${n} day(s) granted by ${user}`
-      );
-    }
-
-    res.json({ success: true, message: `${n} extra duty day(s) granted to ${employeeCode}. Re-run salary computation to apply.` });
-  } catch (e) {
-    console.error('grant-extra-duty error:', e.message);
-    res.status(500).json({ success: false, error: e.message });
-  }
+  return res.status(410).json({ success: false, error: LEGACY_ED_RETIRED });
 });
-
-/**
- * DELETE /api/payroll/revoke-extra-duty/:id
- */
 router.delete('/revoke-extra-duty/:id', (req, res) => {
-  const db = getDb();
-  const existing = db.prepare("SELECT * FROM day_corrections WHERE id = ? AND correction_type = 'extra_duty'").get(req.params.id);
-  if (!existing) return res.status(404).json({ success: false, error: 'Extra duty grant not found' });
-  db.prepare('DELETE FROM day_corrections WHERE id = ?').run(req.params.id);
-  res.json({ success: true, message: 'Extra duty revoked. Re-run salary computation to apply.' });
+  return res.status(410).json({ success: false, error: LEGACY_ED_RETIRED });
 });
 
 /**
