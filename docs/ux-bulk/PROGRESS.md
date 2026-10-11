@@ -9,7 +9,7 @@
 Programme:   UI/UX improvement + bulk input, HR Salary System (Indriyan / Asian Lakto)
 Base:        origin/main a5aec9a (10 Oct 2026). Re-check: git fetch origin; git log -1 origin/main
 Plan:        docs/ux-bulk/MASTER_PLAN.md (§5.2 = PR order, §6 = specs, §7 = bulk design, §14 = open questions)
-Current PR:  21 merged (#112–#118 and #120 on 11 Oct). No PRs open. PROCESS (from #120): frontend/dist is NOT committed (Railway + CI build it); feature PRs do NOT edit CLAUDE.md (notes in docs/ux-bulk/prs/<ID>/PROGRESS.md; planner folds them in). Merges no longer conflict. Next: P1-13 (M), N-9 fresh reads, N-3, money follow-ups N-16/N-17; then a docs PR folding P1-20/21/22 notes into CLAUDE.md.
+Current PR:  21 merged. OPEN batch 2 (all green + clean, no shared files, integration tree 105/1649 + build green): #126 P1-13, #127 P1-14★, #128 P1-18, #129 N-REP (N-1/2/3), #130 N-MONEY★ (N-16/17), #131 N-FRESH (N-7/9/15). Merge in any order. Next: docs PR folding PROGRESS 'CLAUDE.md entry' sections into CLAUDE.md; then P2.
 Asked, not answered: Q1 Q2 Q3 (P3-01/P5-02), Q4 (P1-04) — re-ask before those PRs
 Open Qs:     Q1 Q2 (needed by P3-01) · Q4 (P1-04) · Q5 (P1-07) · Q6 (P1-23) · Q10 (one-PR rule) — ask when the PR needs them
 Roles:       planner = new chat; builder = Claude Code agent session reading prs/<PR-ID>/PROMPT.md; Abhinav says "go" and merges in GitHub UI
@@ -70,12 +70,12 @@ Status values: `todo` · `plan` (Phase 0 written, waiting for go) · `build` · 
 | P1-10 | Night Shift Undo → Reject pairing + confirm | merged #98 | fix/nightshift-undo-relabel | | | | check 44/44 |
 | P1-11 | Dashboard All clear on failed call | merged #99 | fix/dashboard-failed-call-not-all-clear | | | | admin + finance views; check 66/66 |
 | P1-12 | Sidebar/Header hook order | merged #100 | fix/sidebar-header-hook-order | | | | 6/6 switches crash on main; check 58/58 |
-| P1-13 | Finance Verify company filter | todo | | | | | |
-| P1-14 | Bank columns + salary split | todo | | | | | |
+| P1-13 | Finance Verify company filter | PR #126 green | | | | | |
+| P1-14 | Bank columns + salary split | PR #127 green (review SHIP WITH FIXES, applied) | | | | | |
 | P1-15 | Finance Verify flag reason + Approve gate | MERGED #112 | | | | | |
 | P1-16 | Interventions Reject All | MERGED #113 | | | | | |
 | P1-17 | Import overwrite checkbox + month | MERGED #114 | | | | | |
-| P1-18 | DW drafts invisible | todo | | | | | |
+| P1-18 | DW drafts invisible | PR #128 green | | | | | |
 | P1-19 | Sales Mark Left date | MERGED #115 | | | | | |
 | P1-20 | Leave form Comp Off + date order | MERGED #116 | | | | | |
 | P1-21 | Bulk payslips 403 | MERGED #117 | | | | | |
@@ -184,3 +184,11 @@ Status values: `todo` · `plan` (Phase 0 written, waiting for go) · `build` · 
 | N-FRESH (N-7/9/15) | fix/fresh-reads-after-actions | api.js 3 read helpers only, DayCalculation.jsx, MissPunch.jsx, NightShift.jsx |
 Rule: a builder touching a file it does not own STOPS and asks. Before each PR the planner runs `git merge-tree` of every
 open branch against main AND against each other; any overlap is fixed before the PR goes up.
+- 11 Oct 2026 ~17:50 IST — batch 2 built (6 parallel builders, file ownership), money reviews SHIP WITH FIXES applied, integration tree green, PRs #126–#131 open.
+### New findings (batch 2)
+| N-19 | P1-14 | PUT /employees/:code/salary same-gross split change rewrites components with no finance approval; `parseFloat(x)||50` turns 0% basic into 50% | later money PR |
+| N-20 | P1-13 | 2 months in 2026 finalised with 0 sign-off rows ever (pre-gate or another path) | owner check |
+| N-21 | P1-14 | 114 active employees have an account but no IFSC in either pair → never in NEFT; 321/434 empty strings in account_number/ifsc_code | owner data repair |
+| N-22 | N-MONEY | 43 employees had conveyance wiped to 0 by approved salary changes; 1 Mar-2026 gross flag bulk-rejected, never reverted | owner data repair |
+| N-23 | N-MONEY review | approve-flag / bulk-approve have no maker-checker; a revert leaves the salary_change_request Approved; Stage 7 re-run needed after revert | later |
+| N-24 | N-FRESH | floating Salary Explainer button covers row buttons at the bottom of long tables | later UI |
