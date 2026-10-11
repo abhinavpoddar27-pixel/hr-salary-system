@@ -5,10 +5,10 @@ Read PROMPT.md + PLAN.md. GO received; rulings below. Continue from first untick
 - [x] Phase 0: read code, PLAN.md, PROGRESS.md committed + pushed
 - [x] go received / rulings recorded (11 Oct)
 - [x] jest baseline: 105 suites / 1649 tests
-- [ ] utils/sessionReturn.js + api.js 401 lines
-- [ ] useInactivityTimeout rewrite + SessionTimeoutDialog + App.jsx wiring
-- [ ] Login.jsx return path + banner
-- [ ] hooks/useDraft.js + harness
+- [x] utils/sessionReturn.js + api.js 401 lines
+- [x] useInactivityTimeout rewrite + SessionTimeoutDialog + App.jsx wiring
+- [x] Login.jsx return path + banner
+- [x] hooks/useDraft.js (harness next)
 - [ ] check script + base run
 - [ ] jest after, merge main, push
 ## Rulings

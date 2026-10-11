@@ -1,6 +1,7 @@
 import axios from 'axios'
 import toast from 'react-hot-toast'
 import { installContextBufferInterceptors } from './apiContextBuffer'
+import { saveReturnTo, allowForcedUnload } from './sessionReturn'
 
 const api = axios.create({
   baseURL: '/api',
@@ -27,9 +28,11 @@ api.interceptors.response.use(
     const requestId = err.response?.headers?.['x-request-id'] || ''
     if (err.response?.status === 401) {
       // Don't toast on auth errors — just redirect to login
+      if (!window.location.pathname.includes('/login')) saveReturnTo('expired') // P2-08: before hr_user is removed
       localStorage.removeItem('hr_token')
       localStorage.removeItem('hr_user')
       if (!window.location.pathname.includes('/login')) {
+        allowForcedUnload() // P2-08: a draft's "Leave site?" prompt must not block this
         window.location.href = '/login'
       }
       return Promise.reject(err)

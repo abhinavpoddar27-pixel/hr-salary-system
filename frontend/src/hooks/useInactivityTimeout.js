@@ -1,28 +1,68 @@
-import { useEffect, useRef, useCallback } from 'react'
+import { useEffect, useRef, useCallback, useState } from 'react'
 import { useAppStore } from '../store/appStore'
 import api from '../utils/api'
-import toast from 'react-hot-toast'
+import { saveReturnTo, allowForcedUnload } from '../utils/sessionReturn'
 
-const INACTIVITY_LIMIT = 15 * 60 * 1000   // 15 minutes — auto-logout
-const WARNING_BEFORE = 2 * 60 * 1000       // Show warning 2 min before logout
+// P2-08: the warning is a modal countdown (SessionTimeoutDialog, rendered by InactivityGuard in
+// App.jsx) instead of a toast. On a forced sign-out the page + query is saved (utils/sessionReturn)
+// and Login brings the same user back to it.
+const DEFAULT_LIMIT = 15 * 60 * 1000       // 15 minutes — auto-logout
+const DEFAULT_WARN = 2 * 60 * 1000         // countdown shown for the last 2 minutes
 const HEARTBEAT_INTERVAL = 5 * 60 * 1000   // Send heartbeat every 5 min if active
+const TICK_MS = 1000
+const SHARED_KEY = 'hr_last_activity'       // last activity in ANY tab (ruling Q2)
+const SHARE_THROTTLE_MS = 5000
 const ACTIVITY_EVENTS = ['mousedown', 'mousemove', 'keydown', 'scroll', 'touchstart', 'click']
+
+// TEST KNOB (documented in docs/ux-bulk/prs/P2-08/PLAN.md): localStorage `hr_idle_test_ms` and
+// `hr_idle_test_warn_ms` can only SHORTEN the timeout (limit 5 s … 15 min; warning 2 s … limit − 1 s).
+// Used by backend/scripts/session-timeout-check.py; harmless in production.
+function readLimits() {
+  let limit = DEFAULT_LIMIT
+  let warn = DEFAULT_WARN
+  try {
+    const l = Number(localStorage.getItem('hr_idle_test_ms'))
+    if (Number.isFinite(l) && l > 0) limit = Math.min(DEFAULT_LIMIT, Math.max(5000, l))
+    const w = Number(localStorage.getItem('hr_idle_test_warn_ms'))
+    if (Number.isFinite(w) && w > 0) warn = Math.max(2000, w)
+  } catch { /* storage blocked → defaults */ }
+  warn = Math.min(warn, limit - 1000)
+  return { limit, warn }
+}
+
+function readShared() {
+  try { const v = Number(localStorage.getItem(SHARED_KEY)); return Number.isFinite(v) ? v : 0 } catch { return 0 }
+}
+function writeShared(t) {
+  try { localStorage.setItem(SHARED_KEY, String(t)) } catch { /* ignore */ }
+}
 
 export default function useInactivityTimeout() {
   const { isAuthenticated, clearAuth, token } = useAppStore()
   const lastActivityRef = useRef(Date.now())
-  const warningShownRef = useRef(false)
-  const logoutTimerRef = useRef(null)
+  const lastSharedWriteRef = useRef(0)
+  const warningOpenRef = useRef(false)
+  const loggingOutRef = useRef(false)
   const heartbeatTimerRef = useRef(null)
+  const [warningOpen, setWarningOpen] = useState(false)
+  const [secondsLeft, setSecondsLeft] = useState(0)
 
-  const resetActivity = useCallback(() => {
-    lastActivityRef.current = Date.now()
-    warningShownRef.current = false
+  const markActive = useCallback((force = false) => {
+    const now = Date.now()
+    lastActivityRef.current = now
+    if (force || now - lastSharedWriteRef.current >= SHARE_THROTTLE_MS) {
+      lastSharedWriteRef.current = now
+      writeShared(now)
+    }
   }, [])
 
-  const doLogout = useCallback(() => {
+  const doLogout = useCallback((reason) => {
+    if (loggingOutRef.current) return
+    loggingOutRef.current = true
+    saveReturnTo(reason)      // before clearAuth: it reads the stored username
+    allowForcedUnload()
     clearAuth()
-    toast('Session expired due to inactivity', { icon: '🔒', duration: 5000 })
+    // Hard reload on purpose: it drops the old session's in-memory data (react-query cache).
     window.location.href = '/login'
   }, [clearAuth])
 
@@ -38,49 +78,69 @@ export default function useInactivityTimeout() {
     } catch (e) {
       // If heartbeat fails with 401, token expired server-side
       if (e.response?.status === 401) {
-        doLogout()
+        doLogout('expired')
       }
     }
   }, [token, doLogout])
 
+  const staySignedIn = useCallback(() => {
+    markActive(true)
+    warningOpenRef.current = false
+    setWarningOpen(false)
+    sendHeartbeat()
+  }, [markActive, sendHeartbeat])
+
+  const signOutNow = useCallback(() => {
+    if (loggingOutRef.current) return
+    loggingOutRef.current = true
+    api.post('/auth/logout').catch(() => {}).finally(() => {
+      allowForcedUnload() // the user chose to leave
+      clearAuth()
+      window.location.href = '/login'
+    })
+  }, [clearAuth])
+
   useEffect(() => {
     if (!isAuthenticated) return
+    const { limit, warn } = readLimits()
+    loggingOutRef.current = false
+    markActive(true)
 
-    // Track user activity
+    // While the countdown shows, passive movement does NOT keep the session (ruling Q1):
+    // only "Stay signed in" does. Activity in another tab still does (shared timestamp, Q2).
     const handleActivity = () => {
-      resetActivity()
+      if (warningOpenRef.current) return
+      markActive(false)
     }
-
     for (const event of ACTIVITY_EVENTS) {
       window.addEventListener(event, handleActivity, { passive: true })
     }
 
-    // Check inactivity periodically
-    logoutTimerRef.current = setInterval(() => {
-      const elapsed = Date.now() - lastActivityRef.current
-
-      // Auto-logout
-      if (elapsed >= INACTIVITY_LIMIT) {
-        doLogout()
+    const tick = () => {
+      if (loggingOutRef.current) return
+      const last = Math.max(lastActivityRef.current, readShared())
+      const elapsed = Date.now() - last
+      if (elapsed >= limit) {
+        doLogout('idle')
         return
       }
-
-      // Warning toast 2 min before logout
-      if (elapsed >= (INACTIVITY_LIMIT - WARNING_BEFORE) && !warningShownRef.current) {
-        warningShownRef.current = true
-        const minsLeft = Math.ceil((INACTIVITY_LIMIT - elapsed) / 60000)
-        toast(`You'll be logged out in ~${minsLeft} min due to inactivity. Move your mouse to stay active.`, {
-          icon: '⏳',
-          duration: 10000,
-          id: 'inactivity-warning'
-        })
+      if (elapsed >= limit - warn) {
+        if (!warningOpenRef.current) { warningOpenRef.current = true; setWarningOpen(true) }
+        setSecondsLeft(Math.ceil((limit - elapsed) / 1000))
+      } else if (warningOpenRef.current) {
+        // another tab was used — close the countdown here too
+        lastActivityRef.current = Math.max(lastActivityRef.current, last)
+        warningOpenRef.current = false
+        setWarningOpen(false)
       }
-    }, 30000) // Check every 30 seconds
+    }
+    const tickTimer = setInterval(tick, TICK_MS)
+    const onStorage = (e) => { if (e.key === SHARED_KEY) tick() }
+    window.addEventListener('storage', onStorage)
 
-    // Heartbeat: keep server session alive while user is active
+    // Heartbeat: keep the server session alive while THIS tab is active (N tabs ≠ N heartbeats)
     heartbeatTimerRef.current = setInterval(() => {
       const elapsed = Date.now() - lastActivityRef.current
-      // Only send heartbeat if user was recently active (within last 5 min)
       if (elapsed < HEARTBEAT_INTERVAL) {
         sendHeartbeat()
       }
@@ -90,8 +150,13 @@ export default function useInactivityTimeout() {
       for (const event of ACTIVITY_EVENTS) {
         window.removeEventListener(event, handleActivity)
       }
-      if (logoutTimerRef.current) clearInterval(logoutTimerRef.current)
+      window.removeEventListener('storage', onStorage)
+      clearInterval(tickTimer)
       if (heartbeatTimerRef.current) clearInterval(heartbeatTimerRef.current)
+      warningOpenRef.current = false
+      setWarningOpen(false)
     }
-  }, [isAuthenticated, resetActivity, doLogout, sendHeartbeat])
+  }, [isAuthenticated, markActive, doLogout, sendHeartbeat])
+
+  return { warningOpen: isAuthenticated && warningOpen, secondsLeft, staySignedIn, signOutNow }
 }
