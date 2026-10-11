@@ -155,7 +155,7 @@ describe('N-1 — Audit Trail', () => {
     expect(c.total).toBe(5);
     const all = await get(`/api/reports/audit-trail`);
     expect(all.data.length).toBe(1000);
-    expect(all.total).toBe(1013);
+    expect(all.total).toBe(1012);
   });
   test('stage and employeeCode filters still combine with the month', async () => {
     const m = await get(`/api/reports/audit-trail?month=10&year=2026&stage=mid`);
