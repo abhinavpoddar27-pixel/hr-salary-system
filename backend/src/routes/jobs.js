@@ -1,8 +1,9 @@
 const express = require('express');
 const router = express.Router();
+const { requireAdmin } = require('../middleware/roles'); // P2-11 role guards
 const { enqueue, getJob } = require('../services/jobQueue');
 
-router.post('/', (req, res) => {
+router.post('/', requireAdmin, (req, res) => {
   const { type, params } = req.body;
   if (!type) return res.status(400).json({ success: false, error: 'type is required' });
   const jobId = enqueue(type, params || {});

@@ -1,5 +1,6 @@
 const express = require('express');
 const router = express.Router();
+const { requireHrOrAdmin, requireAdmin } = require('../middleware/roles'); // P2-11 role guards
 const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
@@ -37,7 +38,7 @@ const upload = multer({
  * POST /api/import/upload
  * Upload and parse one or more EESL .xls files
  */
-router.post('/upload', upload.array('files', 20), async (req, res) => {
+router.post('/upload', requireHrOrAdmin, upload.array('files', 20), async (req, res) => {
   const db = getDb();
   const files = req.files;
 
@@ -738,13 +739,13 @@ router.get('/summary/:month/:year', (req, res) => {
  * POST /api/import/stage/:stage/complete
  * Mark a pipeline stage as complete
  */
-router.post('/stage/:stage/complete', (req, res) => {
+router.post('/stage/:stage/complete', requireHrOrAdmin, (req, res) => {
   const db = getDb();
   const { stage } = req.params;
   const { month, year, company } = req.body;
 
   const stageNum = parseInt(stage);
-  if (stageNum < 1 || stageNum > 7) return res.status(400).json({ success: false, error: 'Invalid stage number' });
+  if (!(stageNum >= 1 && stageNum <= 7)) return res.status(400).json({ success: false, error: 'Invalid stage number' });
 
   db.prepare(`UPDATE monthly_imports SET stage_${stageNum}_done = 1 WHERE month = ? AND year = ?`)
     .run(month || req.body.month, year || req.body.year);
@@ -756,7 +757,7 @@ router.post('/stage/:stage/complete', (req, res) => {
  * DELETE /api/import/:importId
  * Delete an import
  */
-router.delete('/:importId', (req, res) => {
+router.delete('/:importId', requireAdmin, (req, res) => {
   const db = getDb();
   const { importId } = req.params;
 
@@ -871,7 +872,7 @@ router.get('/reconciliation/:month/:year', (req, res) => {
  * HR corrects departments in EESL; this endpoint syncs those corrections to the master.
  * Also updates attendance_raw records for consistency.
  */
-router.post('/reconciliation/update-departments', (req, res) => {
+router.post('/reconciliation/update-departments', requireHrOrAdmin, (req, res) => {
   const db = getDb();
   const { corrections } = req.body;
   // corrections: [{ code, department, company? }]
@@ -912,7 +913,7 @@ router.post('/reconciliation/update-departments', (req, res) => {
  * POST /api/import/reconciliation/add-to-master
  * Add new EESL employees to the master with their EESL department.
  */
-router.post('/reconciliation/add-to-master', (req, res) => {
+router.post('/reconciliation/add-to-master', requireHrOrAdmin, (req, res) => {
   const db = getDb();
   const { employees } = req.body;
   // employees: [{ code, name, department, company }]

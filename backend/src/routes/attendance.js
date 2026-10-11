@@ -1,5 +1,7 @@
 const express = require('express');
 const router = express.Router();
+const { requireHrOrAdmin, roleIn } = require('../middleware/roles'); // P2-11 role guards
+const requireHrFinanceOrAdmin = (req, res, next) => (roleIn(req, 'admin', 'hr', 'finance') ? next() : res.status(403).json({ success: false, error: 'HR, finance or admin access required' }));
 const { getDb, logAudit } = require('../database/db');
 const { safeTrigger, queueLeaveRecalc, checkAutoStage6 } = require('../services/leaveTriggers');
 const { resolveMissPunch, bulkResolveMissPunches } = require('../services/missPunch');
@@ -146,7 +148,7 @@ router.get('/miss-punches', (req, res) => {
  * POST /api/attendance/miss-punches/:id/resolve
  * Resolve a single miss punch
  */
-router.post('/miss-punches/:id/resolve', (req, res) => {
+router.post('/miss-punches/:id/resolve', requireHrOrAdmin, (req, res) => {
   const db = getDb();
   const { id } = req.params;
   const { inTime, outTime, source, remark, convertToLeave, leaveType } = req.body;
@@ -176,7 +178,7 @@ router.post('/miss-punches/:id/resolve', (req, res) => {
  * POST /api/attendance/miss-punches/bulk-resolve
  * Bulk resolve multiple miss punches
  */
-router.post('/miss-punches/bulk-resolve', (req, res) => {
+router.post('/miss-punches/bulk-resolve', requireHrOrAdmin, (req, res) => {
   const db = getDb();
   const { recordIds, inTime, outTime, source, remark } = req.body;
 
@@ -245,7 +247,7 @@ router.get('/night-shifts', (req, res) => {
  * POST /api/attendance/night-shifts/:id/confirm
  * Confirm a night shift pairing
  */
-router.post('/night-shifts/:id/confirm', (req, res) => {
+router.post('/night-shifts/:id/confirm', requireHrOrAdmin, (req, res) => {
   const db = getDb();
   const { id } = req.params;
 
@@ -257,7 +259,7 @@ router.post('/night-shifts/:id/confirm', (req, res) => {
  * POST /api/attendance/night-shifts/:id/reject
  * Reject a night shift pairing
  */
-router.post('/night-shifts/:id/reject', (req, res) => {
+router.post('/night-shifts/:id/reject', requireHrOrAdmin, (req, res) => {
   const db = getDb();
   const { id } = req.params;
 
@@ -284,7 +286,7 @@ router.post('/night-shifts/:id/reject', (req, res) => {
  * PUT /api/attendance/record/:id
  * Manual correction of attendance record
  */
-router.put('/record/:id', (req, res) => {
+router.put('/record/:id', requireHrFinanceOrAdmin, (req, res) => {
   const db = getDb();
   const { id } = req.params;
   const { statusFinal, inTimeFinal, outTimeFinal, remark } = req.body;
@@ -519,7 +521,7 @@ router.get('/daily/:code', (req, res) => {
  * PUT /api/attendance/record/:id/shift
  * Update shift assignment for a record and recalculate late/early metrics
  */
-router.put('/record/:id/shift', (req, res) => {
+router.put('/record/:id/shift', requireHrOrAdmin, (req, res) => {
   const db = getDb();
   const { id } = req.params;
   const { shiftId } = req.body;
@@ -591,7 +593,7 @@ router.get('/validation-status', (req, res) => {
  * POST /api/attendance/recalculate-metrics
  * Recalculate actual_hours, late arrivals, and night shift flags for existing data
  */
-router.post('/recalculate-metrics', (req, res) => {
+router.post('/recalculate-metrics', requireHrFinanceOrAdmin, (req, res) => {
   const db = getDb();
   const { month, year } = req.body;
 
@@ -679,7 +681,7 @@ router.post('/recalculate-metrics', (req, res) => {
  * Comprehensive cleanup: deduplicate attendance_processed by employee+date.
  * Disables FK checks for safe bulk cleanup, then re-enables.
  */
-router.post('/deduplicate', (req, res) => {
+router.post('/deduplicate', requireHrOrAdmin, (req, res) => {
   try {
     const db = getDb();
     const { month, year } = req.body;

@@ -1,5 +1,6 @@
 const express = require('express');
 const router = express.Router();
+const { requireHrOrAdmin } = require('../middleware/roles'); // P2-11 role guards
 const { getDb } = require('../database/db');
 const { calculateAdvances } = require('../services/advanceCalculation');
 
@@ -7,7 +8,7 @@ const { calculateAdvances } = require('../services/advanceCalculation');
  * POST /api/advance/calculate
  * Calculate advance eligibility for all employees
  */
-router.post('/calculate', (req, res) => {
+router.post('/calculate', requireHrOrAdmin, (req, res) => {
   const db = getDb();
   const { month, year } = req.body;
 
@@ -59,7 +60,7 @@ router.get('/list', (req, res) => {
  * PUT /api/advance/:id/mark-paid
  * Mark an advance as paid
  */
-router.put('/:id/mark-paid', (req, res) => {
+router.put('/:id/mark-paid', requireHrOrAdmin, (req, res) => {
   const db = getDb();
   const { id } = req.params;
   const { paymentMode } = req.body;
@@ -76,7 +77,7 @@ router.put('/:id/mark-paid', (req, res) => {
  * PUT /api/advance/batch-mark-paid
  * Mark multiple advances as paid
  */
-router.put('/batch-mark-paid', (req, res) => {
+router.put('/batch-mark-paid', requireHrOrAdmin, (req, res) => {
   const db = getDb();
   const { ids, paymentMode } = req.body;
 
@@ -118,7 +119,7 @@ router.get('/recovery', (req, res) => {
  * PUT /api/advance/:id/set-remark
  * Set remark on advance: NO_ADVANCE, REDUCED, or clear
  */
-router.put('/:id/set-remark', (req, res) => {
+router.put('/:id/set-remark', requireHrOrAdmin, (req, res) => {
   const db = getDb();
   const { id } = req.params;
   const { remark, reducedAmount } = req.body;
@@ -140,7 +141,7 @@ router.put('/:id/set-remark', (req, res) => {
  * PUT /api/advance/batch-remark
  * Set remark on multiple advances at once
  */
-router.put('/batch-remark', (req, res) => {
+router.put('/batch-remark', requireHrOrAdmin, (req, res) => {
   const db = getDb();
   const { ids, remark, reducedAmount } = req.body;
 

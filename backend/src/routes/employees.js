@@ -287,7 +287,7 @@ router.get('/:code', (req, res) => {
 });
 
 // CREATE employee
-router.post('/', (req, res) => {
+router.post('/', requireHrOrAdmin, (req, res) => {
   const db = getDb();
   const { code, name, fatherName, dob, gender, department, designation, company, employmentType, contractorGroup, dateOfJoining, defaultShiftId, bankAccount, ifsc, bankName, pfNumber, uan, esiNumber, basic, da, hra, conveyance, otherAllowances } = req.body;
 
@@ -955,7 +955,7 @@ router.get('/:code/documents', (req, res) => {
  * POST /api/employees/:code/documents
  * Upload a document for an employee
  */
-router.post('/:code/documents', docUpload.single('file'), (req, res) => {
+router.post('/:code/documents', requireHrOrAdmin, docUpload.single('file'), (req, res) => {
   const db = getDb();
   const { code } = req.params;
   const { documentType, remarks } = req.body;
@@ -999,7 +999,7 @@ router.get('/documents/:id/download', (req, res) => {
  * DELETE /api/employees/documents/:id
  * Delete a document
  */
-router.delete('/documents/:id', (req, res) => {
+router.delete('/documents/:id', requireHrOrAdmin, (req, res) => {
   const db = getDb();
   const doc = db.prepare('SELECT * FROM employee_documents WHERE id = ?').get(req.params.id);
   if (!doc) return res.status(404).json({ success: false, error: 'Document not found' });
@@ -1189,7 +1189,7 @@ router.post('/bulk-import', requireAdmin, (req, res) => {
 });
 
 // Bulk set is_contractor flag
-router.post('/bulk-set-contractor', (req, res) => {
+router.post('/bulk-set-contractor', requireHrOrAdmin, (req, res) => {
   const db = getDb();
   const { codes, is_contractor } = req.body;
   if (!codes || !codes.length) return res.status(400).json({ success: false, error: 'codes array required' });

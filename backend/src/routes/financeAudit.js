@@ -227,7 +227,7 @@ router.get('/report', (req, res) => {
 // POST /api/finance-audit/day-correction
 // Submit a day correction
 // ─────────────────────────────────────────────────────────
-router.post('/day-correction', (req, res) => {
+router.post('/day-correction', requireHrFinanceOrAdmin, (req, res) => {
   try {
     const db = getDb();
     const { employeeCode, month, year, correctedDays, reason, notes } = req.body;
@@ -299,7 +299,7 @@ router.post('/day-correction', (req, res) => {
 // POST /api/finance-audit/punch-correction
 // Submit a punch correction
 // ─────────────────────────────────────────────────────────
-router.post('/punch-correction', (req, res) => {
+router.post('/punch-correction', requireHrFinanceOrAdmin, (req, res) => {
   try {
     const db = getDb();
     const { employeeCode, date, inTime, outTime, punchType, reason, notes } = req.body;
@@ -1140,7 +1140,7 @@ router.get('/manual-flags', (req, res) => {
 // PUT /api/finance-audit/manual-flags/:id/verify
 // Finance team verifies a manual attendance flag
 // ─────────────────────────────────────────────────────────
-router.put('/manual-flags/:id/verify', (req, res) => {
+router.put('/manual-flags/:id/verify', requireFinanceOrAdmin, (req, res) => {
   try {
     const db = getDb();
     const { id } = req.params;

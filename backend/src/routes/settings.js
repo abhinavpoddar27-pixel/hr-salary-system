@@ -1,5 +1,6 @@
 const express = require('express');
 const router = express.Router();
+const { requireFinanceOrAdmin } = require('../middleware/roles'); // P2-11 role guards
 const { getDb } = require('../database/db');
 
 // ─── Admin-only middleware ───────────────────────────────
@@ -216,7 +217,7 @@ router.get('/holidays/audit-log', (req, res) => {
   res.json({ success: true, data, total, unreviewed, page: pageNum, pageSize });
 });
 
-router.put('/holidays/audit-log/:id/review', (req, res) => {
+router.put('/holidays/audit-log/:id/review', requireFinanceOrAdmin, (req, res) => {
   const db = getDb();
   const { reviewed_by, notes } = req.body;
   db.prepare("UPDATE holiday_audit_log SET finance_reviewed = 1, finance_reviewed_by = ?, finance_reviewed_at = datetime('now'), finance_review_notes = ? WHERE id = ?")
