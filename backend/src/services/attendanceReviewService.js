@@ -47,6 +47,10 @@ const DEFAULT_CONFIG = Object.freeze({
     senior_hint_gross: 75000,      // a person about to be deducted with gross ≥ this → suggest "senior staff — not assessed"
     master_fit_min_days: 8,        // master-fit check needs at least this many assessed full days in the month
     master_fit_share: 0.6,         // … late or early (raw) on at least this share of them
+    // mid-month notice board (PR-5)
+    board_miss_punch_min: 3,       // named on the board from this many personal missed punches so far (MP-2)
+    bulk_miss_punch_day: 40,       // a day with at least this many miss-punch rows plant-wide is a system failure → not counted
+    board_spotless_min_share: 0.75, // "on time every day" needs assessed full days ≥ this share of the Mon–Sat days so far
   }),
   // 'import' = the shift the import matched each day (is_late_arrival / is_early_departure as stored);
   // 'master' = each person's CURRENT master shift (employees.default_shift_id), measured from the punches (owner ruling 10 Oct 2026).
@@ -69,6 +73,9 @@ const DEFAULT_CONFIG = Object.freeze({
   standing_departments: Object.freeze({}),  // { department: { rule: 'exclude', reason, source?, set_by?, set_at? } } e.g. a piece-rate crew
   contract_loaders_early_exempt: true,      // contractor workers with a loading designation: early exits not counted (owner ruling 11 Oct 2026)
   dismissed_suggestions: Object.freeze({}), // { key: { by, at } } — a dismissed suggestion is not shown again
+  // notice board footer (PR-5); {date} = the last attendance day the board covers
+  board_footer_en: 'These names are from attendance up to {date}. At month end, working time lost to late coming and early leaving is deducted from salary (at least half a day, in half-day steps). Leaving without punching out is recorded too. Come on time and punch in and out every day.',
+  board_footer_hi: 'ये नाम {date} तक की हाज़िरी के आधार पर हैं। महीने के अंत में देर से आने और जल्दी जाने से गँवाया गया काम का समय वेतन से काटा जाएगा (कम से कम आधा दिन, आधे-आधे दिन के हिसाब से)। बिना पंच किए जाना भी दर्ज होता है। रोज़ समय पर आएँ और आते-जाते समय पंच करें।',
   remeasure: Object.freeze({}),             // { code: { start, end 'HH:MM', late_grace 9, early_grace 15, left_late 'system'|'shift'|'off', left_late_minutes 20, hours_complete false, hours_grace 10 } }
 });
 
@@ -163,6 +170,9 @@ function validateConfig(c) {
       if (!v || !rules.includes(v.rule)) errs.push(`${key} ${k}: rule must be ${rules.join(' | ')}`);
       if (!v || typeof v.reason !== 'string' || v.reason.trim().length < 3) errs.push(`${key} ${k}: a reason of at least 3 characters is required`);
     }
+  }
+  for (const k of ['board_footer_en', 'board_footer_hi']) {
+    if (c[k] !== undefined && (typeof c[k] !== 'string' || c[k].trim().length < 10 || c[k].length > 800)) errs.push(`${k} must be text of 10–800 characters`);
   }
   if (c.dismissed_suggestions !== undefined && (!c.dismissed_suggestions || typeof c.dismissed_suggestions !== 'object' || Array.isArray(c.dismissed_suggestions))) errs.push('dismissed_suggestions must be an object');
   for (const k of ['loading_designation_patterns', 'excluded_codes', 'excluded_departments', 'early_excluded_codes', 'held_codes']) {
@@ -416,11 +426,12 @@ GROUP BY e.code, a.shift_detected
 HAVING days >= 10 AND ((s.name IS NOT NULL AND s.name <> a.shift_detected) OR early >= 0.8 * days OR late >= 0.8 * days)
 ORDER BY e.code`;
 
-function sqlParams(month, year, cfg, releaseDays, prevReleaseDays) {
+/** `to` (optional, YYYY-MM-DD inside the month) ends the current month early — the notice board's "so far". */
+function sqlParams(month, year, cfg, releaseDays, prevReleaseDays, to = null) {
   const t = cfg.thresholds; const pm = prevMonth(month, year);
   return {
     from: addDays(`${ymOf(pm.month, pm.year)}-01`, -t.stayed_late_lookback_days),
-    to: `${ymOf(month, year)}-${pad(daysInMonth(month, year))}`,
+    to: to || `${ymOf(month, year)}-${pad(daysInMonth(month, year))}`,
     cur: ymOf(month, year), prev: ymOf(pm.month, pm.year),
     rel: JSON.stringify(releaseDays || []), prel: JSON.stringify(prevReleaseDays || []),
     lateMin: t.late_min_minutes, mis: t.misread_minutes, eMin: t.early_min_exclusive, eMax: t.early_max_exclusive,
@@ -444,12 +455,12 @@ function inlineParams(sql, params) {
 
 const isMaster = (cfg) => cfg.assessment_basis === 'master';
 
-function detectReleaseDays(db, month, year, cfg) {
+function detectReleaseDays(db, month, year, cfg, to = null) {
   const t = cfg.thresholds;
   const rows = isMaster(cfg)
-    ? db.prepare(RELEASE_DAYS_SQL_MASTER).all({ ...sqlParams(month, year, cfg, [], []), share: t.release_day_share })
+    ? db.prepare(RELEASE_DAYS_SQL_MASTER).all({ ...sqlParams(month, year, cfg, [], [], to), share: t.release_day_share })
     : db.prepare(RELEASE_DAYS_SQL).all({ cur: ymOf(month, year), eMin: t.early_min_exclusive, eMax: t.early_max_exclusive, share: t.release_day_share });
-  return rows.map((r) => ({ date: r.date, worked: r.worked, early: r.early, share: r2(r.early / r.worked) }));
+  return rows.filter((r) => !to || r.date <= to).map((r) => ({ date: r.date, worked: r.worked, early: r.early, share: r2(r.early / r.worked) }));
 }
 
 /**
@@ -459,10 +470,10 @@ function detectReleaseDays(db, month, year, cfg) {
  * exact shift end; gate_pass = early exits reduced by a gate pass; miss_punch_open = miss-punch days still skipped.
  * People left out of the review (excluded_codes, excluded_departments) are left out here too. Returns null on the import basis.
  */
-function assessmentQuality(db, month, year, cfg) {
+function assessmentQuality(db, month, year, cfg, to = null) {
   if (!isMaster(cfg)) return null;
   const ex = new Set(cfg.excluded_codes); const exDept = new Set(cfg.excluded_departments.map((d) => d.toUpperCase()));
-  const all = db.prepare(MASTER_QUALITY_SQL).all(sqlParams(month, year, cfg, [], [])).map((r) => ({ ...r, code: String(r.code) }));
+  const all = db.prepare(MASTER_QUALITY_SQL).all(sqlParams(month, year, cfg, [], [], to)).map((r) => ({ ...r, code: String(r.code) }));
   const emp = loadEmployees(db, [...new Set(all.map((r) => r.code))]);
   const rows = all.filter((r) => !ex.has(r.code) && !exDept.has(String((emp.get(r.code) || {}).department || '').toUpperCase()));
   const kinds = ['no_master', 'night_on_day_master', 'odd_punch', 'half_day', 'gate_register', 'out_not_verified', 'gate_pass', 'miss_punch_open'];
@@ -481,8 +492,8 @@ function detectShiftIssues(db, month, year) {
 
 // ── step 3: person-month ──────────────────────────────────────────────────
 
-function loadPersonMonth(db, month, year, cfg, releaseDays, prevReleaseDays) {
-  const p = sqlParams(month, year, cfg, releaseDays, prevReleaseDays);
+function loadPersonMonth(db, month, year, cfg, releaseDays, prevReleaseDays, to = null) {
+  const p = sqlParams(month, year, cfg, releaseDays, prevReleaseDays, to);
   return db.prepare(isMaster(cfg) ? PERSON_MONTH_SQL_MASTER : PERSON_MONTH_SQL).all(p).map((r) => ({ ...r, code: String(r.code) }));
 }
 
@@ -493,10 +504,10 @@ function loadPersonMonth(db, month, year, cfg, releaseDays, prevReleaseDays) {
  * Full-hours rule per code (hours_complete): a late or an early exit is not counted on a day where
  * out − in ≥ the shift's length (half for ½P) − hours_grace minutes (default 10). Counted in hours_excused.
  */
-function remeasureRows(db, month, year, cfg, releaseDays, prevReleaseDays) {
+function remeasureRows(db, month, year, cfg, releaseDays, prevReleaseDays, to = null) {
   const codes = Object.keys(cfg.remeasure || {});
   if (!codes.length) return [];
-  const t = cfg.thresholds; const p = sqlParams(month, year, cfg, releaseDays, prevReleaseDays);
+  const t = cfg.thresholds; const p = sqlParams(month, year, cfg, releaseDays, prevReleaseDays, to);
   const ph = codes.map(() => '?').join(',');
   const rows = db.prepare(`SELECT employee_code c, date d, status_final st, COALESCE(is_miss_punch,0) mp, in_time_final it, out_time_final ot,
       COALESCE(is_left_late,0) ll FROM attendance_processed WHERE employee_code IN (${ph}) AND date BETWEEN ? AND ? ORDER BY employee_code, date`)
@@ -1128,6 +1139,108 @@ function repeaters(rows) {
     .sort((a, b) => b.months.length - a.months.length || b.workdays_lost - a.workdays_lost || a.code.localeCompare(b.code));
 }
 
+// ── notice board (PR-5): the 1st of the month up to a chosen day, same engine ──────────────────────
+
+/** Today's date in IST (YYYY-MM-DD). */
+function istToday(now = new Date()) { return new Date(now.getTime() + 330 * 60000).toISOString().slice(0, 10); }
+
+/** Bulk-failure days: at least `min` miss-punch rows plant-wide on that day (system cause, not people). */
+function bulkMissPunchDays(db, from, to, min) {
+  return db.prepare(`SELECT date, COUNT(*) n FROM attendance_processed WHERE is_miss_punch = 1 AND date BETWEEN ? AND ?
+    GROUP BY date HAVING n >= ? ORDER BY date`).all(from, to, min).map((r) => ({ date: r.date, miss_punches: r.n }));
+}
+
+function monSatDays(from, to) {
+  let n = 0; for (let d = from; d <= to; d = addDays(d, 1)) if (new Date(`${d}T00:00:00Z`).getUTCDay() !== 0) n += 1;
+  return n;
+}
+
+const fmtDay = (iso) => { const [y, m, d] = iso.split('-').map(Number); return `${d} ${['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'][m - 1]} ${y}`; };
+
+/**
+ * Mid-month notice board (PR-5, plan D-8 / D-9 / MP-2). Names + codes + counts only — no ₹, no minutes.
+ * Lates and early exits are the review's COUNTED figures for the 1st → `to` (same basis, rules, standing leave-outs,
+ * release days as detected up to `to`). Missed punches: worked-status rows with is_miss_punch on days that are not
+ * bulk-failure days, before today (IST). Left-out and held people are not shown. Read only.
+ * @param opts { month, year, to 'YYYY-MM-DD' (in the month), config, company?, skipDays? [], today? 'YYYY-MM-DD' }
+ */
+function noticeBoard(db, { month, year, to, config, company = null, skipDays = [], today = istToday() }) {
+  const cfg = mergeConfig(config); const t = cfg.thresholds;
+  const ym = ymOf(month, year); const from = `${ym}-01`;
+  const end = to && to.slice(0, 7) === ym ? to : `${ym}-${pad(daysInMonth(month, year))}`;
+  const lastRow = db.prepare('SELECT MAX(date) d FROM attendance_processed WHERE date BETWEEN ? AND ?').get(from, end);
+  const lastDataDate = lastRow && lastRow.d ? lastRow.d : null;
+
+  const releaseDays = detectReleaseDays(db, month, year, cfg, end).map((d) => d.date);
+  const sqlRows = loadPersonMonth(db, month, year, cfg, releaseDays, [], end);
+  const remRows = remeasureRows(db, month, year, cfg, releaseDays, [], end);
+
+  // missed punches (MP-2)
+  const mpEnd = end < today ? end : addDays(today, -1);
+  const bulk = mpEnd >= from ? bulkMissPunchDays(db, from, mpEnd, t.bulk_miss_punch_day) : [];
+  const skip = [...new Set([...bulk.map((b) => b.date), ...(skipDays || [])])];
+  const mpRows = mpEnd >= from ? db.prepare(`SELECT employee_code c, COUNT(*) n FROM attendance_processed
+      WHERE is_miss_punch = 1 AND date BETWEEN ? AND ? AND status_final IN ${WORKED}
+        AND date NOT IN (SELECT value FROM json_each(?)) GROUP BY employee_code`).all(from, mpEnd, JSON.stringify(skip)) : [];
+  const mp = new Map(mpRows.map((r) => [String(r.c), r.n]));
+
+  const codes = [...new Set([...sqlRows.map((r) => r.code), ...remRows.map((r) => r.code), ...mp.keys()])];
+  const empMap = loadEmployees(db, codes);
+  const byCode = buildPeople(sqlRows, remRows, empMap, cfg, ym, '__none__');
+  // someone whose only worked days this month were missed punches still belongs on the board
+  for (const code of mp.keys()) {
+    if (byCode.has(code)) continue;
+    const e = empMap.get(code) || {};
+    byCode.set(code, { code, cur: null, prev: null, name: e.name || null, department: e.department || null, designation: e.designation || null,
+      company: e.company || null, group: (Number(e.is_contractor) === 1 || e.employment_type === 'Contract') ? 'Contract' : 'Company',
+      loading: cfg.loading_designation_patterns.some((x) => x && String(e.designation || '').toUpperCase().includes(String(x).toUpperCase())),
+      in_employee_master: !!empMap.get(code) });
+  }
+  const { kept, excludedCount } = applyExclusions(byCode, cfg);
+  const companyOk = (p) => !company || String(p.company || '').trim().toUpperCase() === String(company).trim().toUpperCase();
+  const companies = [...new Set(kept.map((p) => p.company).filter(Boolean))].sort();
+  const live = kept.filter((p) => !p.held && companyOk(p));
+
+  const quality = assessmentQuality(db, month, year, cfg, end);
+  const notAssessed = new Map();
+  if (quality) for (const k of ['no_master', 'night_on_day_master', 'odd_punch', 'half_day']) for (const r of quality[k].people) notAssessed.set(r.code, (notAssessed.get(r.code) || 0) + r.days);
+  const span = lastDataDate ? monSatDays(from, lastDataDate < end ? lastDataDate : end) : 0;
+  const minDays = Math.ceil(t.board_spotless_min_share * span);
+
+  const listed = []; const spotless = [];
+  for (const p of live) {
+    const c = p.cur || {};
+    const lates = c.lates_counted || 0; const early = c.early_counted || 0; const missed = mp.get(p.code) || 0;
+    const flags = { late: lates >= t.notice_late, early: early >= t.notice_early, missed: missed >= t.board_miss_punch_min };
+    const base = { code: p.code, name: p.name, department: p.department, company: p.company };
+    if (flags.late || flags.early || flags.missed) { listed.push({ ...base, lates, early_exits: early, missed_punches: missed, flags }); continue; }
+    const assessed = (c.worked_days || 0) - (notAssessed.get(p.code) || 0);
+    if (p.cur && !p.loading && !p.early_excluded && lates === 0 && early === 0 && missed === 0 && span > 0 && assessed >= minDays) spotless.push({ ...base, assessed_days: assessed });
+  }
+  const byDept = (a, b) => String(a.department || '').localeCompare(String(b.department || '')) || String(a.name || '').localeCompare(String(b.name || '')) || a.code.localeCompare(b.code);
+  listed.sort(byDept); spotless.sort(byDept);
+  const coveredTo = lastDataDate && lastDataDate < end ? lastDataDate : end;
+  const fill = (s) => String(s || '').split('{date}').join(lastDataDate ? fmtDay(coveredTo) : fmtDay(end));
+  return {
+    meta: { month, year, ym, from, to: end, last_data_date: lastDataDate, covered_to: lastDataDate ? coveredTo : null,
+      company: company || null, companies, basis: cfg.assessment_basis, release_days: releaseDays,
+      bulk_miss_punch_days: bulk, skip_days: skip, miss_punches_counted_to: mpEnd >= from ? mpEnd : null,
+      people_assessed: live.filter((p) => p.cur).length, excluded_people: excludedCount,
+      spotless_min_days: minDays, mon_sat_days: span,
+      thresholds: { late: t.notice_late, early: t.notice_early, missed: t.board_miss_punch_min } },
+    listed, spotless,
+    counts: { listed: listed.length, late: listed.filter((x) => x.flags.late).length, early: listed.filter((x) => x.flags.early).length,
+      missed: listed.filter((x) => x.flags.missed).length, spotless: spotless.length },
+    footer: { en: fill(cfg.board_footer_en), hi: fill(cfg.board_footer_hi) },
+  };
+}
+
+/** What a print record keeps: who was named and with which counts (read later by PR-7 / effect tracking). */
+function boardSnapshot(board) {
+  return { from: board.meta.from, to: board.meta.to, covered_to: board.meta.covered_to, company: board.meta.company, skip_days: board.meta.skip_days,
+    listed: board.listed.map((x) => [x.code, x.lates, x.early_exits, x.missed_punches]), spotless: board.spotless.map((x) => x.code) };
+}
+
 // ── main ──────────────────────────────────────────────────────────────────
 
 /**
@@ -1205,4 +1318,5 @@ module.exports = {
   roundDeduction, optionCDays, prevMonth, daysInMonth, computeAttendanceReview,
   financeSendPlan, financeStatus, runTag, trendRow, monthRange, repeaters,
   suggestions, applySuggestions, toStoredConfig, standingFrom, fitShift, MASTER_DAYS_SQL, LEGACY_REASON,
+  noticeBoard, boardSnapshot, bulkMissPunchDays, istToday,
 };

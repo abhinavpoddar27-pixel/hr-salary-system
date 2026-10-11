@@ -752,6 +752,9 @@ export const attendanceReviewFinalise = (id) => api.put(`${AR}/runs/${id}/finali
 export const attendanceReviewTrends = (from, to) => api.get(`${AR}/trends`, { params: { from, to }, headers: arFresh })
 export const attendanceReviewFinance = (id) => api.get(`${AR}/runs/${id}/finance`, { headers: arFresh })
 export const attendanceReviewSendToFinance = (id) => api.post(`${AR}/runs/${id}/send-to-finance`)
+export const attendanceReviewBoard = (month, year, to, company, skipDays = []) =>
+  api.get(`${AR}/board`, { params: { month, year, to, ...(company ? { company } : {}), ...(skipDays.length ? { skipDays: skipDays.join(',') } : {}) }, headers: arFresh })
+export const attendanceReviewBoardPrint = (body) => api.post(`${AR}/board/prints`, body)
 export const attendanceReviewExport = (id, kind) => api.get(`${AR}/runs/${id}/export.${kind}`, { responseType: 'blob', headers: arFresh })
 
 export default api
