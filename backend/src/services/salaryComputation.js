@@ -202,6 +202,10 @@ function getAdvanceRecovery(db, employeeCode, month, year) {
   }
 }
 
+// Owner ruling D-3 (Oct 2026): finance-approved late-coming and early-exit deductions are taken from contractor
+// worker pay from this payroll month (year × 12 + month = September 2026). OT / ED / holiday duty stay contractor-free.
+const CONTRACTOR_LATE_EARLY_FROM = 2026 * 12 + 9;
+
 /**
  * Compute salary for one employee for a month.
  */
@@ -645,10 +649,14 @@ function computeEmployeeSalary(db, employee, month, year, company, requestId = '
   // ─── Late Coming Deduction (Phase 2 — finance-approved only) ───
   // Sum up all late_coming_deductions rows for this employee/month with
   // finance_status='approved' AND is_applied_to_salary=0. Rupees amount uses
-  // the calendar-day rate (same as OT/ED/holiday-duty). Contractors are excluded
-  // — their pay is already daily, mirroring the OT/ED gating rule.
+  // the calendar-day rate (same as OT/ED/holiday-duty) — for a contractor that is
+  // their own day rate (base pay = payable ÷ calendar days × gross).
+  // Contractors are charged from CONTRACTOR_LATE_EARLY_FROM (owner ruling D-3,
+  // Oct 2026); before it they were skipped, so a re-run of an older, paid month
+  // must not start charging a row that was never taken.
+  const chargeLateEarly = !isContract || (year * 12 + month) >= CONTRACTOR_LATE_EARLY_FROM;
   let lateComingDeduction = 0;
-  if (!isContract) {
+  if (chargeLateEarly) {
     try {
       const row = db.prepare(`
         SELECT COALESCE(SUM(deduction_days), 0) AS totalDays
@@ -667,9 +675,9 @@ function computeEmployeeSalary(db, employee, month, year, company, requestId = '
   // ─── Early Exit Deduction (April 2026 — finance-approved only) ───
   // Sum approved deduction amounts from early_exit_deductions. Unlike late
   // coming (which uses deduction_days × day rate), early exit stores the
-  // actual rupee amount directly. Contractors excluded (mirrors OT/ED gate).
+  // actual rupee amount directly. Contractors: as for late coming above.
   let earlyExitDeduction = 0;
-  if (!isContract) {
+  if (chargeLateEarly) {
     try {
       const row = db.prepare(`
         SELECT COALESCE(SUM(deduction_amount), 0) AS total

@@ -135,7 +135,7 @@ describe('download routes', () => {
     expect(d.status).toBe(200);
     expect(d.headers['content-disposition']).toBe('attachment; filename="Oct2026_Late_Early_Action_Notes_DRAFT.docx"');
     expect(docxText(d.body)).toMatch('DRAFT — not finalised');
-    await api.request('PUT', `${BASE}/runs/${id}/finalise`, { as: 'adm' });
+    await api.request('PUT', `${BASE}/runs/${id}/finalise`, { as: 'adm', body: { acknowledge: 'Synthetic test month, checks reviewed' } });
     const f = await get(`${BASE}/runs/${id}/export.docx`);
     expect(f.headers['content-disposition']).toBe('attachment; filename="Oct2026_Late_Early_Action_Notes.docx"');
     expect(docxText(f.body)).not.toMatch('DRAFT');

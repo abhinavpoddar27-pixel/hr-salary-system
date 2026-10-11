@@ -109,7 +109,7 @@ describe('P2 — no LWF without the flag or without earned gross', () => {
 });
 
 describe('P3 — contractors on the list are charged', () => {
-  test('contractor with the flag → 5 / 20 while OT and late coming stay 0', () => {
+  test('contractor with the flag → 5 / 20; OT stays 0; an approved late row is charged (PR-2b, from Sep 2026)', () => {
     const db = S.newDb();
     const e = person(db, { lwf: 1, employment_type: 'Contract' });
     worked(db, e, 9, 2026, { extraDuty: 2 });
@@ -119,9 +119,9 @@ describe('P3 — contractors on the list are charged', () => {
     const r = salary(db, e.code, 9, 2026);
     expect(r.is_contractor).toBe(1);
     expect(r.ot_pay).toBe(0);
-    expect(r.late_coming_deduction).toBe(0);
+    expect(r.late_coming_deduction).toBe(500);                       // PR-2b: 1 day × gross ÷ 30 (was 0 before contractors were charged)
     expect([r.lwf_employee, r.lwf_employer]).toEqual([5, 20]);
-    expect(r.total_deductions).toBe(5);
+    expect(r.total_deductions).toBe(505);
     db.close();
   });
 });

@@ -91,7 +91,7 @@ export default function AttendanceReviewConfig({ month, year }) {
     },
     onSuccess: () => {
       toast.success(`Rules saved, effective from ${effectiveFrom}`)
-      qc.invalidateQueries({ queryKey: ['ar-config'] }); qc.invalidateQueries({ queryKey: ['ar-preview'] })
+      qc.invalidateQueries({ queryKey: ['ar-config'] }); qc.invalidateQueries({ queryKey: ['ar-preview'] }); qc.invalidateQueries({ queryKey: ['ar-quality'] })
     },
     onError: (e) => { const d = e.response?.data?.details; if (d?.length) toast.error(d.join('\n'), { duration: 8000 }) },
   })

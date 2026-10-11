@@ -352,15 +352,57 @@ router.get('/runs/:id/export.docx', async (req, res) => {
   }
 });
 
-// PUT /runs/:id/finalise — lock a draft
+// GET /runs/:id/quality — PR-4: what must be looked at before finalising (stops, checks, notes); for a final run,
+// the acknowledgement recorded when it was finalised
+router.get('/runs/:id/quality', (req, res) => {
+  const id = parseInt(req.params.id, 10); const db = getDb();
+  const row = Number.isInteger(id) ? db.prepare('SELECT * FROM attendance_review_runs WHERE id = ?').get(id) : null;
+  if (!row) return res.status(404).json({ success: false, error: 'Run not found' });
+  try {
+    const gate = svc.qualityGate(db, row, { now: svc.nowDate() });
+    const ack = db.prepare(`SELECT new_value, remark, changed_by, changed_at FROM audit_log WHERE table_name = 'attendance_review_runs'
+      AND record_id = ? AND stage = 'ATTENDANCE_REVIEW_GATE' ORDER BY id DESC LIMIT 1`).get(id);
+    res.json({ success: true, data: { ...gate, status: row.status, reason_min: svc.GATE_REASON_MIN,
+      acknowledged: ack ? { checks: JSON.parse(ack.new_value || '[]'), reason: ack.remark, by: ack.changed_by, at: ack.changed_at } : null } });
+  } catch (err) {
+    console.error('Attendance review quality error:', err.message);
+    res.status(500).json({ success: false, error: 'Failed to check the draft: ' + err.message });
+  }
+});
+
+// PUT /runs/:id/finalise { acknowledge? } — lock a draft. PR-4: refused while the quality check has a stop; with checks,
+// a reason of GATE_REASON_MIN+ characters is required and recorded (audit stage ATTENDANCE_REVIEW_GATE).
 router.put('/runs/:id/finalise', (req, res) => {
   const id = parseInt(req.params.id, 10); const db = getDb();
   const row = Number.isInteger(id) ? db.prepare('SELECT * FROM attendance_review_runs WHERE id = ?').get(id) : null;
   if (!row) return res.status(404).json({ success: false, error: 'Run not found' });
   if (row.status === 'final') return res.status(409).json({ success: false, error: 'Run is already final' });
-  const info = db.prepare("UPDATE attendance_review_runs SET status = 'final', finalised_by = ?, finalised_at = datetime('now') WHERE id = ? AND status = 'draft'").run(user(req), id);
-  if (!info.changes) return res.status(409).json({ success: false, error: 'Run changed meanwhile; reload' });
-  logAudit('attendance_review_runs', id, 'status', 'draft', 'final', 'ATTENDANCE_REVIEW_RUN', `finalised ${row.year}-${row.month}`, user(req));
+  let gate;
+  try { gate = svc.qualityGate(db, row, { now: svc.nowDate() }); } catch (err) {
+    console.error('Attendance review quality error:', err.message);
+    return res.status(500).json({ success: false, error: 'Failed to check the draft: ' + err.message });
+  }
+  if (gate.stops.length) return res.status(409).json({ success: false, code: 'QUALITY_GATE', error: gate.stops.map((s) => s.title).join('; '), gate });
+  const reason = typeof (req.body || {}).acknowledge === 'string' ? req.body.acknowledge.trim() : '';
+  if (gate.checks.length && reason.length < svc.GATE_REASON_MIN) {
+    return res.status(409).json({ success: false, code: 'QUALITY_GATE',
+      error: `Before finalising, look at: ${gate.checks.map((c) => c.title).join('; ')}. Give a reason of at least ${svc.GATE_REASON_MIN} characters to finalise anyway.`, gate });
+  }
+  const done = db.transaction(() => {
+    const info = db.prepare("UPDATE attendance_review_runs SET status = 'final', finalised_by = ?, finalised_at = datetime('now') WHERE id = ? AND status = 'draft'").run(user(req), id);
+    if (!info.changes) return false;
+    if (gate.checks.length) {
+      // written directly (logAudit swallows errors) — a finalise past a check must leave its reason behind
+      db.prepare(`INSERT INTO audit_log (table_name, record_id, field_name, old_value, new_value, stage, remark, changed_by, action_type)
+        VALUES ('attendance_review_runs', ?, 'quality_gate', ?, ?, 'ATTENDANCE_REVIEW_GATE', ?, ?, 'acknowledge')`)
+        .run(id, JSON.stringify(gate.notes.map((n) => n.key)), JSON.stringify(gate.checks.map((c) => ({ key: c.key, title: c.title,
+          people: (c.people || []).map((p) => p.code) }))), reason, user(req));
+    }
+    return true;
+  })();
+  if (!done) return res.status(409).json({ success: false, error: 'Run changed meanwhile; reload' });
+  logAudit('attendance_review_runs', id, 'status', 'draft', 'final', 'ATTENDANCE_REVIEW_RUN',
+    `finalised ${row.year}-${row.month}${gate.checks.length ? `; past ${gate.checks.length} check(s): ${gate.checks.map((c) => c.key).join(', ')}` : ''}`, user(req));
   res.json({ success: true, data: runSummary(db.prepare('SELECT * FROM attendance_review_runs WHERE id = ?').get(id)) });
 });
 
