@@ -59,6 +59,9 @@ const DEFAULT_CONFIG = Object.freeze({
     d4_half_day_min_count: 2,      // D-4 (owner 11 Oct): ½ day per 2 h exit only from this many 2 h exits in the month; fewer → they count as long exits (minutes rule)
     missed_out_from: 5,            // MP-2: from the person's Nth own missed punch in the month (bulk-failure days not counted) …
     missed_out_minutes: 120,       // … each missed OUT counts as an early exit of this many minutes
+    ladder_window_months: 3,       // PR-7 (D-10): strike months counted over this many months up to the month reviewed
+    ladder_deduction_from: 2,      // … a deduction stands from this many strike months (fewer → warning)
+    ladder_hearing_from: 3,        // … and an HR hearing is added from this many
   }),
   // 'import' = the shift the import matched each day (is_late_arrival / is_early_departure as stored);
   // 'master' = each person's CURRENT master shift (employees.default_shift_id), measured from the punches (owner ruling 10 Oct 2026).
@@ -70,6 +73,8 @@ const DEFAULT_CONFIG = Object.freeze({
   early_exit_rule: 'warning',      // 'warning' | 'option_c' | 'd4' (2 h+ exit = ½ day; 3+ exits of 60+ min = minutes deduction)
   late_long_always_counted: false, // D-6: a late of long_late_minutes+ is counted even when the full shift was worked
   missed_out_rule: false,          // MP-2: from the missed_out_from-th own missed punch, each missed OUT = an early exit of missed_out_minutes
+  ladder_rule: false,              // PR-7 (D-10): warning → deduction → deduction + HR hearing, by strike months in the window
+  ladder_from: '2026-08',          // PR-7: months before this are not counted as strikes (owner: count August and September)
   shift_fit: 'everyone',           // early exit not counted on a full-hours day: 'everyone' | 'habitual' (only habitual early leavers) | 'off'
   late_full_hours: true,           // late not counted on a day the person still worked the full shift length (owner ruling 10 Oct 2026)
   loading_designation_patterns: Object.freeze(['LOAD', 'LODING']),
@@ -169,7 +174,12 @@ function validateConfig(c) {
   }
   if (c.stayed_late_mode !== undefined && !(c.stayed_late_mode in MODES)) errs.push('stayed_late_mode must be worked | calendar | either');
   if (c.early_exit_rule !== undefined && !EARLY_RULES.includes(c.early_exit_rule)) errs.push('early_exit_rule must be warning | option_c | d4');
-  for (const k of ['late_long_always_counted', 'missed_out_rule']) if (c[k] !== undefined && typeof c[k] !== 'boolean') errs.push(`${k} must be true or false`);
+  for (const k of ['late_long_always_counted', 'missed_out_rule', 'ladder_rule']) if (c[k] !== undefined && typeof c[k] !== 'boolean') errs.push(`${k} must be true or false`);
+  if (c.ladder_from !== undefined && !(typeof c.ladder_from === 'string' && /^\d{4}-(0[1-9]|1[0-2])$/.test(c.ladder_from))) errs.push('ladder_from must be YYYY-MM');
+  if (c.thresholds && typeof c.thresholds === 'object') {
+    const lw = c.thresholds.ladder_window_months;
+    if (lw !== undefined && (!Number.isInteger(lw) || lw < 1 || lw > 12)) errs.push('ladder_window_months must be a whole number from 1 to 12');
+  }
   if (c.shift_fit !== undefined && !SHIFT_FIT.includes(c.shift_fit)) errs.push('shift_fit must be habitual | everyone | off');
   if (c.late_full_hours !== undefined && typeof c.late_full_hours !== 'boolean') errs.push('late_full_hours must be true or false');
   if (c.assessment_basis !== undefined && !BASES.includes(c.assessment_basis)) errs.push('assessment_basis must be import | master');
@@ -252,6 +262,18 @@ function roundDeduction(wdl, t) {
  * Shift-check columns: ms_days (Mon–Sat worked days when @sunOff), early_short* (exits on days out − in < shift length − @fitGrace).
  * Exported so the acceptance check can run the exact same SQL through the SQL Console.
  */
+// T4: bands (minutes) and weekdays for the Trends distributions — one column per bucket, summed per person-month.
+const LATE_BANDS = [[0, 15], [15, 30], [30, 60], [60, 120], [120, 100000]];
+const EARLY_BANDS = [[0, 30], [30, 60], [60, 120], [120, 100000]];
+const DIST_SQL = [
+  ...LATE_BANDS.map(([a, b], i) => `SUM(CASE WHEN isl = 1 AND exl = 0 AND lm >= ${a} AND lm < ${b} THEN 1 ELSE 0 END) AS lb${i}`),
+  ...EARLY_BANDS.map(([a, b], i) => `SUM(CASE WHEN ise = 1 AND em >= ${a} AND em < ${b} THEN 1 ELSE 0 END) AS eb${i}`),
+  ...EARLY_BANDS.map(([a, b], i) => `SUM(CASE WHEN ise = 1 AND short = 1 AND em >= ${a} AND em < ${b} THEN 1 ELSE 0 END) AS ebs${i}`),
+  ...[0, 1, 2, 3, 4, 5, 6].map((d) => `SUM(CASE WHEN isl = 1 AND exl = 0 AND dow = '${d}' THEN 1 ELSE 0 END) AS lw${d}`),
+  ...[0, 1, 2, 3, 4, 5, 6].map((d) => `SUM(CASE WHEN ise = 1 AND dow = '${d}' THEN 1 ELSE 0 END) AS ew${d}`),
+  ...[0, 1, 2, 3, 4, 5, 6].map((d) => `SUM(CASE WHEN ise = 1 AND short = 1 AND dow = '${d}' THEN 1 ELSE 0 END) AS ews${d}`),
+].join(',\n       ');
+
 const PERSON_MONTH_TAIL = `
 pl AS (SELECT c, d, MAX(ll) ll FROM base GROUP BY c, d),
 w AS (SELECT b.*, LAG(b.ll) OVER (PARTITION BY b.c ORDER BY b.d) pll FROM base b
@@ -306,7 +328,9 @@ SELECT c AS code, ym, COUNT(*) AS worked_days, SUM(f) AS worked_units, SUM(f*h*6
        SUM(CASE WHEN ise = 1 AND short = 1 AND em >= @halfMin THEN 1 ELSE 0 END) AS early_short_half,
        SUM(CASE WHEN ise = 1 AND short = 1 AND em >= @halfMin THEN em ELSE 0 END) AS early_short_half_min,
        SUM(CASE WHEN ise = 1 AND short = 1 AND em >= @midMin AND em < @halfMin THEN 1 ELSE 0 END) AS early_short_mid,
-       SUM(CASE WHEN ise = 1 AND short = 1 AND em >= @midMin AND em < @halfMin THEN em ELSE 0 END) AS early_short_mid_min
+       SUM(CASE WHEN ise = 1 AND short = 1 AND em >= @midMin AND em < @halfMin THEN em ELSE 0 END) AS early_short_mid_min,
+       -- T4 distributions: counted lates by band / weekday; early exits by band / weekday, plain and short-day versions
+       ${DIST_SQL}
 FROM z GROUP BY c, ym`;
 
 const WEEKLY_TAIL = `
@@ -867,6 +891,201 @@ function actions(people, cfg, overrides, month, year) {
   return { actionList, earlyExitWarnings, overridesApplied: applied };
 }
 
+// ── step 7c: T4 month analytics — waterfall, ₹ value of time lost, distributions ──
+
+/**
+ * From the assessed, non-held people of the month (after exclusions and MP-2): how measured lates / early exits became
+ * the counted ones, the ₹ value of the counted time (gross ÷ days in month ÷ shift minutes), and the counted lates /
+ * early exits by band and weekday (MP-2 missed OUTs as exits of missed_out_minutes on their dates).
+ * Re-measured people carry no band / weekday columns and add 0 there.
+ */
+function monthAnalytics(kept, cfg, md) {
+  const t = cfg.thresholds;
+  const live = kept.filter((p) => p.cur && !p.held);
+  const n = (x) => Number(x) || 0;
+  const w = { lates: { measured: 0, stayed_late: 0, full_hours: 0, loaders: 0, counted: 0 },
+    early: { measured: 0, full_hours: 0, exempt: 0, missed_out: 0, counted: 0 }, value_lost_inr: 0, minutes_counted: 0 };
+  const lateBands = LATE_BANDS.map(() => 0); const earlyBands = EARLY_BANDS.map(() => 0);
+  const lateWd = [0, 0, 0, 0, 0, 0, 0]; const earlyWd = [0, 0, 0, 0, 0, 0, 0];
+  const mBand = EARLY_BANDS.findIndex(([a, b]) => t.missed_out_minutes >= a && t.missed_out_minutes < b);
+  for (const p of live) {
+    const c = p.cur; const ee = !!p.early_excluded; const fit = !!c.fit_applied;
+    w.lates.measured += n(c.late_raw);
+    w.lates.full_hours += n(c.late_full_excused);
+    w.lates.stayed_late += n(c.late_excused) - n(c.late_full_excused);
+    w.lates.loaders += p.loading ? n(c.lates) : 0;
+    w.lates.counted += n(c.lates_counted);
+    w.early.measured += n(c.early_exits);
+    w.early.full_hours += n(c.fit_excused);
+    w.early.exempt += ee ? n(c.early_exits) : 0;
+    w.early.missed_out += n(c.missed_out_days);
+    w.early.counted += n(c.early_counted);
+    const mins = n(c.late_min_counted) + n(c.early_min_counted);
+    w.minutes_counted += mins;
+    if (c.shift_h && p.gross_salary) w.value_lost_inr += (mins / (c.shift_h * 60)) * (p.gross_salary / md);
+    if (!p.loading) { LATE_BANDS.forEach((_, i) => { lateBands[i] += n(c[`lb${i}`]); }); for (let d = 0; d < 7; d++) lateWd[d] += n(c[`lw${d}`]); }
+    if (!ee) {
+      EARLY_BANDS.forEach((_, i) => { earlyBands[i] += n(c[fit ? `ebs${i}` : `eb${i}`]); });
+      for (let d = 0; d < 7; d++) earlyWd[d] += n(c[fit ? `ews${d}` : `ew${d}`]);
+      for (const dt of c.missed_out_dates || []) { if (mBand >= 0) earlyBands[mBand] += 1; earlyWd[new Date(`${dt}T00:00:00Z`).getUTCDay()] += 1; }
+    }
+  }
+  w.value_lost_inr = Math.round(w.value_lost_inr);
+  const band = (b, i, arr) => ({ from: b[0], to: b[1] >= 100000 ? null : b[1], count: arr[i] });
+  return { waterfall: w, distribution: {
+    late_bands: LATE_BANDS.map((b, i) => band(b, i, lateBands)), early_bands: EARLY_BANDS.map((b, i) => band(b, i, earlyBands)),
+    late_weekday: lateWd, early_weekday: earlyWd } };
+}
+
+// ── step 7b: PR-7 escalation ladder (D-10) ────────────────────────────────
+
+/** The codes a stored or computed month result put on a list (action list or early-exit section, any action) = strikes. */
+function strikeCodes(result) {
+  const out = new Set();
+  for (const k of ['actionList', 'earlyExitWarnings']) for (const a of (result && result[k]) || []) out.add(String(a.code));
+  return out;
+}
+
+/** A month's release days as confirmed in its run (final, else draft); [] when no run. */
+function storedReleaseDays(db, month, year) {
+  const r = db.prepare('SELECT release_days FROM attendance_review_runs WHERE month = ? AND year = ?').get(month, year);
+  try { return r ? JSON.parse(r.release_days || '[]') : []; } catch { return []; }
+}
+
+/**
+ * Strike months of the ladder window BEFORE month M (M itself is added by applyLadder). Each month comes from its stored
+ * run (final, else draft), else is computed live with that month's rules (no ladder, no overrides); months before
+ * cfg.ladder_from and months without attendance count nothing. `cache` (Map ym → { codes, source }) is shared by callers
+ * that compute several months in a row (Trends). Returns { byCode: Map(code → [ym]), months: [{ ym, source }] }.
+ */
+function strikeHistory(db, month, year, cfg, cache = new Map()) {
+  const w = Math.max(1, Math.round(cfg.thresholds.ladder_window_months || 3));
+  const byCode = new Map(); const months = [];
+  let m = month; let y = year;
+  for (let i = 1; i < w; i++) {
+    ({ month: m, year: y } = prevMonth(m, y));
+    const ym = ymOf(m, y);
+    if (ym < (cfg.ladder_from || '0000-00')) break;
+    let hit = cache.get(ym);
+    if (!hit) {
+      const run = db.prepare('SELECT status, result_json FROM attendance_review_runs WHERE month = ? AND year = ?').get(m, y);
+      let res = null; if (run) { try { res = JSON.parse(run.result_json); } catch { res = null; } }
+      if (res) hit = { codes: strikeCodes(res), source: run.status };
+      else if (db.prepare('SELECT 1 FROM attendance_processed WHERE month = ? AND year = ? LIMIT 1').get(m, y)) {
+        const { config } = loadConfig(db, ym);
+        const mc = mergeConfig(config);
+        const rd = detectReleaseDays(db, m, y, mc).map((d) => d.date);
+        const pm = prevMonth(m, y);
+        const live = computeAttendanceReview(db, { month: m, year: y, config, releaseDays: rd, prevReleaseDays: storedReleaseDays(db, pm.month, pm.year), noLadder: true });
+        hit = { codes: strikeCodes(live), source: 'live' };
+      } else hit = { codes: new Set(), source: 'no attendance' };
+      cache.set(ym, hit);
+    }
+    months.push({ ym, source: hit.source });
+    for (const c of hit.codes) { const a = byCode.get(c) || []; a.unshift(ym); byCode.set(c, a); }
+  }
+  return { byCode, months: months.reverse() };
+}
+
+/**
+ * D-10 ladder on this month's lists: step = strike months in the window (this month included). A deduction at a step below
+ * ladder_deduction_from becomes a warning (downgraded_days kept); from ladder_hearing_from it carries an HR hearing.
+ * An admin override on the person wins (step recorded, action untouched). Mutates act; returns the ladder summary.
+ */
+function applyLadder(act, history, cfg, month, year) {
+  const t = cfg.thresholds; const cur = ymOf(month, year);
+  for (const item of [...act.actionList, ...act.earlyExitWarnings]) {
+    const months = [...(history.byCode.get(String(item.code)) || []), cur];
+    const step = months.length;
+    item.ladder = { step, months };
+    if (item.action !== 'deduction' || item.override) continue;
+    if (step < t.ladder_deduction_from) {
+      item.ladder.downgraded_days = item.deduction_days;
+      item.ladder.downgraded_amount = item.indicative_amount || 0;
+      item.action = 'warning'; item.deduction_days = 0; item.indicative_amount = 0;
+    } else if (step >= t.ladder_hearing_from) item.ladder.hearing = true;
+  }
+  return { rule: true, from: cfg.ladder_from, window_months: t.ladder_window_months, deduction_from: t.ladder_deduction_from,
+    hearing_from: t.ladder_hearing_from, months: history.months };
+}
+
+/**
+ * One month's review result for read-only views: the stored run (final, else draft), else computed live with that month's
+ * rules and detected release days (no overrides). null when the month has no attendance. `cache` as in strikeHistory.
+ */
+function monthResult(db, month, year, cache) {
+  const ym = ymOf(month, year);
+  const run = db.prepare('SELECT id, status, result_json FROM attendance_review_runs WHERE month = ? AND year = ?').get(month, year);
+  let res = null; if (run) { try { res = JSON.parse(run.result_json); } catch { res = null; } }
+  if (res) { if (cache) cache.set(ym, { codes: strikeCodes(res), source: run.status }); return { result: res, source: run.status, run_id: run.id }; }
+  if (!db.prepare('SELECT 1 FROM attendance_processed WHERE month = ? AND year = ? LIMIT 1').get(month, year)) return null;
+  const { config } = loadConfig(db, ym);
+  const rd = detectReleaseDays(db, month, year, mergeConfig(config)).map((d) => d.date);
+  const pm = prevMonth(month, year);
+  const live = computeAttendanceReview(db, { month, year, config, releaseDays: rd, prevReleaseDays: storedReleaseDays(db, pm.month, pm.year), ladderCache: cache });
+  if (cache) cache.set(ym, { codes: strikeCodes(live), source: 'live' });
+  return { result: live, source: 'live', run_id: null };
+}
+
+/**
+ * PR-7 person history: per month (oldest first) what the review said about one person, the notice-board prints that named
+ * them, and the finance rows review runs sent for them. months = [{ month, year }] (caller caps the count).
+ */
+function personHistory(db, code, months) {
+  code = String(code);
+  const cache = new Map(); const out = [];
+  for (const { month, year } of months) {
+    const ym = ymOf(month, year);
+    const mr = monthResult(db, month, year, cache);
+    if (!mr) { out.push({ ym, source: 'no attendance' }); continue; }
+    const r = mr.result;
+    const find = (k) => ((r && r[k]) || []).find((x) => String(x.code) === code) || null;
+    const p = find('people'); const a = find('actionList'); const e = find('earlyExitWarnings');
+    const item = a || e;
+    out.push({ ym, source: mr.source, run_id: mr.run_id, basis: (r.criteria && r.criteria.assessment_basis) || 'import',
+      worked_days: p ? p.worked_days : null, late_days: p ? p.late_days : 0, early_exits: p ? p.early_days : (e ? e.early_exits : 0),
+      list: a ? 'action list' : e ? 'early exits' : null, action: item ? item.action : null,
+      deduction_days: item ? item.deduction_days || 0 : 0, ladder: item && item.ladder ? item.ladder : null,
+      notice_late: !!find('noticeLate'), notice_early: !!find('noticeEarly'),
+      held: !!find('held') });
+  }
+  // strike step per month with the ladder's counting (whatever each month's own rules were): months on a list in the
+  // window up to that month, from ladder_from — the months before the range come from strikeHistory
+  if (months.length) {
+    const lastM = months[months.length - 1];
+    const lcfg = mergeConfig(loadConfig(db, ymOf(lastM.month, lastM.year)).config);
+    const w = Math.max(1, Math.round(lcfg.thresholds.ladder_window_months || 3));
+    const prior = strikeHistory(db, months[0].month, months[0].year, lcfg, cache).byCode.get(code) || [];
+    const onList = new Set([...prior, ...out.filter((m) => m.list).map((m) => m.ym)]);
+    for (const m of out) {
+      if (!m.list || m.ym < (lcfg.ladder_from || '0000-00')) { m.strike_step = null; continue; }
+      let n = 0; let mm = Number(m.ym.slice(5, 7)); let yy = Number(m.ym.slice(0, 4));
+      for (let i = 0; i < w; i++) { const k = ymOf(mm, yy); if (k >= (lcfg.ladder_from || '0000-00') && onList.has(k)) n++; ({ month: mm, year: yy } = prevMonth(mm, yy)); }
+      m.strike_step = n;
+    }
+  }
+  const first = months.length ? ymOf(months[0].month, months[0].year) : '';
+  const last = months.length ? ymOf(months[months.length - 1].month, months[months.length - 1].year) : '';
+  const boards = [];
+  for (const b of db.prepare(`SELECT id, record_id, new_value, changed_at, changed_by FROM audit_log
+      WHERE table_name = 'attendance_review_board' AND stage = 'ATTENDANCE_REVIEW_BOARD_PRINT' ORDER BY id`).all()) {
+    let snap = {}; try { snap = JSON.parse(b.new_value || '{}'); } catch { snap = {}; }
+    const ym = `${String(b.record_id).slice(0, 4)}-${String(b.record_id).slice(4, 6)}`;
+    if (ym < first || ym > last) continue;
+    const named = (snap.listed || []).find((x) => String(x[0]) === code);
+    const spotless = (snap.spotless || []).map(String).includes(code);
+    if (named || spotless) boards.push({ print_id: b.id, ym, to: snap.to || null, printed_at: b.changed_at, printed_by: b.changed_by,
+      as: named ? 'named' : 'on time every day', lates: named ? named[1] : 0, early: named ? named[2] : 0, missed: named ? named[3] : 0 });
+  }
+  const finance = db.prepare(`SELECT id, month, year, deduction_days, finance_status, is_applied_to_salary applied, remark, applied_at
+      FROM late_coming_deductions WHERE employee_code = ? AND remark LIKE '%[review run %' ORDER BY year, month, id`).all(code)
+    .filter((f) => { const ym = ymOf(f.month, f.year); return ym >= first && ym <= last; })
+    .map((f) => ({ id: f.id, ym: ymOf(f.month, f.year), deduction_days: f.deduction_days, finance_status: f.finance_status,
+      applied: !!f.applied, run_id: Number((/\[review run (\d+)\]/.exec(f.remark || '') || [])[1]) || null, sent_at: f.applied_at }));
+  const emp = db.prepare('SELECT code, name, department, designation FROM employees WHERE code = ? ORDER BY id LIMIT 1').get(code) || null;
+  return { code, employee: emp, months: out, boards, finance };
+}
+
 function notices(people, cfg) {
   const t = cfg.thresholds; const live = people.filter((p) => !p.held && p.cur);
   const noticeLate = live.filter((p) => p.cur.lates_counted >= t.notice_late)
@@ -1250,7 +1469,118 @@ function trendRow(result, { month, year, source, run_id = null }) {
       time_lost_pct: d.time_lost_pct || 0, late_days: d.late_days || 0, early_exits: d.early_exits || 0 })),
     action_people: list.map((a) => ({ code: a.code, name: a.name, department: a.department, action: a.action,
       deduction_days: a.deduction_days || 0, workdays_lost: a.workdays_lost || 0, late_days: a.late_days || 0, early_days: a.early_days || 0 })),
+    // T4 — older stored results lack these; they read as null / [] / 0
+    early_people: (result.earlyExitWarnings || []).map((a) => ({ code: a.code, name: a.name, department: a.department, action: a.action, deduction_days: a.deduction_days || 0 })),
+    waterfall: result.waterfall || null,
+    distribution: result.distribution || null,
+    quality: result.assessment && result.assessment.quality ? (() => { const q = result.assessment.quality; const d = (k) => (q[k] && q[k].days) || 0;
+      return { unassessable_days: q.unassessable_days || 0, half_days: d('half_day'), out_not_verified: d('out_not_verified'), gate_register: d('gate_register'),
+        miss_punch_open: d('miss_punch_open'), no_master: d('no_master'), night_on_day_master: d('night_on_day_master'), odd_punch: d('odd_punch') }; })() : null,
+    ladder: { rule: !!(result.ladder && result.ladder.rule), warnings: at.ladder_warnings || 0, hearings: at.hearings || 0 },
+    missed_out_counted: ((result.missedOut && result.missedOut.people) || []).reduce((a, x) => a + (x.counted_as_early || 0), 0),
+    people_counts: (result.people || []).map((x) => ({ code: x.code, name: x.name, department: x.department, worked_days: x.worked_days || 0,
+      late_days: x.late_days || 0, early_days: x.early_days || 0, workdays_lost: x.workdays_lost || 0 })),
   };
+}
+
+// ── T4: funnel, miss punches, top people, effects (Trends) ─────────────────────────────────────────
+
+/** Enforcement funnel of one month: decided in the review → sent → finance → salary (late deductions only reach salary). */
+function funnelRow(db, row) {
+  const early = row.early_people || [];
+  const decided = row.action.deductions + early.filter((x) => x.action === 'deduction').length;
+  const decidedDays = r2(row.action.deduction_days + early.reduce((a, x) => a + (x.action === 'deduction' ? x.deduction_days : 0), 0));
+  const rows = db.prepare('SELECT finance_status st, is_applied_to_salary ap, deduction_days dd, remark FROM late_coming_deductions WHERE month = ? AND year = ?').all(row.month, row.year);
+  const tag = row.run_id ? runTag(row.run_id) : null;
+  const sent = tag ? rows.filter((r) => String(r.remark || '').includes(tag)) : [];
+  const other = rows.filter((r) => !(tag && String(r.remark || '').includes(tag)));
+  const cnt = (arr, st) => arr.filter((r) => r.st === st).length;
+  const sal = db.prepare('SELECT COALESCE(SUM(late_coming_deduction), 0) l, COALESCE(SUM(early_exit_deduction), 0) e FROM salary_computations WHERE month = ? AND year = ?').get(row.month, row.year);
+  return { listed: row.action.people + early.length, decided, decided_days: decidedDays,
+    sent: sent.length, sent_days: r2(sent.reduce((a, r) => a + (r.dd || 0), 0)), approved: cnt(sent, 'approved'), rejected: cnt(sent, 'rejected'), pending: cnt(sent, 'pending'),
+    in_salary: sent.filter((r) => r.ap).length, other_rows: other.length, other_approved: cnt(other, 'approved'),
+    inr_in_salary: Math.round((sal.l || 0) + (sal.e || 0)) };
+}
+
+/** Miss punches of one month: own vs plant-wide failure days, fixed vs open, counted as early exits (MP-2). */
+function missPunchRow(db, month, year, bulkMin, countedAsEarly = 0) {
+  const ym = ymOf(month, year);
+  const bulk = bulkMissPunchDays(db, `${ym}-01`, `${ym}-${pad(daysInMonth(month, year))}`, bulkMin).map((b) => b.date);
+  const r = db.prepare(`SELECT COUNT(*) n, SUM(CASE WHEN date IN (SELECT value FROM json_each(@b)) THEN 1 ELSE 0 END) nb,
+      SUM(CASE WHEN COALESCE(miss_punch_resolved,0) = 1 THEN 1 ELSE 0 END) fixed, COUNT(DISTINCT employee_code) people
+    FROM attendance_processed WHERE substr(date,1,7) = @ym AND COALESCE(is_miss_punch,0) = 1 AND status_final IN ${WORKED}`).get({ ym, b: JSON.stringify(bulk) });
+  return { total: r.n || 0, people: r.people || 0, bulk_days: bulk.length, on_bulk_days: r.nb || 0, own: (r.n || 0) - (r.nb || 0),
+    fixed: r.fixed || 0, open: (r.n || 0) - (r.fixed || 0), counted_as_early: countedAsEarly };
+}
+
+/** Top people across the range with plain pattern labels. rows = trendRow()s. */
+function topPeople(rows, limit = 60) {
+  const by = new Map();
+  for (const r of rows) {
+    const listed = new Set([...(r.action_people || []), ...(r.early_people || [])].map((a) => String(a.code)));
+    for (const x of r.people_counts || []) {
+      const p = by.get(x.code) || { code: x.code, name: x.name, department: x.department, worked_days: 0, late_days: 0, early_days: 0, workdays_lost: 0, months: [], labels: new Set() };
+      p.name = x.name || p.name; p.department = x.department || p.department;
+      p.worked_days += x.worked_days; p.late_days += x.late_days; p.early_days += x.early_days; p.workdays_lost += x.workdays_lost;
+      p.months.push({ ym: r.ym, late_days: x.late_days, early_days: x.early_days, listed: listed.has(String(x.code)) });
+      if (x.worked_days >= 8 && x.late_days >= 0.8 * x.worked_days) p.labels.add('late almost every day — check the shift start');
+      if (x.worked_days >= 8 && x.early_days >= 0.8 * x.worked_days) p.labels.add('leaves early almost every day — check the shift end');
+      if (x.late_days >= 4 && x.early_days >= 4) p.labels.add('late and early in the same month');
+      by.set(x.code, p);
+    }
+  }
+  return [...by.values()].map((p) => {
+    const lm = p.months.filter((m) => m.listed).length;
+    if (lm >= 2) p.labels.add(`on a list in ${lm} months`);
+    const first = p.months[0]; const last = p.months[p.months.length - 1];
+    if (p.months.length >= 2 && last.late_days + last.early_days <= 0.5 * (first.late_days + first.early_days) && first.late_days + first.early_days >= 4) p.labels.add('improving');
+    return { ...p, workdays_lost: r2(p.workdays_lost), listed_months: lm, labels: [...p.labels] };
+  }).sort((a, b) => b.workdays_lost - a.workdays_lost || a.code.localeCompare(b.code)).slice(0, limit);
+}
+
+function weekdaysBetween(fromIso, toIso) {
+  let n = 0; const d = new Date(`${fromIso}T00:00:00Z`); const e = new Date(`${toIso}T00:00:00Z`);
+  while (d <= e) { if (d.getUTCDay() !== 0) n++; d.setUTCDate(d.getUTCDate() + 1); }
+  return n;
+}
+
+/**
+ * Effect tracking. notes: people with a note (action list or early section) in month M — their late + early count in M
+ * and in M+1 (people missing from M+1's people list count 0). boards: people named on a print — late + early per working
+ * day (Mon–Sat) up to the print and after it, to the last attendance day of that month.
+ */
+function effects(db, rows) {
+  const notes = [];
+  for (let i = 0; i + 1 < rows.length; i++) {
+    const a = rows[i]; const b = rows[i + 1];
+    const cohort = new Set([...(a.action_people || []), ...(a.early_people || [])].map((x) => String(x.code)));
+    if (!cohort.size) continue;
+    const sum = (r) => (r.people_counts || []).filter((x) => cohort.has(String(x.code))).reduce((s, x) => s + x.late_days + x.early_days, 0);
+    const before = sum(a); const after = sum(b);
+    const again = new Set([...(b.action_people || []), ...(b.early_people || [])].map((x) => String(x.code)));
+    notes.push({ ym: a.ym, next_ym: b.ym, people: cohort.size, before, after, change_pct: before ? Math.round(((after - before) / before) * 100) : null,
+      listed_again: [...cohort].filter((c) => again.has(c)).length });
+  }
+  const byYm = new Map(rows.map((r) => [r.ym, r]));
+  const boards = [];
+  for (const p of db.prepare(`SELECT id, record_id, new_value, changed_at FROM audit_log WHERE table_name = 'attendance_review_board'
+      AND stage = 'ATTENDANCE_REVIEW_BOARD_PRINT' ORDER BY id`).all()) {
+    const ym = `${String(p.record_id).slice(0, 4)}-${String(p.record_id).slice(4, 6)}`;
+    const r = byYm.get(ym); if (!r) continue;
+    let snap = {}; try { snap = JSON.parse(p.new_value || '{}'); } catch { snap = {}; }
+    const named = (snap.listed || []).map((x) => String(x[0])); if (!named.length) continue;
+    const upTo = snap.covered_to || snap.to; if (!upTo) continue;
+    const atPrint = (snap.listed || []).reduce((a, x) => a + (Number(x[1]) || 0) + (Number(x[2]) || 0), 0);
+    const full = (r.people_counts || []).filter((x) => named.includes(String(x.code))).reduce((a, x) => a + x.late_days + x.early_days, 0);
+    const lastDay = db.prepare('SELECT MAX(date) d FROM attendance_processed WHERE substr(date,1,7) = ?').get(ym).d || upTo;
+    const daysBefore = weekdaysBetween(`${ym}-01`, upTo); const daysAfter = lastDay > upTo ? weekdaysBetween(addDays(upTo, 1), lastDay) : 0;
+    const perBefore = daysBefore ? r2(atPrint / named.length / daysBefore) : null;
+    const perAfter = daysAfter ? r2(Math.max(0, full - atPrint) / named.length / daysAfter) : null;
+    boards.push({ print_id: p.id, ym, to: upTo, printed_at: p.changed_at, named: named.length, at_print: atPrint, after_print: Math.max(0, full - atPrint),
+      per_person_day_before: perBefore, per_person_day_after: perAfter, days_after: daysAfter,
+      change_pct: perBefore && perAfter !== null ? Math.round(((perAfter - perBefore) / perBefore) * 100) : null });
+  }
+  return { notes, boards };
 }
 
 /** Months from..to inclusive, oldest first. from/to are {month, year}. */
@@ -1382,7 +1712,7 @@ function boardSnapshot(board) {
  * @param db better-sqlite3 handle
  * @param opts { month, year, config (merged), releaseDays [], prevReleaseDays [], overrides [] }
  */
-function computeAttendanceReview(db, { month, year, config, releaseDays = [], prevReleaseDays = [], overrides = [] }) {
+function computeAttendanceReview(db, { month, year, config, releaseDays = [], prevReleaseDays = [], overrides = [], noLadder = false, ladderCache }) {
   const cfg = mergeConfig(config);
   const cur = ymOf(month, year); const pm = prevMonth(month, year); const prev = ymOf(pm.month, pm.year);
   const mpPlan = missedOutPlan(db, month, year, cfg);
@@ -1395,8 +1725,12 @@ function computeAttendanceReview(db, { month, year, config, releaseDays = [], pr
   applyMissedOut(kept, mpPlan, cfg);
   classify(kept, cfg);
   const act = actions(kept, cfg, overrides, month, year);
+  // PR-7: the ladder applies to months from ladder_from when switched on (never inside a history look-up)
+  const ladder = !noLadder && cfg.ladder_rule === true && cur >= (cfg.ladder_from || '0000-00')
+    ? applyLadder(act, strikeHistory(db, month, year, cfg, ladderCache), cfg, month, year) : { rule: false };
   const nt = notices(kept, cfg);
   const { monthly, departments } = summarise(kept, cfg, cur, prev);
+  const analytics = monthAnalytics(kept, cfg, daysInMonth(month, year));
   const keptMap = new Map(kept.map((p) => [p.code, p]));
   const weekly = weeklyTrend(db, month, year, cfg, releaseDays, prevReleaseDays, keptMap, mpPlan.keys);
   // D-6: lates of long_late_minutes+ that were counted — a late that big is usually a shift question, not a habit
@@ -1435,7 +1769,8 @@ function computeAttendanceReview(db, { month, year, config, releaseDays = [], pr
       not_in_employee_master: live.filter((p) => !p.in_employee_master).map((p) => p.code) },
     criteria: { assessment_basis: cfg.assessment_basis, assess_fixed_miss_punch: cfg.assess_fixed_miss_punch !== false,
       thresholds: cfg.thresholds, stayed_late_mode: cfg.stayed_late_mode, early_exit_rule: cfg.early_exit_rule,
-      late_long_always_counted: cfg.late_long_always_counted === true, missed_out_rule: cfg.missed_out_rule === true, shift_fit: cfg.shift_fit, late_full_hours: cfg.late_full_hours !== false, loading_designation_patterns: cfg.loading_designation_patterns, remeasure: cfg.remeasure || {} },
+      late_long_always_counted: cfg.late_long_always_counted === true, missed_out_rule: cfg.missed_out_rule === true,
+      ladder_rule: cfg.ladder_rule === true, ladder_from: cfg.ladder_from, shift_fit: cfg.shift_fit, late_full_hours: cfg.late_full_hours !== false, loading_designation_patterns: cfg.loading_designation_patterns, remeasure: cfg.remeasure || {} },
     releaseDaysDetected: detectReleaseDays(db, month, year, cfg),
     shiftIssues: isMaster(cfg) ? [] : detectShiftIssues(db, month, year).filter((r) => !cfg.excluded_codes.includes(r.code)
       && !cfg.excluded_departments.map((d) => d.toUpperCase()).includes(String(r.department || '').toUpperCase())),
@@ -1443,6 +1778,8 @@ function computeAttendanceReview(db, { month, year, config, releaseDays = [], pr
     people: peopleOut, doubleDefaulters, regular,
     actionList: act.actionList, earlyExitWarnings: act.earlyExitWarnings,
     actionTotals: { people: act.actionList.length, deduction_notes: ded.length, warning_notes: act.actionList.length - ded.length,
+      ladder_warnings: [...act.actionList, ...act.earlyExitWarnings].filter((a) => a.ladder && a.ladder.downgraded_days).length,
+      hearings: [...act.actionList, ...act.earlyExitWarnings].filter((a) => a.ladder && a.ladder.hearing).length,
       deduction_days: ded.reduce((s, a) => s + a.deduction_days, 0), indicative_amount: ded.reduce((s, a) => s + a.indicative_amount, 0) },
     held: held.filter((p) => p.cur).map((p) => ({ code: p.code, name: p.name, department: p.department, late_days: p.cur.lates_counted, early_exits: p.cur.early_counted })),
     noticeLate: nt.noticeLate, noticeEarly: nt.noticeEarly,
@@ -1458,6 +1795,8 @@ function computeAttendanceReview(db, { month, year, config, releaseDays = [], pr
     standing: { people: Object.entries(cfg.standing_people).map(([code, v]) => ({ code, ...v, name: byCode.get(code)?.name || null, department: byCode.get(code)?.department || null })),
       departments: Object.entries(cfg.standing_departments).map(([department, v]) => ({ department, ...v })) },
     overridesApplied: act.overridesApplied,
+    ladder,
+    waterfall: analytics.waterfall, distribution: analytics.distribution,
   };
 }
 
@@ -1600,4 +1939,6 @@ module.exports = {
   suggestions, applySuggestions, toStoredConfig, standingFrom, fitShift, MASTER_DAYS_SQL, LEGACY_REASON,
   noticeBoard, boardSnapshot, bulkMissPunchDays, istToday,
   missedOutPlan, applyMissedOut, d4Early, MISSED_OUT_TYPES,
+  strikeCodes, strikeHistory, applyLadder, storedReleaseDays, monthResult, personHistory,
+  monthAnalytics, funnelRow, missPunchRow, topPeople, effects, LATE_BANDS, EARLY_BANDS,
 };

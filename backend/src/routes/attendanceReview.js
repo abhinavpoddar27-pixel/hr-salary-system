@@ -71,38 +71,99 @@ function parseYm(v) {
   const m = /^(\d{4})-(\d{2})$/.exec(String(v || ''));
   return m ? parseMonth({ year: m[1], month: m[2] }) : null;
 }
-router.get('/trends', (req, res) => {
-  const from = parseYm(req.query.from); const to = parseYm(req.query.to);
-  if (!from || !to) return res.status(400).json({ success: false, error: 'from and to are required as YYYY-MM' });
-  const months = svc.monthRange(from, to);
-  if (!months.length) return res.status(400).json({ success: false, error: 'from must not be after to' });
-  if (months.length > TREND_MAX) return res.status(400).json({ success: false, error: `At most ${TREND_MAX} months at a time` });
-  const allowLive = req.query.live !== '0';
-  try {
-    const db = getDb();
-    const runQ = db.prepare('SELECT id, status, result_json FROM attendance_review_runs WHERE month = ? AND year = ?');
-    const hasData = db.prepare('SELECT 1 FROM attendance_processed WHERE month = ? AND year = ? LIMIT 1');
-    const rows = []; const skipped = [];
-    for (const { month, year } of months) {
-      const ym = `${year}-${String(month).padStart(2, '0')}`;
-      const run = runQ.get(month, year);
-      if (run) {
-        let result; try { result = JSON.parse(run.result_json); } catch { result = null; }
-        if (result) { rows.push(svc.trendRow(result, { month, year, source: run.status, run_id: run.id })); continue; }
-      }
-      if (!hasData.get(month, year)) { skipped.push({ ym, reason: 'no attendance' }); continue; }
-      if (!allowLive) { skipped.push({ ym, reason: 'no review run' }); continue; }
-      const { config } = svc.loadConfig(db, ym);
-      const cfg = svc.mergeConfig(config);
-      const rd = svc.detectReleaseDays(db, month, year, cfg).map((d) => d.date);
-      const result = svc.computeAttendanceReview(db, { month, year, config, releaseDays: rd, prevReleaseDays: prevReleaseDays(db, month, year) });
-      if (!result.meta.people_assessed) { skipped.push({ ym, reason: 'no one assessed' }); continue; }
-      rows.push(svc.trendRow(result, { month, year, source: 'live' }));
+/** Trends rows for a month range (each from its stored run, else live) + the T4 cross-month figures. */
+function buildTrends(db, months, allowLive) {
+  const runQ = db.prepare('SELECT id, status, result_json FROM attendance_review_runs WHERE month = ? AND year = ?');
+  const hasData = db.prepare('SELECT 1 FROM attendance_processed WHERE month = ? AND year = ? LIMIT 1');
+  const rows = []; const skipped = [];
+  const ladderCache = new Map(); // PR-7: months already loaded here are reused as ladder history for the later ones
+  for (const { month, year } of months) {
+    const ym = `${year}-${String(month).padStart(2, '0')}`;
+    const run = runQ.get(month, year);
+    if (run) {
+      let result; try { result = JSON.parse(run.result_json); } catch { result = null; }
+      if (result) { ladderCache.set(ym, { codes: svc.strikeCodes(result), source: run.status }); rows.push(svc.trendRow(result, { month, year, source: run.status, run_id: run.id })); continue; }
     }
-    res.json({ success: true, data: { from: months[0], to: months[months.length - 1], months: rows, skipped, repeaters: svc.repeaters(rows) } });
+    if (!hasData.get(month, year)) { skipped.push({ ym, reason: 'no attendance' }); continue; }
+    if (!allowLive) { skipped.push({ ym, reason: 'no review run' }); continue; }
+    const { config } = svc.loadConfig(db, ym);
+    const cfg = svc.mergeConfig(config);
+    const rd = svc.detectReleaseDays(db, month, year, cfg).map((d) => d.date);
+    const result = svc.computeAttendanceReview(db, { month, year, config, releaseDays: rd, prevReleaseDays: prevReleaseDays(db, month, year), ladderCache });
+    ladderCache.set(ym, { codes: svc.strikeCodes(result), source: 'live' });
+    if (!result.meta.people_assessed) { skipped.push({ ym, reason: 'no one assessed' }); continue; }
+    rows.push(svc.trendRow(result, { month, year, source: 'live' }));
+  }
+  // T4: per-month funnel + miss punches; across the range top people and effects
+  for (const r of rows) {
+    r.funnel = svc.funnelRow(db, r);
+    const bulkMin = svc.mergeConfig(svc.loadConfig(db, r.ym).config).thresholds.bulk_miss_punch_day;
+    r.miss_punch = svc.missPunchRow(db, r.month, r.year, bulkMin, r.missed_out_counted);
+  }
+  return { from: months[0], to: months[months.length - 1], months: rows, skipped, repeaters: svc.repeaters(rows),
+    top_people: svc.topPeople(rows), effects: svc.effects(db, rows) };
+}
+
+function trendMonths(req, res) {
+  const from = parseYm(req.query.from); const to = parseYm(req.query.to);
+  if (!from || !to) { res.status(400).json({ success: false, error: 'from and to are required as YYYY-MM' }); return null; }
+  const months = svc.monthRange(from, to);
+  if (!months.length) { res.status(400).json({ success: false, error: 'from must not be after to' }); return null; }
+  if (months.length > TREND_MAX) { res.status(400).json({ success: false, error: `At most ${TREND_MAX} months at a time` }); return null; }
+  return months;
+}
+
+router.get('/trends', (req, res) => {
+  const months = trendMonths(req, res); if (!months) return;
+  try {
+    const data = buildTrends(getDb(), months, req.query.live !== '0');
+    // the people lists are for the export and the cross-month figures; the screen does not need them per month
+    for (const r of data.months) delete r.people_counts;
+    res.json({ success: true, data });
   } catch (err) {
     console.error('Attendance review trends error:', err.message);
     res.status(500).json({ success: false, error: 'Failed to compute trends: ' + err.message });
+  }
+});
+
+// GET /trends/export.xlsx?from&to — T4: the Trends figures as a workbook (audited)
+router.get('/trends/export.xlsx', (req, res) => {
+  const months = trendMonths(req, res); if (!months) return;
+  try {
+    const db = getDb();
+    const data = buildTrends(db, months, true);
+    const buf = require('../services/attendanceReviewExports').buildTrendsWorkbook(data);
+    const name = `Attendance_Trends_${data.months[0] ? data.months[0].ym : 'none'}_to_${data.months.length ? data.months[data.months.length - 1].ym : 'none'}.xlsx`;
+    logAudit('attendance_review_runs', 0, 'export', '', name, 'ATTENDANCE_REVIEW_EXPORT', `trends ${months.length} month(s)`, user(req));
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.setHeader('Content-Disposition', `attachment; filename="${name}"`);
+    res.send(buf);
+  } catch (err) {
+    console.error('Attendance review trends export error:', err.message);
+    res.status(500).json({ success: false, error: 'Failed to build the trends workbook: ' + err.message });
+  }
+});
+
+// GET /person/:code?from=YYYY-MM&to=YYYY-MM — PR-7: one person's months (≤ 12; default the ladder start to this month IST),
+// notice-board prints that named them, and finance rows the review sent for them. Read only.
+router.get('/person/:code', (req, res) => {
+  const code = String(req.params.code || '').trim();
+  if (!code || code.length > 20) return res.status(400).json({ success: false, error: 'employee code required' });
+  try {
+    const db = getDb();
+    const today = svc.istToday(svc.nowDate()).slice(0, 7);
+    const to = parseYm(req.query.to) || { month: Number(today.slice(5, 7)), year: Number(today.slice(0, 4)) };
+    const fromYm = req.query.from ? parseYm(req.query.from) : null;
+    if (req.query.from && !fromYm) return res.status(400).json({ success: false, error: 'from must be YYYY-MM' });
+    const ladderFrom = svc.loadConfig(db, `${to.year}-${String(to.month).padStart(2, '0')}`).config.ladder_from || '2026-08';
+    const from = fromYm || { month: Number(ladderFrom.slice(5, 7)), year: Number(ladderFrom.slice(0, 4)) };
+    const months = svc.monthRange(from, to);
+    if (!months.length) return res.status(400).json({ success: false, error: 'from must not be after to' });
+    if (months.length > TREND_MAX) return res.status(400).json({ success: false, error: `At most ${TREND_MAX} months at a time` });
+    res.json({ success: true, data: svc.personHistory(db, code, months) });
+  } catch (err) {
+    console.error('Attendance review person history error:', err.message);
+    res.status(500).json({ success: false, error: 'Failed to load the history: ' + err.message });
   }
 });
 

@@ -68,6 +68,8 @@ function buildWorkbook(result, run = {}) {
   XLSX.utils.book_append_sheet(wb, ws, 'Summary');
 
   const cats = (r) => (r.categories || []).join(', ');
+  // PR-7 ladder: step, and what it changed
+  const ladderCol = { k: 'ladder', h: 'Ladder', w: 30, v: (r) => (r.ladder ? `month ${r.ladder.step} of ${r.ladder.months.join(', ')}${r.ladder.hearing ? ' – HR hearing' : ''}${r.ladder.downgraded_days ? ` – first month: ${r.ladder.downgraded_days} d → warning` : ''}` : '') };
   XLSX.utils.book_append_sheet(wb, sheet(result.actionList || [], [
     { k: 'code', h: 'Code' }, { k: 'name', h: 'Name', w: 26 }, { k: 'department', h: 'Department', w: 18 }, { k: 'designation', h: 'Designation', w: 20 },
     { k: 'group', h: 'Group' }, { k: 'worked_days', h: 'Worked days' }, { k: 'late_days', h: 'Late days' }, { k: 'early_days', h: 'Early exits' },
@@ -75,12 +77,12 @@ function buildWorkbook(result, run = {}) {
     { k: 'lm_late', h: 'Last month late', v: (r) => r.last_month?.late_days ?? 'new' }, { k: 'lm_early', h: 'Last month early', v: (r) => r.last_month?.early_days ?? 'new' },
     { k: 'categories', h: 'Why', v: cats, w: 30 }, { k: 'action', h: 'Action' }, { k: 'deduction_days', h: 'Deduction days' },
     { k: 'indicative_amount', h: 'Indicative ₹' }, { k: 'override', h: 'Override', v: (r) => (r.override ? `${r.override.action}: ${r.override.reason}` : ''), w: 30 },
-    { k: 'shift', h: 'Shift check', v: (r) => (r.check_master_shift ? 'check master shift' : ''), w: 20 },
+    { k: 'shift', h: 'Shift check', v: (r) => (r.check_master_shift ? 'check master shift' : ''), w: 20 }, ladderCol,
   ]), 'Action list');
   XLSX.utils.book_append_sheet(wb, sheet(result.earlyExitWarnings || [], [
     { k: 'code', h: 'Code' }, { k: 'name', h: 'Name', w: 26 }, { k: 'department', h: 'Department', w: 18 }, { k: 'early_exits', h: 'Early exits' },
     { k: 'over_1h', h: '1 h or more' }, { k: 'over_2h', h: '2 h or more', v: (r) => r.over_2h ?? '' }, { k: 'missed_out_days', h: 'Missed OUT counted', v: (r) => r.missed_out_days || '' },
-    { k: 'early_min', h: 'Early min' }, { k: 'option_c_days', h: 'Option C days' }, { k: 'd4_days', h: '2 h rule days', v: (r) => r.d4_days ?? '' }, { k: 'action', h: 'Action' }, { k: 'deduction_days', h: 'Deduction days' },
+    { k: 'early_min', h: 'Early min' }, { k: 'option_c_days', h: 'Option C days' }, { k: 'd4_days', h: '2 h rule days', v: (r) => r.d4_days ?? '' }, { k: 'action', h: 'Action' }, { k: 'deduction_days', h: 'Deduction days' }, ladderCol,
   ]), 'Early-exit warnings');
   XLSX.utils.book_append_sheet(wb, sheet(result.longLates || [], [
     { k: 'code', h: 'Code' }, { k: 'name', h: 'Name', w: 26 }, { k: 'department', h: 'Department', w: 18 }, { k: 'shift_h', h: 'Shift h' },
@@ -193,7 +195,7 @@ function buildDocx(result, run = {}, { now = new Date() } = {}) {
     table(['#', 'Code', 'Name', 'Department – Role', 'Late days', 'Early days', 'Time lost', 'Workdays lost', 'Action', 'Deduction', 'Indicative ₹', 'Remark'],
       list.map((p, i) => [{ v: i + 1, align: C }, { v: p.code, align: C }, { v: cleanName(p.name), bold: true }, `${p.department || ''} – ${p.designation || ''}`,
         { v: p.late_days, align: C }, { v: p.early_days, align: C }, hm(p.late_min + p.early_min), { v: Number(p.workdays_lost).toFixed(2), align: C },
-        { v: p.action === 'deduction' ? 'Deduction note' : (p.newcomer ? 'Warning note (newcomer)' : 'Warning note'), fill: p.action === 'deduction' ? 'FCE4D6' : 'FFF2CC' },
+        { v: p.action === 'deduction' ? (p.ladder && p.ladder.hearing ? 'Deduction note + HR hearing' : 'Deduction note') : (p.newcomer ? 'Warning note (newcomer)' : p.ladder && p.ladder.downgraded_days ? 'Warning note (first month)' : 'Warning note'), fill: p.action === 'deduction' ? 'FCE4D6' : 'FFF2CC' },
         { v: p.deduction_days ? days(p.deduction_days) : '—', align: C, bold: true }, { v: p.indicative_amount ? inr(p.indicative_amount) : '—', align: R },
         p.override ? `Override: ${p.override.reason}` : p.check_master_shift ? 'Check master shift: leaves early almost daily, short of shift hours' : (p.remeasured ? `Re-measured on the master shift${p.hours_excused ? `; ${days(p.hours_excused)} not counted (full shift hours worked)` : ''}` : '')])
         .concat([['', '', { v: 'TOTAL', bold: true }, '', '', '', '', '', '', { v: days(tot.deduction_days || 0), align: C, bold: true }, { v: inr(tot.indicative_amount), align: R, bold: true }, '']]),
@@ -252,13 +254,20 @@ function buildDocx(result, run = {}, { now = new Date() } = {}) {
     [PL, { v: p.last_month?.late_days ?? '—', align: C }, { v: p.last_month?.early_days ?? '—', align: C }, '—'],
   ], [2400, 1600, 1900, 3100], 20);
   const notes = [];
+  // PR-7 ladder wording
+  const ladderWindow = result.ladder && result.ladder.rule ? `the last ${result.ladder.window_months} months` : 'recent months';
+  const hearing = (p) => (p.ladder && p.ladder.hearing
+    ? [para([tr('HR hearing: ', { bold: true }), tr(`this is month ${p.ladder.step} in ${ladderWindow} with a note on your attendance. You are asked to meet HR within 3 working days of this note. Further repeats can lead to stricter action.`)], { before: 120 })]
+    : []);
   list.forEach((p, i) => {
     if (i > 0) notes.push(new Paragraph({ children: [new PageBreak()] }));
     const what = [p.late_days ? `came late on ${p.late_days} day${p.late_days > 1 ? 's' : ''}` : null, p.early_days ? `left before shift end on ${p.early_days} day${p.early_days > 1 ? 's' : ''}` : null].filter(Boolean).join(' and ') || 'lost working time';
     if (p.action !== 'deduction') {
       notes.push(...head(p, i, `Warning – late coming / early leaving, ${ML}`),
         para(`Our attendance record shows that in ${ML} you ${what}. This is ${hm(p.late_min + p.early_min)} of working time.`), facts(p),
-        para(p.newcomer ? 'As you have joined recently, no deduction is being made this month. Please treat this note as a first warning.' : 'No deduction is being made this month. Please treat this note as a warning.', { before: 200 }),
+        para(p.newcomer ? 'As you have joined recently, no deduction is being made this month. Please treat this note as a first warning.'
+          : p.ladder && p.ladder.downgraded_days ? `This is the first month in ${ladderWindow} that your attendance has needed a note, so no deduction is being made. Next time, a deduction of about ${days(p.ladder.downgraded_days)} would be made for the same record.`
+            : 'No deduction is being made this month. Please treat this note as a warning.', { before: 200 }),
         para(`Any further time lost through late coming or leaving early will be deducted from your salary in half-day steps, as per company policy. A late morning is not counted if you stayed late after your shift the previous evening.${fullText ? ` ${fullText}` : ''}`),
         para('If you need to leave early for a genuine reason, take a gate pass or approved short leave from your in-charge before leaving.'),
         ...copyTo(p), ...signature());
@@ -268,6 +277,7 @@ function buildDocx(result, run = {}, { now = new Date() } = {}) {
         para([tr('As per company attendance policy, a deduction of '), tr(days(p.deduction_days), { bold: true }), tr(' will be made from your salary. Deductions are made in half-day steps, with a minimum of half a day.')], { before: 200 }),
         para(`Late mornings that followed an evening when you stayed late after your shift have not been counted.${fullText ? ` Days on which you still worked your full shift hours have not been counted either.` : ''}`),
         para('Further late coming or leaving early will lead to deductions every month and may lead to stricter action. If you believe this record is wrong, meet HR within 3 working days with the reason or proof.'),
+        ...hearing(p),
         ...copyTo(p), ...signature());
     }
   });
@@ -280,7 +290,10 @@ function buildDocx(result, run = {}, { now = new Date() } = {}) {
       table(['Month', 'Early-exit days', 'Total time'], [[ML, { v: x.early_exits, align: C }, hm(x.early_min)]], [3000, 2500, 3500], 20),
       x.action === 'deduction'
         ? para([tr('As per company attendance policy, a deduction of '), tr(days(x.deduction_days), { bold: true }), tr(' will be made from your salary.')], { before: 200 })
-        : para(x.newcomer ? 'As you have joined recently, this note is a first warning. No deduction is being made.' : 'This note is a warning. No deduction is being made this month.', { before: 200 }),
+        : para(x.newcomer ? 'As you have joined recently, this note is a first warning. No deduction is being made.'
+          : x.ladder && x.ladder.downgraded_days ? `This is the first month in ${ladderWindow} that your attendance has needed a note, so no deduction is being made. Next time, a deduction of about ${days(x.ladder.downgraded_days)} would be made for the same record.`
+            : 'This note is a warning. No deduction is being made this month.', { before: 200 }),
+      ...hearing(x),
       para('Leaving before shift end without a gate pass or approved short leave is treated the same as late coming and is deducted from salary in half-day steps, as per company policy.'),
       para('If you need to leave early for a genuine reason, take a gate pass from your in-charge before leaving and show it at the gate.'),
       ...copyTo(x), ...signature());
@@ -301,4 +314,50 @@ function buildDocx(result, run = {}, { now = new Date() } = {}) {
   return Packer.toBuffer(doc);
 }
 
-module.exports = { buildWorkbook, buildDocx, fileStem, cleanName, todayIst };
+/** T4: the Trends figures as a workbook — one row per month, plus departments, distributions, top people and effects. */
+function buildTrendsWorkbook(data) {
+  const wb = XLSX.utils.book_new();
+  const ms = data.months || [];
+  const W = (r, k) => (r.waterfall ? (k.split('.').reduce((o, x) => (o == null ? o : o[x]), r.waterfall)) : '');
+  XLSX.utils.book_append_sheet(wb, sheet(ms, [
+    { k: 'ym', h: 'Month' }, { k: 'source', h: 'From' }, { k: 'basis', h: 'Basis' }, { k: 'people_assessed', h: 'People assessed' },
+    { k: 'late_pct', h: 'Late %', v: (r) => r.all.late_pct }, { k: 'early_pct', h: 'Early %', v: (r) => r.all.early_pct }, { k: 'lost', h: 'Time lost %', v: (r) => r.all.time_lost_pct },
+    { k: 'listed', h: 'Action list', v: (r) => r.action.people }, { k: 'ded', h: 'Deductions', v: (r) => r.action.deductions }, { k: 'days', h: 'Deduction days', v: (r) => r.action.deduction_days },
+    { k: 'ind', h: 'Indicative ₹', v: (r) => r.action.indicative_amount },
+    { k: 'lm', h: 'Lates measured', v: (r) => W(r, 'lates.measured') }, { k: 'lsl', h: 'Excused: stayed late', v: (r) => W(r, 'lates.stayed_late') },
+    { k: 'lfh', h: 'Excused: full hours', v: (r) => W(r, 'lates.full_hours') }, { k: 'lld', h: 'Loaders', v: (r) => W(r, 'lates.loaders') }, { k: 'lc', h: 'Lates counted', v: (r) => W(r, 'lates.counted') },
+    { k: 'em', h: 'Early exits measured', v: (r) => W(r, 'early.measured') }, { k: 'efh', h: 'Excused: full hours ', v: (r) => W(r, 'early.full_hours') },
+    { k: 'eex', h: 'Not assessed (exempt)', v: (r) => W(r, 'early.exempt') }, { k: 'emo', h: '+ missed OUT', v: (r) => W(r, 'early.missed_out') }, { k: 'ec', h: 'Early counted', v: (r) => W(r, 'early.counted') },
+    { k: 'vl', h: '₹ value of time lost', v: (r) => W(r, 'value_lost_inr') },
+    { k: 'fs', h: 'Sent to finance', v: (r) => r.funnel?.sent ?? '' }, { k: 'fa', h: 'Approved', v: (r) => r.funnel?.approved ?? '' }, { k: 'fsal', h: 'In salary', v: (r) => r.funnel?.in_salary ?? '' },
+    { k: 'finr', h: '₹ in salary (late + early)', v: (r) => r.funnel?.inr_in_salary ?? '' },
+    { k: 'mpt', h: 'Miss punches', v: (r) => r.miss_punch?.total ?? '' }, { k: 'mpo', h: 'Own', v: (r) => r.miss_punch?.own ?? '' }, { k: 'mpb', h: 'Failure days', v: (r) => r.miss_punch?.bulk_days ?? '' },
+    { k: 'mpopen', h: 'Not fixed', v: (r) => r.miss_punch?.open ?? '' }, { k: 'mpc', h: 'Counted as early', v: (r) => r.miss_punch?.counted_as_early ?? '' },
+    { k: 'qua', h: 'Days not assessed', v: (r) => r.quality?.unassessable_days ?? '' }, { k: 'qonv', h: 'Out not verified', v: (r) => r.quality?.out_not_verified ?? '' },
+    { k: 'lw', h: 'Ladder warnings', v: (r) => r.ladder?.warnings ?? '' }, { k: 'lh', h: 'HR hearings', v: (r) => r.ladder?.hearings ?? '' },
+  ]), 'Months');
+  const deps = []; for (const r of ms) for (const d of r.departments || []) deps.push({ ym: r.ym, ...d });
+  XLSX.utils.book_append_sheet(wb, sheet(deps, [{ k: 'ym', h: 'Month' }, { k: 'department', h: 'Department', w: 22 }, { k: 'people', h: 'People' },
+    { k: 'late_days', h: 'Late days' }, { k: 'early_exits', h: 'Early exits' }, { k: 'workdays_lost', h: 'Workdays lost' }, { k: 'time_lost_pct', h: 'Time lost %' }]), 'Departments');
+  const dist = [];
+  for (const r of ms) {
+    if (!r.distribution) continue;
+    for (const b of r.distribution.late_bands) dist.push({ ym: r.ym, kind: 'Late', bucket: `${b.from}${b.to ? `–${b.to - 1}` : '+'} min`, count: b.count });
+    for (const b of r.distribution.early_bands) dist.push({ ym: r.ym, kind: 'Early exit', bucket: `${b.from}${b.to ? `–${b.to - 1}` : '+'} min`, count: b.count });
+    ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].forEach((d, i) => { dist.push({ ym: r.ym, kind: 'Late by weekday', bucket: d, count: r.distribution.late_weekday[i] });
+      dist.push({ ym: r.ym, kind: 'Early by weekday', bucket: d, count: r.distribution.early_weekday[i] }); });
+  }
+  XLSX.utils.book_append_sheet(wb, sheet(dist, [{ k: 'ym', h: 'Month' }, { k: 'kind', h: 'What', w: 18 }, { k: 'bucket', h: 'Band / day' }, { k: 'count', h: 'Count' }]), 'Distribution');
+  XLSX.utils.book_append_sheet(wb, sheet(data.top_people || [], [{ k: 'code', h: 'Code' }, { k: 'name', h: 'Name', w: 24 }, { k: 'department', h: 'Department', w: 18 },
+    { k: 'worked_days', h: 'Worked days' }, { k: 'late_days', h: 'Late days' }, { k: 'early_days', h: 'Early exits' }, { k: 'workdays_lost', h: 'Workdays lost' },
+    { k: 'listed_months', h: 'Months on a list' }, { k: 'labels', h: 'Pattern', w: 60, v: (r) => r.labels.join('; ') }]), 'Top people');
+  const ef = data.effects || { notes: [], boards: [] };
+  XLSX.utils.book_append_sheet(wb, sheet([
+    ...ef.notes.map((n) => ({ what: 'Notes', when: `${n.ym} → ${n.next_ym}`, people: n.people, before: n.before, after: n.after, change: n.change_pct, extra: `${n.listed_again} on a list again` })),
+    ...ef.boards.map((b) => ({ what: 'Notice board', when: `${b.ym} up to ${b.to}`, people: b.named, before: b.per_person_day_before, after: b.per_person_day_after, change: b.change_pct, extra: `${b.days_after} working days after` })),
+  ], [{ k: 'what', h: 'Measure' }, { k: 'when', h: 'When', w: 24 }, { k: 'people', h: 'People' }, { k: 'before', h: 'Before' }, { k: 'after', h: 'After' },
+    { k: 'change', h: 'Change %' }, { k: 'extra', h: 'Note', w: 26 }]), 'Effect');
+  return XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' });
+}
+
+module.exports = { buildWorkbook, buildDocx, fileStem, cleanName, todayIst, buildTrendsWorkbook };
