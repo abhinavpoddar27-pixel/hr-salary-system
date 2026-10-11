@@ -6,6 +6,201 @@
   The planner folds them into CLAUDE.md in one docs-only PR after a batch merges.
 - Why: both files changed in every PR, so each merge put every other open PR into conflict.
 
+## Last Session — 2026-10-11 (P2-11: role guards on 35 write routes that sat behind requireAuth only)
+**Branch `fix/backend-route-guards`, MERGED (#139).** Plan + log: `docs/ux-bulk/prs/P2-11/PLAN.md`, `PROGRESS.md`. Findings N-13,
+N-11 (night-shift confirm/reject), P4 follow-ups. Rulings 11 Oct: Q2 DELETE import admin only; Q3 finance KEPT on
+PUT /attendance/record/:id + recalculate-metrics (finance used them before July); Q4 POST /jobs admin only; Q6 manual-flag
+verify finance+admin; never drop a role that has ever used a route.
+- **Bug:** 35 POST/PUT/PATCH/DELETE routes were reachable by any logged-in role (viewer / supervisor / employee login):
+  delete a month's import (raw + processed attendance + day_calculations), mark employees Left/Active, mark advances paid,
+  queue salary_compute / leave jobs, write punch/day corrections, upload/delete employee documents, create employees.
+- **Fix (guard lines + imports only):** hr+admin on import upload/stage/reconciliation, attendance miss-punch resolve +
+  bulk, night-shift confirm/reject, record shift, deduplicate, employees POST / documents / bulk-set-contractor,
+  analytics detect-inactive / auto-detect-left / reactivate-employee, advance ×5, lifecycle POST. hr/finance/admin on
+  attendance record PUT + recalculate-metrics, analytics alerts generate/read + ai-review, finance-audit day/punch
+  correction, tax-declarations PUT. finance+admin on holiday audit review + manual-flag verify. admin on DELETE
+  /import/:id and POST /jobs. Upload guards sit before multer (refused file never written). Same 403 bodies as
+  middleware/roles.js. Stage route: `!(stageNum >= 1 && stageNum <= 7)` — "abc" gave stage_NaN_done → 500, now 400
+  (parseInt means no text can reach the SQL; no injection).
+- **Left open on purpose:** notifications read flags, session-analytics events, POST /bug-reports, daily-wage
+  check-duplicates (read-only; dailyWage.js owned by P2-03).
+- **Fragile:** analytics.js / attendance.js / taxDeclarations.js each have a one-line local requireHrFinanceOrAdmin
+  (roles.js has no export for it). Settings has its own local requireAdmin (raw role compare) — untouched.
+- **Owner list (payroll.js, DO NOT MODIFY):** POST /calculate-days and /compute-salary have no role guard (90 d:
+  admin, hr, finance used them) — any role incl. viewer can run Stage 6/7; POST /finalise has no role guard beyond the
+  admin stale override. Suggested: hr/finance/admin on all three.
+- **Verified:** jest 105/1649 → 108/1960 after merge; new backendRouteGuards.test.js 291 (176 fail on 80934af4);
+  route-guards-check.js 22/22, --base 6/6.
+- **Not tested:** Railway; browser (no frontend change). **Follow-ups:** hide buttons a refused role can still see
+  (hr: Finance Audit manual-flag Verify); GET /api/tax-declarations/:code readable by any role; POST /employees still
+  takes gross on create with no approval (N-13 semantics).
+
+## Last Session — 2026-10-11 (P2-09: page crashes reach Sentry; plain message; Report bug)
+**Branch `feat/errorboundary-sentry`, MERGED (#138).** Frontend only (`components/ui/ErrorBoundary.jsx`). Plan + log:
+`docs/ux-bulk/prs/P2-09/PLAN.md`, `PROGRESS.md`. Finding X-4. Rulings Q1–Q5 (11 Oct).
+- **Bug:** the page ErrorBoundary (Layout, FinanceAudit, SessionAnalytics) only console.error'd and showed the raw
+  error; the outer `Sentry.ErrorBoundary` in main.jsx never sees errors it catches → page crashes were never reported.
+- **Fix:** `Sentry.captureException` in `componentDidCatch` (tags boundary=page + path, React component stack; never
+  throws); plain message naming the page (Header `<h1>`, fallback "this page"), "Nothing was saved by this error.";
+  Try again / Reload page / Report bug (opens the existing bug reporter); raw error + Sentry reference id behind
+  "Show details"; the error clears on navigation to another path.
+- **Production finding (owner step, not code):** Railway `VITE_SENTRY_DSN` has three other variables glued onto its end
+  → the SDK disables itself; hr-salary-frontend had 0 errors / 0 spans in 90 days. Until the owner fixes the variable
+  and redeploys (seven-field task in PROGRESS.md), no frontend event reaches Sentry — this PR's included.
+- **Fragile:** page name depends on Header rendering its title in `header h1`. Class component, no router hooks: the path
+  reset reads `window.location.pathname` in componentDidUpdate (runs because Layout re-renders with new children).
+- **Verified:** `backend/scripts/errorboundary-sentry-check.py` (Chromium, built dist with a fake `.invalid` DSN, hr,
+  port 3209, forced crash by swapping the Employees chunk) 36/36 — control: no fallback/no event; crash: title names
+  "Employee Master", raw text hidden until details, exactly 1 intercepted Sentry event with message + tags + component
+  stack, details shows its event id, Report bug opens "Report an issue", Try again → 2nd event, sidebar to Daily MIS
+  clears it, 390 px, 0 page errors, 0 unexpected console errors, 0 API ≥ 400. `--base` on an 80934af4 build 3/3: raw
+  message, no Report bug, no event. jest 105/1649 before; 107/1669 after merging origin/main (growth from main), all pass.
+- **Not tested:** Railway; real Sentry ingestion (blocked by the DSN variable); Safari/Firefox; a crash in Layout itself.
+
+## Last Session — 2026-10-11 (P2-08: session-timeout countdown, return path after re-login, useDraft hook)
+**Branch `feat/timeout-modal-drafts`, MERGED (#137).** Plan + log: `docs/ux-bulk/prs/P2-08/PLAN.md`, `PROGRESS.md`. Findings X-3, U-DR.
+Rulings Q1–Q7 (11 Oct): passive activity ignored while the countdown shows; last activity shared across tabs; return
+only for the same username; RequireAuth passes `state.from`; standalone harness; 2 lines in api.js 401 handler.
+- **Before:** 15-min idle → one toast at ~13 min (any mouse move dismissed it) → hard logout; the "Session expired" toast
+  died with the reload; login always went to "/"; an idle tab signed out a user working in another tab (shared token).
+- **Now:** `useInactivityTimeout` ticks every 1 s and returns `{warningOpen, secondsLeft, staySignedIn, signOutNow}`;
+  `components/SessionTimeoutDialog.jsx` (own dialog, not Modal.jsx; role=alertdialog, focus on "Stay signed in", Tab
+  kept inside, Esc ignored) "You'll be signed out in m:ss". Stay → heartbeat. Last activity in localStorage
+  `hr_last_activity` (throttled 5 s, + `storage` event) — any tab's activity keeps all tabs. Forced sign-out (idle, or any
+  API 401 incl. heartbeat) saves sessionStorage `hr_return_to {path+query+hash, user, reason, at}` (`utils/sessionReturn.js`);
+  Login shows "signed out after 15 minutes without activity" / "session expired" and returns the SAME user to that page
+  (safe in-app path only, ≤ 12 h old), else "/". RequireAuth deep links return too (`state.from`). "Sign out now" saves nothing.
+- **useDraft** (`hooks/useDraft.js`, not adopted yet — P3-01): sessionStorage `hr_draft:<user>:<key>`, try/catch everywhere,
+  300 ms debounced writes flushed on unmount/pagehide/beforeunload, `beforeunload` prompt only while dirty,
+  `DraftRestoredBanner` ("Draft restored · Discard", ✕ keeps it), `discard` / `clear` / `markSaved` / `acknowledge`.
+- **Fragile:** (1) every forced `location.href='/login'` must call `allowForcedUnload()` first or an adopting page's
+  "Leave site?" prompt blocks the sign-out (api.js 401 + idle do). (2) heartbeat 401 relies on the api.js handler for the
+  redirect (a second location change aborted the first). (3) TEST KNOB localStorage `hr_idle_test_ms` / `hr_idle_test_warn_ms`
+  can only shorten (limit 5 s–15 min). (4) useDraft's key must be stable for a component's lifetime. (5) Manual sign-out
+  (Header) keeps the tab's drafts; same user gets them back.
+- **Verified:** `backend/scripts/session-timeout-check.py` (Chromium, built dist, scratch DB, hr + finance, port 3208) 57/57 —
+  countdown + passive activity/Esc ignored + Tab trap, Stay → heartbeat 200 and still signed in past the old expiry, expiry →
+  banner + same page+query, finance after hr → "/", 5 tampered paths + 13 h-old → "/", API 401 + heartbeat 401 → expired
+  banner + same page, deep link, two tabs, 390 px, Sign out now; harness (`backend/scripts/p2-08-harness/`, served via
+  page.route): store/restore/banner/Discard/markSaved/unmount flush/✕/forced leave without prompt/user scoping/blocked
+  storage; 0 page/console errors, 0 API ≥ 400 except the intended 401s. `--base` on an 80934af4 build 3/3: no dialog in the
+  bundle, 401 and deep link both land on "/". jest 107/1669 (no backend change).
+- **Not tested:** Railway; Safari/Firefox; real 15-min timing (knob only); background-tab timer throttling.
+- **Found, not fixed:** server.js login limiter is 5 / 15 min per IP — the check script restarts its scratch server between sections.
+
+## Last Session — 2026-10-11 (P2-07: parseCodes + PeoplePicker; EmployeeSearchSelect aria)
+**Branch `feat/people-picker-parse-codes`, MERGED (#136).** Frontend only. Plan + log: `docs/ux-bulk/prs/P2-07/PLAN.md`, `PROGRESS.md`.
+Rulings Q1 (match the master list, pattern only as fallback), Q2 (picker props-only), Q3 (paste inside the picker), Q4 (esbuild harness).
+- **Prod facts (counts only):** plant codes are mostly 5 digits (also 4 and 6); one live code is a word and one starts with "/";
+  sales codes = "S" + 3 digits; no leading zeros; 141 departments (largest 183 Active). So a code regex alone would drop 2 live codes.
+- **`utils/parseCodes.js` (new):** `parseCodes(text, knownCodes) → {codes, unknown, ignored, duplicates, total}`. Splits on
+  newline/comma/tab/semicolon/space; strips quotes, brackets, sentence punctuation, Excel ".0"; text only (leading zeros kept);
+  case-insensitive match against the master, master spelling returned; first-seen order, deduped. Code-shaped but not in the
+  master → `unknown`; words → `ignored`. `knownCodes` null → pattern fallback. Also `splitTokens`, `isCodeShaped`.
+- **`components/bulk/PeoplePicker.jsx` (new, not wired):** props `employees, value, onChange, allowLeft, maxHeight`. Caller fetches;
+  for the "Include people who have left" toggle the caller must pass Active AND Left employees. Departments largest first,
+  "No department" last, collapsed until a search; search name/code/department; department box ticks the VISIBLE members
+  (indeterminate when partial); tray with count, ✕, Clear all; paste box (Added / repeated / ignored / Not found / Has left).
+- **`EmployeeSearchSelect`:** `useId` ids; input `aria-controls` + `aria-activedescendant` (only while open with a highlighted row);
+  non-option rows `role="presentation"`; `active` reset together with the query (v2). Behaviour unchanged.
+- **Fragile:** a word code in the master matches the same word in a pasted name ("code name" pastes). Space is a separator, so a
+  code containing a space would split (0 such codes). Picker department tick acts on what the search shows.
+- **Verified:** `node backend/scripts/parse-codes-check.mjs` 37/37; `backend/scripts/people-picker-check.py` (esbuild harness under
+  `backend/scripts/harness/`, Chromium, fictional data) 40/40; `--base` with origin/main's EmployeeSearchSelect 6/13 (7 aria checks
+  fail); `backend/scripts/leave-picker-aria-check.py` (built dist, real hr login, Leave Management → Apply Leave) 9/9, 0 errors.
+  jest 105/1649 → 107/1669 (after merging main; no backend change).
+- **Not tested:** Railway; Safari/Firefox; screen readers (attributes only); harness has no Tailwind styling (behaviour only).
+
+## Last Session — 2026-10-11 (P2-04/05/06: Button, IconButton, StatusBadge, ScrollTable, ReviewQueue; Extra Duty page adopts them)
+**Branch `feat/ed-shared-components`, MERGED (#135).** Frontend only. Plan + log: `docs/ux-bulk/prs/P2-ED/PLAN.md`, `PROGRESS.md`.
+- **New:** `components/ui/Button.jsx` (primary/secondary/ghost/danger/success/warning + `link` with `tone` for small row
+  actions; `size`; `busy` + `busyLabel` → disabled + aria-busy; type=button default), `IconButton.jsx` (`label` required →
+  aria-label + title; missing → "?" + console.error), `utils/statusMap.js` (one map: ed_hr, ed_finance, miss_punch, leave,
+  salary_change, loan, loan_instalment, dw, bulk_batch — labels copied from the screens that show them; only ED adopts),
+  `StatusBadge.jsx` (`xs` = the old ED pill), `ScrollTable.jsx` (own overflow-auto + max-h window, border-separate, every
+  `th` sticky + opaque; sortable headers are buttons with aria-sort; opt-in chevron expand button + detail row),
+  `components/bulk/ReviewQueue.jsx` (extracted from the ED finance tab, #79 behaviour: chips with counts, client order,
+  header box = rows eligible for any action, on "all" only `allFilterActions`; selection clears on filter change / success;
+  fixed bar; reason modal; optional `confirmText(n,total)` via ConfirmDialog; optional `moneyOf` ₹ total).
+- **ED page:** one `columns` list; all three tabs render `<ReviewQueue key={activeTab}>` (HR/All: `filters=null`, not
+  selectable, server order). Single-row "↩ Return to HR" opens the queue's reason modal via `api.openAction`. Pills via
+  StatusBadge (raw upper-case labels kept, ruling Q1). Visible change by ruling Q2: the list scrolls in a 70vh window and
+  its header sticks. Mutations/toasts unchanged.
+- **Fragile:** the ED check scripts depend on `data-testid` fin-filters/select-all/bulk-bar, `data-filter`, `tr[data-fin]`
+  (page passes it via `rowProps`), and button names. Flagged/rejected row tint comes from the page's `rowProps` (all tabs).
+  The flag modal button still uses `btn-warning`, a class index.css does not define (pre-existing; left as is for zero
+  change; `<Button variant="warning">` is styled). ScrollTable expand rows add a `<tr>` — tables counted by `tbody tr`
+  must not turn expand on.
+- **Verified:** ED checks unchanged 25/25 + 16/16 (before and after); new `backend/scripts/ui-components-check.py`
+  64/64 (Part A: test-only harness `frontend/ui-harness/` built into a scratch dir — every variant, busy, IconButton rule,
+  48 badges, sticky header, keyboard sort Enter/Space, keyboard chevron, ReviewQueue chips/order/selection/bar total/
+  confirm/reason/Esc/Clear, 390 px; Part B: real ED page — header in view after scrolling, pill text, Space on header box,
+  All Grants tab return modal, 390 px, 0 errors); `--base` on 80934af4: header scrolls away (th top −4142). jest 105/1649 →
+  107/1669 after merging main.
+- **Not tested:** Railway; Safari/Firefox (sticky th in a border-separate table); real production data.
+- **Found, not fixed:** `btn-warning` undefined in index.css → ED "Flag for Review" submit button renders unstyled.
+
+## Last Session — 2026-10-11 (P2-03: IST "today", DateSelector month presets + year window, DW dates, Finance Audit flag time)
+**Branch `feat/formatters-ist-today`, MERGED (#134).** Plan + log: `docs/ux-bulk/prs/P2-03/PLAN.md`, `PROGRESS.md`. Findings D-11, P-17, X-14 (+ FinanceAudit:525).
+- **Bugs:** "today" was `new Date().toISOString().slice(0,10)` = the UTC date, so between 00:00 and 05:30 IST it was yesterday:
+  Daily Wage Entry default date AND its `max` (today's IST date could not be picked), DW Payments payment date, every
+  DateSelector preset (range/date mode mixed UTC dates with browser-zone weekdays). Month mode had 6 presets, 4 of which
+  just meant "this month". `YEAR_OPTIONS` was hard-coded 2024–2027. Finance Audit → Attendance Flags "When" read
+  `f.created_at`, a column `manual_attendance_flags` does not have (`marked_at`) → "—" on every row. Backend
+  `routes/dailyWage.js` validateEntryRow judged "future" on the server's UTC date, so an IST-today entry saved before
+  05:30 IST was refused.
+- **Fix:** `utils/formatters.js` adds `todayIST()`, `toIstDateInput()` (stored server time read as UTC; plain YYYY-MM-DD
+  unchanged), `istYearMonth()`, `addDaysIso()`, `isoDayOfWeek()`; fixed +05:30 (no Intl, no DST). `YEAR_OPTIONS` = IST
+  year −2…+1 (computed at load). DateSelector: month mode shows This Month / Last Month only; all presets + the date
+  default are IST; a selected year outside the window is kept in the list (ruling Q2). DW Entry `today = todayIST()`,
+  DW Payments `useState(() => todayIST())`. FinanceAudit L525 → `fmtIstDateTime(f.marked_at)` ("11 Oct, 00:30").
+  dailyWage.js L317 → IST today (planner ruling Q1). No dist committed.
+- **Fragile:** `YEAR_OPTIONS` is fixed for the life of the tab (a tab open over New Year keeps last year's window until
+  reload). Month-mode Today/Yesterday/This Week/Last Week are gone by design. Any new "today" must use `todayIST()`.
+- **Verified:** jest 105/1649 → 108/1672 (after merging origin/main; new `dwEntryIstToday.test.js` 3, the 00:30 IST
+  accept test fails on the old route). `TZ=… node backend/scripts/ist-today-unit-check.mjs` 24/24 in 4 zones.
+  `backend/scripts/ist-today-check.py` (Chromium, built dist, browser zone UTC, clock 10 Oct 19:00 UTC = 00:30 IST,
+  hr/admin/finance, fictional contractor + T9701, port 3203) 26/26 — DW Entry value + max 2026-10-11, month presets 2,
+  Last/This Month, years 2024–2027, remembered 2023 kept and selectable, Analytics range Today/Yesterday/This Week/Last
+  Month in IST, DW Payments date, flags "When" = "11 Oct, 00:30", 390 px, 0 page/console errors, 0 API ≥ 400.
+  `--base` on 80934af4 12/12: UTC dates, 6 presets, "When" = "—".
+- **Not tested:** Railway; Safari/Firefox; a real DW save from the browser before 05:30 IST (server clock is real; covered by jest).
+- **Found, not fixed (other UTC "today" sites, not owned):** GatePasses.jsx:206 (pass date), DailyWageContractors.jsx:161
+  (rate effective_date), Employees.jsx:857 (Mark Left date) + :1008, useDateSelector.js:21, EmployeeProfile.jsx:37-38,
+  DailyWageFinanceReview.jsx:58, DeptAnalytics.jsx:17-18, DailyMIS.jsx:1026. Also: FinanceAudit flags table reads
+  `f.verified` (likely not a column — `verified_by` carries it).
+
+## Last Session — 2026-10-11 (P2-01: Modal + ConfirmDialog on headlessui Dialog; useConfirm; 8 native dialogs migrated)
+**Branch `feat/ui-dialog-confirm`, MERGED (#133).** Frontend only. Plan + log: `docs/ux-bulk/prs/P2-01/PLAN.md`, `PROGRESS.md`. Finding X-10.
+- **What:** `components/ui/Modal.jsx` and `ConfirmDialog.jsx` rebuilt on `@headlessui/react` Dialog (already a dependency),
+  SAME props and outer classes (`fixed inset-0 z-50 …`, `h3` title) — every caller unchanged. Focus trap (Tab/Shift-Tab),
+  Esc + outside click close, scroll lock, focus back to the opener, `role="dialog"`. New optional props: Modal `busy`;
+  ConfirmDialog `busy`, `children`, `showCancel`, `initialFocus`. Modal opens with focus on the panel (never on ✕);
+  ConfirmDialog focuses Cancel on `danger`, Confirm otherwise (planner Q2). Esc now cancels a ConfirmDialog (was a no-op).
+- **New `hooks/useConfirm.jsx`:** `confirmDialog` / `promptDialog` / `alertDialog` (promises) + `useConfirm()`. Self-mounting
+  (`#hr-dialog-root`, own React root) — no provider, App.jsx/main.jsx untouched. One dialog at a time (queue); a dialog
+  ignores answers in its first 300 ms and answers once (a double click cannot answer the next dialog).
+- **Migrated (dialog calls only, same action + arguments):** Settings holiday Remove, Leave comp-off Cancel, GatePasses
+  Cancel, FinanceEarlyExitApprovals Approve (amber), Reports ECR/ESI "download without them", SqlConsole restore prompt +
+  2 alerts (flow unchanged, Q5). PayableOT had none (8 calls, not 10). AttendanceReviewTab left alone.
+- **Fragile:** (1) Dialogs render in a portal at the end of <body>; the page behind is inert while open. (2) A click
+  anywhere outside the panel (a toast too) closes a Modal. (3) Never raise a useConfirm dialog from INSIDE an open Modal
+  (separate root → the Modal sees it as an outside click and closes). (4) Busy is shipped but no page passes it yet.
+- **Verified:** `backend/scripts/ui-dialog-confirm-check.py` (Chromium, built dist, scratch DB, admin/hr/finance, T96xx,
+  port 3201) 111/111 ×2 — each migrated dialog: text, first focus, Tab/Shift-Tab inside, Esc/Cancel/backdrop = 0
+  requests, OK = 1 request with the same body + DB effect, no native dialog; 6 Modal callers (Apply Leave, Create Gate
+  Pass, Reject Early Exit, Employee Profile, Request loan, Sales New employee) ✕/Esc/backdrop + Tab trap + focus return;
+  390 px. `--base` on 80934af4 3/3 (native confirm fires; Tab leaves the old Modal). Harness
+  `backend/scripts/ui-dialog-busy-harness-check.py` (frontend/test-harness, own vite config) 19/19: busy, focus per
+  variant, queue, double click. Regression: nightshift 44/44, stage6 leave reset 53/53, leave reject 29/29, sales NEFT
+  40/40. jest 105/1649 before = after; after merging main 107/1669.
+- **Not tested:** Railway; Safari/Firefox; screen reader.
+- **Scripts updated (planner handed them over):** `backend/scripts/gate-pass-quota-browser-check.py` (cancel now clicks the
+  dialog) 47/47; `docs/statutory-flags/sim/run_pr3.py` (ECR: dialog text → Cancel → download via the dialog; PORT env
+  override, default 3931) 51/51.
+- **Found, not fixed:** SQL Console write txns (preview/restore, 60 s TTL) run on the app's SHARED DB connection — any
+  app write made while a preview is open is rolled back with it (seen: an early-exit approve answered 200 and vanished).
+
 ## Last Session — 2026-10-11 (N-FRESH: lists stale up to 5 s after an action; finance 403 on Miss Punch)
 **Branch `fix/fresh-reads-after-actions`, MERGED (#131).** Frontend only. Findings N-7, N-9, N-15. Plan + log:
 `docs/ux-bulk/prs/N-FRESH/PLAN.md`, `PROGRESS.md`. Rulings Q1–Q4 (11 Oct).
