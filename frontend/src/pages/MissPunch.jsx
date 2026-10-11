@@ -534,7 +534,7 @@ export default function MissPunch() {
                               {rec.miss_punch_finance_status === 'rejected' ? 'Re-resolve' : 'Correct'}
                             </button>
                           )}
-                          {rec.miss_punch_resolved
+                          {!!rec.miss_punch_resolved
                             && (rec.miss_punch_finance_status === 'pending' || !rec.miss_punch_finance_status || rec.miss_punch_finance_status === '')
                             && canFinance && (
                             <div className="flex gap-1">
