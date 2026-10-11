@@ -4,7 +4,7 @@ Branch fix/finverify-company-scope · worktree /home/claude/wt-p1-13 · port 311
 ## Steps
 - [x] Phase 0: code read, prod counts, PLAN.md written (11 Oct 2026)
 - [ ] jest baseline (flock)
-- [ ] backend sign-off scope fix + jest
+- [x] backend sign-off scope fix + jest (new test 9/9; 6 fail on c942563f). Baseline jest 99/1566
 - [ ] frontend note + modal line
 - [ ] build + Playwright check + --base
 - [ ] merge origin/main, re-run, push
