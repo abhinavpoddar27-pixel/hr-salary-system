@@ -43,7 +43,7 @@ describe('workbook', () => {
   test('sheets, numbers as numbers, totals, rules', () => {
     const db = F.newDb(); cast(db);
     const wb = XLSX.read(X.buildWorkbook(result(db), { status: 'final', generated_by: 'adm' }), { type: 'buffer' });
-    expect(wb.SheetNames).toEqual(['Summary', 'Action list', 'Early-exit warnings', 'Notice late', 'Notice early', 'By department', 'All with late or early', 'Shift issues', 'Shift check', 'Payroll checks', 'Rules used']);
+    expect(wb.SheetNames).toEqual(['Summary', 'Action list', 'Early-exit warnings', 'Late 2h or more', 'Notice late', 'Notice early', 'By department', 'All with late or early', 'Shift issues', 'Shift check', 'Payroll checks', 'Rules used']);
     const al = XLSX.utils.sheet_to_json(wb.Sheets['Action list']);
     expect(al.map((r) => [r.Code, r.Action, r['Deduction days']])).toEqual([['X1', 'deduction', 1], ['X2', 'warning', 0]]);
     expect(typeof al[0]['Workdays lost']).toBe('number');

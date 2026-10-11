@@ -48,7 +48,8 @@ function buildWorkbook(result, run = {}) {
     ['People assessed', m.people_assessed], ['Excluded by config', m.excluded_people],
     ['Action list', t.people], ['Deduction notes', t.deduction_notes], ['Warning notes', t.warning_notes],
     ['Deduction days', t.deduction_days], ['Indicative amount (₹, payroll decides)', t.indicative_amount],
-    ['Early-exit warnings', (result.earlyExitWarnings || []).length],
+    ['Early-exit section (warnings and early-exit deductions)', (result.earlyExitWarnings || []).length],
+    ['Lates of 2 h or more (counted / forgiven by full hours)', `${(result.longLates || []).reduce((a, x) => a + (x.long_lates || 0), 0)} / ${(result.longLates || []).reduce((a, x) => a + (x.full_hours_forgiven || 0), 0)}`],
     ['Late notice names', (result.noticeLate || []).length], ['Early notice names', (result.noticeEarly || []).length],
     ['Release days (not counted)', (m.release_days || []).join(', ')],
     ['Gate passes recorded', result.gatePassCount],
@@ -78,8 +79,19 @@ function buildWorkbook(result, run = {}) {
   ]), 'Action list');
   XLSX.utils.book_append_sheet(wb, sheet(result.earlyExitWarnings || [], [
     { k: 'code', h: 'Code' }, { k: 'name', h: 'Name', w: 26 }, { k: 'department', h: 'Department', w: 18 }, { k: 'early_exits', h: 'Early exits' },
-    { k: 'over_1h', h: '1 h or more' }, { k: 'early_min', h: 'Early min' }, { k: 'option_c_days', h: 'Option C days' }, { k: 'action', h: 'Action' }, { k: 'deduction_days', h: 'Deduction days' },
+    { k: 'over_1h', h: '1 h or more' }, { k: 'over_2h', h: '2 h or more', v: (r) => r.over_2h ?? '' }, { k: 'missed_out_days', h: 'Missed OUT counted', v: (r) => r.missed_out_days || '' },
+    { k: 'early_min', h: 'Early min' }, { k: 'option_c_days', h: 'Option C days' }, { k: 'd4_days', h: '2 h rule days', v: (r) => r.d4_days ?? '' }, { k: 'action', h: 'Action' }, { k: 'deduction_days', h: 'Deduction days' },
   ]), 'Early-exit warnings');
+  XLSX.utils.book_append_sheet(wb, sheet(result.longLates || [], [
+    { k: 'code', h: 'Code' }, { k: 'name', h: 'Name', w: 26 }, { k: 'department', h: 'Department', w: 18 }, { k: 'shift_h', h: 'Shift h' },
+    { k: 'long_lates', h: 'Counted 2 h+ lates' }, { k: 'avg_minutes', h: 'Average late (min)' }, { k: 'full_hours_kept', h: 'Counted though hours made up' },
+    { k: 'full_hours_forgiven', h: 'Forgiven (hours made up)' }, { k: 'late_days', h: 'All counted lates' },
+  ]), 'Late 2h or more');
+  if (result.missedOut?.rule) XLSX.utils.book_append_sheet(wb, sheet(result.missedOut.people || [], [
+    { k: 'code', h: 'Code' }, { k: 'name', h: 'Name', w: 26 }, { k: 'department', h: 'Department', w: 18 },
+    { k: 'personal_missed_punches', h: 'Own missed punches' }, { k: 'counted_as_early', h: 'Counted as early exits', v: (r) => (r.exempt ? 'not assessed' : r.counted_as_early) },
+    { k: 'dates', h: 'Days counted', v: (r) => (r.dates || []).join(', '), w: 40 },
+  ]), 'Missed OUT');
   XLSX.utils.book_append_sheet(wb, sheet(result.noticeLate || [], [{ k: 'code', h: 'Code' }, { k: 'name', h: 'Name', w: 26 }, { k: 'department', h: 'Department', w: 18 }, { k: 'late_days', h: 'Late days' }]), 'Notice late');
   XLSX.utils.book_append_sheet(wb, sheet(result.noticeEarly || [], [{ k: 'code', h: 'Code' }, { k: 'name', h: 'Name', w: 26 }, { k: 'department', h: 'Department', w: 18 }, { k: 'early_exits', h: 'Early exits' }]), 'Notice early');
   XLSX.utils.book_append_sheet(wb, sheet(result.departments || [], [
@@ -107,7 +119,7 @@ function buildWorkbook(result, run = {}) {
     { k: 'code', h: 'Code' }, { k: 'flag', h: 'Problem', w: 32 }, { k: 'rows', h: 'Rows' }, { k: 'daycalc_days', h: 'Day-calc days' }, { k: 'salary_amount', h: 'Salary deduction ₹' },
   ]), 'Payroll checks');
   const crit = Object.entries(result.criteria?.thresholds || {}).map(([k, v]) => [k, v]);
-  const cs = XLSX.utils.aoa_to_sheet([['Rule', 'Value'], ['stayed_late_mode', result.criteria?.stayed_late_mode], ['early_exit_rule', result.criteria?.early_exit_rule], ['shift_fit', result.criteria?.shift_fit ?? ''], ['late_full_hours', result.criteria?.late_full_hours === false ? 'off' : 'on'],
+  const cs = XLSX.utils.aoa_to_sheet([['Rule', 'Value'], ['stayed_late_mode', result.criteria?.stayed_late_mode], ['early_exit_rule', result.criteria?.early_exit_rule], ['late_long_always_counted', result.criteria?.late_long_always_counted ? 'on' : 'off'], ['missed_out_rule', result.criteria?.missed_out_rule ? 'on' : 'off'], ['shift_fit', result.criteria?.shift_fit ?? ''], ['late_full_hours', result.criteria?.late_full_hours === false ? 'off' : 'on'],
     ['loading_designation_patterns', (result.criteria?.loading_designation_patterns || []).join(', ')], ...crit,
     ...Object.entries(result.criteria?.remeasure || {}).map(([code, r]) => [`re-measure ${code}`,
       `${r.start}–${r.end}, late grace ${r.late_grace ?? 9} min, early grace ${r.early_grace ?? 15} min, stayed-late ${r.left_late || 'system'}`
@@ -148,11 +160,16 @@ function signature() {
     rows: [new TableRow({ children: [side('HR Manager'), side('Received by employee (signature & date)', R)] })] })];
 }
 
+const t0 = (result) => result.criteria?.thresholds || {};
+
 function buildDocx(result, run = {}, { now = new Date() } = {}) {
   const ML = monthLabel(result); const PL = prevLabel(result); const today = todayIst(now);
   const draft = run.status !== 'final';
   const ref = (i) => `HR/ATT/${MON3[result.meta.month - 1]}${String(result.meta.year).slice(2)}/${String(i + 1).padStart(2, '0')}`;
-  const optionC = result.criteria?.early_exit_rule === 'option_c';
+  const optionC = result.criteria?.early_exit_rule === 'option_c'; const d4 = result.criteria?.early_exit_rule === 'd4';
+  const earlyDeducts = optionC || d4;
+  const earlyRuleText = d4 ? `2-hour rule: each exit of 2 hours or more is half a day; with ${t0(result).d4_long_count ?? 3} or more exits of 1 hour or more, their minutes are deducted too.${result.criteria?.missed_out_rule ? ` From the ${t0(result).missed_out_from ?? 5}th own missed punch in the month, each missed OUT counts as an early exit of 2 hours.` : ''}`
+    : optionC ? 'Option C applies: ½ day per exit of 1 hour or more, plus ½ day per 3 shorter exits.' : 'Warning only.';
   const rel = (result.meta.release_days || []).map(fmtDay);
   const relText = rel.length ? `Plant-wide early-release days (${rel.join(', ')}) are not counted.` : '';
   const list = result.actionList || []; const ew = result.earlyExitWarnings || [];
@@ -181,8 +198,8 @@ function buildDocx(result, run = {}, { now = new Date() } = {}) {
         p.override ? `Override: ${p.override.reason}` : p.check_master_shift ? 'Check master shift: leaves early almost daily, short of shift hours' : (p.remeasured ? `Re-measured on the master shift${p.hours_excused ? `; ${days(p.hours_excused)} not counted (full shift hours worked)` : ''}` : '')])
         .concat([['', '', { v: 'TOTAL', bold: true }, '', '', '', '', '', '', { v: days(tot.deduction_days || 0), align: C, bold: true }, { v: inr(tot.indicative_amount), align: R, bold: true }, '']]),
       [380, 680, 1750, 2750, 600, 600, 1150, 950, 1300, 950, 1050, 3450], 15, true),
-    para([tr(`Early-exit ${optionC ? 'deductions and warnings' : 'warning notes'} (${people(ew.length)})`, { size: 24, bold: true })], { before: 240, after: 60 }),
-    para([tr(`People who left more than ${t.early_min_exclusive ?? 15} minutes before shift end on ${t.early_warning_min ?? 3} or more days (Mon–Sat), who do not already have a note above. ${optionC ? 'Option C applies: ½ day per exit of 1 hour or more, plus ½ day per 3 shorter exits.' : 'Warning only.'} ${relText}`, { size: 18, color: '404040' })], { after: 100 }),
+    para([tr(`Early-exit ${earlyDeducts ? 'deductions and warnings' : 'warning notes'} (${people(ew.length)})`, { size: 24, bold: true })], { before: 240, after: 60 }),
+    para([tr(`People who left more than ${t.early_min_exclusive ?? 15} minutes before shift end on ${t.early_warning_min ?? 3} or more days (Mon–Sat)${d4 ? ', or once for 2 hours or more' : ''}, who do not already have a note above. ${earlyRuleText} ${relText}`, { size: 18, color: '404040' })], { after: 100 }),
     table(['#', 'Code', 'Name', 'Department – Role', 'Early exits', '1 h+ early', 'Time', 'Action'],
       ew.map((x, i) => [{ v: i + 1, align: C }, { v: x.code, align: C }, { v: cleanName(x.name), bold: true }, `${x.department || ''} – ${x.designation || ''}`,
         { v: x.early_exits, align: C }, { v: x.over_1h, align: C }, hm(x.early_min),
@@ -213,7 +230,7 @@ function buildDocx(result, run = {}, { now = new Date() } = {}) {
     new Paragraph({ children: [new PageBreak()] }),
     ...noticeHead('Leaving Early', `The following employees left before the end of their shift on ${t.notice_early ?? 3} or more days in ${ML} without a gate pass covering it.`, [
       `Leaving more than ${t.early_min_exclusive ?? 15} minutes before shift end, or before the time on your gate pass, is marked as an early exit.`,
-      optionC ? 'Early exits are deducted from salary in half-day steps.' : 'Repeated early exits will lead to deduction from salary as per company policy.',
+      d4 ? 'Leaving 2 hours or more early is a half-day deduction. Leaving without punching out is recorded too.' : optionC ? 'Early exits are deducted from salary in half-day steps.' : 'Repeated early exits will lead to deduction from salary as per company policy.',
       'If you must leave early, take a gate pass from your in-charge and show it at the gate.',
     ]),
     table(['S.No', 'Code', 'Name', 'Department', 'Early exits'], (result.noticeEarly || []).map((n, i) => [{ v: i + 1, align: C }, { v: n.code, align: C }, cleanName(n.name), n.department || '', { v: n.early_exits, align: C, bold: true }]), [600, 900, 3300, 2900, 1300], 16, true),
@@ -259,7 +276,7 @@ function buildDocx(result, run = {}, { now = new Date() } = {}) {
     if (i > 0) notes.push(new Paragraph({ children: [new PageBreak()] }));
     const avg = x.early_exits ? Math.round(x.early_min / x.early_exits) : 0;
     notes.push(...head(x, i, `${x.action === 'deduction' ? 'Deduction' : 'Warning'} – leaving before shift end, ${ML}`),
-      para(`Our attendance record shows that in ${ML} you left before the end of your shift on ${x.early_exits} days without a gate pass covering it. On average you left ${hm(avg)} early${x.over_1h ? `, and on ${x.over_1h} of these days one hour or more early` : ''}.`),
+      para(`Our attendance record shows that in ${ML} you left before the end of your shift on ${x.early_exits} day${x.early_exits === 1 ? '' : 's'} without a gate pass covering it. On average you left ${hm(avg)} early${x.over_2h && d4 ? `; on ${x.over_2h} of these days two hours or more early` : x.over_1h ? `, and on ${x.over_1h} of these days one hour or more early` : ''}.${x.missed_out_days ? ` This includes ${x.missed_out_days} day${x.missed_out_days === 1 ? '' : 's'} on which you did not punch out.` : ''}`),
       table(['Month', 'Early-exit days', 'Total time'], [[ML, { v: x.early_exits, align: C }, hm(x.early_min)]], [3000, 2500, 3500], 20),
       x.action === 'deduction'
         ? para([tr('As per company attendance policy, a deduction of '), tr(days(x.deduction_days), { bold: true }), tr(' will be made from your salary.')], { before: 200 })

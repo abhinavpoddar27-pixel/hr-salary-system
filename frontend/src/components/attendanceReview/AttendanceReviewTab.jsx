@@ -154,7 +154,7 @@ function FinanceSection({ runId, isFinal }) {
   const status = (r) => (r.applied ? 'In salary' : FIN_STATUS[r.finance_status] || r.finance_status)
   return (
     <Section title="Finance" count={sm.sent || undefined}
-      note="Deductions on a final review go to the finance queue (Late Coming → Pending Deductions). Finance approves; the salary run applies approved rows. Warnings are not sent.">
+      note="Deductions on a final review — the action list and the early-exit section — go to the finance queue (Late Coming → Pending Deductions), one row per person. Finance approves; the salary run applies approved rows. Warnings are not sent.">
       <div className="px-4 py-3 space-y-3" data-testid="ar-finance">
         {!isFinal && <p className="text-sm text-slate-500">Finalise the review to send its deductions to finance.</p>}
         {q.isLoading && <p className="text-sm text-slate-500">Loading…</p>}
@@ -167,6 +167,9 @@ function FinanceSection({ runId, isFinal }) {
             <span className="text-xs text-slate-600" data-testid="ar-finance-summary">
               {sm.sent} sent · {sm.pending} waiting · {sm.approved} approved · {sm.rejected} rejected · {sm.applied} in salary
             </span>
+            {toSend.some((c) => c.source === 'early') && (
+              <span className="text-xs text-slate-600" data-testid="ar-finance-early">incl. {toSend.filter((c) => c.source === 'early').length} from the early-exit section</span>
+            )}
             {toSend.some((c) => c.contractor) && (
               <span className="text-xs text-amber-700">Contractor deductions are recorded but reach pay only after the contractor-salary change.</span>
             )}
@@ -389,6 +392,8 @@ export default function AttendanceReviewTab({ selectedMonth, selectedYear, onSel
 
   const t = data?.actionTotals || {}
   const ded = (data?.actionList || []).filter((a) => a.action === 'deduction')
+  const d4On = data?.criteria?.early_exit_rule === 'd4'
+  const mpOn = data?.criteria?.missed_out_rule === true && !!data?.missedOut
   const loading = runsQ.isLoading || (runMeta && runQ.isLoading) || (!showingStored && previewQ.isLoading)
 
   const viewSwitch = (
@@ -533,11 +538,12 @@ export default function AttendanceReviewTab({ selectedMonth, selectedYear, onSel
           </Section>
 
           <Section title="Action list" count={data.actionList?.length}
-            note="Deduction = workdays lost to nearest ½ day, minimum ½ day. Newcomers get a warning. Indicative ₹ only — payroll computes the final figure.">
+            note={`Deduction = workdays lost to nearest ½ day, minimum ½ day.${d4On ? ' 2 h rule ON: the early-exit part is the larger of the minutes lost and ½ day per exit of 2 h or more.' : ''}${mpOn ? ' Missed OUTs from the person\'s ' + (data.criteria?.thresholds?.missed_out_from ?? 5) + 'th own missed punch are counted as 2 h early exits.' : ''} Newcomers get a warning. Indicative ₹ only — payroll computes the final figure.`}>
             <Table rows={data.actionList} rowClass={(r) => (r.action === 'warning' ? 'bg-amber-50/60' : '')} cols={[
               { k: 'code', h: 'Code', v: (r) => <span className="font-mono">{r.code}</span> },
               { k: 'name', h: 'Name' }, { k: 'department', h: 'Department' },
-              { k: 'late_days', h: 'Late days', right: true }, { k: 'early_days', h: 'Early exits', right: true },
+              { k: 'late_days', h: 'Late days', right: true, v: (r) => (<>{r.late_days}{r.long_lates > 0 && <span className="ml-1 text-[11px] text-slate-500" title="Late 2 h or more">({r.long_lates} ≥ 2 h)</span>}</>) },
+              { k: 'early_days', h: 'Early exits', right: true, v: (r) => (<>{r.early_days}{(d4On && r.over_2h > 0) && <span className="ml-1 text-[11px] text-slate-500">({r.over_2h} ≥ 2 h)</span>}{r.missed_out_days > 0 && <span className="ml-1 text-[11px] text-slate-500">incl. {r.missed_out_days} missed OUT</span>}</>) },
               { k: 'mins', h: 'Time lost', right: true, v: (r) => `${num(r.late_min + r.early_min)} min` },
               { k: 'workdays_lost', h: 'Workdays lost', right: true, v: (r) => num(r.workdays_lost, 2) },
               { k: 'last', h: 'Last month L/E', right: true, v: (r) => (r.last_month ? `${r.last_month.late_days} / ${r.last_month.early_days}` : 'new') },
@@ -556,14 +562,41 @@ export default function AttendanceReviewTab({ selectedMonth, selectedYear, onSel
           {runMeta && showingStored && <FinanceSection runId={runMeta.id} isFinal={isFinal} />}
 
           <Section title="Early-exit warnings" count={data.earlyExitWarnings?.length}
-            note={data.criteria?.early_exit_rule === 'option_c' ? 'Option C is ON: deduction = ½ day per exit of 1 h or more, plus ½ day per 3 shorter exits.' : 'Warning only. The Option C column shows what the proposed rule would deduct.'}>
+            note={d4On ? `2 h rule is ON: ½ day for each exit of 2 h or more; when there are ${data.criteria?.thresholds?.d4_long_count ?? 3}+ exits of 1 h or more, their minutes are deducted too. One exit of 2 h is enough to be listed here. Shorter exits stay warning-only.`
+              : data.criteria?.early_exit_rule === 'option_c' ? 'Option C is ON: deduction = ½ day per exit of 1 h or more, plus ½ day per 3 shorter exits.' : 'Warning only. The Option C column shows what the proposed rule would deduct.'}>
             <Table rows={data.earlyExitWarnings} cols={[
               { k: 'code', h: 'Code', v: (r) => <span className="font-mono">{r.code}</span> }, { k: 'name', h: 'Name' }, { k: 'department', h: 'Department' },
-              { k: 'early_exits', h: 'Early exits', right: true }, { k: 'over_1h', h: '1 h or more', right: true },
-              { k: 'option_c_days', h: 'Option C days', right: true, v: (r) => num(r.option_c_days, 1) },
+              { k: 'early_exits', h: 'Early exits', right: true, v: (r) => (<>{r.early_exits}{r.missed_out_days > 0 && <span className="ml-1 text-[11px] text-slate-500">incl. {r.missed_out_days} missed OUT</span>}</>) },
+              { k: 'over_1h', h: '1 h or more', right: true },
+              ...(d4On ? [{ k: 'over_2h', h: '2 h or more', right: true }, { k: 'd4_days', h: '2 h rule days', right: true, v: (r) => num(r.d4_days, 1) }]
+                : [{ k: 'option_c_days', h: 'Option C days', right: true, v: (r) => num(r.option_c_days, 1) }]),
               { k: 'action', h: 'Action', v: (r) => `${r.action === 'deduction' ? `Deduction ${num(r.deduction_days, 1)} d` : `Warning${r.newcomer ? ' (newcomer)' : ''}`}${r.check_master_shift ? ' · check master shift' : ''}` },
             ]} />
           </Section>
+
+          <Section title="Late 2 h or more — check the shift" count={data.longLates?.length} defaultOpen={false}
+            note={`A late of ${data.criteria?.thresholds?.long_late_minutes ?? 120} minutes or more is usually a shift question (wrong master, or a different shift that day), not a habit. ${data.criteria?.late_long_always_counted ? 'These lates are counted even when the hours were made up.' : 'Today such a late is still forgiven when the full shift was worked — tick "always counted" in Rules to change that.'}`}>
+            <Table rows={data.longLates || []} cols={[
+              { k: 'code', h: 'Code', v: (r) => <span className="font-mono">{r.code}</span> }, { k: 'name', h: 'Name' }, { k: 'department', h: 'Department' },
+              { k: 'shift_h', h: 'Shift h', right: true },
+              { k: 'long_lates', h: 'Counted 2 h+ lates', right: true }, { k: 'avg_minutes', h: 'Average late', right: true, v: (r) => (r.avg_minutes ? `${r.avg_minutes} min` : '—') },
+              { k: 'full_hours_kept', h: 'Counted though hours made up', right: true },
+              { k: 'full_hours_forgiven', h: 'Forgiven (hours made up)', right: true },
+              { k: 'late_days', h: 'All counted lates', right: true },
+            ]} />
+          </Section>
+
+          {mpOn && (
+            <Section title="Missed OUT counted as an early exit" count={data.missedOut?.people?.length} defaultOpen={false}
+              note={`From the person's ${data.missedOut.from}th own missed punch in the month, each missed OUT counts as an early exit of ${data.missedOut.minutes} min. ${data.missedOut.bulk_days?.length ? `System-failure days not counted: ${data.missedOut.bulk_days.join(', ')}.` : 'No system-failure days this month.'} Loaders and people whose early exits are not assessed are shown but not charged.`}>
+              <Table rows={data.missedOut.people || []} cols={[
+                { k: 'code', h: 'Code', v: (r) => <span className="font-mono">{r.code}</span> }, { k: 'name', h: 'Name' }, { k: 'department', h: 'Department' },
+                { k: 'personal_missed_punches', h: 'Own missed punches', right: true },
+                { k: 'counted_as_early', h: 'Counted as early exits', right: true, v: (r) => (r.exempt ? 'not assessed' : r.counted_as_early) },
+                { k: 'dates', h: 'Days counted', v: (r) => (r.dates || []).map((d) => d.slice(8)).join(', ') },
+              ]} />
+            </Section>
+          )}
 
           <Section title="Shift check — early exits (automatic)" count={data.shiftCheck?.length} defaultOpen={false}
             note={data.criteria?.shift_fit === 'off' ? 'Shift check is OFF — every early exit is counted.'
@@ -649,7 +682,7 @@ export default function AttendanceReviewTab({ selectedMonth, selectedYear, onSel
             Gate passes recorded this month: {num(data.gatePassCount)} (early exits they excused: {num(data.gatePassExcused ?? 0)}). Rules: late = {data.criteria?.thresholds?.late_min_minutes}+ min;
             early exit = {data.criteria?.thresholds?.early_min_exclusive}–{data.criteria?.thresholds?.early_max_exclusive} min, Mon–Sat; stayed-late exemption: {data.criteria?.stayed_late_mode};
             full-hours days: lates {data.criteria?.late_full_hours === false ? 'counted' : 'not counted'}, early exits {data.criteria?.shift_fit === 'everyone' ? 'not counted' : data.criteria?.shift_fit === 'habitual' ? 'not counted for habitual early leavers' : 'counted'};
-            early-exit rule: {data.criteria?.early_exit_rule === 'option_c' ? 'Option C' : 'warning only'}. Nothing on this page changes salary.
+            early-exit rule: {d4On ? '2 h rule' : data.criteria?.early_exit_rule === 'option_c' ? 'Option C' : 'warning only'}{data.criteria?.late_long_always_counted ? '; lates of 2 h+ always counted' : ''}{mpOn ? '; missed OUT counted as early exit' : ''}. Nothing on this page changes salary.
           </p>
         </>
       )}

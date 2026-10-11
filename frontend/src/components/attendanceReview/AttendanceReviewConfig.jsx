@@ -29,6 +29,10 @@ const THRESHOLD_LABELS = {
   master_fit_share: 'Master-fit check: late or early on share of days ≥',
   board_miss_punch_min: 'Notice board: missed punches from', bulk_miss_punch_day: 'Notice board: system failure if miss punches plant-wide that day ≥',
   board_spotless_min_share: 'Notice board: "on time every day" needs share of Mon–Sat days ≥',
+  long_late_minutes: 'Long late from (minutes) — listed as a shift question; counted even on a full-hours day when ticked',
+  d4_half_day_minutes: '2 h rule: early exit of this many minutes or more = ½ day', d4_long_minutes: '2 h rule: long early exit from (minutes)',
+  d4_long_count: '2 h rule: long exits in the month before their minutes are deducted', missed_out_from: 'Missed OUT: counted from the person\'s Nth own missed punch',
+  missed_out_minutes: 'Missed OUT: counts as an early exit of (minutes)',
 }
 const LISTS = [
   ['loading_designation_patterns', 'Loading staff (no late assessment) — designation contains', 'one pattern per line'],
@@ -55,6 +59,7 @@ export default function AttendanceReviewConfig({ month, year }) {
       stayed_late_mode: c.stayed_late_mode, early_exit_rule: c.early_exit_rule, shift_fit: c.shift_fit || 'everyone', late_full_hours: c.late_full_hours !== false,
       assessment_basis: c.assessment_basis || 'import', assess_fixed_miss_punch: c.assess_fixed_miss_punch !== false,
       contract_loaders_early_exempt: c.contract_loaders_early_exempt !== false,
+      late_long_always_counted: c.late_long_always_counted === true, missed_out_rule: c.missed_out_rule === true,
       board_footer_en: c.board_footer_en || '', board_footer_hi: c.board_footer_hi || '',
       people: Object.entries(c.standing_people || {}).map(([code, v]) => ({ ...v, code })),
       depts: Object.entries(c.standing_departments || {}).map(([department, v]) => ({ ...v, department })),
@@ -71,6 +76,7 @@ export default function AttendanceReviewConfig({ month, year }) {
         thresholds: form.thresholds, stayed_late_mode: form.stayed_late_mode, early_exit_rule: form.early_exit_rule, shift_fit: form.shift_fit, late_full_hours: !!form.late_full_hours,
         assessment_basis: form.assessment_basis, assess_fixed_miss_punch: !!form.assess_fixed_miss_punch,
         contract_loaders_early_exempt: !!form.contract_loaders_early_exempt,
+        late_long_always_counted: !!form.late_long_always_counted, missed_out_rule: !!form.missed_out_rule,
         board_footer_en: form.board_footer_en, board_footer_hi: form.board_footer_hi,
         // standing rules keep who set them and why; a row edited here keeps its origin fields
         standing_people: Object.fromEntries(form.people.filter((r) => r.code.trim()).map(({ code, ...v }) => [code.trim(), { ...v, reason: String(v.reason || '').trim() }])),
@@ -180,7 +186,18 @@ export default function AttendanceReviewConfig({ month, year }) {
             <select aria-label="Early-exit rule" className="input w-full" value={form.early_exit_rule} onChange={(e) => setForm((f) => ({ ...f, early_exit_rule: e.target.value }))}>
               <option value="warning">Warning only (current)</option>
               <option value="option_c">Option C deduction (½ day per exit of 1 h+, ½ day per 3 shorter)</option>
+              <option value="d4">2 h rule — exit of 2 h+ = ½ day; 3+ exits of 1 h+ = their minutes deducted</option>
             </select></label>
+          <label className="flex items-start gap-2 text-sm">
+            <input aria-label="Long late always counted" type="checkbox" className="mt-1" checked={!!form.late_long_always_counted}
+              onChange={(e) => setForm((f) => ({ ...f, late_long_always_counted: e.target.checked }))} />
+            <span><span className="text-xs font-semibold text-slate-600">A late of {form.thresholds.long_late_minutes ?? 120} min or more is always counted</span><br />
+              <span className="text-[11px] text-slate-400">Even when the hours were made up. Staying late the evening before still excuses it. Such lates are listed as a possible shift problem either way.</span></span></label>
+          <label className="flex items-start gap-2 text-sm">
+            <input aria-label="Missed OUT counts as early exit" type="checkbox" className="mt-1" checked={!!form.missed_out_rule}
+              onChange={(e) => setForm((f) => ({ ...f, missed_out_rule: e.target.checked }))} />
+            <span><span className="text-xs font-semibold text-slate-600">Missed OUT counts as an early exit</span><br />
+              <span className="text-[11px] text-slate-400">From the person's {form.thresholds.missed_out_from ?? 5}th own missed punch in the month, each missed OUT counts as an early exit of {form.thresholds.missed_out_minutes ?? 120} min. System-failure days (many missed punches plant-wide) are not counted.</span></span></label>
           <label className="flex items-start gap-2 text-sm">
             <input aria-label="Late not counted on a full-hours day" type="checkbox" className="mt-1" checked={!!form.late_full_hours}
               onChange={(e) => setForm((f) => ({ ...f, late_full_hours: e.target.checked }))} />
