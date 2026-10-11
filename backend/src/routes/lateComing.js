@@ -352,51 +352,10 @@ router.get('/employee-history', (req, res) => {
 });
 
 // ─── POST /deduction ──────────────────────────────────────
-router.post('/deduction', requireHrOrAdmin, (req, res) => {
-  const db = getDb();
-  const { employeeCode, month, year, company, lateCount, deductionDays, remark } = req.body;
-
-  if (!employeeCode || !month || !year) {
-    return res.status(400).json({ success: false, error: 'employeeCode, month, year required' });
-  }
-  const ded = parseFloat(deductionDays);
-  if (isNaN(ded) || ded <= 0 || ded > 5) {
-    return res.status(400).json({ success: false, error: 'deductionDays must be > 0 and <= 5' });
-  }
-  if (!remark || !String(remark).trim()) {
-    return res.status(400).json({ success: false, error: 'remark is required' });
-  }
-
-  const emp = db.prepare('SELECT id, code, name FROM employees WHERE code = ?').get(employeeCode);
-  if (!emp) return res.status(404).json({ success: false, error: 'Employee not found' });
-
-  const result = db.prepare(`
-    INSERT INTO late_coming_deductions
-      (employee_code, employee_id, month, year, company, late_count, deduction_days, remark, applied_by, finance_status)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending')
-  `).run(
-    employeeCode, emp.id, parseInt(month), parseInt(year), company || null,
-    parseInt(lateCount) || 0, ded, String(remark).trim(),
-    req.user?.username || 'hr'
-  );
-
-  try {
-    db.prepare(`
-      INSERT INTO audit_log (table_name, record_id, field_name, old_value, new_value, changed_by, stage, remark, employee_code, action_type)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `).run(
-      'late_coming_deductions', result.lastInsertRowid, 'deduction_applied',
-      '', `${ded} days`,
-      req.user?.username || 'hr',
-      'late_coming',
-      `Late coming deduction applied: ${String(remark).trim()}`,
-      employeeCode,
-      'late_deduction_applied'
-    );
-  } catch (e) { /* audit should not break insertion */ }
-
-  res.json({ success: true, id: result.lastInsertRowid });
-});
+// Retired (PR-2): late deductions are decided once a month in Analytics → Attendance Review and sent to finance from a
+// final review, so one person cannot be cut twice by two screens. Finance review below is unchanged.
+const RETIRED = 'Applying a late deduction here has been retired. Deductions are decided in Analytics → Attendance Review and sent to finance from the final review.';
+router.post('/deduction', requireHrOrAdmin, (req, res) => res.status(410).json({ success: false, error: RETIRED }));
 
 // ─── GET /deductions ──────────────────────────────────────
 router.get('/deductions', (req, res) => {

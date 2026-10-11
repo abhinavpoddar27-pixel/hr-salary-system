@@ -1029,6 +1029,56 @@ function applySuggestions(stored, list, { accept = [], dismiss = [], by = 'admin
   return { config: c, applied, unknown };
 }
 
+// ── finance hand-off (PR-2): the review is the only place deductions are decided ──────────────────
+
+/** Tag written into late_coming_deductions.remark so a row can be traced back to its review run (no schema change). */
+const runTag = (runId) => `[review run ${runId}]`;
+const BLOCKING = ['pending', 'approved'];
+
+/**
+ * What "Send to finance" would do for a FINAL run: one pending late_coming_deductions row per deduction on the action list
+ * (deduction days = the review's rounded workdays lost, late + early minutes). A person who already has a pending or
+ * approved row for that month is skipped and shown — never overwritten or duplicated. Pure read.
+ */
+function financeSendPlan(db, run) {
+  const result = typeof run.result_json === 'string' ? JSON.parse(run.result_json) : (run.result || {});
+  const ym = `${run.year}-${pad(run.month)}`;
+  const existing = db.prepare(`SELECT id, deduction_days, finance_status, is_applied_to_salary, applied_by, remark FROM late_coming_deductions
+    WHERE employee_code = ? AND month = ? AND year = ? AND finance_status IN ('pending','approved') ORDER BY id`);
+  const emp = db.prepare('SELECT id, company, is_contractor, employment_type FROM employees WHERE code = ? ORDER BY id LIMIT 1');
+  const create = []; const skipped = [];
+  for (const a of result.actionList || []) {
+    if (a.action !== 'deduction' || !(a.deduction_days > 0)) continue;
+    const rows = existing.all(a.code, run.month, run.year);
+    if (rows.length) {
+      skipped.push({ code: a.code, name: a.name, deduction_days: a.deduction_days, reason: rows.some((r) => String(r.remark || '').includes(runTag(run.id))) ? 'already sent' : 'a deduction row already exists for this month',
+        existing: rows.map((r) => ({ id: r.id, days: r.deduction_days, status: r.finance_status, applied: !!r.is_applied_to_salary, by: r.applied_by })) });
+      continue;
+    }
+    const e = emp.get(a.code) || {};
+    const contractor = Number(e.is_contractor) === 1 || e.employment_type === 'Contract';
+    create.push({ code: a.code, name: a.name, employee_id: e.id || null, company: e.company || null, deduction_days: a.deduction_days,
+      late_count: a.late_days || 0, contractor,
+      remark: `Attendance Review ${ym} ${runTag(run.id)}: ${a.late_days || 0} late, ${a.early_days || 0} early exits, ${a.workdays_lost} workdays lost`
+        + (a.override ? `; override: ${a.override.reason}` : '') });
+  }
+  return { create, skipped };
+}
+
+/** Every late_coming_deductions row for the run's month: those sent by this run, and any entered outside the review. */
+function financeStatus(db, run) {
+  const rows = db.prepare(`SELECT d.id, d.employee_code code, e.name, d.deduction_days, d.late_count, d.finance_status, d.finance_remark,
+      d.is_applied_to_salary applied, d.applied_by, d.applied_at, d.remark FROM late_coming_deductions d
+    LEFT JOIN employees e ON e.id = (SELECT MIN(id) FROM employees WHERE code = d.employee_code)
+    WHERE d.month = ? AND d.year = ? ORDER BY d.employee_code, d.id`).all(run.month, run.year);
+  const tag = runTag(run.id);
+  const sent = rows.filter((r) => String(r.remark || '').includes(tag)).map(({ remark, ...r }) => ({ ...r, applied: !!r.applied }));
+  const outside = rows.filter((r) => !String(r.remark || '').includes(tag)).map(({ remark, ...r }) => ({ ...r, applied: !!r.applied, remark }));
+  const count = (st) => sent.filter((r) => r.finance_status === st).length;
+  return { sent, outside, summary: { sent: sent.length, pending: count('pending'), approved: count('approved'), rejected: count('rejected'),
+    applied: sent.filter((r) => r.applied).length, outside: outside.length } };
+}
+
 // ── main ──────────────────────────────────────────────────────────────────
 
 /**
@@ -1104,5 +1154,6 @@ module.exports = {
   SHIFT_ISSUES_SQL, sqlParams, inlineParams, assessmentQuality,
   isHabitualEarly, shiftFitApplies, detectReleaseDays, detectShiftIssues, loadPersonMonth, remeasureRows, buildPeople, applyExclusions, classify, actions, notices,
   roundDeduction, optionCDays, prevMonth, daysInMonth, computeAttendanceReview,
+  financeSendPlan, financeStatus, runTag,
   suggestions, applySuggestions, toStoredConfig, standingFrom, fitShift, MASTER_DAYS_SQL, LEGACY_REASON,
 };

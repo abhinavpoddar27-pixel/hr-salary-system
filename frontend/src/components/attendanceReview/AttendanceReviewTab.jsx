@@ -6,6 +6,7 @@ import clsx from 'clsx'
 import {
   attendanceReviewPreview, attendanceReviewRuns, attendanceReviewRun,
   attendanceReviewGenerate, attendanceReviewFinalise, attendanceReviewExport, attendanceReviewApplySuggestions,
+  attendanceReviewFinance, attendanceReviewSendToFinance,
 } from '../../utils/api'
 import AttendanceReviewConfig from './AttendanceReviewConfig'
 
@@ -122,6 +123,75 @@ function SuggestionsSection({ list, month, year, releaseDays, onApplied, readOnl
           )}
         </div>
       )}
+    </Section>
+  )
+}
+
+const FIN_STATUS = { pending: 'Waiting for finance', approved: 'Approved', rejected: 'Rejected' }
+
+// PR-2 — the review is the only place a late / early-exit deduction is decided. A final review's deductions go to the
+// finance queue as pending rows; finance approves there and Stage 7 applies approved rows. Nothing is ever overwritten.
+function FinanceSection({ runId, isFinal }) {
+  const qc = useQueryClient()
+  const q = useQuery({ queryKey: ['ar-finance', runId], queryFn: () => attendanceReviewFinance(runId), enabled: !!runId, retry: 0 })
+  const d = q.data?.data?.data
+  const send = useMutation({
+    mutationFn: () => attendanceReviewSendToFinance(runId),
+    onSuccess: (r) => {
+      const { created, skipped } = r.data.data
+      toast.success(`${created.length} sent to finance${skipped.length ? ` · ${skipped.length} skipped` : ''}`, { duration: 6000 })
+      qc.invalidateQueries({ queryKey: ['ar-finance', runId] })
+    },
+    onError: (e) => toast.error(e.response?.data?.error || 'Could not send to finance', { duration: 8000 }),
+  })
+  if (!runId) return null
+  const sm = d?.summary || {}
+  const toSend = d?.preview?.create || []
+  const blocked = (d?.preview?.skipped || []).filter((x) => x.reason !== 'already sent')
+  const status = (r) => (r.applied ? 'In salary' : FIN_STATUS[r.finance_status] || r.finance_status)
+  return (
+    <Section title="Finance" count={sm.sent || undefined}
+      note="Deductions on a final review go to the finance queue (Late Coming → Pending Deductions). Finance approves; the salary run applies approved rows. Warnings are not sent.">
+      <div className="px-4 py-3 space-y-3" data-testid="ar-finance">
+        {!isFinal && <p className="text-sm text-slate-500">Finalise the review to send its deductions to finance.</p>}
+        {q.isLoading && <p className="text-sm text-slate-500">Loading…</p>}
+        {isFinal && d && (
+          <div className="flex flex-wrap items-center gap-3">
+            <button type="button" className="btn-primary text-sm" data-testid="ar-send-finance" disabled={!toSend.length || send.isPending}
+              onClick={() => { if (window.confirm(`Send ${toSend.length} deduction${toSend.length === 1 ? '' : 's'} to finance for approval?`)) send.mutate() }}>
+              {send.isPending ? 'Sending…' : toSend.length ? `Send ${toSend.length} to finance` : 'Nothing left to send'}
+            </button>
+            <span className="text-xs text-slate-600" data-testid="ar-finance-summary">
+              {sm.sent} sent · {sm.pending} waiting · {sm.approved} approved · {sm.rejected} rejected · {sm.applied} in salary
+            </span>
+            {toSend.some((c) => c.contractor) && (
+              <span className="text-xs text-amber-700">Contractor deductions are recorded but reach pay only after the contractor-salary change.</span>
+            )}
+          </div>
+        )}
+        {blocked.length > 0 && (
+          <div className="text-xs text-amber-800 bg-amber-50 rounded px-3 py-2" data-testid="ar-finance-blocked">
+            Not sent — a deduction row already exists for this month: {blocked.map((b) => `${b.code} (${b.existing.map((x) => `${x.days} d ${FIN_STATUS[x.status] || x.status}`).join(', ')})`).join('; ')}.
+            Ask finance to reject the old row if the review's figure should replace it, then send again.
+          </div>
+        )}
+        {d?.sent?.length > 0 && (
+          <Table rows={d.sent} cols={[
+            { k: 'code', h: 'Code', v: (r) => <span className="font-mono">{r.code}</span> }, { k: 'name', h: 'Name' },
+            { k: 'deduction_days', h: 'Days', right: true }, { k: 'st', h: 'Status', v: status },
+            { k: 'finance_remark', h: 'Finance note', v: (r) => r.finance_remark || '—' },
+          ]} />
+        )}
+        {d?.outside?.length > 0 && (
+          <div>
+            <div className="text-xs font-semibold text-slate-600 mb-1">Entered outside this review for the month ({d.outside.length})</div>
+            <Table rows={d.outside} cols={[
+              { k: 'code', h: 'Code', v: (r) => <span className="font-mono">{r.code}</span> }, { k: 'name', h: 'Name' },
+              { k: 'deduction_days', h: 'Days', right: true }, { k: 'st', h: 'Status', v: status }, { k: 'applied_by', h: 'By' },
+            ]} />
+          </div>
+        )}
+      </div>
     </Section>
   )
 }
@@ -290,7 +360,7 @@ export default function AttendanceReviewTab({ selectedMonth, selectedYear }) {
   })
   const fin = useMutation({
     mutationFn: () => attendanceReviewFinalise(runMeta.id),
-    onSuccess: () => { toast.success('Review finalised and locked'); qc.invalidateQueries({ queryKey: ['ar-runs'] }) },
+    onSuccess: () => { toast.success('Review finalised and locked'); qc.invalidateQueries({ queryKey: ['ar-runs'] }); qc.invalidateQueries({ queryKey: ['ar-finance'] }) },
   })
 
   const [downloading, setDownloading] = useState(null)
@@ -450,6 +520,8 @@ export default function AttendanceReviewTab({ selectedMonth, selectedYear }) {
             ]} />
             {ded.length > 0 && <p className="px-4 py-2 text-xs text-slate-500 border-t border-slate-100">Total: {num(t.deduction_days, 1)} days · {inr(t.indicative_amount)} indicative · {ded.length} deduction notes</p>}
           </Section>
+
+          {runMeta && showingStored && <FinanceSection runId={runMeta.id} isFinal={isFinal} />}
 
           <Section title="Early-exit warnings" count={data.earlyExitWarnings?.length}
             note={data.criteria?.early_exit_rule === 'option_c' ? 'Option C is ON: deduction = ½ day per exit of 1 h or more, plus ½ day per 3 shorter exits.' : 'Warning only. The Option C column shows what the proposed rule would deduct.'}>
