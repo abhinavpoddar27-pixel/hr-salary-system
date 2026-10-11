@@ -172,7 +172,7 @@ function FinanceSection({ runId, isFinal }) {
               <span className="text-xs text-slate-600" data-testid="ar-finance-early">incl. {toSend.filter((c) => c.source === 'early').length} from the early-exit section</span>
             )}
             {toSend.some((c) => c.contractor) && (
-              <span className="text-xs text-amber-700">Contractor deductions are recorded but reach pay only after the contractor-salary change.</span>
+              <span className="text-xs text-amber-700">Contractor deductions reach their pay too, at their own day rate, once finance approves (from September 2026 payroll).</span>
             )}
           </div>
         )}
