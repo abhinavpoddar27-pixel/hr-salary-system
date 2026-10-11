@@ -562,7 +562,7 @@ export default function AttendanceReviewTab({ selectedMonth, selectedYear, onSel
           {runMeta && showingStored && <FinanceSection runId={runMeta.id} isFinal={isFinal} />}
 
           <Section title="Early-exit warnings" count={data.earlyExitWarnings?.length}
-            note={d4On ? `2 h rule is ON: ½ day for each exit of 2 h or more; when there are ${data.criteria?.thresholds?.d4_long_count ?? 3}+ exits of 1 h or more, their minutes are deducted too. One exit of 2 h is enough to be listed here. Shorter exits stay warning-only.`
+            note={d4On ? `2 h rule is ON: from the ${data.criteria?.thresholds?.d4_half_day_min_count ?? 1}${(data.criteria?.thresholds?.d4_half_day_min_count ?? 1) === 1 ? 'st' : (data.criteria?.thresholds?.d4_half_day_min_count === 2 ? 'nd' : 'th')} exit of 2 h or more in the month, each costs ½ day (fewer = warning); when there are ${data.criteria?.thresholds?.d4_long_count ?? 3}+ exits of 1 h or more, the minutes of those not charged as ½ days are deducted too. One exit of 2 h is enough to be listed here. Shorter exits stay warning-only.`
               : data.criteria?.early_exit_rule === 'option_c' ? 'Option C is ON: deduction = ½ day per exit of 1 h or more, plus ½ day per 3 shorter exits.' : 'Warning only. The Option C column shows what the proposed rule would deduct.'}>
             <Table rows={data.earlyExitWarnings} cols={[
               { k: 'code', h: 'Code', v: (r) => <span className="font-mono">{r.code}</span> }, { k: 'name', h: 'Name' }, { k: 'department', h: 'Department' },
