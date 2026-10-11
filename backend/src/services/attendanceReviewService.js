@@ -989,6 +989,21 @@ function personHistory(db, code, months) {
       notice_late: !!find('noticeLate'), notice_early: !!find('noticeEarly'),
       held: !!find('held') });
   }
+  // strike step per month with the ladder's counting (whatever each month's own rules were): months on a list in the
+  // window up to that month, from ladder_from — the months before the range come from strikeHistory
+  if (months.length) {
+    const lastM = months[months.length - 1];
+    const lcfg = mergeConfig(loadConfig(db, ymOf(lastM.month, lastM.year)).config);
+    const w = Math.max(1, Math.round(lcfg.thresholds.ladder_window_months || 3));
+    const prior = strikeHistory(db, months[0].month, months[0].year, lcfg, cache).byCode.get(code) || [];
+    const onList = new Set([...prior, ...out.filter((m) => m.list).map((m) => m.ym)]);
+    for (const m of out) {
+      if (!m.list || m.ym < (lcfg.ladder_from || '0000-00')) { m.strike_step = null; continue; }
+      let n = 0; let mm = Number(m.ym.slice(5, 7)); let yy = Number(m.ym.slice(0, 4));
+      for (let i = 0; i < w; i++) { const k = ymOf(mm, yy); if (k >= (lcfg.ladder_from || '0000-00') && onList.has(k)) n++; ({ month: mm, year: yy } = prevMonth(mm, yy)); }
+      m.strike_step = n;
+    }
+  }
   const first = months.length ? ymOf(months[0].month, months[0].year) : '';
   const last = months.length ? ymOf(months[months.length - 1].month, months[months.length - 1].year) : '';
   const boards = [];

@@ -12,6 +12,7 @@ import AttendanceReviewConfig from './AttendanceReviewConfig'
 import AttendanceReviewTrends from './AttendanceReviewTrends'
 import AttendanceReviewBoard from './AttendanceReviewBoard'
 import { QualityPanel, FinaliseDialog, useQualityGate } from './AttendanceReviewQuality'
+import { LadderBadge, PersonHistory } from './AttendanceReviewPerson'
 import { useAppStore } from '../../store/appStore'
 
 /**
@@ -21,6 +22,7 @@ import { useAppStore } from '../../store/appStore'
  * Read-only on payroll: nothing here deducts salary (write-back is a later, gated PR).
  */
 
+const ord2 = (n) => (n === 1 ? '1st' : n === 2 ? '2nd' : n === 3 ? '3rd' : `${n}th`)
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
 const inr = (n) => `₹${Math.round(Number(n) || 0).toLocaleString('en-IN')}`
 const num = (n, d = 0) => (Number(n) || 0).toLocaleString('en-IN', { maximumFractionDigits: d, minimumFractionDigits: d })
@@ -372,6 +374,7 @@ export default function AttendanceReviewTab({ selectedMonth, selectedYear, onSel
   const qualityQ = useQualityGate(runMeta?.id, `${runMeta?.generated_at}|${runMeta?.status}`)
   const gate = qualityQ.data?.data?.data
   const [finOpen, setFinOpen] = useState(false)
+  const [personCode, setPersonCode] = useState(null)   // PR-7 history window
 
   const [downloading, setDownloading] = useState(null)
   const download = async (kind) => {
@@ -395,6 +398,9 @@ export default function AttendanceReviewTab({ selectedMonth, selectedYear, onSel
   const ded = (data?.actionList || []).filter((a) => a.action === 'deduction')
   const d4On = data?.criteria?.early_exit_rule === 'd4'
   const mpOn = data?.criteria?.missed_out_rule === true && !!data?.missedOut
+  const ladderOn = data?.ladder?.rule === true
+  const codeCell = (r) => <button type="button" className="font-mono text-blue-700 underline decoration-dotted" title="Open this person's history"
+    data-testid={`ar-code-${r.code}`} onClick={() => setPersonCode(String(r.code))}>{r.code}</button>
   const loading = runsQ.isLoading || (runMeta && runQ.isLoading) || (!showingStored && previewQ.isLoading)
 
   const viewSwitch = (
@@ -499,6 +505,7 @@ export default function AttendanceReviewTab({ selectedMonth, selectedYear, onSel
       </div>
 
       {runMeta && <QualityPanel q={qualityQ} isFinal={isFinal} />}
+      {personCode && <PersonHistory code={personCode} month={month} year={year} onClose={() => setPersonCode(null)} />}
       <FinaliseDialog open={finOpen} onClose={() => setFinOpen(false)} runId={runMeta?.id} label={`${MONTHS[month - 1]} ${year}`} q={qualityQ} />
 
       {showConfig && <AttendanceReviewConfig month={month} year={year} />}
@@ -543,9 +550,9 @@ export default function AttendanceReviewTab({ selectedMonth, selectedYear, onSel
           </Section>
 
           <Section title="Action list" count={data.actionList?.length}
-            note={`Deduction = workdays lost to nearest ½ day, minimum ½ day.${d4On ? ' 2 h rule ON: the early-exit part is the larger of the minutes lost and ½ day per exit of 2 h or more.' : ''}${mpOn ? ' Missed OUTs from the person\'s ' + (data.criteria?.thresholds?.missed_out_from ?? 5) + 'th own missed punch are counted as 2 h early exits.' : ''} Newcomers get a warning. Indicative ₹ only — payroll computes the final figure.`}>
+            note={`Deduction = workdays lost to nearest ½ day, minimum ½ day.${d4On ? ' 2 h rule ON: the early-exit part is the larger of the minutes lost and ½ day per exit of 2 h or more.' : ''}${mpOn ? ' Missed OUTs from the person\'s ' + (data.criteria?.thresholds?.missed_out_from ?? 5) + 'th own missed punch are counted as 2 h early exits.' : ''} Newcomers get a warning.${ladderOn ? ` Ladder ON: the first month in ${data.ladder.window_months} on a list is a warning, the ${ord2(data.ladder.deduction_from)} a deduction, from the ${ord2(data.ladder.hearing_from)} a deduction + HR hearing (counted from ${data.ladder.from}). ${t.ladder_warnings || 0} turned into warnings, ${t.hearings || 0} hearing(s).` : ''} Click a code for the person's history. Indicative ₹ only — payroll computes the final figure.`}>
             <Table rows={data.actionList} rowClass={(r) => (r.action === 'warning' ? 'bg-amber-50/60' : '')} cols={[
-              { k: 'code', h: 'Code', v: (r) => <span className="font-mono">{r.code}</span> },
+              { k: 'code', h: 'Code', v: codeCell },
               { k: 'name', h: 'Name' }, { k: 'department', h: 'Department' },
               { k: 'late_days', h: 'Late days', right: true, v: (r) => (<>{r.late_days}{r.long_lates > 0 && <span className="ml-1 text-[11px] text-slate-500" title="Late 2 h or more">({r.long_lates} ≥ 2 h)</span>}</>) },
               { k: 'early_days', h: 'Early exits', right: true, v: (r) => (<>{r.early_days}{(d4On && r.over_2h > 0) && <span className="ml-1 text-[11px] text-slate-500">({r.over_2h} ≥ 2 h)</span>}{r.missed_out_days > 0 && <span className="ml-1 text-[11px] text-slate-500">incl. {r.missed_out_days} missed OUT</span>}</>) },
@@ -557,6 +564,7 @@ export default function AttendanceReviewTab({ selectedMonth, selectedYear, onSel
                 {r.action === 'deduction' ? <span className="text-red-700 font-semibold">Deduction</span> : <span className="text-amber-700 font-semibold">Warning{r.newcomer ? ' (newcomer)' : ''}</span>}
                 {r.check_master_shift && <span className="ml-1 text-[11px] rounded bg-amber-100 text-amber-800 px-1" title="Leaves early almost every day and short of the master shift. Confirm the shift; use an override if the master is wrong.">check master shift</span>}
               </>) },
+              ...(ladderOn ? [{ k: 'ladder', h: 'Ladder', v: (r) => <LadderBadge ladder={r.ladder} /> }] : []),
               { k: 'deduction_days', h: 'Days', right: true, v: (r) => (r.deduction_days ? num(r.deduction_days, 1) : '—') },
               { k: 'indicative_amount', h: 'Indicative ₹', right: true, v: (r) => (r.indicative_amount ? inr(r.indicative_amount) : '—') },
               { k: 'override', h: 'Override', v: (r) => (r.override ? `${OV_LABEL[r.override.action]}: ${r.override.reason}` : '') },
@@ -570,12 +578,13 @@ export default function AttendanceReviewTab({ selectedMonth, selectedYear, onSel
             note={d4On ? `2 h rule is ON: from the ${data.criteria?.thresholds?.d4_half_day_min_count ?? 1}${(data.criteria?.thresholds?.d4_half_day_min_count ?? 1) === 1 ? 'st' : (data.criteria?.thresholds?.d4_half_day_min_count === 2 ? 'nd' : 'th')} exit of 2 h or more in the month, each costs ½ day (fewer = warning); when there are ${data.criteria?.thresholds?.d4_long_count ?? 3}+ exits of 1 h or more, the minutes of those not charged as ½ days are deducted too. One exit of 2 h is enough to be listed here. Shorter exits stay warning-only.`
               : data.criteria?.early_exit_rule === 'option_c' ? 'Option C is ON: deduction = ½ day per exit of 1 h or more, plus ½ day per 3 shorter exits.' : 'Warning only. The Option C column shows what the proposed rule would deduct.'}>
             <Table rows={data.earlyExitWarnings} cols={[
-              { k: 'code', h: 'Code', v: (r) => <span className="font-mono">{r.code}</span> }, { k: 'name', h: 'Name' }, { k: 'department', h: 'Department' },
+              { k: 'code', h: 'Code', v: codeCell }, { k: 'name', h: 'Name' }, { k: 'department', h: 'Department' },
               { k: 'early_exits', h: 'Early exits', right: true, v: (r) => (<>{r.early_exits}{r.missed_out_days > 0 && <span className="ml-1 text-[11px] text-slate-500">incl. {r.missed_out_days} missed OUT</span>}</>) },
               { k: 'over_1h', h: '1 h or more', right: true },
               ...(d4On ? [{ k: 'over_2h', h: '2 h or more', right: true }, { k: 'd4_days', h: '2 h rule days', right: true, v: (r) => num(r.d4_days, 1) }]
                 : [{ k: 'option_c_days', h: 'Option C days', right: true, v: (r) => num(r.option_c_days, 1) }]),
               { k: 'action', h: 'Action', v: (r) => `${r.action === 'deduction' ? `Deduction ${num(r.deduction_days, 1)} d` : `Warning${r.newcomer ? ' (newcomer)' : ''}`}${r.check_master_shift ? ' · check master shift' : ''}` },
+              ...(ladderOn ? [{ k: 'ladder', h: 'Ladder', v: (r) => <LadderBadge ladder={r.ladder} /> }] : []),
             ]} />
           </Section>
 
@@ -687,7 +696,7 @@ export default function AttendanceReviewTab({ selectedMonth, selectedYear, onSel
             Gate passes recorded this month: {num(data.gatePassCount)} (early exits they excused: {num(data.gatePassExcused ?? 0)}). Rules: late = {data.criteria?.thresholds?.late_min_minutes}+ min;
             early exit = {data.criteria?.thresholds?.early_min_exclusive}–{data.criteria?.thresholds?.early_max_exclusive} min, Mon–Sat; stayed-late exemption: {data.criteria?.stayed_late_mode};
             full-hours days: lates {data.criteria?.late_full_hours === false ? 'counted' : 'not counted'}, early exits {data.criteria?.shift_fit === 'everyone' ? 'not counted' : data.criteria?.shift_fit === 'habitual' ? 'not counted for habitual early leavers' : 'counted'};
-            early-exit rule: {d4On ? '2 h rule' : data.criteria?.early_exit_rule === 'option_c' ? 'Option C' : 'warning only'}{data.criteria?.late_long_always_counted ? '; lates of 2 h+ always counted' : ''}{mpOn ? '; missed OUT counted as early exit' : ''}. Nothing on this page changes salary.
+            early-exit rule: {d4On ? '2 h rule' : data.criteria?.early_exit_rule === 'option_c' ? 'Option C' : 'warning only'}{data.criteria?.late_long_always_counted ? '; lates of 2 h+ always counted' : ''}{mpOn ? '; missed OUT counted as early exit' : ''}{ladderOn ? '; escalation ladder on' : ''}. Nothing on this page changes salary.
           </p>
         </>
       )}

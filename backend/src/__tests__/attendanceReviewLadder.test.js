@@ -5,6 +5,19 @@
 const F = require('./helpers/attendanceReviewFixture');
 const S = require('../services/attendanceReviewService');
 const { startJwtApi } = require('./helpers/jwtApiHarness');
+const XLSX = require('xlsx');
+const zlib = require('zlib');
+const X = require('../services/attendanceReviewExports');
+function docxText(buf) {      // document.xml text of a .docx (zip, deflate) — same reader as the exports spec
+  let i = 0; let out = '';
+  while ((i = buf.indexOf(Buffer.from([0x50, 0x4b, 0x03, 0x04]), i)) !== -1) {
+    const method = buf.readUInt16LE(i + 8); const size = buf.readUInt32LE(i + 18); const nlen = buf.readUInt16LE(i + 26); const xlen = buf.readUInt16LE(i + 28);
+    const name = buf.slice(i + 30, i + 30 + nlen).toString(); const start = i + 30 + nlen + xlen;
+    if (name === 'word/document.xml') { const raw = buf.slice(start, start + size); out = (method === 8 ? zlib.inflateRawSync(raw) : raw).toString(); break; }
+    i = start;
+  }
+  return out.replace(/<[^>]+>/g, '');
+}
 
 const LATE8 = (i) => (i < 8 ? { lm: 30 } : {}); // 8 lates of 30 min = a late regular, ½ day
 const CLEAN = () => ({});
@@ -78,6 +91,18 @@ describe('ladder engine', () => {
     db.prepare('DELETE FROM attendance_review_runs').run();
   });
 
+  test('exports: Word notes say first-month warning and HR hearing; Excel has a Ladder column', async () => {
+    const r = S.computeAttendanceReview(db, { month: 10, year: 2026, config: LADDER });
+    const text = docxText(await X.buildDocx(r, { status: 'draft' }));
+    expect(text).toMatch(/HR hearing: this is month 3 in the last 3 months/);
+    expect(text).toMatch(/This is the first month in the last 3 months that your attendance has needed a note/);
+    expect(text).toMatch(/Deduction note \+ HR hearing/);
+    const wb = XLSX.read(X.buildWorkbook(r, { status: 'draft', generated_by: 'adm' }), { type: 'buffer' });
+    const rows = XLSX.utils.sheet_to_json(wb.Sheets['Action list']);
+    expect(rows.find((x) => x.Code === 'LA1').Ladder).toMatch(/month 3 .* HR hearing/);
+    expect(rows.find((x) => x.Code === 'LA2').Ladder).toMatch(/first month: 0.5 d → warning/);
+  });
+
   test('config validation', () => {
     expect(S.validateConfig({ ladder_rule: 'yes' })).toContain('ladder_rule must be true or false');
     expect(S.validateConfig({ ladder_from: '2026-8' })).toContain('ladder_from must be YYYY-MM');
@@ -118,6 +143,7 @@ describe('person history API', () => {
     expect(d.months.map((m) => [m.ym, m.source, m.list, m.action, m.late_days])).toEqual([
       ['2026-08', 'live', 'action list', 'warning', 8], ['2026-09', 'live', 'action list', 'deduction', 8], ['2026-10', 'live', 'action list', 'deduction', 8]]);
     expect(d.months.map((m) => m.ladder && m.ladder.step)).toEqual([1, 2, 3]);
+    expect(d.months.map((m) => m.strike_step)).toEqual([1, 2, 3]);
     expect(d.months[2].ladder.hearing).toBe(true);
     expect(d.months[2].notice_late).toBe(true);
     expect(d.boards).toEqual([expect.objectContaining({ ym: '2026-10', to: '2026-10-15', as: 'named', lates: 6 })]);
