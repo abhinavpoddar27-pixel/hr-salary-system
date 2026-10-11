@@ -1,3 +1,23 @@
+## Last Session — 2026-10-11 (P1-20: Apply Leave offered Comp Off and accepted an end date before the start)
+**Branch `fix/leave-form-type-and-dates`, NOT merged.** Frontend only (`pages/LeaveManagement.jsx`, `ApplyLeaveModal`). Plan + log:
+`docs/ux-bulk/prs/P1-20/PLAN.md`, `PROGRESS.md`. Finding H-7. Rulings Q1 (Applications type filter left as is), Q2 (Days keeps its value on a reversed range).
+- **Bug:** the Apply Leave type list offered "Comp Off", which `POST /api/leaves` refuses (accepts CL/EL/LWP only) → 400 on
+  submit. An end date before the start showed "1 day" (`Math.max(1, diff)`) and submitted; the server has no end ≥ start
+  check, so the row was saved with reversed dates as 1 day (prod: 0 such rows, 0 Comp Off rows ever).
+- **Fix:** `APPLY_LEAVE_TYPES` (CL/EL/LWP, commented to match routes/leaves.js) feeds the form's select; the Applications
+  filter still uses `LEAVE_TYPES`. `dateRangeInvalid` (ISO string compare) → red hint "End date must be on or after the start
+  date." (`data-testid="leave-date-hint"`) + Submit disabled; Days recomputed only for a valid range; end input `min=start`.
+  Comp-off tab untouched. Server untouched. dist rebuilt (own commit).
+- **Fragile:** the accepted type list now lives in two places (server L105 + `APPLY_LEAVE_TYPES`) — change both. The end ≥
+  start rule is UI-only.
+- **Verified:** `backend/scripts/leave-form-type-dates-check.py` (Chromium, built dist, scratch DB, real hr login, fictional
+  T9651–T9654, port 3120) 28/28 twice — types exactly CL/EL/LWP, hint + disabled + forced click sends no POST, Days kept,
+  fixed range submits 3 days, same-day LWP 1 day, start moved after end blocks, 390px EL submit, 0 page/console errors,
+  0 API ≥ 400. `--base` on an 868f5389 worktree 7/7: Comp Off → 400, reversed range saved as 1 day. jest 96 suites / 1537
+  before and after.
+- **Not tested:** Railway; Safari/Firefox date inputs; real production data.
+- **Found, not fixed:** (1) `POST /api/leaves` has no end ≥ start check (API callers). (2) its 400 text says "Must be CL or EL"
+  though LWP is allowed. (3) the Days field is free-editable and never checked against the date range.
 ## Last Session — 2026-10-11 (P1-07: legacy "Grant Extra Duty" on Payable OT retired)
 **Branch `fix/retire-legacy-extra-duty-grant`, NOT merged.** Owner ruling Q5 (11 Oct). Log: `docs/ux-bulk/prs/P1-07/PROGRESS.md`.
 - **Bug:** Payable OT → "Grant Extra Duty" called `POST /payroll/grant-extra-duty`, which wrote a `day_corrections` row
