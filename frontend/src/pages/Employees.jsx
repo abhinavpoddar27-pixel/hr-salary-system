@@ -117,7 +117,9 @@ function SalaryForm({ employee, emp, onClose }) {
       }
       qc.invalidateQueries(['employee-detail', employee.code])
       onClose()
-    }
+    },
+    // P1-14: a refused save (e.g. BANK_PAIR_MISMATCH) says why; the window stays open.
+    onError: (err) => toast.error(err?.response?.data?.error || 'Could not save — try again')
   })
 
   const gross = parseFloat(form.gross_salary) || 0
@@ -152,7 +154,9 @@ function SalaryForm({ employee, emp, onClose }) {
             ].map(f => (
               <div key={f.key}>
                 <label className="label">{f.label}</label>
-                <input type="number" value={form[f.key]} onChange={e => setForm(prev => ({ ...prev, [f.key]: e.target.value }))} className="input" min="0" max="100" />
+                {/* P1-14: special % is derived from the stored amount, so it can carry many
+                    decimals — show 2; the full value is still sent until the field is edited. */}
+                <input type="number" value={f.key === 'special_allowance_percent' && typeof form[f.key] === 'number' ? Math.round(form[f.key] * 100) / 100 : form[f.key]} onChange={e => setForm(prev => ({ ...prev, [f.key]: e.target.value }))} className="input" min="0" max="100" />
               </div>
             ))}
             <div>

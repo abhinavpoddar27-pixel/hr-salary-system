@@ -30,6 +30,14 @@ Q3 trim account; trim + upper-case IFSC. Q4 400 on mismatched pair. Q5 I now own
 - B7 browser check `backend/scripts/employee-bank-columns-check.py` 20/20 (before and after merging main); `--base` on c942563f 10/10.
 - B8 merged origin/main; jest 100 suites / 1585 (base 99 / 1566 before the merge).
 
+## Independent review (11 Oct): SHIP WITH FIXES — applied
+- F1 portal PATCH /bank-details → 403 BANK_CHANGE_VIA_HR, writes nothing (0 employee users in prod).
+- F2 `bankPair.auditBankChange`: one audit_log row per REAL change (stage/action `bank_details_change`, field
+  account_number / ifsc_code, old/new masked `****` + last 4, changed_by = user) in POST /, PUT /:code, PUT /:code/salary.
+- F4 SalaryForm save onError toast (server message); Special % shown to 2 decimals (full value still sent until edited).
+- F5 noted under Fragile.
+- jest file 24/24 (c942563f: 15 fail / 9 pass); browser check 24/24.
+
 ## CLAUDE.md entry
 ## Last Session — 2026-10-11 (P1-14: Employee bank edits wrote the wrong column pair; salary split reset on save)
 **Branch `fix/employee-bank-columns`, NOT merged. MONEY PR — independent review by the planner.** Plan + log:
@@ -42,20 +50,25 @@ Q3 trim account; trim + upper-case IFSC. Q4 400 on mismatched pair. Q5 I now own
   (special + other zeroed). NEFT also read `COALESCE(A, B)`, so A = '' hid a filled-in B (1 active person left out).
 - **Fix:** new `services/bankPair.js` (`readBankPairs`, `normAccount` trim, `normIfsc` trim + upper, blank → NULL).
   Canonical A, mirror to B on EVERY write: `PUT /:code/salary`, `PUT /:code` (either name; both names with different
-  values → 400 `BANK_PAIR_MISMATCH`, nothing written), `POST /`, portal `PATCH /bank-details`. A key left out keeps
-  all stored columns. `PUT /:code/salary` same gross AND same split → structure NOT rewritten (`structureUnchanged`);
+  values → 400 `BANK_PAIR_MISMATCH`, nothing written), `POST /`. A key left out keeps all stored columns. Every real
+  change writes a masked audit row (stage `bank_details_change`, last 4 only). Portal `PATCH /bank-details` → 403
+  `BANK_CHANGE_VIA_HR` (review F1). `PUT /:code/salary` same gross AND same split → structure NOT rewritten (`structureUnchanged`);
   a changed split at the same gross still writes (as before). `exportFormats.generateBankFile` reads
   `COALESCE(NULLIF(TRIM(A),''), B)` (Q1). `Employees.jsx` SalaryModal renders only after the no-cache detail fetch,
   form from `salaryStructure` (special % = special_allowance / gross, other = other_allowances), bank fields A else B.
   dist not committed.
-- **Fragile:** a new writer of either pair must use `readBankPairs` and write all four columns. `splitUnchanged()`
+- **Fragile:** a new writer of either pair must use `readBankPairs`, write all four columns and call
+  `auditBankChange` after the write (old value = A else B, so re-sending a B-only value is no change).
+  `splitUnchanged()` ignores conveyance (the window cannot edit it); a changed split at the same gross can leave
+  basic+da+hra+special+other+conveyance > gross on rows with conveyance (44 active) — pre-existing behaviour (F5).
+  Portal bank change is closed (403) — HR changes bank details. `splitUnchanged()`
   compares the fields the window sends — add any new split field there. reports.js bank transfer sheet still had the
   old COALESCE (N-REP builder). Production data NOT repaired: 321 '' in account_number, 434 '' in ifsc_code, 6 B-only
   accounts, 114 with an account and no IFSC — owner decision.
-- **Verified:** new `employeeBankColumns.test.js` 18 (12 fail on c942563f; the 6 that pass are role 403s and
-  unchanged behaviour). NEFT md5 on a scratch DB (81 fictional combos): without A=''/B-set rows base = branch; with them
-  the 16 common lines are identical and only the 9 A=''/B-set rows are added. Browser check 20/20 (hr, built dist,
-  port 3114: stored split shown, edit → NEFT has new account, structure byte-identical, reopen inside 5 s shows new
+- **Verified:** new `employeeBankColumns.test.js` 24 (15 fail on c942563f; the 9 that pass are role 403s, no-audit
+  cases and unchanged behaviour). NEFT md5 on a scratch DB (81 fictional combos): without A=''/B-set rows base = branch; with them
+  the 16 common lines are identical and only the 9 A=''/B-set rows are added. Browser check 24/24 (hr, built dist,
+  port 3114, 24 checks: stored split shown, special % to 2 decimals + untouched save identical, masked audit rows, edit → NEFT has new account, structure byte-identical, reopen inside 5 s shows new
   values, B-only shown + kept + in NEFT, clear → NULL + out of NEFT, 390 px, 0 errors); `--base` 10/10 (50/20, NEFT
   old account, structure rewritten, B-only wiped). jest 99/1566 → 100/1585 (after merging main).
 - **Not tested:** Railway; production data; Safari/Firefox.

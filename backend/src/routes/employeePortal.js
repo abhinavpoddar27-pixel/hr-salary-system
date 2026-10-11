@@ -1,7 +1,6 @@
 const express = require('express');
 const router = express.Router();
 const { getDb } = require('../database/db');
-const { readBankPairs, BANK_PAIR_MISMATCH } = require('../services/bankPair');
 
 // All portal routes require authenticated user with employee_code set
 function requireEmployee(req, res, next) {
@@ -137,30 +136,11 @@ router.get('/loans', requireEmployee, (req, res) => {
 });
 
 // PATCH /api/portal/bank-details
+// P1-14 review F1: an employee login may not redirect its own salary. Bank
+// details change through HR (Employee Master), which writes both column pairs
+// and an audit row. Nothing is written here.
 router.patch('/bank-details', requireEmployee, (req, res) => {
-  const db = getDb();
-  const { bank_name } = req.body;
-  // P1-14: write BOTH bank column pairs (A = account_number / ifsc_code, read
-  // first by the bank file; B = bank_account / ifsc, read by the payslip).
-  // A key left out keeps what is stored; blank clears; IFSC upper-cased.
-  const pairs = readBankPairs(req.body);
-  if (!pairs.ok) return res.status(400).json({ success: false, code: BANK_PAIR_MISMATCH, error: pairs.error });
-  const emp = db.prepare('SELECT account_number, bank_account, ifsc_code, ifsc, bank_name FROM employees WHERE code = ?')
-    .get(req.user.employee_code);
-  if (!emp) return res.status(404).json({ success: false, error: 'Employee not found' });
-  const acct = pairs.account.present ? pairs.account.value : null;
-  const ifscVal = pairs.ifsc.present ? pairs.ifsc.value : null;
-  db.prepare(`UPDATE employees SET account_number = ?, bank_account = ?, bank_name = ?, ifsc_code = ?, ifsc = ?,
-    updated_at = datetime('now') WHERE code = ?`)
-    .run(
-      pairs.account.present ? acct : emp.account_number,
-      pairs.account.present ? acct : emp.bank_account,
-      bank_name !== undefined ? bank_name : emp.bank_name,
-      pairs.ifsc.present ? ifscVal : emp.ifsc_code,
-      pairs.ifsc.present ? ifscVal : emp.ifsc,
-      req.user.employee_code
-    );
-  res.json({ success: true, message: 'Bank details updated' });
+  res.status(403).json({ success: false, code: 'BANK_CHANGE_VIA_HR', error: 'Ask HR to change your bank details' });
 });
 
 module.exports = router;

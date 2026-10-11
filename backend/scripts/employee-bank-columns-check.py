@@ -43,9 +43,10 @@ def q(sql, args=()):
 
 def seed():
     c = sqlite3.connect(DB)
-    for i, (code, a, b, ia, ib) in enumerate([
-        ('T9411', OLD_ACCT, OLD_ACCT, OLD_IFSC, OLD_IFSC),
-        ('T9412', '', B_ACCT, '', B_IFSC),
+    for i, (code, a, b, ia, ib, special) in enumerate([
+        ('T9411', OLD_ACCT, OLD_ACCT, OLD_IFSC, OLD_IFSC, 900),
+        ('T9412', '', B_ACCT, '', B_IFSC, 900),
+        ('T9413', '900000000444', '900000000444', 'TEST0000444', 'TEST0000444', 1000),  # special % = 3.333…
     ], 1):
         cur = c.execute("INSERT INTO employees(code,name,department,company,status,employment_type,gross_salary,"
                         "account_number,bank_account,ifsc_code,ifsc,bank_name,date_of_joining) "
@@ -53,7 +54,7 @@ def seed():
                         (code, f'TEST EMP {i}', C, a, b, ia, ib))
         c.execute("INSERT INTO salary_structures(employee_id,effective_from,gross_salary,basic,da,hra,conveyance,"
                   "special_allowance,other_allowances,basic_percent,hra_percent,da_percent,pf_wage_ceiling) "
-                  "VALUES(?,'2025-01-01',30000,12345.67,1500,7500,1600,900,1250,40,25,5,15000)", (cur.lastrowid,))
+                  "VALUES(?,'2025-01-01',30000,12345.67,1500,7500,1600,?,1250,40,25,5,15000)", (cur.lastrowid, special))
         c.execute("INSERT INTO salary_computations(employee_code,month,year,company,net_salary,salary_held) "
                   "VALUES(?,9,2026,?,25000,0)", (code, C))
     c.commit(); c.close()
@@ -185,6 +186,18 @@ try:
             bk = bank('T9412')
             check('cleared account → both account columns NULL', (None, None), (bk['account_number'], bk['bank_account']))
             check('cleared account → not in the NEFT file', False, B_ACCT in neft(pg))
+
+            # review F4: a long derived special % shows 2 decimals; an untouched save keeps the structure
+            s3_before = struct('T9413')
+            win = open_window(pg, 'T9413')
+            check('T9413 special % shown to 2 decimals', '3.33', field(win, 'Special Allowance %').input_value())
+            save(win, pg)
+            check('T9413 untouched save: structure byte-identical (full % sent)', s3_before, struct('T9413'))
+            check('T9413 untouched save: no bank audit row', 0,
+                  q("SELECT COUNT(*) AS c FROM audit_log WHERE employee_code='T9413' AND stage='bank_details_change'")[0]['c'])
+            check('T9411 edit wrote masked bank audit rows', [('account_number', '****0111', '****0222'), ('ifsc_code', '****0111', '****0222')],
+                  [(r['field_name'], r['old_value'], r['new_value']) for r in
+                   q("SELECT * FROM audit_log WHERE employee_code='T9411' AND stage='bank_details_change' ORDER BY id")])
 
             # phone width: the window opens and is usable
             pg2, errs2, cons2, bad2 = login(b, width=390)

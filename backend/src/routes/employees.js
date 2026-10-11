@@ -10,7 +10,7 @@ const { getPolicyNumber } = require('../services/leaveEngine');
 const { setLeaveBalance } = require('../services/leaveBalanceGuard');
 const { requireHrOrAdmin, requireAdmin } = require('../middleware/roles');
 const { carryFlags } = require('../services/statutoryFlags');
-const { normAccount, normIfsc, readBankPairs, BANK_PAIR_MISMATCH } = require('../services/bankPair');
+const { normAccount, normIfsc, readBankPairs, auditBankChange, BANK_PAIR_MISMATCH } = require('../services/bankPair');
 
 // Statutory flags PR-1 (R10): PF / ESI / LWF change only through the audited
 // statutory upload (/api/statutory-flags). Every writer in this file ignores
@@ -305,6 +305,11 @@ router.post('/', (req, res) => {
   `).run(code, name, fatherName, dob, gender, department, designation, company, employmentType || 'Permanent', contractorGroup, dateOfJoining, defaultShiftId, acct, acct, ifscVal, ifscVal, bankName, pfNumber, uan, esiNumber);
 
   const empId = result.lastInsertRowid;
+  auditBankChange(db, {
+    emp: null, employeeId: empId, employeeCode: code,
+    account: { present: true, value: acct }, ifsc: { present: true, value: ifscVal },
+    user: req.user?.username, via: 'new employee',
+  });
 
   // Insert salary structure if provided
   if (basic > 0) {
@@ -546,6 +551,11 @@ router.put('/:code', requireHrOrAdmin, (req, res) => {
   params.push(code);
 
   db.prepare(`UPDATE employees SET ${setClauses.join(', ')} WHERE code = ?`).run(...params);
+  auditBankChange(db, {
+    emp, employeeId: emp.id, employeeCode: emp.code,
+    account: bankPairs.account, ifsc: bankPairs.ifsc,
+    user: req.user?.username, via: 'employee edit',
+  });
 
   // ── Sync salary_structures whenever gross_salary or any statutory flag
   // changes via this generic PUT. Prevents the employees↔salary_structures
@@ -696,6 +706,12 @@ router.put('/:code/salary', requireHrOrAdmin, (req, res) => {
     pt_applicable !== undefined ? (pt_applicable ? 1 : 0) : (emp.pt_applicable ?? 1),
     req.params.code
   );
+
+  auditBankChange(db, {
+    emp, employeeId: emp.id, employeeCode: emp.code,
+    account: acctPair, ifsc: ifscPair,
+    user: req.user?.username, via: 'salary window',
+  });
 
   // Sync pt to salary_structures (NOT gross, NOT pf/esi/lwf)
   if (pt_applicable !== undefined) {

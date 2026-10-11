@@ -49,4 +49,43 @@ function readBankPairs(body, names = {}) {
 
 const BANK_PAIR_MISMATCH = 'BANK_PAIR_MISMATCH';
 
-module.exports = { normAccount, normIfsc, readBankPairs, BANK_PAIR_MISMATCH };
+/** Last 4 characters only — an audit row must never hold a full account / IFSC. */
+function maskTail(v) {
+  if (v === null || v === undefined || String(v) === '') return '';
+  const s = String(v);
+  return '****' + s.slice(-4);
+}
+
+/** The value a reader sees today: A unless empty, else B (normalised). */
+const storedAccount = (emp) => normAccount(emp?.account_number) ?? normAccount(emp?.bank_account);
+const storedIfsc = (emp) => normIfsc(emp?.ifsc_code) ?? normIfsc(emp?.ifsc);
+
+/**
+ * P1-14 review F2: one audit_log row per bank value that really changed
+ * (stage 'bank_details_change', field account_number / ifsc_code, old/new
+ * masked to the last 4 characters). Call AFTER the write, on the same handle.
+ *
+ * @param {object} db
+ * @param {object} p  { emp: stored row before the write (or null for a new employee),
+ *                      employeeId, employeeCode, account: readPair result, ifsc: readPair result, user, via }
+ * @returns {number} rows written
+ */
+function auditBankChange(db, { emp, employeeId, employeeCode, account, ifsc, user, via }) {
+  const ins = db.prepare(`INSERT INTO audit_log (table_name, record_id, field_name, old_value, new_value, changed_by, stage, remark, employee_code, action_type)
+    VALUES ('employees', ?, ?, ?, ?, ?, 'bank_details_change', ?, ?, 'bank_details_change')`);
+  let n = 0;
+  for (const [field, pair, before] of [
+    ['account_number', account, storedAccount(emp)],
+    ['ifsc_code', ifsc, storedIfsc(emp)],
+  ]) {
+    if (!pair || !pair.present) continue;
+    const after = pair.value ?? null;
+    if ((before ?? null) === after) continue;
+    ins.run(employeeId ?? null, field, maskTail(before), maskTail(after), user || 'unknown',
+      `Bank ${field === 'account_number' ? 'account' : 'IFSC'} changed via ${via}`, employeeCode);
+    n++;
+  }
+  return n;
+}
+
+module.exports = { normAccount, normIfsc, readBankPairs, auditBankChange, maskTail, BANK_PAIR_MISMATCH };
