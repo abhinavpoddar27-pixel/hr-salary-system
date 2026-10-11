@@ -23,6 +23,30 @@ const isOwnRequest = (user, req) => {
   return !!a && a === b
 }
 
+// P1-22: the approver sees every component old → new. Proposed = what PUT /approve writes
+// (parseFloat(x) || 0 — a key missing from the request is written as 0). Special allowance only when non-zero.
+const MISSING_NOTE = 'not in this request — approval sets it to 0'
+const CHANGE_COMPONENTS = [
+  ['basic', 'Basic'], ['da', 'DA'], ['hra', 'HRA'], ['conveyance', 'Conveyance'],
+  ['other_allowances', 'Other allowances'], ['special_allowance', 'Special allowance'],
+]
+const hasValue = (o, k) => o != null && o[k] !== undefined && o[k] !== null && o[k] !== ''
+const num = (v) => parseFloat(v) || 0
+const componentRows = (os, ns) => {
+  const oldS = os && typeof os === 'object' ? os : {}
+  const newS = ns && typeof ns === 'object' ? ns : {}
+  return CHANGE_COMPONENTS
+    .filter(([k]) => k !== 'special_allowance' || num(oldS[k]) !== 0 || num(newS[k]) !== 0)
+    .map(([k, label]) => {
+      const oldKnown = hasValue(oldS, k)
+      const oldVal = oldKnown ? num(oldS[k]) : null
+      const newVal = num(newS[k])
+      const missingNew = !hasValue(newS, k)
+      return { key: k, label, oldVal, newVal, missingNew, changed: Math.abs((oldVal || 0) - newVal) > 0.005 }
+    })
+}
+const todayLabel = () => new Date().toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' })
+
 export default function SalaryInput() {
   const { selectedCompany, user } = useAppStore()
   // April 2026: gross-salary changes follow the HR-proposes / Finance-
@@ -256,8 +280,8 @@ export default function SalaryInput() {
               const ns = req.new_structure || {}
               const os = req.old_structure || {}
               return (
-                <div key={req.id} className="card p-4 border-l-4 border-l-amber-400">
-                  <div className="flex items-start justify-between">
+                <div key={req.id} className="card p-4 border-l-4 border-l-amber-400" data-testid="pending-card" data-request-id={req.id}>
+                  <div className="flex flex-wrap items-start justify-between gap-2">
                     <div>
                       <div className="font-medium text-sm">{req.employee_name} <span className="font-mono text-xs text-slate-400">({req.employee_code})</span></div>
                       <div className="text-xs text-slate-500">{req.department} | Requested by {req.requested_by}</div>
@@ -284,18 +308,54 @@ export default function SalaryInput() {
                       <div className="text-[10px] text-slate-400 italic">Awaiting Finance approval</div>
                     )}
                   </div>
-                  <div className="grid grid-cols-2 gap-4 mt-3 text-xs max-w-3xl">
-                    <div className="bg-slate-50 p-2 rounded-lg">
-                      <p className="font-semibold text-slate-500 mb-1">Current</p>
-                      <p>Basic: {fmtINR(os.basic)} | DA: {fmtINR(os.da)} | HRA: {fmtINR(os.hra)}</p>
-                      <p className="font-bold">Gross: {fmtINR(req.old_gross)}</p>
-                    </div>
-                    <div className="bg-blue-50 p-2 rounded-lg">
-                      <p className="font-semibold text-blue-600 mb-1">Proposed</p>
-                      <p>Basic: {fmtINR(ns.basic)} | DA: {fmtINR(ns.da)} | HRA: {fmtINR(ns.hra)}</p>
-                      <p className="font-bold">Gross: {fmtINR(req.new_gross)}</p>
-                    </div>
-                  </div>
+                  {(() => {
+                    const rows = componentRows(os, ns)
+                    const noCurrent = !os || typeof os !== 'object' || Object.keys(os).length === 0
+                    const grossChanged = Math.abs(num(req.old_gross) - num(req.new_gross)) > 0.005
+                    const arrow = (o, n) => (n > (o || 0) ? '▲' : '▼')
+                    return (
+                      <div className="mt-3 max-w-3xl" data-testid="change-table">
+                        {noCurrent && <p className="text-[11px] text-slate-500 mb-1" data-testid="no-current">No current structure on record.</p>}
+                        <div className="overflow-x-auto">
+                          <table className="w-full text-xs border border-slate-200 rounded-lg">
+                            <thead>
+                              <tr className="bg-slate-50 text-slate-500">
+                                <th className="text-left font-semibold px-2 py-1">Component</th>
+                                <th className="text-right font-semibold px-2 py-1">Current</th>
+                                <th className="text-right font-semibold px-2 py-1 text-blue-600">Proposed</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {rows.map(r => (
+                                <tr key={r.key} data-component={r.key} data-changed={r.changed ? '1' : '0'}
+                                  className={clsx('border-t border-slate-100', r.changed && 'bg-amber-50')}>
+                                  <td className="px-2 py-1">
+                                    {r.label}
+                                    {r.missingNew && <div className="text-[10px] text-amber-700" data-testid="missing-note">{MISSING_NOTE}</div>}
+                                  </td>
+                                  <td className="px-2 py-1 text-right font-mono">{r.oldVal === null ? '—' : fmtINR(r.oldVal)}</td>
+                                  <td className={clsx('px-2 py-1 text-right font-mono', r.changed && 'font-bold text-amber-800')}>
+                                    {r.changed && <span className="mr-1">{arrow(r.oldVal, r.newVal)}</span>}{fmtINR(r.newVal)}
+                                  </td>
+                                </tr>
+                              ))}
+                              <tr data-component="gross" data-changed={grossChanged ? '1' : '0'}
+                                className={clsx('border-t border-slate-300 font-bold', grossChanged && 'bg-amber-50')}>
+                                <td className="px-2 py-1">Gross</td>
+                                <td className="px-2 py-1 text-right font-mono">{fmtINR(req.old_gross)}</td>
+                                <td className={clsx('px-2 py-1 text-right font-mono', grossChanged && 'text-amber-800')}>
+                                  {grossChanged && <span className="mr-1">{arrow(num(req.old_gross), num(req.new_gross))}</span>}{fmtINR(req.new_gross)}
+                                </td>
+                              </tr>
+                            </tbody>
+                          </table>
+                        </div>
+                        <p className="text-[11px] text-slate-600 mt-1" data-testid="effective-note">
+                          Effective from: the day it is approved (today, {todayLabel()}).
+                        </p>
+                      </div>
+                    )
+                  })()}
                 </div>
               )
             })}
