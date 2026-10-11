@@ -9,7 +9,7 @@
 Programme:   UI/UX improvement + bulk input, HR Salary System (Indriyan / Asian Lakto)
 Base:        origin/main a5aec9a (10 Oct 2026). Re-check: git fetch origin; git log -1 origin/main
 Plan:        docs/ux-bulk/MASTER_PLAN.md (§5.2 = PR order, §6 = specs, §7 = bulk design, §14 = open questions)
-Current PR:  21 merged. OPEN batch 2 (all green + clean, no shared files, integration tree 105/1649 + build green): #126 P1-13, #127 P1-14★, #128 P1-18, #129 N-REP (N-1/2/3), #130 N-MONEY★ (N-16/17), #131 N-FRESH (N-7/9/15). Merge in any order. Next: docs PR folding PROGRESS 'CLAUDE.md entry' sections into CLAUDE.md; then P2.
+Current PR:  27 merged (batch 2 #126–#131 all merged 11 Oct). Open: #132 docs (CLAUDE.md notes). Process: file ownership + integration worktree + no dist/CLAUDE.md in feature PRs; if GitHub 'checking mergeability' stalls > 1 min, merge main into the branch to restart it. Next: batch 3 (P2 foundations).
 Asked, not answered: Q1 Q2 Q3 (P3-01/P5-02), Q4 (P1-04) — re-ask before those PRs
 Open Qs:     Q1 Q2 (needed by P3-01) · Q4 (P1-04) · Q5 (P1-07) · Q6 (P1-23) · Q10 (one-PR rule) — ask when the PR needs them
 Roles:       planner = new chat; builder = Claude Code agent session reading prs/<PR-ID>/PROMPT.md; Abhinav says "go" and merges in GitHub UI
@@ -70,12 +70,12 @@ Status values: `todo` · `plan` (Phase 0 written, waiting for go) · `build` · 
 | P1-10 | Night Shift Undo → Reject pairing + confirm | merged #98 | fix/nightshift-undo-relabel | | | | check 44/44 |
 | P1-11 | Dashboard All clear on failed call | merged #99 | fix/dashboard-failed-call-not-all-clear | | | | admin + finance views; check 66/66 |
 | P1-12 | Sidebar/Header hook order | merged #100 | fix/sidebar-header-hook-order | | | | 6/6 switches crash on main; check 58/58 |
-| P1-13 | Finance Verify company filter | PR #126 green | | | | | |
-| P1-14 | Bank columns + salary split | PR #127 green (review SHIP WITH FIXES, applied) | | | | | |
+| P1-13 | Finance Verify company filter | MERGED #126| | | | | |
+| P1-14 | Bank columns + salary split | MERGED #127| | | | | |
 | P1-15 | Finance Verify flag reason + Approve gate | MERGED #112 | | | | | |
 | P1-16 | Interventions Reject All | MERGED #113 | | | | | |
 | P1-17 | Import overwrite checkbox + month | MERGED #114 | | | | | |
-| P1-18 | DW drafts invisible | PR #128 green | | | | | |
+| P1-18 | DW drafts invisible | MERGED #128| | | | | |
 | P1-19 | Sales Mark Left date | MERGED #115 | | | | | |
 | P1-20 | Leave form Comp Off + date order | MERGED #116 | | | | | |
 | P1-21 | Bulk payslips 403 | MERGED #117 | | | | | |
@@ -192,3 +192,4 @@ open branch against main AND against each other; any overlap is fixed before the
 | N-22 | N-MONEY | 43 employees had conveyance wiped to 0 by approved salary changes; 1 Mar-2026 gross flag bulk-rejected, never reverted | owner data repair |
 | N-23 | N-MONEY review | approve-flag / bulk-approve have no maker-checker; a revert leaves the salary_change_request Approved; Stage 7 re-run needed after revert | later |
 | N-24 | N-FRESH | floating Salary Explainer button covers row buttons at the bottom of long tables | later UI |
+- 11 Oct 2026 ~20:50 IST — batch 2 fully merged (#126–#131). #132 docs PR folds 9 CLAUDE.md entries.
