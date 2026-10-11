@@ -330,6 +330,36 @@ Plan + log: `docs/ux-bulk/prs/P1-15/PLAN.md`, `PROGRESS.md`. Finding F-12. Rulin
 - **Found, not fixed:** F-a `POST /status` has no server-side reason minimum. F-b sign-off gate + dashboard ignore company;
   `/signoff-status` reads by month/year only. F-c no per-employee "rejected" action in the UI, yet rejected rows block
   sign-off. F-d "Bulk Verify Clean Employees" skips already-flagged rows (one-by-one only).
+## Attendance Review enforcement — merged notes (#119, #121, #122, #123, #124, #125; folded 12 Oct 2026)
+Private plan + rulings: project `claude/attendance-review/PLAN_enforcement_v2.md`. Per-PR detail: `docs/attendance-review/`
+(PR3_EARLY_EXIT_RULES.md, PR3_NEED_TWO.md, PR4_QUALITY_GATE.md, PR2B_CONTRACTOR_DEDUCTIONS.md, PR7_LADDER.md, T4_TRENDS_MORE.md).
+Status: the whole plan v2 build is MERGED — #101 PR-1, #102 PR-A, #103 leave-outs, #108 PR-2, #110 T1–T3, #111 PR-5,
+#119 PR-3, #121, #122 PR-4, #123 PR-2b, #124 PR-7, #125 T4 (older "NOT merged" lines in the entries below are stale).
+- **PR-3 #119 (D-4, D-6, MP-2), all OFF until a rules version turns them on:** `early_exit_rule: 'd4'` — a counted early
+  exit of 2 h+ = ½ day, 3+ exits of 60+ min = minutes deduction; `late_long_always_counted` (D-6) — a 2 h+ late is never
+  excused by full hours and is listed "check the shift"; `missed_out_rule` (MP-2) — from the person's 5th own missed punch
+  (bulk-failure days not counted) each missed OUT = a 2 h early exit. Early-section deductions go to finance with Send
+  (one `late_coming_deductions` row per person); per-date `early_exit_deductions` rows are NOT written.
+- **#121 "need 2":** threshold `d4_half_day_min_count` (default 2) — the ½-day charge applies only from the 2nd 2 h exit in
+  the month; a lone 2 h exit is a warning and joins the minutes rule. `1` restores the first PR-3 behaviour.
+- **PR-4 #122 quality gate:** `qualityGate(db, run, {now})`; `GET /runs/:id/quality`; `PUT /runs/:id/finalise {acknowledge}`.
+  stop = `rules_changed` (regenerate first, 409 QUALITY_GATE); checks (`month_not_over`, `data_ends_early`, `shift_doubt`,
+  `miss_punch_open`) need a reason ≥ 10 chars, logged in audit_log stage `ATTENDANCE_REVIEW_GATE`; notes shown only.
+- **PR-2b #123 (protected salaryComputation.js, owner-approved D-3):** finance-approved late / early deductions are taken
+  from contractor pay from Sep 2026 payroll (`CONTRACTOR_LATE_EARLY_FROM` = 2026×12+9). OT / ED / holiday duty still
+  contractor-free. Before re-running a month's Stage 7, confirm the bank transfer has not already gone out.
+- **PR-7 #124 ladder + person history:** config `ladder_rule` (off), `ladder_from` 2026-08, thresholds
+  `ladder_window_months` 3 / `ladder_deduction_from` 2 / `ladder_hearing_from` 3. Strike month = on the action list or the
+  early section in the stored run (final, else draft) or a live compute. Step 1 = warning (not sent to finance), step 2 =
+  deduction, step 3+ = deduction + HR hearing. `GET /person/:code?from&to`.
+- **T4 #125 Trends:** `monthAnalytics` (waterfall, bands, weekday) in every result; trendRow + funnel, miss punches, top
+  people, effects; `GET /trends/export.xlsx` (5 sheets).
+- **Fragile (all of the above):** (1) any new default config key makes every open draft show "Must fix: rules changed"
+  until regenerated — expected. (2) The rules editor rebuilds config from its form: a new top-level key must be in the form
+  AND the save body or a save drops it. (3) Finalise months in date order — the ladder reads earlier months' stored runs.
+  (4) A wrong master shift is wrong in every month (master basis); the quality gate's `shift_doubt` is the guard.
+  (5) Stored runs older than T4 show waterfall / distribution as "not available" until regenerated.
+
 ## Last Session — 2026-10-11 (Attendance enforcement PR-5: mid-month notice board)
 **Branch `feat/attendance-review-notice-board` (on main 75d60ee6), NOT merged.** Plan: `docs/attendance-review/PR5_NOTICE_BOARD.md`; private plan D-8 / D-9 / MP-2.
 - **What:** Attendance Review tab → third view "Notice board": a printable A4 for the 1st up to a chosen day (default the 15th),
