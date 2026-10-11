@@ -35,6 +35,10 @@ const LEAVE_TYPES = [
   { value: 'Comp Off', label: 'Compensatory Off' }
 ]
 
+// Types the Apply Leave form may send. Must match the list POST /api/leaves
+// accepts (routes/leaves.js — CL, EL, LWP). Comp off has its own tab.
+const APPLY_LEAVE_TYPES = LEAVE_TYPES.filter(t => ['CL', 'EL', 'LWP'].includes(t.value))
+
 function ApplyLeaveModal({ show, onClose, employees }) {
   const queryClient = useQueryClient()
   const [form, setForm] = useState({
@@ -85,13 +89,18 @@ function ApplyLeaveModal({ show, onClose, employees }) {
 
   const handleDateChange = (field, val) => {
     const updated = { ...form, [field]: val }
-    if (updated.start_date && updated.end_date) {
+    // Recompute only for a valid range. An end before the start keeps the
+    // last Days value; the form cannot be submitted until it is fixed.
+    if (updated.start_date && updated.end_date && updated.end_date >= updated.start_date) {
       updated.days = calcDays(updated.start_date, updated.end_date)
     }
     setForm(updated)
   }
 
-  // Hard-block: CL / EL require sufficient balance. LWP and Comp Off are exempt.
+  // ISO YYYY-MM-DD strings compare correctly as text.
+  const dateRangeInvalid = !!form.start_date && !!form.end_date && form.end_date < form.start_date
+
+  // Hard-block: CL / EL require sufficient balance. LWP is exempt.
   const isBalanceTracked = ['CL', 'EL'].includes(form.leave_type)
   const insufficient = isBalanceTracked && form.employee_code && form.days > currentBal
   const hrRemarkMissing = !String(form.hr_remark || '').trim()
@@ -138,7 +147,7 @@ function ApplyLeaveModal({ show, onClose, employees }) {
           <div>
             <label className="block text-sm font-medium text-slate-700 mb-1">Leave Type</label>
             <select className="input w-full" value={form.leave_type} onChange={e => setForm(f => ({ ...f, leave_type: e.target.value }))}>
-              {LEAVE_TYPES.map(t => <option key={t.value} value={t.value}>{t.label}</option>)}
+              {APPLY_LEAVE_TYPES.map(t => <option key={t.value} value={t.value}>{t.label}</option>)}
             </select>
           </div>
           <div>
@@ -154,9 +163,14 @@ function ApplyLeaveModal({ show, onClose, employees }) {
           </div>
           <div>
             <label className="block text-sm font-medium text-slate-700 mb-1">End Date</label>
-            <input type="date" className="input w-full" value={form.end_date} onChange={e => handleDateChange('end_date', e.target.value)} />
+            <input type="date" className="input w-full" value={form.end_date} min={form.start_date || undefined} onChange={e => handleDateChange('end_date', e.target.value)} />
           </div>
         </div>
+        {dateRangeInvalid && (
+          <div className="text-xs text-red-600 -mt-2" data-testid="leave-date-hint">
+            End date must be on or after the start date.
+          </div>
+        )}
 
         <div>
           <label className="block text-sm font-medium text-slate-700 mb-1">Reason</label>
@@ -180,7 +194,7 @@ function ApplyLeaveModal({ show, onClose, employees }) {
           <button className="btn btn-secondary" onClick={onClose}>Cancel</button>
           <button
             className="btn btn-primary"
-            disabled={!form.employee_code || !form.start_date || !form.end_date || hrRemarkMissing || insufficient || submit.isPending}
+            disabled={!form.employee_code || !form.start_date || !form.end_date || dateRangeInvalid || hrRemarkMissing || insufficient || submit.isPending}
             onClick={() => submit.mutate(form)}
           >
             {submit.isPending ? 'Submitting...' : 'Submit Application'}
