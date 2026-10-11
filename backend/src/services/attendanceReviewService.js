@@ -56,6 +56,7 @@ const DEFAULT_CONFIG = Object.freeze({
     d4_half_day_minutes: 120,      // D-4: each counted early exit of this many minutes or more = ½ day
     d4_long_minutes: 60,           // D-4: early exits of this many minutes or more …
     d4_long_count: 3,              // … this many or more in the month → the minutes of the ones under d4_half_day_minutes are deducted
+    d4_half_day_min_count: 2,      // D-4 (owner 11 Oct): ½ day per 2 h exit only from this many 2 h exits in the month; fewer → they count as long exits (minutes rule)
     missed_out_from: 5,            // MP-2: from the person's Nth own missed punch in the month (bulk-failure days not counted) …
     missed_out_minutes: 120,       // … each missed OUT counts as an early exit of this many minutes
   }),
@@ -299,9 +300,11 @@ SELECT c AS code, ym, COUNT(*) AS worked_days, SUM(f) AS worked_units, SUM(f*h*6
        SUM(CASE WHEN ise = 1 THEN COALESCE(wm,0) ELSE 0 END) AS early_wm_sum,
        -- D-4 buckets: exits >= @halfMin (½ day each) and @midMin .. @halfMin (minutes), plain and short-day versions
        SUM(CASE WHEN ise = 1 AND em >= @halfMin THEN 1 ELSE 0 END) AS early_half,
+       SUM(CASE WHEN ise = 1 AND em >= @halfMin THEN em ELSE 0 END) AS early_half_min,
        SUM(CASE WHEN ise = 1 AND em >= @midMin AND em < @halfMin THEN 1 ELSE 0 END) AS early_mid,
        SUM(CASE WHEN ise = 1 AND em >= @midMin AND em < @halfMin THEN em ELSE 0 END) AS early_mid_min,
        SUM(CASE WHEN ise = 1 AND short = 1 AND em >= @halfMin THEN 1 ELSE 0 END) AS early_short_half,
+       SUM(CASE WHEN ise = 1 AND short = 1 AND em >= @halfMin THEN em ELSE 0 END) AS early_short_half_min,
        SUM(CASE WHEN ise = 1 AND short = 1 AND em >= @midMin AND em < @halfMin THEN 1 ELSE 0 END) AS early_short_mid,
        SUM(CASE WHEN ise = 1 AND short = 1 AND em >= @midMin AND em < @halfMin THEN em ELSE 0 END) AS early_short_mid_min
 FROM z GROUP BY c, ym`;
@@ -568,7 +571,7 @@ function remeasureRows(db, month, year, cfg, releaseDays, prevReleaseDays, to = 
     const h = (toMin(rm.end) - toMin(rm.start)) / 60; const f = ['½P', 'WO½P'].includes(r.st) ? 0.5 : 1;
     const key = `${code}|${ym}`;
     const a = out.get(key) || { code, ym, worked_days: 0, worked_units: 0, sched_min: 0, shift_h: h, shift_h_missing: 0, late_raw: 0, late_excused: 0, lates: 0, late_min: 0, early_exits: 0, early_min: 0, early_long: 0, hours_excused: 0, remeasured: true,
-      long_lates: 0, long_late_min: 0, long_late_kept: 0, long_late_forgiven: 0, early_half: 0, early_mid: 0, early_mid_min: 0 };
+      long_lates: 0, long_late_min: 0, long_late_kept: 0, long_late_forgiven: 0, early_half: 0, early_half_min: 0, early_mid: 0, early_mid_min: 0 };
     a.worked_days += 1; a.worked_units += f; a.sched_min += f * h * 60;
     const inM = toMin(r.it); const outM = toMin(r.ot);
     const wmin = inM !== null && outM !== null && outM > inM ? outM - inM : null;
@@ -593,7 +596,7 @@ function remeasureRows(db, month, year, cfg, releaseDays, prevReleaseDays, to = 
       if (fullEarly) a.hours_excused += 1;
       else {
         a.early_exits += 1; a.early_min += earlyBy; if (earlyBy >= t.option_c_long_minutes) a.early_long += 1;
-        if (earlyBy >= t.d4_half_day_minutes) a.early_half += 1;
+        if (earlyBy >= t.d4_half_day_minutes) { a.early_half += 1; a.early_half_min += earlyBy; }
         else if (earlyBy >= t.d4_long_minutes) { a.early_mid += 1; a.early_mid_min += earlyBy; }
       }
     }
@@ -673,6 +676,7 @@ function applyExclusions(byCode, cfg) {
       m.early_long_counted = ee ? 0 : fit ? m.early_short_long : m.early_long;
       // D-4 buckets (re-measured rows never use the shift check, so they carry only the plain buckets)
       m.early_half_counted = ee ? 0 : (fit ? m.early_short_half : m.early_half) || 0;
+      m.early_half_min_counted = ee ? 0 : (fit ? m.early_short_half_min : m.early_half_min) || 0;
       m.early_mid_counted = ee ? 0 : (fit ? m.early_short_mid : m.early_mid) || 0;
       m.early_mid_min_counted = ee ? 0 : (fit ? m.early_short_mid_min : m.early_mid_min) || 0;
       m.long_lates_counted = p.loading ? 0 : (m.long_lates || 0);
@@ -730,21 +734,26 @@ function applyMissedOut(people, plan, cfg) {
       m.missed_out_days = n; m.missed_out_dates = dates;
       m.early_counted += n; m.early_min_counted += n * mins;
       if (mins >= t.option_c_long_minutes) m.early_long_counted += n;
-      if (mins >= t.d4_half_day_minutes) m.early_half_counted += n;
+      if (mins >= t.d4_half_day_minutes) { m.early_half_counted += n; m.early_half_min_counted = (m.early_half_min_counted || 0) + n * mins; }
       else if (mins >= t.d4_long_minutes) { m.early_mid_counted += n; m.early_mid_min_counted += n * mins; }
     }
   }
 }
 
 /**
- * D-4 (early_exit_rule 'd4'): ½ day per counted early exit of d4_half_day_minutes+; when exits of d4_long_minutes+ (the long ones
- * included) number d4_long_count or more, also the minutes of those under d4_half_day_minutes ÷ shift minutes.
+ * D-4 (early_exit_rule 'd4'): ½ day per counted early exit of d4_half_day_minutes+, but only when the month has
+ * d4_half_day_min_count or more of them (owner 11 Oct: "need 2"). With fewer, those exits are treated like the other long
+ * exits. When exits of d4_long_minutes+ (the 2 h ones included) number d4_long_count or more, the minutes of the long exits
+ * that are not charged as ½ days ÷ shift minutes are deducted too.
  * raw = unrounded days; days = rounded to the ½ day (minimum ½) when raw > 0.
  */
 function d4Early(m, t) {
   if (!m) return { half_days: 0, long_exits: 0, minutes: 0, raw: 0, days: 0 };
-  const half = m.early_half_counted || 0; const long = half + (m.early_mid_counted || 0);
-  const minutes = long >= t.d4_long_count ? (m.early_mid_min_counted || 0) : 0;
+  const two = m.early_half_counted || 0; const long = two + (m.early_mid_counted || 0);
+  const halfOn = two >= (t.d4_half_day_min_count ?? 1);
+  const half = halfOn ? two : 0;
+  const pool = (m.early_mid_min_counted || 0) + (halfOn ? 0 : (m.early_half_min_counted || 0));
+  const minutes = long >= t.d4_long_count ? pool : 0;
   const raw = 0.5 * half + (m.shift_h ? minutes / (m.shift_h * 60) : 0);
   return { half_days: half, long_exits: long, minutes, raw: r2(raw), days: raw > 0 ? roundDeduction(raw, t) : 0 };
 }
@@ -838,8 +847,9 @@ function actions(people, cfg, overrides, month, year) {
     if ((ov.get(p.code) || {}).action === 'exclude') continue;
     const c = p.cur;
     const d4 = d4Early(c, t);
-    // under D-4 a single 2 h+ exit (or a missed OUT under MP-2) is enough to be listed here; otherwise the 3+ warning line applies
-    if (c.early_counted < t.early_warning_min && !(cfg.early_exit_rule === 'd4' && d4.days > 0)) continue;
+    // under D-4 a 2 h+ exit (or a missed OUT under MP-2) is enough to be listed here — as a warning until the month has
+    // d4_half_day_min_count of them; otherwise the 3+ warning line applies
+    if (c.early_counted < t.early_warning_min && !(cfg.early_exit_rule === 'd4' && (d4.days > 0 || (c.early_half_counted || 0) > 0))) continue;
     const days = optionCDays(c, t);
     const line = { code: p.code, name: p.name, department: p.department, designation: p.designation, group: p.group,
       early_exits: c.early_counted, over_1h: c.early_long_counted, over_2h: c.early_half_counted || 0, missed_out_days: c.missed_out_days || 0,
@@ -1192,7 +1202,7 @@ function financeSendPlan(db, run) {
     create.push({ code: a.code, name: a.name, employee_id: e.id || null, company: e.company || null, deduction_days: a.deduction_days,
       late_count: a.late_days || 0, contractor, source: a._src,
       remark: a._src === 'early'
-        ? `Attendance Review ${ym} ${runTag(run.id)}: early exits — ${a.early_exits} exits${a.over_2h ? `, ${a.over_2h} of 2 h or more` : ''}${a.missed_out_days ? `, ${a.missed_out_days} missed OUT` : ''} (${a.d4 ? 'D-4 rule' : 'Option C'})`
+        ? `Attendance Review ${ym} ${runTag(run.id)}: early exits — ${a.early_exits} exits${a.over_2h ? `, ${a.over_2h} of 2 h or more` : ''}${a.missed_out_days ? `, ${a.missed_out_days} missed OUT` : ''}${a.d4 && a.d4.half_days ? `; ${a.d4.half_days} at ½ day each` : ''} (${a.d4 ? 'D-4 rule' : 'Option C'})`
         : `Attendance Review ${ym} ${runTag(run.id)}: ${a.late_days || 0} late, ${a.early_days || 0} early exits, ${a.workdays_lost} workdays lost`
           + (a.d4 && a.d4.half_days ? `; ${a.d4.half_days} exit(s) of 2 h or more at ½ day` : '')
           + (a.missed_out_days ? `; ${a.missed_out_days} missed OUT counted as 2 h early` : '')
@@ -1451,7 +1461,136 @@ function computeAttendanceReview(db, { month, year, config, releaseDays = [], pr
   };
 }
 
+// ── PR-4: data-quality check before Finalise ──────────────────────────────
+
+/** The clock the quality gate uses (a function so tests can pin it). */
+function nowDate() { return new Date(); }
+
+const GATE_DATA_GAP_DAYS = 3; // attendance ending more than this many days before month end = "data ends early"
+const GATE_NIGHT_SHARE = 0.5; // a person whose worked days are at least this share night work is a night worker
+
+const dmy = (iso) => (iso ? `${iso.slice(8, 10)}-${iso.slice(5, 7)}-${iso.slice(0, 4)}` : '');
+const medHhmm = (xs) => { const m = median(xs.filter((x) => x != null)); return m == null ? '?' : hhmmOf(m); };
+
+/**
+ * PR-4 — what must be looked at before a draft is finalised, read from the STORED draft (run.result_json, run.config_snapshot)
+ * plus a few live reads. Items: { key, level, title, detail, people? }.
+ *  stop  — Finalise refused, no acknowledgement possible: rules_changed.
+ *  check — Finalise needs a typed reason: month_not_over, data_ends_early, shift_doubt, miss_punch_open.
+ *  note  — shown only: unassessed_on_list, out_not_verified, no_master, master_drift, bulk_days, half_days.
+ * Returns { stops, checks, notes, items, ok } — ok = no stop and no check.
+ */
+function qualityGate(db, run, { now = nowDate() } = {}) {
+  const month = run.month; const year = run.year; const ym = ymOf(month, year);
+  const res = typeof run.result_json === 'string' ? JSON.parse(run.result_json || '{}') : (run.result || {});
+  const snap = typeof run.config_snapshot === 'string' ? run.config_snapshot : JSON.stringify(run.config_snapshot || {});
+  let cfg; try { cfg = JSON.parse(snap || '{}'); } catch { cfg = {}; }
+  if (!cfg || !cfg.thresholds) cfg = mergeConfig(cfg || {});
+  const t = { ...DEFAULT_CONFIG.thresholds, ...cfg.thresholds }; // an older draft may predate a threshold
+  const end = `${ym}-${pad(daysInMonth(month, year))}`;
+  const items = [];
+  const add = (key, level, title, detail, people) => items.push({ key, level, title, detail, ...(people ? { people } : {}) });
+  const list = Array.isArray(res.actionList) ? res.actionList : [];
+  const ded = list.filter((a) => a.action === 'deduction');
+  const listed = new Map(list.map((a) => [String(a.code), a]));
+
+  // stop: the rules in force for the month are no longer the ones the draft used
+  const live = loadConfig(db, ym);
+  if (JSON.stringify(live.config) !== snap) {
+    const was = res.configSource ? `v${res.configSource.id}` : 'earlier rules';
+    add('rules_changed', 'stop', 'Rules changed since this draft',
+      `The draft used ${was}; the rules in force for ${ym} are now ${live.source ? `v${live.source.id}` : 'the defaults'}. Regenerate the draft, then finalise.`);
+  }
+
+  // check: the month is not over yet
+  const today = istToday(now);
+  if (today <= end) add('month_not_over', 'check', 'The month is not over',
+    `Today is ${dmy(today)}; ${ym} runs to ${dmy(end)}. Days still to come are not in this review.`);
+
+  // check: attendance ends early
+  const last = db.prepare('SELECT MAX(date) d FROM attendance_processed WHERE substr(date,1,7) = ?').get(ym).d;
+  if (!last) add('data_ends_early', 'check', 'No attendance for the month', `No attendance is imported for ${ym}.`);
+  else if (last < addDays(end, -GATE_DATA_GAP_DAYS)) add('data_ends_early', 'check', 'Attendance ends early',
+    `Attendance is imported only up to ${dmy(last)} (month ends ${dmy(end)}). Import the rest first, or say why the last days are missing.`);
+
+  // check: deductions for people whose master shift looks wrong
+  const fitSugg = new Map((res.suggestions || []).filter((s) => s.kind === 'master_fit').map((s) => [String(s.code), s]));
+  const codes = ded.map((a) => String(a.code));
+  const nightRows = codes.length ? db.prepare(`SELECT employee_code c, in_time_final it, out_time_final ot,
+      CASE WHEN COALESCE(is_night_shift,0) = 1 OR shift_detected = 'Night Shift' THEN 1 ELSE 0 END n
+    FROM attendance_processed WHERE substr(date,1,7) = ? AND status_final IN ${WORKED}
+      AND employee_code IN (SELECT value FROM json_each(?))`).all(ym, JSON.stringify(codes)) : [];
+  const nights = new Map();
+  for (const r of nightRows) {
+    const k = String(r.c); const o = nights.get(k) || { worked: 0, night: 0, ins: [], outs: [] };
+    o.worked++; if (r.n) { o.night++; o.ins.push(toMin(r.it)); o.outs.push(toMin(r.ot)); }
+    nights.set(k, o);
+  }
+  const masters = codes.length ? new Map(db.prepare(`SELECT e.code c, s.name, s.start_time st, s.end_time en FROM employees e
+    LEFT JOIN shifts s ON s.id = e.default_shift_id WHERE e.code IN (SELECT value FROM json_each(?))`).all(JSON.stringify(codes))
+    .map((r) => [String(r.c), r])) : new Map();
+  const doubt = [];
+  for (const a of ded) {
+    const code = String(a.code); const why = [];
+    const wd = a.worked_days || 0; const ms = masters.get(code);
+    const master = ms && ms.st ? `${ms.name} (${ms.st}–${ms.en})` : 'no master';
+    const s = fitSugg.get(code); if (s) why.push(s.evidence || s.title);
+    if (wd >= t.master_fit_min_days) {
+      if ((a.late_days || 0) >= t.master_fit_share * wd) why.push(`late on ${a.late_days} of ${wd} days worked on ${master}`);
+      if ((a.early_days || 0) >= t.master_fit_share * wd) why.push(`left early on ${a.early_days} of ${wd} days worked on ${master}`);
+    }
+    const n = nights.get(code);
+    const ovn = ms && ms.st && ms.en && toMin(ms.en) < toMin(ms.st);
+    if (n && n.worked && n.night >= GATE_NIGHT_SHARE * n.worked && !ovn && (a.missed_out_days || a.early_days)) {
+      why.push(`works nights (${n.night} of ${n.worked} days, punches about ${medHhmm(n.ins)}–${medHhmm(n.outs)}) on a day master ${master}`
+        + `${a.missed_out_days ? `; ${a.missed_out_days} unpaired night(s) counted as missed OUT` : ''} — needs an overnight master`);
+    }
+    if (why.length) doubt.push({ code, name: a.name, department: a.department, deduction_days: a.deduction_days,
+      indicative_amount: a.indicative_amount, why: [...new Set(why)] });
+  }
+  if (doubt.length) add('shift_doubt', 'check', `${doubt.length} deduction(s) may come from a wrong master shift`,
+    'Late or early on most days, or night work on a day master, usually means the shift is wrong rather than the person. Fix the master and regenerate, or leave them out, or say why the deduction stands.', doubt);
+
+  // check: miss-punch days still not fixed (bulk-failure days left out — they are a system cause)
+  const bulk = bulkMissPunchDays(db, `${ym}-01`, end, t.bulk_miss_punch_day).map((b) => b.date);
+  const open = db.prepare(`SELECT employee_code c, COUNT(*) days FROM attendance_processed
+    WHERE substr(date,1,7) = ? AND status_final IN ${WORKED} AND COALESCE(is_miss_punch,0) = 1 AND COALESCE(miss_punch_resolved,0) = 0
+      AND date NOT IN (SELECT value FROM json_each(?)) GROUP BY employee_code ORDER BY days DESC, employee_code`).all(ym, JSON.stringify(bulk))
+    .map((r) => ({ code: String(r.c), days: r.days, listed: listed.has(String(r.c)) }));
+  if (open.length) add('miss_punch_open', 'check', `${open.reduce((s, r) => s + r.days, 0)} miss-punch day(s) not fixed`,
+    `Stage 2 has open miss punches for ${open.length} people; those days are skipped, so a late or early exit on them is not counted. Fix them in Miss Punch and regenerate, or say why not.`, open);
+
+  // notes
+  const q = res.assessment && res.assessment.quality;
+  if (q) {
+    const ua = new Map();
+    for (const k of ['no_master', 'night_on_day_master', 'odd_punch']) for (const r of (q[k] && q[k].people) || []) {
+      if (!listed.has(String(r.code))) continue;
+      const o = ua.get(String(r.code)) || { code: String(r.code), days: 0, reasons: [] }; o.days += r.days; o.reasons.push(k); ua.set(String(r.code), o);
+    }
+    if (ua.size) add('unassessed_on_list', 'note', 'Listed people with days not assessed', 'These days were not measured, so the list may understate them.', [...ua.values()]);
+    const onv = ((q.out_not_verified && q.out_not_verified.people) || []);
+    if (onv.length) add('out_not_verified', 'note', `${q.out_not_verified.days} gate-register out time(s) typed as the exact shift end`,
+      'No early exit is measured on those days. Ask HR to write the real exit time in the gate register.',
+      onv.map((r) => ({ code: String(r.code), days: r.days, listed: listed.has(String(r.code)) })));
+    const nm = (q.no_master && q.no_master.people) || [];
+    if (nm.length) add('no_master', 'note', `${nm.length} people have no master shift`, `Their ${q.no_master.days} worked day(s) are not assessed at all. Set a master in Employee Master.`,
+      nm.map((r) => ({ code: String(r.code), days: r.days })));
+    if (q.half_day && q.half_day.days) add('half_days', 'note', `${q.half_day.days} half day(s) not checked`, 'Half days are not checked for late coming or early exits (owner ruling D-13).');
+  }
+  const drift = [...fitSugg.values()].filter((s) => !doubt.some((d) => d.code === String(s.code)));
+  if (drift.length) add('master_drift', 'note', `${drift.length} master shift(s) don't fit the punches`, 'Not on the deduction list, but the master is worth fixing.',
+    drift.map((s) => ({ code: String(s.code), name: s.name, proposed: s.proposed || null, evidence: s.evidence })));
+  if (bulk.length) add('bulk_days', 'note', `${bulk.length} system-failure day(s)`, `Miss punches on ${bulk.map(dmy).join(', ')} were plant-wide (${t.bulk_miss_punch_day}+ people) and are not counted against anyone.`);
+
+  const stops = items.filter((i) => i.level === 'stop'); const checks = items.filter((i) => i.level === 'check'); const notes = items.filter((i) => i.level === 'note');
+  return { month, year, ok: !stops.length && !checks.length, stops, checks, notes, items, checked_at: now.toISOString() };
+}
+
+const GATE_REASON_MIN = 10;
+
 module.exports = {
+  qualityGate, nowDate, GATE_REASON_MIN,
   DEFAULT_CONFIG, mergeConfig, validateConfig, validateOverrides, loadConfig,
   PERSON_MONTH_SQL, PERSON_MONTH_SQL_MASTER, WEEKLY_SQL, WEEKLY_SQL_MASTER, RELEASE_DAYS_SQL, RELEASE_DAYS_SQL_MASTER, MASTER_QUALITY_SQL,
   SHIFT_ISSUES_SQL, sqlParams, inlineParams, assessmentQuality,

@@ -749,7 +749,9 @@ export const attendanceReviewApplySuggestions = (body) => api.post(`${AR}/sugges
 export const attendanceReviewRuns = () => api.get(`${AR}/runs`, { headers: arFresh })
 export const attendanceReviewRun = (id) => api.get(`${AR}/runs/${id}`, { headers: arFresh })
 export const attendanceReviewGenerate = (body) => api.post(`${AR}/runs`, body)
-export const attendanceReviewFinalise = (id) => api.put(`${AR}/runs/${id}/finalise`)
+// PR-4: finalise past the quality checks needs a reason (acknowledge); the check itself is read first
+export const attendanceReviewFinalise = (id, acknowledge) => api.put(`${AR}/runs/${id}/finalise`, acknowledge ? { acknowledge } : {})
+export const attendanceReviewQuality = (id) => api.get(`${AR}/runs/${id}/quality`, { headers: arFresh })
 export const attendanceReviewTrends = (from, to) => api.get(`${AR}/trends`, { params: { from, to }, headers: arFresh })
 export const attendanceReviewFinance = (id) => api.get(`${AR}/runs/${id}/finance`, { headers: arFresh })
 export const attendanceReviewSendToFinance = (id) => api.post(`${AR}/runs/${id}/send-to-finance`)

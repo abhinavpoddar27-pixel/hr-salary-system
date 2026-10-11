@@ -5,12 +5,13 @@ import toast from 'react-hot-toast'
 import clsx from 'clsx'
 import {
   attendanceReviewPreview, attendanceReviewRuns, attendanceReviewRun,
-  attendanceReviewGenerate, attendanceReviewFinalise, attendanceReviewExport, attendanceReviewApplySuggestions,
+  attendanceReviewGenerate, attendanceReviewExport, attendanceReviewApplySuggestions,
   attendanceReviewFinance, attendanceReviewSendToFinance,
 } from '../../utils/api'
 import AttendanceReviewConfig from './AttendanceReviewConfig'
 import AttendanceReviewTrends from './AttendanceReviewTrends'
 import AttendanceReviewBoard from './AttendanceReviewBoard'
+import { QualityPanel, FinaliseDialog, useQualityGate } from './AttendanceReviewQuality'
 import { useAppStore } from '../../store/appStore'
 
 /**
@@ -367,10 +368,10 @@ export default function AttendanceReviewTab({ selectedMonth, selectedYear, onSel
     mutationFn: () => attendanceReviewGenerate({ month, year, releaseDays: previewDays, overrides }),
     onSuccess: (r) => { toast.success(r.status === 201 ? 'Draft created' : 'Draft regenerated'); qc.invalidateQueries({ queryKey: ['ar-runs'] }) },
   })
-  const fin = useMutation({
-    mutationFn: () => attendanceReviewFinalise(runMeta.id),
-    onSuccess: () => { toast.success('Review finalised and locked'); qc.invalidateQueries({ queryKey: ['ar-runs'] }); qc.invalidateQueries({ queryKey: ['ar-finance'] }) },
-  })
+  // PR-4: data-quality check of the saved draft; Finalise goes through a window that lists the checks
+  const qualityQ = useQualityGate(runMeta?.id, `${runMeta?.generated_at}|${runMeta?.status}`)
+  const gate = qualityQ.data?.data?.data
+  const [finOpen, setFinOpen] = useState(false)
 
   const [downloading, setDownloading] = useState(null)
   const download = async (kind) => {
@@ -458,9 +459,10 @@ export default function AttendanceReviewTab({ selectedMonth, selectedYear, onSel
             </>
           )}
           {runMeta && !isFinal && (
-            <button type="button" className="btn-secondary border-emerald-300 text-emerald-700" disabled={fin.isPending || !runMatchesEdits}
-              title={runMatchesEdits ? '' : 'Regenerate the draft first so the saved review matches what you see'}
-              onClick={() => { if (window.confirm(`Finalise the ${MONTHS[month - 1]} ${year} review? It cannot be changed afterwards.`)) fin.mutate() }}>
+            <button type="button" className="btn-secondary border-emerald-300 text-emerald-700" disabled={!runMatchesEdits || !gate || gate.stops.length > 0}
+              title={!runMatchesEdits ? 'Regenerate the draft first so the saved review matches what you see'
+                : gate && gate.stops.length ? gate.stops.map((x) => x.title).join('; ') : ''}
+              onClick={() => setFinOpen(true)}>
               Finalise
             </button>
           )}
@@ -496,6 +498,9 @@ export default function AttendanceReviewTab({ selectedMonth, selectedYear, onSel
         )}
       </div>
 
+      {runMeta && <QualityPanel q={qualityQ} isFinal={isFinal} />}
+      <FinaliseDialog open={finOpen} onClose={() => setFinOpen(false)} runId={runMeta?.id} label={`${MONTHS[month - 1]} ${year}`} q={qualityQ} />
+
       {showConfig && <AttendanceReviewConfig month={month} year={year} />}
 
       {loading && <div className="card p-6 text-sm text-slate-500">Computing the review…</div>}
@@ -529,7 +534,7 @@ export default function AttendanceReviewTab({ selectedMonth, selectedYear, onSel
 
           {!isFinal && preview?.suggestions && (
             <SuggestionsSection list={preview.suggestions} month={month} year={year} releaseDays={previewDays} readOnly={false}
-              onApplied={() => { qc.invalidateQueries({ queryKey: ['ar-preview'] }); qc.invalidateQueries({ queryKey: ['ar-config'] }) }} />
+              onApplied={() => { qc.invalidateQueries({ queryKey: ['ar-preview'] }); qc.invalidateQueries({ queryKey: ['ar-config'] }); qc.invalidateQueries({ queryKey: ['ar-quality'] }) }} />
           )}
           {data.assessment?.quality && <QualitySection q={data.assessment.quality} />}
 
@@ -562,7 +567,7 @@ export default function AttendanceReviewTab({ selectedMonth, selectedYear, onSel
           {runMeta && showingStored && <FinanceSection runId={runMeta.id} isFinal={isFinal} />}
 
           <Section title="Early-exit warnings" count={data.earlyExitWarnings?.length}
-            note={d4On ? `2 h rule is ON: ½ day for each exit of 2 h or more; when there are ${data.criteria?.thresholds?.d4_long_count ?? 3}+ exits of 1 h or more, their minutes are deducted too. One exit of 2 h is enough to be listed here. Shorter exits stay warning-only.`
+            note={d4On ? `2 h rule is ON: from the ${data.criteria?.thresholds?.d4_half_day_min_count ?? 1}${(data.criteria?.thresholds?.d4_half_day_min_count ?? 1) === 1 ? 'st' : (data.criteria?.thresholds?.d4_half_day_min_count === 2 ? 'nd' : 'th')} exit of 2 h or more in the month, each costs ½ day (fewer = warning); when there are ${data.criteria?.thresholds?.d4_long_count ?? 3}+ exits of 1 h or more, the minutes of those not charged as ½ days are deducted too. One exit of 2 h is enough to be listed here. Shorter exits stay warning-only.`
               : data.criteria?.early_exit_rule === 'option_c' ? 'Option C is ON: deduction = ½ day per exit of 1 h or more, plus ½ day per 3 shorter exits.' : 'Warning only. The Option C column shows what the proposed rule would deduct.'}>
             <Table rows={data.earlyExitWarnings} cols={[
               { k: 'code', h: 'Code', v: (r) => <span className="font-mono">{r.code}</span> }, { k: 'name', h: 'Name' }, { k: 'department', h: 'Department' },
