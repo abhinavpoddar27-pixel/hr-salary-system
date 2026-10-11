@@ -65,7 +65,7 @@ export default function ReviewQueue({
 
   const idOf = (r) => (typeof rowKey === 'function' ? rowKey(r) : r[rowKey])
   const filterList = filters || []
-  const filterById = useMemo(() => Object.fromEntries(filterList.map(f => [f.id, f])), [filters]) // eslint-disable-line react-hooks/exhaustive-deps
+  const filterById = useMemo(() => Object.fromEntries(filterList.map(f => [f.id, f])), [filters])
 
   const counts = useMemo(() => {
     const c = { all: rows.length }
@@ -85,14 +85,14 @@ export default function ReviewQueue({
     const m = {}
     for (const a of actions) m[a.id] = rows.filter(r => a.eligible(r)).map(idOf)
     return m
-  }, [rows, actions]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [rows, actions])
   const isEligibleAny = (id) => actions.some(a => eligibleIds[a.id].includes(id))
 
   const headerIds = useMemo(() => view
     .map(idOf)
     .filter(id => (filter === 'all'
       ? allFilterActions.some(aid => (eligibleIds[aid] || []).includes(id))
-      : isEligibleAny(id))), [view, filter, allFilterActions, eligibleIds]) // eslint-disable-line react-hooks/exhaustive-deps
+      : isEligibleAny(id))), [view, filter, allFilterActions, eligibleIds])
   const allSelected = headerIds.length > 0 && headerIds.every(id => selected.includes(id))
   const toggleSelectAll = () => setSelected(allSelected ? [] : headerIds)
   const toggleSelect = (id) => setSelected(prev => prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id])
