@@ -47,7 +47,8 @@ Q5 keep SqlConsole flow exactly. Keep SAME props + outer classes (P2-ED builder 
   variant, queue, double click. Regression: nightshift 44/44, stage6 leave reset 53/53, leave reject 29/29, sales NEFT
   40/40. jest 105/1649 before = after; after merging main 107/1669.
 - **Not tested:** Railway; Safari/Firefox; screen reader.
-- **Broken by design, not fixed (not my files):** `backend/scripts/gate-pass-quota-browser-check.py` L192 and
-  `docs/statutory-flags/sim/run_pr3.py` L261/264 wait for a NATIVE confirm — they must click the new dialog instead.
+- **Scripts updated (planner handed them over):** `backend/scripts/gate-pass-quota-browser-check.py` (cancel now clicks the
+  dialog) 47/47; `docs/statutory-flags/sim/run_pr3.py` (ECR: dialog text → Cancel → download via the dialog; PORT env
+  override, default 3931) 51/51.
 - **Found, not fixed:** SQL Console write txns (preview/restore, 60 s TTL) run on the app's SHARED DB connection — any
   app write made while a preview is open is rolled back with it (seen: an early-exit approve answered 200 and vanished).
