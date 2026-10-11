@@ -13,6 +13,7 @@ import { useAppStore } from '../store/appStore'
 import clsx from 'clsx'
 import useExpandableRows from '../hooks/useExpandableRows'
 import DrillDownRow, { DrillDownChevron } from '../components/ui/DrillDownRow'
+import { confirmDialog } from '../hooks/useConfirm'
 
 const DAYS = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday']
 
@@ -270,7 +271,7 @@ function HolidaysTab() {
                   <td className="text-center">{h.is_recurring ? '✓' : '—'}</td>
                   <td>{h.applicable_to}</td>
                   <td>
-                    <button onClick={() => { if (window.confirm('Remove this holiday?')) deleteMutation.mutate(h.id) }} className="text-xs text-red-500 hover:text-red-700">Remove</button>
+                    <button onClick={async () => { if (await confirmDialog({ title: 'Remove holiday?', message: 'Remove this holiday?', confirmText: 'Remove', cancelText: 'Keep', variant: 'danger' })) deleteMutation.mutate(h.id) }} className="text-xs text-red-500 hover:text-red-700">Remove</button>
                   </td>
                 </tr>
               ))}

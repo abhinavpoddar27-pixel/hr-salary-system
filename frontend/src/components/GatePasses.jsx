@@ -3,6 +3,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { getShortLeaves, createShortLeave, getShortLeaveQuota, cancelShortLeave, getEmployees } from '../utils/api'
 import { useAppStore } from '../store/appStore'
 import Modal from '../components/ui/Modal'
+import { confirmDialog } from '../hooks/useConfirm'
 import clsx from 'clsx'
 import toast from 'react-hot-toast'
 
@@ -145,8 +146,8 @@ export default function GatePasses() {
                     {r.status === 'active' && (
                       <button
                         className="text-xs text-red-600 hover:text-red-800 font-medium"
-                        onClick={() => {
-                          if (confirm('Cancel this gate pass?')) {
+                        onClick={async () => {
+                          if (await confirmDialog({ title: 'Cancel gate pass?', message: 'Cancel this gate pass?', confirmText: 'Cancel gate pass', cancelText: 'Keep', variant: 'danger' })) {
                             cancelMut.mutate({ id: r.id, reason: 'Cancelled by HR' })
                           }
                         }}

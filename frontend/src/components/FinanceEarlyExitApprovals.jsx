@@ -4,6 +4,7 @@ import { getEarlyExitPendingFinance, getEarlyExitDeductions, approveEarlyExitDed
 import { useAppStore } from '../store/appStore'
 import { fmtINR } from '../utils/formatters'
 import Modal from '../components/ui/Modal'
+import { confirmDialog } from '../hooks/useConfirm'
 import clsx from 'clsx'
 import toast from 'react-hot-toast'
 
@@ -124,8 +125,8 @@ export default function FinanceEarlyExitApprovals({ month, year }) {
                   <div className="flex gap-2">
                     <button
                       className="text-xs px-2 py-1 rounded bg-green-100 text-green-700 hover:bg-green-200 font-medium"
-                      onClick={() => {
-                        if (confirm('Approve this deduction?')) approveMut.mutate(r.id)
+                      onClick={async () => {
+                        if (await confirmDialog({ title: 'Approve deduction?', message: 'Approve this deduction?', confirmText: 'Approve', cancelText: 'Cancel', variant: 'warning' })) approveMut.mutate(r.id)
                       }}
                       disabled={approveMut.isPending}
                     >
