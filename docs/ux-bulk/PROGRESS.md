@@ -9,7 +9,7 @@
 Programme:   UI/UX improvement + bulk input, HR Salary System (Indriyan / Asian Lakto)
 Base:        origin/main a5aec9a (10 Oct 2026). Re-check: git fetch origin; git log -1 origin/main
 Plan:        docs/ux-bulk/MASTER_PLAN.md (§5.2 = PR order, §6 = specs, §7 = bulk design, §14 = open questions)
-Current PR:  18 merged (#112–#115 and #120 on 11 Oct). OPEN + green + clean: #116 P1-20, #117 P1-21, #118 P1-22. PROCESS (from #120): frontend/dist is NOT committed (Railway builds it; CI builds it) and feature PRs do NOT edit CLAUDE.md (notes go in docs/ux-bulk/prs/<ID>/PROGRESS.md; planner folds them in later) — so merges no longer conflict each other and no re-sync is needed. Next: P1-13 (M), N-9 fresh reads, N-3, money follow-ups N-16/N-17.
+Current PR:  21 merged (#112–#118 and #120 on 11 Oct). No PRs open. PROCESS (from #120): frontend/dist is NOT committed (Railway + CI build it); feature PRs do NOT edit CLAUDE.md (notes in docs/ux-bulk/prs/<ID>/PROGRESS.md; planner folds them in). Merges no longer conflict. Next: P1-13 (M), N-9 fresh reads, N-3, money follow-ups N-16/N-17; then a docs PR folding P1-20/21/22 notes into CLAUDE.md.
 Asked, not answered: Q1 Q2 Q3 (P3-01/P5-02), Q4 (P1-04) — re-ask before those PRs
 Open Qs:     Q1 Q2 (needed by P3-01) · Q4 (P1-04) · Q5 (P1-07) · Q6 (P1-23) · Q10 (one-PR rule) — ask when the PR needs them
 Roles:       planner = new chat; builder = Claude Code agent session reading prs/<PR-ID>/PROMPT.md; Abhinav says "go" and merges in GitHub UI
@@ -77,9 +77,9 @@ Status values: `todo` · `plan` (Phase 0 written, waiting for go) · `build` · 
 | P1-17 | Import overwrite checkbox + month | MERGED #114 | | | | | |
 | P1-18 | DW drafts invisible | todo | | | | | |
 | P1-19 | Sales Mark Left date | MERGED #115 | | | | | |
-| P1-20 | Leave form Comp Off + date order | PR #116 green | | | | | |
-| P1-21 | Bulk payslips 403 | PR #117 green | | | | | |
-| P1-22 | Salary change approver view | PR #118 green | | | | | |
+| P1-20 | Leave form Comp Off + date order | MERGED #116 | | | | | |
+| P1-21 | Bulk payslips 403 | MERGED #117 | | | | | |
+| P1-22 | Salary change approver view | MERGED #118 | | | | | |
 | P1-23 | Salary change self-approval | merged #106 | | | | | Q6 |
 | P1-25 | Employee edit cannot change salary (N-12) | merged #107 | | | | | |
 | P1-24 | Miss Punch stray "0" | merged #105 | | | | | |
@@ -171,3 +171,4 @@ Status values: `todo` · `plan` (Phase 0 written, waiting for go) · `build` · 
 - 10 Oct 2026 ~19:00 IST — Master plan v1 written (branch `docs/ux-bulk-master-plan`). Audit + bulk ideation + PR-1 plan folded in. No code changed.
 
 - 11 Oct 2026 ~16:05 IST — #120 merged: dist out of git, CLAUDE.md edits only via docs PRs. Production verified serving the Railway-built bundle. #116–#118 given one final sync (dist dropped, CLAUDE.md entries moved to their PROGRESS.md); green + clean.
+- 11 Oct 2026 ~16:30 IST — #116, #117, #118 merged back to back with no re-sync (new process working). Batch P1-15…P1-22 complete.
