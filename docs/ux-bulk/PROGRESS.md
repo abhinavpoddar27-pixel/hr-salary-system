@@ -9,7 +9,7 @@
 Programme:   UI/UX improvement + bulk input, HR Salary System (Indriyan / Asian Lakto)
 Base:        origin/main a5aec9a (10 Oct 2026). Re-check: git fetch origin; git log -1 origin/main
 Plan:        docs/ux-bulk/MASTER_PLAN.md (§5.2 = PR order, §6 = specs, §7 = bulk design, §14 = open questions)
-Current PR:  15 merged (#112 P1-15, #113 P1-16 merged 11 Oct). OPEN + green + clean (re-synced after #112): #114 P1-17, #115 P1-19, #116 P1-20, #117 P1-21, #118 P1-22. Re-sync the rest after each merge (syncfast.sh, sequential). Next: P1-13 (M), N-9 fresh reads, N-3, money follow-ups N-16/N-17.
+Current PR:  18 merged (#112–#115 and #120 on 11 Oct). OPEN + green + clean: #116 P1-20, #117 P1-21, #118 P1-22. PROCESS (from #120): frontend/dist is NOT committed (Railway builds it; CI builds it) and feature PRs do NOT edit CLAUDE.md (notes go in docs/ux-bulk/prs/<ID>/PROGRESS.md; planner folds them in later) — so merges no longer conflict each other and no re-sync is needed. Next: P1-13 (M), N-9 fresh reads, N-3, money follow-ups N-16/N-17.
 Asked, not answered: Q1 Q2 Q3 (P3-01/P5-02), Q4 (P1-04) — re-ask before those PRs
 Open Qs:     Q1 Q2 (needed by P3-01) · Q4 (P1-04) · Q5 (P1-07) · Q6 (P1-23) · Q10 (one-PR rule) — ask when the PR needs them
 Roles:       planner = new chat; builder = Claude Code agent session reading prs/<PR-ID>/PROMPT.md; Abhinav says "go" and merges in GitHub UI
@@ -74,9 +74,9 @@ Status values: `todo` · `plan` (Phase 0 written, waiting for go) · `build` · 
 | P1-14 | Bank columns + salary split | todo | | | | | |
 | P1-15 | Finance Verify flag reason + Approve gate | MERGED #112 | | | | | |
 | P1-16 | Interventions Reject All | MERGED #113 | | | | | |
-| P1-17 | Import overwrite checkbox + month | PR #114 green | | | | | |
+| P1-17 | Import overwrite checkbox + month | MERGED #114 | | | | | |
 | P1-18 | DW drafts invisible | todo | | | | | |
-| P1-19 | Sales Mark Left date | PR #115 green | | | | | |
+| P1-19 | Sales Mark Left date | MERGED #115 | | | | | |
 | P1-20 | Leave form Comp Off + date order | PR #116 green | | | | | |
 | P1-21 | Bulk payslips 403 | PR #117 green | | | | | |
 | P1-22 | Salary change approver view | PR #118 green | | | | | |
@@ -169,3 +169,5 @@ Status values: `todo` · `plan` (Phase 0 written, waiting for go) · `build` · 
 - 10 Oct 2026 19:04 IST — Owner "go" on P1-01 (with the held-card link fix). Builder resumed for build → verify → push. Q1–Q4 asked, no answer yet.
 - 10 Oct 2026 ~19:30 IST — Planner session start: origin/main a5aec9a; 3 docs branches NOT merged and have no PR open; push access OK after add_repo; open PRs #59 (leave), #42 (server.js), #8 (stale Apr, touches salaryComputation.js — close?). No collision with FinanceAudit.jsx. P1-01 diagnostics (Sentry 0 — frontend not reported; readiness 821 calls/90d; 265 Aug + 206 Sep unapproved manual flags). PROMPT.md 34/35 → builder Phase 0 → PLAN.md @619e28d.
 - 10 Oct 2026 ~19:00 IST — Master plan v1 written (branch `docs/ux-bulk-master-plan`). Audit + bulk ideation + PR-1 plan folded in. No code changed.
+
+- 11 Oct 2026 ~16:05 IST — #120 merged: dist out of git, CLAUDE.md edits only via docs PRs. Production verified serving the Railway-built bundle. #116–#118 given one final sync (dist dropped, CLAUDE.md entries moved to their PROGRESS.md); green + clean.

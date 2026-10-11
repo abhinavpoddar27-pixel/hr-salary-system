@@ -33,7 +33,7 @@ Global list (MASTER_PLAN §10.4) + <PR-specific>.
 
 ## Build rules
 - One finding = this PR only. Fictional test data only. ₹ via fmtINR, dates via fmtDate, today via todayIST (after P2-03).
-- Frontend change → npm run build --prefix frontend; commit frontend/dist (never hand-merge dist).
+- Frontend change → npm run build --prefix frontend LOCALLY for checks only. NEVER commit frontend/dist (in .gitignore since #120; Railway + CI build it). NEVER edit CLAUDE.md — put the session entry in docs/ux-bulk/prs/<ID>/PROGRESS.md.
 - UPSERT completeness; money/day changes end with the drift query (MASTER_PLAN §10.7).
 - Skills to use: <e.g. frontend-design + design:ux-copy for UI copy; design:accessibility-review for a11y;
   engineering:testing-strategy for the test plan; engineering:code-review for the independent review>.
