@@ -74,7 +74,7 @@ export default function TrendsMore({ d, tables, open }) {
       <div className="grid lg:grid-cols-2 gap-4">
         <Card title="From measured to counted — late arrivals" sub="Each month: lates the punches show, the ones excused by each rule, and the ones counted." testid="ar-trends-waterfall-late">
           {wf.length === 0 ? <p className="text-sm text-slate-400">Not available for these months (reviews saved before this view).</p> : tables ? (
-            <T head={['Month', 'Measured', 'Stayed late', 'Full hours', 'Loaders', 'Counted']} rows={wf.map((r) => [r.x, num(r.measured), num(r.stayed_late), num(r.full_hours), num(r.loaders), num(r.counted)])} />
+            <T head={['Month', 'Measured', 'Stayed late', 'Full hours', 'Loaders', 'Plant-wide late days', 'Counted']} rows={wf.map((r) => [r.x, num(r.measured), num(r.stayed_late), num(r.full_hours), num(r.loaders), num(r.plant_late_days || 0), num(r.counted)])} />
           ) : (
             <Chart><BarChart data={wf} margin={{ top: 12, right: 12, bottom: 0, left: -12 }} onClick={(e) => open(e?.activePayload?.[0]?.payload?.ym)} style={{ cursor: 'pointer' }}>
               {axes('')}
@@ -82,6 +82,7 @@ export default function TrendsMore({ d, tables, open }) {
               <Bar dataKey="stayed_late" name="Excused: stayed late" stackId="a" fill={C.g3} isAnimationActive={false} />
               <Bar dataKey="full_hours" name="Excused: full hours" stackId="a" fill={C.g1} isAnimationActive={false} />
               <Bar dataKey="loaders" name="Loaders" stackId="a" fill={C.g2} isAnimationActive={false} />
+              {wf.some((r) => r.plant_late_days > 0) && <Bar dataKey="plant_late_days" name="Excused: plant-wide late day" stackId="a" fill="#44403c" isAnimationActive={false} />}
             </BarChart></Chart>)}
         </Card>
         <Card title="From measured to counted — early exits" sub="Release days are left out before measuring. Missed OUTs counted under the missed-OUT rule are added." testid="ar-trends-waterfall-early">

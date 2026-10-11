@@ -332,7 +332,7 @@ function buildTrendsWorkbook(data) {
     { k: 'listed', h: 'Action list', v: (r) => r.action.people }, { k: 'ded', h: 'Deductions', v: (r) => r.action.deductions }, { k: 'days', h: 'Deduction days', v: (r) => r.action.deduction_days },
     { k: 'ind', h: 'Indicative ₹', v: (r) => r.action.indicative_amount },
     { k: 'lm', h: 'Lates measured', v: (r) => W(r, 'lates.measured') }, { k: 'lsl', h: 'Excused: stayed late', v: (r) => W(r, 'lates.stayed_late') },
-    { k: 'lfh', h: 'Excused: full hours', v: (r) => W(r, 'lates.full_hours') }, { k: 'lld', h: 'Loaders', v: (r) => W(r, 'lates.loaders') }, { k: 'lc', h: 'Lates counted', v: (r) => W(r, 'lates.counted') },
+    { k: 'lfh', h: 'Excused: full hours', v: (r) => W(r, 'lates.full_hours') }, { k: 'lld', h: 'Loaders', v: (r) => W(r, 'lates.loaders') }, { k: 'lpl', h: 'Excused: plant-wide late days', v: (r) => (r.waterfall ? (r.waterfall.lates.plant_late_days ?? 0) : '') }, { k: 'lc', h: 'Lates counted', v: (r) => W(r, 'lates.counted') },
     { k: 'em', h: 'Early exits measured', v: (r) => W(r, 'early.measured') }, { k: 'efh', h: 'Excused: full hours ', v: (r) => W(r, 'early.full_hours') },
     { k: 'eex', h: 'Not assessed (exempt)', v: (r) => W(r, 'early.exempt') }, { k: 'emo', h: '+ missed OUT', v: (r) => W(r, 'early.missed_out') }, { k: 'ec', h: 'Early counted', v: (r) => W(r, 'early.counted') },
     { k: 'vl', h: '₹ value of time lost', v: (r) => W(r, 'value_lost_inr') },

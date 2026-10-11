@@ -266,3 +266,17 @@ describe('API', () => {
     expect(S.detectPlantLateDays(db, M, Y, S.mergeConfig(after))).toEqual([]);              // 20 late < 21
   });
 });
+
+describe('Trends workbook carries the plant-wide late-day step', () => {
+  test('Months sheet column "Excused: plant-wide late days"', () => {
+    const XLSX = require('xlsx');
+    const { buildTrendsWorkbook } = require('../services/attendanceReviewExports');
+    const g = { late_pct: 0, early_pct: 0, time_lost_pct: 0 };
+    const m = { ym: '2026-10', source: 'live', basis: 'master', people_assessed: 3, all: g, action: { people: 0, deductions: 0, deduction_days: 0, indicative_amount: 0 },
+      waterfall: { lates: { measured: 10, stayed_late: 1, full_hours: 2, loaders: 0, plant_late_days: 4, counted: 3 }, early: { measured: 0, full_hours: 0, exempt: 0, missed_out: 0, counted: 0 }, value_lost_inr: 0 } };
+    const wb = XLSX.read(buildTrendsWorkbook({ months: [m, { ...m, ym: '2026-09', waterfall: null }] }), { type: 'buffer' });
+    const rows = XLSX.utils.sheet_to_json(wb.Sheets.Months);
+    expect(rows[0]['Excused: plant-wide late days']).toBe(4);
+    expect(rows[1]['Excused: plant-wide late days'] ?? '').toBe(''); // older result: blank, like the other waterfall columns
+  });
+});
