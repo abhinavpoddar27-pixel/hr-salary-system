@@ -1,3 +1,20 @@
+## Last Session — 2026-10-11 (P1-21: Reports "Download All Payslips" button always got a 403)
+**Branch `fix/reports-bulk-payslips-403`, NOT merged.** Frontend only (`pages/Reports.jsx`, `utils/api.js` 1 line). Plan + log:
+`docs/ux-bulk/prs/P1-21/PLAN.md`, `PROGRESS.md`. Finding H-9. Rulings Q1 (keep tab, label "Payslips"), Q2 (leave payslipPdf.js), Q3 (Stage 7 link).
+- **Bug:** Reports → "Payslips (Bulk PDF)" → "Download All Payslips (PDF)" called `GET /api/payroll/payslips/bulk`, which answers
+  403 on purpose (bulk payslips disabled by company policy, April 2026) → every click = 403 + "Failed to generate payslips".
+- **Fix:** button, `handleBulkPayslips`, `bulkPdfLoading` and the two imports removed; tab relabelled "Payslips" and now shows a
+  note ("Bulk payslips are disabled by company policy. Download individual payslips from Stage 7…") + "Open Stage 7" link to
+  `/pipeline/salary`. The page sends no request to /payslips/bulk. Dead `getBulkPayslips` removed from `utils/api.js`.
+  Server route (403) and Stage 7 untouched. dist rebuilt (own commit).
+- **Fragile:** none new. The route stays and still answers 403 (pinned by `manualDeductionsRetired.test.js` T4).
+- **Verified:** `backend/scripts/reports-bulk-payslips-check.py` (Chromium, built dist, scratch DB, hr + finance, fictional
+  T2101/T2102, port 3121) 33/33 — note visible, no bulk button, 0 requests to /payslips/bulk, link opens Stage 7 and an individual
+  payslip opens there, Salary Register tab still loads, 390px, 0 page/console errors, 0 API ≥ 400. `--base` on 868f5389 4/4: click
+  → GET /payslips/bulk → 403 + error toast. jest 96 suites / 1537 before and after.
+- **Not tested:** Railway; Safari/Firefox.
+- **Found, not fixed:** `downloadBulkPayslipsPDF` in `frontend/src/utils/payslipPdf.js` is now a dead export (no caller).
+
 ## Last Session — 2026-10-11 (P1-07: legacy "Grant Extra Duty" on Payable OT retired)
 **Branch `fix/retire-legacy-extra-duty-grant`, NOT merged.** Owner ruling Q5 (11 Oct). Log: `docs/ux-bulk/prs/P1-07/PROGRESS.md`.
 - **Bug:** Payable OT → "Grant Extra Duty" called `POST /payroll/grant-extra-duty`, which wrote a `day_corrections` row
