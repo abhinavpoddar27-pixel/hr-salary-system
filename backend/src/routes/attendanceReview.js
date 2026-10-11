@@ -35,16 +35,28 @@ function prevReleaseDays(db, month, year) {
   const r = db.prepare("SELECT release_days FROM attendance_review_runs WHERE month = ? AND year = ?").get(p.month, p.year);
   try { return r ? JSON.parse(r.release_days) : []; } catch { return []; }
 }
+/** PR-8: plant-wide late days ticked on last month's run (final, else draft); [] if no run exists. */
+function prevLateFreeDays(db, month, year) {
+  const p = svc.prevMonth(month, year);
+  return svc.storedLateFreeDays(db, p.month, p.year);
+}
+const parseLateFreeDays = (v, month, year) => {
+  const r = parseReleaseDays(v, month, year);
+  return r.error ? { error: r.error.replace('release day', 'plant-wide late day') } : r;
+};
+const jsonList = (v) => { try { const x = JSON.parse(v || '[]'); return Array.isArray(x) ? x : []; } catch { return []; } };
 
 function runSummary(r) {
   return { id: r.id, month: r.month, year: r.year, status: r.status, generated_by: r.generated_by, generated_at: r.generated_at,
-    finalised_by: r.finalised_by, finalised_at: r.finalised_at, release_days: JSON.parse(r.release_days || '[]'), overrides: JSON.parse(r.overrides || '[]') };
+    finalised_by: r.finalised_by, finalised_at: r.finalised_at, release_days: JSON.parse(r.release_days || '[]'), overrides: JSON.parse(r.overrides || '[]'),
+    late_free_days: jsonList(r.late_free_days) };
 }
 
 // GET /?month&year[&releaseDays=a,b][&overrides=<JSON list>] — preview, nothing saved
 router.get('/', (req, res) => {
   const my = parseMonth(req.query); if (!my) return res.status(400).json({ success: false, error: 'month and year required' });
   const rd = parseReleaseDays(req.query.releaseDays, my.month, my.year); if (rd.error) return res.status(400).json({ success: false, error: rd.error });
+  const lf = parseLateFreeDays(req.query.lateFreeDays, my.month, my.year); if (lf.error) return res.status(400).json({ success: false, error: lf.error });
   let overrides = [];
   if (req.query.overrides) {
     try { overrides = JSON.parse(req.query.overrides); } catch { return res.status(400).json({ success: false, error: 'overrides must be a JSON list' }); }
@@ -55,7 +67,8 @@ router.get('/', (req, res) => {
   try {
     const db = getDb();
     const { config, source } = svc.loadConfig(db, `${my.year}-${String(my.month).padStart(2, '0')}`);
-    const data = svc.computeAttendanceReview(db, { ...my, config, releaseDays: rd.list, prevReleaseDays: prevReleaseDays(db, my.month, my.year), overrides });
+    const data = svc.computeAttendanceReview(db, { ...my, config, releaseDays: rd.list, prevReleaseDays: prevReleaseDays(db, my.month, my.year), overrides,
+      lateFreeDays: lf.list, prevLateFreeDays: prevLateFreeDays(db, my.month, my.year) });
     res.json({ success: true, data: { ...data, configSource: source } });
   } catch (err) {
     console.error('Attendance review preview error:', err.message);
@@ -267,7 +280,9 @@ router.post('/suggestions', (req, res) => {
     const row = db.prepare('SELECT id, config_json FROM attendance_review_config WHERE effective_from <= ? ORDER BY effective_from DESC, id DESC LIMIT 1').get(ym);
     let stored = {}; if (row) { try { stored = JSON.parse(row.config_json); } catch { stored = {}; } }
     const { config } = svc.loadConfig(db, ym);
-    const result = svc.computeAttendanceReview(db, { ...my, config, releaseDays: rd.list, prevReleaseDays: prevReleaseDays(db, my.month, my.year), overrides: [] });
+    const lf = parseLateFreeDays(body.lateFreeDays, my.month, my.year); if (lf.error) return res.status(400).json({ success: false, error: lf.error });
+    const result = svc.computeAttendanceReview(db, { ...my, config, releaseDays: rd.list, prevReleaseDays: prevReleaseDays(db, my.month, my.year), overrides: [],
+      lateFreeDays: lf.list, prevLateFreeDays: prevLateFreeDays(db, my.month, my.year) });
     const out = svc.applySuggestions(stored, result.suggestions, { accept, dismiss, by: user(req) });
     if (out.unknown.length) return res.status(409).json({ success: false, error: 'Some suggestions are no longer shown (already applied or changed) — refresh and try again', details: out.unknown });
     const errs = svc.validateConfig(out.config);
@@ -293,26 +308,31 @@ router.post('/runs', (req, res) => {
   // Omitted releaseDays / overrides on a regenerate keep the draft's saved values; an explicit [] clears them.
   const rd = body.releaseDays === undefined && existing ? { list: JSON.parse(existing.release_days || '[]') } : parseReleaseDays(body.releaseDays, my.month, my.year);
   if (rd.error) return res.status(400).json({ success: false, error: rd.error });
+  // PR-8: same rule for the ticked plant-wide late days
+  const lf = body.lateFreeDays === undefined && existing ? { list: jsonList(existing.late_free_days) } : parseLateFreeDays(body.lateFreeDays, my.month, my.year);
+  if (lf.error) return res.status(400).json({ success: false, error: lf.error });
   const ovIn = body.overrides === undefined && existing ? JSON.parse(existing.overrides || '[]') : body.overrides;
   const oerr = svc.validateOverrides(ovIn);
   if (oerr.length) return res.status(400).json({ success: false, error: 'Invalid overrides', details: oerr });
   const overrides = (ovIn || []).map((o) => ({ code: String(o.code).trim(), action: o.action, reason: String(o.reason).trim() }));
   try {
     const { config, source } = svc.loadConfig(db, `${my.year}-${String(my.month).padStart(2, '0')}`);
-    const result = svc.computeAttendanceReview(db, { ...my, config, releaseDays: rd.list, prevReleaseDays: prevReleaseDays(db, my.month, my.year), overrides });
+    const result = svc.computeAttendanceReview(db, { ...my, config, releaseDays: rd.list, prevReleaseDays: prevReleaseDays(db, my.month, my.year), overrides,
+      lateFreeDays: lf.list, prevLateFreeDays: prevLateFreeDays(db, my.month, my.year) });
     result.configSource = source;
     const snap = JSON.stringify(config); const rel = JSON.stringify(rd.list); const ov = JSON.stringify(overrides); const out = JSON.stringify(result);
+    const lfd = JSON.stringify(lf.list);
     let id;
     if (existing) {
-      db.prepare(`UPDATE attendance_review_runs SET config_snapshot = ?, release_days = ?, overrides = ?, result_json = ?, generated_by = ?,
-        generated_at = datetime('now') WHERE id = ? AND status = 'draft'`).run(snap, rel, ov, out, user(req), existing.id);
+      db.prepare(`UPDATE attendance_review_runs SET config_snapshot = ?, release_days = ?, overrides = ?, late_free_days = ?, result_json = ?, generated_by = ?,
+        generated_at = datetime('now') WHERE id = ? AND status = 'draft'`).run(snap, rel, ov, lfd, out, user(req), existing.id);
       id = existing.id;
     } else {
-      id = db.prepare(`INSERT INTO attendance_review_runs (month, year, status, config_snapshot, release_days, overrides, result_json, generated_by)
-        VALUES (?, ?, 'draft', ?, ?, ?, ?, ?)`).run(my.month, my.year, snap, rel, ov, out, user(req)).lastInsertRowid;
+      id = db.prepare(`INSERT INTO attendance_review_runs (month, year, status, config_snapshot, release_days, overrides, late_free_days, result_json, generated_by)
+        VALUES (?, ?, 'draft', ?, ?, ?, ?, ?, ?)`).run(my.month, my.year, snap, rel, ov, lfd, out, user(req)).lastInsertRowid;
     }
     logAudit('attendance_review_runs', id, 'status', existing ? 'draft' : '', 'draft', 'ATTENDANCE_REVIEW_RUN',
-      `${existing ? 'regenerated' : 'generated'} ${my.year}-${my.month}; release days ${rel}; ${overrides.length} override(s)`, user(req));
+      `${existing ? 'regenerated' : 'generated'} ${my.year}-${my.month}; release days ${rel}; plant-wide late days ${lfd}; ${overrides.length} override(s)`, user(req));
     const row = db.prepare('SELECT * FROM attendance_review_runs WHERE id = ?').get(id);
     res.status(existing ? 200 : 201).json({ success: true, data: { ...runSummary(row), result } });
   } catch (err) {

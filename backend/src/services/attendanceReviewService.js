@@ -62,6 +62,8 @@ const DEFAULT_CONFIG = Object.freeze({
     ladder_window_months: 3,       // PR-7 (D-10): strike months counted over this many months up to the month reviewed
     ladder_deduction_from: 2,      // … a deduction stands from this many strike months (fewer → warning)
     ladder_hearing_from: 3,        // … and an HR hearing is added from this many
+    plant_late_min_people: 15,     // PR-8: a plant-wide late day needs at least this many people late …
+    plant_late_min_share: 0.25,    // … and at least this share of the day's assessed workers late (detected only; the admin ticks it)
   }),
   // 'import' = the shift the import matched each day (is_late_arrival / is_early_departure as stored);
   // 'master' = each person's CURRENT master shift (employees.default_shift_id), measured from the punches (owner ruling 10 Oct 2026).
@@ -179,6 +181,10 @@ function validateConfig(c) {
   if (c.thresholds && typeof c.thresholds === 'object') {
     const lw = c.thresholds.ladder_window_months;
     if (lw !== undefined && (!Number.isInteger(lw) || lw < 1 || lw > 12)) errs.push('ladder_window_months must be a whole number from 1 to 12');
+    const pp = c.thresholds.plant_late_min_people;
+    if (pp !== undefined && (!Number.isInteger(pp) || pp < 1)) errs.push('plant_late_min_people must be a whole number of at least 1');
+    const ps = c.thresholds.plant_late_min_share;
+    if (ps !== undefined && (typeof ps !== 'number' || !Number.isFinite(ps) || ps <= 0 || ps > 1)) errs.push('plant_late_min_share must be a share above 0 and at most 1 (e.g. 0.25)');
   }
   if (c.shift_fit !== undefined && !SHIFT_FIT.includes(c.shift_fit)) errs.push('shift_fit must be habitual | everyone | off');
   if (c.late_full_hours !== undefined && typeof c.late_full_hours !== 'boolean') errs.push('late_full_hours must be true or false');
@@ -299,21 +305,24 @@ y AS (SELECT x.*,
         CASE WHEN x.wm IS NULL OR x.wm < x.f*x.h*60 - @fitGrace THEN 1 ELSE 0 END short,
         -- full shift worked, for lates: tolerance kept below the late threshold, so a late is only forgiven when made up
         CASE WHEN x.wm IS NOT NULL AND x.wm >= x.f*x.h*60 - MIN(@fitGrace, @lateMin - 1) THEN 1 ELSE 0 END fhl,
-        CASE WHEN x.lm >= @longLate THEN 1 ELSE 0 END lng
+        CASE WHEN x.lm >= @longLate THEN 1 ELSE 0 END lng,
+        -- PR-8: a plant-wide late day the admin ticked — every late on it is excused
+        CASE WHEN x.d IN (SELECT value FROM json_each(CASE WHEN x.ym = @cur THEN @lfd ELSE @plfd END)) THEN 1 ELSE 0 END pld
       FROM x),
 -- exl = the late is excused: stayed late the evening before, or (with @lateFull) the full shift was worked — except a long
 -- late (>= @longLate) when @longOn (D-6), which only the stayed-late excuse can forgive
-z AS (SELECT y.*, MAX(y.exc, @lateFull*y.fhl*(1 - @longOn*y.lng)) exl FROM y)
+z AS (SELECT y.*, MAX(y.exc, @lateFull*y.fhl*(1 - @longOn*y.lng), y.pld) exl FROM y)
 SELECT c AS code, ym, COUNT(*) AS worked_days, SUM(f) AS worked_units, SUM(f*h*60) AS sched_min,
        MAX(h) AS shift_h, MAX(hmiss) AS shift_h_missing,
        SUM(isl) AS late_raw, SUM(isl*exl) AS late_excused,
        SUM(isl*(1-exl)) AS lates,
        SUM(CASE WHEN isl = 1 AND exl = 0 THEN lm ELSE 0 END) AS late_min,
-       SUM(CASE WHEN isl = 1 AND exc = 0 AND @lateFull = 1 AND fhl = 1 AND exl = 1 THEN 1 ELSE 0 END) AS late_full_excused,
+       SUM(CASE WHEN isl = 1 AND exc = 0 AND pld = 0 AND @lateFull = 1 AND fhl = 1 AND exl = 1 THEN 1 ELSE 0 END) AS late_full_excused,
+       SUM(isl*pld) AS late_plant_excused,
        SUM(CASE WHEN isl = 1 AND lng = 1 AND exl = 0 THEN 1 ELSE 0 END) AS long_lates,
        SUM(CASE WHEN isl = 1 AND lng = 1 AND exl = 0 THEN lm ELSE 0 END) AS long_late_min,
        SUM(CASE WHEN isl = 1 AND lng = 1 AND exc = 0 AND @lateFull = 1 AND fhl = 1 AND exl = 0 THEN 1 ELSE 0 END) AS long_late_kept,
-       SUM(CASE WHEN isl = 1 AND lng = 1 AND exc = 0 AND @lateFull = 1 AND fhl = 1 AND exl = 1 THEN 1 ELSE 0 END) AS long_late_forgiven,
+       SUM(CASE WHEN isl = 1 AND lng = 1 AND exc = 0 AND pld = 0 AND @lateFull = 1 AND fhl = 1 AND exl = 1 THEN 1 ELSE 0 END) AS long_late_forgiven,
        SUM(ise) AS early_exits, SUM(CASE WHEN ise = 1 THEN em ELSE 0 END) AS early_min,
        SUM(CASE WHEN ise = 1 AND em >= @longMin THEN 1 ELSE 0 END) AS early_long,
        SUM(CASE WHEN @sunOff = 0 OR dow <> '0' THEN 1 ELSE 0 END) AS ms_days,
@@ -347,7 +356,8 @@ x AS (SELECT w.*, COALESCE(p.ll,0) cll, substr(w.d,1,7) ym,
 SELECT c AS code, ym, date(d, 'weekday 1', '-7 days') AS week_start, COUNT(*) AS worked_days,
   SUM(CASE WHEN la = 1 AND lm >= @lateMin AND lm < @mis AND NOT ((@mode = 0 AND COALESCE(pll,0) = 1) OR (@mode = 1 AND cll = 1)
        OR (@mode = 2 AND (COALESCE(pll,0) = 1 OR cll = 1)))
-       AND NOT (@lateFull = 1 AND wm IS NOT NULL AND wm >= f*h*60 - MIN(@fitGrace, @lateMin - 1) AND NOT (@longOn = 1 AND lm >= @longLate)) THEN 1 ELSE 0 END) AS lates,
+       AND NOT (@lateFull = 1 AND wm IS NOT NULL AND wm >= f*h*60 - MIN(@fitGrace, @lateMin - 1) AND NOT (@longOn = 1 AND lm >= @longLate))
+       AND d NOT IN (SELECT value FROM json_each(CASE WHEN ym = @cur THEN @lfd ELSE @plfd END)) THEN 1 ELSE 0 END) AS lates,
   SUM(CASE WHEN ed = 1 AND em > @eMin AND em < @eMax AND (CAST(c AS TEXT) || '|' || d) NOT IN (SELECT value FROM json_each(@mp2))
        AND d NOT IN (SELECT value FROM json_each(CASE WHEN ym = @cur THEN @rel ELSE @prel END)) THEN 1 ELSE 0 END) AS early_exits,
   SUM(CASE WHEN ed = 1 AND em > @eMin AND em < @eMax AND (wm IS NULL OR wm < f*h*60 - @fitGrace) AND (CAST(c AS TEXT) || '|' || d) NOT IN (SELECT value FROM json_each(@mp2))
@@ -481,8 +491,11 @@ GROUP BY e.code, a.shift_detected
 HAVING days >= 10 AND ((s.name IS NOT NULL AND s.name <> a.shift_detected) OR early >= 0.8 * days OR late >= 0.8 * days)
 ORDER BY e.code`;
 
+/** PR-8: no ticked plant-wide late days (the default everywhere). */
+const NO_LATE_FREE = Object.freeze({ cur: Object.freeze([]), prev: Object.freeze([]) });
+
 /** `to` (optional, YYYY-MM-DD inside the month) ends the current month early — the notice board's "so far". */
-function sqlParams(month, year, cfg, releaseDays, prevReleaseDays, to = null, mp2 = []) {
+function sqlParams(month, year, cfg, releaseDays, prevReleaseDays, to = null, mp2 = [], lateFree = NO_LATE_FREE) {
   const t = cfg.thresholds; const pm = prevMonth(month, year);
   return {
     from: addDays(`${ymOf(pm.month, pm.year)}-01`, -t.stayed_late_lookback_days),
@@ -497,6 +510,8 @@ function sqlParams(month, year, cfg, releaseDays, prevReleaseDays, to = null, mp
     // PR-3: D-6 long lates, D-4 buckets, MP-2 days ('code|date') taken out of the measured early exits
     longLate: t.long_late_minutes, longOn: cfg.late_long_always_counted === true ? 1 : 0,
     halfMin: t.d4_half_day_minutes, midMin: t.d4_long_minutes, mp2: JSON.stringify(mp2 || []),
+    // PR-8: ticked plant-wide late days (this month / last month) — lates on them are not counted
+    lfd: JSON.stringify((lateFree && lateFree.cur) || []), plfd: JSON.stringify((lateFree && lateFree.prev) || []),
   };
 }
 
@@ -544,14 +559,65 @@ function assessmentQuality(db, month, year, cfg, to = null) {
   return out;
 }
 
+/**
+ * PR-8 — plant-wide late days (plan item 7). Per Mon–Sat date of the month: the workers assessed that day (full worked day,
+ * no open miss punch, day work — on the master basis mode 'day' and not a half day; on the import basis status P / WOP and
+ * not a night row) and the people late by the engine's own measure BEFORE any excuse (late ≥ late_min_minutes, < misread).
+ * People left out of the review (excluded codes / departments) are not counted. A date is a plant-wide late day when
+ * late people ≥ plant_late_min_people AND late people ÷ assessed ≥ plant_late_min_share. Detected days are only offered —
+ * nothing is excused until the admin ticks a day (owner ruling 11–12 Oct). `to` ends the month early (as release days).
+ */
+const PLANT_LATE_DAYS_SQL_MASTER = MASTER_BASE.replace(/,$/, '') + `
+SELECT c AS code, d AS date, la, lm FROM base
+WHERE substr(d,1,7) = @cur AND d <= @to AND st IN ${WORKED} AND mp = 0 AND mode = 'day' AND half = 0 AND strftime('%w', d) <> '0'`;
+const PLANT_LATE_DAYS_SQL = `
+SELECT employee_code AS code, date, COALESCE(is_late_arrival,0) AS la, COALESCE(late_by_minutes,0) AS lm FROM attendance_processed
+WHERE substr(date,1,7) = @cur AND date <= @to AND status_final IN ('P','WOP') AND COALESCE(is_miss_punch,0) = 0
+  AND COALESCE(is_night_shift,0) = 0 AND strftime('%w', date) <> '0'`;
+const WEEKDAY_SHORT = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+
+function detectPlantLateDays(db, month, year, cfg, to = null) {
+  cfg = cfg && cfg.thresholds && cfg.excluded_codes ? cfg : mergeConfig(cfg);
+  const t = cfg.thresholds;
+  const p = sqlParams(month, year, cfg, [], [], to);
+  const rows = isMaster(cfg) ? db.prepare(PLANT_LATE_DAYS_SQL_MASTER).all(p) : db.prepare(PLANT_LATE_DAYS_SQL).all({ cur: p.cur, to: p.to });
+  const exCodes = new Set(cfg.excluded_codes.map(String)); const exDept = new Set(cfg.excluded_departments.map((d) => String(d).toUpperCase()));
+  const emp = loadEmployees(db, [...new Set(rows.map((r) => String(r.code)))]);
+  const left = (code) => exCodes.has(code) || exDept.has(String((emp.get(code) || {}).department || '').toUpperCase());
+  const byDate = new Map();
+  for (const r of rows) {
+    const code = String(r.code); if (left(code)) continue;
+    const d = byDate.get(r.date) || { assessed: new Set(), late: new Map() };
+    d.assessed.add(code);
+    if (r.la === 1 && r.lm >= t.late_min_minutes && r.lm < t.misread_minutes) d.late.set(code, Math.max(d.late.get(code) || 0, r.lm));
+    byDate.set(r.date, d);
+  }
+  const out = [];
+  for (const [date, d] of [...byDate.entries()].sort((a, b) => a[0].localeCompare(b[0]))) {
+    const assessed = d.assessed.size; const late = d.late.size;
+    if (!assessed || late < t.plant_late_min_people || late / assessed < t.plant_late_min_share) continue;
+    out.push({ date, weekday: WEEKDAY_SHORT[new Date(`${date}T00:00:00Z`).getUTCDay()], assessed, late_people: late,
+      share: r2(late / assessed), median_late_minutes: Math.round(median([...d.late.values()])) });
+  }
+  return out;
+}
+
+/** PR-8: a month's ticked plant-wide late days as saved on its run (final, else draft); [] when no run. */
+function storedLateFreeDays(db, month, year) {
+  try {
+    const r = db.prepare('SELECT late_free_days FROM attendance_review_runs WHERE month = ? AND year = ?').get(month, year);
+    return r ? JSON.parse(r.late_free_days || '[]') : [];
+  } catch { return []; }
+}
+
 function detectShiftIssues(db, month, year) {
   return db.prepare(SHIFT_ISSUES_SQL).all({ cur: ymOf(month, year) }).map((r) => ({ ...r, code: String(r.code) }));
 }
 
 // ── step 3: person-month ──────────────────────────────────────────────────
 
-function loadPersonMonth(db, month, year, cfg, releaseDays, prevReleaseDays, to = null, mp2 = []) {
-  const p = sqlParams(month, year, cfg, releaseDays, prevReleaseDays, to, mp2);
+function loadPersonMonth(db, month, year, cfg, releaseDays, prevReleaseDays, to = null, mp2 = [], lateFree = NO_LATE_FREE) {
+  const p = sqlParams(month, year, cfg, releaseDays, prevReleaseDays, to, mp2, lateFree);
   return db.prepare(isMaster(cfg) ? PERSON_MONTH_SQL_MASTER : PERSON_MONTH_SQL).all(p).map((r) => ({ ...r, code: String(r.code) }));
 }
 
@@ -562,7 +628,7 @@ function loadPersonMonth(db, month, year, cfg, releaseDays, prevReleaseDays, to 
  * Full-hours rule per code (hours_complete): a late or an early exit is not counted on a day where
  * out − in ≥ the shift's length (half for ½P) − hours_grace minutes (default 10). Counted in hours_excused.
  */
-function remeasureRows(db, month, year, cfg, releaseDays, prevReleaseDays, to = null, mp2 = []) {
+function remeasureRows(db, month, year, cfg, releaseDays, prevReleaseDays, to = null, mp2 = [], lateFree = NO_LATE_FREE) {
   const codes = Object.keys(cfg.remeasure || {});
   if (!codes.length) return [];
   const t = cfg.thresholds; const p = sqlParams(month, year, cfg, releaseDays, prevReleaseDays, to);
@@ -572,6 +638,7 @@ function remeasureRows(db, month, year, cfg, releaseDays, prevReleaseDays, to = 
       COALESCE(is_left_late,0) ll FROM attendance_processed WHERE employee_code IN (${ph}) AND date BETWEEN ? AND ? ORDER BY employee_code, date`)
     .all(...codes, p.from, p.to);
   const rel = { [p.cur]: new Set(releaseDays || []), [p.prev]: new Set(prevReleaseDays || []) };
+  const lfree = { [p.cur]: new Set((lateFree && lateFree.cur) || []), [p.prev]: new Set((lateFree && lateFree.prev) || []) };
   // Stayed-late flag per day: 'system' = is_left_late as stored (measured on the system's shift);
   // 'shift' = recomputed on the re-measure shift (out >= end + left_late_minutes); 'off' = no exemption.
   const llOf = (r) => {
@@ -595,7 +662,7 @@ function remeasureRows(db, month, year, cfg, releaseDays, prevReleaseDays, to = 
     const h = (toMin(rm.end) - toMin(rm.start)) / 60; const f = ['½P', 'WO½P'].includes(r.st) ? 0.5 : 1;
     const key = `${code}|${ym}`;
     const a = out.get(key) || { code, ym, worked_days: 0, worked_units: 0, sched_min: 0, shift_h: h, shift_h_missing: 0, late_raw: 0, late_excused: 0, lates: 0, late_min: 0, early_exits: 0, early_min: 0, early_long: 0, hours_excused: 0, remeasured: true,
-      long_lates: 0, long_late_min: 0, long_late_kept: 0, long_late_forgiven: 0, early_half: 0, early_half_min: 0, early_mid: 0, early_mid_min: 0 };
+      long_lates: 0, long_late_min: 0, long_late_kept: 0, long_late_forgiven: 0, early_half: 0, early_half_min: 0, early_mid: 0, early_mid_min: 0, late_plant_excused: 0 };
     a.worked_days += 1; a.worked_units += f; a.sched_min += f * h * 60;
     const inM = toMin(r.it); const outM = toMin(r.ot);
     const wmin = inM !== null && outM !== null && outM > inM ? outM - inM : null;
@@ -609,7 +676,8 @@ function remeasureRows(db, month, year, cfg, releaseDays, prevReleaseDays, to = 
     if (lateBy > (rm.late_grace ?? 9) && lateBy >= t.late_min_minutes && lateBy < t.misread_minutes) {
       a.late_raw += 1;
       const long = lateBy >= t.long_late_minutes;
-      if (exc) a.late_excused += 1;
+      if (lfree[ym].has(r.d)) { a.late_excused += 1; a.late_plant_excused += 1; } // PR-8: ticked plant-wide late day
+      else if (exc) a.late_excused += 1;
       else if (fullLate && !(long && longOn)) { a.late_excused += 1; a.hours_excused += 1; if (long) a.long_late_forgiven += 1; }
       else { a.lates += 1; a.late_min += lateBy; if (long) { a.long_lates += 1; a.long_late_min += lateBy; if (fullLate) a.long_late_kept += 1; } }
     }
@@ -903,7 +971,7 @@ function monthAnalytics(kept, cfg, md) {
   const t = cfg.thresholds;
   const live = kept.filter((p) => p.cur && !p.held);
   const n = (x) => Number(x) || 0;
-  const w = { lates: { measured: 0, stayed_late: 0, full_hours: 0, loaders: 0, counted: 0 },
+  const w = { lates: { measured: 0, stayed_late: 0, full_hours: 0, loaders: 0, plant_late_days: 0, counted: 0 },
     early: { measured: 0, full_hours: 0, exempt: 0, missed_out: 0, counted: 0 }, value_lost_inr: 0, minutes_counted: 0 };
   const lateBands = LATE_BANDS.map(() => 0); const earlyBands = EARLY_BANDS.map(() => 0);
   const lateWd = [0, 0, 0, 0, 0, 0, 0]; const earlyWd = [0, 0, 0, 0, 0, 0, 0];
@@ -912,7 +980,8 @@ function monthAnalytics(kept, cfg, md) {
     const c = p.cur; const ee = !!p.early_excluded; const fit = !!c.fit_applied;
     w.lates.measured += n(c.late_raw);
     w.lates.full_hours += n(c.late_full_excused);
-    w.lates.stayed_late += n(c.late_excused) - n(c.late_full_excused);
+    w.lates.stayed_late += n(c.late_excused) - n(c.late_full_excused) - n(c.late_plant_excused);
+    w.lates.plant_late_days += n(c.late_plant_excused);
     w.lates.loaders += p.loading ? n(c.lates) : 0;
     w.lates.counted += n(c.lates_counted);
     w.early.measured += n(c.early_exits);
@@ -976,7 +1045,8 @@ function strikeHistory(db, month, year, cfg, cache = new Map()) {
         const mc = mergeConfig(config);
         const rd = detectReleaseDays(db, m, y, mc).map((d) => d.date);
         const pm = prevMonth(m, y);
-        const live = computeAttendanceReview(db, { month: m, year: y, config, releaseDays: rd, prevReleaseDays: storedReleaseDays(db, pm.month, pm.year), noLadder: true });
+        const live = computeAttendanceReview(db, { month: m, year: y, config, releaseDays: rd, prevReleaseDays: storedReleaseDays(db, pm.month, pm.year),
+          prevLateFreeDays: storedLateFreeDays(db, pm.month, pm.year), noLadder: true });
         hit = { codes: strikeCodes(live), source: 'live' };
       } else hit = { codes: new Set(), source: 'no attendance' };
       cache.set(ym, hit);
@@ -1022,7 +1092,8 @@ function monthResult(db, month, year, cache) {
   const { config } = loadConfig(db, ym);
   const rd = detectReleaseDays(db, month, year, mergeConfig(config)).map((d) => d.date);
   const pm = prevMonth(month, year);
-  const live = computeAttendanceReview(db, { month, year, config, releaseDays: rd, prevReleaseDays: storedReleaseDays(db, pm.month, pm.year), ladderCache: cache });
+  const live = computeAttendanceReview(db, { month, year, config, releaseDays: rd, prevReleaseDays: storedReleaseDays(db, pm.month, pm.year),
+    prevLateFreeDays: storedLateFreeDays(db, pm.month, pm.year), ladderCache: cache });
   if (cache) cache.set(ym, { codes: strikeCodes(live), source: 'live' });
   return { result: live, source: 'live', run_id: null };
 }
@@ -1135,8 +1206,8 @@ function summarise(people, cfg, cur, prev) {
   return { monthly, departments };
 }
 
-function weeklyTrend(db, month, year, cfg, releaseDays, prevReleaseDays, peopleByCode, mp2 = []) {
-  const rows = db.prepare(isMaster(cfg) ? WEEKLY_SQL_MASTER : WEEKLY_SQL).all(sqlParams(month, year, cfg, releaseDays, prevReleaseDays, null, mp2));
+function weeklyTrend(db, month, year, cfg, releaseDays, prevReleaseDays, peopleByCode, mp2 = [], lateFree = NO_LATE_FREE) {
+  const rows = db.prepare(isMaster(cfg) ? WEEKLY_SQL_MASTER : WEEKLY_SQL).all(sqlParams(month, year, cfg, releaseDays, prevReleaseDays, null, mp2, lateFree));
   const wk = new Map();
   for (const r of rows) {
     const p = peopleByCode.get(String(r.code)); if (!p) continue; // excluded or unknown
@@ -1712,12 +1783,16 @@ function boardSnapshot(board) {
  * @param db better-sqlite3 handle
  * @param opts { month, year, config (merged), releaseDays [], prevReleaseDays [], overrides [] }
  */
-function computeAttendanceReview(db, { month, year, config, releaseDays = [], prevReleaseDays = [], overrides = [], noLadder = false, ladderCache }) {
+function computeAttendanceReview(db, { month, year, config, releaseDays = [], prevReleaseDays = [], overrides = [], noLadder = false, ladderCache,
+  lateFreeDays = [], prevLateFreeDays = [] }) {
   const cfg = mergeConfig(config);
   const cur = ymOf(month, year); const pm = prevMonth(month, year); const prev = ymOf(pm.month, pm.year);
+  // PR-8: ticked plant-wide late days — lates on them are excused for everyone; early exits untouched
+  const lateFree = (lateFreeDays && lateFreeDays.length) || (prevLateFreeDays && prevLateFreeDays.length)
+    ? { cur: [...(lateFreeDays || [])], prev: [...(prevLateFreeDays || [])] } : NO_LATE_FREE;
   const mpPlan = missedOutPlan(db, month, year, cfg);
-  const sqlRows = loadPersonMonth(db, month, year, cfg, releaseDays, prevReleaseDays, null, mpPlan.keys);
-  const remRows = remeasureRows(db, month, year, cfg, releaseDays, prevReleaseDays, null, mpPlan.keys);
+  const sqlRows = loadPersonMonth(db, month, year, cfg, releaseDays, prevReleaseDays, null, mpPlan.keys, lateFree);
+  const remRows = remeasureRows(db, month, year, cfg, releaseDays, prevReleaseDays, null, mpPlan.keys, lateFree);
   const codes = [...new Set([...sqlRows, ...remRows].map((r) => r.code))];
   const empMap = loadEmployees(db, codes);
   const byCode = buildPeople(sqlRows, remRows, empMap, cfg, cur, prev);
@@ -1732,7 +1807,7 @@ function computeAttendanceReview(db, { month, year, config, releaseDays = [], pr
   const { monthly, departments } = summarise(kept, cfg, cur, prev);
   const analytics = monthAnalytics(kept, cfg, daysInMonth(month, year));
   const keptMap = new Map(kept.map((p) => [p.code, p]));
-  const weekly = weeklyTrend(db, month, year, cfg, releaseDays, prevReleaseDays, keptMap, mpPlan.keys);
+  const weekly = weeklyTrend(db, month, year, cfg, releaseDays, prevReleaseDays, keptMap, mpPlan.keys, lateFree);
   // D-6: lates of long_late_minutes+ that were counted — a late that big is usually a shift question, not a habit
   const longLates = kept.filter((p) => p.cur).filter((p) => (p.cur.long_lates_counted || 0) > 0 || (!p.loading && (p.cur.long_late_forgiven || 0) > 0))
     .map((p) => ({ code: p.code, name: p.name, department: p.department, designation: p.designation, shift_h: p.cur.shift_h,
@@ -1770,8 +1845,11 @@ function computeAttendanceReview(db, { month, year, config, releaseDays = [], pr
     criteria: { assessment_basis: cfg.assessment_basis, assess_fixed_miss_punch: cfg.assess_fixed_miss_punch !== false,
       thresholds: cfg.thresholds, stayed_late_mode: cfg.stayed_late_mode, early_exit_rule: cfg.early_exit_rule,
       late_long_always_counted: cfg.late_long_always_counted === true, missed_out_rule: cfg.missed_out_rule === true,
-      ladder_rule: cfg.ladder_rule === true, ladder_from: cfg.ladder_from, shift_fit: cfg.shift_fit, late_full_hours: cfg.late_full_hours !== false, loading_designation_patterns: cfg.loading_designation_patterns, remeasure: cfg.remeasure || {} },
+      ladder_rule: cfg.ladder_rule === true, ladder_from: cfg.ladder_from, shift_fit: cfg.shift_fit, late_full_hours: cfg.late_full_hours !== false, loading_designation_patterns: cfg.loading_designation_patterns, remeasure: cfg.remeasure || {},
+      late_free_days: [...lateFree.cur] },
     releaseDaysDetected: detectReleaseDays(db, month, year, cfg),
+    plantLateDays: { detected: detectPlantLateDays(db, month, year, cfg), ticked: [...lateFree.cur], prev_ticked: [...lateFree.prev],
+      lates_excused: analytics.waterfall.lates.plant_late_days },
     shiftIssues: isMaster(cfg) ? [] : detectShiftIssues(db, month, year).filter((r) => !cfg.excluded_codes.includes(r.code)
       && !cfg.excluded_departments.map((d) => d.toUpperCase()).includes(String(r.department || '').toUpperCase())),
     trend: { monthly, weekly }, departments, shiftCheck,
@@ -1941,4 +2019,5 @@ module.exports = {
   missedOutPlan, applyMissedOut, d4Early, MISSED_OUT_TYPES,
   strikeCodes, strikeHistory, applyLadder, storedReleaseDays, monthResult, personHistory,
   monthAnalytics, funnelRow, missPunchRow, topPeople, effects, LATE_BANDS, EARLY_BANDS,
+  detectPlantLateDays, storedLateFreeDays, PLANT_LATE_DAYS_SQL, PLANT_LATE_DAYS_SQL_MASTER,
 };
