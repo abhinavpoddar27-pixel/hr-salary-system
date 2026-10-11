@@ -8,8 +8,8 @@ Read PROMPT.md + PLAN.md. GO received; rulings below. Continue from first untick
 - [x] utils/sessionReturn.js + api.js 401 lines
 - [x] useInactivityTimeout rewrite + SessionTimeoutDialog + App.jsx wiring
 - [x] Login.jsx return path + banner
-- [x] hooks/useDraft.js (harness next)
-- [ ] check script + base run
+- [x] hooks/useDraft.js + harness (backend/scripts/p2-08-harness)
+- [x] check script: 57/57 (fix). [ ] base run
 - [ ] jest after, merge main, push
 ## Rulings
 Q1 yes (passive activity ignored while countdown shows). Q2 yes (shared last activity, localStorage + storage event).

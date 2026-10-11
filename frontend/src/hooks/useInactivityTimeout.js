@@ -76,12 +76,13 @@ export default function useInactivityTimeout() {
         // Update cookie is handled by the backend httpOnly cookie
       }
     } catch (e) {
-      // If heartbeat fails with 401, token expired server-side
+      // If heartbeat fails with 401, token expired server-side. The api.js 401 handler has already
+      // saved the return path and started the redirect — a second location change would abort it.
       if (e.response?.status === 401) {
-        doLogout('expired')
+        loggingOutRef.current = true
       }
     }
-  }, [token, doLogout])
+  }, [token])
 
   const staySignedIn = useCallback(() => {
     markActive(true)
