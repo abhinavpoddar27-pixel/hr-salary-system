@@ -1,5 +1,5 @@
 import React, { useState } from 'react'
-import { useQuery, useMutation } from '@tanstack/react-query'
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import toast from 'react-hot-toast'
 import { getNightShifts, confirmNightShift, rejectNightShift } from '../utils/api'
 import { useAppStore } from '../store/appStore'
@@ -31,7 +31,8 @@ export default function NightShift() {
   const [rejectTarget, setRejectTarget] = useState(null)
   const { toggle, isExpanded } = useExpandableRows()
 
-  const { data: res, isLoading, refetch } = useQuery({
+  const queryClient = useQueryClient()
+  const { data: res, isLoading } = useQuery({
     queryKey: ['night-shifts', month, year, selectedCompany],
     queryFn: () => getNightShifts({ month: month, year: year, company: selectedCompany }),
     retry: 0
@@ -42,12 +43,18 @@ export default function NightShift() {
 
   const confirmMutation = useMutation({
     mutationFn: confirmNightShift,
-    onSuccess: () => { toast.success('Night shift confirmed'); refetch() }
+    // N-9: mark every night-shift view stale (getNightShifts sends no-cache)
+    onSuccess: () => { toast.success('Night shift confirmed'); queryClient.invalidateQueries({ queryKey: ['night-shifts'] }) }
   })
 
   const rejectMutation = useMutation({
     mutationFn: rejectNightShift,
-    onSuccess: () => { toast.success('Pairing rejected — record moved to Miss Punches'); refetch() }
+    // N-9: the IN day moves back to Miss Punches (MISSING_OUT) — refresh that list too
+    onSuccess: () => {
+      toast.success('Pairing rejected — record moved to Miss Punches')
+      queryClient.invalidateQueries({ queryKey: ['night-shifts'] })
+      queryClient.invalidateQueries({ queryKey: ['miss-punches'] })
+    }
   })
 
   const filtered = pairs.filter(p => {

@@ -48,7 +48,7 @@ export default function DayCalculation() {
   const [sortField, setSortField] = useState('employee')
   const [sortDir, setSortDir] = useState('asc')
 
-  const { data: res, isLoading, refetch } = useQuery({
+  const { data: res, isLoading } = useQuery({
     queryKey: ['day-calculations', month, year, selectedCompany],
     queryFn: () => getDayCalculations({ month, year, company: selectedCompany }),
     retry: 0
@@ -118,9 +118,11 @@ export default function DayCalculation() {
     mutationFn: () => calculateDays({ month, year, company: '' }),
     onSuccess: (res) => {
       toast.success(`Day calculation complete for ${res.data.processed} employees (all companies)`)
-      refetch()
-      queryClient.invalidateQueries(['org-overview'])
-      queryClient.invalidateQueries(['day-calc-staleness'])
+      // N-7: every company view of the register is stale after a run (getDayCalculations sends no-cache).
+      // { queryKey } form: the bare-array form is read by react-query v5 as "invalidate everything".
+      queryClient.invalidateQueries({ queryKey: ['day-calculations'] })
+      queryClient.invalidateQueries({ queryKey: ['org-overview'] })
+      queryClient.invalidateQueries({ queryKey: ['day-calc-staleness'] })
     },
     onError: (err) => toast.error(err.response?.data?.error || 'Calculation failed')
   })

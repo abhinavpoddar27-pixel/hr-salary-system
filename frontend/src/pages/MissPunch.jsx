@@ -100,7 +100,7 @@ export default function MissPunch() {
   const [finRejectId, setFinRejectId] = useState(null)
   const [finRejectReason, setFinRejectReason] = useState('')
 
-  const { data: res, isLoading, isError, refetch } = useQuery({
+  const { data: res, isLoading, isError } = useQuery({
     queryKey: ['miss-punches', month, year, filterDept, filterType, filterState, selectedCompany],
     queryFn: () => getMissPunches({ month: month, year: year, department: filterDept, state: filterState, company: selectedCompany }),
     retry: 0
@@ -151,11 +151,17 @@ export default function MissPunch() {
     queryFn: () => getLeaveAutomationStatus({ year }),
     refetchInterval: 30 * 1000,
     retry: 0,
+    // N-15: the route is hr/admin only (phase5.js requireHrOrAdmin) — finance/viewer got a 403 every load + 30 s
+    enabled: canHR,
   })
   const period = (autoStatus?.data?.periods || []).find(
     (p) => p.month === month && (!selectedCompany || p.company === selectedCompany)
   )
   const autoStage6 = period?.auto_stage6 || null
+
+  // N-9: every status chip / dept / type view is cached (staleTime 30 s) — after any action mark them all stale
+  // (prefix), so the current view refetches now and the others when opened. getMissPunches sends no-cache.
+  const refreshMissPunches = () => queryClient.invalidateQueries({ queryKey: ['miss-punches'] })
 
   const afterResolve = () => {
     queryClient.invalidateQueries({ queryKey: ['leave-automation-status'] })
@@ -170,7 +176,7 @@ export default function MissPunch() {
         ? 'Corrected — that was the last one, day calculation is running now'
         : 'Corrected — finance still has to review this before day calculation runs')
       setEditId(null)
-      refetch()
+      refreshMissPunches()
       afterResolve()
     }
   })
@@ -182,7 +188,7 @@ export default function MissPunch() {
       toast.success(`${res.data.result.success} records corrected${fired ? ' — day calculation is running now' : ''}`)
       setBulkModal(false)
       setSelected(new Set())
-      refetch()
+      refreshMissPunches()
       afterResolve()
     }
   })
@@ -193,7 +199,12 @@ export default function MissPunch() {
   // /finance-audit/miss-punch/:id/approve|reject.
   const finApproveMut = useMutation({
     mutationFn: (id) => approveMissPunch(id, ''),
-    onSuccess: () => { toast.success('Approved — Stage 6 recalculation required'); refetch() },
+    onSuccess: () => {
+      toast.success('Approved — Stage 6 recalculation required')
+      refreshMissPunches()
+      queryClient.invalidateQueries({ queryKey: ['day-calculations'] })
+      queryClient.invalidateQueries({ queryKey: ['day-calc-staleness'] })
+    },
     onError: (e) => toast.error(e?.response?.data?.error || 'Approve failed')
   })
   const finRejectMut = useMutation({
@@ -201,7 +212,9 @@ export default function MissPunch() {
     onSuccess: () => {
       toast.success('Rejected — ½P credited, awaiting HR re-resolution')
       setFinRejectId(null); setFinRejectReason('')
-      refetch()
+      refreshMissPunches()
+      queryClient.invalidateQueries({ queryKey: ['day-calculations'] })
+      queryClient.invalidateQueries({ queryKey: ['day-calc-staleness'] })
     },
     onError: (e) => toast.error(e?.response?.data?.error || 'Reject failed')
   })
