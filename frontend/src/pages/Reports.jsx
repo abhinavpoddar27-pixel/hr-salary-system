@@ -20,6 +20,7 @@ import { fmtINR, fmtINR2, fmtDate } from '../utils/formatters'
 import useExpandableRows from '../hooks/useExpandableRows'
 import DrillDownRow, { DrillDownChevron } from '../components/ui/DrillDownRow'
 import EmployeeQuickView from '../components/ui/EmployeeQuickView'
+import { confirmDialog } from '../hooks/useConfirm'
 
 const MONTH_NAMES = ['', 'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
 
@@ -300,12 +301,17 @@ export default function Reports() {
       const ee = due.reduce((s, m) => s + (m.ee || 0), 0)
       const er = due.reduce((s, m) => s + (m.er || 0), 0)
       const zero = missing.length - due.length
-      const ok = window.confirm(
+      const ok = await confirmDialog({
+        title: 'Download without these employees?',
+        confirmText: 'Download without them',
+        cancelText: 'Cancel',
+        variant: 'danger',
+        message:
         `${due.length} employee(s) with a contribution have no valid ${idLabel} and are NOT in this file:\n${codes}\n\n` +
         `Their contributions (EE ${fmtINR2(ee)}, ER ${fmtINR2(er)}) would not be filed.` +
         (zero > 0 ? `\n(${zero} more with ₹0 due are listed for information only.)` : '') +
         `\n\nDownload the file without them?`
-      )
+      })
       if (!ok) return
     }
     try {

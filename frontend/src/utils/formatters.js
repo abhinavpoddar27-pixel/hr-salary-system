@@ -83,7 +83,67 @@ export function severityIcon(severity) {
 }
 
 export const MONTH_OPTIONS = Array.from({ length: 12 }, (_, i) => ({ value: i + 1, label: MONTHS_LONG[i + 1] }))
-export const YEAR_OPTIONS = [2024, 2025, 2026, 2027].map(y => ({ value: y, label: String(y) }))
+
+// ── IST calendar helpers ──────────────────────────────────────────────
+// The plant runs on IST; the server stores UTC; a browser may be in any zone.
+// India has no DST, so IST is always UTC+05:30 — a fixed shift is exact and
+// gives the same answer in every browser zone (no Intl dependency).
+const IST_OFFSET_MS = 330 * 60 * 1000
+
+function toEpochMs(value) {
+  if (value === null || value === undefined || value === '') return NaN
+  if (value instanceof Date) return value.getTime()
+  if (typeof value === 'number') return value
+  const str = String(value).trim()
+  if (!str) return NaN
+  // A stored server timestamp "YYYY-MM-DD HH:MM:SS" (or ISO without a zone) is UTC.
+  const iso = str.replace(' ', 'T')
+  const hasZone = /([zZ]|[+-]\d{2}:?\d{2})$/.test(iso)
+  return new Date(hasZone ? iso : `${iso}Z`).getTime()
+}
+
+/** Today's date in IST as 'YYYY-MM-DD', whatever zone the browser is in. */
+export function todayIST(now = new Date()) {
+  const ms = toEpochMs(now)
+  return new Date((Number.isNaN(ms) ? Date.now() : ms) + IST_OFFSET_MS).toISOString().slice(0, 10)
+}
+
+/**
+ * A value for <input type="date"> ('YYYY-MM-DD') in IST.
+ * Accepts a Date, epoch ms, or a stored server timestamp (read as UTC).
+ * A plain 'YYYY-MM-DD' is already a calendar date and is returned unchanged.
+ * Empty / invalid → ''.
+ */
+export function toIstDateInput(value) {
+  if (typeof value === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(value.trim())) return value.trim()
+  const ms = toEpochMs(value)
+  if (Number.isNaN(ms)) return ''
+  return new Date(ms + IST_OFFSET_MS).toISOString().slice(0, 10)
+}
+
+/** { year, month } (month 1-12) of `now` in IST. */
+export function istYearMonth(now = new Date()) {
+  const [y, m] = todayIST(now).split('-').map(Number)
+  return { year: y, month: m }
+}
+
+/** 'YYYY-MM-DD' + n days (calendar arithmetic, zone-free). */
+export function addDaysIso(iso, n) {
+  const d = new Date(`${iso}T00:00:00Z`)
+  d.setUTCDate(d.getUTCDate() + n)
+  return d.toISOString().slice(0, 10)
+}
+
+/** Day of week of a 'YYYY-MM-DD' (0 = Sunday … 6 = Saturday), zone-free. */
+export function isoDayOfWeek(iso) {
+  return new Date(`${iso}T00:00:00Z`).getUTCDay()
+}
+
+/** Current IST year −2 … +1 (evaluated when the app loads). */
+export const YEAR_OPTIONS = (() => {
+  const { year } = istYearMonth()
+  return [year - 2, year - 1, year, year + 1].map(y => ({ value: y, label: String(y) }))
+})()
 
 /**
  * The server stores timestamps in UTC (`datetime('now')`). The plant reads IST.

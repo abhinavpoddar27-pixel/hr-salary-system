@@ -3,6 +3,7 @@ import CodeMirror from '@uiw/react-codemirror'
 import { sql, SQLite } from '@codemirror/lang-sql'
 import api from '../utils/api'
 import { useAppStore } from '../store/appStore'
+import { promptDialog, alertDialog } from '../hooks/useConfirm'
 
 function exportCSV(columns, rows, filename) {
   const cols = columns && columns.length ? columns : (rows[0] ? Object.keys(rows[0]) : [])
@@ -337,13 +338,15 @@ LIMIT 50`
   }, [])
 
   const startRestore = useCallback(async (auditId) => {
-    const remark = window.prompt(
-      'Restore snapshot — describe why (≥10 characters):',
-      ''
-    )
+    const remark = await promptDialog({
+      title: 'Restore snapshot',
+      message: 'Restore snapshot — describe why (≥10 characters):',
+      defaultValue: '',
+      confirmText: 'OK',
+    })
     if (remark == null) return
     if (remark.trim().length < 10) {
-      window.alert('Restore aborted: remark must be at least 10 characters.')
+      await alertDialog({ title: 'Restore aborted', message: 'Restore aborted: remark must be at least 10 characters.' })
       return
     }
     setSnapshotsOpen(false)
@@ -357,7 +360,7 @@ LIMIT 50`
       setLastCommitToast(null)
     } catch (err) {
       const data = err.response?.data || {}
-      window.alert(`Restore failed: ${data.code || 'ERROR'} — ${data.reason || err.message}`)
+      await alertDialog({ title: 'Restore failed', message: `Restore failed: ${data.code || 'ERROR'} — ${data.reason || err.message}`, variant: 'danger' })
     }
   }, [])
 
