@@ -753,6 +753,7 @@ export const attendanceReviewRuns = () => api.get(`${AR}/runs`, { headers: arFre
 export const attendanceReviewRun = (id) => api.get(`${AR}/runs/${id}`, { headers: arFresh })
 export const attendanceReviewGenerate = (body) => api.post(`${AR}/runs`, body)
 export const attendanceReviewFinalise = (id) => api.put(`${AR}/runs/${id}/finalise`)
+export const attendanceReviewTrends = (from, to) => api.get(`${AR}/trends`, { params: { from, to }, headers: arFresh })
 export const attendanceReviewFinance = (id) => api.get(`${AR}/runs/${id}/finance`, { headers: arFresh })
 export const attendanceReviewSendToFinance = (id) => api.post(`${AR}/runs/${id}/send-to-finance`)
 export const attendanceReviewExport = (id, kind) => api.get(`${AR}/runs/${id}/export.${kind}`, { responseType: 'blob', headers: arFresh })

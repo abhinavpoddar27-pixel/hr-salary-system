@@ -1171,7 +1171,7 @@ function WorkingHoursTab({ selectedMonth, selectedYear, dateRangeMode, dateRange
 // MAIN ANALYTICS COMPONENT
 // ═══════════════════════════════════════════════════════════
 export default function Analytics() {
-  const { month, year, dateRangeMode, dateRangeStart, dateRangeEnd, dateProps } = useDateSelector({ mode: 'range', syncToStore: true })
+  const { month, year, dateRangeMode, dateRangeStart, dateRangeEnd, dateProps, handleDateChange } = useDateSelector({ mode: 'range', syncToStore: true })
   const { selectedCompany, user } = useAppStore()
   const isAdmin = normalizeRole(user?.role) === 'admin'
   const dp = { selectedMonth: month, selectedYear: year, dateRangeMode, dateRangeStart, dateRangeEnd, selectedCompany }
@@ -1203,7 +1203,7 @@ export default function Analytics() {
         <Route path="hours" element={<WorkingHoursTab {...dp} />} />
         <Route path="early-exit" element={<EarlyExitDetection {...dp} />} />
         <Route path="attendance-review" element={isAdmin
-          ? <AttendanceReviewTab {...dp} />
+          ? <AttendanceReviewTab {...dp} onSelectMonth={(m, y) => handleDateChange({ month: m, year: y })} />
           : <div className="card p-6 text-sm text-slate-500">The Attendance Review is available to admin only.</div>} />
       </Routes>
     </div>
