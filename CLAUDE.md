@@ -1,3 +1,30 @@
+## Last Session — 2026-10-11 (P1-15: Finance Verification — Flag asks for a reason; Approve gated while flagged)
+**Branch `fix/finverify-flag-reason`, NOT merged.** Frontend only (`pages/FinanceVerification.jsx`, `utils/api.js` 2 reads).
+Plan + log: `docs/ux-bulk/prs/P1-15/PLAN.md`, `PROGRESS.md`. Finding F-12. Rulings Q1–Q4 (11 Oct 2026).
+- **Bug:** Employee Review "⚠" saved the fixed text 'Flagged for review' with no prompt; the Red Flags card "Flag" saved the
+  detector text with no prompt. Sign Off → Approve was always clickable although `POST /finance-verify/signoff` refuses
+  approve (400) while any `finance_audit_status` row of the month is `flagged` or `rejected`. Prod: 11 flagged (Mar 2026,
+  all red-flag texts, 0 'Flagged for review'), 0 sign-offs ever.
+- **Fix:** both Flag buttons open one reason dialog (≥ 5 trimmed chars, `FLAG_REASON_MIN`; live count; reset on every
+  open/close; closes on success only). The red-flag card pre-fills `f.description` (editable) and keeps `flagCategory` (Q1).
+  Stored reason shown under the "Flagged" pill (truncated, full text in tooltip) (Q2). Approve disabled with "N still
+  flagged — verify or resolve them before approving." where N = dashboard flagged + rejected (the server's rule; month-wide,
+  not company-scoped); disabled while the dashboard is loading; Reject still reachable. `verifyMut` gets an `onError`
+  toast. `getFinanceAuditDashboard` / `getFinanceAuditEmployees` send `fresh` (no-cache) so the gate follows a Verify at
+  once (Q3). Server untouched (Q4). dist rebuilt (own commit; api.js is in the index chunk, so most chunk hashes rotate).
+- **Fragile:** the gate's N must stay the server's rule (`status IN ('flagged','rejected')`, month+year) — change both
+  together. The 5-char minimum is UI only. A flag success closes the dialog even if it was reopened for someone else while
+  the request was in flight (same class as P1-05 Q3).
+- **Verified:** `backend/scripts/finverify-flag-reason-check.py` (Chromium, built dist, real finance login, fictional
+  T9561–T9563, current month, port 3115) 32/32 twice — empty/4 chars/spaces disabled, forced click + Cancel send nothing,
+  reopen empty, trimmed reason in POST + DB, row shows it, red-flag pre-fill edited → DB reason + `salary_held` category,
+  Approve disabled "2 still flagged" → verify one "1 still flagged" at once → seeded rejected row also blocks → all verified
+  → approve → signoff row approved, 390px, 0 page/console errors, 0 API ≥ 400. `--base` on an 868f5389 worktree 6/6: ⚠
+  posts 'Flagged for review' with no dialog, Approve enabled while flagged, click → 400. jest 96 suites / 1537 before and after.
+- **Not tested:** Railway; Safari/Firefox; admin role (same `canFinance` gate).
+- **Found, not fixed:** F-a `POST /status` has no server-side reason minimum. F-b sign-off gate + dashboard ignore company;
+  `/signoff-status` reads by month/year only. F-c no per-employee "rejected" action in the UI, yet rejected rows block
+  sign-off. F-d "Bulk Verify Clean Employees" skips already-flagged rows (one-by-one only).
 ## Last Session — 2026-10-11 (Attendance enforcement PR-5: mid-month notice board)
 **Branch `feat/attendance-review-notice-board` (on main 75d60ee6), NOT merged.** Plan: `docs/attendance-review/PR5_NOTICE_BOARD.md`; private plan D-8 / D-9 / MP-2.
 - **What:** Attendance Review tab → third view "Notice board": a printable A4 for the 1st up to a chosen day (default the 15th),
