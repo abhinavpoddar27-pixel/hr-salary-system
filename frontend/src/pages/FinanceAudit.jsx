@@ -690,6 +690,10 @@ function ManualInterventionsTab() {
   const [selected, setSelected] = useState(new Set())
   const [commentModal, setCommentModal] = useState(null)
   const [comment, setComment] = useState('')
+  // P1-16: bulk confirm window — { status: 'APPROVED' | 'REJECTED' }
+  const [bulkModal, setBulkModal] = useState(null)
+  const [bulkReason, setBulkReason] = useState('')
+  const headerBoxRef = useRef(null)
 
   const { data: res } = useQuery({
     queryKey: ['salary-manual-flags', month, year, selectedCompany],
@@ -712,9 +716,15 @@ function ManualInterventionsTab() {
     onSuccess: () => { qc.invalidateQueries(['salary-manual-flags']); qc.invalidateQueries(['readiness']); toast.success('Flag updated') }
   })
 
+  const closeBulkModal = () => { setBulkModal(null); setBulkReason('') }
+  // isPending only flips after a re-render, so a fast double click would send twice — guard with a ref.
+  const bulkInFlight = useRef(false)
+
   const bulkMut = useMutation({
     mutationFn: (data) => bulkApproveFlags(data),
-    onSuccess: () => { qc.invalidateQueries(['salary-manual-flags']); qc.invalidateQueries(['readiness']); setSelected(new Set()); toast.success('Bulk action complete') }
+    onSettled: () => { bulkInFlight.current = false },
+    onSuccess: () => { qc.invalidateQueries(['salary-manual-flags']); qc.invalidateQueries(['readiness']); setSelected(new Set()); closeBulkModal(); toast.success('Bulk action complete') },
+    onError: (err) => toast.error(err?.response?.data?.error || 'Bulk action failed — nothing was changed')
   })
 
   const handleApprove = (id, status) => {
@@ -727,7 +737,18 @@ function ManualInterventionsTab() {
 
   // Live entries (punch / day corrections) cannot be approved via salary_manual_flags id
   const isLive = (f) => f._live === true || (typeof f.id === 'string' && /^(pc|dc)-/.test(f.id))
-  const approvableFiltered = filtered.filter(f => !isLive(f))
+  // P1-16: only pending, non-live rows can be ticked. The header box, the bulk
+  // buttons and the confirm window all work on exactly this set.
+  const isSelectable = (f) => !isLive(f) && f.finance_approved === 0
+  const selectable = filtered.filter(isSelectable)
+  const selectedRows = selectable.filter(f => selected.has(f.id))
+  const allTicked = selectable.length > 0 && selectedRows.length === selectable.length
+  const someTicked = selectedRows.length > 0 && !allTicked
+
+  // A filter / month / company change starts a fresh selection, so nothing hidden stays ticked.
+  useEffect(() => { setSelected(new Set()) }, [filterType, filterStatus, month, year, selectedCompany])
+
+  useEffect(() => { if (headerBoxRef.current) headerBoxRef.current.indeterminate = someTicked }, [someTicked])
 
   const toggleSelect = (id) => {
     const s = new Set(selected)
@@ -736,8 +757,25 @@ function ManualInterventionsTab() {
   }
 
   const selectAll = () => {
-    if (selected.size === approvableFiltered.length) setSelected(new Set())
-    else setSelected(new Set(approvableFiltered.map(f => f.id)))
+    if (allTicked) setSelected(new Set())
+    else setSelected(new Set(selectable.map(f => f.id)))
+  }
+
+  // Bulk reject skips the gross revert that the single reject route performs, so
+  // GROSS_STRUCTURE_CHANGE rows are left out of Reject All (reject them one by one).
+  const isGross = (f) => f.flag_type === 'GROSS_STRUCTURE_CHANGE'
+  const bulkRows = bulkModal?.status === 'REJECTED' ? selectedRows.filter(f => !isGross(f)) : selectedRows
+  const bulkLeftOut = bulkModal?.status === 'REJECTED' ? selectedRows.filter(isGross).length : 0
+  const bulkTypeCounts = bulkRows.reduce((acc, f) => { acc[f.flag_type] = (acc[f.flag_type] || 0) + 1; return acc }, {})
+  const BULK_REASON_MIN = 5
+  const reasonOk = bulkReason.trim().length >= BULK_REASON_MIN
+  const canConfirmBulk = bulkRows.length > 0 && !bulkMut.isPending && (bulkModal?.status !== 'REJECTED' || reasonOk)
+  const confirmBulk = () => {
+    if (!canConfirmBulk || bulkInFlight.current) return
+    bulkInFlight.current = true
+    const data = { flagIds: bulkRows.map(f => f.id), status: bulkModal.status }
+    if (bulkModal.status === 'REJECTED') data.comments = bulkReason.trim()
+    bulkMut.mutate(data)
   }
 
   const statusBadge = (val) => {
@@ -778,11 +816,11 @@ function ManualInterventionsTab() {
           <option value="approved">Approved</option>
           <option value="rejected">Rejected</option>
         </select>
-        {selected.size > 0 && (
+        {selectedRows.length > 0 && (
           <div className="flex items-center gap-2 ml-auto">
-            <span className="text-xs text-slate-500">{selected.size} selected</span>
-            <button onClick={() => bulkMut.mutate({ flagIds: [...selected], status: 'APPROVED' })} className="btn-primary text-xs">Approve All</button>
-            <button onClick={() => bulkMut.mutate({ flagIds: [...selected], status: 'REJECTED' })} className="btn-secondary text-xs">Reject All</button>
+            <span className="text-xs text-slate-500" data-testid="bulk-selected-count">{selectedRows.length} selected</span>
+            <button onClick={() => setBulkModal({ status: 'APPROVED' })} className="btn-primary text-xs">Approve All</button>
+            <button onClick={() => { setBulkReason(''); setBulkModal({ status: 'REJECTED' }) }} className="btn-secondary text-xs">Reject All</button>
           </div>
         )}
       </div>
@@ -792,7 +830,7 @@ function ManualInterventionsTab() {
         <table className="table-compact w-full">
           <thead>
             <tr>
-              <th><input type="checkbox" onChange={selectAll} checked={selected.size === filtered.length && filtered.length > 0} /></th>
+              <th><input type="checkbox" ref={headerBoxRef} data-testid="flags-header-box" onChange={selectAll} checked={allTicked} disabled={selectable.length === 0} title={selectable.length === 0 ? 'No pending flags to select' : 'Select all pending flags shown'} /></th>
               <th>Employee</th>
               <th>Dept</th>
               <th>Flag Type</th>
@@ -814,8 +852,10 @@ function ManualInterventionsTab() {
                   <td>
                     {live ? (
                       <span className="text-[10px] text-slate-300" title="Auto-included from source table">—</span>
+                    ) : !isPending ? (
+                      <span className="text-[10px] text-slate-300" title="Already decided">—</span>
                     ) : (
-                      <input type="checkbox" checked={selected.has(f.id)} onChange={() => toggleSelect(f.id)} />
+                      <input type="checkbox" data-testid={`flag-box-${f.id}`} checked={selected.has(f.id)} onChange={() => toggleSelect(f.id)} />
                     )}
                   </td>
                   <td className="font-medium text-sm">{f.employee_name}<div className="text-[10px] text-slate-400">{f.employee_code}</div></td>
@@ -846,6 +886,48 @@ function ManualInterventionsTab() {
           </tbody>
         </table>
       </div>
+
+      {/* Bulk confirm (P1-16) */}
+      {bulkModal && (
+        <Modal open onClose={() => { if (!bulkMut.isPending) closeBulkModal() }}
+          title={bulkModal.status === 'REJECTED' ? `Reject ${bulkRows.length} flag${bulkRows.length === 1 ? '' : 's'}?` : `Approve ${bulkRows.length} flag${bulkRows.length === 1 ? '' : 's'}?`}>
+          <div className="px-6 py-5 space-y-3 text-sm" data-testid="bulk-modal">
+            {bulkRows.length > 0 && (
+              <ul className="text-xs text-slate-600 space-y-0.5">
+                {Object.entries(bulkTypeCounts).map(([t, n]) => (
+                  <li key={t}>{(FLAG_TYPE_CONFIG[t]?.label) || t}: {n}</li>
+                ))}
+              </ul>
+            )}
+            {bulkLeftOut > 0 && (
+              <div className="text-xs bg-amber-50 border border-amber-200 text-amber-800 rounded p-2" data-testid="bulk-left-out">
+                {bulkLeftOut} gross salary change{bulkLeftOut === 1 ? '' : 's'} left out — reject {bulkLeftOut === 1 ? 'it' : 'them'} one by one
+                with the row's Reject button (that puts the old gross back).
+              </div>
+            )}
+            {bulkRows.length === 0 && (
+              <div className="text-xs text-slate-500">Nothing to {bulkModal.status === 'REJECTED' ? 'reject' : 'approve'} here.</div>
+            )}
+            {bulkModal.status === 'REJECTED' && bulkRows.length > 0 && (
+              <div>
+                <label className="text-xs font-medium text-slate-600">Reason (sent with every rejection)</label>
+                <textarea value={bulkReason} onChange={e => setBulkReason(e.target.value)} data-testid="bulk-reason"
+                  className="input w-full h-20 mt-1" placeholder="Why are these being rejected?" />
+                <div className={clsx('text-[11px]', reasonOk ? 'text-slate-400' : 'text-red-500')}>
+                  {reasonOk ? `${bulkReason.trim().length} characters` : `At least ${BULK_REASON_MIN} characters (${bulkReason.trim().length}/${BULK_REASON_MIN})`}
+                </div>
+              </div>
+            )}
+            <div className="flex gap-2 justify-end">
+              <button onClick={closeBulkModal} disabled={bulkMut.isPending} className="btn-secondary text-sm">Cancel</button>
+              <button onClick={confirmBulk} disabled={!canConfirmBulk} data-testid="bulk-confirm"
+                className={clsx('text-sm', bulkModal.status === 'REJECTED' ? 'btn-danger' : 'btn-primary', !canConfirmBulk && 'opacity-50 cursor-not-allowed')}>
+                {bulkMut.isPending ? 'Working…' : bulkModal.status === 'REJECTED' ? `Reject ${bulkRows.length}` : `Approve ${bulkRows.length}`}
+              </button>
+            </div>
+          </div>
+        </Modal>
+      )}
 
       {/* Comment modal */}
       {commentModal && (
