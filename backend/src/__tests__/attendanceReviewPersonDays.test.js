@@ -82,12 +82,12 @@ const CONFIGS = {
 const asMaster = (c) => ({ ...c, assessment_basis: 'master' });
 
 /** The invariant: per person, counted days / minutes = the engine's person line (0 when not listed). */
-function checkInvariant(db, config, releaseDays = REL) {
-  const r = S.computeAttendanceReview(db, { month: M, year: Y, config, releaseDays, prevReleaseDays: [] });
+function checkInvariant(db, config, releaseDays = REL, lateFreeDays = []) {
+  const r = S.computeAttendanceReview(db, { month: M, year: Y, config, releaseDays, prevReleaseDays: [], lateFreeDays });
   const codes = db.prepare('SELECT DISTINCT employee_code c FROM attendance_processed WHERE substr(date,1,7) = ?').all(`${Y}-${M}`).map((x) => String(x.c));
   const out = [];
   for (const code of codes) {
-    const d = S.personMonthDays(db, code, M, Y, { config, releaseDays, prevReleaseDays: [] });
+    const d = S.personMonthDays(db, code, M, Y, { config, releaseDays, prevReleaseDays: [], lateFreeDays, prevLateFreeDays: [] });
     const p = r.people.find((x) => x.code === code) || { late_days: 0, early_days: 0, late_min: 0, early_min: 0 };
     expect({ code, ...pick(d.totals) }).toEqual({ code, ...pick(p) });
     expect(d.consistent).toBe(true);
@@ -107,6 +107,20 @@ describe('person drill-down — invariant on both bases', () => {
     test(`import basis, ${name} rules: counted days and minutes equal the engine for every person`, () => { checkInvariant(db, cfg); });
     test(`master basis, ${name} rules: counted days and minutes equal the engine for every person`, () => { checkInvariant(db, asMaster(cfg)); });
   }
+
+  test('PR-8: a ticked plant-wide late day is named on its day and the invariant still holds (both bases)', () => {
+    for (const cfg of [CONFIGS.everything, asMaster(CONFIGS.everything)]) {
+      const plain = checkInvariant(db, cfg).days;
+      // first person with a plainly counted late; tick that date
+      const [code, day] = [...plain.entries()].map(([c, d]) => [c, d.days.find((x) => x.late === 'counted')]).find(([, x]) => x);
+      const { days } = checkInvariant(db, cfg, REL, [day.date]);
+      const d = days.get(code);
+      expect(on(d, day.date).late).toBe('excused:plant_late_day');
+      expect(on(d, day.date).notes).toContain('plant_late_day');
+      expect(d.late_free_days).toEqual([day.date]);
+      expect(d.totals.late_days).toBe(plain.get(code).totals.late_days - 1);
+    }
+  });
 
   test('import basis: each excuse kind is named on its day', () => {
     const { days } = checkInvariant(db, CONFIGS.everything);

@@ -2018,7 +2018,7 @@ function personDaySql(master) {
   const i = PERSON_MONTH_TAIL.indexOf(DAY_TAIL_CUT);
   if (i < 0) throw new Error('personMonthDays: PERSON_MONTH_TAIL changed shape — update DAY_TAIL_CUT');
   const cte = PERSON_MONTH_TAIL.slice(0, i);
-  const cols = 'z.isl, z.exc, z.fhl, z.lng, z.exl, z.ise, z.short, z.wm, z.h, z.f, z.dow AS zdow, 1 AS inz';
+  const cols = 'z.isl, z.exc, z.fhl, z.lng, z.exl, z.pld, z.ise, z.short, z.wm, z.h, z.f, z.dow AS zdow, 1 AS inz';
   if (!master) {
     return `${IMPORT_BASE}${cte}
 SELECT b.d, b.st, b.mp, b.la, b.lm, b.ed, b.em, b.ll, b.sd, ${cols}
@@ -2036,13 +2036,14 @@ WHERE b.c = @code AND substr(b.d,1,7) = @cur ORDER BY b.d`;
  * Re-measure, one day at a time (JS re-implementation of remeasureRows for ONE code — keep both in step).
  * Returns Map(date → { late_minutes, early_minutes, late, early, shift }) for the current month's worked, non-miss-punch days.
  */
-function remeasureDays(db, code, month, year, cfg, releaseDays, prevReleaseDays, mp2) {
+function remeasureDays(db, code, month, year, cfg, releaseDays, prevReleaseDays, mp2, lateFree = NO_LATE_FREE) {
   const t = cfg.thresholds; const rm = cfg.remeasure[code]; const p = sqlParams(month, year, cfg, releaseDays, prevReleaseDays);
   const mp2Set = new Set(mp2 || []); const longOn = cfg.late_long_always_counted === true;
   const rows = db.prepare(`SELECT employee_code c, date d, status_final st, COALESCE(is_miss_punch,0) mp, in_time_final it, out_time_final ot,
       COALESCE(is_left_late,0) ll FROM attendance_processed WHERE employee_code = ? AND date BETWEEN ? AND ? ORDER BY employee_code, date`)
     .all(code, p.from, p.to);
   const rel = { [p.cur]: new Set(releaseDays || []), [p.prev]: new Set(prevReleaseDays || []) };
+  const lfree = new Set((lateFree && lateFree.cur) || []); // PR-8: ticked plant-wide late days of this month
   const llOf = (r) => {
     const mode = rm.left_late || 'system';
     if (mode === 'off') return 0;
@@ -2072,7 +2073,8 @@ function remeasureDays(db, code, month, year, cfg, releaseDays, prevReleaseDays,
     const day = { late_minutes: Math.max(0, lateBy), early_minutes: 0, late: 'none', early: 'none', worked_minutes: wmin, shift: shiftLabel };
     if (lateBy > (rm.late_grace ?? 9) && lateBy >= t.late_min_minutes && lateBy < t.misread_minutes) {
       const long = lateBy >= t.long_late_minutes;
-      if (exc) day.late = 'excused:stayed_late';
+      if (lfree.has(r.d)) day.late = 'excused:plant_late_day';
+      else if (exc) day.late = 'excused:stayed_late';
       else if (fullLate && !(long && longOn)) day.late = 'excused:full_hours';
       else { day.late = 'counted'; if (long) day.long_late = true; if (long && fullLate) day.long_late_kept = true; }
     } else if (lateBy > 0) day.late_note = lateBy >= t.misread_minutes ? 'misread' : 'within_grace';
@@ -2100,8 +2102,8 @@ const WORKED_ST = ['P', 'WOP', '½P', 'WO½P'];
  */
 function personMonthInputs(db, month, year, opts = {}) {
   const ym = ymOf(month, year); const pm = prevMonth(month, year);
-  const run = db.prepare('SELECT id, status, config_snapshot, release_days, result_json FROM attendance_review_runs WHERE month = ? AND year = ?').get(month, year);
-  let config = opts.config; let releaseDays = opts.releaseDays; let source = 'live'; let runId = null; let configId = null; let stored = null;
+  const run = db.prepare('SELECT * FROM attendance_review_runs WHERE month = ? AND year = ?').get(month, year);
+  let config = opts.config; let releaseDays = opts.releaseDays; let lateFreeDays = opts.lateFreeDays; let source = 'live'; let runId = null; let configId = null; let stored = null;
   if (run) {
     source = run.status; runId = run.id;
     let res = null; try { res = JSON.parse(run.result_json); } catch { res = null; }
@@ -2113,12 +2115,17 @@ function personMonthInputs(db, month, year, opts = {}) {
     }
     if (config === undefined) { try { config = JSON.parse(run.config_snapshot); } catch { config = undefined; } }
     if (releaseDays === undefined) { try { releaseDays = JSON.parse(run.release_days || '[]'); } catch { releaseDays = []; } }
+    if (lateFreeDays === undefined) { try { lateFreeDays = JSON.parse(run.late_free_days || '[]'); } catch { lateFreeDays = []; } }
   }
   if (config === undefined) { const lc = loadConfig(db, ym); config = lc.config; configId = lc.source ? lc.source.id : null; }
   const cfg = mergeConfig(config);
   if (releaseDays === undefined) releaseDays = detectReleaseDays(db, month, year, cfg).map((d) => d.date);
   const prevReleaseDays = opts.prevReleaseDays !== undefined ? opts.prevReleaseDays : storedReleaseDays(db, pm.month, pm.year);
-  return { cfg, config, releaseDays, prevReleaseDays, source, runId, configId, stored };
+  // PR-8: ticked plant-wide late days — this month's from the run (a month without a run has none), last month's from its run
+  const lf = Array.isArray(lateFreeDays) ? lateFreeDays : [];
+  const plf = opts.prevLateFreeDays !== undefined ? opts.prevLateFreeDays : storedLateFreeDays(db, pm.month, pm.year);
+  const lateFree = lf.length || plf.length ? { cur: [...lf], prev: [...plf] } : NO_LATE_FREE;
+  return { cfg, config, releaseDays, prevReleaseDays, lateFree, source, runId, configId, stored };
 }
 
 /**
@@ -2137,13 +2144,13 @@ function personMonthDays(db, code, month, year, opts = {}) {
     FROM attendance_processed WHERE employee_code = ? AND substr(date,1,7) = ? ORDER BY date`).all(code, ym);
   if (!raw.length) return null;
   const inp = personMonthInputs(db, month, year, { ...opts, code });
-  const { cfg, releaseDays, prevReleaseDays } = inp;
+  const { cfg, releaseDays, prevReleaseDays, lateFree } = inp;
   const t = cfg.thresholds; const master = isMaster(cfg);
 
   // the engine's own pipeline, for the person-level steps and the totals the days must add up to
   const plan = missedOutPlan(db, month, year, cfg);
-  const sqlRows = loadPersonMonth(db, month, year, cfg, releaseDays, prevReleaseDays, null, plan.keys).filter((r) => r.code === code);
-  const remRows = remeasureRows(db, month, year, cfg, releaseDays, prevReleaseDays, null, plan.keys).filter((r) => r.code === code);
+  const sqlRows = loadPersonMonth(db, month, year, cfg, releaseDays, prevReleaseDays, null, plan.keys, lateFree).filter((r) => r.code === code);
+  const remRows = remeasureRows(db, month, year, cfg, releaseDays, prevReleaseDays, null, plan.keys, lateFree).filter((r) => r.code === code);
   const empMap = loadEmployees(db, [code]);
   const byCode = buildPeople(sqlRows, remRows, empMap, cfg, ym, ymOf(prevMonth(month, year).month, prevMonth(month, year).year));
   const { kept } = applyExclusions(byCode, cfg);
@@ -2157,12 +2164,12 @@ function personMonthDays(db, code, month, year, opts = {}) {
   const loading = !!(p && p.loading); const earlyExempt = !!(p && p.early_excluded);
   const fit = !!(m && m.fit_applied);
 
-  const sp = sqlParams(month, year, cfg, releaseDays, prevReleaseDays, null, plan.keys);
+  const sp = sqlParams(month, year, cfg, releaseDays, prevReleaseDays, null, plan.keys, lateFree);
   const dayRows = new Map(db.prepare(personDaySql(master)).all({ ...sp, code }).map((r) => [r.d, r]));
-  const rem = remeasured ? remeasureDays(db, code, month, year, cfg, releaseDays, prevReleaseDays, plan.keys) : null;
+  const rem = remeasured ? remeasureDays(db, code, month, year, cfg, releaseDays, prevReleaseDays, plan.keys, lateFree) : null;
   const shiftByName = db.prepare('SELECT name, start_time, end_time, duration_hours FROM shifts WHERE name = ? ORDER BY id LIMIT 1');
   const gatePass = db.prepare(`SELECT leave_type, duration_hours FROM short_leaves WHERE employee_code = ? AND date = ? AND cancelled_at IS NULL ORDER BY id LIMIT 1`);
-  const rel = new Set(releaseDays || []);
+  const rel = new Set(releaseDays || []); const lfd = new Set(lateFree.cur);
   const masterName = master ? ((db.prepare('SELECT s.name FROM employees e JOIN shifts s ON s.id = e.default_shift_id WHERE e.code = ? ORDER BY e.id LIMIT 1').get(code) || {}).name || null) : null;
   const fitReason = cfg.shift_fit === 'habitual' ? 'excused:shift_fit' : 'excused:full_hours';
   const mp2Dates = new Set(plan.days.get(`${code}|${ym}`) || []);
@@ -2183,6 +2190,7 @@ function personMonthDays(db, code, month, year, opts = {}) {
     if (!r) { day.not_assessed_reason = 'no_attendance_row'; continue; }
     day.times_from = r.is_miss_punch === 1 && r.miss_punch_resolved === 1 ? 'gate_register' : r.is_miss_punch === 1 ? 'missing' : 'machine';
     if (rel.has(d)) day.notes.push('release_day');
+    if (lfd.has(d)) day.notes.push('plant_late_day');
     const gp = gatePass.get(code, d); if (gp) day.gate_pass = { type: gp.leave_type, hours: gp.duration_hours };
     if (r.is_miss_punch === 1 && WORKED_ST.includes(r.status_final)) {
       day.missed_punch = { type: r.miss_punch_type || null, fixed: r.miss_punch_resolved === 1, bulk_day: bulk.has(d), own_number: ownMp.get(d) || null };
@@ -2233,7 +2241,7 @@ function personMonthDays(db, code, month, year, opts = {}) {
         day.worked_minutes = b.wm;
         // late — the engine's own isl / exc / fhl / lng / exl, then the person-level loader step
         if (b.isl === 1) {
-          if (b.exl === 1) day.late = b.exc === 1 ? 'excused:stayed_late' : 'excused:full_hours';
+          if (b.exl === 1) day.late = b.pld === 1 ? 'excused:plant_late_day' : b.exc === 1 ? 'excused:stayed_late' : 'excused:full_hours';
           else if (loading) day.late = 'excused:loader';
           else day.late = 'counted';
           if (b.lng === 1) { day.long_late = true; if (b.exl === 0 && b.exc === 0 && b.fhl === 1) day.notes.push('long_late_counted_despite_full_hours'); }
@@ -2277,7 +2285,7 @@ function personMonthDays(db, code, month, year, opts = {}) {
     code, name: emp.name || null, department: emp.department || null, designation: emp.designation || null, month, year, ym,
     basis: cfg.assessment_basis,
     rule_version: { source: inp.source, run_id: inp.runId, config_id: inp.configId },
-    release_days: releaseDays,
+    release_days: releaseDays, late_free_days: [...lateFree.cur],
     person: { left_out: leftOut, held: !!(p && p.held), loader: loading, early_exempt: earlyExempt, contract_loader: !!(p && p.contract_loader),
       remeasured, shift_check: fit, missed_out_rule: cfg.missed_out_rule === true, long_late_rule: cfg.late_long_always_counted === true },
     days, totals, engine,

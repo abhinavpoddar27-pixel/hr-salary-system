@@ -27,6 +27,7 @@ const REASON = {
   stayed_late: 'stayed late the evening before', full_hours: 'full shift hours worked', release_day: 'plant release day',
   sunday: 'Sunday', loader: 'loader (lates not assessed)', early_exempt: 'early exits not assessed', contract_loader: 'contract loader',
   shift_fit: 'shift check (full hours)', gate_pass: 'gate pass covered it', missed_out_counted: 'counted as a missed OUT instead',
+  plant_late_day: 'plant-wide late day (ticked)',
 }
 const NOT_ASSESSED = {
   no_master: 'no master shift', night_on_day_master: 'night work on a day master', odd_punch: 'in-punch 3 h+ before the shift',
@@ -37,7 +38,7 @@ const NOTE = {
   out_not_verified: 'out typed as shift end — not verified', gate_pass_reduced: 'gate pass reduced the minutes', remeasured: 're-measured',
   late_within_grace: 'late within grace', late_misread: 'late reading 10 h+ — dropped', early_within_grace: 'early within grace',
   early_misread: 'early reading 10 h+ — dropped', long_late_counted_despite_full_hours: '2 h+ late — counted despite full hours',
-  person_held: 'person held', release_day: 'release day',
+  person_held: 'person held', release_day: 'release day', plant_late_day: 'plant-wide late day',
 }
 const hm = (m) => (m ? `${Math.floor(m / 60) ? `${Math.floor(m / 60)}h ` : ''}${Math.round(m % 60)}m` : '—')
 
@@ -77,6 +78,7 @@ export function PersonMonthDays({ code, ym, expect }) {
         <span>Measured on: {d.basis === 'master' ? 'current master shift' : 'shift matched at import'}</span>
         <span>Rules: {d.rule_version.source === 'live' ? 'in force now' : `${d.rule_version.source} review`}{d.rule_version.config_id ? ` (v${d.rule_version.config_id})` : ''}</span>
         {d.release_days.length > 0 && <span>Release days: {d.release_days.map((x) => Number(x.slice(8))).join(', ')}</span>}
+        {d.late_free_days?.length > 0 && <span>Plant-wide late days: {d.late_free_days.map((x) => Number(x.slice(8))).join(', ')}</span>}
         {p.left_out && <span className="text-amber-700">Left out of the review</span>}
         {p.held && <span className="text-amber-700">Held</span>}
         {p.loader && <span>Loader — lates not assessed</span>}
@@ -99,7 +101,7 @@ export function PersonMonthDays({ code, ym, expect }) {
                 x.missed_out ? 'missed OUT counted as an early exit' : null,
                 x.missed_punch && x.missed_punch.bulk_day ? 'system failure day' : null,
                 x.gate_pass ? `gate pass ${x.gate_pass.hours} h` : null,
-                ...(x.notes || []).filter((n) => n !== 'release_day' || x.early === 'none').map((n) => NOTE[n] || n),
+                ...(x.notes || []).filter((n) => (n !== 'release_day' || x.early === 'none') && (n !== 'plant_late_day' || x.late === 'none')).map((n) => NOTE[n] || n),
               ].filter(Boolean)
               const early = x.missed_out ? x.early_minutes : (x.early_minutes_after_gate_pass ?? x.early_minutes)
               return (
