@@ -62,10 +62,12 @@ export const deleteImport = (id) => api.delete(`/import/${id}`)
 
 // ── Attendance ─────────────────────────────────────────
 export const getProcessedRecords = (params) => api.get('/attendance/processed', { params })
-export const getMissPunches = (params) => api.get('/attendance/miss-punches', { params })
+// fresh (N-FRESH/N-9): re-read right after resolve/approve/reject (server GET max-age=5) — no-cache
+export const getMissPunches = (params) => api.get('/attendance/miss-punches', { params, ...fresh })
 export const resolveMissPunch = (id, data) => api.post(`/attendance/miss-punches/${id}/resolve`, data)
 export const bulkResolveMissPunches = (data) => api.post('/attendance/miss-punches/bulk-resolve', data)
-export const getNightShifts = (params) => api.get('/attendance/night-shifts', { params })
+// fresh (N-FRESH/N-9): re-read right after confirm/reject — no-cache past the server's 5 s GET cache
+export const getNightShifts = (params) => api.get('/attendance/night-shifts', { params, ...fresh })
 export const confirmNightShift = (id) => api.post(`/attendance/night-shifts/${id}/confirm`)
 export const rejectNightShift = (id) => api.post(`/attendance/night-shifts/${id}/reject`)
 export const updateAttendanceRecord = (id, data) => api.put(`/attendance/record/${id}`, data)
@@ -99,7 +101,8 @@ export const markEmployeeLeft = (code, data) => api.put(`/employees/${code}/mark
 
 // ── Payroll ────────────────────────────────────────────
 export const calculateDays = (data) => api.post('/payroll/calculate-days', data)
-export const getDayCalculations = (params) => api.get('/payroll/day-calculations', { params })
+// fresh (N-FRESH/N-7): the register is re-read right after Run — no-cache past the server's 5 s GET cache
+export const getDayCalculations = (params) => api.get('/payroll/day-calculations', { params, ...fresh })
 export const getDayCalculation = (code, month, year) => api.get(`/payroll/day-calculations/${code}`, { params: { month, year } })
 export const computeSalary = (data) => api.post('/payroll/compute-salary', data)
 export const getSalaryRegister = (month, year, company) => api.get('/payroll/salary-register', { params: { month, year, company } })
@@ -149,8 +152,9 @@ export const getHoldReleases = (params = {}) => api.get('/payroll/salary/hold-re
 export const getHoldReleasesReport = (params) => api.get('/payroll/salary/hold-releases/report', { params })
 // Stage 6/7 recompute-required banner — detects miss punches whose
 // finance status changed since the last day_calculations.updated_at
+// fresh (N-FRESH): the banner is re-read right after Run / a finance decision — no-cache
 export const getDayCalcStaleness = (month, year, company) =>
-  api.get('/payroll/day-calc-staleness', { params: { month, year, company } })
+  api.get('/payroll/day-calc-staleness', { params: { month, year, company }, ...fresh })
 
 // ── Loans (Loans PR-4: rebuilt on the PR-3 API, routes/loans.js) ──────────
 // server.js marks every GET `Cache-Control: private, max-age=5`, so the browser
@@ -521,7 +525,8 @@ export const rejectDWRateChange = (id, remarks) => api.put(`/daily-wage/rates/${
 export const getPendingDWRateChanges = () => api.get('/daily-wage/rates/pending')
 export const getDWAuditLog = (params) => api.get('/daily-wage/audit', { params })
 // DW Entries
-export const getDWEntries = (params) => api.get('/daily-wage/entries', { params })
+// fresh (N-FRESH, for P1-18): the records list is re-read right after Submit-all — no-cache
+export const getDWEntries = (params) => api.get('/daily-wage/entries', { params, ...fresh })
 export const getDWEntry = (id) => api.get(`/daily-wage/entries/${id}`)
 export const createDWEntry = (data) => api.post('/daily-wage/entries', data)
 export const updateDWEntry = (id, data) => api.put(`/daily-wage/entries/${id}`, data)
