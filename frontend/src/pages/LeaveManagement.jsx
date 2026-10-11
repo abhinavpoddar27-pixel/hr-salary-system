@@ -17,6 +17,7 @@ import useExpandableRows from '../hooks/useExpandableRows'
 import DrillDownRow, { DrillDownChevron } from '../components/ui/DrillDownRow'
 import EmployeeQuickView from '../components/ui/EmployeeQuickView'
 import GatePasses from '../components/GatePasses'
+import { confirmDialog } from '../hooks/useConfirm'
 
 // A leave rejection must say why (P1-06). UI rule only — the route accepts any text.
 const REJECT_REASON_MIN = 5
@@ -1454,8 +1455,8 @@ function CompOffTab({ month, year, company, employees, user }) {
                       {r.finance_status === 'pending' && isHrOrAdmin && !isFinanceOrAdmin && (
                         <button
                           className="px-2 py-1 text-xs font-medium bg-slate-100 text-slate-700 rounded hover:bg-slate-200"
-                          onClick={() => {
-                            if (window.confirm('Cancel this pending comp-off request?')) {
+                          onClick={async () => {
+                            if (await confirmDialog({ title: 'Cancel comp-off request?', message: 'Cancel this pending comp-off request?', confirmText: 'Cancel request', cancelText: 'Keep', variant: 'danger' })) {
                               deleteMutation.mutate(r.id)
                             }
                           }}

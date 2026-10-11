@@ -189,8 +189,11 @@ try:
         print('\n— hr: cancelling gives the points back —')
         hr.reload(); hr.wait_for_load_state('networkidle')
         hr.get_by_role('button', name='Gate Passes', exact=True).click(); hr.wait_for_load_state('networkidle')
-        hr.once('dialog', lambda d: d.accept())
         hr.locator('tbody tr', has=hr.get_by_text('91002', exact=True)).get_by_role('button', name='Cancel').click()
+        # P2-01: the confirm is an in-page dialog now (was window.confirm)
+        cdlg = hr.locator('[role="dialog"]', has=hr.locator('h3', has_text='Cancel gate pass?'))
+        cdlg.wait_for(timeout=10000); time.sleep(.4)   # useConfirm ignores answers in its first 300 ms
+        cdlg.get_by_role('button', name='Cancel gate pass', exact=True).click()
         hr.get_by_text('Gate pass cancelled', exact=True).last.wait_for(timeout=10000)
         open_modal(hr, '91002', 9, 'half_day')
         check('after cancel: Half Day available again', not hr.locator('input[name=gate-pass-type][value=half_day]').is_disabled()

@@ -23,7 +23,7 @@ REPO = os.path.abspath(sys.argv[1])
 SHOTS = sys.argv[sys.argv.index('--shots') + 1] if '--shots' in sys.argv else None
 BACKEND = os.path.join(REPO, 'backend')
 DATA = tempfile.mkdtemp(prefix='filing-sim-')
-PORT = 3931
+PORT = int(os.environ.get('PORT', '3931'))
 URL = f'http://127.0.0.1:{PORT}'
 A = 'Indriyan Beverages Pvt Ltd'; B = 'Asian Lakto Ind Ltd'
 AQ = urllib.parse.quote(A); BQ = urllib.parse.quote(B)
@@ -257,13 +257,15 @@ try:
             pg.click('button:has-text("PF ECR File")'); pg.wait_for_selector('[data-testid="filing-missing"]', timeout=15000)
             panel = pg.inner_text('[data-testid="filing-missing"]')
             check('browser: ECR missing panel names P03 + P04 and says NOT in the file', 'P03' in panel and 'P04' in panel and 'NOT in the file' in panel, panel[:160])
-            msgs = []
-            pg.once('dialog', lambda d: (msgs.append(d.message), d.dismiss()))
-            pg.click('button:has-text("Download ECR")'); pg.wait_for_timeout(800)
-            check('browser: Download ECR asks first (window.confirm names P03, P04 and the ₹)', msgs and 'P03' in msgs[0] and 'P04' in msgs[0] and 'NOT in this file' in msgs[0], msgs[:1])
-            pg.once('dialog', lambda d: d.accept())
+            # P2-01: the confirm is an in-page dialog now (was window.confirm); Cancel first, then download
+            ecr_dlg = pg.locator('[role="dialog"]', has=pg.locator('h3', has_text='Download without these employees?'))
+            pg.click('button:has-text("Download ECR")'); ecr_dlg.wait_for(timeout=10000); pg.wait_for_timeout(400)
+            msg = ecr_dlg.inner_text()
+            check('browser: Download ECR asks first (dialog names P03, P04 and the ₹)', 'P03' in msg and 'P04' in msg and 'NOT in this file' in msg and '₹' in msg, msg[:200])
+            ecr_dlg.get_by_role('button', name='Cancel', exact=True).click(); ecr_dlg.wait_for(state='detached')
+            pg.click('button:has-text("Download ECR")'); ecr_dlg.wait_for(timeout=10000); pg.wait_for_timeout(400)
             with pg.expect_download() as dl:
-                pg.click('button:has-text("Download ECR")')
+                ecr_dlg.get_by_role('button', name='Download without them', exact=True).click()
             check('browser: after confirming, ECR_Oct_2026.txt downloads', dl.value.suggested_filename == 'ECR_Oct_2026.txt', dl.value.suggested_filename)
             # LWF tab
             pg.click('button:has-text("LWF Register")'); pg.wait_for_selector('[data-testid="lwf-capped"]', timeout=15000)
