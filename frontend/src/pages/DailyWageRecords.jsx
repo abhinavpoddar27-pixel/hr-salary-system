@@ -1,5 +1,5 @@
 import React, { useState, useMemo } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useNavigate, useSearchParams } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { getDWEntries, getDWContractors, submitDWEntry, batchSubmitDWEntries, getDWEntry } from '../utils/api'
 import { useAppStore } from '../store/appStore'
@@ -33,13 +33,19 @@ function StatusBadge({ status }) {
 
 export default function DailyWageRecords() {
   const navigate = useNavigate()
+  const [searchParams] = useSearchParams()
   const { user } = useAppStore()
   const canHR = canHRFn(user)
   const qc = useQueryClient()
 
   // ── Filters ─────────────────────────────────────────────────
   const [page, setPage] = useState(1)
-  const [statusFilter, setStatusFilter] = useState('')
+  // ?status=hr_entered (link from the import done screen) opens a filtered list.
+  // Only known status keys are honoured.
+  const [statusFilter, setStatusFilter] = useState(() => {
+    const s = searchParams.get('status') || ''
+    return Object.prototype.hasOwnProperty.call(STATUS_LABELS, s) ? s : ''
+  })
   const [contractorFilter, setContractorFilter] = useState('')
   const [dateFrom, setDateFrom] = useState('')
   const [dateTo, setDateTo] = useState('')
@@ -83,7 +89,7 @@ export default function DailyWageRecords() {
   const batchSubmitMut = useMutation({
     mutationFn: (ids) => batchSubmitDWEntries(ids),
     onSuccess: (res) => { invalidate(); setSelectedIds([]); toast.success(`${res?.data?.submitted || 0} entries submitted`) },
-    onError: (e) => toast.error(e.response?.data?.error || 'Batch submit failed')
+    onError: (e) => { invalidate(); toast.error(e.response?.data?.error || 'Batch submit failed') }
   })
 
   // ── Selection ───────────────────────────────────────────────
@@ -113,17 +119,24 @@ export default function DailyWageRecords() {
       </div>
 
       {/* KPI Cards */}
-      <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
+      <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-7 gap-3">
         {[
           { label: 'Total', value: summary.total || 0, color: 'slate', filter: '' },
+          // Drafts (hr_entered) and needs-correction rows wait on HR; finance cannot
+          // see drafts at all until they are submitted (finding D-1).
+          { label: 'Draft', value: summary.hr_entered || 0, color: 'slate', filter: 'hr_entered', alert: 'amber' },
+          { label: 'Needs Correction', value: summary.needs_correction || 0, color: 'red', filter: 'needs_correction', alert: 'red' },
           { label: 'Pending Finance', value: summary.pending_finance || 0, color: 'amber', filter: 'pending_finance' },
           { label: 'Approved', value: summary.approved || 0, color: 'green', filter: 'approved' },
           { label: 'Paid', value: summary.paid || 0, color: 'blue', filter: 'paid' },
           { label: 'Rejected', value: summary.rejected || 0, color: 'rose', filter: 'rejected' }
         ].map(kpi => (
           <button key={kpi.label} onClick={() => setKPIFilter(kpi.filter)}
-            className={clsx('bg-white rounded-lg border p-3 text-left transition-colors hover:border-blue-300',
-              statusFilter === kpi.filter ? 'border-blue-400 ring-1 ring-blue-200' : 'border-slate-200')}>
+            data-testid={`dw-kpi-${kpi.filter || 'total'}`}
+            className={clsx('rounded-lg border p-3 text-left transition-colors hover:border-blue-300',
+              kpi.alert && kpi.value > 0 ? (kpi.alert === 'red' ? 'bg-red-50' : 'bg-amber-50') : 'bg-white',
+              statusFilter === kpi.filter ? 'border-blue-400 ring-1 ring-blue-200'
+                : kpi.alert && kpi.value > 0 ? (kpi.alert === 'red' ? 'border-red-300' : 'border-amber-300') : 'border-slate-200')}>
             <div className={clsx('text-xl font-bold', `text-${kpi.color}-700`)}>{kpi.value}</div>
             <div className="text-[10px] text-slate-400 uppercase font-medium">{kpi.label}</div>
           </button>
@@ -153,6 +166,18 @@ export default function DailyWageRecords() {
             className="px-3 py-2 text-sm text-slate-500 hover:text-slate-700">Clear</button>
         )}
       </div>
+
+      {/* What to do with the HR-side statuses */}
+      {statusFilter === 'hr_entered' && (
+        <div className="bg-amber-50 border border-amber-200 rounded-lg px-4 py-2 text-sm text-amber-800" data-testid="dw-draft-hint">
+          Drafts are not visible to finance until submitted.{canHR ? ' Tick the rows and press Submit Selected for Review.' : ''}
+        </div>
+      )}
+      {statusFilter === 'needs_correction' && (
+        <div className="bg-red-50 border border-red-200 rounded-lg px-4 py-2 text-sm text-red-700" data-testid="dw-correction-hint">
+          Finance sent these back. Open a row to read the note{canHR ? ', then Edit & Resubmit' : ''}.
+        </div>
+      )}
 
       {/* Batch Submit Bar */}
       {canHR && selectedIds.length > 0 && (

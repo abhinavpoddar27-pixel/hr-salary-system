@@ -132,7 +132,7 @@ try:
         check('button: Send 3 to finance', 'Send 3 to finance', btn.inner_text().strip())
         blocked = pg.get_by_test_id('ar-finance-blocked').inner_text()
         check('F9003 named as blocked by the existing approved row', True, 'F9003' in blocked and 'Approved' in blocked)
-        check('contractor note shown', 1, pg.get_by_text('Contractor deductions are recorded').count())
+        check('contractor note shown', 1, pg.get_by_text('Contractor deductions reach their pay too').count())
         check('nothing written before the click', 1, q('SELECT COUNT(*) n FROM late_coming_deductions')[0]['n'])
         section(pg, 'Finance').screenshot(path=os.path.join(WORK, 'finance-before.png'))
         btn.click(); pg.get_by_text('3 sent to finance', exact=False).wait_for(timeout=10000)

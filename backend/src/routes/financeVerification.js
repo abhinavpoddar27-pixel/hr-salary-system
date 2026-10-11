@@ -7,6 +7,18 @@ const { requireFinanceOrAdmin } = require('../middleware/roles');
 // be a naive `req.user.role` check that broke for any legacy non-
 // canonical role string — the new helper runs roles through normalizeRole.
 
+// P1-13 (F-4): Finance Verification covers ALL companies for the month — one sign-off per
+// month (owner ruling, 11 Oct 2026). payroll.js's /finalise gate is month-wide, so a
+// per-company sign-off could never gate one company. The sign-off row is keyed on
+// company = '' so UNIQUE(month, year, company) really upserts: a NULL company never
+// conflicts in SQLite (every sign-off used to append a row and reads returned the first).
+// Every read here ignores a `company` query/body value on purpose.
+const SIGNOFF_SCOPE = '';
+function latestSignoff(db, month, year) {
+  return db.prepare("SELECT * FROM finance_month_signoff WHERE month = ? AND year = ? AND COALESCE(company, '') = ? ORDER BY id DESC LIMIT 1")
+    .get(month, year, SIGNOFF_SCOPE);
+}
+
 // GET /dashboard
 router.get('/dashboard', (req, res) => {
   const db = getDb();
@@ -26,7 +38,7 @@ router.get('/dashboard', (req, res) => {
 
   let signoffStatus = 'pending';
   try {
-    const so = db.prepare('SELECT status FROM finance_month_signoff WHERE month = ? AND year = ?').get(month, year);
+    const so = latestSignoff(db, month, year);
     if (so) signoffStatus = so.status;
   } catch {}
 
@@ -46,7 +58,8 @@ router.get('/dashboard', (req, res) => {
         totalDeductions: Math.round(sc?.totalDed || 0),
         heldSalaries: held?.cnt || 0,
         grossChangedCount: changed?.cnt || 0,
-        signoffStatus
+        signoffStatus,
+        scope: 'all'
       },
       redFlagSummary: rfSummary,
       redFlagCount: redFlags.length
@@ -192,7 +205,7 @@ router.put('/comment/:id/resolve', requireFinanceOrAdmin, (req, res) => {
 // POST /signoff
 router.post('/signoff', requireFinanceOrAdmin, (req, res) => {
   const db = getDb();
-  const { month, year, company, status, rejectionReason } = req.body;
+  const { month, year, status, rejectionReason } = req.body; // body `company` ignored (P1-13)
 
   if (status === 'approved') {
     const flagged = db.prepare("SELECT COUNT(*) as cnt FROM finance_audit_status WHERE month = ? AND year = ? AND status IN ('flagged', 'rejected')").get(month, year);
@@ -209,13 +222,19 @@ router.post('/signoff', requireFinanceOrAdmin, (req, res) => {
   const verified = db.prepare("SELECT COUNT(*) as cnt FROM finance_audit_status WHERE month = ? AND year = ? AND status = 'verified'").get(month, year);
   const flagged = db.prepare("SELECT COUNT(*) as cnt FROM finance_audit_status WHERE month = ? AND year = ? AND status = 'flagged'").get(month, year);
 
-  db.prepare(`INSERT INTO finance_month_signoff (month, year, company, status, total_employees, verified_count, flagged_count, rejected_count, total_net_salary, rejection_reason, signed_by)
+  const upsert = db.prepare(`INSERT INTO finance_month_signoff (month, year, company, status, total_employees, verified_count, flagged_count, rejected_count, total_net_salary, rejection_reason, signed_by)
     VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?)
     ON CONFLICT(month, year, company) DO UPDATE SET
       status = excluded.status, total_employees = excluded.total_employees, verified_count = excluded.verified_count,
       flagged_count = excluded.flagged_count, total_net_salary = excluded.total_net_salary,
       rejection_reason = excluded.rejection_reason, signed_by = excluded.signed_by, signed_at = datetime('now')
-  `).run(month, year, company || null, status, sc?.cnt || 0, verified?.cnt || 0, flagged?.cnt || 0, Math.round(sc?.total || 0), rejectionReason || null, req.user?.username || 'finance');
+  `);
+  // Old NULL-company rows (the duplicate-append rows) go in the same transaction, so a
+  // reject after an approve leaves no approved row behind for payroll.js's finalise gate.
+  db.transaction(() => {
+    db.prepare('DELETE FROM finance_month_signoff WHERE month = ? AND year = ? AND company IS NULL').run(month, year);
+    upsert.run(month, year, SIGNOFF_SCOPE, status, sc?.cnt || 0, verified?.cnt || 0, flagged?.cnt || 0, Math.round(sc?.total || 0), rejectionReason || null, req.user?.username || 'finance');
+  })();
 
   if (status === 'approved') {
     try {
@@ -226,7 +245,9 @@ router.post('/signoff', requireFinanceOrAdmin, (req, res) => {
     } catch (e) {}
   }
 
-  res.json({ success: true });
+  // P1-13: return the stored row so the page shows the decision at once (GET reads may be
+  // served from the browser's 5 s cache for a moment after the write).
+  res.json({ success: true, data: { ...latestSignoff(db, month, year), scope: 'all' } });
 });
 
 // GET /signoff-status
@@ -234,8 +255,8 @@ router.get('/signoff-status', (req, res) => {
   const db = getDb();
   const { month, year } = req.query;
   try {
-    const so = db.prepare('SELECT * FROM finance_month_signoff WHERE month = ? AND year = ?').get(month, year);
-    res.json({ success: true, data: so || { status: 'pending' } });
+    const so = latestSignoff(db, month, year);
+    res.json({ success: true, data: so ? { ...so, scope: 'all' } : { status: 'pending', scope: 'all' } });
   } catch { res.json({ success: true, data: { status: 'pending' } }); }
 });
 

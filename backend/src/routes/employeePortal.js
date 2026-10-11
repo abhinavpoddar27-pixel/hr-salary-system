@@ -136,12 +136,11 @@ router.get('/loans', requireEmployee, (req, res) => {
 });
 
 // PATCH /api/portal/bank-details
+// P1-14 review F1: an employee login may not redirect its own salary. Bank
+// details change through HR (Employee Master), which writes both column pairs
+// and an audit row. Nothing is written here.
 router.patch('/bank-details', requireEmployee, (req, res) => {
-  const db = getDb();
-  const { bank_account, bank_name, ifsc } = req.body;
-  db.prepare(`UPDATE employees SET bank_account = ?, bank_name = ?, ifsc = ?, updated_at = datetime('now') WHERE code = ?`)
-    .run(bank_account, bank_name, ifsc, req.user.employee_code);
-  res.json({ success: true, message: 'Bank details updated' });
+  res.status(403).json({ success: false, code: 'BANK_CHANGE_VIA_HR', error: 'Ask HR to change your bank details' });
 });
 
 module.exports = router;
