@@ -4,7 +4,7 @@ Read PROMPT.md + PLAN.md. Phase 0 done; GO received. Build per PLAN + rulings.
 ## Steps
 - [x] Phase 0: code read, production shapes (counts only), PLAN.md
 - [x] go received (11 Oct)
-- [ ] parseCodes.js + parse-codes-check.mjs
+- [x] parseCodes.js + parse-codes-check.mjs (37/37)
 - [ ] EmployeeSearchSelect aria fix
 - [ ] PeoplePicker.jsx
 - [ ] harness + people-picker-check.py (+ --base)
