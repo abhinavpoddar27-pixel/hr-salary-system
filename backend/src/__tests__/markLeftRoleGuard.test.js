@@ -125,17 +125,19 @@ describe('PUT /api/employees/:code/mark-left — hr and admin still work, loan f
 describe('PUT /api/employees/:code cannot move an employee into Left / Exited', () => {
   const put = (code, as, body) => api.request('PUT', `/api/employees/${code}`, { as, body });
 
+  // P1-25: PUT /:code is hr + admin only, so viewer / finance get 403 before the
+  // exit check; nothing is written either way.
   test.each([
-    ['hr1', 'Left'], ['boss', 'Exited'], ['view1', 'Left'], ['fin1', 'Exited'], ['hr1', ' left '],
-  ])('%s sending status %p → 400 pointing to Mark Left; nothing written', async (who, status) => {
+    ['hr1', 'Left', 400], ['boss', 'Exited', 400], ['view1', 'Left', 403], ['fin1', 'Exited', 403], ['hr1', ' left ', 400],
+  ])('%s sending status %p → %p; nothing written', async (who, status, expected) => {
     const code = nextCode();
     addEmployee(code);
     const loanId = addActiveLoan(code);
     const before = { emp: empRow(code), loan: loanRow(loanId), counts: counts() };
 
     const r = await put(code, who, { status, name: 'RENAMED' });
-    expect(r.status).toBe(400);
-    expect(r.body.error).toMatch(/Use Mark Left/);
+    expect(r.status).toBe(expected);
+    expect(r.body.error).toMatch(expected === 400 ? /Use Mark Left/ : /HR or admin access required/);
 
     expect(empRow(code)).toEqual(before.emp);
     expect(db.prepare('SELECT name FROM employees WHERE code = ?').get(code).name).toBe('TEST');   // whole edit refused

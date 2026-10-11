@@ -46,14 +46,16 @@ function uploaded(code, over = {}) {
 }
 
 describe('T9a — plant master writers keep the uploaded flags', () => {
-  test('PUT /employees/:code with flags (and a gross change) → flags unchanged, ignoredFields', async () => {
+  // P1-25: PUT /:code refuses a CHANGED gross (salary request flow only), so the
+  // current gross is re-sent — it still drives the structure sync.
+  test('PUT /employees/:code with flags (and the gross re-sent) → flags unchanged, ignoredFields', async () => {
     const e = uploaded('W101');
     const before = snapshot(e);
-    const r = await api.request('PUT', '/api/employees/W101', { as: 'boss', body: { pf_applicable: 1, esi_applicable: 0, lwf_applicable: 0, gross_salary: 16000, name: 'SYNTH 2' } });
+    const r = await api.request('PUT', '/api/employees/W101', { as: 'boss', body: { pf_applicable: 1, esi_applicable: 0, lwf_applicable: 0, gross_salary: 15000, name: 'SYNTH 2' } });
     expect(r.status).toBe(200);
     expect(r.body.ignoredFields).toEqual(['pf_applicable', 'esi_applicable', 'lwf_applicable']);
     expect(snapshot(e)).toEqual(before);
-    expect(S.master(db, e).gross_salary).toBe(16000);
+    expect(S.master(db, e).gross_salary).toBe(15000);
   });
 
   test('PUT /employees/:code with only flags → "No updates", nothing changed', async () => {
@@ -67,7 +69,10 @@ describe('T9a — plant master writers keep the uploaded flags', () => {
   test('PUT /employees/:code basic/da on an employee with no structure → inserted row carries the in-force flags (0 when none), not DEFAULT 1', async () => {
     const e = S.plant(db, { code: 'W103' });
     // basic/da alone hit the pre-existing "No updates" early return (not in allowedFields) — send a name too
-    await api.request('PUT', '/api/employees/W103', { as: 'boss', body: { name: 'SYNTH', basic: 8000, da: 0, hra: 2000 } });
+    // P1-25 (F3): a CHANGED component is refused on PUT /:code, so the same (0) values are re-sent —
+    // the insert path still runs and must carry the flags.
+    const r = await api.request('PUT', '/api/employees/W103', { as: 'boss', body: { name: 'SYNTH', basic: 0, da: 0, hra: 0 } });
+    expect(r.status).toBe(200);
     const rows = S.plantRows(db, e);
     expect(rows.length).toBe(1);
     expect(S.flags(rows[0])).toEqual({ pf: 0, esi: 0, lwf: 0 });
@@ -194,7 +199,11 @@ describe('T8b — new employees land with flags OFF on the DEFAULT 1 tables (L3)
     `).run('W120', 'NEW JOINER', 'W120', 'PRODUCTION', S.COMPANY);
     const e = { id: db.prepare("SELECT id FROM employees WHERE code='W120'").get().id, code: 'W120', company: S.COMPANY };
     expect(S.flags(S.master(db, e))).toEqual({ pf: 0, esi: 0, lwf: 0 });
-    await api.request('PUT', '/api/employees/W120', { as: 'boss', body: { gross_salary: 12000 } }); // sync create path
+    // P1-25: a first gross via PUT /:code is refused, so seed it and re-send the
+    // same value — the sync create path still runs.
+    db.prepare('UPDATE employees SET gross_salary = 12000 WHERE id = ?').run(e.id);
+    const r = await api.request('PUT', '/api/employees/W120', { as: 'boss', body: { gross_salary: 12000 } }); // sync create path
+    expect(r.status).toBe(200);
     expect(S.plantRows(db, e).map(S.flags)).toEqual([{ pf: 0, esi: 0, lwf: 0 }]);
     S.plantMonth(db, e, 9, 2026);
     const sc = S.computePlant(db, e, 9, 2026);

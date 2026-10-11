@@ -390,7 +390,9 @@ router.put('/bulk-shift', (req, res) => {
 });
 
 // UPDATE employee
-router.put('/:code', (req, res) => {
+// hr + admin only (P1-25): production callers were hr and admin only; the
+// guard runs before the lookup (403, not 404), like Mark Left.
+router.put('/:code', requireHrOrAdmin, (req, res) => {
   const db = getDb();
   const { code } = req.params;
   const updates = req.body;
@@ -404,6 +406,49 @@ router.put('/:code', (req, res) => {
   const isExit = (s) => ['left', 'exited'].includes(String(s ?? '').trim().toLowerCase());
   if (updates.status !== undefined && isExit(updates.status) && !isExit(emp.status)) {
     return res.status(400).json({ success: false, error: 'Use Mark Left to record an exit — it sets the exit date and flags loans' });
+  }
+
+  // P1-25: a gross change goes through PUT /:code/salary only (a Pending
+  // salary_change_requests row that finance approves). Writing it here moved
+  // Stage 7 pay with no approval and no audit row. Every role, admin included;
+  // a first gross on an employee with none is a change too. Re-sending the
+  // current value still works (same 0.01 tolerance as /salary; NULL = 0).
+  if (updates.gross_salary !== undefined) {
+    const next = Number(updates.gross_salary);
+    const cur = Number(emp.gross_salary) || 0;
+    if (!Number.isFinite(next) || Math.abs(next - cur) > 0.01) {
+      return res.status(400).json({
+        success: false, code: 'GROSS_CHANGE_NEEDS_APPROVAL',
+        error: 'Change salary through Salary → request a change (finance approves)',
+      });
+    }
+    // Same value: write the STORED value, never the sent text ('0x3A98',
+    // 15000.009 and '' all pass the numeric check above).
+    updates.gross_salary = emp.gross_salary;
+  }
+
+  // P1-25 (review F3): the salary components below write salary_structures
+  // directly (they move the PF base). Same rule as gross: a changed component
+  // is refused; a same-value resend passes and writes the STORED values, so a
+  // component left out of the body keeps its value instead of becoming 0.
+  const COMPONENT_KEYS = { basic: 'basic', da: 'da', hra: 'hra', conveyance: 'conveyance', otherAllowances: 'other_allowances' };
+  if (Object.keys(COMPONENT_KEYS).some((k) => updates[k] !== undefined)) {
+    const latest = db.prepare('SELECT * FROM salary_structures WHERE employee_id = ? ORDER BY effective_from DESC LIMIT 1').get(emp.id) || {};
+    for (const [key, col] of Object.entries(COMPONENT_KEYS)) {
+      if (updates[key] === undefined) continue;
+      const next = Number(updates[key]);
+      const cur = Number(latest[col]) || 0;
+      if (!Number.isFinite(next) || Math.abs(next - cur) > 0.01) {
+        return res.status(400).json({
+          success: false, code: 'SALARY_CHANGE_NEEDS_APPROVAL',
+          error: 'Change salary through Salary → request a change (finance approves)',
+        });
+      }
+    }
+    // Only basic / da trigger the structure write further down; normalise only then.
+    if (updates.basic !== undefined || updates.da !== undefined) {
+      for (const [key, col] of Object.entries(COMPONENT_KEYS)) updates[key] = Number(latest[col]) || 0;
+    }
   }
 
   const allowedFields = [
