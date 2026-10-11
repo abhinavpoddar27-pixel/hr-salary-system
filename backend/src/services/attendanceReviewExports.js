@@ -319,8 +319,11 @@ function buildTrendsWorkbook(data) {
   const wb = XLSX.utils.book_new();
   const ms = data.months || [];
   const W = (r, k) => (r.waterfall ? (k.split('.').reduce((o, x) => (o == null ? o : o[x]), r.waterfall)) : '');
+  // T5: which rules version made each month's figures; what-if rows say so
+  const rulesLabel = (r) => (!r.rules ? 'unknown' : r.rules.version == null ? 'built-in defaults' : `v${r.rules.version}${r.rules.effective_from ? ` (from ${r.rules.effective_from})` : ''}`);
   XLSX.utils.book_append_sheet(wb, sheet(ms, [
-    { k: 'ym', h: 'Month' }, { k: 'source', h: 'From' }, { k: 'basis', h: 'Basis' }, { k: 'people_assessed', h: 'People assessed' },
+    { k: 'ym', h: 'Month' }, { k: 'source', h: 'From', v: (r) => (r.what_if ? 'what-if (live)' : r.source) }, { k: 'basis', h: 'Basis' },
+    { k: 'rules', h: 'Rules version', w: 22, v: rulesLabel }, { k: 'people_assessed', h: 'People assessed' },
     { k: 'late_pct', h: 'Late %', v: (r) => r.all.late_pct }, { k: 'early_pct', h: 'Early %', v: (r) => r.all.early_pct }, { k: 'lost', h: 'Time lost %', v: (r) => r.all.time_lost_pct },
     { k: 'listed', h: 'Action list', v: (r) => r.action.people }, { k: 'ded', h: 'Deductions', v: (r) => r.action.deductions }, { k: 'days', h: 'Deduction days', v: (r) => r.action.deduction_days },
     { k: 'ind', h: 'Indicative ₹', v: (r) => r.action.indicative_amount },

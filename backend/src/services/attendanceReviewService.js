@@ -1453,13 +1453,16 @@ const pickGroup = (g) => { const o = { ...ZERO_GROUP }; for (const k of Object.k
  * Reduces one month's review result (stored run or live) to the figures the Trends charts need. Tolerant of older stored
  * result shapes: a field a run never had reads as 0 / []. Codes and names appear only in action_people (admin screen).
  */
-function trendRow(result, { month, year, source, run_id = null }) {
+function trendRow(result, { month, year, source, run_id = null, rules = null }) {
   const ym = ymOf(month, year);
   const monthly = (result.trend && result.trend.monthly && result.trend.monthly[ym]) || {};
   const at = result.actionTotals || {};
   const list = result.actionList || [];
   return {
     ym, month, year, source, run_id,
+    // T5: the rules version the figures were made with — { version (config id, null = built-in defaults), effective_from, from }
+    // or null when it cannot be told (older run without configSource whose snapshot matches no saved version)
+    rules: rules || null,
     basis: (result.criteria && result.criteria.assessment_basis) || (result.assessment && result.assessment.basis) || 'import',
     people_assessed: (result.meta && result.meta.people_assessed) || 0,
     all: pickGroup(monthly.All), company: pickGroup(monthly.Company), contract: pickGroup(monthly.Contract),
