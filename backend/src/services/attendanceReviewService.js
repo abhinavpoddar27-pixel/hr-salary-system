@@ -262,6 +262,18 @@ function roundDeduction(wdl, t) {
  * Shift-check columns: ms_days (Mon–Sat worked days when @sunOff), early_short* (exits on days out − in < shift length − @fitGrace).
  * Exported so the acceptance check can run the exact same SQL through the SQL Console.
  */
+// T4: bands (minutes) and weekdays for the Trends distributions — one column per bucket, summed per person-month.
+const LATE_BANDS = [[0, 15], [15, 30], [30, 60], [60, 120], [120, 100000]];
+const EARLY_BANDS = [[0, 30], [30, 60], [60, 120], [120, 100000]];
+const DIST_SQL = [
+  ...LATE_BANDS.map(([a, b], i) => `SUM(CASE WHEN isl = 1 AND exl = 0 AND lm >= ${a} AND lm < ${b} THEN 1 ELSE 0 END) AS lb${i}`),
+  ...EARLY_BANDS.map(([a, b], i) => `SUM(CASE WHEN ise = 1 AND em >= ${a} AND em < ${b} THEN 1 ELSE 0 END) AS eb${i}`),
+  ...EARLY_BANDS.map(([a, b], i) => `SUM(CASE WHEN ise = 1 AND short = 1 AND em >= ${a} AND em < ${b} THEN 1 ELSE 0 END) AS ebs${i}`),
+  ...[0, 1, 2, 3, 4, 5, 6].map((d) => `SUM(CASE WHEN isl = 1 AND exl = 0 AND dow = '${d}' THEN 1 ELSE 0 END) AS lw${d}`),
+  ...[0, 1, 2, 3, 4, 5, 6].map((d) => `SUM(CASE WHEN ise = 1 AND dow = '${d}' THEN 1 ELSE 0 END) AS ew${d}`),
+  ...[0, 1, 2, 3, 4, 5, 6].map((d) => `SUM(CASE WHEN ise = 1 AND short = 1 AND dow = '${d}' THEN 1 ELSE 0 END) AS ews${d}`),
+].join(',\n       ');
+
 const PERSON_MONTH_TAIL = `
 pl AS (SELECT c, d, MAX(ll) ll FROM base GROUP BY c, d),
 w AS (SELECT b.*, LAG(b.ll) OVER (PARTITION BY b.c ORDER BY b.d) pll FROM base b
@@ -316,7 +328,9 @@ SELECT c AS code, ym, COUNT(*) AS worked_days, SUM(f) AS worked_units, SUM(f*h*6
        SUM(CASE WHEN ise = 1 AND short = 1 AND em >= @halfMin THEN 1 ELSE 0 END) AS early_short_half,
        SUM(CASE WHEN ise = 1 AND short = 1 AND em >= @halfMin THEN em ELSE 0 END) AS early_short_half_min,
        SUM(CASE WHEN ise = 1 AND short = 1 AND em >= @midMin AND em < @halfMin THEN 1 ELSE 0 END) AS early_short_mid,
-       SUM(CASE WHEN ise = 1 AND short = 1 AND em >= @midMin AND em < @halfMin THEN em ELSE 0 END) AS early_short_mid_min
+       SUM(CASE WHEN ise = 1 AND short = 1 AND em >= @midMin AND em < @halfMin THEN em ELSE 0 END) AS early_short_mid_min,
+       -- T4 distributions: counted lates by band / weekday; early exits by band / weekday, plain and short-day versions
+       ${DIST_SQL}
 FROM z GROUP BY c, ym`;
 
 const WEEKLY_TAIL = `
@@ -877,6 +891,52 @@ function actions(people, cfg, overrides, month, year) {
   return { actionList, earlyExitWarnings, overridesApplied: applied };
 }
 
+// ── step 7c: T4 month analytics — waterfall, ₹ value of time lost, distributions ──
+
+/**
+ * From the assessed, non-held people of the month (after exclusions and MP-2): how measured lates / early exits became
+ * the counted ones, the ₹ value of the counted time (gross ÷ days in month ÷ shift minutes), and the counted lates /
+ * early exits by band and weekday (MP-2 missed OUTs as exits of missed_out_minutes on their dates).
+ * Re-measured people carry no band / weekday columns and add 0 there.
+ */
+function monthAnalytics(kept, cfg, md) {
+  const t = cfg.thresholds;
+  const live = kept.filter((p) => p.cur && !p.held);
+  const n = (x) => Number(x) || 0;
+  const w = { lates: { measured: 0, stayed_late: 0, full_hours: 0, loaders: 0, counted: 0 },
+    early: { measured: 0, full_hours: 0, exempt: 0, missed_out: 0, counted: 0 }, value_lost_inr: 0, minutes_counted: 0 };
+  const lateBands = LATE_BANDS.map(() => 0); const earlyBands = EARLY_BANDS.map(() => 0);
+  const lateWd = [0, 0, 0, 0, 0, 0, 0]; const earlyWd = [0, 0, 0, 0, 0, 0, 0];
+  const mBand = EARLY_BANDS.findIndex(([a, b]) => t.missed_out_minutes >= a && t.missed_out_minutes < b);
+  for (const p of live) {
+    const c = p.cur; const ee = !!p.early_excluded; const fit = !!c.fit_applied;
+    w.lates.measured += n(c.late_raw);
+    w.lates.full_hours += n(c.late_full_excused);
+    w.lates.stayed_late += n(c.late_excused) - n(c.late_full_excused);
+    w.lates.loaders += p.loading ? n(c.lates) : 0;
+    w.lates.counted += n(c.lates_counted);
+    w.early.measured += n(c.early_exits);
+    w.early.full_hours += n(c.fit_excused);
+    w.early.exempt += ee ? n(c.early_exits) : 0;
+    w.early.missed_out += n(c.missed_out_days);
+    w.early.counted += n(c.early_counted);
+    const mins = n(c.late_min_counted) + n(c.early_min_counted);
+    w.minutes_counted += mins;
+    if (c.shift_h && p.gross_salary) w.value_lost_inr += (mins / (c.shift_h * 60)) * (p.gross_salary / md);
+    if (!p.loading) { LATE_BANDS.forEach((_, i) => { lateBands[i] += n(c[`lb${i}`]); }); for (let d = 0; d < 7; d++) lateWd[d] += n(c[`lw${d}`]); }
+    if (!ee) {
+      EARLY_BANDS.forEach((_, i) => { earlyBands[i] += n(c[fit ? `ebs${i}` : `eb${i}`]); });
+      for (let d = 0; d < 7; d++) earlyWd[d] += n(c[fit ? `ews${d}` : `ew${d}`]);
+      for (const dt of c.missed_out_dates || []) { if (mBand >= 0) earlyBands[mBand] += 1; earlyWd[new Date(`${dt}T00:00:00Z`).getUTCDay()] += 1; }
+    }
+  }
+  w.value_lost_inr = Math.round(w.value_lost_inr);
+  const band = (b, i, arr) => ({ from: b[0], to: b[1] >= 100000 ? null : b[1], count: arr[i] });
+  return { waterfall: w, distribution: {
+    late_bands: LATE_BANDS.map((b, i) => band(b, i, lateBands)), early_bands: EARLY_BANDS.map((b, i) => band(b, i, earlyBands)),
+    late_weekday: lateWd, early_weekday: earlyWd } };
+}
+
 // ── step 7b: PR-7 escalation ladder (D-10) ────────────────────────────────
 
 /** The codes a stored or computed month result put on a list (action list or early-exit section, any action) = strikes. */
@@ -1409,7 +1469,118 @@ function trendRow(result, { month, year, source, run_id = null }) {
       time_lost_pct: d.time_lost_pct || 0, late_days: d.late_days || 0, early_exits: d.early_exits || 0 })),
     action_people: list.map((a) => ({ code: a.code, name: a.name, department: a.department, action: a.action,
       deduction_days: a.deduction_days || 0, workdays_lost: a.workdays_lost || 0, late_days: a.late_days || 0, early_days: a.early_days || 0 })),
+    // T4 — older stored results lack these; they read as null / [] / 0
+    early_people: (result.earlyExitWarnings || []).map((a) => ({ code: a.code, name: a.name, department: a.department, action: a.action, deduction_days: a.deduction_days || 0 })),
+    waterfall: result.waterfall || null,
+    distribution: result.distribution || null,
+    quality: result.assessment && result.assessment.quality ? (() => { const q = result.assessment.quality; const d = (k) => (q[k] && q[k].days) || 0;
+      return { unassessable_days: q.unassessable_days || 0, half_days: d('half_day'), out_not_verified: d('out_not_verified'), gate_register: d('gate_register'),
+        miss_punch_open: d('miss_punch_open'), no_master: d('no_master'), night_on_day_master: d('night_on_day_master'), odd_punch: d('odd_punch') }; })() : null,
+    ladder: { rule: !!(result.ladder && result.ladder.rule), warnings: at.ladder_warnings || 0, hearings: at.hearings || 0 },
+    missed_out_counted: ((result.missedOut && result.missedOut.people) || []).reduce((a, x) => a + (x.counted_as_early || 0), 0),
+    people_counts: (result.people || []).map((x) => ({ code: x.code, name: x.name, department: x.department, worked_days: x.worked_days || 0,
+      late_days: x.late_days || 0, early_days: x.early_days || 0, workdays_lost: x.workdays_lost || 0 })),
   };
+}
+
+// ── T4: funnel, miss punches, top people, effects (Trends) ─────────────────────────────────────────
+
+/** Enforcement funnel of one month: decided in the review → sent → finance → salary (late deductions only reach salary). */
+function funnelRow(db, row) {
+  const early = row.early_people || [];
+  const decided = row.action.deductions + early.filter((x) => x.action === 'deduction').length;
+  const decidedDays = r2(row.action.deduction_days + early.reduce((a, x) => a + (x.action === 'deduction' ? x.deduction_days : 0), 0));
+  const rows = db.prepare('SELECT finance_status st, is_applied_to_salary ap, deduction_days dd, remark FROM late_coming_deductions WHERE month = ? AND year = ?').all(row.month, row.year);
+  const tag = row.run_id ? runTag(row.run_id) : null;
+  const sent = tag ? rows.filter((r) => String(r.remark || '').includes(tag)) : [];
+  const other = rows.filter((r) => !(tag && String(r.remark || '').includes(tag)));
+  const cnt = (arr, st) => arr.filter((r) => r.st === st).length;
+  const sal = db.prepare('SELECT COALESCE(SUM(late_coming_deduction), 0) l, COALESCE(SUM(early_exit_deduction), 0) e FROM salary_computations WHERE month = ? AND year = ?').get(row.month, row.year);
+  return { listed: row.action.people + early.length, decided, decided_days: decidedDays,
+    sent: sent.length, sent_days: r2(sent.reduce((a, r) => a + (r.dd || 0), 0)), approved: cnt(sent, 'approved'), rejected: cnt(sent, 'rejected'), pending: cnt(sent, 'pending'),
+    in_salary: sent.filter((r) => r.ap).length, other_rows: other.length, other_approved: cnt(other, 'approved'),
+    inr_in_salary: Math.round((sal.l || 0) + (sal.e || 0)) };
+}
+
+/** Miss punches of one month: own vs plant-wide failure days, fixed vs open, counted as early exits (MP-2). */
+function missPunchRow(db, month, year, bulkMin, countedAsEarly = 0) {
+  const ym = ymOf(month, year);
+  const bulk = bulkMissPunchDays(db, `${ym}-01`, `${ym}-${pad(daysInMonth(month, year))}`, bulkMin).map((b) => b.date);
+  const r = db.prepare(`SELECT COUNT(*) n, SUM(CASE WHEN date IN (SELECT value FROM json_each(@b)) THEN 1 ELSE 0 END) nb,
+      SUM(CASE WHEN COALESCE(miss_punch_resolved,0) = 1 THEN 1 ELSE 0 END) fixed, COUNT(DISTINCT employee_code) people
+    FROM attendance_processed WHERE substr(date,1,7) = @ym AND COALESCE(is_miss_punch,0) = 1 AND status_final IN ${WORKED}`).get({ ym, b: JSON.stringify(bulk) });
+  return { total: r.n || 0, people: r.people || 0, bulk_days: bulk.length, on_bulk_days: r.nb || 0, own: (r.n || 0) - (r.nb || 0),
+    fixed: r.fixed || 0, open: (r.n || 0) - (r.fixed || 0), counted_as_early: countedAsEarly };
+}
+
+/** Top people across the range with plain pattern labels. rows = trendRow()s. */
+function topPeople(rows, limit = 60) {
+  const by = new Map();
+  for (const r of rows) {
+    const listed = new Set([...(r.action_people || []), ...(r.early_people || [])].map((a) => String(a.code)));
+    for (const x of r.people_counts || []) {
+      const p = by.get(x.code) || { code: x.code, name: x.name, department: x.department, worked_days: 0, late_days: 0, early_days: 0, workdays_lost: 0, months: [], labels: new Set() };
+      p.name = x.name || p.name; p.department = x.department || p.department;
+      p.worked_days += x.worked_days; p.late_days += x.late_days; p.early_days += x.early_days; p.workdays_lost += x.workdays_lost;
+      p.months.push({ ym: r.ym, late_days: x.late_days, early_days: x.early_days, listed: listed.has(String(x.code)) });
+      if (x.worked_days >= 8 && x.late_days >= 0.8 * x.worked_days) p.labels.add('late almost every day — check the shift start');
+      if (x.worked_days >= 8 && x.early_days >= 0.8 * x.worked_days) p.labels.add('leaves early almost every day — check the shift end');
+      if (x.late_days >= 4 && x.early_days >= 4) p.labels.add('late and early in the same month');
+      by.set(x.code, p);
+    }
+  }
+  return [...by.values()].map((p) => {
+    const lm = p.months.filter((m) => m.listed).length;
+    if (lm >= 2) p.labels.add(`on a list in ${lm} months`);
+    const first = p.months[0]; const last = p.months[p.months.length - 1];
+    if (p.months.length >= 2 && last.late_days + last.early_days <= 0.5 * (first.late_days + first.early_days) && first.late_days + first.early_days >= 4) p.labels.add('improving');
+    return { ...p, workdays_lost: r2(p.workdays_lost), listed_months: lm, labels: [...p.labels] };
+  }).sort((a, b) => b.workdays_lost - a.workdays_lost || a.code.localeCompare(b.code)).slice(0, limit);
+}
+
+function weekdaysBetween(fromIso, toIso) {
+  let n = 0; const d = new Date(`${fromIso}T00:00:00Z`); const e = new Date(`${toIso}T00:00:00Z`);
+  while (d <= e) { if (d.getUTCDay() !== 0) n++; d.setUTCDate(d.getUTCDate() + 1); }
+  return n;
+}
+
+/**
+ * Effect tracking. notes: people with a note (action list or early section) in month M — their late + early count in M
+ * and in M+1 (people missing from M+1's people list count 0). boards: people named on a print — late + early per working
+ * day (Mon–Sat) up to the print and after it, to the last attendance day of that month.
+ */
+function effects(db, rows) {
+  const notes = [];
+  for (let i = 0; i + 1 < rows.length; i++) {
+    const a = rows[i]; const b = rows[i + 1];
+    const cohort = new Set([...(a.action_people || []), ...(a.early_people || [])].map((x) => String(x.code)));
+    if (!cohort.size) continue;
+    const sum = (r) => (r.people_counts || []).filter((x) => cohort.has(String(x.code))).reduce((s, x) => s + x.late_days + x.early_days, 0);
+    const before = sum(a); const after = sum(b);
+    const again = new Set([...(b.action_people || []), ...(b.early_people || [])].map((x) => String(x.code)));
+    notes.push({ ym: a.ym, next_ym: b.ym, people: cohort.size, before, after, change_pct: before ? Math.round(((after - before) / before) * 100) : null,
+      listed_again: [...cohort].filter((c) => again.has(c)).length });
+  }
+  const byYm = new Map(rows.map((r) => [r.ym, r]));
+  const boards = [];
+  for (const p of db.prepare(`SELECT id, record_id, new_value, changed_at FROM audit_log WHERE table_name = 'attendance_review_board'
+      AND stage = 'ATTENDANCE_REVIEW_BOARD_PRINT' ORDER BY id`).all()) {
+    const ym = `${String(p.record_id).slice(0, 4)}-${String(p.record_id).slice(4, 6)}`;
+    const r = byYm.get(ym); if (!r) continue;
+    let snap = {}; try { snap = JSON.parse(p.new_value || '{}'); } catch { snap = {}; }
+    const named = (snap.listed || []).map((x) => String(x[0])); if (!named.length) continue;
+    const upTo = snap.covered_to || snap.to; if (!upTo) continue;
+    const atPrint = (snap.listed || []).reduce((a, x) => a + (Number(x[1]) || 0) + (Number(x[2]) || 0), 0);
+    const full = (r.people_counts || []).filter((x) => named.includes(String(x.code))).reduce((a, x) => a + x.late_days + x.early_days, 0);
+    const lastDay = db.prepare('SELECT MAX(date) d FROM attendance_processed WHERE substr(date,1,7) = ?').get(ym).d || upTo;
+    const daysBefore = weekdaysBetween(`${ym}-01`, upTo); const daysAfter = lastDay > upTo ? weekdaysBetween(addDays(upTo, 1), lastDay) : 0;
+    const perBefore = daysBefore ? r2(atPrint / named.length / daysBefore) : null;
+    const perAfter = daysAfter ? r2(Math.max(0, full - atPrint) / named.length / daysAfter) : null;
+    boards.push({ print_id: p.id, ym, to: upTo, printed_at: p.changed_at, named: named.length, at_print: atPrint, after_print: Math.max(0, full - atPrint),
+      per_person_day_before: perBefore, per_person_day_after: perAfter, days_after: daysAfter,
+      change_pct: perBefore && perAfter !== null ? Math.round(((perAfter - perBefore) / perBefore) * 100) : null });
+  }
+  return { notes, boards };
 }
 
 /** Months from..to inclusive, oldest first. from/to are {month, year}. */
@@ -1559,6 +1730,7 @@ function computeAttendanceReview(db, { month, year, config, releaseDays = [], pr
     ? applyLadder(act, strikeHistory(db, month, year, cfg, ladderCache), cfg, month, year) : { rule: false };
   const nt = notices(kept, cfg);
   const { monthly, departments } = summarise(kept, cfg, cur, prev);
+  const analytics = monthAnalytics(kept, cfg, daysInMonth(month, year));
   const keptMap = new Map(kept.map((p) => [p.code, p]));
   const weekly = weeklyTrend(db, month, year, cfg, releaseDays, prevReleaseDays, keptMap, mpPlan.keys);
   // D-6: lates of long_late_minutes+ that were counted — a late that big is usually a shift question, not a habit
@@ -1624,6 +1796,7 @@ function computeAttendanceReview(db, { month, year, config, releaseDays = [], pr
       departments: Object.entries(cfg.standing_departments).map(([department, v]) => ({ department, ...v })) },
     overridesApplied: act.overridesApplied,
     ladder,
+    waterfall: analytics.waterfall, distribution: analytics.distribution,
   };
 }
 
@@ -1767,4 +1940,5 @@ module.exports = {
   noticeBoard, boardSnapshot, bulkMissPunchDays, istToday,
   missedOutPlan, applyMissedOut, d4Early, MISSED_OUT_TYPES,
   strikeCodes, strikeHistory, applyLadder, storedReleaseDays, monthResult, personHistory,
+  monthAnalytics, funnelRow, missPunchRow, topPeople, effects, LATE_BANDS, EARLY_BANDS,
 };
