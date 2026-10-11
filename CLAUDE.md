@@ -22,6 +22,82 @@
   DB rows + audit, button disables, finance approval shows, Punctuality has no Apply and a direct POST → 410, phone 390,
   salary tables untouched); tab 49/49, suggestions 29/29, master basis 26/26, legacy 15/15 re-run. **Not tested:** Railway.
 
+## Last Session — 2026-10-11 (P1-25: Employee edit could change gross salary with no approval and no role check)
+**Branch `fix/employee-edit-no-direct-gross`, NOT merged. MONEY PR — independent review done (SHIP WITH FIXES F1–F3, applied).**
+Plan + log: `docs/ux-bulk/prs/P1-25/PLAN.md`, `PROGRESS.md`. Finding N-12 (P1-23 review). Rulings Q1–Q4 (11 Oct 2026).
+- **Bug:** `PUT /api/employees/:code` had `gross_salary` in `allowedFields` and no role guard (router behind requireAuth
+  only) → any logged-in role (viewer included) could move `employees.gross_salary` and rescale `salary_structures`
+  (`syncSalaryStructureFromEmployee`) with no `salary_change_requests` row, no finance approval, no audit row. Stage 7 pays it.
+  The same route also wrote `basic/da/hra/conveyance/otherAllowances` straight into `salary_structures` (PF base).
+- **Fix (`routes/employees.js`, PUT /:code only):** `requireHrOrAdmin` on the route (403 before the lookup, like Mark Left;
+  prod callers hr 139× / admin 5×). After the P4 exit check: a gross that differs from the stored one by > 0.01 (NULL = 0)
+  or is unreadable → 400 `{code:'GROSS_CHANGE_NEEDS_APPROVAL', error:'Change salary through Salary → request a change
+  (finance approves)'}`, whole edit refused, nothing written. Every role, admin included (Q4); a FIRST gross on an employee
+  with none is refused too (Q3). A same-value resend passes and writes the STORED gross, never the sent text (F1:
+  '0x3A98', 15000.009, ''). Components (F3): a changed basic/da/hra/conveyance/otherAllowances vs the latest structure →
+  400 `SALARY_CHANGE_NEEDS_APPROVAL` (same message); a same-value resend writes the stored components, so a component left
+  out of the body keeps its value instead of becoming 0 (only when basic/da trigger the structure write).
+  **UI (F2, `Employees.jsx`):** row "Edit" and drill-down "Edit Details" only for hr/admin (`canEditEmployee`, same gate as
+  canMarkLeft). The Edit modal never sends gross or components (SalaryModal → `PUT /:code/salary` = the one path). dist rebuilt.
+- **Tests changed on purpose:** `statutoryWriters` T9a re-sends the current gross; T8b seeds 12000 then re-sends it (sync
+  create path still covered) (Q1); W103 re-sends zero components (insert path + flags still covered) (F3).
+  `markLeftRoleGuard` viewer/finance exit-via-edit → 403 instead of 400 (Q2).
+- **Fragile:** re-sending the SAME gross still runs `syncSalaryStructureFromEmployee` (pre-existing) — if the latest structure's
+  gross differs from `employees.gross_salary`, that resync rescales the structure to the employee gross. The component map
+  (`COMPONENT_KEYS`, body key → structure column) must match the structure-write block further down the handler.
+- **Verified:** jest 92/1478 → 93/1513; new `employeeEditGrossGuard.test.js` 35 (real JWTs; 12 of the first 23 fail on
+  origin/main 0ea1409; 11 of the 12 F1/F3 tests fail on the pre-review commit 5042937). `node backend/scripts/employee-edit-
+  gross-guard-check.js` (real server.js, port 3125, real logins) 26/26; `--base` on a 0ea1409 worktree 7/7: hr AND viewer move
+  gross straight through, structure rescaled, no request. Browser `backend/scripts/employee-edit-gross-guard-check.py`
+  (Chromium, built dist) 16/16: hr sees Edit + Edit Details and saves (200, gross unchanged), finance/viewer see neither,
+  0 page/console errors, 0 API ≥ 400; `--base` 1/1 (finance sees Edit). salaryComputation.js and every DO-NOT-MODIFY file untouched.
+- **Not tested:** Railway; production data; Safari/Firefox.
+- **Found, not fixed:** POST /employees still accepts `gross_salary` (and components) on create with no approval (P2-11).
+
+## Last Session — 2026-10-11 (P1-23: salary change — the requester can never approve or reject their own request)
+**Branch `fix/salary-change-no-self-approval`, NOT merged. MONEY PR — independent review before PR.** Plan + log:
+`docs/ux-bulk/prs/P1-23/PLAN.md`, `PROGRESS.md`. Finding F-3. Owner ruling Q6 (11 Oct 2026): a second person always decides, admin included.
+- **Bug:** `PUT /api/salary-input/approve/:id` and `/reject/:id` (requireFinanceOrAdmin) never compared the deciding user with
+  `salary_change_requests.requested_by`. Admin passes both the HR raise guard and the finance decide guard → could raise
+  and approve their own gross change (prod: 2 approved rows decided by their own requester, counts only).
+- **Fix (`routes/salary-input.js`, guard lines only):** `sameUser()` (trimmed, case-insensitive; empty never matches) +
+  403 `{code:'SELF_APPROVAL', error:'You raised this request — ask another finance or admin user to decide it.'}` right
+  after the Pending-row read / 404 and BEFORE any write (approve: before JSON parse + transaction; reject: before the
+  `finance_rejections` insert). Apply logic untouched. Covers both writers (salary-input request-change and Employee
+  Master `PUT /employees/:code/salary`). Legacy rows with empty `requested_by` stay decidable (planner Q2).
+  **UI (`SalaryInput.jsx`):** the requester's own pending card shows Approve + Reject disabled, reason as tooltip and as text
+  (`data-testid="self-decide-note"`). Others' cards unchanged. dist rebuilt (vs fresh 18bef07 build only SalaryInput chunk differs).
+- **Fragile:** the compare is on USERNAME (no user id on the request); renaming a user would unlock their old requests.
+  The UI rule (`isOwnRequest`) mirrors the server's `sameUser` by hand — change both. The server is the real gate.
+- **Verified:** jest `salaryChangeSelfApproval.test.js` 9 (real JWTs; 4 fail on 18bef07): own approve/reject 403 and nothing
+  written (structures, gross, status, finance_rejections), case/space variant, Employee-Master-raised request, second admin
+  and finance decide, hr still role-403, empty requested_by decidable, 404 before the self check. Full suite 89/1430 →
+  90/1439. Browser `backend/scripts/salary-change-self-approval-check.py` 36/36 (Chromium, built dist, admin/admin2/finance/hr,
+  forced clicks inert, API probe 403, 390px, 0 page/console errors); `--base` on 18bef07 3/3: admin approves own request.
+- **Not tested:** Railway; production data; Safari/Firefox.
+- **Found, not fixed:** (1) FinanceAudit `PUT /api/finance-audit/approve-flag/:flagId` (GROSS_STRUCTURE_CHANGE on
+  `salary_manual_flags`) has no maker-checker either. (2) `approveSalaryChange` in `frontend/src/utils/api.js` is dead
+  code; the screen never sends `effectiveFrom`, so every approval is effective TODAY. (3) SalaryInput reads don't send
+  `no-cache` → with server.js `max-age=5`, the Pending tab shows a just-submitted request only after ~5 s and keeps an
+  approved card for ~5 s (clicking it again → 404 "already processed").
+- **Process note:** during this build a broad `pkill -f jest` was run once and may have killed other parallel builders'
+  jest runs (all root) around 19:46 local — re-run their suites if a run ended abnormally.
+## Last Session — 2026-10-11 (P1-24: Miss Punch stray "0" next to Correct)
+**Branch `fix/misspunch-stray-zero`, NOT merged.** Frontend only (`pages/MissPunch.jsx`, 1 line). Plan + log:
+`docs/ux-bulk/prs/P1-24/PLAN.md`, `PROGRESS.md`. Finding O-3.
+- **Bug:** Action cell guard `{rec.miss_punch_resolved && (finance pending) && canFinance && …}` — `miss_punch_resolved`
+  is an INTEGER, so every unresolved row printed `0` (hr: "Correct0", finance/viewer: a lone "0").
+- **Fix:** `{!!rec.miss_punch_resolved && …}`. Logic unchanged. Every other `&&` in the file checked (PLAN §1):
+  booleans, objects, text columns or clsx args — safe. dist rebuilt (own commit; vs a fresh 18bef07 build only the
+  MissPunch chunk differs).
+- **Fragile:** any `{intColumn && …}` in JSX prints 0 — coerce with `!!` (no ESLint in the repo to catch it).
+- **Verified:** `backend/scripts/misspunch-stray-zero-check.py` (Chromium, built dist, hr + finance, fictional T2401–T2405
+  in 4 workflow states) 46/46 — no "0" text node in any Action cell or row, Correct / Re-resolve / Approve+Reject /
+  Finalised per role, hr Correct→Cancel sim, 390px, empty month, 0 page errors. `--base` on an 18bef07 worktree 6/6: the
+  "0" is there. jest 89 suites / 1430 before and after.
+- **Not tested:** Railway; Safari/Firefox; real production rows.
+- **Found, not fixed:** Stage 2 calls `GET /api/features/leave-automation/status` for every role but the route is
+  `requireHrOrAdmin` (phase5.js L614) → finance gets a 403 + console error on every Miss Punch load (pre-existing).
 ## Last Session — 2026-10-11 (P1-05: Stage 6 Apply Leave form kept the previous employee's values)
 **Branch `fix/stage6-leave-form-reset`, NOT merged.** Frontend only (`pages/DayCalculation.jsx`, Apply Leave open/close). Plan + log:
 `docs/ux-bulk/prs/P1-05/PLAN.md`, `PROGRESS.md`. Finding P-3. Rulings Q1 (reset on every open, same employee too), Q2 (success path

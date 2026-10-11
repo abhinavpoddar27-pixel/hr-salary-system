@@ -871,6 +871,7 @@ export default function Employees() {
   const navigate = useNavigate()
   const canBulkAssignShift = user?.role === 'admin' || user?.role === 'hr'
   const canMarkLeft = canBulkAssignShift  // hr + admin — same set as PUT /employees/:code/mark-left (P4)
+  const canEditEmployee = canBulkAssignShift  // hr + admin — same set as PUT /employees/:code (P1-25)
   const [search, setSearch] = useState('')
   const [deptFilter, setDeptFilter] = useState('')
   const [typeFilter, setTypeFilter] = useState('All')
@@ -1159,7 +1160,9 @@ export default function Employees() {
                         <div className="flex gap-1.5">
                           <button onClick={(ev) => { ev.stopPropagation(); setProfileEmp(e) }} className="text-xs py-0.5 px-2 bg-blue-50 text-blue-700 rounded hover:bg-blue-100 border border-blue-200">Profile</button>
                           <button onClick={(ev) => { ev.stopPropagation(); navigate(`/employee-profile?code=${e.code}`) }} className="text-xs py-0.5 px-2 bg-violet-50 text-violet-700 rounded hover:bg-violet-100 border border-violet-200" title="Full Intelligence Profile">Intel</button>
-                          <button onClick={(ev) => { ev.stopPropagation(); setEditEmp(e) }} className="btn-secondary text-xs py-0.5 px-2">Edit</button>
+                          {canEditEmployee && (
+                            <button onClick={(ev) => { ev.stopPropagation(); setEditEmp(e) }} className="btn-secondary text-xs py-0.5 px-2">Edit</button>
+                          )}
                           <button onClick={(ev) => { ev.stopPropagation(); setSalaryEmp(e) }} className="text-xs py-0.5 px-2 bg-brand-50 text-brand-600 rounded hover:bg-brand-100 border border-brand-200">₹</button>
                           {canMarkLeft && e.status !== 'Left' && e.status !== 'Exited' && (
                             <button onClick={(ev) => { ev.stopPropagation(); setMarkLeftEmp(e) }} className="text-xs py-0.5 px-2 bg-red-50 text-red-600 rounded hover:bg-red-100 border border-red-200">Mark Left</button>
@@ -1176,7 +1179,9 @@ export default function Employees() {
                               <div className="text-xs font-semibold text-slate-500 mb-2">Quick Actions</div>
                               <div className="flex gap-2">
                                 <button onClick={() => setProfileEmp(e)} className="text-xs py-1.5 px-3 bg-blue-50 text-blue-700 rounded-lg hover:bg-blue-100 border border-blue-200 font-medium">View Full Profile</button>
-                                <button onClick={() => setEditEmp(e)} className="text-xs py-1.5 px-3 bg-slate-50 text-slate-700 rounded-lg hover:bg-slate-100 border border-slate-200 font-medium">Edit Details</button>
+                                {canEditEmployee && (
+                                  <button onClick={() => setEditEmp(e)} className="text-xs py-1.5 px-3 bg-slate-50 text-slate-700 rounded-lg hover:bg-slate-100 border border-slate-200 font-medium">Edit Details</button>
+                                )}
                                 <button onClick={() => setSalaryEmp(e)} className="text-xs py-1.5 px-3 bg-green-50 text-green-700 rounded-lg hover:bg-green-100 border border-green-200 font-medium">Salary Structure</button>
                               </div>
                             </div>
