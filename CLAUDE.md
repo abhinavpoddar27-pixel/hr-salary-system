@@ -1,3 +1,24 @@
+## Last Session — 2026-10-11 (P1-19: Sales Mark Left always stored today's date)
+**Branch `fix/sales-mark-left-date`, NOT merged.** Frontend only (`pages/Sales/SalesEmployeeMaster.jsx`). Plan + log:
+`docs/ux-bulk/prs/P1-19/PLAN.md`, `PROGRESS.md`. Finding S-3. Planner rulings Q1 (backend untouched), Q2 (date only), Q3 (browser local date).
+- **Bug:** the Mark Left dialog sent an empty body; `PUT /api/sales/employees/:code/mark-left` falls back to today (UTC)
+  when `dol` is missing, so every sales leaver got the click date as DOL — and, with a loan, the wrong final payroll cycle
+  (`flagSalesBorrowerForExit` uses the cycle containing `dol`). The route already read `body.dol`.
+- **Fix:** `ConfirmDialog` replaced by a local `MarkLeftDialog` (on `Modal`): required "Leaving date", empty on every open,
+  `max` = browser-local today, `min` = row DOJ when it is YYYY-MM-DD; JS validation (typed dates bypass min/max) with a
+  hint (empty / future / before joining DD-MM-YYYY); mutation sends `{ dol }`. Cancel / ✕ / backdrop / Esc send nothing.
+  A `useRef` in-flight guard keeps a double click to one PUT. dist rebuilt (own commits). Backend + api.js untouched.
+- **Fragile:** the date rules are UI-only — the route still accepts any `dol` string. "Today" is the browser's date, the
+  route's own fallback is UTC (unused now the UI always sends a date). A DOJ stored in another format gives no min.
+- **Verified:** `backend/scripts/sales-mark-left-date-check.py` (Chromium, built dist, scratch DB, hr, fictional S901–S905,
+  port 3119) 40/40 — empty/future/before-DOJ disabled + hint, today allowed, past date → PUT `{dol}` + DB dol + audit remark
+  `dol=…`, 4 exits send nothing and reopen empty, no-DOJ rep, double click = 1 PUT (fails 4 with the guard removed), 390px,
+  0 page/console errors, 0 API ≥ 400. `--base` on an 868f5389 build 4/4: no field, DOL = today. jest 96 / 1537 before and after.
+- **Not tested:** Railway; Safari/Firefox date input; production data.
+- **Found, not fixed:** (1) the route has no server-side check on `dol` (format, future, before DOJ) — Q1, API callers can
+  still store anything. (2) Clicking the very top-left corner (5,5) with this Modal open does not close it (another
+  fixed layer sits above the overlay there); the rest of the backdrop closes it — shared `Modal`, pre-existing, harmless.
+
 ## Last Session — 2026-10-11 (P1-07: legacy "Grant Extra Duty" on Payable OT retired)
 **Branch `fix/retire-legacy-extra-duty-grant`, NOT merged.** Owner ruling Q5 (11 Oct). Log: `docs/ux-bulk/prs/P1-07/PROGRESS.md`.
 - **Bug:** Payable OT → "Grant Extra Duty" called `POST /payroll/grant-extra-duty`, which wrote a `day_corrections` row
