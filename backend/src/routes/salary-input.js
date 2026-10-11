@@ -18,6 +18,36 @@ function isCalendarDate(v) {
 // force at the new row's own date.
 const STATUTORY_FLAG_FIELDS = ['pf_applicable', 'esi_applicable', 'lwf_applicable'];
 
+// N-17 (11 Oct 2026): a salary change request names only some components —
+// Salary Input sends no special_allowance, Employee Master no conveyance. A
+// component ABSENT from the request keeps the value of the structure in force
+// at the approval date; a component present (0 included) is written as sent.
+// Gross: the request's explicit gross_salary when it has one, else the sum of
+// the resolved components (planner ruling Q3a). The pending list returns the
+// same result as `approval_preview`, so finance sees what approval will write.
+const COMPONENT_KEYS = ['basic', 'da', 'hra', 'conveyance', 'special_allowance', 'other_allowances'];
+const present = (v) => v !== undefined && v !== null && v !== '';
+const money = (v) => Math.round((parseFloat(v) || 0) * 100) / 100;
+
+function resolveApproval(newStructure, current) {
+  const ns = newStructure || {};
+  const cur = current || {};
+  const components = {};
+  const kept = [];
+  for (const k of COMPONENT_KEYS) {
+    if (present(ns[k])) components[k] = parseFloat(ns[k]) || 0;
+    else { components[k] = parseFloat(cur[k]) || 0; kept.push(k); }
+  }
+  const sum = money(COMPONENT_KEYS.reduce((t, k) => t + components[k], 0));
+  const gross = present(ns.gross_salary) && (parseFloat(ns.gross_salary) || 0) > 0 ? parseFloat(ns.gross_salary) : sum;
+  return { components, kept, gross, componentSum: sum };
+}
+
+/** Today's date in India (UTC+05:30) as YYYY-MM-DD — never the UTC day. */
+function istToday(now = Date.now()) {
+  return new Date(now + 330 * 60000).toISOString().slice(0, 10);
+}
+
 // P1-23 (owner ruling Q6, 11 Oct 2026): the person who raised a salary change
 // never decides it — admin included. Username compare, trimmed, case-insensitive;
 // an empty requested_by (legacy rows) blocks nobody.
@@ -118,9 +148,14 @@ router.get('/pending-changes', (req, res) => {
   `).all();
 
   // Parse JSON fields
+  const today = istToday();
   records.forEach(r => {
     try { r.old_structure = JSON.parse(r.old_structure); } catch { r.old_structure = {}; }
     try { r.new_structure = JSON.parse(r.new_structure); } catch { r.new_structure = {}; }
+    // What an approval today would write (N-17) — same function as /approve.
+    const current = r.employee_id ? structureForDate(db, 'plant', r.employee_id, today) : null;
+    const p = resolveApproval(r.new_structure, current);
+    r.approval_preview = { components: p.components, kept: p.kept, gross: p.gross, effective_from: today };
   });
 
   res.json({ success: true, data: records });
@@ -170,26 +205,18 @@ router.put('/approve/:id', requireFinanceOrAdmin, (req, res) => {
   const emp = db.prepare('SELECT id FROM employees WHERE code = ?').get(request.employee_code);
   if (!emp) return res.status(404).json({ success: false, error: 'Employee not found' });
 
-  const effectiveFrom = req.body.effectiveFrom || new Date().toISOString().split('T')[0];
+  const effectiveFrom = req.body.effectiveFrom || istToday();
   // A real calendar date only (review fix 5): a bogus later-dated row such as
   // '2026-13-01' would block every honest approval after it (STRUCTURE_DATED_LATER).
   if (!isCalendarDate(effectiveFrom)) {
     return res.status(400).json({ success: false, error: 'effectiveFrom must be a real date, YYYY-MM-DD (e.g. 2026-09-01)' });
   }
 
-  // Resolve gross from newStructure — prefer explicit gross_salary field,
-  // fall back to summing components. Required to keep employees.gross_salary
-  // and salary_structures.gross_salary in sync after approval (before this
-  // fix, the INSERT omitted gross_salary entirely so the new row had gross=0,
-  // and employees.gross_salary was never touched at all).
-  const newBasic = parseFloat(newStructure.basic) || 0;
-  const newDa = parseFloat(newStructure.da) || 0;
-  const newHra = parseFloat(newStructure.hra) || 0;
-  const newConv = parseFloat(newStructure.conveyance) || 0;
-  const newOther = parseFloat(newStructure.other_allowances) || 0;
-  const newSpecial = parseFloat(newStructure.special_allowance) || 0;
-  const newGross = parseFloat(newStructure.gross_salary)
-                || (newBasic + newDa + newHra + newConv + newOther + newSpecial);
+  // Resolved inside the transaction (below): a component absent from the
+  // request keeps the in-force value (N-17); gross = explicit or the sum.
+  // employees.gross_salary and salary_structures.gross_salary are both set
+  // to it so they stay in sync.
+  let newBasic, newDa, newHra, newConv, newOther, newSpecial, newGross, keptComponents;
 
   const txn = db.transaction(() => {
     // A row dated after effectiveFrom would shadow the new one from its date
@@ -197,6 +224,12 @@ router.put('/approve/:id', requireFinanceOrAdmin, (req, res) => {
     // stays Pending (10 Oct 2026 ruling, statutory flags PR-1 review).
     const later = structureDatedAfter(db, 'plant', emp.id, effectiveFrom);
     if (later) { const err = new Error(later.error); err.statutory = later; throw err; }
+
+    const resolved = resolveApproval(newStructure, structureForDate(db, 'plant', emp.id, effectiveFrom));
+    ({ basic: newBasic, da: newDa, hra: newHra, conveyance: newConv,
+       other_allowances: newOther, special_allowance: newSpecial } = resolved.components);
+    newGross = resolved.gross;
+    keptComponents = resolved.kept;
 
     const sameDate = db.prepare('SELECT id FROM salary_structures WHERE employee_id = ? AND effective_from = ?').all(emp.id, effectiveFrom);
     if (sameDate.length) {
@@ -254,7 +287,7 @@ router.put('/approve/:id', requireFinanceOrAdmin, (req, res) => {
     throw e;
   }
 
-  res.json({ success: true, message: 'Salary change approved and applied' });
+  res.json({ success: true, message: 'Salary change approved and applied', effectiveFrom, gross: newGross, keptComponents });
 });
 
 /**
@@ -303,3 +336,5 @@ router.put('/reject/:id', requireFinanceOrAdmin, (req, res) => {
 });
 
 module.exports = router;
+module.exports.resolveApproval = resolveApproval;
+module.exports.istToday = istToday;

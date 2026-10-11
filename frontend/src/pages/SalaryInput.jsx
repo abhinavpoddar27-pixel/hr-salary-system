@@ -23,27 +23,29 @@ const isOwnRequest = (user, req) => {
   return !!a && a === b
 }
 
-// P1-22: the approver sees every component old → new. Proposed = what PUT /approve writes
-// (parseFloat(x) || 0 — a key missing from the request is written as 0). Special allowance only when non-zero.
-const MISSING_NOTE = 'not in this request — approval sets it to 0'
+// P1-22: the approver sees every component old → new. Proposed = what PUT /approve writes.
+// N-17: a component the request does not name keeps the current value; the server returns the
+// exact result (same function as /approve) as `approval_preview` on the pending list.
+const MISSING_NOTE = 'not in this request — current value kept'
 const CHANGE_COMPONENTS = [
   ['basic', 'Basic'], ['da', 'DA'], ['hra', 'HRA'], ['conveyance', 'Conveyance'],
   ['other_allowances', 'Other allowances'], ['special_allowance', 'Special allowance'],
 ]
 const hasValue = (o, k) => o != null && o[k] !== undefined && o[k] !== null && o[k] !== ''
 const num = (v) => parseFloat(v) || 0
-const componentRows = (os, ns) => {
+const componentRows = (os, ns, preview) => {
   const oldS = os && typeof os === 'object' ? os : {}
   const newS = ns && typeof ns === 'object' ? ns : {}
+  const resolved = preview && preview.components ? preview.components : null
   return CHANGE_COMPONENTS
-    .filter(([k]) => k !== 'special_allowance' || num(oldS[k]) !== 0 || num(newS[k]) !== 0)
     .map(([k, label]) => {
       const oldKnown = hasValue(oldS, k)
       const oldVal = oldKnown ? num(oldS[k]) : null
-      const newVal = num(newS[k])
       const missingNew = !hasValue(newS, k)
+      const newVal = resolved ? num(resolved[k]) : (missingNew ? (oldVal || 0) : num(newS[k]))
       return { key: k, label, oldVal, newVal, missingNew, changed: Math.abs((oldVal || 0) - newVal) > 0.005 }
     })
+    .filter((r) => r.key !== 'special_allowance' || (r.oldVal || 0) !== 0 || r.newVal !== 0)
 }
 const todayLabel = () => new Date().toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' })
 
@@ -309,9 +311,14 @@ export default function SalaryInput() {
                     )}
                   </div>
                   {(() => {
-                    const rows = componentRows(os, ns)
+                    const preview = req.approval_preview
+                    const rows = componentRows(os, ns, preview)
                     const noCurrent = !os || typeof os !== 'object' || Object.keys(os).length === 0
-                    const grossChanged = Math.abs(num(req.old_gross) - num(req.new_gross)) > 0.005
+                    // N-17: the gross the approval writes (kept components included) — highlight when it
+                    // differs from the gross the request itself shows.
+                    const writeGross = preview && preview.gross != null ? num(preview.gross) : num(req.new_gross)
+                    const grossDiffers = Math.abs(writeGross - num(req.new_gross)) > 0.005
+                    const grossChanged = Math.abs(num(req.old_gross) - writeGross) > 0.005
                     const arrow = (o, n) => (n > (o || 0) ? '▲' : '▼')
                     return (
                       <div className="mt-3 max-w-3xl" data-testid="change-table">
@@ -343,10 +350,18 @@ export default function SalaryInput() {
                                 className={clsx('border-t border-slate-300 font-bold', grossChanged && 'bg-amber-50')}>
                                 <td className="px-2 py-1">Gross</td>
                                 <td className="px-2 py-1 text-right font-mono">{fmtINR(req.old_gross)}</td>
-                                <td className={clsx('px-2 py-1 text-right font-mono', grossChanged && 'text-amber-800')}>
-                                  {grossChanged && <span className="mr-1">{arrow(num(req.old_gross), num(req.new_gross))}</span>}{fmtINR(req.new_gross)}
+                                <td className={clsx('px-2 py-1 text-right font-mono', grossChanged && 'text-amber-800', grossDiffers && 'bg-red-100 text-red-800')}
+                                  data-testid="write-gross" data-gross-differs={grossDiffers ? '1' : '0'}>
+                                  {grossChanged && <span className="mr-1">{arrow(num(req.old_gross), writeGross)}</span>}{fmtINR(writeGross)}
                                 </td>
                               </tr>
+                              {grossDiffers && (
+                                <tr className="bg-red-50" data-testid="gross-differs-note">
+                                  <td colSpan={3} className="px-2 py-1 text-[11px] text-red-800 font-semibold">
+                                    The request shows a gross of {fmtINR(req.new_gross)}; approving writes {fmtINR(writeGross)} (components not in the request keep their current value).
+                                  </td>
+                                </tr>
+                              )}
                             </tbody>
                           </table>
                         </div>

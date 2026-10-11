@@ -1335,10 +1335,101 @@ router.get('/salary-manual-flags', (req, res) => {
 });
 
 // ─────────────────────────────────────────────────────────
-// PUT /api/finance-audit/approve-flag/:flagId
-// Approve/reject a manual flag
+// Finance decision on one salary_manual_flags row (N-16, 11 Oct 2026).
+// Shared by approve-flag and bulk-approve so a bulk REJECT of a
+// GROSS_STRUCTURE_CHANGE flag reverts the gross exactly like the single route.
+// Runs on the caller's transaction; THROWS (err.flagStatus/err.flagBody) on a
+// refusal so the caller's transaction rolls back and nothing is written.
+// flag.system_value = old gross (previous month); flag.manual_value = new gross.
 // ─────────────────────────────────────────────────────────
-router.put('/approve-flag/:flagId', (req, res) => {
+const GROSS_MOVED_TOLERANCE = 1; // rupees (planner ruling Q1)
+
+function flagRefusal(status, body) {
+  const err = new Error(body.error);
+  err.flagStatus = status;
+  err.flagBody = { success: false, ...body };
+  return err;
+}
+
+function decideManualFlag(db, flag, { status, comments, reviewer, username }) {
+  const approvedVal = status === 'APPROVED' ? 1 : status === 'REJECTED' ? -1 : 0;
+  const wasRejected = Number(flag.finance_approved) === -1;
+  const revert = status === 'REJECTED' && flag.flag_type === 'GROSS_STRUCTURE_CHANGE' && !wasRejected;
+
+  let emp = null;
+  let oldGross = 0;
+  if (revert) {
+    oldGross = parseFloat(flag.system_value);
+    if (oldGross > 0) {
+      emp = db.prepare('SELECT id, code, name, department, gross_salary FROM employees WHERE code = ?').get(flag.employee_code);
+      // Q1: never let a stale rejection overwrite a gross that has moved since
+      // this flag was raised (a newer approved change, an earlier revert, ...).
+      const current = emp ? Number(emp.gross_salary) || 0 : null;
+      const flagged = parseFloat(flag.manual_value) || 0;
+      if (!emp || Math.abs(current - flagged) > GROSS_MOVED_TOLERANCE) {
+        throw flagRefusal(409, {
+          code: 'GROSS_MOVED_SINCE',
+          flagId: flag.id,
+          error: `Flag ${flag.id} (${flag.employee_code}): the employee's gross is no longer the value this flag was raised for `
+            + `(more than ₹${GROSS_MOVED_TOLERANCE} different), so rejecting it would overwrite a newer salary. `
+            + 'Nothing was changed — review the employee\'s current salary instead.',
+        });
+      }
+    }
+  }
+
+  db.prepare(`UPDATE salary_manual_flags SET finance_approved = ?, approved_by = ?, approved_at = datetime('now') WHERE id = ?`)
+    .run(approvedVal, reviewer, flag.id);
+
+  db.prepare(`INSERT INTO finance_approvals (employee_code, month, year, flag_id, status, reviewed_by, reviewed_at, comments)
+    VALUES (?, ?, ?, ?, ?, ?, datetime('now'), ?)`)
+    .run(flag.employee_code, flag.month, flag.year, flag.id, status, reviewer, comments || '');
+
+  logAudit('salary_manual_flags', flag.id, 'finance_approved', String(flag.finance_approved), String(approvedVal),
+    status === 'APPROVED' ? 'FINANCE_FLAG_APPROVE' : status === 'REJECTED' ? 'FINANCE_FLAG_REJECT' : 'FINANCE_FLAG_CLEAR',
+    `Flag ${status}: ${flag.flag_type} for ${flag.employee_code}. ${comments || ''}`, username);
+
+  // GROSS_STRUCTURE_CHANGE revert: restore the old gross to employees +
+  // salary_structures so Stage 7 recomputes with the original value.
+  if (revert && oldGross > 0) {
+    db.prepare(`
+      INSERT INTO finance_rejections
+        (rejection_type, source_table, source_record_id, employee_code,
+         employee_name, department, month, year, company,
+         original_details, rejection_reason, rejected_by)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      'GROSS_STRUCTURE_CHANGE_REVERT', 'salary_manual_flags', flag.id,
+      flag.employee_code, emp?.name || '', emp?.department || '',
+      flag.month, flag.year, '',
+      JSON.stringify({ old_gross: flag.system_value, new_gross: flag.manual_value, flag }),
+      comments || 'Finance rejected gross change — reverting to original',
+      reviewer
+    );
+
+    db.prepare("UPDATE employees SET gross_salary = ?, updated_at = datetime('now') WHERE code = ?")
+      .run(oldGross, flag.employee_code);
+
+    // Revert salary_structures proportionally (preserves component ratios)
+    syncSalaryStructureFromEmployee(db, emp.id, { gross_salary: oldGross });
+
+    logAudit('employees', emp.id, 'gross_salary',
+      String(flag.manual_value), String(flag.system_value), 'FINANCE_GROSS_REVERT',
+      `GROSS REVERT: Finance rejected gross change ${flag.manual_value} → ${flag.system_value} for ${flag.employee_code}`, username);
+  }
+}
+
+function sendFlagError(res, e, label) {
+  if (e && e.flagStatus) return res.status(e.flagStatus).json(e.flagBody);
+  console.error(`[${label}] failed, nothing written:`, e.message);
+  return res.status(500).json({ success: false, error: `Could not save the decision — nothing was changed (${e.message})` });
+}
+
+// ─────────────────────────────────────────────────────────
+// PUT /api/finance-audit/approve-flag/:flagId
+// Approve/reject a manual flag (finance/admin). All-or-nothing (Q2).
+// ─────────────────────────────────────────────────────────
+router.put('/approve-flag/:flagId', requireFinanceOrAdmin, (req, res) => {
   const db = getDb();
   const { flagId } = req.params;
   const { status, comments } = req.body;
@@ -1347,96 +1438,39 @@ router.put('/approve-flag/:flagId', (req, res) => {
   const flag = db.prepare('SELECT * FROM salary_manual_flags WHERE id = ?').get(flagId);
   if (!flag) return res.status(404).json({ success: false, error: 'Flag not found' });
 
-  const approvedVal = status === 'APPROVED' ? 1 : status === 'REJECTED' ? -1 : 0;
-  db.prepare(`UPDATE salary_manual_flags SET finance_approved = ?, approved_by = ?, approved_at = datetime('now') WHERE id = ?`)
-    .run(approvedVal, reviewer, flagId);
-
-  db.prepare(`INSERT INTO finance_approvals (employee_code, month, year, flag_id, status, reviewed_by, reviewed_at, comments)
-    VALUES (?, ?, ?, ?, ?, ?, datetime('now'), ?)`)
-    .run(flag.employee_code, flag.month, flag.year, flagId, status, reviewer, comments || '');
-
   try {
-    logAudit('salary_manual_flags', flagId, 'finance_approved', String(flag.finance_approved), String(approvedVal),
-      status === 'APPROVED' ? 'FINANCE_FLAG_APPROVE' : status === 'REJECTED' ? 'FINANCE_FLAG_REJECT' : 'FINANCE_FLAG_CLEAR',
-      `Flag ${status}: ${flag.flag_type} for ${flag.employee_code}. ${comments || ''}`, req.user?.username);
-  } catch {}
-
-  // GROSS_STRUCTURE_CHANGE revert: when finance rejects, restore old gross to
-  // employees + salary_structures so Stage 7 recomputes with the original value.
-  // flag.system_value = old gross (before the change); flag.manual_value = new gross (what was rejected).
-  if (status === 'REJECTED' && flag.flag_type === 'GROSS_STRUCTURE_CHANGE') {
-    const oldGross = parseFloat(flag.system_value);
-    if (oldGross > 0) {
-      try {
-        const emp = db.prepare('SELECT id, code, name, department FROM employees WHERE code = ?')
-          .get(flag.employee_code);
-
-        // Archive rejection snapshot (mirrors miss-punch pattern)
-        db.prepare(`
-          INSERT INTO finance_rejections
-            (rejection_type, source_table, source_record_id, employee_code,
-             employee_name, department, month, year, company,
-             original_details, rejection_reason, rejected_by)
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        `).run(
-          'GROSS_STRUCTURE_CHANGE_REVERT', 'salary_manual_flags', flag.id,
-          flag.employee_code, emp?.name || '', emp?.department || '',
-          flag.month, flag.year, '',
-          JSON.stringify({ old_gross: flag.system_value, new_gross: flag.manual_value, flag }),
-          comments || 'Finance rejected gross change — reverting to original',
-          reviewer
-        );
-
-        // Revert employees.gross_salary to old value
-        db.prepare("UPDATE employees SET gross_salary = ?, updated_at = datetime('now') WHERE code = ?")
-          .run(oldGross, flag.employee_code);
-
-        // Revert salary_structures proportionally (preserves component ratios)
-        if (emp) {
-          syncSalaryStructureFromEmployee(db, emp.id, { gross_salary: oldGross });
-        }
-
-        // Audit log for the gross revert
-        logAudit('employees', emp?.id || flag.employee_code, 'gross_salary',
-          String(flag.manual_value), String(flag.system_value), 'FINANCE_GROSS_REVERT',
-          `GROSS REVERT: Finance rejected gross change ${flag.manual_value} → ${flag.system_value} for ${flag.employee_code}`, req.user?.username);
-      } catch (e) {
-        console.error('[GROSS_REVERT] revert failed, flag status still updated:', e.message);
-      }
-    }
+    db.transaction(() => decideManualFlag(db, flag, { status, comments, reviewer, username: req.user?.username }))();
+  } catch (e) {
+    return sendFlagError(res, e, 'approve-flag');
   }
-
   res.json({ success: true });
 });
 
 // ─────────────────────────────────────────────────────────
 // PUT /api/finance-audit/bulk-approve
-// Bulk approve/reject flags
+// Bulk approve/reject flags (finance/admin). Same per-flag work as the single
+// route, ONE transaction for the batch: any refusal → nothing written (Q5).
 // ─────────────────────────────────────────────────────────
-router.put('/bulk-approve', (req, res) => {
+router.put('/bulk-approve', requireFinanceOrAdmin, (req, res) => {
   const db = getDb();
   const { flagIds, status, comments } = req.body;
-  if (!flagIds || !flagIds.length) return res.status(400).json({ success: false, error: 'flagIds required' });
+  if (!Array.isArray(flagIds) || !flagIds.length) return res.status(400).json({ success: false, error: 'flagIds required' });
 
   const reviewer = req.user?.username || 'finance';
-  const approvedVal = status === 'APPROVED' ? 1 : status === 'REJECTED' ? -1 : 0;
-
-  const updateStmt = db.prepare(`UPDATE salary_manual_flags SET finance_approved = ?, approved_by = ?, approved_at = datetime('now') WHERE id = ?`);
-  const insertApproval = db.prepare(`INSERT INTO finance_approvals (employee_code, month, year, flag_id, status, reviewed_by, reviewed_at, comments)
-    VALUES (?, ?, ?, ?, ?, ?, datetime('now'), ?)`);
-
-  const txn = db.transaction(() => {
-    for (const id of flagIds) {
-      const flag = db.prepare('SELECT * FROM salary_manual_flags WHERE id = ?').get(id);
-      if (flag) {
-        updateStmt.run(approvedVal, reviewer, id);
-        insertApproval.run(flag.employee_code, flag.month, flag.year, id, status, reviewer, comments || '');
+  let count = 0;
+  try {
+    db.transaction(() => {
+      for (const id of [...new Set(flagIds.map(String))]) {
+        const flag = db.prepare('SELECT * FROM salary_manual_flags WHERE id = ?').get(id);
+        if (!flag) continue;
+        decideManualFlag(db, flag, { status, comments, reviewer, username: req.user?.username });
+        count++;
       }
-    }
-  });
-  txn();
-
-  res.json({ success: true, count: flagIds.length });
+    })();
+  } catch (e) {
+    return sendFlagError(res, e, 'bulk-approve');
+  }
+  res.json({ success: true, count });
 });
 
 // ─────────────────────────────────────────────────────────
