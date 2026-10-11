@@ -83,6 +83,16 @@ def login(ctx, user='admin', pw='Admin@123'):
     pg.get_by_role('button', name='Sign in').click(); pg.wait_for_url(lambda u: '/login' not in u)
     return pg
 
+def finalise_ui(pg, btn=None):
+    """PR-4: Finalise opens a window; give a reason when the quality check lists anything."""
+    (btn or pg.get_by_role('button', name='Finalise')).click()
+    pg.get_by_test_id('ar-finalise-dialog').get_by_text('Finalising locks the review').wait_for(timeout=10000)
+    box = pg.get_by_label('Reason to finalise')
+    if box.count(): box.fill('Synthetic test month, checks reviewed')
+    pg.get_by_test_id('ar-finalise-confirm').click()
+    pg.get_by_text('Review finalised and locked').first.wait_for(timeout=10000)
+
+
 
 def open_tab(pg):
     pg.goto(BASE + '/analytics/attendance-review'); pg.wait_for_load_state('networkidle')
@@ -171,7 +181,7 @@ try:
         print('\n— draft → finalise → send —')
         pg.get_by_role('button', name='Generate draft').click(); pg.get_by_text('Draft created').wait_for(timeout=15000)
         pg.wait_for_load_state('networkidle'); time.sleep(1.2)
-        pg.get_by_role('button', name='Finalise').click(); pg.get_by_text('Review finalised and locked').wait_for(timeout=10000)
+        finalise_ui(pg)
         pg.wait_for_load_state('networkidle'); time.sleep(1.5)
         btn = pg.get_by_test_id('ar-send-finance')
         check('button: Send 4 to finance', 'Send 4 to finance', btn.inner_text().strip())

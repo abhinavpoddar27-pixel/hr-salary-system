@@ -1461,7 +1461,136 @@ function computeAttendanceReview(db, { month, year, config, releaseDays = [], pr
   };
 }
 
+// ── PR-4: data-quality check before Finalise ──────────────────────────────
+
+/** The clock the quality gate uses (a function so tests can pin it). */
+function nowDate() { return new Date(); }
+
+const GATE_DATA_GAP_DAYS = 3; // attendance ending more than this many days before month end = "data ends early"
+const GATE_NIGHT_SHARE = 0.5; // a person whose worked days are at least this share night work is a night worker
+
+const dmy = (iso) => (iso ? `${iso.slice(8, 10)}-${iso.slice(5, 7)}-${iso.slice(0, 4)}` : '');
+const medHhmm = (xs) => { const m = median(xs.filter((x) => x != null)); return m == null ? '?' : hhmmOf(m); };
+
+/**
+ * PR-4 — what must be looked at before a draft is finalised, read from the STORED draft (run.result_json, run.config_snapshot)
+ * plus a few live reads. Items: { key, level, title, detail, people? }.
+ *  stop  — Finalise refused, no acknowledgement possible: rules_changed.
+ *  check — Finalise needs a typed reason: month_not_over, data_ends_early, shift_doubt, miss_punch_open.
+ *  note  — shown only: unassessed_on_list, out_not_verified, no_master, master_drift, bulk_days, half_days.
+ * Returns { stops, checks, notes, items, ok } — ok = no stop and no check.
+ */
+function qualityGate(db, run, { now = nowDate() } = {}) {
+  const month = run.month; const year = run.year; const ym = ymOf(month, year);
+  const res = typeof run.result_json === 'string' ? JSON.parse(run.result_json || '{}') : (run.result || {});
+  const snap = typeof run.config_snapshot === 'string' ? run.config_snapshot : JSON.stringify(run.config_snapshot || {});
+  let cfg; try { cfg = JSON.parse(snap || '{}'); } catch { cfg = {}; }
+  if (!cfg || !cfg.thresholds) cfg = mergeConfig(cfg || {});
+  const t = { ...DEFAULT_CONFIG.thresholds, ...cfg.thresholds }; // an older draft may predate a threshold
+  const end = `${ym}-${pad(daysInMonth(month, year))}`;
+  const items = [];
+  const add = (key, level, title, detail, people) => items.push({ key, level, title, detail, ...(people ? { people } : {}) });
+  const list = Array.isArray(res.actionList) ? res.actionList : [];
+  const ded = list.filter((a) => a.action === 'deduction');
+  const listed = new Map(list.map((a) => [String(a.code), a]));
+
+  // stop: the rules in force for the month are no longer the ones the draft used
+  const live = loadConfig(db, ym);
+  if (JSON.stringify(live.config) !== snap) {
+    const was = res.configSource ? `v${res.configSource.id}` : 'earlier rules';
+    add('rules_changed', 'stop', 'Rules changed since this draft',
+      `The draft used ${was}; the rules in force for ${ym} are now ${live.source ? `v${live.source.id}` : 'the defaults'}. Regenerate the draft, then finalise.`);
+  }
+
+  // check: the month is not over yet
+  const today = istToday(now);
+  if (today <= end) add('month_not_over', 'check', 'The month is not over',
+    `Today is ${dmy(today)}; ${ym} runs to ${dmy(end)}. Days still to come are not in this review.`);
+
+  // check: attendance ends early
+  const last = db.prepare('SELECT MAX(date) d FROM attendance_processed WHERE substr(date,1,7) = ?').get(ym).d;
+  if (!last) add('data_ends_early', 'check', 'No attendance for the month', `No attendance is imported for ${ym}.`);
+  else if (last < addDays(end, -GATE_DATA_GAP_DAYS)) add('data_ends_early', 'check', 'Attendance ends early',
+    `Attendance is imported only up to ${dmy(last)} (month ends ${dmy(end)}). Import the rest first, or say why the last days are missing.`);
+
+  // check: deductions for people whose master shift looks wrong
+  const fitSugg = new Map((res.suggestions || []).filter((s) => s.kind === 'master_fit').map((s) => [String(s.code), s]));
+  const codes = ded.map((a) => String(a.code));
+  const nightRows = codes.length ? db.prepare(`SELECT employee_code c, in_time_final it, out_time_final ot,
+      CASE WHEN COALESCE(is_night_shift,0) = 1 OR shift_detected = 'Night Shift' THEN 1 ELSE 0 END n
+    FROM attendance_processed WHERE substr(date,1,7) = ? AND status_final IN ${WORKED}
+      AND employee_code IN (SELECT value FROM json_each(?))`).all(ym, JSON.stringify(codes)) : [];
+  const nights = new Map();
+  for (const r of nightRows) {
+    const k = String(r.c); const o = nights.get(k) || { worked: 0, night: 0, ins: [], outs: [] };
+    o.worked++; if (r.n) { o.night++; o.ins.push(toMin(r.it)); o.outs.push(toMin(r.ot)); }
+    nights.set(k, o);
+  }
+  const masters = codes.length ? new Map(db.prepare(`SELECT e.code c, s.name, s.start_time st, s.end_time en FROM employees e
+    LEFT JOIN shifts s ON s.id = e.default_shift_id WHERE e.code IN (SELECT value FROM json_each(?))`).all(JSON.stringify(codes))
+    .map((r) => [String(r.c), r])) : new Map();
+  const doubt = [];
+  for (const a of ded) {
+    const code = String(a.code); const why = [];
+    const wd = a.worked_days || 0; const ms = masters.get(code);
+    const master = ms && ms.st ? `${ms.name} (${ms.st}–${ms.en})` : 'no master';
+    const s = fitSugg.get(code); if (s) why.push(s.evidence || s.title);
+    if (wd >= t.master_fit_min_days) {
+      if ((a.late_days || 0) >= t.master_fit_share * wd) why.push(`late on ${a.late_days} of ${wd} days worked on ${master}`);
+      if ((a.early_days || 0) >= t.master_fit_share * wd) why.push(`left early on ${a.early_days} of ${wd} days worked on ${master}`);
+    }
+    const n = nights.get(code);
+    const ovn = ms && ms.st && ms.en && toMin(ms.en) < toMin(ms.st);
+    if (n && n.worked && n.night >= GATE_NIGHT_SHARE * n.worked && !ovn && (a.missed_out_days || a.early_days)) {
+      why.push(`works nights (${n.night} of ${n.worked} days, punches about ${medHhmm(n.ins)}–${medHhmm(n.outs)}) on a day master ${master}`
+        + `${a.missed_out_days ? `; ${a.missed_out_days} unpaired night(s) counted as missed OUT` : ''} — needs an overnight master`);
+    }
+    if (why.length) doubt.push({ code, name: a.name, department: a.department, deduction_days: a.deduction_days,
+      indicative_amount: a.indicative_amount, why: [...new Set(why)] });
+  }
+  if (doubt.length) add('shift_doubt', 'check', `${doubt.length} deduction(s) may come from a wrong master shift`,
+    'Late or early on most days, or night work on a day master, usually means the shift is wrong rather than the person. Fix the master and regenerate, or leave them out, or say why the deduction stands.', doubt);
+
+  // check: miss-punch days still not fixed (bulk-failure days left out — they are a system cause)
+  const bulk = bulkMissPunchDays(db, `${ym}-01`, end, t.bulk_miss_punch_day).map((b) => b.date);
+  const open = db.prepare(`SELECT employee_code c, COUNT(*) days FROM attendance_processed
+    WHERE substr(date,1,7) = ? AND status_final IN ${WORKED} AND COALESCE(is_miss_punch,0) = 1 AND COALESCE(miss_punch_resolved,0) = 0
+      AND date NOT IN (SELECT value FROM json_each(?)) GROUP BY employee_code ORDER BY days DESC, employee_code`).all(ym, JSON.stringify(bulk))
+    .map((r) => ({ code: String(r.c), days: r.days, listed: listed.has(String(r.c)) }));
+  if (open.length) add('miss_punch_open', 'check', `${open.reduce((s, r) => s + r.days, 0)} miss-punch day(s) not fixed`,
+    `Stage 2 has open miss punches for ${open.length} people; those days are skipped, so a late or early exit on them is not counted. Fix them in Miss Punch and regenerate, or say why not.`, open);
+
+  // notes
+  const q = res.assessment && res.assessment.quality;
+  if (q) {
+    const ua = new Map();
+    for (const k of ['no_master', 'night_on_day_master', 'odd_punch']) for (const r of (q[k] && q[k].people) || []) {
+      if (!listed.has(String(r.code))) continue;
+      const o = ua.get(String(r.code)) || { code: String(r.code), days: 0, reasons: [] }; o.days += r.days; o.reasons.push(k); ua.set(String(r.code), o);
+    }
+    if (ua.size) add('unassessed_on_list', 'note', 'Listed people with days not assessed', 'These days were not measured, so the list may understate them.', [...ua.values()]);
+    const onv = ((q.out_not_verified && q.out_not_verified.people) || []);
+    if (onv.length) add('out_not_verified', 'note', `${q.out_not_verified.days} gate-register out time(s) typed as the exact shift end`,
+      'No early exit is measured on those days. Ask HR to write the real exit time in the gate register.',
+      onv.map((r) => ({ code: String(r.code), days: r.days, listed: listed.has(String(r.code)) })));
+    const nm = (q.no_master && q.no_master.people) || [];
+    if (nm.length) add('no_master', 'note', `${nm.length} people have no master shift`, `Their ${q.no_master.days} worked day(s) are not assessed at all. Set a master in Employee Master.`,
+      nm.map((r) => ({ code: String(r.code), days: r.days })));
+    if (q.half_day && q.half_day.days) add('half_days', 'note', `${q.half_day.days} half day(s) not checked`, 'Half days are not checked for late coming or early exits (owner ruling D-13).');
+  }
+  const drift = [...fitSugg.values()].filter((s) => !doubt.some((d) => d.code === String(s.code)));
+  if (drift.length) add('master_drift', 'note', `${drift.length} master shift(s) don't fit the punches`, 'Not on the deduction list, but the master is worth fixing.',
+    drift.map((s) => ({ code: String(s.code), name: s.name, proposed: s.proposed || null, evidence: s.evidence })));
+  if (bulk.length) add('bulk_days', 'note', `${bulk.length} system-failure day(s)`, `Miss punches on ${bulk.map(dmy).join(', ')} were plant-wide (${t.bulk_miss_punch_day}+ people) and are not counted against anyone.`);
+
+  const stops = items.filter((i) => i.level === 'stop'); const checks = items.filter((i) => i.level === 'check'); const notes = items.filter((i) => i.level === 'note');
+  return { month, year, ok: !stops.length && !checks.length, stops, checks, notes, items, checked_at: now.toISOString() };
+}
+
+const GATE_REASON_MIN = 10;
+
 module.exports = {
+  qualityGate, nowDate, GATE_REASON_MIN,
   DEFAULT_CONFIG, mergeConfig, validateConfig, validateOverrides, loadConfig,
   PERSON_MONTH_SQL, PERSON_MONTH_SQL_MASTER, WEEKLY_SQL, WEEKLY_SQL_MASTER, RELEASE_DAYS_SQL, RELEASE_DAYS_SQL_MASTER, MASTER_QUALITY_SQL,
   SHIFT_ISSUES_SQL, sqlParams, inlineParams, assessmentQuality,
