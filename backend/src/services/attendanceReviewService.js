@@ -2006,7 +2006,289 @@ function qualityGate(db, run, { now = nowDate() } = {}) {
 
 const GATE_REASON_MIN = 10;
 
+// ── G10 (PR-9): person drill-down — every day of one month, with why it was counted or excused ─────────────
+//
+// Per-day SQL = the engine's OWN base CTE + its OWN person-month CTE chain (pl → w → x → y → z), with the aggregate SELECT
+// replaced by a per-day one. So every per-day flag the engine sums (isl, exc, fhl, lng, exl, ise, short) is computed by the
+// very same SQL text. Person-level steps (exclusions, loaders, early-exempt, shift-fit, MP-2) come from running the engine's
+// own pipeline functions. Only the re-measure rule is per-day re-implemented in JS (remeasureDays, mirrors remeasureRows).
+
+const DAY_TAIL_CUT = '\nSELECT c AS code, ym, COUNT(*)';
+function personDaySql(master) {
+  const i = PERSON_MONTH_TAIL.indexOf(DAY_TAIL_CUT);
+  if (i < 0) throw new Error('personMonthDays: PERSON_MONTH_TAIL changed shape — update DAY_TAIL_CUT');
+  const cte = PERSON_MONTH_TAIL.slice(0, i);
+  const cols = 'z.isl, z.exc, z.fhl, z.lng, z.exl, z.ise, z.short, z.wm, z.h, z.f, z.dow AS zdow, 1 AS inz';
+  if (!master) {
+    return `${IMPORT_BASE}${cte}
+SELECT b.d, b.st, b.mp, b.la, b.lm, b.ed, b.em, b.ll, b.sd, ${cols}
+FROM base b LEFT JOIN z ON z.c = b.c AND z.d = b.d
+WHERE b.c = @code AND substr(b.d,1,7) = @cur ORDER BY b.d`;
+  }
+  return `${MASTER_BASE}${cte}
+SELECT b.d, b.st, b.mp, b.la, b.lm, b.ed, b.em, b.ll, b.sd, b.mode, b.ua, b.gr, b.onv, b.gpx, b.half,
+       m5.mst, m5.men, m5.mdur, m5.s0, m5.dmin, m5.lt, m5.er, m5.gph, m5.isn, ${cols}
+FROM base b LEFT JOIN m5 ON m5.c = b.c AND m5.d = b.d LEFT JOIN z ON z.c = b.c AND z.d = b.d
+WHERE b.c = @code AND substr(b.d,1,7) = @cur ORDER BY b.d`;
+}
+
+/**
+ * Re-measure, one day at a time (JS re-implementation of remeasureRows for ONE code — keep both in step).
+ * Returns Map(date → { late_minutes, early_minutes, late, early, shift }) for the current month's worked, non-miss-punch days.
+ */
+function remeasureDays(db, code, month, year, cfg, releaseDays, prevReleaseDays, mp2) {
+  const t = cfg.thresholds; const rm = cfg.remeasure[code]; const p = sqlParams(month, year, cfg, releaseDays, prevReleaseDays);
+  const mp2Set = new Set(mp2 || []); const longOn = cfg.late_long_always_counted === true;
+  const rows = db.prepare(`SELECT employee_code c, date d, status_final st, COALESCE(is_miss_punch,0) mp, in_time_final it, out_time_final ot,
+      COALESCE(is_left_late,0) ll FROM attendance_processed WHERE employee_code = ? AND date BETWEEN ? AND ? ORDER BY employee_code, date`)
+    .all(code, p.from, p.to);
+  const rel = { [p.cur]: new Set(releaseDays || []), [p.prev]: new Set(prevReleaseDays || []) };
+  const llOf = (r) => {
+    const mode = rm.left_late || 'system';
+    if (mode === 'off') return 0;
+    if (mode === 'shift') { const o = toMin(r.ot); return o !== null && o >= toMin(rm.end) + (rm.left_late_minutes ?? 20) ? 1 : 0; }
+    return r.ll;
+  };
+  const llByDay = new Map(); for (const r of rows) llByDay.set(r.d, Math.max(llByDay.get(r.d) || 0, llOf(r)));
+  const out = new Map(); let lastLl = null;
+  const shiftLabel = { name: 'Re-measure', start: rm.start, end: rm.end, mode: 'remeasure' };
+  for (const r of rows) {
+    const worked = ['P', 'WOP', '½P', 'WO½P'].includes(r.st) && r.mp === 0;
+    if (!worked) continue;
+    const pll = lastLl === null ? 0 : lastLl;
+    lastLl = llOf(r);
+    const ym = r.d.slice(0, 7);
+    if (ym !== p.cur) continue;
+    const cll = llByDay.get(addDays(r.d, -1)) || 0;
+    const exc = cfg.stayed_late_mode === 'worked' ? pll === 1 : cfg.stayed_late_mode === 'calendar' ? cll === 1 : (pll === 1 || cll === 1);
+    const h = (toMin(rm.end) - toMin(rm.start)) / 60; const f = ['½P', 'WO½P'].includes(r.st) ? 0.5 : 1;
+    const inM = toMin(r.it); const outM = toMin(r.ot);
+    const wmin = inM !== null && outM !== null && outM > inM ? outM - inM : null;
+    const need = f * h * 60;
+    const own = rm.hours_complete === true && wmin !== null && wmin >= need - (rm.hours_grace ?? 10);
+    const fullLate = own || (cfg.late_full_hours !== false && wmin !== null && wmin >= need - Math.min(t.shift_fit_grace, t.late_min_minutes - 1));
+    const fullEarly = own || (cfg.shift_fit === 'everyone' && wmin !== null && wmin >= need - t.shift_fit_grace);
+    const lateBy = inM === null ? 0 : inM - toMin(rm.start);
+    const day = { late_minutes: Math.max(0, lateBy), early_minutes: 0, late: 'none', early: 'none', worked_minutes: wmin, shift: shiftLabel };
+    if (lateBy > (rm.late_grace ?? 9) && lateBy >= t.late_min_minutes && lateBy < t.misread_minutes) {
+      const long = lateBy >= t.long_late_minutes;
+      if (exc) day.late = 'excused:stayed_late';
+      else if (fullLate && !(long && longOn)) day.late = 'excused:full_hours';
+      else { day.late = 'counted'; if (long) day.long_late = true; if (long && fullLate) day.long_late_kept = true; }
+    } else if (lateBy > 0) day.late_note = lateBy >= t.misread_minutes ? 'misread' : 'within_grace';
+    const earlyBy = outM === null ? 0 : toMin(rm.end) - outM;
+    day.early_minutes = Math.max(0, earlyBy);
+    const dow = new Date(`${r.d}T00:00:00Z`).getUTCDay();
+    if (earlyBy > (rm.early_grace ?? t.early_min_exclusive) && earlyBy < t.early_max_exclusive) {
+      if (t.early_weekdays_only && dow === 0) day.early = 'excused:sunday';
+      else if (rel[ym].has(r.d)) day.early = 'excused:release_day';
+      else if (mp2Set.has(`${code}|${r.d}`)) day.early = 'excused:missed_out_counted';
+      else if (fullEarly) day.early = 'excused:full_hours';
+      else day.early = 'counted';
+    } else if (earlyBy > 0) day.early_note = earlyBy >= t.early_max_exclusive ? 'misread' : 'within_grace';
+    out.set(r.d, day);
+  }
+  return out;
+}
+
+const WEEKDAY = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+const WORKED_ST = ['P', 'WOP', '½P', 'WO½P'];
+
+/**
+ * Inputs the drill-down uses when the caller gives none: the month's stored run (final, else draft) → its config snapshot and
+ * confirmed release days; else the rules in force + release days as detected (same as Trends). Previous month: its run's days.
+ */
+function personMonthInputs(db, month, year, opts = {}) {
+  const ym = ymOf(month, year); const pm = prevMonth(month, year);
+  const run = db.prepare('SELECT id, status, config_snapshot, release_days, result_json FROM attendance_review_runs WHERE month = ? AND year = ?').get(month, year);
+  let config = opts.config; let releaseDays = opts.releaseDays; let source = 'live'; let runId = null; let configId = null; let stored = null;
+  if (run) {
+    source = run.status; runId = run.id;
+    let res = null; try { res = JSON.parse(run.result_json); } catch { res = null; }
+    if (res) {
+      configId = res.configSource ? res.configSource.id : null;
+      stored = (res.people || []).find((x) => x.code !== undefined && String(x.code) === String(opts.code)) || null;
+      stored = { found: !!stored, late_days: stored ? stored.late_days : 0, early_days: stored ? stored.early_days : 0,
+        late_min: stored ? stored.late_min : 0, early_min: stored ? stored.early_min : 0 };
+    }
+    if (config === undefined) { try { config = JSON.parse(run.config_snapshot); } catch { config = undefined; } }
+    if (releaseDays === undefined) { try { releaseDays = JSON.parse(run.release_days || '[]'); } catch { releaseDays = []; } }
+  }
+  if (config === undefined) { const lc = loadConfig(db, ym); config = lc.config; configId = lc.source ? lc.source.id : null; }
+  const cfg = mergeConfig(config);
+  if (releaseDays === undefined) releaseDays = detectReleaseDays(db, month, year, cfg).map((d) => d.date);
+  const prevReleaseDays = opts.prevReleaseDays !== undefined ? opts.prevReleaseDays : storedReleaseDays(db, pm.month, pm.year);
+  return { cfg, config, releaseDays, prevReleaseDays, source, runId, configId, stored };
+}
+
+/**
+ * G10: one person's month, day by day. Read only. Returns null when the person has no attendance row in the month.
+ * Each day: status, in / out (final) + where they came from (machine | gate register), the shift the day was measured on
+ * (or "not assessed" + reason), late / early minutes as measured, and late / early = 'counted' | 'excused:<reason>' | 'none'.
+ * Hard invariant (checked here, and in the tests): counted days + minutes = what computeAttendanceReview gives the person.
+ * opts { releaseDays, prevReleaseDays, config } override the stored-run / live defaults (see personMonthInputs).
+ */
+function personMonthDays(db, code, month, year, opts = {}) {
+  code = String(code);
+  const ym = ymOf(month, year);
+  const raw = db.prepare(`SELECT date, status_final, status_original, in_time_final, out_time_final, in_time_original, out_time_original,
+      shift_detected, COALESCE(is_night_shift,0) is_night_shift, COALESCE(is_miss_punch,0) is_miss_punch, miss_punch_type,
+      COALESCE(miss_punch_resolved,0) miss_punch_resolved, correction_source
+    FROM attendance_processed WHERE employee_code = ? AND substr(date,1,7) = ? ORDER BY date`).all(code, ym);
+  if (!raw.length) return null;
+  const inp = personMonthInputs(db, month, year, { ...opts, code });
+  const { cfg, releaseDays, prevReleaseDays } = inp;
+  const t = cfg.thresholds; const master = isMaster(cfg);
+
+  // the engine's own pipeline, for the person-level steps and the totals the days must add up to
+  const plan = missedOutPlan(db, month, year, cfg);
+  const sqlRows = loadPersonMonth(db, month, year, cfg, releaseDays, prevReleaseDays, null, plan.keys).filter((r) => r.code === code);
+  const remRows = remeasureRows(db, month, year, cfg, releaseDays, prevReleaseDays, null, plan.keys).filter((r) => r.code === code);
+  const empMap = loadEmployees(db, [code]);
+  const byCode = buildPeople(sqlRows, remRows, empMap, cfg, ym, ymOf(prevMonth(month, year).month, prevMonth(month, year).year));
+  const { kept } = applyExclusions(byCode, cfg);
+  applyMissedOut(kept, plan, cfg);
+  const p = kept.find((x) => x.code === code) || null;
+  const emp = empMap.get(code) || db.prepare('SELECT name, department, designation FROM employees WHERE code = ? ORDER BY id LIMIT 1').get(code) || {};
+  const exDept = new Set(cfg.excluded_departments.map((d) => d.toUpperCase()));
+  const leftOut = !p && (cfg.excluded_codes.includes(code) || exDept.has(String(emp.department || '').toUpperCase()));
+  const m = p && p.cur ? p.cur : null;
+  const remeasured = !!(m && m.remeasured);
+  const loading = !!(p && p.loading); const earlyExempt = !!(p && p.early_excluded);
+  const fit = !!(m && m.fit_applied);
+
+  const sp = sqlParams(month, year, cfg, releaseDays, prevReleaseDays, null, plan.keys);
+  const dayRows = new Map(db.prepare(personDaySql(master)).all({ ...sp, code }).map((r) => [r.d, r]));
+  const rem = remeasured ? remeasureDays(db, code, month, year, cfg, releaseDays, prevReleaseDays, plan.keys) : null;
+  const shiftByName = db.prepare('SELECT name, start_time, end_time, duration_hours FROM shifts WHERE name = ? ORDER BY id LIMIT 1');
+  const gatePass = db.prepare(`SELECT leave_type, duration_hours FROM short_leaves WHERE employee_code = ? AND date = ? AND cancelled_at IS NULL ORDER BY id LIMIT 1`);
+  const rel = new Set(releaseDays || []);
+  const masterName = master ? ((db.prepare('SELECT s.name FROM employees e JOIN shifts s ON s.id = e.default_shift_id WHERE e.code = ? ORDER BY e.id LIMIT 1').get(code) || {}).name || null) : null;
+  const fitReason = cfg.shift_fit === 'habitual' ? 'excused:shift_fit' : 'excused:full_hours';
+  const mp2Dates = new Set(plan.days.get(`${code}|${ym}`) || []);
+  const bulk = new Set(plan.bulk);
+  const rawBy = new Map(raw.map((r) => [r.date, r]));
+  // MP-2 ordinal of each own missed punch (display; the counting uses plan.keys from the engine)
+  const ownMp = new Map(); let n = 0;
+  for (const r of raw) if (r.is_miss_punch === 1 && WORKED_ST.includes(r.status_final) && !bulk.has(r.date)) ownMp.set(r.date, ++n);
+
+  const days = []; const md = daysInMonth(month, year);
+  for (let dd = 1; dd <= md; dd++) {
+    const d = `${ym}-${pad(dd)}`; const dow = new Date(`${d}T00:00:00Z`).getUTCDay();
+    const r = rawBy.get(d); const b = dayRows.get(d);
+    const day = { date: d, weekday: WEEKDAY[dow], status: r ? r.status_final : null, in: r ? r.in_time_final : null, out: r ? r.out_time_final : null,
+      times_from: null, shift: null, assessed: false, not_assessed_reason: null, late_minutes: 0, early_minutes: 0,
+      late: 'none', early: 'none', notes: [] };
+    days.push(day);
+    if (!r) { day.not_assessed_reason = 'no_attendance_row'; continue; }
+    day.times_from = r.is_miss_punch === 1 && r.miss_punch_resolved === 1 ? 'gate_register' : r.is_miss_punch === 1 ? 'missing' : 'machine';
+    if (rel.has(d)) day.notes.push('release_day');
+    const gp = gatePass.get(code, d); if (gp) day.gate_pass = { type: gp.leave_type, hours: gp.duration_hours };
+    if (r.is_miss_punch === 1 && WORKED_ST.includes(r.status_final)) {
+      day.missed_punch = { type: r.miss_punch_type || null, fixed: r.miss_punch_resolved === 1, bulk_day: bulk.has(d), own_number: ownMp.get(d) || null };
+    }
+    if (leftOut) { day.not_assessed_reason = 'person_left_out'; continue; }
+    if (!WORKED_ST.includes(r.status_final)) { day.not_assessed_reason = 'not_a_worked_day'; continue; }
+
+    if (remeasured) {
+      const x = rem.get(d);
+      if (!x) { day.not_assessed_reason = r.is_miss_punch === 1 ? 'miss_punch' : 'not_a_worked_day'; }
+      else {
+        Object.assign(day, { assessed: true, shift: x.shift, late_minutes: x.late_minutes, early_minutes: x.early_minutes, late: x.late, early: x.early,
+          worked_minutes: x.worked_minutes });
+        if (x.late_note) day.notes.push(`late_${x.late_note}`); if (x.early_note) day.notes.push(`early_${x.early_note}`);
+        if (x.long_late) day.long_late = true; if (x.long_late_kept) day.notes.push('long_late_counted_despite_full_hours');
+        day.notes.push('remeasured');
+        // person-level steps the engine applies after re-measure (applyExclusions): loaders' lates, early-exempt exits
+        if (day.late === 'counted' && loading) day.late = 'excused:loader';
+        if (day.early === 'counted' && earlyExempt) day.early = p.contract_loader ? 'excused:contract_loader' : 'excused:early_exempt';
+      }
+    } else if (b) {
+      // shift the day was measured on
+      if (master) {
+        const mode = b.mode;
+        if (b.mst) day.shift = { name: masterName, start: b.s0 != null ? hhmmOf(b.s0) : b.mst,
+          end: b.s0 != null && b.dmin != null ? hhmmOf(b.s0 + b.dmin) : b.men, hours: b.mdur, mode };
+        if (b.ua) day.not_assessed_reason = b.ua;
+        else if (b.mp === 1) day.not_assessed_reason = 'miss_punch';
+        else if (b.half === 1) day.not_assessed_reason = 'half_day';
+        else if (!(b.mode === 'day' || b.mode === 'night')) day.not_assessed_reason = b.mode;
+        else if (!b.inz) day.not_assessed_reason = r.in_time_final && r.out_time_final ? 'not_assessed' : 'no_punches';
+        else day.assessed = true;
+        if (b.onv === 1) day.notes.push('out_not_verified');
+        if (b.gpx === 1) day.notes.push('gate_pass_reduced');
+        if (b.lt != null && b.lt > 0) day.late_minutes = b.lt;
+        if (b.er != null && b.er > 0) day.early_minutes = b.er;
+        if (b.gpx === 1 && b.em != null) day.early_minutes_after_gate_pass = b.em;
+      } else {
+        const sh = b.sd ? shiftByName.get(b.sd) : null;
+        day.shift = { name: b.sd || null, start: sh ? sh.start_time : null, end: sh ? sh.end_time : null,
+          hours: b.h || (sh ? sh.duration_hours : null), mode: r.is_night_shift === 1 ? 'night' : 'day' };
+        if (b.mp === 1) day.not_assessed_reason = 'miss_punch';
+        else if (!b.inz) day.not_assessed_reason = 'not_assessed';
+        else day.assessed = true;
+        day.late_minutes = b.lm || 0; day.early_minutes = b.em || 0;
+      }
+      if (b.inz) {
+        day.worked_minutes = b.wm;
+        // late — the engine's own isl / exc / fhl / lng / exl, then the person-level loader step
+        if (b.isl === 1) {
+          if (b.exl === 1) day.late = b.exc === 1 ? 'excused:stayed_late' : 'excused:full_hours';
+          else if (loading) day.late = 'excused:loader';
+          else day.late = 'counted';
+          if (b.lng === 1) { day.long_late = true; if (b.exl === 0 && b.exc === 0 && b.fhl === 1) day.notes.push('long_late_counted_despite_full_hours'); }
+        } else if (b.la === 1 && b.lm > 0) day.notes.push(b.lm >= t.misread_minutes ? 'late_misread' : 'late_within_grace');
+        // early — the engine's own ise / short, then early-exempt and the shift check
+        if (b.ise === 1) {
+          if (earlyExempt) day.early = p.contract_loader ? 'excused:contract_loader' : 'excused:early_exempt';
+          else if (fit && b.short === 0) day.early = fitReason;
+          else day.early = 'counted';
+        } else if (master && b.gph != null && b.er != null && b.er > t.early_min_exclusive && b.em <= t.early_min_exclusive) {
+          day.early = 'excused:gate_pass';
+        } else if (b.ed === 1 && b.em > 0) {
+          day.early = b.em <= t.early_min_exclusive ? 'none' : b.em >= t.early_max_exclusive ? 'none'
+            : (t.early_weekdays_only && b.zdow === '0') ? 'excused:sunday'
+              : rel.has(d) ? 'excused:release_day' : mp2Dates.has(d) ? 'excused:missed_out_counted' : 'none';
+          if (b.em <= t.early_min_exclusive) day.notes.push('early_within_grace');
+          if (b.em >= t.early_max_exclusive) day.notes.push('early_misread');
+        }
+      }
+    } else day.not_assessed_reason = 'not_assessed';
+
+    // MP-2: a missed OUT from the person's Nth own missed punch counts as an early exit of missed_out_minutes
+    if (mp2Dates.has(d) && m) {
+      if (earlyExempt) day.early = p && p.contract_loader ? 'excused:contract_loader' : 'excused:early_exempt';
+      else { day.early = 'counted'; day.early_minutes = t.missed_out_minutes; day.missed_out = true; }
+    }
+    if (p && p.held) day.notes.push('person_held');
+  }
+
+  const cnt = (k) => days.filter((x) => x[k] === 'counted');
+  const totals = {
+    late_days: cnt('late').length, late_min: cnt('late').reduce((s, x) => s + x.late_minutes, 0),
+    early_days: cnt('early').length, early_min: cnt('early').reduce((s, x) => s + (x.missed_out ? t.missed_out_minutes : (x.early_minutes_after_gate_pass ?? x.early_minutes)), 0),
+    missed_out_days: days.filter((x) => x.missed_out && x.early === 'counted').length,
+    long_lates: days.filter((x) => x.long_late && x.late === 'counted').length,
+    worked_days: days.filter((x) => WORKED_ST.includes(x.status) && !(x.missed_punch && !x.missed_punch.fixed)).length,
+  };
+  const engine = { late_days: m ? m.lates_counted || 0 : 0, late_min: m ? m.late_min_counted || 0 : 0,
+    early_days: m ? m.early_counted || 0 : 0, early_min: m ? m.early_min_counted || 0 : 0 };
+  return {
+    code, name: emp.name || null, department: emp.department || null, designation: emp.designation || null, month, year, ym,
+    basis: cfg.assessment_basis,
+    rule_version: { source: inp.source, run_id: inp.runId, config_id: inp.configId },
+    release_days: releaseDays,
+    person: { left_out: leftOut, held: !!(p && p.held), loader: loading, early_exempt: earlyExempt, contract_loader: !!(p && p.contract_loader),
+      remeasured, shift_check: fit, missed_out_rule: cfg.missed_out_rule === true, long_late_rule: cfg.late_long_always_counted === true },
+    days, totals, engine,
+    consistent: totals.late_days === engine.late_days && totals.early_days === engine.early_days
+      && Math.abs(totals.late_min - engine.late_min) < 0.01 && Math.abs(totals.early_min - engine.early_min) < 0.01,
+    stored: inp.stored,
+  };
+}
+
 module.exports = {
+  personMonthDays, personMonthInputs,
   qualityGate, nowDate, GATE_REASON_MIN,
   DEFAULT_CONFIG, mergeConfig, validateConfig, validateOverrides, loadConfig,
   PERSON_MONTH_SQL, PERSON_MONTH_SQL_MASTER, WEEKLY_SQL, WEEKLY_SQL_MASTER, RELEASE_DAYS_SQL, RELEASE_DAYS_SQL_MASTER, MASTER_QUALITY_SQL,
