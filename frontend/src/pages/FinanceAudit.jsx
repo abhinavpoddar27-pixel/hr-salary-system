@@ -9,7 +9,7 @@ import { getFinanceReport, submitDayCorrection, getCorrectionHistory, getCorrect
 import { useAppStore } from '../store/appStore'
 import DateSelector from '../components/common/DateSelector'
 import useDateSelector from '../hooks/useDateSelector'
-import { fmtINR, fmtINR2, monthYearLabel } from '../utils/formatters'
+import { fmtINR, fmtINR2, monthYearLabel, fmtIstDateTime } from '../utils/formatters'
 import Modal from '../components/ui/Modal'
 import useExpandableRows from '../hooks/useExpandableRows'
 import DrillDownRow, { DrillDownChevron } from '../components/ui/DrillDownRow'
@@ -522,7 +522,7 @@ function ManualFlagsTab() {
                       </td>
                       <td className="text-xs text-slate-600 max-w-[200px] truncate">{f.reason || '—'}</td>
                       <td className="text-xs text-slate-500">{f.marked_by || f.added_by || '—'}</td>
-                      <td className="text-xs text-slate-400">{f.created_at ? new Date(f.created_at).toLocaleDateString() : '—'}</td>
+                      <td className="text-xs text-slate-400">{f.marked_at ? fmtIstDateTime(f.marked_at) : '—'}</td>
                       <td className="text-center">
                         {isVerified ? (
                           <div>
