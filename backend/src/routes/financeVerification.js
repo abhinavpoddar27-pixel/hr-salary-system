@@ -245,7 +245,9 @@ router.post('/signoff', requireFinanceOrAdmin, (req, res) => {
     } catch (e) {}
   }
 
-  res.json({ success: true });
+  // P1-13: return the stored row so the page shows the decision at once (GET reads may be
+  // served from the browser's 5 s cache for a moment after the write).
+  res.json({ success: true, data: { ...latestSignoff(db, month, year), scope: 'all' } });
 });
 
 // GET /signoff-status

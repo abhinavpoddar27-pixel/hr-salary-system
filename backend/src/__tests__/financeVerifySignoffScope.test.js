@@ -44,7 +44,9 @@ describe('P1-13 one month-wide sign-off', () => {
   test('approve then reject: one row, status rejected, payroll gate finds no approved row', async () => {
     expect((await signoff('fin1', { status: 'approved' })).status).toBe(200);
     expect(db.prepare(PAYROLL_GATE_SQL).get(M, Y)).toBeTruthy();
-    expect((await signoff('fin1', { status: 'rejected', rejectionReason: 'synthetic reason' })).status).toBe(200);
+    const rj = await signoff('fin1', { status: 'rejected', rejectionReason: 'synthetic reason' });
+    expect(rj.status).toBe(200);
+    expect(rj.body.data).toMatchObject({ status: 'rejected', rejection_reason: 'synthetic reason', company: '', scope: 'all' });
     expect(rows()).toHaveLength(1);
     expect(rows()[0].status).toBe('rejected');
     expect(db.prepare(PAYROLL_GATE_SQL).get(M, Y)).toBeUndefined();
