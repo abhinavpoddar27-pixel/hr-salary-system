@@ -125,6 +125,13 @@ class Page:
         self.ctx.close()
 
 
+def close_drawer(pg):
+    try: bb = pg.get_by_text('Leave Management', exact=True).first.bounding_box(timeout=3000)
+    except Exception: bb = None
+    if bb and bb['x'] >= 0 and bb['x'] < 300:
+        pg.mouse.click(370, 420); time.sleep(.5)
+
+
 def click_backdrop(p):
     p.pg.mouse.click(4, 890)
 
@@ -134,7 +141,7 @@ def confirm_cycle(p, label, opener, title, text, cancel_name, ok_name, method, u
     pg = p.pg
     for how in ('Esc', 'Cancel', 'backdrop'):
         opener().click()
-        dlg = p.dialog(title); dlg.wait_for(timeout=8000)
+        dlg = p.dialog(title); dlg.wait_for(timeout=8000); time.sleep(.3)
         if how == 'Esc':
             check(f'{label}: dialog text', True, text in dlg.inner_text())
             check(f'{label}: first focus on {first_focus}', first_focus, p.active_text())
@@ -165,11 +172,13 @@ def modal_cycle(p, label, opener, title):
     pg = p.pg
     for how in ('x', 'Esc', 'backdrop'):
         opener().click()
-        dlg = p.dialog(title); dlg.wait_for(timeout=10000)
+        dlg = p.dialog(title); dlg.wait_for(timeout=10000); time.sleep(.3)
         if how == 'x':
             check(f'{label}: opens', True, dlg.is_visible())
             for _ in range(15): pg.keyboard.press('Tab')
-            check(f'{label}: Tab ×15 stays inside', True, p.focus_inside(title))
+            fi = p.focus_inside(title)
+            if not fi: print('    active:', pg.evaluate('() => document.activeElement.outerHTML.slice(0, 200)'))
+            check(f'{label}: Tab ×15 stays inside', True, fi)
             dlg.get_by_role('button', name='Close', exact=True).first.click()
         elif how == 'Esc':
             pg.keyboard.press('Escape')
@@ -192,61 +201,8 @@ def run_fix(b):
     confirm_cycle(p, 'holiday', row, 'Remove holiday?', 'Remove this holiday?', 'Keep', 'Remove',
                   'DELETE', r'/api/settings/holidays/\d+', 'Keep')
     time.sleep(.8)
-    check('holiday: row deleted in DB', 0, len(q("SELECT 1 FROM holidays WHERE name='TEST HOLIDAY P2'")))
-
-    # ── 2. SqlConsole restore: prompt + 2 alerts (admin) ───────────────────────
-    print('\n— admin: SQL Console snapshot restore —')
-    s, r = api('POST', '/api/auth/login', {'username': 'admin', 'password': PW['admin']}); tok = r.get('token')
-    for code in ('T9603', 'T9604'):
-        s, r = api('POST', '/api/admin/sql/preview', {'sql': f"UPDATE employees SET department='TEST DEPT B' WHERE code='{code}'",
-                                                      'remark': 'P2-01 test write for restore'}, tok)
-        s2, r2 = api('POST', f"/api/admin/sql/commit/{r.get('txn_id')}", {}, tok)
-        check(f'setup: committed protected write {code}', (200, 200), (s, s2))
-    pg = p.pg
-    pg.goto(BASE + '/admin/sql-console'); pg.wait_for_load_state('networkidle')
-
-    def open_restore():
-        btn = pg.get_by_role('button', name='Snapshots ▾')
-        btn.click()
-        link = pg.get_by_role('button', name='Restore this snapshot →').first
-        link.wait_for(timeout=8000)
-        link.click()
-        dlg = p.dialog('Restore snapshot'); dlg.wait_for(timeout=8000)
-        return dlg
-    RESTORE = r'/api/admin/sql/snapshot/\d+/restore'
-    dlg = open_restore()
-    check('prompt: text', True, 'describe why (≥10 characters)' in dlg.inner_text())
-    check('prompt: input has focus', 'INPUT', pg.evaluate('() => document.activeElement.tagName'))
-    dlg.get_by_role('button', name='Cancel', exact=True).click(); dlg.wait_for(state='detached')
-    time.sleep(.3); check('prompt Cancel → 0 restore POST', 0, p.count('POST', RESTORE))
-    dlg = open_restore(); pg.keyboard.press('Escape'); dlg.wait_for(state='detached')
-    time.sleep(.3); check('prompt Esc → 0 restore POST', 0, p.count('POST', RESTORE))
-    dlg = open_restore(); dlg.locator('input').fill('short'); dlg.get_by_role('button', name='OK', exact=True).click()
-    al = p.dialog('Restore aborted'); al.wait_for(timeout=5000)
-    check('alert (<10 chars): text', True, 'remark must be at least 10 characters' in al.inner_text())
-    check('alert: one button only (no Cancel)', 1, al.get_by_role('button').count())
-    check('alert: focus on OK', 'OK', p.active_text())
-    al.get_by_role('button', name='OK', exact=True).click(); al.wait_for(state='detached')
-    time.sleep(.3); check('<10 chars → 0 restore POST', 0, p.count('POST', RESTORE))
-    # failure: hold a write txn open via the API so the restore answers 409 TXN_ALREADY_OPEN
-    s, hold = api('POST', '/api/admin/sql/preview', {'sql': "UPDATE employees SET department='TEST DEPT C' WHERE code='T9604'",
-                                                     'remark': 'P2-01 hold a txn open'}, tok)
-    ALLOWED_BAD.append('/restore')
-    dlg = open_restore(); dlg.locator('input').fill('P2-01 restore check (fails)'); pg.keyboard.press('Enter')
-    al = p.dialog('Restore failed'); al.wait_for(timeout=8000)
-    check('alert (failed): text names the code', True, 'Restore failed: TXN_ALREADY_OPEN' in al.inner_text())
-    pg.keyboard.press('Escape'); al.wait_for(state='detached')
-    check('failed restore → exactly 1 POST', 1, p.count('POST', RESTORE))
-    api('POST', f"/api/admin/sql/rollback/{hold.get('txn_id')}", {}, tok)
-    dlg = open_restore(); dlg.locator('input').fill('  P2-01 restore check  ')
-    dlg.get_by_role('button', name='OK', exact=True).click(); dlg.wait_for(state='detached')
-    for _ in range(30):
-        if p.count('POST', RESTORE) == 2: break
-        time.sleep(.2)
-    check('valid remark → 2nd restore POST', 2, p.count('POST', RESTORE))
-    check('restore POST body = trimmed remark', {'remark': 'P2-01 restore check'}, json.loads(p.bodies('POST', RESTORE)[-1]))
-    pg.get_by_text('Restore', exact=False).first.wait_for(timeout=8000)
-    p.finish()
+    check('holiday: soft-deleted in DB (is_active 0, as before)', [(0,)], q("SELECT is_active FROM holidays WHERE name='TEST HOLIDAY P2'"))
+    pa = p   # admin page is reused for the SQL Console section at the end (login limiter: 5 per window)
 
     # ── 3. Leave Management (hr): Comp-off Cancel + Gate pass Cancel + modals ──
     print('\n— hr: Leave Management —')
@@ -296,7 +252,7 @@ def run_fix(b):
         dlg.get_by_role('button', name='Download without them', exact=True).click()
     check('ECR: OK → file downloaded', True, dli.value.suggested_filename.endswith('.txt'))
     check('ECR: OK → exactly 1 download request', 1, p.count('GET', ECR))
-    p.finish()
+    ph = p
 
     # ── 4. Finance Audit → Early Exit (finance): Approve + Reject modal ─────────
     print('\n— finance: Early Exit approvals —')
@@ -317,21 +273,21 @@ def run_fix(b):
 
     # ── 5. More existing <Modal> callers (hr) ───────────────────────────────────
     print('\n— hr: more Modal callers —')
-    p = Page(b, 'hr'); pg = p.pg
+    p = ph; pg = p.pg
     pg.goto(BASE + '/employees'); pg.wait_for_load_state('networkidle')
-    erow = lambda: pg.locator('tr', has_text='TEST EMP 1').get_by_role('button', name='Edit', exact=True).first
+    erow = lambda: pg.locator('tr', has_text='TEST EMP 1').get_by_role('button', name='Profile', exact=True).first
     erow().wait_for(timeout=10000)
-    modal_cycle(p, 'Employee Edit modal', erow, 'T9601')
+    modal_cycle(p, 'Employee Profile modal', erow, 'TEST EMP 1')
     pg.goto(BASE + '/loans'); pg.wait_for_load_state('networkidle')
     modal_cycle(p, 'Request loan modal', lambda: pg.get_by_test_id('new-loan'), 'loan')
     pg.goto(BASE + '/sales/employees'); pg.wait_for_load_state('networkidle')
-    modal_cycle(p, 'Sales employee New modal', lambda: pg.get_by_role('button', name='+ New', exact=True), 'Employee')
-    p.finish()
+    modal_cycle(p, 'Sales employee New modal', lambda: pg.get_by_role('button', name='+ New', exact=True), 'New sales employee')
 
     # ── 6. 390px phone ─────────────────────────────────────────────────────────
     print('\n— hr @390px —')
-    p = Page(b, 'hr', width=390); pg = p.pg
+    pg.set_viewport_size({'width': 390, 'height': 844})
     pg.goto(BASE + '/leave-management'); pg.wait_for_load_state('networkidle')
+    close_drawer(pg)   # the desktop sidebar opens as a drawer at 390 — close it
     pg.get_by_role('button', name='+ Apply Leave').click()
     dlg = p.dialog('Apply for Leave'); dlg.wait_for()
     box = dlg.locator('h3').evaluate('el => { const r = el.closest("[id^=headlessui-dialog-panel]").getBoundingClientRect(); return [r.left, r.right] }')
@@ -344,14 +300,74 @@ def run_fix(b):
                    "calendar_month,calendar_year,created_by_name) VALUES('T9602','TEST EMP 2',?,?,'short_leave',2,"
                    "'Phone gate pass',?,?,'hr')", (C, d(27), M, Y)); q_conn.commit(); q_conn.close()
     pg.reload(); pg.wait_for_load_state('networkidle')
+    close_drawer(pg)
     pg.get_by_role('button', name='Gate Passes').first.click(); pg.wait_for_load_state('networkidle')
     gb = pg.locator('tr', has_text='Phone gate pass').get_by_role('button', name='Cancel', exact=True)
+    n0 = p.count('PUT', r'/api/short-leaves/\d+/cancel')
     gb.scroll_into_view_if_needed(); gb.click()
     dlg = p.dialog('Cancel gate pass?'); dlg.wait_for()
     ok = dlg.get_by_role('button', name='Cancel gate pass', exact=True).bounding_box()
     check('390: confirm buttons on screen', True, ok['x'] >= 0 and ok['x'] + ok['width'] <= 390)
     dlg.get_by_role('button', name='Keep', exact=True).click(); dlg.wait_for(state='detached')
-    check('390: Keep → 0 cancel requests', 0, p.count('PUT', r'/api/short-leaves/\d+/cancel'))
+    time.sleep(.4)
+    check('390: Keep → 0 cancel requests', n0, p.count('PUT', r'/api/short-leaves/\d+/cancel'))
+    p.finish()
+
+    # ── 2. SqlConsole restore: prompt + 2 alerts (admin) ───────────────────────
+    print('\n— admin: SQL Console snapshot restore —')
+    # LAST on purpose: a successful restore leaves a write txn open on the app's shared DB connection for 60 s,
+    # and any other app write in that window is rolled back with it (pre-existing SQL Console behaviour).
+    p = pa
+    s, r = api('POST', '/api/auth/login', {'username': 'admin', 'password': PW['admin']}); tok = r.get('token')
+    for code in ('T9603', 'T9604'):
+        s, r = api('POST', '/api/admin/sql/preview', {'sql': f"UPDATE employees SET department='TEST DEPT B' WHERE code='{code}'",
+                                                      'remark': 'P2-01 test write for restore'}, tok)
+        s2, r2 = api('POST', f"/api/admin/sql/commit/{r.get('txn_id')}", {}, tok)
+        check(f'setup: committed protected write {code}', (200, 200), (s, s2))
+    pg = p.pg
+    pg.goto(BASE + '/admin/sql-console'); pg.wait_for_load_state('networkidle')
+
+    def open_restore():
+        link = pg.get_by_role('button', name='Restore this snapshot →').first
+        if not link.is_visible():   # a cancelled prompt leaves the list open (unchanged behaviour)
+            pg.get_by_role('button', name='Snapshots ▾').click()
+        link.wait_for(timeout=8000)
+        link.click()
+        dlg = p.dialog('Restore snapshot'); dlg.wait_for(timeout=8000)
+        return dlg
+    RESTORE = r'/api/admin/sql/snapshot/\d+/restore'
+    dlg = open_restore()
+    check('prompt: text', True, 'describe why (≥10 characters)' in dlg.inner_text())
+    check('prompt: input has focus', 'INPUT', pg.evaluate('() => document.activeElement.tagName'))
+    dlg.get_by_role('button', name='Cancel', exact=True).click(); dlg.wait_for(state='detached')
+    time.sleep(.3); check('prompt Cancel → 0 restore POST', 0, p.count('POST', RESTORE))
+    dlg = open_restore(); pg.keyboard.press('Escape'); dlg.wait_for(state='detached')
+    time.sleep(.3); check('prompt Esc → 0 restore POST', 0, p.count('POST', RESTORE))
+    dlg = open_restore(); dlg.locator('input').fill('short'); dlg.get_by_role('button', name='OK', exact=True).click()
+    al = p.dialog('Restore aborted'); al.wait_for(timeout=5000)
+    check('alert (<10 chars): text', True, 'remark must be at least 10 characters' in al.inner_text())
+    check('alert: one button only (no Cancel)', 1, al.get_by_role('button').count())
+    check('alert: focus on OK', 'OK', p.active_text())
+    al.get_by_role('button', name='OK', exact=True).click(); al.wait_for(state='detached')
+    time.sleep(.3); check('<10 chars → 0 restore POST', 0, p.count('POST', RESTORE))
+    # failure: hold a write txn open via the API so the restore answers 409 TXN_ALREADY_OPEN
+    s, hold = api('POST', '/api/admin/sql/preview', {'sql': "UPDATE employees SET department='TEST DEPT C' WHERE code='T9604'",
+                                                     'remark': 'P2-01 hold a txn open'}, tok)
+    ALLOWED_BAD.append('/restore')
+    dlg = open_restore(); dlg.locator('input').fill('P2-01 restore check (fails)'); pg.keyboard.press('Enter')
+    al = p.dialog('Restore failed'); al.wait_for(timeout=8000)
+    check('alert (failed): text names the code', True, 'Restore failed: TXN_ALREADY_OPEN' in al.inner_text())
+    pg.keyboard.press('Escape'); al.wait_for(state='detached')
+    check('failed restore → exactly 1 POST', 1, p.count('POST', RESTORE))
+    api('POST', f"/api/admin/sql/rollback/{hold.get('txn_id')}", {}, tok)
+    dlg = open_restore(); dlg.locator('input').fill('  P2-01 restore check  ')
+    dlg.get_by_role('button', name='OK', exact=True).click(); dlg.wait_for(state='detached')
+    for _ in range(30):
+        if p.count('POST', RESTORE) == 2: break
+        time.sleep(.2)
+    check('valid remark → 2nd restore POST', 2, p.count('POST', RESTORE))
+    check('restore POST body = trimmed remark', {'remark': 'P2-01 restore check'}, json.loads(p.bodies('POST', RESTORE)[-1]))
+    pg.get_by_text('Restore', exact=False).first.wait_for(timeout=8000)
     p.finish()
 
 
