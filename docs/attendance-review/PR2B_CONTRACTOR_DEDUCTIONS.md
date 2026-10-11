@@ -21,8 +21,22 @@ worker's pay the same way as for company staff. Owner-approved change to the pro
   10 of 180 rows differ — all contractor rows from Sep 2026 with an approved late / early row, only in the deduction,
   total, net, payable and take-home fields, net down by exactly the deduction; 0 staff rows and 0 pre-Sep rows move;
   drift 0. `loans-stage7-simulation --dump` and `loans-sales-simulation --dump` byte-identical main vs branch.
-- [ ] independent review (money PR)
-- [ ] PR
+- [x] independent review (money PR): SHIP. Types safe (recomputeSalary parseInts month/year), applied flags safe,
+  loan headroom already counts late/early, no other reader assumes contractors carry none. Follow-ups taken: tests for an
+  `is_contractor` flag with a Permanent type (staff), Jan 2027, August early row not flagged (suite now 8).
+  Left as is (existing rule): when the deductions cap fires the late/early columns keep the full amount while the total
+  is capped — likelier for short-attendance contractors. Review label "contractor" in the Attendance Review uses
+  `is_contractor OR employment_type='Contract'`, payroll uses `isContractorForPayroll` — money identical from Sep 2026.
+- [x] browser: send-to-finance check 28/28 with the new contractor note
+- [x] PR
+
+## Before the next September Stage 7 re-run (owner / finance)
+Approved contractor rows for September will be taken on the re-run. If the plant September bank transfer already went
+out, agree first whether they move to October. (The plant bank file writes no audit row, so the app can't tell.)
+
+## Session note (for CLAUDE.md, folded in by the planner)
+PR-2b: finance-approved late / early deductions are taken from contractor pay from Sep 2026 payroll
+(`CONTRACTOR_LATE_EARLY_FROM` in salaryComputation.js; OT / ED / holiday duty still contractor-free).
 
 ## Resume
 Read this file + `git log --oneline origin/main..`; continue at the first unticked line.

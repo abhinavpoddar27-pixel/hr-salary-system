@@ -108,4 +108,19 @@ describe('contractor late / early deductions reach pay', () => {
     stage7(db, 9, 2026);
     expect(db.prepare('SELECT COUNT(*) n FROM salary_computations WHERE ABS(net_salary - (gross_earned - total_deductions)) > 1').get().n).toBe(0);
   });
+
+  test('review follow-ups: is_contractor flag with a Permanent type is staff (charged any month); Jan 2027 charged; August early skipped and not flagged', () => {
+    const e = F.addEmployee(db, { code: 'CD10', company: C, employment_type: 'Permanent', is_contractor: 1 });
+    db.prepare('UPDATE employees SET gross_salary = 30000 WHERE code = ?').run('CD10');
+    F.addDayCalc(db, e, 7, 2026, { days_present: 26, total_payable_days: 26 });
+    late(db, 'CD10', 7, 2026, 1);
+    emp(db, 'CD11', 'Contract', 1, 2027, 26); late(db, 'CD11', 1, 2027, 0.5); early(db, 'CD11', 1, 2027, 99);
+    emp(db, 'CD12', 'Contract', 8, 2026, 26); early(db, 'CD12', 8, 2026, 321);
+    stage7(db, 7, 2026); stage7(db, 1, 2027); stage7(db, 8, 2026);
+    expect(row(db, 'CD10', 7, 2026).late_coming_deduction).toBe(r2(30000 / 31));     // employment_type wins (isContractorForPayroll)
+    const j = row(db, 'CD11', 1, 2027);
+    expect([j.late_coming_deduction, j.early_exit_deduction]).toEqual([r2(0.5 * 30000 / 31), 99]);
+    expect(row(db, 'CD12', 8, 2026).early_exit_deduction).toBe(0);
+    expect(db.prepare("SELECT salary_applied a FROM early_exit_deductions WHERE employee_code = 'CD12'").get().a).toBe(0);
+  });
 });
