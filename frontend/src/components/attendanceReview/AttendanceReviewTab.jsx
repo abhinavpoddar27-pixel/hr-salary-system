@@ -9,6 +9,8 @@ import {
   attendanceReviewFinance, attendanceReviewSendToFinance,
 } from '../../utils/api'
 import AttendanceReviewConfig from './AttendanceReviewConfig'
+import AttendanceReviewTrends from './AttendanceReviewTrends'
+import { useAppStore } from '../../store/appStore'
 
 /**
  * Analytics → Attendance Review (admin only).
@@ -313,11 +315,14 @@ function TrendBlock({ trend, ym, prevYm }) {
   )
 }
 
-export default function AttendanceReviewTab({ selectedMonth, selectedYear }) {
+export default function AttendanceReviewTab({ selectedMonth, selectedYear, onSelectMonth }) {
   const qc = useQueryClient()
   const month = Number(selectedMonth); const year = Number(selectedYear)
   const ym = `${year}-${String(month).padStart(2, '0')}`
   const [showConfig, setShowConfig] = useState(false)
+  const [view, setView] = useState('month')   // 'month' | 'trends'
+  const [trendRange, setTrendRange] = useState(6)   // kept while switching views
+  const setMonthYear = useAppStore((st) => st.setMonthYear)
 
   const runsQ = useQuery({ queryKey: ['ar-runs'], queryFn: attendanceReviewRuns, retry: 0 })
   const runMeta = (runsQ.data?.data?.data || []).find((r) => r.month === month && r.year === year) || null
@@ -385,8 +390,26 @@ export default function AttendanceReviewTab({ selectedMonth, selectedYear }) {
   const ded = (data?.actionList || []).filter((a) => a.action === 'deduction')
   const loading = runsQ.isLoading || (runMeta && runQ.isLoading) || (!showingStored && previewQ.isLoading)
 
+  const viewSwitch = (
+    <div className="inline-flex rounded-md border border-slate-200 overflow-hidden text-sm bg-white" role="tablist" aria-label="Attendance Review view">
+      {[['month', `${MONTHS[month - 1]} ${year}`], ['trends', 'Trends']].map(([k, l]) => (
+        <button key={k} type="button" role="tab" aria-selected={view === k} data-testid={`ar-view-${k}`} onClick={() => setView(k)}
+          className={clsx('px-4 py-1.5', view === k ? 'bg-slate-800 text-white' : 'text-slate-700 hover:bg-slate-50')}>{l}</button>
+      ))}
+    </div>
+  )
+  if (view === 'trends') {
+    return (
+      <div className="space-y-4">
+        {viewSwitch}
+        <AttendanceReviewTrends month={month} year={year} range={trendRange} onRange={setTrendRange} onOpenMonth={(m, y) => { onSelectMonth?.(m, y); setMonthYear(m, y); setView('month') }} />
+      </div>
+    )
+  }
+
   return (
     <div className="space-y-4" data-testid="attendance-review">
+      {viewSwitch}
       {/* ── control bar ── */}
       <div className="card p-4 space-y-3">
         <div className="flex flex-wrap items-center gap-3">
