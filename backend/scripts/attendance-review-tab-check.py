@@ -73,6 +73,16 @@ def login(ctx, user, pw):
     pg.get_by_role('button', name='Sign in').click(); pg.wait_for_url(lambda u: '/login' not in u)
     return pg, errs, cons, bad, calls
 
+def finalise_ui(pg, btn=None):
+    """PR-4: Finalise opens a window; give a reason when the quality check lists anything."""
+    (btn or pg.get_by_role('button', name='Finalise')).click()
+    pg.get_by_test_id('ar-finalise-dialog').get_by_text('Finalising locks the review').wait_for(timeout=10000)
+    box = pg.get_by_label('Reason to finalise')
+    if box.count(): box.fill('Synthetic test month, checks reviewed')
+    pg.get_by_test_id('ar-finalise-confirm').click()
+    pg.get_by_text('Review finalised and locked').first.wait_for(timeout=10000)
+
+
 
 def open_tab(pg):
     pg.goto(BASE + '/analytics/attendance-review'); pg.wait_for_load_state('networkidle')
@@ -182,8 +192,7 @@ try:
         pg.get_by_role('button', name='Regenerate draft').click(); time.sleep(1.5)
         check('regenerated → Finalise enabled', True, fin.is_enabled())
         check('deduction days now 0.0 (T7001 downgraded)', '0.0', stat(pg, 'Deduction days'))
-        pg.once('dialog', lambda d: d.accept())
-        fin.click(); time.sleep(1.5)
+        finalise_ui(pg, fin); time.sleep(1)
         check('status FINAL', 'FINAL', status(pg))
         check('final: no Generate / Regenerate button', 0, pg.get_by_role('button', name='Regenerate draft').count() + pg.get_by_role('button', name='Generate draft').count())
         check('final: release days + override listed', True, pg.get_by_text('confirm shift with HR first').count() >= 1)

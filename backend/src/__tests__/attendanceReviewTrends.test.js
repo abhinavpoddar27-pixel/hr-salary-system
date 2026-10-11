@@ -69,7 +69,7 @@ describe('API: GET /trends', () => {
     const gen = await api.request('POST', `${BASE}/runs`, { as: 'adm', body: { month: 9, year: 2026, releaseDays: [], overrides: [] } });
     expect([200, 201]).toContain(gen.status);
     const id = gen.body.data.id;
-    const fin = await api.request('PUT', `${BASE}/runs/${id}/finalise`, { as: 'adm' });
+    const fin = await api.request('PUT', `${BASE}/runs/${id}/finalise`, { as: 'adm', body: { acknowledge: 'Synthetic test month, checks reviewed' } });
     expect(fin.status).toBe(200);
     const stored = JSON.parse(db.prepare('SELECT result_json FROM attendance_review_runs WHERE id = ?').get(id).result_json);
     // make the stored figure distinguishable from a recomputation

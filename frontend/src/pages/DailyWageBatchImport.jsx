@@ -1,7 +1,7 @@
-import React, { useState, useCallback } from 'react'
+import React, { useState, useCallback, useRef } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { useMutation } from '@tanstack/react-query'
-import { batchImportDWEntries, getDWEntryTemplate } from '../utils/api'
+import { useMutation, useQueryClient } from '@tanstack/react-query'
+import { batchImportDWEntries, batchSubmitDWEntries, getDWEntryTemplate } from '../utils/api'
 import { useAppStore } from '../store/appStore'
 import { useDropzone } from 'react-dropzone'
 import * as XLSX from 'xlsx'
@@ -10,11 +10,16 @@ import toast from 'react-hot-toast'
 
 export default function DailyWageBatchImport() {
   const navigate = useNavigate()
+  const qc = useQueryClient()
   const selectedCompany = useAppStore(s => s.selectedCompany)
   const [step, setStep] = useState(1) // 1=upload, 2=review, 3=done
   const [parsedRows, setParsedRows] = useState([])
   const [errors, setErrors] = useState([])
   const [fileName, setFileName] = useState('')
+  // Rows the import created. They are drafts (status hr_entered): finance does
+  // not see them until HR submits them (finding D-1).
+  const [importResult, setImportResult] = useState(null) // { ids: [], count }
+  const [submitResult, setSubmitResult] = useState(null) // { ok, count } | { ok:false, error }
 
   // ── Template download ───────────────────────────────────────
   const downloadTemplate = async () => {
@@ -103,10 +108,13 @@ export default function DailyWageBatchImport() {
   const importMut = useMutation({
     mutationFn: ({ entries, company }) => batchImportDWEntries(entries, company),
     onSuccess: (res) => {
-      const count = res?.data?.imported || parsedRows.length
-      toast.success(`${count} entries imported successfully`)
+      const ids = Array.isArray(res?.data?.ids) ? res.data.ids : []
+      const count = res?.data?.imported || ids.length || parsedRows.length
+      setImportResult({ ids, count })
+      setSubmitResult(null)
+      qc.invalidateQueries({ queryKey: ['dw-entries'] })
+      toast.success(`${count} drafts created`)
       setStep(3)
-      setTimeout(() => navigate('/daily-wage'), 1500)
     },
     onError: (e) => {
       const data = e.response?.data
@@ -120,6 +128,30 @@ export default function DailyWageBatchImport() {
   })
 
   const doImport = () => importMut.mutate({ entries: parsedRows, company: selectedCompany })
+
+  // ── Submit all imported drafts (existing batch-submit endpoint) ─
+  const submitAllMut = useMutation({
+    mutationFn: (ids) => batchSubmitDWEntries(ids),
+    onSuccess: (res, ids) => {
+      const n = res?.data?.submitted || ids.length
+      setSubmitResult({ ok: true, count: n })
+      qc.invalidateQueries({ queryKey: ['dw-entries'] })
+      toast.success(`${n} entries sent to finance review`)
+    },
+    onError: (e) => {
+      // batch-submit is all-or-nothing: nothing changed on a refusal.
+      setSubmitResult({ ok: false, error: e.response?.data?.error || 'Submit failed' })
+      qc.invalidateQueries({ queryKey: ['dw-entries'] })
+    }
+  })
+  // isPending only flips on the next render, so a double click could send two
+  // batch-submits (the second one refused, its error replacing the success).
+  const submitInFlight = useRef(false)
+  const submitAll = () => {
+    if (!importResult?.ids?.length || submitInFlight.current || submitResult?.ok) return
+    submitInFlight.current = true
+    submitAllMut.mutate(importResult.ids, { onSettled: () => { submitInFlight.current = false } })
+  }
 
   // ── Row error lookup ────────────────────────────────────────
   const getRowErrors = (idx) => errors.filter(e => e.row === idx)
@@ -251,12 +283,46 @@ export default function DailyWageBatchImport() {
         </div>
       )}
 
-      {/* Step 3: Done */}
-      {step === 3 && (
-        <div className="bg-green-50 border border-green-200 rounded-lg p-8 text-center">
-          <div className="text-4xl mb-3">✓</div>
-          <h3 className="text-lg font-semibold text-green-700">Import Complete</h3>
-          <p className="text-sm text-green-600 mt-1">Redirecting to records...</p>
+      {/* Step 3: Done — the imported rows are drafts until submitted */}
+      {step === 3 && importResult && (
+        <div className="space-y-4" data-testid="dw-import-done">
+          {submitResult?.ok ? (
+            <div className="bg-green-50 border border-green-200 rounded-lg p-6 text-center">
+              <div className="text-3xl mb-2">✓</div>
+              <h3 className="text-lg font-semibold text-green-700" data-testid="dw-import-submitted">
+                {submitResult.count} {submitResult.count === 1 ? 'entry' : 'entries'} sent to finance review
+              </h3>
+              <p className="text-sm text-green-600 mt-1">They now wait in the finance queue as Pending Finance.</p>
+              <button onClick={() => navigate('/daily-wage')}
+                className="mt-4 px-4 py-2 text-sm font-medium rounded-lg bg-blue-600 text-white hover:bg-blue-700">Go to records</button>
+            </div>
+          ) : (
+            <div className="bg-amber-50 border border-amber-200 rounded-lg p-6">
+              <h3 className="text-lg font-semibold text-amber-800" data-testid="dw-import-drafts">
+                {importResult.count} {importResult.count === 1 ? 'entry' : 'entries'} created as drafts
+              </h3>
+              <p className="text-sm text-amber-700 mt-1">
+                Finance does not see drafts. Submit them now, or later from Records → Draft.
+              </p>
+              {submitResult && !submitResult.ok && (
+                <div className="mt-3 bg-red-50 border border-red-200 rounded-lg p-3 text-sm text-red-700" data-testid="dw-import-submit-error">
+                  Nothing was submitted: {submitResult.error}. Open the drafts list to submit them one by one.
+                </div>
+              )}
+              <div className="flex flex-wrap gap-2 mt-4">
+                {importResult.ids.length > 0 && (
+                  <button onClick={submitAll} disabled={submitAllMut.isPending} data-testid="dw-import-submit-all"
+                    className="px-4 py-2 text-sm font-medium rounded-lg bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-50">
+                    {submitAllMut.isPending ? 'Submitting...' : `Submit all ${importResult.ids.length} for finance review`}
+                  </button>
+                )}
+                <button onClick={() => navigate('/daily-wage?status=hr_entered')} data-testid="dw-import-open-drafts"
+                  className="px-4 py-2 text-sm font-medium rounded-lg border border-slate-300 text-slate-600 bg-white hover:bg-slate-50">
+                  Leave as drafts — open drafts list
+                </button>
+              </div>
+            </div>
+          )}
         </div>
       )}
     </div>

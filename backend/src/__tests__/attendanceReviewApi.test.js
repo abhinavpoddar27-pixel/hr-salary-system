@@ -82,7 +82,9 @@ test('runs: create draft, regenerate, finalise, then locked', async () => {
   expect(one.body.data.result.actionList[0].override.reason).toBe('confirm shift first');
   expect(one.body.data.config_snapshot.excluded_codes).toEqual(['API2']);
   expect((await api.request('GET', `${BASE}/runs`, { as: 'adm' })).body.data).toHaveLength(1);
-  const f = await api.request('PUT', `${BASE}/runs/${id}/finalise`, { as: 'adm' });
+  const blocked = await api.request('PUT', `${BASE}/runs/${id}/finalise`, { as: 'adm' });          // PR-4: the month has checks
+  expect(blocked.status).toBe(409); expect(blocked.body.code).toBe('QUALITY_GATE');
+  const f = await api.request('PUT', `${BASE}/runs/${id}/finalise`, { as: 'adm', body: { acknowledge: 'Synthetic test month, checks reviewed' } });
   expect(f.status).toBe(200); expect(f.body.data).toMatchObject({ status: 'final', finalised_by: 'adm' });
   expect((await api.request('PUT', `${BASE}/runs/${id}/finalise`, { as: 'adm' })).status).toBe(409);
   expect((await api.request('POST', `${BASE}/runs`, { as: 'adm', body: { month: 10, year: 2026 } })).status).toBe(409);
