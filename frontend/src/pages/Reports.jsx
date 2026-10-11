@@ -90,6 +90,15 @@ function ReportCard({ title, description, icon, children }) {
   )
 }
 
+// audit_log.changed_at is SQLite UTC 'YYYY-MM-DD HH:MM:SS' → 'DD-MM-YYYY HH:MM' IST (N-1).
+function fmtIST(utc) {
+  const m = /^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2})/.exec(utc || '')
+  if (!m) return utc || '—'
+  const d = new Date(Date.UTC(+m[1], +m[2] - 1, +m[3], +m[4], +m[5]) + 330 * 60000)
+  const p = (n) => String(n).padStart(2, '0')
+  return `${p(d.getUTCDate())}-${p(d.getUTCMonth() + 1)}-${d.getUTCFullYear()} ${p(d.getUTCHours())}:${p(d.getUTCMinutes())}`
+}
+
 export default function Reports() {
   const { month, year, dateProps } = useDateSelector({ mode: 'month', syncToStore: true })
   const { selectedCompany, user } = useAppStore()
@@ -139,6 +148,8 @@ export default function Reports() {
     retry: 0
   })
   const bankData = bankRes?.data?.data || []
+  const bankHeld = bankRes?.data?.held || { count: 0, amount: 0 }
+  const bankTotal = bankRes?.data?.totalAmount ?? bankData.reduce((s, e) => s + (parseFloat(e.net_pay) || 0), 0)
 
   // PF Statement
   const { data: pfRes, isLoading: pfLoading } = useQuery({
@@ -166,6 +177,8 @@ export default function Reports() {
     retry: 0
   })
   const auditData = auditRes?.data?.data || []
+  const auditTotal = auditRes?.data?.total ?? auditData.length
+  const auditTruncated = !!auditRes?.data?.truncated
 
   // PF ECR
   const { data: ecrRes, isLoading: ecrLoading } = useQuery({
@@ -624,7 +637,7 @@ export default function Reports() {
           {activeReport === 'bank' && canFile && (
             <div className="space-y-4">
               <div className="flex items-center justify-between">
-                <h3 className="text-base font-bold text-slate-800">Bank Transfer Sheet — {MONTH_NAMES[month]} {year}</h3>
+                <h3 className="text-base font-bold text-slate-800">Bank Transfer Sheet — {MONTH_NAMES[month]} {year}{companyFilter ? ` · ${companyFilter}` : ''}</h3>
                 <button onClick={() => exportToCSV(bankData, [
                   { key: 'employee_code', label: 'Emp Code' }, { key: 'employee_name', label: 'Name' },
                   { key: 'account_number', label: 'Account No.' }, { key: 'bank_name', label: 'Bank' },
@@ -632,8 +645,13 @@ export default function Reports() {
                 ], `bank_neft_${monthLabel}.csv`)} className="btn-secondary text-sm">⬇ Export CSV</button>
               </div>
               <div className="card p-3 bg-blue-50 border border-blue-200 text-sm text-blue-800">
-                Total Net Payable: <strong>{fmtINR(bankData.reduce((s, e) => s + (parseFloat(e.net_pay) || 0), 0))}</strong> ({bankData.length} employees)
+                Total Net Payable: <strong>{fmtINR(bankTotal)}</strong> ({bankData.length} employees)
               </div>
+              {bankHeld.count > 0 && (
+                <div className="card p-3 bg-amber-50 border border-amber-200 text-sm text-amber-800" data-testid="bank-held-note">
+                  {bankHeld.count} held salar{bankHeld.count === 1 ? 'y' : 'ies'} ({fmtINR(bankHeld.amount)}) {bankHeld.count === 1 ? 'is' : 'are'} not in this sheet — release the hold in Stage 7 / Finance to include {bankHeld.count === 1 ? 'it' : 'them'}.
+                </div>
+              )}
               {bankLoading ? <div className="card p-8 text-center text-slate-400">Loading...</div> : (
                 <div className="card overflow-hidden">
                   <div className="overflow-x-auto">
@@ -696,7 +714,7 @@ export default function Reports() {
           {activeReport === 'pf' && canFile && (
             <div className="space-y-4">
               <div className="flex items-center justify-between">
-                <h3 className="text-base font-bold text-slate-800">PF Statement — {MONTH_NAMES[month]} {year}</h3>
+                <h3 className="text-base font-bold text-slate-800">PF Statement — {MONTH_NAMES[month]} {year}{companyFilter ? ` · ${companyFilter}` : ''}</h3>
                 <button onClick={() => exportToCSV(pfData.employees || [], [
                   { key: 'employee_code', label: 'Code' }, { key: 'employee_name', label: 'Name' },
                   { key: 'uan', label: 'UAN' }, { key: 'pf_wages', label: 'PF Wages' },
@@ -766,7 +784,7 @@ export default function Reports() {
           {activeReport === 'esi' && canFile && (
             <div className="space-y-4">
               <div className="flex items-center justify-between">
-                <h3 className="text-base font-bold text-slate-800">ESI Statement — {MONTH_NAMES[month]} {year}</h3>
+                <h3 className="text-base font-bold text-slate-800">ESI Statement — {MONTH_NAMES[month]} {year}{companyFilter ? ` · ${companyFilter}` : ''}</h3>
                 <button onClick={() => exportToCSV(esiData.employees || [], [
                   { key: 'employee_code', label: 'Code' }, { key: 'employee_name', label: 'Name' },
                   { key: 'esi_number', label: 'ESI No.' }, { key: 'esi_wages', label: 'ESI Wages' },
@@ -1014,13 +1032,20 @@ export default function Reports() {
             <div className="space-y-4">
               <div className="flex items-center justify-between">
                 <h3 className="text-base font-bold text-slate-800">Audit Trail — {MONTH_NAMES[month]} {year}</h3>
-                <button onClick={() => exportToCSV(auditData, [
-                  { key: 'created_at', label: 'Timestamp' }, { key: 'table_name', label: 'Table' },
+                <button onClick={() => exportToCSV(auditData.map(a => ({ ...a, changed_at_ist: fmtIST(a.changed_at) })), [
+                  { key: 'changed_at_ist', label: 'Timestamp (IST)' }, { key: 'table_name', label: 'Table' },
                   { key: 'record_id', label: 'Record ID' }, { key: 'field_name', label: 'Field' },
                   { key: 'old_value', label: 'Old Value' }, { key: 'new_value', label: 'New Value' },
                   { key: 'stage', label: 'Stage' }, { key: 'remark', label: 'Remark' }
                 ], `audit_trail_${monthLabel}.csv`)} className="btn-secondary text-sm">⬇ Export CSV</button>
               </div>
+              {!auditLoading && (
+                <p className="text-xs text-slate-500" data-testid="audit-count">
+                  {auditTruncated
+                    ? `Showing the latest ${auditData.length.toLocaleString('en-IN')} of ${auditTotal.toLocaleString('en-IN')} changes in ${MONTH_NAMES[month]} ${year} (times in IST). Not filtered by company.`
+                    : `${auditTotal.toLocaleString('en-IN')} change${auditTotal === 1 ? '' : 's'} in ${MONTH_NAMES[month]} ${year} (times in IST). Not filtered by company.`}
+                </p>
+              )}
               {auditLoading ? <div className="card p-8 text-center text-slate-400">Loading...</div> : (
                 <div className="card overflow-hidden">
                   <div className="overflow-x-auto">
@@ -1043,7 +1068,7 @@ export default function Reports() {
                         ) : auditData.map((a, i) => (
                           <React.Fragment key={i}>
                             <tr onClick={() => toggle(i)} className={`cursor-pointer transition-colors hover:bg-slate-50 ${isExpanded(i) ? 'bg-blue-50' : ''}`}>
-                              <td className="text-slate-400 whitespace-nowrap"><DrillDownChevron isExpanded={isExpanded(i)} /> {a.created_at}</td>
+                              <td className="text-slate-400 whitespace-nowrap"><DrillDownChevron isExpanded={isExpanded(i)} /> {fmtIST(a.changed_at)}</td>
                               <td className="font-mono">{a.table_name}</td>
                               <td className="font-mono">{a.record_id}</td>
                               <td className="text-blue-700">{a.field_name}</td>
@@ -1058,7 +1083,7 @@ export default function Reports() {
                                   <div className="flex-1">
                                     <div className="text-xs font-semibold text-slate-500 mb-2">Audit Change Detail</div>
                                     <div className="bg-white rounded-lg border border-slate-100 p-3 space-y-2 text-xs">
-                                      <div className="flex justify-between"><span className="text-slate-500">Timestamp:</span> <strong>{a.created_at}</strong></div>
+                                      <div className="flex justify-between"><span className="text-slate-500">Timestamp (IST):</span> <strong>{fmtIST(a.changed_at)}</strong></div>
                                       <div className="flex justify-between"><span className="text-slate-500">Table:</span> <strong className="font-mono">{a.table_name}</strong></div>
                                       <div className="flex justify-between"><span className="text-slate-500">Record ID:</span> <strong className="font-mono">{a.record_id}</strong></div>
                                       <div className="flex justify-between"><span className="text-slate-500">Field:</span> <strong className="text-blue-700">{a.field_name}</strong></div>
