@@ -15,7 +15,10 @@ backups/*.db
 uploads/
 *.log
 .DS_Store
-# frontend/dist/ is committed so Railway can serve it directly
+# frontend/dist/ is NOT committed: Railway (Nixpacks) runs `npm run build` at
+# the repo root on every deploy, which builds it. Committing it made every
+# merge conflict every open PR.
+frontend/dist/
 .env
 *.env.local
 scripts/master-data-extracted.json

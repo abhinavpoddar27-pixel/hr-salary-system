@@ -37,6 +37,10 @@ jobs:
         working-directory: frontend
         run: npm ci --no-audit --no-fund
 
+      - name: Frontend build (dist is built here and on Railway, never committed)
+        working-directory: frontend
+        run: npm run build
+
       - name: ESLint (skipped if no config present)
         run: |
           if compgen -G ".eslintrc*" >/dev/null \
