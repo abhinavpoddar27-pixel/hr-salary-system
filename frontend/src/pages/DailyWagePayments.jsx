@@ -8,6 +8,7 @@ import { useAppStore } from '../store/appStore'
 import { canFinance as canFinanceFn } from '../utils/role'
 import clsx from 'clsx'
 import toast from 'react-hot-toast'
+import { todayIST } from '../utils/formatters'
 
 function fmt(n) { return (n || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) }
 
@@ -23,7 +24,7 @@ export default function DailyWagePayments() {
   const [selectedEntryIds, setSelectedEntryIds] = useState([])
   const [payRef, setPayRef] = useState('')
   const [payMethod, setPayMethod] = useState('Bank Transfer')
-  const [payDate, setPayDate] = useState(new Date().toISOString().slice(0, 10))
+  const [payDate, setPayDate] = useState(() => todayIST())
   const [payRemarks, setPayRemarks] = useState('')
   const [showConfirm, setShowConfirm] = useState(false)
   // History state

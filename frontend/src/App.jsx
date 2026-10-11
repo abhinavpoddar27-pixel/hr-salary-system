@@ -11,6 +11,7 @@ import { useAppStore } from './store/appStore'
 import { getMe } from './utils/api'
 import { tracker } from './utils/sessionTracker'
 import useInactivityTimeout from './hooks/useInactivityTimeout'
+import SessionTimeoutDialog from './components/SessionTimeoutDialog'
 
 // Public page
 const Login = React.lazy(() => import('./pages/Login'))
@@ -118,6 +119,7 @@ function RequireAuth({ children }) {
   const isAuthenticated = useAppStore(s => s.isAuthenticated)
   const token = useAppStore(s => s.token)
   const refreshUser = useAppStore(s => s.refreshUser)
+  const location = useLocation()
 
   useEffect(() => {
     if (!isAuthenticated || !token || lastRefreshedToken === token) return
@@ -133,7 +135,8 @@ function RequireAuth({ children }) {
     return () => { cancelled = true }
   }, [isAuthenticated, token, refreshUser])
 
-  if (!isAuthenticated) return <Navigate to="/login" replace />
+  // P2-08: a page opened while signed out comes back after login
+  if (!isAuthenticated) return <Navigate to="/login" replace state={{ from: location.pathname + location.search + location.hash }} />
   return children
 }
 
@@ -158,8 +161,8 @@ function RouteTracker() {
 }
 
 function InactivityGuard() {
-  useInactivityTimeout()
-  return null
+  const timeout = useInactivityTimeout()
+  return <SessionTimeoutDialog {...timeout} />
 }
 
 export default function App() {

@@ -1,5 +1,5 @@
 import React, { useState, useCallback, useEffect } from 'react'
-import { MONTH_OPTIONS, YEAR_OPTIONS } from '../../utils/formatters'
+import { MONTH_OPTIONS, YEAR_OPTIONS, todayIST, istYearMonth, addDaysIso, isoDayOfWeek } from '../../utils/formatters'
 import { useAppStore } from '../../store/appStore'
 import clsx from 'clsx'
 import toast from 'react-hot-toast'
@@ -33,7 +33,7 @@ export default function DateSelector({
   const [rangeMode, setRangeMode] = useState('month') // 'month' | 'custom'
   const [startDate, setStartDate] = useState('')
   const [endDate, setEndDate] = useState('')
-  const [singleDate, setSingleDate] = useState(new Date().toISOString().slice(0, 10))
+  const [singleDate, setSingleDate] = useState(() => todayIST())
   const [activePreset, setActivePreset] = useState(null)
   // Follow the parent when it changes the month itself (e.g. Attendance Review → Trends opens a month). A change made
   // here flows out through onChange and comes back equal, so this is a no-op for the selector's own changes.
@@ -92,37 +92,27 @@ export default function DateSelector({
   // ── Quick Presets ──────────────────────────────────────
   function applyPreset(preset) {
     setActivePreset(preset)
-    const now = new Date()
-    const today = now.toISOString().slice(0, 10)
-    const yesterday = new Date(now - 86400000).toISOString().slice(0, 10)
+    // Every preset is worked out on the IST calendar (the plant's clock), whatever zone the browser is in.
+    const today = todayIST()
+    const yesterday = addDaysIso(today, -1)
 
-    // Monday of this week
-    const dayOfWeek = now.getDay() || 7
-    const thisMonday = new Date(now - (dayOfWeek - 1) * 86400000).toISOString().slice(0, 10)
-    const lastMonday = new Date(new Date(thisMonday) - 7 * 86400000).toISOString().slice(0, 10)
-    const lastSunday = new Date(new Date(thisMonday) - 86400000).toISOString().slice(0, 10)
+    // Monday of this week (IST)
+    const dayOfWeek = isoDayOfWeek(today) || 7
+    const thisMonday = addDaysIso(today, -(dayOfWeek - 1))
+    const lastMonday = addDaysIso(thisMonday, -7)
+    const lastSunday = addDaysIso(thisMonday, -1)
 
-    const thisMonth = now.getMonth() + 1
-    const thisYear = now.getFullYear()
+    const { month: thisMonth, year: thisYear } = istYearMonth()
     let prevMonth = thisMonth - 1, prevYear = thisYear
     if (prevMonth === 0) { prevMonth = 12; prevYear-- }
 
     if (mode === 'month') {
       // In month mode, presets resolve to the correct month
       switch (preset) {
-        case 'today':
-        case 'yesterday':
-        case 'thisWeek':
         case 'thisMonth':
           setMonth(thisMonth); setYear(thisYear)
           emit({ month: thisMonth, year: thisYear })
           break
-        case 'lastWeek': {
-          const lm = new Date(lastMonday)
-          setMonth(lm.getMonth() + 1); setYear(lm.getFullYear())
-          emit({ month: lm.getMonth() + 1, year: lm.getFullYear() })
-          break
-        }
         case 'lastMonth':
           setMonth(prevMonth); setYear(prevYear)
           emit({ month: prevMonth, year: prevYear })
@@ -142,7 +132,7 @@ export default function DateSelector({
           e = today; break
         case 'lastMonth':
           s = `${prevYear}-${String(prevMonth).padStart(2,'0')}-01`
-          const lastDay = new Date(thisYear, thisMonth - 1, 0).getDate()
+          const lastDay = new Date(Date.UTC(thisYear, thisMonth - 1, 0)).getUTCDate()
           e = `${prevYear}-${String(prevMonth).padStart(2,'0')}-${String(lastDay).padStart(2,'0')}`
           break
       }
@@ -157,10 +147,16 @@ export default function DateSelector({
     }
   }
 
+  // Month mode: only presets that pick a different month (Today / Yesterday / This Week all meant "this month").
   const presets = mode === 'date'
     ? [
         { key: 'today', label: 'Today' },
         { key: 'yesterday', label: 'Yesterday' },
+      ]
+    : mode === 'month'
+    ? [
+        { key: 'thisMonth', label: 'This Month' },
+        { key: 'lastMonth', label: 'Last Month' },
       ]
     : [
         { key: 'today', label: 'Today' },
@@ -170,6 +166,11 @@ export default function DateSelector({
         { key: 'thisMonth', label: 'This Month' },
         { key: 'lastMonth', label: 'Last Month' },
       ]
+
+  // Keep the selected year in the list even when it sits outside the −2…+1 window (no blank select).
+  const yearOptions = YEAR_OPTIONS.some(y => y.value === Number(year)) || !year
+    ? YEAR_OPTIONS
+    : [...YEAR_OPTIONS, { value: Number(year), label: String(year) }].sort((a, b) => a.value - b.value)
 
   return (
     <div className={clsx('flex flex-wrap items-center gap-2', className)}>
@@ -215,7 +216,7 @@ export default function DateSelector({
           </select>
           <select value={year} onChange={e => handleYearChange(parseInt(e.target.value))}
             className={clsx('font-medium text-slate-700 bg-transparent border-none focus:outline-none cursor-pointer', compact ? 'text-xs' : 'text-sm')}>
-            {YEAR_OPTIONS.map(y => <option key={y.value} value={y.value}>{y.label}</option>)}
+            {yearOptions.map(y => <option key={y.value} value={y.value}>{y.label}</option>)}
           </select>
         </div>
       )}

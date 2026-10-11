@@ -1,11 +1,22 @@
 import React, { useState } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useNavigate, useLocation } from 'react-router-dom'
 import { login } from '../utils/api'
 import { useAppStore } from '../store/appStore'
 import toast from 'react-hot-toast'
+import { readReturnTo, clearReturnTo, returnPathFor, isSafePath } from '../utils/sessionReturn'
+
+// P2-08: why the user is on this page after a forced sign-out
+const SIGNED_OUT_TEXT = {
+  idle: 'You were signed out after 15 minutes without activity. Sign in to continue where you left off.',
+  expired: 'Your session expired. Sign in to continue where you left off.',
+}
 
 export default function Login() {
   const navigate = useNavigate()
+  const location = useLocation()
+  // Read once: the forced sign-out (timeout / 401) saved page, and a deep link RequireAuth bounced here.
+  const [saved] = useState(() => readReturnTo())
+  const fromState = location.state?.from
   const setAuth = useAppStore(s => s.setAuth)
   const [form, setForm] = useState({ username: '', password: '' })
   const [loading, setLoading] = useState(false)
@@ -28,7 +39,10 @@ export default function Login() {
       // Update store
       setAuth(user, token)
       toast.success(`Welcome, ${user.username}!`)
-      navigate('/', { replace: true })
+      // Same user only (ruling Q3); a deep link (RequireAuth state) needs only a safe path.
+      const target = (isSafePath(fromState) && fromState) || returnPathFor(saved, user.username) || '/'
+      clearReturnTo()
+      navigate(target, { replace: true })
     } catch (err) {
       const msg = err.response?.data?.error || 'Login failed'
       setError(msg)
@@ -52,6 +66,13 @@ export default function Login() {
         {/* Card */}
         <div className="bg-white rounded-2xl shadow-2xl p-8">
           <h2 className="text-lg font-semibold text-slate-800 mb-6">Sign in to your account</h2>
+
+          {saved && SIGNED_OUT_TEXT[saved.reason] && (
+            <div role="status" data-testid="signed-out-banner"
+              className="mb-4 bg-amber-50 border border-amber-200 rounded-lg px-4 py-3 text-sm text-amber-800">
+              {SIGNED_OUT_TEXT[saved.reason]}
+            </div>
+          )}
 
           <form onSubmit={handleSubmit} className="space-y-4">
             <div>
