@@ -1,3 +1,31 @@
+## Last Session — 2026-10-11 (P1-17: Import — dead Overwrite checkbox; picked month never sent)
+**Branch `fix/import-month-and-dead-checkbox`, NOT merged.** Frontend only (`pages/Import.jsx`, `utils/api.js` 1 line). Plan + log:
+`docs/ux-bulk/prs/P1-17/PLAN.md`, `PROGRESS.md`. Findings P-7, P-8. Planner rulings Q1 (send the month, batch of other
+months is refused; hint + multi-file note), Q2 (`fresh` on the history read), Q3 (warning across all companies).
+- **Bug:** (P-7) the "Overwrite if month already imported" tick did nothing — `routes/import.js` reads `overwrite` and never
+  uses it; a re-import always upserts (snapshot + replay of corrections, Stage 6 + 7 recompute). (P-8) the upload sent no
+  month/year, so the server's UI-vs-file month refusal (L86–96) never fired: a September file uploaded with October
+  picked imported silently. Failed rows also showed `result.error` ("UI/file month mismatch"), never `userMessage`.
+- **Fix:** checkbox + state + `overwrite` field removed; FormData carries the picker's `month` + `year`; a line "Files will
+  be checked against {Mon YYYY}"; amber "This month is already imported ({companies}) — Stage 6 and 7 will be recomputed
+  and manual corrections replayed." when history has that month (any company); with > 1 file "Only files for {Mon YYYY}
+  will import."; drop-zone hint "(all for the month selected above)"; failed rows show `userMessage || error` (parse and
+  multi-month refusals now show their friendly text too). `getImportHistory` sends `no-cache` (server GET max-age=5).
+  Backend untouched. dist rebuilt (own commit).
+- **Fragile:** a multi-month batch now imports only the picked month (by ruling). The warning reads `/import/history`,
+  which ignores the company param — if that route starts filtering by company, the warning goes company-scoped. testids
+  `import-month-line`, `reimport-warning`, `multi-file-note`, `import-error` are read by the check script.
+- **Verified:** `backend/scripts/import-month-check.py` (Chromium, built dist, scratch DB, real hr login, fictional
+  T1701/T1702 .xls for Sep + Aug 2026 built in the script, port 3117) 38/38 twice — no checkbox; Oct picked + Sep file →
+  body month 10, server refusal text, DB counts unchanged; Sep → imports 60 rows, warning appears at once; re-import → no
+  duplicate rows; Aug hides warning; Aug + Sep batch → 1/2, Aug refused, no Aug rows; 390px; 0 page/console errors,
+  0 API ≥ 400. `--base` on a 868f5389 archive 3/3: checkbox, no month in body, Sep file imported under Oct.
+  jest 96 suites / 1537 before and after.
+- **Not tested:** Railway; Safari/Firefox; real EESL exports (synthetic layout from parser.test.js); a real two-sheet file.
+- **Found, not fixed:** (1) `routes/import.js` L188 still reads the unused `overwrite` (dead backend line). (2) Picking the
+  exact same file again after a successful import may not fire the input's `change` (seen in Playwright; react-dropzone
+  normally clears the input on click — unverified for a real dialog).
+
 ## Last Session — 2026-10-11 (P1-07: legacy "Grant Extra Duty" on Payable OT retired)
 **Branch `fix/retire-legacy-extra-duty-grant`, NOT merged.** Owner ruling Q5 (11 Oct). Log: `docs/ux-bulk/prs/P1-07/PROGRESS.md`.
 - **Bug:** Payable OT → "Grant Extra Duty" called `POST /payroll/grant-extra-duty`, which wrote a `day_corrections` row
