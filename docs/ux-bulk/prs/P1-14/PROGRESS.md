@@ -36,7 +36,7 @@ Q3 trim account; trim + upper-case IFSC. Q4 400 on mismatched pair. Q5 I now own
   account_number / ifsc_code, old/new masked `****` + last 4, changed_by = user) in POST /, PUT /:code, PUT /:code/salary.
 - F4 SalaryForm save onError toast (server message); Special % shown to 2 decimals (full value still sent until edited).
 - F5 noted under Fragile.
-- jest file 24/24 (c942563f: 15 fail / 9 pass); browser check 24/24.
+- jest file 24/24 (c942563f: 15 fail / 9 pass); browser check 24/24 after merging origin/main again; full jest 102 suites / 1606.
 
 ## CLAUDE.md entry
 ## Last Session — 2026-10-11 (P1-14: Employee bank edits wrote the wrong column pair; salary split reset on save)
@@ -70,7 +70,7 @@ Q3 trim account; trim + upper-case IFSC. Q4 400 on mismatched pair. Q5 I now own
   the 16 common lines are identical and only the 9 A=''/B-set rows are added. Browser check 24/24 (hr, built dist,
   port 3114, 24 checks: stored split shown, special % to 2 decimals + untouched save identical, masked audit rows, edit → NEFT has new account, structure byte-identical, reopen inside 5 s shows new
   values, B-only shown + kept + in NEFT, clear → NULL + out of NEFT, 390 px, 0 errors); `--base` 10/10 (50/20, NEFT
-  old account, structure rewritten, B-only wiped). jest 99/1566 → 100/1585 (after merging main).
+  old account, structure rewritten, B-only wiped). jest 99/1566 → 102/1606 (after merging main).
 - **Not tested:** Railway; production data; Safari/Firefox.
 - **Found, not fixed:** `PUT /:code/salary` same-gross split change still rewrites components with no finance
   approval (planner logged separately); 114 active employees have no IFSC in either pair.
