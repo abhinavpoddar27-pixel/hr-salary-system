@@ -54,7 +54,8 @@ export const createUser = (data) => api.post('/auth/users', data)
 
 // ── Import ──────────────────────────────────────────────
 export const uploadFiles = (formData) => api.post('/import/upload', formData, { headers: { 'Content-Type': 'multipart/form-data' } })
-export const getImportHistory = (params = {}) => api.get('/import/history', { params })
+// fresh (P1-17): read right after an import (server GET max-age=5) — no-cache so the re-import warning is current
+export const getImportHistory = (params = {}) => api.get('/import/history', { params, ...fresh })
 export const getImportSummary = (month, year) => api.get(`/import/summary/${month}/${year}`)
 export const markStageComplete = (stage, month, year, company) => api.post(`/import/stage/${stage}/complete`, { month, year, company })
 export const deleteImport = (id) => api.delete(`/import/${id}`)
