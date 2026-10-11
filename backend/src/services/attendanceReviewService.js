@@ -1079,6 +1079,55 @@ function financeStatus(db, run) {
     applied: sent.filter((r) => r.applied).length, outside: outside.length } };
 }
 
+// ── trends (T1): one row per month from a stored run or a live computation ──────────────────────────
+
+const ZERO_GROUP = { people: 0, worked_days: 0, late_days: 0, early_exits: 0, late_pct: 0, early_pct: 0, time_lost_pct: 0, lost_min: 0, habitual_late: 0, double_defaulters: 0 };
+const pickGroup = (g) => { const o = { ...ZERO_GROUP }; for (const k of Object.keys(o)) if (g && g[k] != null) o[k] = g[k]; return o; };
+
+/**
+ * Reduces one month's review result (stored run or live) to the figures the Trends charts need. Tolerant of older stored
+ * result shapes: a field a run never had reads as 0 / []. Codes and names appear only in action_people (admin screen).
+ */
+function trendRow(result, { month, year, source, run_id = null }) {
+  const ym = ymOf(month, year);
+  const monthly = (result.trend && result.trend.monthly && result.trend.monthly[ym]) || {};
+  const at = result.actionTotals || {};
+  const list = result.actionList || [];
+  return {
+    ym, month, year, source, run_id,
+    basis: (result.criteria && result.criteria.assessment_basis) || (result.assessment && result.assessment.basis) || 'import',
+    people_assessed: (result.meta && result.meta.people_assessed) || 0,
+    all: pickGroup(monthly.All), company: pickGroup(monthly.Company), contract: pickGroup(monthly.Contract),
+    action: { people: at.people || list.length, deductions: at.deduction_notes || 0, warnings: at.warning_notes || 0,
+      deduction_days: r2(at.deduction_days || 0), indicative_amount: Math.round(at.indicative_amount || 0) },
+    departments: (result.departments || []).map((d) => ({ department: d.department, people: d.people || 0, workdays_lost: r2(d.workdays_lost || 0),
+      time_lost_pct: d.time_lost_pct || 0, late_days: d.late_days || 0, early_exits: d.early_exits || 0 })),
+    action_people: list.map((a) => ({ code: a.code, name: a.name, department: a.department, action: a.action,
+      deduction_days: a.deduction_days || 0, workdays_lost: a.workdays_lost || 0, late_days: a.late_days || 0, early_days: a.early_days || 0 })),
+  };
+}
+
+/** Months from..to inclusive, oldest first. from/to are {month, year}. */
+function monthRange(from, to) {
+  const out = []; let m = from.month; let y = from.year;
+  while (y < to.year || (y === to.year && m <= to.month)) { out.push({ month: m, year: y }); m += 1; if (m === 13) { m = 1; y += 1; } }
+  return out;
+}
+
+/** People on the action list in two or more months of the range, most months first. */
+function repeaters(rows) {
+  const by = new Map();
+  for (const r of rows) for (const a of r.action_people) {
+    const p = by.get(a.code) || { code: a.code, name: a.name, department: a.department, months: [], deduction_days: 0, workdays_lost: 0 };
+    p.months.push({ ym: r.ym, action: a.action, deduction_days: a.deduction_days, workdays_lost: a.workdays_lost });
+    p.deduction_days += a.deduction_days; p.workdays_lost += a.workdays_lost; p.name = a.name || p.name; p.department = a.department || p.department;
+    by.set(a.code, p);
+  }
+  return [...by.values()].filter((p) => p.months.length >= 2)
+    .map((p) => ({ ...p, deduction_days: r2(p.deduction_days), workdays_lost: r2(p.workdays_lost) }))
+    .sort((a, b) => b.months.length - a.months.length || b.workdays_lost - a.workdays_lost || a.code.localeCompare(b.code));
+}
+
 // ── main ──────────────────────────────────────────────────────────────────
 
 /**
@@ -1154,6 +1203,6 @@ module.exports = {
   SHIFT_ISSUES_SQL, sqlParams, inlineParams, assessmentQuality,
   isHabitualEarly, shiftFitApplies, detectReleaseDays, detectShiftIssues, loadPersonMonth, remeasureRows, buildPeople, applyExclusions, classify, actions, notices,
   roundDeduction, optionCDays, prevMonth, daysInMonth, computeAttendanceReview,
-  financeSendPlan, financeStatus, runTag,
+  financeSendPlan, financeStatus, runTag, trendRow, monthRange, repeaters,
   suggestions, applySuggestions, toStoredConfig, standingFrom, fitShift, MASTER_DAYS_SQL, LEGACY_REASON,
 };

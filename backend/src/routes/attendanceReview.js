@@ -63,6 +63,49 @@ router.get('/', (req, res) => {
   }
 });
 
+// GET /trends?from=YYYY-MM&to=YYYY-MM[&live=0] — one row per month (≤ 12) for the Trends charts. Each month comes from its
+// FINAL run, else its DRAFT, else (unless live=0) a live computation with that month's rules, release days as detected and
+// no overrides — labelled by source so the screen can say which is which. Months with no attendance are left out. Read only.
+const TREND_MAX = 12;
+function parseYm(v) {
+  const m = /^(\d{4})-(\d{2})$/.exec(String(v || ''));
+  return m ? parseMonth({ year: m[1], month: m[2] }) : null;
+}
+router.get('/trends', (req, res) => {
+  const from = parseYm(req.query.from); const to = parseYm(req.query.to);
+  if (!from || !to) return res.status(400).json({ success: false, error: 'from and to are required as YYYY-MM' });
+  const months = svc.monthRange(from, to);
+  if (!months.length) return res.status(400).json({ success: false, error: 'from must not be after to' });
+  if (months.length > TREND_MAX) return res.status(400).json({ success: false, error: `At most ${TREND_MAX} months at a time` });
+  const allowLive = req.query.live !== '0';
+  try {
+    const db = getDb();
+    const runQ = db.prepare('SELECT id, status, result_json FROM attendance_review_runs WHERE month = ? AND year = ?');
+    const hasData = db.prepare('SELECT 1 FROM attendance_processed WHERE month = ? AND year = ? LIMIT 1');
+    const rows = []; const skipped = [];
+    for (const { month, year } of months) {
+      const ym = `${year}-${String(month).padStart(2, '0')}`;
+      const run = runQ.get(month, year);
+      if (run) {
+        let result; try { result = JSON.parse(run.result_json); } catch { result = null; }
+        if (result) { rows.push(svc.trendRow(result, { month, year, source: run.status, run_id: run.id })); continue; }
+      }
+      if (!hasData.get(month, year)) { skipped.push({ ym, reason: 'no attendance' }); continue; }
+      if (!allowLive) { skipped.push({ ym, reason: 'no review run' }); continue; }
+      const { config } = svc.loadConfig(db, ym);
+      const cfg = svc.mergeConfig(config);
+      const rd = svc.detectReleaseDays(db, month, year, cfg).map((d) => d.date);
+      const result = svc.computeAttendanceReview(db, { month, year, config, releaseDays: rd, prevReleaseDays: prevReleaseDays(db, month, year) });
+      if (!result.meta.people_assessed) { skipped.push({ ym, reason: 'no one assessed' }); continue; }
+      rows.push(svc.trendRow(result, { month, year, source: 'live' }));
+    }
+    res.json({ success: true, data: { from: months[0], to: months[months.length - 1], months: rows, skipped, repeaters: svc.repeaters(rows) } });
+  } catch (err) {
+    console.error('Attendance review trends error:', err.message);
+    res.status(500).json({ success: false, error: 'Failed to compute trends: ' + err.message });
+  }
+});
+
 // GET /config[?month&year] — effective config (defaults merged) + stored history
 router.get('/config', (req, res) => {
   const db = getDb();
