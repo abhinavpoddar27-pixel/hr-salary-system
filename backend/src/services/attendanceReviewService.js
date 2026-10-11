@@ -63,7 +63,7 @@ const DEFAULT_CONFIG = Object.freeze({
     ladder_deduction_from: 2,      // … a deduction stands from this many strike months (fewer → warning)
     ladder_hearing_from: 3,        // … and an HR hearing is added from this many
     plant_late_min_people: 15,     // PR-8: a plant-wide late day needs at least this many people late …
-    plant_late_min_share: 0.25,    // … and at least this share of the day's assessed workers late (detected only; the admin ticks it)
+    plant_late_min_share: 0.4,     // … and at least this share of the day's assessed workers late (detected only; the admin ticks it). 0.4 not 0.25: Sep 2026 replay — ordinary bad days ran 24–36 %, the one plant-wide day 66 %
   }),
   // 'import' = the shift the import matched each day (is_late_arrival / is_early_departure as stored);
   // 'master' = each person's CURRENT master shift (employees.default_shift_id), measured from the punches (owner ruling 10 Oct 2026).

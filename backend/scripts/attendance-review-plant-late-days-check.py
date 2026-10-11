@@ -166,11 +166,11 @@ try:
         pg.get_by_role('button', name='Rules & exclusions').click(); time.sleep(1)
         pg.get_by_text('Thresholds (change only on a ruling)').click()
         pp = pg.get_by_label('plant_late_min_people'); ps = pg.get_by_label('plant_late_min_share')
-        check('thresholds shown: 15 and 0.25', ['15', '0.25'], [pp.input_value(), ps.input_value()])
+        check('thresholds shown: 15 and 0.4', ['15', '0.4'], [pp.input_value(), ps.input_value()])
         check('labelled', True, pg.get_by_text('Plant-wide late day: people late that day at least').is_visible())
         pp.fill('23'); pg.get_by_role('button', name='Save as new version').click(); time.sleep(2)
         cfg = q("SELECT json_extract(config_json,'$.thresholds.plant_late_min_people') a, json_extract(config_json,'$.thresholds.plant_late_min_share') b FROM attendance_review_config ORDER BY id DESC LIMIT 1")[0]
-        check('saved version keeps both thresholds', [23, 0.25], [cfg['a'], cfg['b']])
+        check('saved version keeps both thresholds', [23, 0.4], [cfg['a'], cfg['b']])
         pg.get_by_role('button', name='Hide rules & exclusions').click(); pg.wait_for_load_state('networkidle'); time.sleep(2.5)
         check('no day detected at 23 people', 1, pg.get_by_test_id('ar-plant-late-none').count())
 

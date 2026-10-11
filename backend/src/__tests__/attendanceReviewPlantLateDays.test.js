@@ -14,6 +14,8 @@ const M = 10; const Y = 2026; const DAY = '2026-10-06'; // a Tuesday
 const review = (db, o = {}) => S.computeAttendanceReview(db, { month: M, year: Y, config: o.config || {}, releaseDays: o.releaseDays || [],
   prevReleaseDays: [], overrides: o.overrides || [], ...(o.lateFreeDays ? { lateFreeDays: o.lateFreeDays } : {}),
   ...(o.prevLateFreeDays ? { prevLateFreeDays: o.prevLateFreeDays } : {}) });
+// the mechanics tests below use the first default share (0.25) so their fixtures stay small; the default (0.4) is tested above
+const Q = { thresholds: { plant_late_min_share: 0.25 } };
 const person = (r, code) => r.people.find((p) => p.code === code) || { code, late_days: 0, early_days: 0 };
 
 /** One date: `n` people at work (codes prefix1..n), the first `k` late by `lm` minutes. */
@@ -26,46 +28,48 @@ function oneDay(db, date, n, k, { prefix = 'PX', lm = 52, emp = true } = {}) {
 }
 
 describe('detector', () => {
-  test('both thresholds: just below / at / above (people 15, share 0.25)', () => {
+  test('both thresholds: just below / at / above (people 15, share 0.4)', () => {
     const db = F.newDb();
-    oneDay(db, '2026-10-01', 40, 14, { prefix: 'PA' });              // 14 late — below people
-    oneDay(db, '2026-10-02', 60, 15, { prefix: 'PB' });              // 15 of 60 = 0.25 exactly — at both
-    oneDay(db, '2026-10-03', 61, 15, { prefix: 'PC' });              // 15 of 61 = 0.246 — below share
+    oneDay(db, '2026-10-01', 40, 14, { prefix: 'PA' });              // 14 late — below people (and share 0.35)
+    oneDay(db, '2026-10-02', 40, 16, { prefix: 'PB' });              // 16 of 40 = 0.4 exactly — at share
+    oneDay(db, '2026-10-03', 41, 16, { prefix: 'PC' });              // 16 of 41 = 0.39 — below share
     oneDay(db, '2026-10-05', 40, 22, { prefix: 'PD', lm: 55 });      // above both
+    oneDay(db, '2026-10-06', 30, 15, { prefix: 'PE' });              // 15 people exactly — at people (share 0.5)
     const cfg = S.mergeConfig({});
-    expect(cfg.thresholds).toMatchObject({ plant_late_min_people: 15, plant_late_min_share: 0.25 });
+    expect(cfg.thresholds).toMatchObject({ plant_late_min_people: 15, plant_late_min_share: 0.4 });
     const d = S.detectPlantLateDays(db, M, Y, cfg);
-    expect(d).toEqual([
-      { date: '2026-10-02', weekday: 'Fri', assessed: 60, late_people: 15, share: 0.25, median_late_minutes: 52 },
-      { date: '2026-10-05', weekday: 'Mon', assessed: 40, late_people: 22, share: 0.55, median_late_minutes: 55 },
+    expect(d.map((x) => [x.date, x.weekday, x.assessed, x.late_people, x.share])).toEqual([
+      ['2026-10-02', 'Fri', 40, 16, 0.4], ['2026-10-05', 'Mon', 40, 22, 0.55], ['2026-10-06', 'Tue', 30, 15, 0.5],
     ]);
+    expect(d[1].median_late_minutes).toBe(55);
     // thresholds come from the config
-    expect(S.detectPlantLateDays(db, M, Y, S.mergeConfig({ thresholds: { plant_late_min_people: 14 } })).map((x) => x.date)).toEqual(['2026-10-01', '2026-10-02', '2026-10-05']);
-    expect(S.detectPlantLateDays(db, M, Y, S.mergeConfig({ thresholds: { plant_late_min_share: 0.24 } })).map((x) => x.date)).toEqual(['2026-10-02', '2026-10-03', '2026-10-05']);
+    expect(S.detectPlantLateDays(db, M, Y, S.mergeConfig({ thresholds: { plant_late_min_people: 14, plant_late_min_share: 0.35 } })).map((x) => x.date))
+      .toEqual(['2026-10-01', '2026-10-02', '2026-10-03', '2026-10-05', '2026-10-06']);
+    expect(S.detectPlantLateDays(db, M, Y, S.mergeConfig({ thresholds: { plant_late_min_share: 0.39 } })).map((x) => x.date))
+      .toEqual(['2026-10-02', '2026-10-03', '2026-10-05', '2026-10-06']);
   });
-
   test('the engine\'s own late measure: under late_min_minutes and misreads are not late; Sunday is ignored; median of the late minutes', () => {
     const db = F.newDb();
     oneDay(db, '2026-10-04', 40, 40, { prefix: 'PS' });               // Sunday, everyone late → ignored
     for (let i = 1; i <= 40; i++) F.emp(db, `PM${i}`);
     for (let i = 1; i <= 40; i++) F.day(db, `PM${i}`, '2026-10-07', i <= 15 ? { lm: 20 + i } : i <= 25 ? { lm: 9 } : i <= 30 ? { lm: 700 } : {});
-    const d = S.detectPlantLateDays(db, M, Y, S.mergeConfig({}));
+    const d = S.detectPlantLateDays(db, M, Y, S.mergeConfig(Q));
     expect(d).toEqual([{ date: '2026-10-07', weekday: 'Wed', assessed: 40, late_people: 15, share: 0.38, median_late_minutes: 28 }]);
   });
 
   test('excluded people (codes and departments) are not counted; miss-punch and night rows are not assessed', () => {
     const db = F.newDb();
     oneDay(db, DAY, 40, 15, { prefix: 'PE' });
-    expect(S.detectPlantLateDays(db, M, Y, S.mergeConfig({}))).toHaveLength(1);
+    expect(S.detectPlantLateDays(db, M, Y, S.mergeConfig(Q))).toHaveLength(1);
     // one late person left out of the review → 14 late → not a plant day
-    const ex = S.mergeConfig({ standing_people: { PE1: { rule: 'exclude', reason: 'senior staff' } } });
+    const ex = S.mergeConfig({ ...Q, standing_people: { PE1: { rule: 'exclude', reason: 'senior staff' } } });
     expect(S.detectPlantLateDays(db, M, Y, ex)).toEqual([]);
     db.prepare("UPDATE employees SET department = 'PIECE RATE CREW' WHERE code IN ('PE2')").run();
-    const exd = S.mergeConfig({ standing_departments: { 'PIECE RATE CREW': { rule: 'exclude', reason: 'piece rate' } } });
+    const exd = S.mergeConfig({ ...Q, standing_departments: { 'PIECE RATE CREW': { rule: 'exclude', reason: 'piece rate' } } });
     expect(S.detectPlantLateDays(db, M, Y, exd)).toEqual([]);
     // a late person on a miss-punch / night row is not assessed that day
     db.prepare("UPDATE attendance_processed SET is_miss_punch = 1 WHERE employee_code = 'PE3'").run();
-    expect(S.detectPlantLateDays(db, M, Y, S.mergeConfig({}))).toEqual([]);
+    expect(S.detectPlantLateDays(db, M, Y, S.mergeConfig(Q))).toEqual([]);
   });
 
   test('master basis: late on the current master shift; not-assessed days left out', () => {
@@ -74,12 +78,12 @@ describe('detector', () => {
     db.prepare("UPDATE employees SET default_shift_id = (SELECT id FROM shifts WHERE code = '12HR')").run();
     // the import says nobody is late; 16 people punched in 08:50 against a 08:00 master
     db.prepare("UPDATE attendance_processed SET in_time_final = '08:50' WHERE employee_code IN (SELECT 'PG' || value FROM json_each('[1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16]'))").run();
-    expect(S.detectPlantLateDays(db, M, Y, S.mergeConfig({}))).toEqual([]);                      // import basis
-    const d = S.detectPlantLateDays(db, M, Y, S.mergeConfig({ assessment_basis: 'master' }));
+    expect(S.detectPlantLateDays(db, M, Y, S.mergeConfig(Q))).toEqual([]);                      // import basis
+    const d = S.detectPlantLateDays(db, M, Y, S.mergeConfig({ ...Q, assessment_basis: 'master' }));
     expect(d).toEqual([{ date: DAY, weekday: 'Tue', assessed: 40, late_people: 16, share: 0.4, median_late_minutes: 50 }]);
     // a person without a master is not assessed → 15 of 39
     db.prepare("UPDATE employees SET default_shift_id = NULL WHERE code = 'PG1'").run();
-    expect(S.detectPlantLateDays(db, M, Y, S.mergeConfig({ assessment_basis: 'master' }))[0]).toMatchObject({ assessed: 39, late_people: 15 });
+    expect(S.detectPlantLateDays(db, M, Y, S.mergeConfig({ ...Q, assessment_basis: 'master' }))[0]).toMatchObject({ assessed: 39, late_people: 15 });
   });
 });
 
@@ -255,7 +259,7 @@ describe('API', () => {
 
   test('rules editor save keeps the two thresholds; bad values refused', async () => {
     const cfg = (await get(`/config?month=${M}&year=${Y}`)).body.data.config;
-    expect(cfg.thresholds).toMatchObject({ plant_late_min_people: 15, plant_late_min_share: 0.25 });
+    expect(cfg.thresholds).toMatchObject({ plant_late_min_people: 15, plant_late_min_share: 0.4 });
     // the editor rebuilds config from its form: thresholds are carried whole
     const body = { thresholds: { ...cfg.thresholds, plant_late_min_people: 21, plant_late_min_share: 0.3 }, stayed_late_mode: cfg.stayed_late_mode,
       early_exit_rule: cfg.early_exit_rule, standing_people: {}, standing_departments: {} };

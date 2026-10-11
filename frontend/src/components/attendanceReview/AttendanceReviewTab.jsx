@@ -505,7 +505,7 @@ export default function AttendanceReviewTab({ selectedMonth, selectedYear, onSel
             <div className="md:col-span-2" data-testid="ar-plant-late">
               <div className="text-xs font-semibold text-slate-600 mb-1">Plant-wide late days (tick a day to stop counting its lates for everyone — early exits still count)</div>
               {lateOptions.length === 0 && <p className="text-xs text-slate-400" data-testid="ar-plant-late-none">
-                None detected (no weekday with {data?.criteria?.thresholds?.plant_late_min_people ?? 15}+ people late and at least {Math.round((data?.criteria?.thresholds?.plant_late_min_share ?? 0.25) * 100)}% of those at work).</p>}
+                None detected (no weekday with {data?.criteria?.thresholds?.plant_late_min_people ?? 15}+ people late and at least {Math.round((data?.criteria?.thresholds?.plant_late_min_share ?? 0.4) * 100)}% of those at work).</p>}
               <div className="flex flex-wrap gap-2">
                 {lateOptions.map((d) => {
                   const det = lateDetected.find((x) => x.date === d)
