@@ -1,6 +1,6 @@
 # P1-16 — PLAN (Phase 0)
 Branch `fix/interventions-reject-all-confirm` · base origin/main 868f5389 · Finding F-10 (Med).
-Status: **Phase 0 ready — waiting for "go". No code written.**
+Status: **Built — rulings Q1 (a), Q2 pending-only, Q3 yes (see PROGRESS).**
 
 ## 1. What the code does today (FACT, `frontend/src/pages/FinanceAudit.jsx`, `ManualInterventionsTab` L684–861)
 - L781–787: when `selected.size > 0` two buttons appear. **Reject All** (L785) calls
