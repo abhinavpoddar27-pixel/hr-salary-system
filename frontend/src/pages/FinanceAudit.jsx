@@ -717,9 +717,12 @@ function ManualInterventionsTab() {
   })
 
   const closeBulkModal = () => { setBulkModal(null); setBulkReason('') }
+  // isPending only flips after a re-render, so a fast double click would send twice — guard with a ref.
+  const bulkInFlight = useRef(false)
 
   const bulkMut = useMutation({
     mutationFn: (data) => bulkApproveFlags(data),
+    onSettled: () => { bulkInFlight.current = false },
     onSuccess: () => { qc.invalidateQueries(['salary-manual-flags']); qc.invalidateQueries(['readiness']); setSelected(new Set()); closeBulkModal(); toast.success('Bulk action complete') },
     onError: (err) => toast.error(err?.response?.data?.error || 'Bulk action failed — nothing was changed')
   })
@@ -768,7 +771,8 @@ function ManualInterventionsTab() {
   const reasonOk = bulkReason.trim().length >= BULK_REASON_MIN
   const canConfirmBulk = bulkRows.length > 0 && !bulkMut.isPending && (bulkModal?.status !== 'REJECTED' || reasonOk)
   const confirmBulk = () => {
-    if (!canConfirmBulk) return
+    if (!canConfirmBulk || bulkInFlight.current) return
+    bulkInFlight.current = true
     const data = { flagIds: bulkRows.map(f => f.id), status: bulkModal.status }
     if (bulkModal.status === 'REJECTED') data.comments = bulkReason.trim()
     bulkMut.mutate(data)
