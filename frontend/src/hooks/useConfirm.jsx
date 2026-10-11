@@ -86,8 +86,12 @@ function OneDialog({ item, finish: finishOnce }) {
   // A double click (or Enter + click) must answer once — a second answer would
   // drop the NEXT queued dialog.
   const answered = useRef(false)
+  // A dialog that follows another (queue, or prompt → alert) ignores answers in its first
+  // 300 ms, so the second click of a double click cannot answer it unseen.
+  const shownAt = useRef(Date.now())
   const finish = (value) => {
     if (answered.current) return
+    if (Date.now() - shownAt.current < 300) return
     answered.current = true
     finishOnce(value)
   }

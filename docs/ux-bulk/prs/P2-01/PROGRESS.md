@@ -12,7 +12,7 @@ Phase 0 approved (go 11 Oct). Building.
 - [x] B2 ConfirmDialog.jsx on headless Dialog
 - [x] B3 hooks/useConfirm.jsx
 - [x] B4 migrate Settings, LeaveManagement, GatePasses, FinanceEarlyExitApprovals, Reports, SqlConsole
-- [ ] B5 local build + check script + --base
+- [x] B5 local build + check script 111/111 (×2) + harness 19/19; --base pending
 - [ ] B6 regression checks + jest after
 - [ ] B7 merge origin/main, push, report
 

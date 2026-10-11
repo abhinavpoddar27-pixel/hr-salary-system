@@ -158,7 +158,7 @@ def confirm_cycle(p, label, opener, title, text, cancel_name, ok_name, method, u
         time.sleep(.4)
         check(f'{label}: {how} → closed, 0 {method} requests', 0, p.count(method, url_pat))
     opener().click()
-    dlg = p.dialog(title); dlg.wait_for(timeout=8000)
+    dlg = p.dialog(title); dlg.wait_for(timeout=8000); time.sleep(.4)
     dlg.get_by_role('button', name=ok_name, exact=True).click()
     dlg.wait_for(state='detached', timeout=5000)
     for _ in range(40):
@@ -236,7 +236,7 @@ def run_fix(b):
     ECR = r'/api/reports/pf-ecr\?.*download=true'
     confirm_cycle_noo = None
     for how in ('Esc', 'Cancel', 'backdrop'):
-        dl().click(); dlg = p.dialog('Download without these employees?'); dlg.wait_for(timeout=8000)
+        dl().click(); dlg = p.dialog('Download without these employees?'); dlg.wait_for(timeout=8000); time.sleep(.4)
         if how == 'Esc':
             txt = dlg.inner_text()
             check('ECR: lists the missing code', True, 'T9601' in txt and 'NOT in this file' in txt)
@@ -247,7 +247,7 @@ def run_fix(b):
         else: click_backdrop(p)
         dlg.wait_for(state='detached'); time.sleep(.4)
         check(f'ECR: {how} → 0 download requests', 0, p.count('GET', ECR))
-    dl().click(); dlg = p.dialog('Download without these employees?'); dlg.wait_for()
+    dl().click(); dlg = p.dialog('Download without these employees?'); dlg.wait_for(); time.sleep(.4)
     with pg.expect_download(timeout=15000) as dli:
         dlg.get_by_role('button', name='Download without them', exact=True).click()
     check('ECR: OK → file downloaded', True, dli.value.suggested_filename.endswith('.txt'))
@@ -305,7 +305,7 @@ def run_fix(b):
     gb = pg.locator('tr', has_text='Phone gate pass').get_by_role('button', name='Cancel', exact=True)
     n0 = p.count('PUT', r'/api/short-leaves/\d+/cancel')
     gb.scroll_into_view_if_needed(); gb.click()
-    dlg = p.dialog('Cancel gate pass?'); dlg.wait_for()
+    dlg = p.dialog('Cancel gate pass?'); dlg.wait_for(); time.sleep(.4)
     ok = dlg.get_by_role('button', name='Cancel gate pass', exact=True).bounding_box()
     check('390: confirm buttons on screen', True, ok['x'] >= 0 and ok['x'] + ok['width'] <= 390)
     dlg.get_by_role('button', name='Keep', exact=True).click(); dlg.wait_for(state='detached')
@@ -333,7 +333,7 @@ def run_fix(b):
             pg.get_by_role('button', name='Snapshots ▾').click()
         link.wait_for(timeout=8000)
         link.click()
-        dlg = p.dialog('Restore snapshot'); dlg.wait_for(timeout=8000)
+        dlg = p.dialog('Restore snapshot'); dlg.wait_for(timeout=8000); time.sleep(.4)
         return dlg
     RESTORE = r'/api/admin/sql/snapshot/\d+/restore'
     dlg = open_restore()
@@ -344,7 +344,7 @@ def run_fix(b):
     dlg = open_restore(); pg.keyboard.press('Escape'); dlg.wait_for(state='detached')
     time.sleep(.3); check('prompt Esc → 0 restore POST', 0, p.count('POST', RESTORE))
     dlg = open_restore(); dlg.locator('input').fill('short'); dlg.get_by_role('button', name='OK', exact=True).click()
-    al = p.dialog('Restore aborted'); al.wait_for(timeout=5000)
+    al = p.dialog('Restore aborted'); al.wait_for(timeout=5000); time.sleep(.4)
     check('alert (<10 chars): text', True, 'remark must be at least 10 characters' in al.inner_text())
     check('alert: one button only (no Cancel)', 1, al.get_by_role('button').count())
     check('alert: focus on OK', 'OK', p.active_text())
@@ -355,7 +355,7 @@ def run_fix(b):
                                                      'remark': 'P2-01 hold a txn open'}, tok)
     ALLOWED_BAD.append('/restore')
     dlg = open_restore(); dlg.locator('input').fill('P2-01 restore check (fails)'); pg.keyboard.press('Enter')
-    al = p.dialog('Restore failed'); al.wait_for(timeout=8000)
+    al = p.dialog('Restore failed'); al.wait_for(timeout=8000); time.sleep(.4)
     check('alert (failed): text names the code', True, 'Restore failed: TXN_ALREADY_OPEN' in al.inner_text())
     pg.keyboard.press('Escape'); al.wait_for(state='detached')
     check('failed restore → exactly 1 POST', 1, p.count('POST', RESTORE))
