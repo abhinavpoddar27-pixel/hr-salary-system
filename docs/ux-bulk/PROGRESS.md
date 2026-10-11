@@ -9,7 +9,7 @@
 Programme:   UI/UX improvement + bulk input, HR Salary System (Indriyan / Asian Lakto)
 Base:        origin/main a5aec9a (10 Oct 2026). Re-check: git fetch origin; git log -1 origin/main
 Plan:        docs/ux-bulk/MASTER_PLAN.md (§5.2 = PR order, §6 = specs, §7 = bulk design, §14 = open questions)
-Current PR:  ALL 8 MERGED 11 Oct 00:10–00:43 IST: P1-03 #86, P1-04 #90, P1-06 #91, P1-08 #92, P1-09 #97, P1-10 #98, P1-11 #99, P1-12 #100 (main 18bef07). Owner post-deploy checks pending → verified. Next: P1-05 (DayCalculation leave form reset), P1-24 (Miss Punch stray 0), P1-13/15/16/17/19/20/21/22; N-9 fresh-reads PR. Owner Qs pending: Q5 (P1-07), Q6 (P1-23). Lesson: merge-time conflicts are only frontend/dist + CLAUDE.md top — re-sync after each merge (scratchpad syncfast.sh, builds one at a time — parallel vite builds OOM).
+Current PR:  12 merged. 11 Oct: P1-05 #104, P1-24 #105, P1-23 #106 (Q6 = no self-approval), P1-25 #107 (employee edit cannot change salary; hr/admin only) — main 26fc35fc. Next: P1-13/15/16/17/19/20/21/22; N-9 fresh-reads PR; N-3 bank sheet includes held. Awaiting owner: Q5 (P1-07 retire legacy Stage 6 extra-duty tab — touches payroll.js bottom handlers). Lesson: re-sync open PRs after each merge (syncfast.sh, one build at a time).
 Asked, not answered: Q1 Q2 Q3 (P3-01/P5-02), Q4 (P1-04) — re-ask before those PRs
 Open Qs:     Q1 Q2 (needed by P3-01) · Q4 (P1-04) · Q5 (P1-07) · Q6 (P1-23) · Q10 (one-PR rule) — ask when the PR needs them
 Roles:       planner = new chat; builder = Claude Code agent session reading prs/<PR-ID>/PROMPT.md; Abhinav says "go" and merges in GitHub UI
@@ -62,7 +62,7 @@ Status values: `todo` · `plan` (Phase 0 written, waiting for go) · `build` · 
 | P1-02 | Salary Register ₹0 | merged | fix/salary-register-report-fields | #83 | cc58076 | pending owner check | go 10 Oct 20:17; rulings R12/R13 |
 | P1-03 | Sales NEFT excludes paid rows + always confirm | merged #86 | fix/sales-neft-finalized-only | | | | Q12=C; jest 86/1388 merged tree; check 40/40; review SHIP (Low-1,3 fixed) |
 | P1-04 | Stage 6 company-scope guard | merged #90 | fix/stage6-company-scope-guard | | | | Q4 default (always all companies); check 28/28, base 4/4 |
-| P1-05 | Stage 6 Apply Leave form reset | todo | | | | | |
+| P1-05 | Stage 6 Apply Leave form reset | merged #104 | | | | | |
 | P1-06 | Leave rejection reason dropped + require | merged #91 | fix/leave-rejection-reason | | | | check 29/29; jest +5 |
 | P1-07 | Retire Payable OT grant tab + endpoint | todo | | | | | Q5, fragile payroll.js |
 | P1-08 | Stage 5 grid not refreshed after save | merged #92 | fix/stage5-grid-refresh | | | | +calendar + no-cache; check 34/34 |
@@ -80,8 +80,9 @@ Status values: `todo` · `plan` (Phase 0 written, waiting for go) · `build` · 
 | P1-20 | Leave form Comp Off + date order | todo | | | | | |
 | P1-21 | Bulk payslips 403 | todo | | | | | |
 | P1-22 | Salary change approver view | todo | | | | | |
-| P1-23 | Salary change self-approval | todo | | | | | Q6 |
-| P1-24 | Miss Punch stray "0" | todo | | | | | |
+| P1-23 | Salary change self-approval | merged #106 | | | | | Q6 |
+| P1-25 | Employee edit cannot change salary (N-12) | merged #107 | | | | | |
+| P1-24 | Miss Punch stray "0" | merged #105 | | | | | |
 | P2-01 | Modal/Confirm on headlessui + useConfirm | todo | | | | | |
 | P2-02 | Toast dedup | todo | | | | | |
 | P2-03 | Formatters + IST today + DateSelector | todo | | | | | |
@@ -137,11 +138,16 @@ Status values: `todo` · `plan` (Phase 0 written, waiting for go) · `build` · 
 | N-6 | P1-06 | Leave reject route: success on a no-op, no audit row, no server-side minimum | later PR |
 | N-7 | P1-04 | `getDayCalculations` list has no no-cache → list stale ≤ 5 s after a Stage 6 run | later PR (one line) |
 | N-9 | P1-04/08/09/10 | Lists not refetched fresh after an action (server 5 s GET cache, no `fresh`): day-calculations, miss-punches, night-shifts — one cross-cutting PR "fresh reads after mutation" | later PR |
+| N-12 | P1-25 | PUT /employees/:code changed gross with no approval and no role guard — FIXED by P1-25 | done |
+| N-13 | P1-25 | POST /employees sets gross on create with no approval (P2-11 role-guard PR) | later PR |
+| N-14 | P1-23 | approve-flag has no maker-checker; salary-change approvals send no effectiveFrom; SalaryInput lists not no-cache | later PR |
+| N-15 | P1-09 | finance gets 403 from leave-automation/status on every Miss Punch visit | later PR (one line) |
 | N-10 | P1-11 | Dashboard KPI/readiness/dept table look like "nothing yet" on failure; salary-manual-flags returns success:true on DB error | later PR |
 | N-11 | P1-10/P1-12 | Night-shift reject irreversible + no role guard (→P2-11); no ESLint rules-of-hooks | later |
 | N-8 | P1-08 | Stage 5 editor: miss-punch cell stays red after edit; failed save has no page-level error | later PR |
 
 ## Session log (newest first; one line per meaningful event)
+- 11 Oct 2026 09:02 IST — #105 #106 #107 merged by owner (re-synced #106/#107 after each merge, CI green). Q5 explained to owner, awaiting yes/no.
 - 11 Oct 2026 00:43 IST — all 8 P1 PRs merged (#86 #90 #91 #92 #97 #98 #99 #100); each merge forced a dist/CLAUDE.md re-sync of the rest (done by planner, CI green each time). main = 18bef07.
 - 11 Oct 2026 ~00:30 IST — P1-09/10/11/12 built in parallel (planner approved Phase 0s) → PRs #97–#100. All 8 open branches synced with main (dist rebuilt, jest 87–88 suites green). Planner mod `ux-bulk-control` written (pane + /ux-status + status line).
 - 10 Oct 2026 ~23:30 IST — P1-03 built (review SHIP, Low-1 double-click guard + Low-3 copy fixed; Low-2 preview/download race → register) → PR #86. P1-04/P1-06/P1-08 built in parallel worktrees, planner approved Phase 0s under owner's programme go → PRs #90 #91 #92. All four synced with main (dist rebuilt, jest green).
