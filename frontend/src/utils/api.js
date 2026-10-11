@@ -385,8 +385,9 @@ export const getJobStatus = (id) => api.get(`/jobs/${id}`)
 export const getUserPermissions = () => api.get('/auth/permissions')
 
 // ── Finance Verification ─────────────────────────────────
-export const getFinanceAuditDashboard = (month, year) => api.get('/finance-verify/dashboard', { params: { month, year } })
-export const getFinanceAuditEmployees = (month, year, params) => api.get('/finance-verify/employees', { params: { month, year, ...params } })
+// P1-15: no-cache — the sign-off Approve gate reads these counts right after a Verify / Flag.
+export const getFinanceAuditDashboard = (month, year) => api.get('/finance-verify/dashboard', { params: { month, year }, ...fresh })
+export const getFinanceAuditEmployees = (month, year, params) => api.get('/finance-verify/employees', { params: { month, year, ...params }, ...fresh })
 export const getFinanceAuditEmployee = (code, month, year) => api.get(`/finance-verify/employee/${code}`, { params: { month, year } })
 export const getFinanceRedFlags = (month, year) => api.get('/finance-verify/red-flags', { params: { month, year } })
 export const setFinanceAuditStatus = (data) => api.post('/finance-verify/status', data)
