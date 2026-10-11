@@ -51,6 +51,13 @@ const DEFAULT_CONFIG = Object.freeze({
     board_miss_punch_min: 3,       // named on the board from this many personal missed punches so far (MP-2)
     bulk_miss_punch_day: 40,       // a day with at least this many miss-punch rows plant-wide is a system failure → not counted
     board_spotless_min_share: 0.75, // "on time every day" needs assessed full days ≥ this share of the Mon–Sat days so far
+    // PR-3 (owner rulings D-4, D-6, MP-2) — used only when the matching switch below is on
+    long_late_minutes: 120,        // D-6: a late of this many minutes or more is never excused by full hours; listed as a shift question
+    d4_half_day_minutes: 120,      // D-4: each counted early exit of this many minutes or more = ½ day
+    d4_long_minutes: 60,           // D-4: early exits of this many minutes or more …
+    d4_long_count: 3,              // … this many or more in the month → the minutes of the ones under d4_half_day_minutes are deducted
+    missed_out_from: 5,            // MP-2: from the person's Nth own missed punch in the month (bulk-failure days not counted) …
+    missed_out_minutes: 120,       // … each missed OUT counts as an early exit of this many minutes
   }),
   // 'import' = the shift the import matched each day (is_late_arrival / is_early_departure as stored);
   // 'master' = each person's CURRENT master shift (employees.default_shift_id), measured from the punches (owner ruling 10 Oct 2026).
@@ -59,7 +66,9 @@ const DEFAULT_CONFIG = Object.freeze({
   // An out typed as exactly the shift end is "out not verified": no early exit is measured from it and it excuses nothing (MP-3).
   assess_fixed_miss_punch: true,
   stayed_late_mode: 'either',      // 'worked' | 'calendar' | 'either' (previous worked day OR previous calendar day)
-  early_exit_rule: 'warning',      // 'warning' | 'option_c'
+  early_exit_rule: 'warning',      // 'warning' | 'option_c' | 'd4' (2 h+ exit = ½ day; 3+ exits of 60+ min = minutes deduction)
+  late_long_always_counted: false, // D-6: a late of long_late_minutes+ is counted even when the full shift was worked
+  missed_out_rule: false,          // MP-2: from the missed_out_from-th own missed punch, each missed OUT = an early exit of missed_out_minutes
   shift_fit: 'everyone',           // early exit not counted on a full-hours day: 'everyone' | 'habitual' (only habitual early leavers) | 'off'
   late_full_hours: true,           // late not counted on a day the person still worked the full shift length (owner ruling 10 Oct 2026)
   loading_designation_patterns: Object.freeze(['LOAD', 'LODING']),
@@ -83,6 +92,8 @@ const MODES = { worked: 0, calendar: 1, either: 2 };
 const ACTIONS = ['include', 'exclude', 'warning'];
 const SHIFT_FIT = ['habitual', 'everyone', 'off'];
 const BASES = ['import', 'master'];
+const EARLY_RULES = ['warning', 'option_c', 'd4'];
+const MISSED_OUT_TYPES = ['MISSING_OUT', 'NIGHT_UNPAIRED']; // MP-2: punched in, no out (a night IN with no next-morning OUT is the same)
 const WORKED = "('P','WOP','½P','WO½P')";
 
 // ── config ────────────────────────────────────────────────────────────────
@@ -156,7 +167,8 @@ function validateConfig(c) {
     }
   }
   if (c.stayed_late_mode !== undefined && !(c.stayed_late_mode in MODES)) errs.push('stayed_late_mode must be worked | calendar | either');
-  if (c.early_exit_rule !== undefined && !['warning', 'option_c'].includes(c.early_exit_rule)) errs.push('early_exit_rule must be warning | option_c');
+  if (c.early_exit_rule !== undefined && !EARLY_RULES.includes(c.early_exit_rule)) errs.push('early_exit_rule must be warning | option_c | d4');
+  for (const k of ['late_long_always_counted', 'missed_out_rule']) if (c[k] !== undefined && typeof c[k] !== 'boolean') errs.push(`${k} must be true or false`);
   if (c.shift_fit !== undefined && !SHIFT_FIT.includes(c.shift_fit)) errs.push('shift_fit must be habitual | everyone | off');
   if (c.late_full_hours !== undefined && typeof c.late_full_hours !== 'boolean') errs.push('late_full_hours must be true or false');
   if (c.assessment_basis !== undefined && !BASES.includes(c.assessment_basis)) errs.push('assessment_basis must be import | master');
@@ -259,24 +271,40 @@ y AS (SELECT x.*,
                OR (@mode = 2 AND (COALESCE(x.pll,0) = 1 OR x.cll = 1)) THEN 1 ELSE 0 END exc,
         CASE WHEN x.ed = 1 AND x.em > @eMin AND x.em < @eMax AND (@sunOff = 0 OR x.dow <> '0')
               AND x.d NOT IN (SELECT value FROM json_each(CASE WHEN x.ym = @cur THEN @rel ELSE @prel END))
+              AND (CAST(x.c AS TEXT) || '|' || x.d) NOT IN (SELECT value FROM json_each(@mp2))
              THEN 1 ELSE 0 END ise,
         CASE WHEN x.wm IS NULL OR x.wm < x.f*x.h*60 - @fitGrace THEN 1 ELSE 0 END short,
         -- full shift worked, for lates: tolerance kept below the late threshold, so a late is only forgiven when made up
-        CASE WHEN x.wm IS NOT NULL AND x.wm >= x.f*x.h*60 - MIN(@fitGrace, @lateMin - 1) THEN 1 ELSE 0 END fhl
-      FROM x)
+        CASE WHEN x.wm IS NOT NULL AND x.wm >= x.f*x.h*60 - MIN(@fitGrace, @lateMin - 1) THEN 1 ELSE 0 END fhl,
+        CASE WHEN x.lm >= @longLate THEN 1 ELSE 0 END lng
+      FROM x),
+-- exl = the late is excused: stayed late the evening before, or (with @lateFull) the full shift was worked — except a long
+-- late (>= @longLate) when @longOn (D-6), which only the stayed-late excuse can forgive
+z AS (SELECT y.*, MAX(y.exc, @lateFull*y.fhl*(1 - @longOn*y.lng)) exl FROM y)
 SELECT c AS code, ym, COUNT(*) AS worked_days, SUM(f) AS worked_units, SUM(f*h*60) AS sched_min,
        MAX(h) AS shift_h, MAX(hmiss) AS shift_h_missing,
-       SUM(isl) AS late_raw, SUM(isl*MAX(exc, @lateFull*fhl)) AS late_excused,
-       SUM(isl*(1-MAX(exc, @lateFull*fhl))) AS lates,
-       SUM(CASE WHEN isl = 1 AND MAX(exc, @lateFull*fhl) = 0 THEN lm ELSE 0 END) AS late_min,
-       SUM(CASE WHEN isl = 1 AND exc = 0 AND @lateFull = 1 AND fhl = 1 THEN 1 ELSE 0 END) AS late_full_excused,
+       SUM(isl) AS late_raw, SUM(isl*exl) AS late_excused,
+       SUM(isl*(1-exl)) AS lates,
+       SUM(CASE WHEN isl = 1 AND exl = 0 THEN lm ELSE 0 END) AS late_min,
+       SUM(CASE WHEN isl = 1 AND exc = 0 AND @lateFull = 1 AND fhl = 1 AND exl = 1 THEN 1 ELSE 0 END) AS late_full_excused,
+       SUM(CASE WHEN isl = 1 AND lng = 1 AND exl = 0 THEN 1 ELSE 0 END) AS long_lates,
+       SUM(CASE WHEN isl = 1 AND lng = 1 AND exl = 0 THEN lm ELSE 0 END) AS long_late_min,
+       SUM(CASE WHEN isl = 1 AND lng = 1 AND exc = 0 AND @lateFull = 1 AND fhl = 1 AND exl = 0 THEN 1 ELSE 0 END) AS long_late_kept,
+       SUM(CASE WHEN isl = 1 AND lng = 1 AND exc = 0 AND @lateFull = 1 AND fhl = 1 AND exl = 1 THEN 1 ELSE 0 END) AS long_late_forgiven,
        SUM(ise) AS early_exits, SUM(CASE WHEN ise = 1 THEN em ELSE 0 END) AS early_min,
        SUM(CASE WHEN ise = 1 AND em >= @longMin THEN 1 ELSE 0 END) AS early_long,
        SUM(CASE WHEN @sunOff = 0 OR dow <> '0' THEN 1 ELSE 0 END) AS ms_days,
        SUM(ise*short) AS early_short, SUM(CASE WHEN ise = 1 AND short = 1 THEN em ELSE 0 END) AS early_short_min,
        SUM(CASE WHEN ise = 1 AND short = 1 AND em >= @longMin THEN 1 ELSE 0 END) AS early_short_long,
-       SUM(CASE WHEN ise = 1 THEN COALESCE(wm,0) ELSE 0 END) AS early_wm_sum
-FROM y GROUP BY c, ym`;
+       SUM(CASE WHEN ise = 1 THEN COALESCE(wm,0) ELSE 0 END) AS early_wm_sum,
+       -- D-4 buckets: exits >= @halfMin (½ day each) and @midMin .. @halfMin (minutes), plain and short-day versions
+       SUM(CASE WHEN ise = 1 AND em >= @halfMin THEN 1 ELSE 0 END) AS early_half,
+       SUM(CASE WHEN ise = 1 AND em >= @midMin AND em < @halfMin THEN 1 ELSE 0 END) AS early_mid,
+       SUM(CASE WHEN ise = 1 AND em >= @midMin AND em < @halfMin THEN em ELSE 0 END) AS early_mid_min,
+       SUM(CASE WHEN ise = 1 AND short = 1 AND em >= @halfMin THEN 1 ELSE 0 END) AS early_short_half,
+       SUM(CASE WHEN ise = 1 AND short = 1 AND em >= @midMin AND em < @halfMin THEN 1 ELSE 0 END) AS early_short_mid,
+       SUM(CASE WHEN ise = 1 AND short = 1 AND em >= @midMin AND em < @halfMin THEN em ELSE 0 END) AS early_short_mid_min
+FROM z GROUP BY c, ym`;
 
 const WEEKLY_TAIL = `
 pl AS (SELECT c, d, MAX(ll) ll FROM base GROUP BY c, d),
@@ -292,10 +320,10 @@ x AS (SELECT w.*, COALESCE(p.ll,0) cll, substr(w.d,1,7) ym,
 SELECT c AS code, ym, date(d, 'weekday 1', '-7 days') AS week_start, COUNT(*) AS worked_days,
   SUM(CASE WHEN la = 1 AND lm >= @lateMin AND lm < @mis AND NOT ((@mode = 0 AND COALESCE(pll,0) = 1) OR (@mode = 1 AND cll = 1)
        OR (@mode = 2 AND (COALESCE(pll,0) = 1 OR cll = 1)))
-       AND NOT (@lateFull = 1 AND wm IS NOT NULL AND wm >= f*h*60 - MIN(@fitGrace, @lateMin - 1)) THEN 1 ELSE 0 END) AS lates,
-  SUM(CASE WHEN ed = 1 AND em > @eMin AND em < @eMax
+       AND NOT (@lateFull = 1 AND wm IS NOT NULL AND wm >= f*h*60 - MIN(@fitGrace, @lateMin - 1) AND NOT (@longOn = 1 AND lm >= @longLate)) THEN 1 ELSE 0 END) AS lates,
+  SUM(CASE WHEN ed = 1 AND em > @eMin AND em < @eMax AND (CAST(c AS TEXT) || '|' || d) NOT IN (SELECT value FROM json_each(@mp2))
        AND d NOT IN (SELECT value FROM json_each(CASE WHEN ym = @cur THEN @rel ELSE @prel END)) THEN 1 ELSE 0 END) AS early_exits,
-  SUM(CASE WHEN ed = 1 AND em > @eMin AND em < @eMax AND (wm IS NULL OR wm < f*h*60 - @fitGrace)
+  SUM(CASE WHEN ed = 1 AND em > @eMin AND em < @eMax AND (wm IS NULL OR wm < f*h*60 - @fitGrace) AND (CAST(c AS TEXT) || '|' || d) NOT IN (SELECT value FROM json_each(@mp2))
        AND d NOT IN (SELECT value FROM json_each(CASE WHEN ym = @cur THEN @rel ELSE @prel END)) THEN 1 ELSE 0 END) AS early_short
 FROM x GROUP BY c, ym, week_start`;
 
@@ -427,7 +455,7 @@ HAVING days >= 10 AND ((s.name IS NOT NULL AND s.name <> a.shift_detected) OR ea
 ORDER BY e.code`;
 
 /** `to` (optional, YYYY-MM-DD inside the month) ends the current month early — the notice board's "so far". */
-function sqlParams(month, year, cfg, releaseDays, prevReleaseDays, to = null) {
+function sqlParams(month, year, cfg, releaseDays, prevReleaseDays, to = null, mp2 = []) {
   const t = cfg.thresholds; const pm = prevMonth(month, year);
   return {
     from: addDays(`${ymOf(pm.month, pm.year)}-01`, -t.stayed_late_lookback_days),
@@ -439,6 +467,9 @@ function sqlParams(month, year, cfg, releaseDays, prevReleaseDays, to = null) {
     longMin: t.option_c_long_minutes, fitGrace: t.shift_fit_grace, lateFull: cfg.late_full_hours === false ? 0 : 1,
     // master basis only (unused by the import SQL)
     fixMp: cfg.assess_fixed_miss_punch === false ? 0 : 1, odd: t.odd_punch_minutes, nightStart: t.night_start_minutes, llMin: t.stayed_late_minutes,
+    // PR-3: D-6 long lates, D-4 buckets, MP-2 days ('code|date') taken out of the measured early exits
+    longLate: t.long_late_minutes, longOn: cfg.late_long_always_counted === true ? 1 : 0,
+    halfMin: t.d4_half_day_minutes, midMin: t.d4_long_minutes, mp2: JSON.stringify(mp2 || []),
   };
 }
 
@@ -492,8 +523,8 @@ function detectShiftIssues(db, month, year) {
 
 // ── step 3: person-month ──────────────────────────────────────────────────
 
-function loadPersonMonth(db, month, year, cfg, releaseDays, prevReleaseDays, to = null) {
-  const p = sqlParams(month, year, cfg, releaseDays, prevReleaseDays, to);
+function loadPersonMonth(db, month, year, cfg, releaseDays, prevReleaseDays, to = null, mp2 = []) {
+  const p = sqlParams(month, year, cfg, releaseDays, prevReleaseDays, to, mp2);
   return db.prepare(isMaster(cfg) ? PERSON_MONTH_SQL_MASTER : PERSON_MONTH_SQL).all(p).map((r) => ({ ...r, code: String(r.code) }));
 }
 
@@ -504,10 +535,11 @@ function loadPersonMonth(db, month, year, cfg, releaseDays, prevReleaseDays, to 
  * Full-hours rule per code (hours_complete): a late or an early exit is not counted on a day where
  * out − in ≥ the shift's length (half for ½P) − hours_grace minutes (default 10). Counted in hours_excused.
  */
-function remeasureRows(db, month, year, cfg, releaseDays, prevReleaseDays, to = null) {
+function remeasureRows(db, month, year, cfg, releaseDays, prevReleaseDays, to = null, mp2 = []) {
   const codes = Object.keys(cfg.remeasure || {});
   if (!codes.length) return [];
   const t = cfg.thresholds; const p = sqlParams(month, year, cfg, releaseDays, prevReleaseDays, to);
+  const mp2Set = new Set(mp2 || []); const longOn = cfg.late_long_always_counted === true;
   const ph = codes.map(() => '?').join(',');
   const rows = db.prepare(`SELECT employee_code c, date d, status_final st, COALESCE(is_miss_punch,0) mp, in_time_final it, out_time_final ot,
       COALESCE(is_left_late,0) ll FROM attendance_processed WHERE employee_code IN (${ph}) AND date BETWEEN ? AND ? ORDER BY employee_code, date`)
@@ -535,7 +567,8 @@ function remeasureRows(db, month, year, cfg, releaseDays, prevReleaseDays, to = 
     const exc = cfg.stayed_late_mode === 'worked' ? pll === 1 : cfg.stayed_late_mode === 'calendar' ? cll === 1 : (pll === 1 || cll === 1);
     const h = (toMin(rm.end) - toMin(rm.start)) / 60; const f = ['½P', 'WO½P'].includes(r.st) ? 0.5 : 1;
     const key = `${code}|${ym}`;
-    const a = out.get(key) || { code, ym, worked_days: 0, worked_units: 0, sched_min: 0, shift_h: h, shift_h_missing: 0, late_raw: 0, late_excused: 0, lates: 0, late_min: 0, early_exits: 0, early_min: 0, early_long: 0, hours_excused: 0, remeasured: true };
+    const a = out.get(key) || { code, ym, worked_days: 0, worked_units: 0, sched_min: 0, shift_h: h, shift_h_missing: 0, late_raw: 0, late_excused: 0, lates: 0, late_min: 0, early_exits: 0, early_min: 0, early_long: 0, hours_excused: 0, remeasured: true,
+      long_lates: 0, long_late_min: 0, long_late_kept: 0, long_late_forgiven: 0, early_half: 0, early_mid: 0, early_mid_min: 0 };
     a.worked_days += 1; a.worked_units += f; a.sched_min += f * h * 60;
     const inM = toMin(r.it); const outM = toMin(r.ot);
     const wmin = inM !== null && outM !== null && outM > inM ? outM - inM : null;
@@ -548,15 +581,21 @@ function remeasureRows(db, month, year, cfg, releaseDays, prevReleaseDays, to = 
     const lateBy = inM === null ? 0 : inM - toMin(rm.start);
     if (lateBy > (rm.late_grace ?? 9) && lateBy >= t.late_min_minutes && lateBy < t.misread_minutes) {
       a.late_raw += 1;
+      const long = lateBy >= t.long_late_minutes;
       if (exc) a.late_excused += 1;
-      else if (fullLate) { a.late_excused += 1; a.hours_excused += 1; }
-      else { a.lates += 1; a.late_min += lateBy; }
+      else if (fullLate && !(long && longOn)) { a.late_excused += 1; a.hours_excused += 1; if (long) a.long_late_forgiven += 1; }
+      else { a.lates += 1; a.late_min += lateBy; if (long) { a.long_lates += 1; a.long_late_min += lateBy; if (fullLate) a.long_late_kept += 1; } }
     }
     const earlyBy = outM === null ? 0 : toMin(rm.end) - outM;
     const dow = new Date(`${r.d}T00:00:00Z`).getUTCDay();
-    if (earlyBy > (rm.early_grace ?? t.early_min_exclusive) && earlyBy < t.early_max_exclusive && (!t.early_weekdays_only || dow !== 0) && !rel[ym].has(r.d)) {
+    if (earlyBy > (rm.early_grace ?? t.early_min_exclusive) && earlyBy < t.early_max_exclusive && (!t.early_weekdays_only || dow !== 0) && !rel[ym].has(r.d)
+      && !mp2Set.has(`${code}|${r.d}`)) {
       if (fullEarly) a.hours_excused += 1;
-      else { a.early_exits += 1; a.early_min += earlyBy; if (earlyBy >= t.option_c_long_minutes) a.early_long += 1; }
+      else {
+        a.early_exits += 1; a.early_min += earlyBy; if (earlyBy >= t.option_c_long_minutes) a.early_long += 1;
+        if (earlyBy >= t.d4_half_day_minutes) a.early_half += 1;
+        else if (earlyBy >= t.d4_long_minutes) { a.early_mid += 1; a.early_mid_min += earlyBy; }
+      }
     }
     out.set(key, a);
   }
@@ -632,6 +671,12 @@ function applyExclusions(byCode, cfg) {
       m.early_counted = ee ? 0 : fit ? m.early_short : m.early_exits;
       m.early_min_counted = ee ? 0 : fit ? m.early_short_min : m.early_min;
       m.early_long_counted = ee ? 0 : fit ? m.early_short_long : m.early_long;
+      // D-4 buckets (re-measured rows never use the shift check, so they carry only the plain buckets)
+      m.early_half_counted = ee ? 0 : (fit ? m.early_short_half : m.early_half) || 0;
+      m.early_mid_counted = ee ? 0 : (fit ? m.early_short_mid : m.early_mid) || 0;
+      m.early_mid_min_counted = ee ? 0 : (fit ? m.early_short_mid_min : m.early_mid_min) || 0;
+      m.long_lates_counted = p.loading ? 0 : (m.long_lates || 0);
+      m.missed_out_days = 0;
       m.fit_confirm_master = fit && isHabitualEarly(m, cfg.thresholds) && m.early_counted > 0
         && m.early_counted >= cfg.thresholds.shift_fit_confirm_share * m.early_raw;
     }
@@ -641,6 +686,67 @@ function applyExclusions(byCode, cfg) {
     kept.push(p);
   }
   return { kept, excludedCount: excluded.length, held: heldList };
+}
+
+// ── step 4b: MP-2 missed OUT (PR-3) ───────────────────────────────────────
+
+/**
+ * MP-2: a person's own missed punches in a month = worked-status rows with is_miss_punch, not on a bulk-failure day
+ * (>= bulk_miss_punch_day plant-wide), in date order. From the missed_out_from-th, each missed OUT (MISSED_OUT_TYPES) is an
+ * early exit of missed_out_minutes. Returns { keys: ['code|date'], days: Map('code|ym' → [dates]), personal: Map('code|ym' → n),
+ * bulk: [dates] } for this month and last; empty when the rule is off.
+ */
+function missedOutPlan(db, month, year, cfg) {
+  const empty = { keys: [], days: new Map(), personal: new Map(), bulk: [] };
+  if (cfg.missed_out_rule !== true) return empty;
+  const t = cfg.thresholds; const pm = prevMonth(month, year);
+  const from = `${ymOf(pm.month, pm.year)}-01`; const to = `${ymOf(month, year)}-${pad(daysInMonth(month, year))}`;
+  const bulk = bulkMissPunchDays(db, from, to, t.bulk_miss_punch_day).map((b) => b.date);
+  const rows = db.prepare(`SELECT employee_code c, date d, miss_punch_type ty FROM attendance_processed
+    WHERE is_miss_punch = 1 AND date BETWEEN ? AND ? AND status_final IN ${WORKED} AND date NOT IN (SELECT value FROM json_each(?))
+    ORDER BY employee_code, date`).all(from, to, JSON.stringify(bulk));
+  const out = { keys: [], days: new Map(), personal: new Map(), bulk };
+  for (const r of rows) {
+    const k = `${r.c}|${r.d.slice(0, 7)}`;
+    const n = (out.personal.get(k) || 0) + 1; out.personal.set(k, n);
+    if (n >= t.missed_out_from && MISSED_OUT_TYPES.includes(r.ty)) {
+      out.keys.push(`${r.c}|${r.d}`);
+      const a = out.days.get(k) || []; a.push(r.d); out.days.set(k, a);
+    }
+  }
+  return out;
+}
+
+/** Adds the MP-2 days to the counted early exits as exits of missed_out_minutes (not for people whose early exits are not assessed). */
+function applyMissedOut(people, plan, cfg) {
+  const t = cfg.thresholds; const mins = t.missed_out_minutes;
+  for (const p of people) {
+    for (const m of [p.cur, p.prev]) {
+      if (!m) continue;
+      m.personal_missed_punches = plan.personal.get(`${p.code}|${m.ym}`) || 0;
+      const dates = plan.days.get(`${p.code}|${m.ym}`) || [];
+      if (!dates.length || p.early_excluded) continue;
+      const n = dates.length;
+      m.missed_out_days = n; m.missed_out_dates = dates;
+      m.early_counted += n; m.early_min_counted += n * mins;
+      if (mins >= t.option_c_long_minutes) m.early_long_counted += n;
+      if (mins >= t.d4_half_day_minutes) m.early_half_counted += n;
+      else if (mins >= t.d4_long_minutes) { m.early_mid_counted += n; m.early_mid_min_counted += n * mins; }
+    }
+  }
+}
+
+/**
+ * D-4 (early_exit_rule 'd4'): ½ day per counted early exit of d4_half_day_minutes+; when exits of d4_long_minutes+ (the long ones
+ * included) number d4_long_count or more, also the minutes of those under d4_half_day_minutes ÷ shift minutes.
+ * raw = unrounded days; days = rounded to the ½ day (minimum ½) when raw > 0.
+ */
+function d4Early(m, t) {
+  if (!m) return { half_days: 0, long_exits: 0, minutes: 0, raw: 0, days: 0 };
+  const half = m.early_half_counted || 0; const long = half + (m.early_mid_counted || 0);
+  const minutes = long >= t.d4_long_count ? (m.early_mid_min_counted || 0) : 0;
+  const raw = 0.5 * half + (m.shift_h ? minutes / (m.shift_h * 60) : 0);
+  return { half_days: half, long_exits: long, minutes, raw: r2(raw), days: raw > 0 ? roundDeduction(raw, t) : 0 };
 }
 
 // ── step 5: classify ──────────────────────────────────────────────────────
@@ -690,6 +796,7 @@ function personLine(p, monthDays) {
     workdays_lost: r2(p.workdays_lost || 0),
     last_month: p.prev ? { worked_days: p.prev.worked_days, late_days: p.prev.lates_counted, early_days: p.prev.early_counted } : null,
     newcomer: p.newcomer, categories: p.categories || [], remeasured: !!c.remeasured, hours_excused: c.hours_excused || 0, fit_excused: c.fit_excused || 0, late_full_excused: c.late_full_excused || 0,
+    long_lates: c.long_lates_counted || 0, missed_out_days: c.missed_out_days || 0, over_2h: c.early_half_counted || 0,
     gross_salary: p.gross_salary, _monthDays: monthDays,
   };
 }
@@ -709,8 +816,13 @@ function actions(people, cfg, overrides, month, year) {
     // Leaves early almost every day and short of the master shift: punches alone cannot tell a wrong master shift from a
     // habitual early leaver, so this is a flag for the admin (fix the master, or override) — the action is unchanged.
     if (p.cur.fit_confirm_master) line.check_master_shift = true;
+    // D-4: the early-exit part is the larger of the minutes lost and the D-4 charge (2 h+ exits at ½ day each) — never less than before
+    const d4 = cfg.early_exit_rule === 'd4' ? d4Early(p.cur, t) : null;
+    const shiftMin = p.cur.shift_h ? p.cur.shift_h * 60 : 0;
+    const basis = d4 && shiftMin ? (p.cur.late_min_counted / shiftMin) + Math.max(p.cur.early_min_counted / shiftMin, d4.raw) : p.workdays_lost;
+    if (d4) line.d4 = d4;
     if (p.newcomer || forcedWarn) { line.action = 'warning'; line.deduction_days = 0; }
-    else { line.action = 'deduction'; line.deduction_days = roundDeduction(p.workdays_lost, t); }
+    else { line.action = 'deduction'; line.deduction_days = roundDeduction(basis, t); }
     line.indicative_amount = line.deduction_days > 0 && p.gross_salary ? Math.round((p.gross_salary / md) * line.deduction_days) : 0;
     if (o) { line.override = { action: o.action, reason: o.reason }; applied.push({ ...o, effect: o.action === 'include' && !selected ? 'added to action list' : forcedWarn ? 'deduction changed to warning' : 'no change' }); }
     delete line.gross_salary; delete line._monthDays;
@@ -724,15 +836,21 @@ function actions(people, cfg, overrides, month, year) {
   for (const p of eligible) {
     if (onList.has(p.code) || p.early_excluded) continue;
     if ((ov.get(p.code) || {}).action === 'exclude') continue;
-    const c = p.cur; if (c.early_counted < t.early_warning_min) continue;
+    const c = p.cur;
+    const d4 = d4Early(c, t);
+    // under D-4 a single 2 h+ exit (or a missed OUT under MP-2) is enough to be listed here; otherwise the 3+ warning line applies
+    if (c.early_counted < t.early_warning_min && !(cfg.early_exit_rule === 'd4' && d4.days > 0)) continue;
     const days = optionCDays(c, t);
     const line = { code: p.code, name: p.name, department: p.department, designation: p.designation, group: p.group,
-      early_exits: c.early_counted, over_1h: c.early_long_counted, early_min: c.early_min_counted, option_c_days: days, newcomer: p.newcomer,
+      early_exits: c.early_counted, over_1h: c.early_long_counted, over_2h: c.early_half_counted || 0, missed_out_days: c.missed_out_days || 0,
+      early_min: c.early_min_counted, option_c_days: days, d4_days: d4.days, newcomer: p.newcomer,
       check_master_shift: !!c.fit_confirm_master };
-    if (cfg.early_exit_rule === 'option_c' && !p.newcomer && days > 0) {
-      line.action = 'deduction'; line.deduction_days = days;
-      line.indicative_amount = p.gross_salary ? Math.round((p.gross_salary / md) * days) : 0;
+    const ruleDays = cfg.early_exit_rule === 'option_c' ? days : cfg.early_exit_rule === 'd4' ? d4.days : 0;
+    if (ruleDays > 0 && !p.newcomer) {
+      line.action = 'deduction'; line.deduction_days = ruleDays;
+      line.indicative_amount = p.gross_salary ? Math.round((p.gross_salary / md) * ruleDays) : 0;
     } else { line.action = 'warning'; line.deduction_days = 0; line.indicative_amount = 0; }
+    if (cfg.early_exit_rule === 'd4') line.d4 = d4;
     earlyExitWarnings.push(line);
   }
   earlyExitWarnings.sort((a, b) => b.early_exits - a.early_exits || a.code.localeCompare(b.code));
@@ -788,8 +906,8 @@ function summarise(people, cfg, cur, prev) {
   return { monthly, departments };
 }
 
-function weeklyTrend(db, month, year, cfg, releaseDays, prevReleaseDays, peopleByCode) {
-  const rows = db.prepare(isMaster(cfg) ? WEEKLY_SQL_MASTER : WEEKLY_SQL).all(sqlParams(month, year, cfg, releaseDays, prevReleaseDays));
+function weeklyTrend(db, month, year, cfg, releaseDays, prevReleaseDays, peopleByCode, mp2 = []) {
+  const rows = db.prepare(isMaster(cfg) ? WEEKLY_SQL_MASTER : WEEKLY_SQL).all(sqlParams(month, year, cfg, releaseDays, prevReleaseDays, null, mp2));
   const wk = new Map();
   for (const r of rows) {
     const p = peopleByCode.get(String(r.code)); if (!p) continue; // excluded or unknown
@@ -1058,7 +1176,10 @@ function financeSendPlan(db, run) {
     WHERE employee_code = ? AND month = ? AND year = ? AND finance_status IN ('pending','approved') ORDER BY id`);
   const emp = db.prepare('SELECT id, company, is_contractor, employment_type FROM employees WHERE code = ? ORDER BY id LIMIT 1');
   const create = []; const skipped = [];
-  for (const a of result.actionList || []) {
+  // action-list deductions, then early-exit-section deductions (Option C / D-4, PR-3) — one row per person
+  const lines = [...(result.actionList || []).map((a) => ({ ...a, _src: 'list' })),
+    ...(result.earlyExitWarnings || []).map((x) => ({ ...x, _src: 'early', late_days: 0, early_days: x.early_exits, workdays_lost: x.d4 ? x.d4.raw : x.option_c_days }))];
+  for (const a of lines) {
     if (a.action !== 'deduction' || !(a.deduction_days > 0)) continue;
     const rows = existing.all(a.code, run.month, run.year);
     if (rows.length) {
@@ -1069,9 +1190,13 @@ function financeSendPlan(db, run) {
     const e = emp.get(a.code) || {};
     const contractor = Number(e.is_contractor) === 1 || e.employment_type === 'Contract';
     create.push({ code: a.code, name: a.name, employee_id: e.id || null, company: e.company || null, deduction_days: a.deduction_days,
-      late_count: a.late_days || 0, contractor,
-      remark: `Attendance Review ${ym} ${runTag(run.id)}: ${a.late_days || 0} late, ${a.early_days || 0} early exits, ${a.workdays_lost} workdays lost`
-        + (a.override ? `; override: ${a.override.reason}` : '') });
+      late_count: a.late_days || 0, contractor, source: a._src,
+      remark: a._src === 'early'
+        ? `Attendance Review ${ym} ${runTag(run.id)}: early exits — ${a.early_exits} exits${a.over_2h ? `, ${a.over_2h} of 2 h or more` : ''}${a.missed_out_days ? `, ${a.missed_out_days} missed OUT` : ''} (${a.d4 ? 'D-4 rule' : 'Option C'})`
+        : `Attendance Review ${ym} ${runTag(run.id)}: ${a.late_days || 0} late, ${a.early_days || 0} early exits, ${a.workdays_lost} workdays lost`
+          + (a.d4 && a.d4.half_days ? `; ${a.d4.half_days} exit(s) of 2 h or more at ½ day` : '')
+          + (a.missed_out_days ? `; ${a.missed_out_days} missed OUT counted as 2 h early` : '')
+          + (a.override ? `; override: ${a.override.reason}` : '') });
   }
   return { create, skipped };
 }
@@ -1250,18 +1375,27 @@ function boardSnapshot(board) {
 function computeAttendanceReview(db, { month, year, config, releaseDays = [], prevReleaseDays = [], overrides = [] }) {
   const cfg = mergeConfig(config);
   const cur = ymOf(month, year); const pm = prevMonth(month, year); const prev = ymOf(pm.month, pm.year);
-  const sqlRows = loadPersonMonth(db, month, year, cfg, releaseDays, prevReleaseDays);
-  const remRows = remeasureRows(db, month, year, cfg, releaseDays, prevReleaseDays);
+  const mpPlan = missedOutPlan(db, month, year, cfg);
+  const sqlRows = loadPersonMonth(db, month, year, cfg, releaseDays, prevReleaseDays, null, mpPlan.keys);
+  const remRows = remeasureRows(db, month, year, cfg, releaseDays, prevReleaseDays, null, mpPlan.keys);
   const codes = [...new Set([...sqlRows, ...remRows].map((r) => r.code))];
   const empMap = loadEmployees(db, codes);
   const byCode = buildPeople(sqlRows, remRows, empMap, cfg, cur, prev);
   const { kept, excludedCount, held } = applyExclusions(byCode, cfg);
+  applyMissedOut(kept, mpPlan, cfg);
   classify(kept, cfg);
   const act = actions(kept, cfg, overrides, month, year);
   const nt = notices(kept, cfg);
   const { monthly, departments } = summarise(kept, cfg, cur, prev);
   const keptMap = new Map(kept.map((p) => [p.code, p]));
-  const weekly = weeklyTrend(db, month, year, cfg, releaseDays, prevReleaseDays, keptMap);
+  const weekly = weeklyTrend(db, month, year, cfg, releaseDays, prevReleaseDays, keptMap, mpPlan.keys);
+  // D-6: lates of long_late_minutes+ that were counted — a late that big is usually a shift question, not a habit
+  const longLates = kept.filter((p) => p.cur).filter((p) => (p.cur.long_lates_counted || 0) > 0 || (!p.loading && (p.cur.long_late_forgiven || 0) > 0))
+    .map((p) => ({ code: p.code, name: p.name, department: p.department, designation: p.designation, shift_h: p.cur.shift_h,
+      long_lates: p.cur.long_lates_counted || 0, avg_minutes: p.cur.long_lates ? Math.round(p.cur.long_late_min / p.cur.long_lates) : null,
+      full_hours_kept: p.loading ? 0 : (p.cur.long_late_kept || 0), full_hours_forgiven: p.loading ? 0 : (p.cur.long_late_forgiven || 0),
+      late_days: p.cur.lates_counted || 0 }))
+    .sort((a, b) => (b.long_lates + b.full_hours_forgiven) - (a.long_lates + a.full_hours_forgiven) || a.code.localeCompare(b.code));
   const md = daysInMonth(month, year);
   const live = kept.filter((p) => p.cur);
   const peopleOut = live.filter((p) => (p.cur.lates_counted || 0) + (p.cur.early_counted || 0) > 0)
@@ -1290,7 +1424,8 @@ function computeAttendanceReview(db, { month, year, config, releaseDays = [], pr
       excluded_people: excludedCount, people_assessed: live.length, missing_shift_hours: live.filter((p) => p.cur.shift_h_missing).map((p) => p.code),
       not_in_employee_master: live.filter((p) => !p.in_employee_master).map((p) => p.code) },
     criteria: { assessment_basis: cfg.assessment_basis, assess_fixed_miss_punch: cfg.assess_fixed_miss_punch !== false,
-      thresholds: cfg.thresholds, stayed_late_mode: cfg.stayed_late_mode, early_exit_rule: cfg.early_exit_rule, shift_fit: cfg.shift_fit, late_full_hours: cfg.late_full_hours !== false, loading_designation_patterns: cfg.loading_designation_patterns, remeasure: cfg.remeasure || {} },
+      thresholds: cfg.thresholds, stayed_late_mode: cfg.stayed_late_mode, early_exit_rule: cfg.early_exit_rule,
+      late_long_always_counted: cfg.late_long_always_counted === true, missed_out_rule: cfg.missed_out_rule === true, shift_fit: cfg.shift_fit, late_full_hours: cfg.late_full_hours !== false, loading_designation_patterns: cfg.loading_designation_patterns, remeasure: cfg.remeasure || {} },
     releaseDaysDetected: detectReleaseDays(db, month, year, cfg),
     shiftIssues: isMaster(cfg) ? [] : detectShiftIssues(db, month, year).filter((r) => !cfg.excluded_codes.includes(r.code)
       && !cfg.excluded_departments.map((d) => d.toUpperCase()).includes(String(r.department || '').toUpperCase())),
@@ -1301,6 +1436,12 @@ function computeAttendanceReview(db, { month, year, config, releaseDays = [], pr
       deduction_days: ded.reduce((s, a) => s + a.deduction_days, 0), indicative_amount: ded.reduce((s, a) => s + a.indicative_amount, 0) },
     held: held.filter((p) => p.cur).map((p) => ({ code: p.code, name: p.name, department: p.department, late_days: p.cur.lates_counted, early_exits: p.cur.early_counted })),
     noticeLate: nt.noticeLate, noticeEarly: nt.noticeEarly,
+    longLates,
+    missedOut: { rule: cfg.missed_out_rule === true, from: cfg.thresholds.missed_out_from, minutes: cfg.thresholds.missed_out_minutes, bulk_days: mpPlan.bulk.filter((d) => d.startsWith(cur)),
+      people: live.filter((p) => (p.cur.missed_out_days || 0) > 0 || (p.cur.personal_missed_punches || 0) >= cfg.thresholds.missed_out_from)
+        .map((p) => ({ code: p.code, name: p.name, department: p.department, personal_missed_punches: p.cur.personal_missed_punches || 0,
+          counted_as_early: p.cur.missed_out_days || 0, dates: p.cur.missed_out_dates || [], exempt: !!p.early_excluded }))
+        .sort((a, b) => b.counted_as_early - a.counted_as_early || b.personal_missed_punches - a.personal_missed_punches || a.code.localeCompare(b.code)) },
     payrollChecks: payrollChecks(db, pm.month, pm.year), gatePassCount, gatePassExcused,
     assessment: { basis: cfg.assessment_basis, quality: assessmentQuality(db, month, year, cfg) },
     suggestions: suggestions(db, month, year, cfg, byCode, act),
@@ -1319,4 +1460,5 @@ module.exports = {
   financeSendPlan, financeStatus, runTag, trendRow, monthRange, repeaters,
   suggestions, applySuggestions, toStoredConfig, standingFrom, fitShift, MASTER_DAYS_SQL, LEGACY_REASON,
   noticeBoard, boardSnapshot, bulkMissPunchDays, istToday,
+  missedOutPlan, applyMissedOut, d4Early, MISSED_OUT_TYPES,
 };
