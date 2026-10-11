@@ -155,7 +155,7 @@ router.get('/pending-changes', (req, res) => {
     // What an approval today would write (N-17) — same function as /approve.
     const current = r.employee_id ? structureForDate(db, 'plant', r.employee_id, today) : null;
     const p = resolveApproval(r.new_structure, current);
-    r.approval_preview = { components: p.components, kept: p.kept, gross: p.gross, effective_from: today };
+    r.approval_preview = { components: p.components, kept: p.kept, gross: p.gross, componentSum: p.componentSum, effective_from: today };
   });
 
   res.json({ success: true, data: records });

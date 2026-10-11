@@ -18,6 +18,15 @@
 - Q2 yes: single route all-or-nothing, 500, nothing written.
 - Q3 (a): gross = sum of resolved components; SalaryInput.jsx approver card (owned now) shows kept value "not in this request — current value kept" + resulting gross, highlighted when it differs.
 - Q4 report only. Q5 bulk all-or-nothing. employees.js untouched.
+## Independent review (SHIP WITH FIXES) — applied
+- [x] F1 bulk sorts flags newest month first (year, month, id DESC) → two gross flags of one employee give the same result in any id order
+- [x] F2 status must be exactly APPROVED / REJECTED / CLEAR, else 400 BAD_STATUS before the transaction (UI sends APPROVED/REJECTED)
+- [x] F3 old gross 0/empty → 409 NO_PREVIOUS_GROSS, nothing written
+- [x] F4 employee missing → 404 EMPLOYEE_NOT_FOUND
+- [x] F5 approval_preview.componentSum; amber card note when |sum − gross| > ₹1 (approval math unchanged, Q3a)
+- Known, not fixed: F6–F8 as listed in the planner's review (text held by the planner)
+- [x] jest file 23/23; check 31/31; P1-22 check 58/58
+
 ## CLAUDE.md entry
 ## Last Session — 2026-10-11 (N-MONEY: flag reject reverts in bulk; salary approval keeps components it was not given)
 **Branch `fix/salary-flag-reject-revert`, NOT merged. MONEY PR — independent review before PR.** Plan: `docs/ux-bulk/prs/N-MONEY/PLAN.md`.
@@ -25,7 +34,9 @@
   Shared `decideManualFlag()` — bulk REJECT of a GROSS_STRUCTURE_CHANGE flag reverts employees.gross + latest structure, writes
   finance_rejections + FINANCE_FLAG_* + FINANCE_GROSS_REVERT audit exactly like the single route. Single = one txn, bulk = one
   txn for the batch (Q2/Q5: any failure → 500, nothing written). An already-rejected flag is never reverted twice. If the
-  employee gross differs from the flag's new value by > ₹1 → 409 `GROSS_MOVED_SINCE` (Q1), nothing written.
+  employee gross differs from the flag's new value by > ₹1 → 409 `GROSS_MOVED_SINCE` (Q1), nothing written. Review fixes: bulk
+  processes newest month first (F1); status must be APPROVED/REJECTED/CLEAR (400 BAD_STATUS, F2); old gross 0 → 409
+  NO_PREVIOUS_GROSS (F3); employee missing → 404 EMPLOYEE_NOT_FOUND (F4); card warns when components ≠ gross (F5).
 - **N-17:** `PUT /salary-input/approve/:id` — `resolveApproval()`: a component absent from the request keeps the structure in force
   at effectiveFrom; present (0 incl.) written as sent; gross = explicit gross_salary, else sum of resolved components (Q3a).
   Default effectiveFrom = IST today. `GET /pending-changes` returns `approval_preview` {components, kept, gross, effective_from}

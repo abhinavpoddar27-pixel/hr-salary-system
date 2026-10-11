@@ -319,6 +319,9 @@ export default function SalaryInput() {
                     const writeGross = preview && preview.gross != null ? num(preview.gross) : num(req.new_gross)
                     const grossDiffers = Math.abs(writeGross - num(req.new_gross)) > 0.005
                     const grossChanged = Math.abs(num(req.old_gross) - writeGross) > 0.005
+                    // F5 (review): components that do not add up to the gross are scaled by Stage 7 — say so.
+                    const compSum = preview && preview.componentSum != null ? num(preview.componentSum) : null
+                    const sumOff = compSum !== null && Math.abs(compSum - writeGross) > 1
                     const arrow = (o, n) => (n > (o || 0) ? '▲' : '▼')
                     return (
                       <div className="mt-3 max-w-3xl" data-testid="change-table">
@@ -355,6 +358,13 @@ export default function SalaryInput() {
                                   {grossChanged && <span className="mr-1">{arrow(num(req.old_gross), writeGross)}</span>}{fmtINR(writeGross)}
                                 </td>
                               </tr>
+                              {sumOff && (
+                                <tr className="bg-amber-50" data-testid="component-sum-note">
+                                  <td colSpan={3} className="px-2 py-1 text-[11px] text-amber-800 font-semibold">
+                                    Components add up to {fmtINR(compSum)}, gross {fmtINR(writeGross)} — Stage 7 scales them to the gross.
+                                  </td>
+                                </tr>
+                              )}
                               {grossDiffers && (
                                 <tr className="bg-red-50" data-testid="gross-differs-note">
                                   <td colSpan={3} className="px-2 py-1 text-[11px] text-red-800 font-semibold">

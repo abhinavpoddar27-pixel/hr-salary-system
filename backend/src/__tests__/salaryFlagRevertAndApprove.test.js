@@ -245,6 +245,7 @@ describe('N-17 salary change approval keeps components the request did not name'
     expect(row.approval_preview.kept).toEqual(['special_allowance']);
     expect(row.approval_preview.components.special_allowance).toBe(2000);
     expect(row.approval_preview.gross).toBe(21000);
+    expect(row.approval_preview.componentSum).toBe(21000);
   });
 
   test('default effective date is today in IST (00:30 IST = previous UTC day)', async () => {
@@ -271,5 +272,72 @@ describe('N-17 salary change approval keeps components the request did not name'
     expect(row.gross_salary).toBe(22000);
     const drift = db.prepare('SELECT COUNT(*) n FROM salary_computations WHERE ABS(net_salary - (gross_earned - total_deductions)) > 1').get().n;
     expect(drift).toBe(0);
+  });
+});
+
+describe('N-MONEY review fixes F1–F4', () => {
+  /** One employee, Aug 15000→18000 and Sep 18000→21000 flags; current gross 21000. */
+  function twoMonths() {
+    const e = S.plant(db, { code: code(), gross_salary: 21000 });
+    S.plantStructure(db, e, '2025-01-01', { gross_salary: 21000 });
+    const ins = db.prepare(`INSERT INTO salary_manual_flags
+        (employee_code, month, year, flag_type, field_name, system_value, manual_value, delta, changed_by, notes)
+        VALUES (?, ?, 2026, 'GROSS_STRUCTURE_CHANGE', 'gross_salary', ?, ?, ?, 'system', 'synthetic')`);
+    const aug = Number(ins.run(e.code, 8, 15000, 18000, 3000).lastInsertRowid);
+    const sep = Number(ins.run(e.code, 9, 18000, 21000, 3000).lastInsertRowid);
+    return { e, aug, sep };
+  }
+  const result = (e, ids) => ({
+    gross: db.prepare('SELECT gross_salary FROM employees WHERE id = ?').get(e.id).gross_salary,
+    structure: db.prepare('SELECT gross_salary FROM salary_structures WHERE employee_id = ? ORDER BY id DESC LIMIT 1').get(e.id).gross_salary,
+    flags: ids.map((id) => db.prepare('SELECT finance_approved FROM salary_manual_flags WHERE id = ?').get(id).finance_approved),
+    rejections: db.prepare("SELECT COUNT(*) n FROM finance_rejections WHERE source_table = 'salary_manual_flags' AND source_record_id IN (?, ?)").get(...ids).n,
+  });
+
+  test('F1: two gross flags of one employee — same result for either id order', async () => {
+    const a = twoMonths(); const b = twoMonths();
+    const ra = await bulk('fin1', { flagIds: [a.aug, a.sep], ...REJECT });
+    const rb = await bulk('fin1', { flagIds: [b.sep, b.aug], ...REJECT });
+    expect([ra.status, rb.status]).toEqual([200, 200]);
+    const xa = result(a.e, [a.aug, a.sep]); const xb = result(b.e, [b.aug, b.sep]);
+    expect(xa).toEqual(xb);
+    expect(xa).toEqual({ gross: 15000, structure: 15000, flags: [-1, -1], rejections: 2 });
+  });
+
+  test("F2: status 'rejected' (lower case) or missing → 400 BAD_STATUS, nothing written", async () => {
+    const { e, flagId } = grossChanged();
+    const before = snapshot(e, flagId);
+    for (const st of ['rejected', undefined, 'DENIED']) {
+      const a = await single('fin1', flagId, { status: st });
+      const b = await bulk('fin1', { flagIds: [flagId], status: st });
+      expect([a.status, b.status]).toEqual([400, 400]);
+      expect(b.body.code).toBe('BAD_STATUS');
+    }
+    expect(snapshot(e, flagId)).toEqual(before);
+    expect((await single('fin1', flagId, { status: 'CLEAR' })).status).toBe(200);
+  });
+
+  test('F3: old gross 0 / empty → 409 NO_PREVIOUS_GROSS, nothing written', async () => {
+    for (const old of [0, null]) {
+      const { e, flagId } = grossChanged();
+      db.prepare('UPDATE salary_manual_flags SET system_value = ? WHERE id = ?').run(old, flagId);
+      const before = snapshot(e, flagId);
+      const r = await bulk('fin1', { flagIds: [flagId], ...REJECT });
+      expect(r.status).toBe(409);
+      expect(r.body).toMatchObject({ code: 'NO_PREVIOUS_GROSS', error: 'No previous gross to restore — change the salary through Salary Input' });
+      expect((await single('fin1', flagId, REJECT)).status).toBe(409);
+      expect(snapshot(e, flagId)).toEqual(before);
+    }
+  });
+
+  test('F4: employee missing → 404 EMPLOYEE_NOT_FOUND, nothing written', async () => {
+    const flagId = Number(db.prepare(`INSERT INTO salary_manual_flags
+        (employee_code, month, year, flag_type, field_name, system_value, manual_value, delta, changed_by, notes)
+        VALUES ('T9699', 9, 2026, 'GROSS_STRUCTURE_CHANGE', 'gross_salary', 15000, 18000, 3000, 'system', 'synthetic')`).run().lastInsertRowid);
+    const r = await single('fin1', flagId, REJECT);
+    expect(r.status).toBe(404);
+    expect(r.body.code).toBe('EMPLOYEE_NOT_FOUND');
+    expect(db.prepare('SELECT finance_approved FROM salary_manual_flags WHERE id = ?').get(flagId).finance_approved).toBe(0);
+    expect(db.prepare('SELECT COUNT(*) n FROM finance_approvals WHERE flag_id = ?').get(flagId).n).toBe(0);
   });
 });

@@ -175,6 +175,9 @@ try:
             check('T2301 differs cell is red', True, wg.evaluate("e => e.className.includes('bg-red-100')"))
             check('T2302 conveyance ₹1,000 kept, unchanged, note', ('₹1,000', False, 'not in this request — current value kept'), tuple(row(c2, 'conveyance')))
             check('T2302 gross not highlighted', '0', c2.get_by_test_id('write-gross').get_attribute('data-gross-differs'))
+            check('F5: T2302 amber note — components ₹13,600 vs gross ₹18,000', True,
+                  'Components add up to ₹13,600, gross ₹18,000' in c2.get_by_test_id('component-sum-note').inner_text())
+            check('F5: T2301 components = gross → no note', 0, card(pg, 'T2301').get_by_test_id('component-sum-note').count())
             check('T2303 conveyance sent 0 → ₹0, changed, no note', ('₹0', True, ''), tuple(row(card(pg, 'T2303'), 'conveyance')))
             check('no card says "approval sets it to 0"', 0, pg.get_by_text('approval sets it to 0').count())
 

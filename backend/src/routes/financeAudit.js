@@ -1359,14 +1359,22 @@ function decideManualFlag(db, flag, { status, comments, reviewer, username }) {
   let emp = null;
   let oldGross = 0;
   if (revert) {
+    emp = db.prepare('SELECT id, code, name, department, gross_salary FROM employees WHERE code = ?').get(flag.employee_code);
+    if (!emp) {
+      throw flagRefusal(404, { code: 'EMPLOYEE_NOT_FOUND', flagId: flag.id,
+        error: `Flag ${flag.id}: employee ${flag.employee_code} not found — nothing was changed.` });
+    }
     oldGross = parseFloat(flag.system_value);
-    if (oldGross > 0) {
-      emp = db.prepare('SELECT id, code, name, department, gross_salary FROM employees WHERE code = ?').get(flag.employee_code);
+    if (!(oldGross > 0)) {
+      throw flagRefusal(409, { code: 'NO_PREVIOUS_GROSS', flagId: flag.id,
+        error: 'No previous gross to restore — change the salary through Salary Input' });
+    }
+    {
       // Q1: never let a stale rejection overwrite a gross that has moved since
       // this flag was raised (a newer approved change, an earlier revert, ...).
-      const current = emp ? Number(emp.gross_salary) || 0 : null;
+      const current = Number(emp.gross_salary) || 0;
       const flagged = parseFloat(flag.manual_value) || 0;
-      if (!emp || Math.abs(current - flagged) > GROSS_MOVED_TOLERANCE) {
+      if (Math.abs(current - flagged) > GROSS_MOVED_TOLERANCE) {
         throw flagRefusal(409, {
           code: 'GROSS_MOVED_SINCE',
           flagId: flag.id,
@@ -1391,7 +1399,7 @@ function decideManualFlag(db, flag, { status, comments, reviewer, username }) {
 
   // GROSS_STRUCTURE_CHANGE revert: restore the old gross to employees +
   // salary_structures so Stage 7 recomputes with the original value.
-  if (revert && oldGross > 0) {
+  if (revert) {
     db.prepare(`
       INSERT INTO finance_rejections
         (rejection_type, source_table, source_record_id, employee_code,
@@ -1419,6 +1427,15 @@ function decideManualFlag(db, flag, { status, comments, reviewer, username }) {
   }
 }
 
+// F2 (review): only the exact statuses the Finance Audit screen sends (plus CLEAR).
+const FLAG_STATUSES = ['APPROVED', 'REJECTED', 'CLEAR'];
+const badFlagStatus = (status) => !FLAG_STATUSES.includes(status);
+const BAD_STATUS_BODY = { success: false, code: 'BAD_STATUS', error: `status must be one of ${FLAG_STATUSES.join(', ')}` };
+
+// F1 (review): newest month first, so two gross flags of one employee revert
+// in chain order (Sep 21k→18k, then Aug 18k→15k) whatever order the ids came in.
+const newestFirst = (a, b) => (Number(b.year) - Number(a.year)) || (Number(b.month) - Number(a.month)) || (Number(b.id) - Number(a.id));
+
 function sendFlagError(res, e, label) {
   if (e && e.flagStatus) return res.status(e.flagStatus).json(e.flagBody);
   console.error(`[${label}] failed, nothing written:`, e.message);
@@ -1435,6 +1452,7 @@ router.put('/approve-flag/:flagId', requireFinanceOrAdmin, (req, res) => {
   const { status, comments } = req.body;
   const reviewer = req.user?.username || 'finance';
 
+  if (badFlagStatus(status)) return res.status(400).json(BAD_STATUS_BODY);
   const flag = db.prepare('SELECT * FROM salary_manual_flags WHERE id = ?').get(flagId);
   if (!flag) return res.status(404).json({ success: false, error: 'Flag not found' });
 
@@ -1456,13 +1474,17 @@ router.put('/bulk-approve', requireFinanceOrAdmin, (req, res) => {
   const { flagIds, status, comments } = req.body;
   if (!Array.isArray(flagIds) || !flagIds.length) return res.status(400).json({ success: false, error: 'flagIds required' });
 
+  if (badFlagStatus(status)) return res.status(400).json(BAD_STATUS_BODY);
+
   const reviewer = req.user?.username || 'finance';
   let count = 0;
   try {
     db.transaction(() => {
-      for (const id of [...new Set(flagIds.map(String))]) {
-        const flag = db.prepare('SELECT * FROM salary_manual_flags WHERE id = ?').get(id);
-        if (!flag) continue;
+      const flags = [...new Set(flagIds.map(String))]
+        .map((id) => db.prepare('SELECT * FROM salary_manual_flags WHERE id = ?').get(id))
+        .filter(Boolean)
+        .sort(newestFirst);
+      for (const flag of flags) {
         decideManualFlag(db, flag, { status, comments, reviewer, username: req.user?.username });
         count++;
       }
