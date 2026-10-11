@@ -183,3 +183,17 @@ describe('API: basis switch (what-if)', () => {
     expect(db.prepare("SELECT COUNT(*) n FROM audit_log WHERE stage = 'ATTENDANCE_REVIEW_EXPORT' AND remark LIKE '%what-if master basis'").get().n).toBe(1);
   });
 });
+
+describe('master-basis SQL speed-up keeps results identical (T5 perf)', () => {
+  test('MATERIALIZED steps return exactly what the plain CTE chain returns', () => {
+    const cfg = S.mergeConfig({ assessment_basis: 'master', early_exit_rule: 'd4', missed_out_rule: true, late_long_always_counted: true });
+    const p = S.sqlParams(10, 2026, cfg, [], [], null, []);
+    for (const sql of [S.PERSON_MONTH_SQL_MASTER, S.WEEKLY_SQL_MASTER, S.MASTER_QUALITY_SQL, S.MASTER_DAYS_SQL]) {
+      expect(sql).toMatch(/m1 AS MATERIALIZED \(/);
+      const plain = sql.replace(/ AS MATERIALIZED \(/g, ' AS (');
+      expect(JSON.stringify(db.prepare(sql).all(p))).toBe(JSON.stringify(db.prepare(plain).all(p)));
+    }
+    const rp = { ...p, share: 0.5 };
+    expect(JSON.stringify(db.prepare(S.RELEASE_DAYS_SQL_MASTER).all(rp))).toBe(JSON.stringify(db.prepare(S.RELEASE_DAYS_SQL_MASTER.replace(/ AS MATERIALIZED \(/g, ' AS (')).all(rp)));
+  });
+});

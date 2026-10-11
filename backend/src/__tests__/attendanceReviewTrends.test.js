@@ -44,8 +44,8 @@ describe('API: GET /trends', () => {
     expect((await get('from=2026-8&to=2026-10')).status).toBe(400);
     expect((await get('to=2026-10')).status).toBe(400);
     expect((await get('from=2026-10&to=2026-08')).status).toBe(400);
-    const tooMany = await get('from=2025-01&to=2026-01');
-    expect(tooMany.status).toBe(400); expect(tooMany.body.error).toMatch(/12 months/);
+    const tooMany = await get('from=2025-01&to=2026-07'); // T5: 19 months
+    expect(tooMany.status).toBe(400); expect(tooMany.body.error).toMatch(/18 months/);
   });
 
   test('live months match the month preview; a month with no attendance is skipped', async () => {
