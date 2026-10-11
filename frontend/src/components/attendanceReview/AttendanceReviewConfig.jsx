@@ -25,6 +25,10 @@ const THRESHOLD_LABELS = {
   shift_fit_grace: 'Full-hours tolerance (minutes; for lates kept below the late threshold)', shift_fit_confirm_share: 'Shift check: flag "check master shift" if short on share ≥',
   odd_punch_minutes: 'Master basis: not assessed if in-punch earlier than start by (minutes)', night_start_minutes: 'Master basis: night on a 12-hour master starts at (minutes after midnight; 1200 = 20:00)',
   stayed_late_minutes: 'Master basis: stayed late if out after shift end by (minutes)',
+  senior_hint_gross: 'Suggest "senior staff" from gross (₹)', master_fit_min_days: 'Master-fit check: needs assessed days of at least',
+  master_fit_share: 'Master-fit check: late or early on share of days ≥',
+  board_miss_punch_min: 'Notice board: missed punches from', bulk_miss_punch_day: 'Notice board: system failure if miss punches plant-wide that day ≥',
+  board_spotless_min_share: 'Notice board: "on time every day" needs share of Mon–Sat days ≥',
 }
 const LISTS = [
   ['loading_designation_patterns', 'Loading staff (no late assessment) — designation contains', 'one pattern per line'],
@@ -51,6 +55,7 @@ export default function AttendanceReviewConfig({ month, year }) {
       stayed_late_mode: c.stayed_late_mode, early_exit_rule: c.early_exit_rule, shift_fit: c.shift_fit || 'everyone', late_full_hours: c.late_full_hours !== false,
       assessment_basis: c.assessment_basis || 'import', assess_fixed_miss_punch: c.assess_fixed_miss_punch !== false,
       contract_loaders_early_exempt: c.contract_loaders_early_exempt !== false,
+      board_footer_en: c.board_footer_en || '', board_footer_hi: c.board_footer_hi || '',
       people: Object.entries(c.standing_people || {}).map(([code, v]) => ({ ...v, code })),
       depts: Object.entries(c.standing_departments || {}).map(([department, v]) => ({ ...v, department })),
       dismissed: c.dismissed_suggestions || {},
@@ -66,6 +71,7 @@ export default function AttendanceReviewConfig({ month, year }) {
         thresholds: form.thresholds, stayed_late_mode: form.stayed_late_mode, early_exit_rule: form.early_exit_rule, shift_fit: form.shift_fit, late_full_hours: !!form.late_full_hours,
         assessment_basis: form.assessment_basis, assess_fixed_miss_punch: !!form.assess_fixed_miss_punch,
         contract_loaders_early_exempt: !!form.contract_loaders_early_exempt,
+        board_footer_en: form.board_footer_en, board_footer_hi: form.board_footer_hi,
         // standing rules keep who set them and why; a row edited here keeps its origin fields
         standing_people: Object.fromEntries(form.people.filter((r) => r.code.trim()).map(({ code, ...v }) => [code.trim(), { ...v, reason: String(v.reason || '').trim() }])),
         standing_departments: Object.fromEntries(form.depts.filter((r) => r.department.trim()).map(({ department, ...v }) => [department.trim(), { ...v, rule: 'exclude', reason: String(v.reason || '').trim() }])),
@@ -218,6 +224,18 @@ export default function AttendanceReviewConfig({ month, year }) {
           onClick={() => setForm((f) => ({ ...f, remeasure: [...f.remeasure, { code: '', start: '09:00', end: '18:00', late_grace: 9, early_grace: 15, left_late: 'system', hours_complete: false, hours_grace: 10 }] }))}>+ add re-measure</button>
         <div className="text-[11px] text-slate-400 mt-1">Full hours excuse: a late arrival or early exit is not counted on a day the person still worked the whole shift length (half for a half day), less the tolerance.</div>
       </div>
+
+      <details>
+        <summary className="text-xs font-semibold text-slate-600 cursor-pointer">Notice board wording (printed at the foot of the notice)</summary>
+        <div className="grid md:grid-cols-2 gap-3 mt-2">
+          {[['board_footer_hi', 'Hindi'], ['board_footer_en', 'English']].map(([k, l]) => (
+            <label key={k} className="text-sm">
+              <span className="block text-xs text-slate-500 mb-1">{l} — write {'{date}'} where the last day covered should appear</span>
+              <textarea aria-label={`Notice wording ${l}`} rows={4} className="input w-full" value={form[k]} onChange={(e) => setForm((f) => ({ ...f, [k]: e.target.value }))} />
+            </label>
+          ))}
+        </div>
+      </details>
 
       <details>
         <summary className="text-xs font-semibold text-slate-600 cursor-pointer">Thresholds (change only on a ruling)</summary>
