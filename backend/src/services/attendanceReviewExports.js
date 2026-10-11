@@ -314,4 +314,50 @@ function buildDocx(result, run = {}, { now = new Date() } = {}) {
   return Packer.toBuffer(doc);
 }
 
-module.exports = { buildWorkbook, buildDocx, fileStem, cleanName, todayIst };
+/** T4: the Trends figures as a workbook — one row per month, plus departments, distributions, top people and effects. */
+function buildTrendsWorkbook(data) {
+  const wb = XLSX.utils.book_new();
+  const ms = data.months || [];
+  const W = (r, k) => (r.waterfall ? (k.split('.').reduce((o, x) => (o == null ? o : o[x]), r.waterfall)) : '');
+  XLSX.utils.book_append_sheet(wb, sheet(ms, [
+    { k: 'ym', h: 'Month' }, { k: 'source', h: 'From' }, { k: 'basis', h: 'Basis' }, { k: 'people_assessed', h: 'People assessed' },
+    { k: 'late_pct', h: 'Late %', v: (r) => r.all.late_pct }, { k: 'early_pct', h: 'Early %', v: (r) => r.all.early_pct }, { k: 'lost', h: 'Time lost %', v: (r) => r.all.time_lost_pct },
+    { k: 'listed', h: 'Action list', v: (r) => r.action.people }, { k: 'ded', h: 'Deductions', v: (r) => r.action.deductions }, { k: 'days', h: 'Deduction days', v: (r) => r.action.deduction_days },
+    { k: 'ind', h: 'Indicative ₹', v: (r) => r.action.indicative_amount },
+    { k: 'lm', h: 'Lates measured', v: (r) => W(r, 'lates.measured') }, { k: 'lsl', h: 'Excused: stayed late', v: (r) => W(r, 'lates.stayed_late') },
+    { k: 'lfh', h: 'Excused: full hours', v: (r) => W(r, 'lates.full_hours') }, { k: 'lld', h: 'Loaders', v: (r) => W(r, 'lates.loaders') }, { k: 'lc', h: 'Lates counted', v: (r) => W(r, 'lates.counted') },
+    { k: 'em', h: 'Early exits measured', v: (r) => W(r, 'early.measured') }, { k: 'efh', h: 'Excused: full hours ', v: (r) => W(r, 'early.full_hours') },
+    { k: 'eex', h: 'Not assessed (exempt)', v: (r) => W(r, 'early.exempt') }, { k: 'emo', h: '+ missed OUT', v: (r) => W(r, 'early.missed_out') }, { k: 'ec', h: 'Early counted', v: (r) => W(r, 'early.counted') },
+    { k: 'vl', h: '₹ value of time lost', v: (r) => W(r, 'value_lost_inr') },
+    { k: 'fs', h: 'Sent to finance', v: (r) => r.funnel?.sent ?? '' }, { k: 'fa', h: 'Approved', v: (r) => r.funnel?.approved ?? '' }, { k: 'fsal', h: 'In salary', v: (r) => r.funnel?.in_salary ?? '' },
+    { k: 'finr', h: '₹ in salary (late + early)', v: (r) => r.funnel?.inr_in_salary ?? '' },
+    { k: 'mpt', h: 'Miss punches', v: (r) => r.miss_punch?.total ?? '' }, { k: 'mpo', h: 'Own', v: (r) => r.miss_punch?.own ?? '' }, { k: 'mpb', h: 'Failure days', v: (r) => r.miss_punch?.bulk_days ?? '' },
+    { k: 'mpopen', h: 'Not fixed', v: (r) => r.miss_punch?.open ?? '' }, { k: 'mpc', h: 'Counted as early', v: (r) => r.miss_punch?.counted_as_early ?? '' },
+    { k: 'qua', h: 'Days not assessed', v: (r) => r.quality?.unassessable_days ?? '' }, { k: 'qonv', h: 'Out not verified', v: (r) => r.quality?.out_not_verified ?? '' },
+    { k: 'lw', h: 'Ladder warnings', v: (r) => r.ladder?.warnings ?? '' }, { k: 'lh', h: 'HR hearings', v: (r) => r.ladder?.hearings ?? '' },
+  ]), 'Months');
+  const deps = []; for (const r of ms) for (const d of r.departments || []) deps.push({ ym: r.ym, ...d });
+  XLSX.utils.book_append_sheet(wb, sheet(deps, [{ k: 'ym', h: 'Month' }, { k: 'department', h: 'Department', w: 22 }, { k: 'people', h: 'People' },
+    { k: 'late_days', h: 'Late days' }, { k: 'early_exits', h: 'Early exits' }, { k: 'workdays_lost', h: 'Workdays lost' }, { k: 'time_lost_pct', h: 'Time lost %' }]), 'Departments');
+  const dist = [];
+  for (const r of ms) {
+    if (!r.distribution) continue;
+    for (const b of r.distribution.late_bands) dist.push({ ym: r.ym, kind: 'Late', bucket: `${b.from}${b.to ? `–${b.to - 1}` : '+'} min`, count: b.count });
+    for (const b of r.distribution.early_bands) dist.push({ ym: r.ym, kind: 'Early exit', bucket: `${b.from}${b.to ? `–${b.to - 1}` : '+'} min`, count: b.count });
+    ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].forEach((d, i) => { dist.push({ ym: r.ym, kind: 'Late by weekday', bucket: d, count: r.distribution.late_weekday[i] });
+      dist.push({ ym: r.ym, kind: 'Early by weekday', bucket: d, count: r.distribution.early_weekday[i] }); });
+  }
+  XLSX.utils.book_append_sheet(wb, sheet(dist, [{ k: 'ym', h: 'Month' }, { k: 'kind', h: 'What', w: 18 }, { k: 'bucket', h: 'Band / day' }, { k: 'count', h: 'Count' }]), 'Distribution');
+  XLSX.utils.book_append_sheet(wb, sheet(data.top_people || [], [{ k: 'code', h: 'Code' }, { k: 'name', h: 'Name', w: 24 }, { k: 'department', h: 'Department', w: 18 },
+    { k: 'worked_days', h: 'Worked days' }, { k: 'late_days', h: 'Late days' }, { k: 'early_days', h: 'Early exits' }, { k: 'workdays_lost', h: 'Workdays lost' },
+    { k: 'listed_months', h: 'Months on a list' }, { k: 'labels', h: 'Pattern', w: 60, v: (r) => r.labels.join('; ') }]), 'Top people');
+  const ef = data.effects || { notes: [], boards: [] };
+  XLSX.utils.book_append_sheet(wb, sheet([
+    ...ef.notes.map((n) => ({ what: 'Notes', when: `${n.ym} → ${n.next_ym}`, people: n.people, before: n.before, after: n.after, change: n.change_pct, extra: `${n.listed_again} on a list again` })),
+    ...ef.boards.map((b) => ({ what: 'Notice board', when: `${b.ym} up to ${b.to}`, people: b.named, before: b.per_person_day_before, after: b.per_person_day_after, change: b.change_pct, extra: `${b.days_after} working days after` })),
+  ], [{ k: 'what', h: 'Measure' }, { k: 'when', h: 'When', w: 24 }, { k: 'people', h: 'People' }, { k: 'before', h: 'Before' }, { k: 'after', h: 'After' },
+    { k: 'change', h: 'Change %' }, { k: 'extra', h: 'Note', w: 26 }]), 'Effect');
+  return XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' });
+}
+
+module.exports = { buildWorkbook, buildDocx, fileStem, cleanName, todayIst, buildTrendsWorkbook };
