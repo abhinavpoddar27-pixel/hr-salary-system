@@ -31,7 +31,7 @@ const THRESHOLD_LABELS = {
   board_spotless_min_share: 'Notice board: "on time every day" needs share of Mon–Sat days ≥',
   long_late_minutes: 'Long late from (minutes) — listed as a shift question; counted even on a full-hours day when ticked',
   d4_half_day_minutes: '2 h rule: early exit of this many minutes or more = ½ day', d4_long_minutes: '2 h rule: long early exit from (minutes)',
-  d4_long_count: '2 h rule: long exits in the month before their minutes are deducted', missed_out_from: 'Missed OUT: counted from the person\'s Nth own missed punch',
+  d4_long_count: '2 h rule: long exits in the month before their minutes are deducted', d4_half_day_min_count: '2 h rule: number of 2 h exits in the month before each costs ½ day (fewer = warning)', missed_out_from: 'Missed OUT: counted from the person\'s Nth own missed punch',
   missed_out_minutes: 'Missed OUT: counts as an early exit of (minutes)',
 }
 const LISTS = [

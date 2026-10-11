@@ -14,7 +14,8 @@ const review = (db, config = {}) => S.computeAttendanceReview(db, { month: M, ye
 const person = (r, code) => r.people.find((p) => p.code === code);
 const early = (r, code) => r.earlyExitWarnings.find((x) => x.code === code);
 const listed = (r, code) => r.actionList.find((x) => x.code === code);
-const D4 = { early_exit_rule: 'd4' };
+const D4 = { early_exit_rule: 'd4' };                                        // default: ½ day per 2 h exit from the 2nd one (owner 11 Oct)
+const D4_ONE = { early_exit_rule: 'd4', thresholds: { d4_half_day_min_count: 1 } }; // PR-3 as first built: the 1st 2 h exit already costs ½ day
 
 /** Every person gets 10 clean September days (not a newcomer) unless `newcomer`. */
 function emp(db, code, over = {}) {
@@ -34,6 +35,8 @@ function seed(db) {
   emp(db, 'ERM2'); oct.slice(0, 20).forEach((d, i) => F.day(db, 'ERM2', d, i < 2 ? { em: 70 } : {}));
   // ERMIX: two 130-min + two 70-min exits
   emp(db, 'ERMIX'); oct.slice(0, 20).forEach((d, i) => F.day(db, 'ERMIX', d, i < 2 ? { em: 130 } : i < 4 ? { em: 70 } : {}));
+  // ERH1M2: one 130-min exit + two 70-min exits (3 long exits, only one of 2 h)
+  emp(db, 'ERH1M2'); oct.slice(0, 20).forEach((d, i) => F.day(db, 'ERH1M2', d, i === 0 ? { em: 130 } : i < 3 ? { em: 70 } : {}));
   // ERNEW: newcomer with a 130-min exit → warning only
   emp(db, 'ERNEW', { newcomer: true }); oct.slice(0, 20).forEach((d, i) => F.day(db, 'ERNEW', d, i === 0 ? { em: 130 } : {}));
   // ERLIST: late regular (8 lates of 30 min) + one 130-min exit
@@ -71,8 +74,8 @@ describe('PR-3 rules', () => {
     expect(r.missedOut.rule).toBe(false);
   });
 
-  test('D-4: 2 h+ exit = ½ day; 3+ exits of 60+ min = minutes; fewer = nothing; newcomer = warning', () => {
-    const r = review(db, D4);
+  test('D-4 (count 1): 2 h+ exit = ½ day; 3+ exits of 60+ min = minutes; fewer = nothing; newcomer = warning', () => {
+    const r = review(db, D4_ONE);
     expect(early(r, 'ERH1')).toMatchObject({ action: 'deduction', deduction_days: 0.5, over_2h: 1, d4_days: 0.5 });
     expect(early(r, 'ERM3')).toMatchObject({ action: 'deduction', deduction_days: 0.5 });           // 210 / 720 → ½ (minimum)
     expect(early(r, 'ERM3').d4).toMatchObject({ half_days: 0, long_exits: 3, minutes: 210 });
@@ -83,12 +86,34 @@ describe('PR-3 rules', () => {
   });
 
   test('D-4 on the action list: early part = max(minutes, D-4 charge) — never less than before', () => {
-    const r = review(db, D4);
+    const r = review(db, D4_ONE);
     const l = listed(r, 'ERLIST');
     expect(l.workdays_lost).toBeCloseTo(0.51, 2);
     expect(l).toMatchObject({ action: 'deduction', deduction_days: 1, over_2h: 1 });              // 240/720 + max(130/720, 0.5) = 0.83 → 1
     expect(early(r, 'ERLIST')).toBeUndefined();                                                     // not listed twice
     expect(r.actionTotals.deduction_days).toBe(r.actionList.filter((a) => a.action === 'deduction').reduce((s, a) => s + a.deduction_days, 0));
+  });
+
+  test('D-4 need 2 (default): the 1st 2 h exit is a warning; from the 2nd each costs ½ day; a lone one joins the minutes rule', () => {
+    const r = review(db, D4);
+    expect(r.criteria.thresholds.d4_half_day_min_count).toBe(2);
+    expect(early(r, 'ERH1')).toMatchObject({ action: 'warning', deduction_days: 0, over_2h: 1 });   // listed, not deducted
+    expect(early(r, 'ERH1').d4).toMatchObject({ half_days: 0, long_exits: 1, minutes: 0, raw: 0 });
+    expect(early(r, 'ERMIX')).toMatchObject({ action: 'deduction', deduction_days: 1 });            // 2 of 2 h → 1.0 + 140 / 720
+    expect(early(r, 'ERMIX').d4).toMatchObject({ half_days: 2, minutes: 140, raw: 1.19 });
+    expect(early(r, 'ERM3')).toMatchObject({ action: 'deduction', deduction_days: 0.5 });           // unchanged: 210 / 720
+    // one 2 h + two 70-min = 3 long exits → all their minutes: (130 + 140) / 720 = 0.375 → ½
+    expect(early(r, 'ERH1M2')).toMatchObject({ action: 'deduction', deduction_days: 0.5 });
+    expect(early(r, 'ERH1M2').d4).toMatchObject({ half_days: 0, long_exits: 3, minutes: 270, raw: 0.38 });
+    // on the action list a lone 2 h exit adds nothing beyond its minutes: 240/720 + 130/720 = 0.51 → ½ (= rules off)
+    expect(listed(r, 'ERLIST')).toMatchObject({ action: 'deduction', deduction_days: 0.5 });
+    const plan = S.financeSendPlan(db, { id: 78, month: M, year: Y, result_json: JSON.stringify(r) });
+    expect(plan.create.find((c) => c.code === 'ERH1')).toBeUndefined();                            // warning, not sent
+    expect(plan.create.find((c) => c.code === 'ERMIX')).toMatchObject({ deduction_days: 1, source: 'early' });
+    expect(plan.create.find((c) => c.code === 'ERMIX').remark).toMatch(/2 of 2 h or more; 2 at ½ day each \(D-4 rule\)/);
+    expect(plan.create.find((c) => c.code === 'ERH1M2').remark).not.toMatch(/at ½ day/);
+    expect(S.validateConfig({ thresholds: { d4_half_day_min_count: 1 } })).toEqual([]);
+    expect(S.validateConfig({ thresholds: { d4_half_day_min_count: -1 } }).join()).toMatch(/d4_half_day_min_count/);
   });
 
   test('D-6: a 2 h+ late on a full-hours day is counted and listed; stayed late the evening before still excuses it', () => {
@@ -127,7 +152,7 @@ describe('PR-3 rules', () => {
   });
 
   test('send to finance includes the early-exit section deductions (one row per person)', () => {
-    const r = review(db, D4);
+    const r = review(db, D4_ONE);
     const run = { id: 77, month: M, year: Y, result_json: JSON.stringify(r) };
     const plan = S.financeSendPlan(db, run);
     const h1 = plan.create.find((c) => c.code === 'ERH1');
@@ -148,7 +173,7 @@ describe('PR-3 rules', () => {
 
   test('exports: Excel has the long-late and missed-OUT sheets and the 2 h rule column; Word pack builds', async () => {
     const XLSX = require('xlsx'); const X = require('../services/attendanceReviewExports');
-    const r = review(db, { ...D4, late_long_always_counted: true, missed_out_rule: true, thresholds: { bulk_miss_punch_day: 5 } });
+    const r = review(db, { ...D4, late_long_always_counted: true, missed_out_rule: true, thresholds: { bulk_miss_punch_day: 5, d4_half_day_min_count: 1 } });
     const wb = XLSX.read(X.buildWorkbook(r, { status: 'draft' }), { type: 'buffer' });
     expect(wb.SheetNames).toEqual(expect.arrayContaining(['Late 2h or more', 'Missed OUT']));
     const ew = XLSX.utils.sheet_to_json(wb.Sheets['Early-exit warnings']);
