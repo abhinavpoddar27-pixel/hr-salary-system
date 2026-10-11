@@ -25,6 +25,35 @@ Pending Approvals cards). Plan + log: `docs/ux-bulk/prs/P1-22/PLAN.md`, `PROGRES
 - **Found, not fixed:** F-a above (money). F-b `effectiveFrom` default is the UTC date — an approval 00:00–05:30 IST is
   dated the previous day. F-c `POST /request-change` `new_gross` leaves out special_allowance, approve includes it.
 
+## Last Session — 2026-10-11 (Attendance enforcement PR-5: mid-month notice board)
+**Branch `feat/attendance-review-notice-board` (on main 75d60ee6), NOT merged.** Plan: `docs/attendance-review/PR5_NOTICE_BOARD.md`; private plan D-8 / D-9 / MP-2.
+- **What:** Attendance Review tab → third view "Notice board": a printable A4 for the 1st up to a chosen day (default the 15th),
+  from the SAME engine (basis, rules, standing leave-outs, release days as detected up to that day). Names + codes + department
+  + counts only — no ₹, no minutes. Named: counted lates ≥ `notice_late` (4), counted early exits ≥ `notice_early` (3),
+  personal missed punches ≥ `board_miss_punch_min` (3). "On time every day": assessed for both, 0/0/0, assessed full days ≥
+  `board_spotless_min_share` (0.75) of Mon–Sat days so far (loaders and early-exempt people never listed there).
+  Missed punch = worked-status row with is_miss_punch (any type) on a day with < `bulk_miss_punch_day` (40) miss punches
+  plant-wide, before today IST; admin can skip extra days on screen. Held and left-out people never shown. Company filter.
+- **API (admin):** `GET /api/analytics/attendance-review/board?month&year&to[&company][&skipDays]` (board + print history),
+  `POST /board/prints` (recomputes, records, returns what to print; 409 when no attendance). Engine: `noticeBoard()`,
+  `boardSnapshot()`, optional `to` threaded through sqlParams / loadPersonMonth / remeasureRows / assessmentQuality /
+  detectReleaseDays (default = month end → every existing caller unchanged).
+- **Print record:** audit_log row table_name `attendance_review_board`, record_id yyyymm, stage `ATTENDANCE_REVIEW_BOARD_PRINT`,
+  new_value = JSON {from,to,covered_to,company,skip_days,listed:[[code,lates,early,missed]],spotless:[codes]} — PR-7 / effect
+  tracking read board appearances from here. Direct INSERT (logAudit swallows errors; an unrecorded print must not print). No schema change.
+- **Wording:** config keys `board_footer_en` / `board_footer_hi` ({date} = last day covered), editable in Rules & exclusions
+  ("Notice board wording"); 10–800 chars validated. Editor save now carries them (it rebuilds config from form fields).
+- **UI:** `AttendanceReviewBoard.jsx`; `utils/noticeBoardHtml.js` builds ONE HTML document used for the on-screen iframe preview
+  and the print (hidden iframe, not a pop-up), so screen = paper. dist rebuilt.
+- **Fragile:** (1) the editor rebuilds config from its form — any new top-level config key must be added to the form AND the save
+  body or a save silently drops it. (2) Hindi wording needs a native reader's check before the first print. (3) Spotless uses the
+  master-basis quality figures to subtract unassessed days; on the import basis worked days are taken as assessed.
+- **Live expectation (read-only, SQL Console, engine SQL inlined):** 1–15 Sep 2026 on config v5 ≈ 45 named for lates/early after
+  leave-outs + 5 more for 3+ missed punches (3 and 12 Sep auto-skipped). October not imported yet.
+- **Verified:** new `attendanceReviewNoticeBoard.test.js` 13; jest 98 suites / 1557; `scripts/attendance-review-board-check.py`
+  36/36 (counts, preview content, auto skip chip, company, "up to", manual skip + undo, print No. 1 + 2 recorded with snapshot,
+  history, wording from rules, empty month, hr 403, phone 390, no payroll table written); tab 49, trends 31, suggestions 29,
+  master 26, send-to-finance 28 re-run green. **Not tested:** Railway; a real printer / Devanagari font on the HR PC.
 ## Last Session — 2026-10-11 (Attendance Review Trends T1–T3: month-by-month interactive charts)
 **Branch `feat/attendance-review-trends` (on origin/main 4645e973, #108 merged), NOT merged.** Owner ask 10 Oct: "no interactive pictorial diagrams" → "PR-2 first, then Trends".
 - **T1 API:** `GET /api/analytics/attendance-review/trends?from=YYYY-MM&to=YYYY-MM[&live=0]` (admin, ≤ 12 months, read only).
