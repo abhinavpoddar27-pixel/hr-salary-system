@@ -1,3 +1,30 @@
+## Last Session — 2026-10-11 (P1-22: salary change approver could not see every component)
+**Branch `fix/salary-change-approver-view` (on origin/main 868f5389), NOT merged.** Frontend only (`pages/SalaryInput.jsx`,
+Pending Approvals cards). Plan + log: `docs/ux-bulk/prs/P1-22/PLAN.md`, `PROGRESS.md`. Finding F-2. Rulings Q1–Q3 (11 Oct).
+- **Bug:** a pending salary change card showed only Basic / DA / HRA + gross, old and new. Conveyance and Other
+  allowances never showed, nothing marked what changed, and no effective date — finance approved blind.
+- **Fix (display only, no route change):** each card has a Component | Current | Proposed table: Basic, DA, HRA,
+  Conveyance, Other allowances always; Special allowance only when non-zero on either side (Q3); Gross = stored
+  `old_gross` → `new_gross` (Q1). Proposed = what `PUT /approve/:id` writes (`parseFloat(x) || 0`): a component missing
+  from the request shows ₹0, highlighted, with "not in this request — approval sets it to 0" (Q2). Changed rows amber
+  + ▲/▼ (`data-changed`). No old structure → "—" + "No current structure on record". Line "Effective from: the day it is
+  approved (today, DD Mon YYYY)" — the screen still sends no `effectiveFrom` (by scope). P1-23 self-approval UI
+  untouched. dist rebuilt (own commit).
+- **MONEY FINDING (F-a, not fixed):** an Employee Master salary request (`PUT /employees/:code/salary`) stores no
+  `conveyance` key, so approving it writes conveyance 0 — an employee on conveyance loses it with no one asking for
+  that. The card now shows it (₹X → ₹0 + note). Likewise a Salary Input request carries no `special_allowance`, so its
+  approval zeroes a non-zero special allowance.
+- **Fragile:** `componentRows()` mirrors the approve route's parse rule by hand — change both. The effective line uses
+  the browser's date; the server uses the UTC date (F-b).
+- **Verified:** `backend/scripts/salary-change-approver-view-check.py` (Chromium, built dist, scratch DB, port 3122, hr
+  raises via API incl. Employee Master, fictional T2201–T2207 incl. 3 legacy rows NULL / bad JSON / `{}`) 57/57 — rows,
+  changed set, values, notes, effective line, hr view, 390px no sideways scroll, approve still applies, 0 page/console
+  errors, 0 API ≥ 400. `--base` on an 868f5389 build 9/9: Conveyance/Other absent, no effective date.
+  jest 96 suites / 1537 before and after.
+- **Not tested:** Railway; Safari/Firefox; production rows.
+- **Found, not fixed:** F-a above (money). F-b `effectiveFrom` default is the UTC date — an approval 00:00–05:30 IST is
+  dated the previous day. F-c `POST /request-change` `new_gross` leaves out special_allowance, approve includes it.
+
 ## Last Session — 2026-10-11 (P1-07: legacy "Grant Extra Duty" on Payable OT retired)
 **Branch `fix/retire-legacy-extra-duty-grant`, NOT merged.** Owner ruling Q5 (11 Oct). Log: `docs/ux-bulk/prs/P1-07/PROGRESS.md`.
 - **Bug:** Payable OT → "Grant Extra Duty" called `POST /payroll/grant-extra-duty`, which wrote a `day_corrections` row
