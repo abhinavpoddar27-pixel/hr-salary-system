@@ -193,3 +193,33 @@ open branch against main AND against each other; any overlap is fixed before the
 | N-23 | N-MONEY review | approve-flag / bulk-approve have no maker-checker; a revert leaves the salary_change_request Approved; Stage 7 re-run needed after revert | later |
 | N-24 | N-FRESH | floating Salary Explainer button covers row buttons at the bottom of long tables | later UI |
 - 11 Oct 2026 ~20:50 IST — batch 2 fully merged (#126–#131). #132 docs PR folds 9 CLAUDE.md entries.
+
+## Batch 3 (12 Oct 2026) — 7 PRs, integration-tested together, merge in any order
+Base main fa430144. No shared files. Combined tree: jest 109/1963, build OK, every batch check green (errorboundary needs a fake-DSN build: `VITE_SENTRY_DSN=https://public@o0.ingest.invalid/1`; that same build makes other checks see a console error, so build without it for them).
+
+| ID | PR | Branch | Result |
+|---|---|---|---|
+| P2-01 Dialog + useConfirm | #133 | feat/ui-dialog-confirm | 111/111, CI green, clean |
+| P2-03 IST today | #134 | feat/formatters-ist-today | 26/26 + unit 24/24, clean |
+| P2-ED shared components | #135 | feat/ed-shared-components | 64/64, ED 25/25 + 16/16, clean |
+| P2-07 PeoplePicker + parseCodes | #136 | feat/people-picker-parse-codes | 40/40, aria 9/9, clean |
+| P2-08 timeout dialog + drafts | #137 | feat/timeout-modal-drafts | 57/57, clean |
+| P2-09 ErrorBoundary → Sentry | #138 | feat/errorboundary-sentry | 36/36, clean |
+| P2-11 route guards (35 routes) | #139 | fix/backend-route-guards | jest 291 new, 22/22, clean |
+
+After merge: one docs PR folds the 7 "## CLAUDE.md entry" blocks from each branch's PROGRESS.md.
+
+### Owner items (batch 3)
+- Railway `VITE_SENTRY_DSN` malformed → frontend events dropped (task in P2-09 PROGRESS).
+- payroll.js calculate-days / compute-salary / finalise have no role guard (protected file; suggest hr/finance/admin).
+- Data repairs pending: 43 employees with conveyance wiped; 1 unreverted Mar-2026 flag; 114 without IFSC; 2 months finalised with no sign-off.
+
+### New findings (batch 3)
+- More UTC "today" sites: GatePasses:206, DailyWageContractors:161, Employees:857/1008, useDateSelector:21, EmployeeProfile, DailyWageFinanceReview:58, DeptAnalytics, DailyMIS:1026.
+- FinanceAudit reads `f.verified` (field name check needed).
+- ED `btn-warning` class does not exist.
+- SQL Console writes share the app DB connection — other app writes during an open preview are rolled back with it.
+- GET /api/tax-declarations/:code has no role check.
+- POST /employees accepts gross on create (P2-11 noted; = earlier P2-11 follow-up).
+- HR still sees the manual-flag Verify button, which now answers 403.
+- Login limit 5 per 15 min is not configurable.
