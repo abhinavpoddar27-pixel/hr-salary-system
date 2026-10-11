@@ -1,5 +1,6 @@
 const express = require('express');
 const router = express.Router();
+const { requireHrOrAdmin } = require('../middleware/roles'); // P2-11 role guards
 const { getDb } = require('../database/db');
 
 /**
@@ -26,7 +27,7 @@ router.get('/employee/:code', (req, res) => {
  * POST /api/lifecycle
  * Add a lifecycle event
  */
-router.post('/', (req, res) => {
+router.post('/', requireHrOrAdmin, (req, res) => {
   const db = getDb();
   const { employee_code, event_type, event_date, details, from_value, to_value, remarks } = req.body;
 

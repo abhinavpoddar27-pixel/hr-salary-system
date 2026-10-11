@@ -1,5 +1,7 @@
 const express = require('express');
 const router = express.Router();
+const { roleIn } = require('../middleware/roles'); // P2-11 role guards
+const requireHrFinanceOrAdmin = (req, res, next) => (roleIn(req, 'admin', 'hr', 'finance') ? next() : res.status(403).json({ success: false, error: 'HR, finance or admin access required' }));
 const { getDb } = require('../database/db');
 const { calculateMonthlyTDS } = require('../services/tdsCalculation');
 
@@ -12,7 +14,7 @@ router.get('/:employeeCode', (req, res) => {
   res.json({ success: true, data: decl || null });
 });
 
-router.put('/:employeeCode', (req, res) => {
+router.put('/:employeeCode', requireHrFinanceOrAdmin, (req, res) => {
   const db = getDb();
   const { employeeCode } = req.params;
   const { financial_year, regime, section_80c, section_80d, hra_exemption, other_exemptions } = req.body;

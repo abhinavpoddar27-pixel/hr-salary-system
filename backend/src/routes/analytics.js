@@ -1,5 +1,7 @@
 const express = require('express');
 const router = express.Router();
+const { requireHrOrAdmin, roleIn } = require('../middleware/roles'); // P2-11 role guards
+const requireHrFinanceOrAdmin = (req, res, next) => (roleIn(req, 'admin', 'hr', 'finance') ? next() : res.status(403).json({ success: false, error: 'HR, finance or admin access required' }));
 const { getDb } = require('../database/db');
 const {
   computeOrgOverview, computeHeadcountTrend, computeAttrition,
@@ -260,7 +262,7 @@ router.get('/alerts', (req, res) => {
 });
 
 // POST generate alerts for a month
-router.post('/alerts/generate', (req, res) => {
+router.post('/alerts/generate', requireHrFinanceOrAdmin, (req, res) => {
   try {
     const db = getDb();
     const { month, year } = req.body;
@@ -274,7 +276,7 @@ router.post('/alerts/generate', (req, res) => {
 });
 
 // PUT mark alert as read
-router.put('/alerts/:id/read', (req, res) => {
+router.put('/alerts/:id/read', requireHrFinanceOrAdmin, (req, res) => {
   try {
     const db = getDb();
     db.prepare('UPDATE alerts SET is_read = 1 WHERE id = ?').run(req.params.id);
@@ -347,7 +349,7 @@ router.get('/employee/:code', (req, res) => {
 // Mark them as "Left" so they are excluded from workforce
 // Also auto-reactivate employees who have returned
 // ─────────────────────────────────────────────────────────
-router.post('/detect-inactive', (req, res) => {
+router.post('/detect-inactive', requireHrOrAdmin, (req, res) => {
   try {
     const db = getDb();
     const { month, year, inactiveDays = 14 } = req.body;
@@ -377,7 +379,7 @@ router.post('/detect-inactive', (req, res) => {
 // POST /api/analytics/auto-detect-left
 // Lighter version that auto-runs after import
 // ─────────────────────────────────────────────────────────
-router.post('/auto-detect-left', (req, res) => {
+router.post('/auto-detect-left', requireHrOrAdmin, (req, res) => {
   try {
     const db = getDb();
     const { month, year } = req.body;
@@ -527,7 +529,7 @@ router.get('/inactive-employees', (req, res) => {
 
 // POST /api/analytics/reactivate-employee
 // Reactivate an employee that was auto-marked inactive
-router.post('/reactivate-employee', (req, res) => {
+router.post('/reactivate-employee', requireHrOrAdmin, (req, res) => {
   try {
     const db = getDb();
     const { code } = req.body;
@@ -848,7 +850,7 @@ router.get('/employee/:code/profile-range', (req, res) => {
 // Body (all optional): { from, to }
 // Requires ANTHROPIC_API_KEY env var
 // ─────────────────────────────────────────────────────────
-router.post('/employee/:code/ai-review', async (req, res) => {
+router.post('/employee/:code/ai-review', requireHrFinanceOrAdmin, async (req, res) => {
   try {
     const db = getDb();
     const { code } = req.params;
