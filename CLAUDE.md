@@ -18,6 +18,22 @@
   31/31 (sources, tiles, charts, tooltip, heat-map hover, repeat dots, filters, tables, sticky range, click opens Sep FINAL
   and the picker shows Sep, empty range, phone 390, nothing written); tab 49, suggestions 29, master 26, send-to-finance 28
   re-run. **Not tested:** Railway / production data volume.
+## Last Session — 2026-10-11 (P1-07: legacy "Grant Extra Duty" on Payable OT retired)
+**Branch `fix/retire-legacy-extra-duty-grant`, NOT merged.** Owner ruling Q5 (11 Oct). Log: `docs/ux-bulk/prs/P1-07/PROGRESS.md`.
+- **Bug:** Payable OT → "Grant Extra Duty" called `POST /payroll/grant-extra-duty`, which wrote a `day_corrections` row
+  (`correction_type='extra_duty'`) and answered "granted … re-run salary". No pay path reads it (Stage 6 `manualExtraDutyDays`
+  is hard-coded 0; extra duty is paid only from `extra_duty_grants` with HR + finance approval). The row also blocked a real
+  day correction for that employee-month (409) and raised a spurious DAY_CORRECTION finance flag. Prod: 2 legacy rows ever
+  (Mar + Jun 2026), last 04-Jul-2026; 0 grant/revoke calls in 90 days.
+- **Fix:** grant + revoke answer 410 and write nothing (same pattern as manual-deductions); GET `/payroll/extra-duty-grants`
+  kept read-only. `PayableOT.jsx`: tab, form, mutations and list removed; one line under the month box links to
+  `/extra-duty-grants`. `utils/api.js`: `grantExtraDuty`, `revokeExtraDuty`, `listExtraDutyGrants` removed (no other caller).
+  `payroll.js` edit is the bottom legacy handlers only (owner approved). dist rebuilt (own commit).
+- **Fragile:** the 2 legacy rows stay; they still raise DAY_CORRECTION flags if those months' Stage 7 is re-run (harmless, old).
+- **Verified:** new `legacyExtraDutyGrantRetired.test.js` 6 (5 fail on main); jest 96 suites / 1537.
+  `backend/scripts/legacy-ed-grant-retired-check.py` 31/31 (hr + finance, register still renders, pointer → /extra-duty-grants,
+  POST/DELETE → 410 with day_corrections byte-identical, phone 390, 0 page/console errors). `--base` on origin/main 3/3.
+- **Not tested:** Railway; Safari/Firefox.
 
 ## Last Session — 2026-10-11 (Attendance enforcement PR-2: Send to finance from a final review; Late Coming apply retired)
 **Branch `feat/attendance-review-send-to-finance` (on origin/main d0409f06), NOT merged.** Plan: private project `claude/attendance-review/PLAN_enforcement_v2.md`.

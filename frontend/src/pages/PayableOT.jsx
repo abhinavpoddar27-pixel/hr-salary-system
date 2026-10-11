@@ -1,6 +1,6 @@
 import React, { useState, useMemo } from 'react'
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import toast from 'react-hot-toast'
+import { useQuery } from '@tanstack/react-query'
+import { Link } from 'react-router-dom'
 import { useAppStore } from '../store/appStore'
 import CompanyFilter from '../components/shared/CompanyFilter'
 import DateSelector from '../components/common/DateSelector'
@@ -9,19 +9,12 @@ import { fmtINR, monthYearLabel } from '../utils/formatters'
 import clsx from 'clsx'
 import useExpandableRows from '../hooks/useExpandableRows'
 import DrillDownRow, { DrillDownChevron } from '../components/ui/DrillDownRow'
-import {
-  getPayableOT,
-  grantExtraDuty,
-  revokeExtraDuty,
-  listExtraDutyGrants
-} from '../utils/api'
+import { getPayableOT } from '../utils/api'
 
 export default function PayableOT() {
   const { selectedCompany } = useAppStore()
   const { month, year, dateProps } = useDateSelector({ mode: 'month', syncToStore: true })
-  const [activeTab, setActiveTab] = useState('register')
   const [showNoOT, setShowNoOT] = useState(false)
-  const qc = useQueryClient()
 
   const { data: otRes, isLoading } = useQuery({
     queryKey: ['payable-ot', month, year, selectedCompany],
@@ -36,48 +29,6 @@ export default function PayableOT() {
     () => allRecords.filter(r => (r.ot_pay || 0) === 0 && (r.ed_pay || 0) === 0),
     [allRecords]
   )
-
-  const { data: grantsRes } = useQuery({
-    queryKey: ['extra-duty-grants', month, year],
-    queryFn: () => listExtraDutyGrants(month, year),
-    retry: 0,
-    enabled: activeTab === 'grant'
-  })
-  const grants = grantsRes?.data?.data || []
-
-  const grantMut = useMutation({
-    mutationFn: grantExtraDuty,
-    onSuccess: (res) => {
-      toast.success(res.data?.message || 'Extra duty granted')
-      qc.invalidateQueries({ queryKey: ['extra-duty-grants'] })
-      qc.invalidateQueries({ queryKey: ['payable-ot'] })
-    },
-    onError: (err) => {
-      toast.error(err?.response?.data?.error || err.message || 'Grant failed')
-    }
-  })
-
-  const revokeMut = useMutation({
-    mutationFn: revokeExtraDuty,
-    onSuccess: () => {
-      toast.success('Extra duty revoked')
-      qc.invalidateQueries({ queryKey: ['extra-duty-grants'] })
-      qc.invalidateQueries({ queryKey: ['payable-ot'] })
-    }
-  })
-
-  const [form, setForm] = useState({ employeeCode: '', days: 1, remark: '' })
-  const submitGrant = () => {
-    if (!form.employeeCode) return toast.error('Enter employee code')
-    if (!form.days || form.days <= 0) return toast.error('Enter days (1-10)')
-    grantMut.mutate({
-      employeeCode: form.employeeCode.trim(),
-      month, year,
-      days: parseFloat(form.days),
-      remark: form.remark
-    })
-    setForm({ employeeCode: '', days: 1, remark: '' })
-  }
 
   const exportCSV = () => {
     const header = ['Code', 'Name', 'Department', 'Type', 'Days Present', 'Std Working',
@@ -171,49 +122,21 @@ export default function PayableOT() {
         </div>
       </div>
 
-      {/* Tabs */}
-      <div className="border-b border-slate-200 flex gap-0">
-        {[
-          { id: 'register', label: `OT Register (${otRecords.length})` },
-          { id: 'grant', label: 'Grant Extra Duty' }
-        ].map(t => (
-          <button
-            key={t.id}
-            onClick={() => setActiveTab(t.id)}
-            className={clsx(
-              'px-4 py-2.5 text-sm font-medium border-b-2 transition-colors',
-              activeTab === t.id ? 'border-blue-600 text-blue-600' : 'border-transparent text-slate-500 hover:text-slate-700'
-            )}
-          >
-            {t.label}
-          </button>
-        ))}
-      </div>
+      <p className="text-xs text-slate-500" data-testid="ed-grant-pointer">
+        Extra duty is granted on the{' '}
+        <Link to="/extra-duty-grants" className="text-blue-600 hover:underline font-medium">Extra Duty Grants</Link>{' '}
+        page (HR raises, finance approves). Approved grants show here after Stage 7 is re-run.
+      </p>
 
-      {/* Tab 1: OT Register */}
-      {activeTab === 'register' && (
-        <OTRegisterTab
-          otRecords={otRecords}
-          noOTRecords={noOTRecords}
-          summary={summary}
-          isLoading={isLoading}
-          showNoOT={showNoOT}
-          setShowNoOT={setShowNoOT}
-          exportCSV={exportCSV}
-        />
-      )}
-
-      {/* Tab 2: Grant Extra Duty */}
-      {activeTab === 'grant' && (
-        <GrantExtraDutyTab
-          form={form}
-          setForm={setForm}
-          submitGrant={submitGrant}
-          grantMut={grantMut}
-          grants={grants}
-          revokeMut={revokeMut}
-        />
-      )}
+      <OTRegisterTab
+        otRecords={otRecords}
+        noOTRecords={noOTRecords}
+        summary={summary}
+        isLoading={isLoading}
+        showNoOT={showNoOT}
+        setShowNoOT={setShowNoOT}
+        exportCSV={exportCSV}
+      />
     </div>
   )
 }
@@ -386,115 +309,5 @@ function OTRegisterTab({ otRecords, noOTRecords, summary, isLoading, showNoOT, s
         )}
       </div>
     </>
-  )
-}
-
-/* ── Grant Extra Duty Tab ──────────────────────────────── */
-function GrantExtraDutyTab({ form, setForm, submitGrant, grantMut, grants, revokeMut }) {
-  return (
-    <div className="space-y-4">
-      <div className="card p-5">
-        <h3 className="font-semibold text-slate-700 mb-3 text-sm">Grant Extra Duty</h3>
-        <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
-          <div>
-            <label className="label">Employee Code *</label>
-            <input
-              value={form.employeeCode}
-              onChange={e => setForm(f => ({ ...f, employeeCode: e.target.value }))}
-              className="input"
-              placeholder="e.g. 22713"
-            />
-          </div>
-          <div>
-            <label className="label">Days (1–10) *</label>
-            <input
-              type="number"
-              min="0.5"
-              max="10"
-              step="0.5"
-              value={form.days}
-              onChange={e => setForm(f => ({ ...f, days: parseFloat(e.target.value) }))}
-              className="input"
-            />
-          </div>
-          <div className="md:col-span-2">
-            <label className="label">Remark</label>
-            <input
-              value={form.remark}
-              onChange={e => setForm(f => ({ ...f, remark: e.target.value }))}
-              className="input"
-              placeholder="Reason / reference number"
-            />
-          </div>
-        </div>
-        <div className="mt-4 flex items-center justify-between">
-          <div className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded px-2 py-1">
-            After granting, re-run Salary Computation (Stage 7) to apply OT to the register.
-          </div>
-          <button
-            onClick={submitGrant}
-            disabled={grantMut.isPending}
-            className="btn-primary text-sm"
-          >
-            {grantMut.isPending ? 'Granting…' : 'Grant'}
-          </button>
-        </div>
-      </div>
-
-      <div className="card">
-        <div className="card-header">
-          <span className="font-semibold text-slate-700">Active Grants — {grants.length}</span>
-        </div>
-        <div className="overflow-x-auto">
-          <table className="w-full table-compact text-[11px]">
-            <thead>
-              <tr>
-                <th className="w-6">#</th>
-                <th>Employee</th>
-                <th>Dept</th>
-                <th className="text-center">Days</th>
-                <th>Remark</th>
-                <th>Granted By</th>
-                <th>When</th>
-                <th className="w-16"></th>
-              </tr>
-            </thead>
-            <tbody>
-              {grants.length === 0 && (
-                <tr><td colSpan={8} className="text-center py-8 text-slate-400">
-                  No extra duty grants for this period.
-                </td></tr>
-              )}
-              {grants.map((g, i) => (
-                <tr key={g.id} className="hover:bg-slate-50">
-                  <td className="text-slate-400">{i + 1}</td>
-                  <td className="font-medium">
-                    {g.employee_name}
-                    <div className="text-[9px] text-slate-400 font-mono">{g.employee_code}</div>
-                  </td>
-                  <td className="text-slate-500">{g.department || '—'}</td>
-                  <td className="text-center font-mono font-bold text-purple-700">{g.days || 0}</td>
-                  <td className="text-slate-600">{g.remark || g.correction_notes || '—'}</td>
-                  <td className="text-slate-500 text-[10px]">{g.granted_by || '—'}</td>
-                  <td className="text-slate-400 text-[10px]">{(g.corrected_at || '').slice(0, 16)}</td>
-                  <td>
-                    <button
-                      onClick={() => {
-                        if (window.confirm(`Revoke ${g.days} extra duty day(s) for ${g.employee_code}?`)) {
-                          revokeMut.mutate(g.id)
-                        }
-                      }}
-                      className="text-red-600 hover:bg-red-50 px-1.5 py-0.5 rounded text-xs"
-                    >
-                      Revoke
-                    </button>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      </div>
-    </div>
   )
 }

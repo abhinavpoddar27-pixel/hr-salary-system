@@ -109,10 +109,6 @@ export const finaliseSalary = (data) => api.post('/payroll/finalise', data)  // 
 // ── Payable OT / Extra Duty ──────────────────────────
 export const getPayableOT = (month, year, company) =>
   api.get('/payroll/payable-ot', { params: { month, year, company } })
-export const grantExtraDuty = (data) => api.post('/payroll/grant-extra-duty', data)
-export const revokeExtraDuty = (id) => api.delete(`/payroll/revoke-extra-duty/${id}`)
-export const listExtraDutyGrants = (month, year) =>
-  api.get('/payroll/extra-duty-grants', { params: { month, year } })
 
 // ── Daily MIS ────────────────────────────────────────
 export const getDailyShiftBreakdown = (date, opts = {}) => api.get('/daily-mis/shift-breakdown', { params: { date, ...opts } })
