@@ -223,3 +223,8 @@ After merge: one docs PR folds the 7 "## CLAUDE.md entry" blocks from each branc
 - POST /employees accepts gross on create (P2-11 noted; = earlier P2-11 follow-up).
 - HR still sees the manual-flag Verify button, which now answers 403.
 - Login limit 5 per 15 min is not configurable.
+
+### Batch 3 close-out (12 Oct 2026 ~00:40 IST)
+- #133–#139 all MERGED. #140 MERGED: statutoryWriters T9b built "today" in UTC while the route stamps IST (since #130) → failed nightly 00:00–05:30 IST; test now uses IST. Full suite run inside that window: only T9b failed, so no other date-boundary test.
+- #141 MERGED: CLAUDE.md entries for batch 3.
+- Lesson: run the full jest once between 00:00–05:30 IST in the integration step when a batch touches date handling.
