@@ -6,6 +6,224 @@
   The planner folds them into CLAUDE.md in one docs-only PR after a batch merges.
 - Why: both files changed in every PR, so each merge put every other open PR into conflict.
 
+## Last Session — 2026-10-11 (N-FRESH: lists stale up to 5 s after an action; finance 403 on Miss Punch)
+**Branch `fix/fresh-reads-after-actions`, MERGED (#131).** Frontend only. Findings N-7, N-9, N-15. Plan + log:
+`docs/ux-bulk/prs/N-FRESH/PLAN.md`, `PROGRESS.md`. Rulings Q1–Q4 (11 Oct).
+- **Bug:** server.js sends `private, max-age=5` on every GET, so a refetch < 5 s after the last read got the browser's
+  pre-action copy (Stage 6 list after Run, Miss Punch after resolve/approve/reject, Night Shift after confirm/reject).
+  The pages refetched only the current filter, so other Miss Punch chips stayed stale up to 30 s (react-query staleTime),
+  and a Night Shift reject never refreshed the Miss Punch list. Miss Punch called the hr/admin-only
+  `GET /features/leave-automation/status` for every role → finance got a 403 + console error on load and every 30 s.
+- **Fix:** `utils/api.js` adds `fresh` (no-cache) to getMissPunches, getNightShifts, getDayCalculations,
+  getDayCalcStaleness and getDWEntries (for P1-18). MissPunch: status query `enabled: canHR`; every action invalidates the
+  `['miss-punches']` prefix; finance approve/reject also invalidate `['day-calculations']` + `['day-calc-staleness']`.
+  NightShift: invalidate `['night-shifts']` (+ `['miss-punches']` on reject). DayCalculation Run: `['day-calculations']`
+  prefix; the two bare-array `invalidateQueries([...])` calls (v5 reads them as "invalidate everything") now use `{ queryKey }`.
+- **Fragile:** any new action on these pages must invalidate the query-key PREFIX, not call `refetch()`. getMissPunches is
+  also read by Dashboard (now no-cache there too — harmless). Finance no longer loads the auto-Stage-6 status (never could).
+- **Verified:** `backend/scripts/fresh-reads-check.py` (Chromium, built dist, scratch DB, hr + finance, fictional T98xx,
+  port 3133) 39/39 — every action read < 5 s after the list load shows the change; cached chips updated; rejected night
+  day appears in Miss Punch without reload; no-cache on all five GETs; finance 0 console errors / 0 API ≥ 400; 390 px.
+  `--base` on c942563f 30/30: every stale read reproduced + finance 403. jest 99 suites / 1566 before and after.
+- **Not tested:** Railway; Safari/Firefox (`no-cache` request header); P1-18's Submit-all flow itself.
+
+## Last Session — 2026-10-11 (N-MONEY: flag reject reverts in bulk; salary approval keeps components it was not given)
+**Branch `fix/salary-flag-reject-revert`, MERGED (#130). MONEY PR — independent review before PR.** Plan: `docs/ux-bulk/prs/N-MONEY/PLAN.md`.
+- **N-16:** `PUT /finance-audit/approve-flag/:id` + `/bulk-approve` now `requireFinanceOrAdmin` (prod reviewers: admin/finance only).
+  Shared `decideManualFlag()` — bulk REJECT of a GROSS_STRUCTURE_CHANGE flag reverts employees.gross + latest structure, writes
+  finance_rejections + FINANCE_FLAG_* + FINANCE_GROSS_REVERT audit exactly like the single route. Single = one txn, bulk = one
+  txn for the batch (Q2/Q5: any failure → 500, nothing written). An already-rejected flag is never reverted twice. If the
+  employee gross differs from the flag's new value by > ₹1 → 409 `GROSS_MOVED_SINCE` (Q1), nothing written. Review fixes: bulk
+  processes newest month first (F1); status must be APPROVED/REJECTED/CLEAR (400 BAD_STATUS, F2); old gross 0 → 409
+  NO_PREVIOUS_GROSS (F3); employee missing → 404 EMPLOYEE_NOT_FOUND (F4); card warns when components ≠ gross (F5).
+- **N-17:** `PUT /salary-input/approve/:id` — `resolveApproval()`: a component absent from the request keeps the structure in force
+  at effectiveFrom; present (0 incl.) written as sent; gross = explicit gross_salary, else sum of resolved components (Q3a).
+  Default effectiveFrom = IST today. `GET /pending-changes` returns `approval_preview` {components, kept, gross, effective_from}
+  from the same function; SalaryInput approver card shows kept values ("not in this request — current value kept") and the
+  gross the approval writes, red when it differs from the request's gross.
+- **Prod (counts, not repaired, Q4):** 43 employees had a non-zero conveyance zeroed by an approval; 1 GROSS flag rejected via
+  bulk never reverted (gross has moved since).
+- **Fragile:** Salary-Input requests carry no special/gross → approved gross = request sum + kept special (shown red on the card).
+  `logAudit` writes through getDb() (same connection as the txn). P1-22 browser script updated to the kept-value wording.
+- **Verified:** new `salaryFlagRevertAndApprove.test.js` 19 (13 fail on c942563f; the 6 that pass are controls); check script
+  29/29, `--base` 6/6; Stage 7 drift 0; P1-22 check 58/58; jest 101 suites / 1593. **Not tested:** Railway; production data.
+
+## Last Session — 2026-10-11 (N-REP: Reports — bank sheet held salaries, PF/ESI company, Audit Trail month + times)
+**Branch `fix/reports-company-held-audit`, MERGED (#129).** Plan + log: `docs/ux-bulk/prs/N-REP/PLAN.md`, `PROGRESS.md`.
+Findings N-3, N-2, N-1 (P1-02 review). Planner rulings Q1–Q4 + P1-14 account fallback (11 Oct).
+- **N-3 bank sheet:** `GET /reports/bank-transfer` had no held filter → total included held salaries (prod: Jul 46 rows,
+  Aug 16, Sep 19 ≈ ₹0.78 L). Now `COALESCE(sc.salary_held,0) = 0` (bank NEFT file rule); additive `held {count, amount}`;
+  `totalAmount`/`count` = sheet rows only. Account / IFSC = `COALESCE(NULLIF(TRIM(e.account_number),''), e.bank_account)`
+  (same for ifsc) — the expression P1-14 puts in exportFormats.js, so sheet and NEFT file list the same people.
+  UI: total from the server + amber "N held salaries (₹X) are not in this sheet" line.
+- **N-2 PF / ESI Statements:** now `${company ? 'AND sc.company = ?' : ''}` (blank = all). Held rows stay (contribution
+  still due). Compliance.jsx (already sends company) gets the fix too. Rows with a blank company label drop out when a
+  company is selected — same as ECR / ESI / bank files.
+- **N-1 Audit Trail:** page read `created_at` (column is `changed_at`) → blank times; month/year ignored → last 1,000 of
+  all time. Server: month+year → IST month as a UTC range on the stored column (`changed_at >= datetime(M-01,'-330
+  minutes') AND < datetime(M+1-01,'-330 minutes')`); returns `changed_at AS created_at` too (Settings → Audit tab shows
+  times without an edit), `total`, `truncated`; cap 1,000 kept (every prod month has > 1,000 rows); company ignored
+  (no column). No month → unchanged. UI: IST "DD-MM-YYYY HH:MM", count line "latest 1,000 of N … Not filtered by company",
+  CSV column "Timestamp (IST)".
+- **Fragile:** the bank-sheet account/IFSC expression must stay identical to exportFormats.js `generateBankFile` (P1-14)
+  or sheet and file disagree on who has a bank account. Settings → Audit tab relies on the `created_at` alias.
+  `salary_held` NULL counts as not held here but is excluded by the file's `= 0` (prod: 0 NULL rows).
+- **Verified:** new `reportsCorrectness.test.js` 11 (11/11 fail on c942563f); jest 99/1566 → 101/1585 after merging main.
+  `backend/scripts/reports-correctness-check.py` (Chromium, built dist, hr + finance, port 3131) 55/55 — bank rows/total/
+  held note per company, fallback account, CSVs, PF/ESI per company, audit IST month edges + times + count line, 1,003-row
+  month cap line, alias, 390px, empty month, 0 page/console errors, 0 API ≥ 400. `--base` on c942563f 4/4.
+- **Not tested:** Railway; Safari/Firefox; production data in the UI.
+
+## Last Session — 2026-10-11 (P1-18: Daily wage imported drafts were invisible)
+**Branch `fix/dw-drafts-visible`, MERGED (#128).** Frontend only (`pages/DailyWageBatchImport.jsx`, `pages/DailyWageRecords.jsx`).
+Plan + log: `docs/ux-bulk/prs/P1-18/PLAN.md`, `PROGRESS.md`. Finding D-1. Rulings Q1 (no api.js edit — no-cache comes from
+N-FRESH), Q2 (auto-redirect removed), Q3 (no confirm).
+- **Bug:** batch import creates every row as `hr_entered` (Draft); the done screen said "Import Complete" and redirected
+  after 1.5 s, throwing away the returned ids; Records had no Draft / Needs-correction card (the API already returned both
+  counts), so drafts — which finance never sees — sat unseen. Prod: 2 drafts + 1 needs-correction (Apr 2026), 0 batch imports ever.
+- **Fix:** done screen "N entries created as drafts — finance does not see drafts" + "Submit all N for finance review" (existing
+  `POST /entries/batch-submit` with the imported ids; useRef in-flight guard — a double click sent two submits and the
+  second's 400 replaced the success) + "Leave as drafts — open drafts list" (`/daily-wage?status=hr_entered`). A refusal
+  (all-or-nothing) shows the server message, nothing changes. Records: Draft + Needs Correction cards (filter the list, tinted
+  when > 0), `?status=` honoured for known keys only, a hint line per filter. `['dw-entries']` invalidated after Submit all and
+  after Submit Selected (success AND error). No backend change.
+- **Fragile:** `getDWEntries` still lacks `no-cache` until N-FRESH lands — a refetch inside the server's 5 s cache window can
+  show the old status. Card counts are global (ignore contractor/date/company filters), same as the existing cards.
+- **Verified:** `backend/scripts/dw-drafts-visible-check.py` (Chromium, local build, scratch DB, hr, fictional "TEST GANG ALPHA",
+  port 3118) 37/37 twice — cards = DB counts + filter, import 3 → done screen, no redirect, double-click = 1 POST with the 3
+  ids, 3 rows pending_finance + 3 'submitted' approvals, edge (one draft submitted elsewhere → refusal shown, others stay
+  drafts), Open drafts → Draft filter, Submit Selected, `?status=bogus` ignored, 390px card, 0 page errors.
+  `--base` on c942563f 7/7: no cards, no draft wording, no Submit all, auto-redirect. jest 99 suites / 1566 before and after.
+- **Not tested:** Railway; Safari/Firefox; finance/viewer view of the new cards (hint text omits the HR action for them, by code).
+
+## Last Session — 2026-10-11 (P1-14: Employee bank edits wrote the wrong column pair; salary split reset on save)
+**Branch `fix/employee-bank-columns`, MERGED (#127). MONEY PR — independent review by the planner.** Plan + log:
+`docs/ux-bulk/prs/P1-14/PLAN.md`, `PROGRESS.md`. Finding H-2. Rulings Q1–Q6 (11 Oct 2026).
+- **Bug:** employees has two bank pairs — A `account_number`/`ifsc_code` (read FIRST by the plant NEFT file + bank
+  transfer sheet) and B `bank_account`/`ifsc` (payslip, payroll register). The Employee Master salary window
+  (`PUT /:code/salary`) saved into B only → an edited account never reached NEFT (old account paid); it showed A only,
+  so a save wiped the account of B-only employees (6 active); its split read `salary_structures` (API key is
+  `salaryStructure`) from the LIST row → always 50/20 and a same-gross save rewrote basic/da/hra/special/other
+  (special + other zeroed). NEFT also read `COALESCE(A, B)`, so A = '' hid a filled-in B (1 active person left out).
+- **Fix:** new `services/bankPair.js` (`readBankPairs`, `normAccount` trim, `normIfsc` trim + upper, blank → NULL).
+  Canonical A, mirror to B on EVERY write: `PUT /:code/salary`, `PUT /:code` (either name; both names with different
+  values → 400 `BANK_PAIR_MISMATCH`, nothing written), `POST /`. A key left out keeps all stored columns. Every real
+  change writes a masked audit row (stage `bank_details_change`, last 4 only). Portal `PATCH /bank-details` → 403
+  `BANK_CHANGE_VIA_HR` (review F1). `PUT /:code/salary` same gross AND same split → structure NOT rewritten (`structureUnchanged`);
+  a changed split at the same gross still writes (as before). `exportFormats.generateBankFile` reads
+  `COALESCE(NULLIF(TRIM(A),''), B)` (Q1). `Employees.jsx` SalaryModal renders only after the no-cache detail fetch,
+  form from `salaryStructure` (special % = special_allowance / gross, other = other_allowances), bank fields A else B.
+  dist not committed.
+- **Fragile:** a new writer of either pair must use `readBankPairs`, write all four columns and call
+  `auditBankChange` after the write (old value = A else B, so re-sending a B-only value is no change).
+  `splitUnchanged()` ignores conveyance (the window cannot edit it); a changed split at the same gross can leave
+  basic+da+hra+special+other+conveyance > gross on rows with conveyance (44 active) — pre-existing behaviour (F5).
+  Portal bank change is closed (403) — HR changes bank details. `splitUnchanged()`
+  compares the fields the window sends — add any new split field there. reports.js bank transfer sheet still had the
+  old COALESCE (N-REP builder). Production data NOT repaired: 321 '' in account_number, 434 '' in ifsc_code, 6 B-only
+  accounts, 114 with an account and no IFSC — owner decision.
+- **Verified:** new `employeeBankColumns.test.js` 24 (15 fail on c942563f; the 9 that pass are role 403s, no-audit
+  cases and unchanged behaviour). NEFT md5 on a scratch DB (81 fictional combos): without A=''/B-set rows base = branch; with them
+  the 16 common lines are identical and only the 9 A=''/B-set rows are added. Browser check 24/24 (hr, built dist,
+  port 3114, 24 checks: stored split shown, special % to 2 decimals + untouched save identical, masked audit rows, edit → NEFT has new account, structure byte-identical, reopen inside 5 s shows new
+  values, B-only shown + kept + in NEFT, clear → NULL + out of NEFT, 390 px, 0 errors); `--base` 10/10 (50/20, NEFT
+  old account, structure rewritten, B-only wiped). jest 99/1566 → 102/1606 (after merging main).
+- **Not tested:** Railway; production data; Safari/Firefox.
+- **Found, not fixed:** `PUT /:code/salary` same-gross split change still rewrites components with no finance
+  approval (planner logged separately); 114 active employees have no IFSC in either pair.
+
+## Last Session — 2026-10-11 (P1-13: Finance Verification company filter did nothing; sign-off kept the first decision)
+**Branch `fix/finverify-company-scope`, MERGED (#126).** Plan + log: `docs/ux-bulk/prs/P1-13/PLAN.md`, `PROGRESS.md`. Finding F-4 (+ N-18).
+Rulings 11 Oct: Option B (one month-wide sign-off for all companies), Q2 delete NULL-company rows in the same txn, Q3 latest decision wins.
+- **Bug:** the page showed a company dropdown no read used (counts, red flags, sign-off all month-wide). The sign-off was
+  written with company NULL; UNIQUE(month, year, company) never conflicts on NULL, so every sign-off appended a row and reads
+  returned the FIRST one → approve then reject kept showing "Approved", and payroll.js's /finalise gate (any approved row for
+  the month) stayed unlocked after a reject. Prod: 0 sign-off rows ever; salary rows carry dirty company labels (Aug+Sep 114
+  of 556 blank), ~1 Indriyan row/month — per-company scoping would have hidden rows from both views.
+- **Fix (`routes/financeVerification.js`):** sign-off row keyed on company '' (`SIGNOFF_SCOPE`), body company ignored; one
+  transaction deletes that month's `company IS NULL` rows then upserts → one row per month, latest wins, a reject re-locks the
+  finalise gate (payroll.js untouched). `latestSignoff()` (COALESCE(company,'')='' ORDER BY id DESC) feeds /dashboard and
+  /signoff-status; replies carry `scope: 'all'`; POST /signoff returns the stored row. **UI (`FinanceVerification.jsx`):**
+  page CompanyFilter → "All companies" chip (`finverify-scope-note`), subtitle + sign-off modal line "This sign-off covers all
+  companies for <Month YYYY>". signoffMut sets the sign-off query from the POST reply and refetches only the dashboard
+  (getFinanceSignoffStatus has no `fresh`; api.js not owned this batch). dist not committed.
+- **Fragile:** the global top-bar company selector still exists and does nothing here (the chip says so). A per-company
+  sign-off later needs payroll.js's gate changed too. The new test copies the payroll gate SQL verbatim — re-copy if it changes.
+- **Verified:** jest `financeVerifySignoffScope.test.js` 9 (6 fail on c942563f); full jest 99/1566 → 100/1576 (after merging
+  main 01c89070). Browser `backend/scripts/finverify-company-scope-check.py` 25/25 (finance + admin, 2 fictional companies +
+  blank label, numbers = SQL, company chosen elsewhere changes nothing, approve → reject < 5 s banner Rejected, one row,
+  gate empty, legacy NULL row replaced, 390px, 0 page/console errors). `--base` on c942563f 9/9: dropdown changes nothing,
+  banner Approved after reject, 2 rows, gate still open. P1-15 `finverify-flag-reason-check.py` 32/32.
+- **Not tested:** Railway; Safari/Firefox; production data.
+- **Found, not fixed:** (1) GET /signoff-status has no `fresh` in api.js (works around via POST reply). (2) Global header company
+  selector applies nowhere on this page. (3) Prod `monthly_imports` shows 2 finalised months in 2026 with 0 sign-off rows ever
+  — finalise happened before the gate or via another path (unverified).
+
+## Last Session — 2026-10-11 (P1-22: salary change approver could not see every component)
+**Branch `fix/salary-change-approver-view` (on origin/main 868f5389), MERGED (#118).** Frontend only (`pages/SalaryInput.jsx`,
+Pending Approvals cards). Plan + log: `docs/ux-bulk/prs/P1-22/PLAN.md`, `PROGRESS.md`. Finding F-2. Rulings Q1–Q3 (11 Oct).
+- **Bug:** a pending salary change card showed only Basic / DA / HRA + gross, old and new. Conveyance and Other
+  allowances never showed, nothing marked what changed, and no effective date — finance approved blind.
+- **Fix (display only, no route change):** each card has a Component | Current | Proposed table: Basic, DA, HRA,
+  Conveyance, Other allowances always; Special allowance only when non-zero on either side (Q3); Gross = stored
+  `old_gross` → `new_gross` (Q1). Proposed = what `PUT /approve/:id` writes (`parseFloat(x) || 0`): a component missing
+  from the request shows ₹0, highlighted, with "not in this request — approval sets it to 0" (Q2). Changed rows amber
+  + ▲/▼ (`data-changed`). No old structure → "—" + "No current structure on record". Line "Effective from: the day it is
+  approved (today, DD Mon YYYY)" — the screen still sends no `effectiveFrom` (by scope). P1-23 self-approval UI
+  untouched. dist rebuilt (own commit).
+- **MONEY FINDING (F-a, not fixed):** an Employee Master salary request (`PUT /employees/:code/salary`) stores no
+  `conveyance` key, so approving it writes conveyance 0 — an employee on conveyance loses it with no one asking for
+  that. The card now shows it (₹X → ₹0 + note). Likewise a Salary Input request carries no `special_allowance`, so its
+  approval zeroes a non-zero special allowance.
+- **Fragile:** `componentRows()` mirrors the approve route's parse rule by hand — change both. The effective line uses
+  the browser's date; the server uses the UTC date (F-b).
+- **Verified:** `backend/scripts/salary-change-approver-view-check.py` (Chromium, built dist, scratch DB, port 3122, hr
+  raises via API incl. Employee Master, fictional T2201–T2207 incl. 3 legacy rows NULL / bad JSON / `{}`) 57/57 — rows,
+  changed set, values, notes, effective line, hr view, 390px no sideways scroll, approve still applies, 0 page/console
+  errors, 0 API ≥ 400. `--base` on an 868f5389 build 9/9: Conveyance/Other absent, no effective date.
+  jest 96 suites / 1537 before and after.
+- **Not tested:** Railway; Safari/Firefox; production rows.
+- **Found, not fixed:** F-a above (money). F-b `effectiveFrom` default is the UTC date — an approval 00:00–05:30 IST is
+  dated the previous day. F-c `POST /request-change` `new_gross` leaves out special_allowance, approve includes it.
+
+## Last Session — 2026-10-11 (P1-21: Reports "Download All Payslips" button always got a 403)
+**Branch `fix/reports-bulk-payslips-403`, MERGED (#117).** Frontend only (`pages/Reports.jsx`, `utils/api.js` 1 line). Plan + log:
+`docs/ux-bulk/prs/P1-21/PLAN.md`, `PROGRESS.md`. Finding H-9. Rulings Q1 (keep tab, label "Payslips"), Q2 (leave payslipPdf.js), Q3 (Stage 7 link).
+- **Bug:** Reports → "Payslips (Bulk PDF)" → "Download All Payslips (PDF)" called `GET /api/payroll/payslips/bulk`, which answers
+  403 on purpose (bulk payslips disabled by company policy, April 2026) → every click = 403 + "Failed to generate payslips".
+- **Fix:** button, `handleBulkPayslips`, `bulkPdfLoading` and the two imports removed; tab relabelled "Payslips" and now shows a
+  note ("Bulk payslips are disabled by company policy. Download individual payslips from Stage 7…") + "Open Stage 7" link to
+  `/pipeline/salary`. The page sends no request to /payslips/bulk. Dead `getBulkPayslips` removed from `utils/api.js`.
+  Server route (403) and Stage 7 untouched. dist rebuilt (own commit).
+- **Fragile:** none new. The route stays and still answers 403 (pinned by `manualDeductionsRetired.test.js` T4).
+- **Verified:** `backend/scripts/reports-bulk-payslips-check.py` (Chromium, built dist, scratch DB, hr + finance, fictional
+  T2101/T2102, port 3121) 33/33 — note visible, no bulk button, 0 requests to /payslips/bulk, link opens Stage 7 and an individual
+  payslip opens there, Salary Register tab still loads, 390px, 0 page/console errors, 0 API ≥ 400. `--base` on 868f5389 4/4: click
+  → GET /payslips/bulk → 403 + error toast. jest 96 suites / 1537 before and after.
+- **Not tested:** Railway; Safari/Firefox.
+- **Found, not fixed:** `downloadBulkPayslipsPDF` in `frontend/src/utils/payslipPdf.js` is now a dead export (no caller).
+
+## Last Session — 2026-10-11 (P1-20: Apply Leave offered Comp Off and accepted an end date before the start)
+**Branch `fix/leave-form-type-and-dates`, MERGED (#116).** Frontend only (`pages/LeaveManagement.jsx`, `ApplyLeaveModal`). Plan + log:
+`docs/ux-bulk/prs/P1-20/PLAN.md`, `PROGRESS.md`. Finding H-7. Rulings Q1 (Applications type filter left as is), Q2 (Days keeps its value on a reversed range).
+- **Bug:** the Apply Leave type list offered "Comp Off", which `POST /api/leaves` refuses (accepts CL/EL/LWP only) → 400 on
+  submit. An end date before the start showed "1 day" (`Math.max(1, diff)`) and submitted; the server has no end ≥ start
+  check, so the row was saved with reversed dates as 1 day (prod: 0 such rows, 0 Comp Off rows ever).
+- **Fix:** `APPLY_LEAVE_TYPES` (CL/EL/LWP, commented to match routes/leaves.js) feeds the form's select; the Applications
+  filter still uses `LEAVE_TYPES`. `dateRangeInvalid` (ISO string compare) → red hint "End date must be on or after the start
+  date." (`data-testid="leave-date-hint"`) + Submit disabled; Days recomputed only for a valid range; end input `min=start`.
+  Comp-off tab untouched. Server untouched. dist rebuilt (own commit).
+- **Fragile:** the accepted type list now lives in two places (server L105 + `APPLY_LEAVE_TYPES`) — change both. The end ≥
+  start rule is UI-only.
+- **Verified:** `backend/scripts/leave-form-type-dates-check.py` (Chromium, built dist, scratch DB, real hr login, fictional
+  T9651–T9654, port 3120) 28/28 twice — types exactly CL/EL/LWP, hint + disabled + forced click sends no POST, Days kept,
+  fixed range submits 3 days, same-day LWP 1 day, start moved after end blocks, 390px EL submit, 0 page/console errors,
+  0 API ≥ 400. `--base` on an 868f5389 worktree 7/7: Comp Off → 400, reversed range saved as 1 day. jest 96 suites / 1537
+  before and after.
+- **Not tested:** Railway; Safari/Firefox date inputs; real production data.
+- **Found, not fixed:** (1) `POST /api/leaves` has no end ≥ start check (API callers). (2) its 400 text says "Must be CL or EL"
+  though LWP is allowed. (3) the Days field is free-editable and never checked against the date range.
+
 ## Last Session — 2026-10-11 (P1-19: Sales Mark Left always stored today's date)
 **Branch `fix/sales-mark-left-date`, NOT merged.** Frontend only (`pages/Sales/SalesEmployeeMaster.jsx`). Plan + log:
 `docs/ux-bulk/prs/P1-19/PLAN.md`, `PROGRESS.md`. Finding S-3. Planner rulings Q1 (backend untouched), Q2 (date only), Q3 (browser local date).
