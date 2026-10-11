@@ -59,6 +59,9 @@ const DEFAULT_CONFIG = Object.freeze({
     d4_half_day_min_count: 2,      // D-4 (owner 11 Oct): ½ day per 2 h exit only from this many 2 h exits in the month; fewer → they count as long exits (minutes rule)
     missed_out_from: 5,            // MP-2: from the person's Nth own missed punch in the month (bulk-failure days not counted) …
     missed_out_minutes: 120,       // … each missed OUT counts as an early exit of this many minutes
+    ladder_window_months: 3,       // PR-7 (D-10): strike months counted over this many months up to the month reviewed
+    ladder_deduction_from: 2,      // … a deduction stands from this many strike months (fewer → warning)
+    ladder_hearing_from: 3,        // … and an HR hearing is added from this many
   }),
   // 'import' = the shift the import matched each day (is_late_arrival / is_early_departure as stored);
   // 'master' = each person's CURRENT master shift (employees.default_shift_id), measured from the punches (owner ruling 10 Oct 2026).
@@ -70,6 +73,8 @@ const DEFAULT_CONFIG = Object.freeze({
   early_exit_rule: 'warning',      // 'warning' | 'option_c' | 'd4' (2 h+ exit = ½ day; 3+ exits of 60+ min = minutes deduction)
   late_long_always_counted: false, // D-6: a late of long_late_minutes+ is counted even when the full shift was worked
   missed_out_rule: false,          // MP-2: from the missed_out_from-th own missed punch, each missed OUT = an early exit of missed_out_minutes
+  ladder_rule: false,              // PR-7 (D-10): warning → deduction → deduction + HR hearing, by strike months in the window
+  ladder_from: '2026-08',          // PR-7: months before this are not counted as strikes (owner: count August and September)
   shift_fit: 'everyone',           // early exit not counted on a full-hours day: 'everyone' | 'habitual' (only habitual early leavers) | 'off'
   late_full_hours: true,           // late not counted on a day the person still worked the full shift length (owner ruling 10 Oct 2026)
   loading_designation_patterns: Object.freeze(['LOAD', 'LODING']),
@@ -169,7 +174,12 @@ function validateConfig(c) {
   }
   if (c.stayed_late_mode !== undefined && !(c.stayed_late_mode in MODES)) errs.push('stayed_late_mode must be worked | calendar | either');
   if (c.early_exit_rule !== undefined && !EARLY_RULES.includes(c.early_exit_rule)) errs.push('early_exit_rule must be warning | option_c | d4');
-  for (const k of ['late_long_always_counted', 'missed_out_rule']) if (c[k] !== undefined && typeof c[k] !== 'boolean') errs.push(`${k} must be true or false`);
+  for (const k of ['late_long_always_counted', 'missed_out_rule', 'ladder_rule']) if (c[k] !== undefined && typeof c[k] !== 'boolean') errs.push(`${k} must be true or false`);
+  if (c.ladder_from !== undefined && !(typeof c.ladder_from === 'string' && /^\d{4}-(0[1-9]|1[0-2])$/.test(c.ladder_from))) errs.push('ladder_from must be YYYY-MM');
+  if (c.thresholds && typeof c.thresholds === 'object') {
+    const lw = c.thresholds.ladder_window_months;
+    if (lw !== undefined && (!Number.isInteger(lw) || lw < 1 || lw > 12)) errs.push('ladder_window_months must be a whole number from 1 to 12');
+  }
   if (c.shift_fit !== undefined && !SHIFT_FIT.includes(c.shift_fit)) errs.push('shift_fit must be habitual | everyone | off');
   if (c.late_full_hours !== undefined && typeof c.late_full_hours !== 'boolean') errs.push('late_full_hours must be true or false');
   if (c.assessment_basis !== undefined && !BASES.includes(c.assessment_basis)) errs.push('assessment_basis must be import | master');
@@ -867,6 +877,140 @@ function actions(people, cfg, overrides, month, year) {
   return { actionList, earlyExitWarnings, overridesApplied: applied };
 }
 
+// ── step 7b: PR-7 escalation ladder (D-10) ────────────────────────────────
+
+/** The codes a stored or computed month result put on a list (action list or early-exit section, any action) = strikes. */
+function strikeCodes(result) {
+  const out = new Set();
+  for (const k of ['actionList', 'earlyExitWarnings']) for (const a of (result && result[k]) || []) out.add(String(a.code));
+  return out;
+}
+
+/** A month's release days as confirmed in its run (final, else draft); [] when no run. */
+function storedReleaseDays(db, month, year) {
+  const r = db.prepare('SELECT release_days FROM attendance_review_runs WHERE month = ? AND year = ?').get(month, year);
+  try { return r ? JSON.parse(r.release_days || '[]') : []; } catch { return []; }
+}
+
+/**
+ * Strike months of the ladder window BEFORE month M (M itself is added by applyLadder). Each month comes from its stored
+ * run (final, else draft), else is computed live with that month's rules (no ladder, no overrides); months before
+ * cfg.ladder_from and months without attendance count nothing. `cache` (Map ym → { codes, source }) is shared by callers
+ * that compute several months in a row (Trends). Returns { byCode: Map(code → [ym]), months: [{ ym, source }] }.
+ */
+function strikeHistory(db, month, year, cfg, cache = new Map()) {
+  const w = Math.max(1, Math.round(cfg.thresholds.ladder_window_months || 3));
+  const byCode = new Map(); const months = [];
+  let m = month; let y = year;
+  for (let i = 1; i < w; i++) {
+    ({ month: m, year: y } = prevMonth(m, y));
+    const ym = ymOf(m, y);
+    if (ym < (cfg.ladder_from || '0000-00')) break;
+    let hit = cache.get(ym);
+    if (!hit) {
+      const run = db.prepare('SELECT status, result_json FROM attendance_review_runs WHERE month = ? AND year = ?').get(m, y);
+      let res = null; if (run) { try { res = JSON.parse(run.result_json); } catch { res = null; } }
+      if (res) hit = { codes: strikeCodes(res), source: run.status };
+      else if (db.prepare('SELECT 1 FROM attendance_processed WHERE month = ? AND year = ? LIMIT 1').get(m, y)) {
+        const { config } = loadConfig(db, ym);
+        const mc = mergeConfig(config);
+        const rd = detectReleaseDays(db, m, y, mc).map((d) => d.date);
+        const pm = prevMonth(m, y);
+        const live = computeAttendanceReview(db, { month: m, year: y, config, releaseDays: rd, prevReleaseDays: storedReleaseDays(db, pm.month, pm.year), noLadder: true });
+        hit = { codes: strikeCodes(live), source: 'live' };
+      } else hit = { codes: new Set(), source: 'no attendance' };
+      cache.set(ym, hit);
+    }
+    months.push({ ym, source: hit.source });
+    for (const c of hit.codes) { const a = byCode.get(c) || []; a.unshift(ym); byCode.set(c, a); }
+  }
+  return { byCode, months: months.reverse() };
+}
+
+/**
+ * D-10 ladder on this month's lists: step = strike months in the window (this month included). A deduction at a step below
+ * ladder_deduction_from becomes a warning (downgraded_days kept); from ladder_hearing_from it carries an HR hearing.
+ * An admin override on the person wins (step recorded, action untouched). Mutates act; returns the ladder summary.
+ */
+function applyLadder(act, history, cfg, month, year) {
+  const t = cfg.thresholds; const cur = ymOf(month, year);
+  for (const item of [...act.actionList, ...act.earlyExitWarnings]) {
+    const months = [...(history.byCode.get(String(item.code)) || []), cur];
+    const step = months.length;
+    item.ladder = { step, months };
+    if (item.action !== 'deduction' || item.override) continue;
+    if (step < t.ladder_deduction_from) {
+      item.ladder.downgraded_days = item.deduction_days;
+      item.ladder.downgraded_amount = item.indicative_amount || 0;
+      item.action = 'warning'; item.deduction_days = 0; item.indicative_amount = 0;
+    } else if (step >= t.ladder_hearing_from) item.ladder.hearing = true;
+  }
+  return { rule: true, from: cfg.ladder_from, window_months: t.ladder_window_months, deduction_from: t.ladder_deduction_from,
+    hearing_from: t.ladder_hearing_from, months: history.months };
+}
+
+/**
+ * One month's review result for read-only views: the stored run (final, else draft), else computed live with that month's
+ * rules and detected release days (no overrides). null when the month has no attendance. `cache` as in strikeHistory.
+ */
+function monthResult(db, month, year, cache) {
+  const ym = ymOf(month, year);
+  const run = db.prepare('SELECT id, status, result_json FROM attendance_review_runs WHERE month = ? AND year = ?').get(month, year);
+  let res = null; if (run) { try { res = JSON.parse(run.result_json); } catch { res = null; } }
+  if (res) { if (cache) cache.set(ym, { codes: strikeCodes(res), source: run.status }); return { result: res, source: run.status, run_id: run.id }; }
+  if (!db.prepare('SELECT 1 FROM attendance_processed WHERE month = ? AND year = ? LIMIT 1').get(month, year)) return null;
+  const { config } = loadConfig(db, ym);
+  const rd = detectReleaseDays(db, month, year, mergeConfig(config)).map((d) => d.date);
+  const pm = prevMonth(month, year);
+  const live = computeAttendanceReview(db, { month, year, config, releaseDays: rd, prevReleaseDays: storedReleaseDays(db, pm.month, pm.year), ladderCache: cache });
+  if (cache) cache.set(ym, { codes: strikeCodes(live), source: 'live' });
+  return { result: live, source: 'live', run_id: null };
+}
+
+/**
+ * PR-7 person history: per month (oldest first) what the review said about one person, the notice-board prints that named
+ * them, and the finance rows review runs sent for them. months = [{ month, year }] (caller caps the count).
+ */
+function personHistory(db, code, months) {
+  code = String(code);
+  const cache = new Map(); const out = [];
+  for (const { month, year } of months) {
+    const ym = ymOf(month, year);
+    const mr = monthResult(db, month, year, cache);
+    if (!mr) { out.push({ ym, source: 'no attendance' }); continue; }
+    const r = mr.result;
+    const find = (k) => ((r && r[k]) || []).find((x) => String(x.code) === code) || null;
+    const p = find('people'); const a = find('actionList'); const e = find('earlyExitWarnings');
+    const item = a || e;
+    out.push({ ym, source: mr.source, run_id: mr.run_id, basis: (r.criteria && r.criteria.assessment_basis) || 'import',
+      worked_days: p ? p.worked_days : null, late_days: p ? p.late_days : 0, early_exits: p ? p.early_days : (e ? e.early_exits : 0),
+      list: a ? 'action list' : e ? 'early exits' : null, action: item ? item.action : null,
+      deduction_days: item ? item.deduction_days || 0 : 0, ladder: item && item.ladder ? item.ladder : null,
+      notice_late: !!find('noticeLate'), notice_early: !!find('noticeEarly'),
+      held: !!find('held') });
+  }
+  const first = months.length ? ymOf(months[0].month, months[0].year) : '';
+  const last = months.length ? ymOf(months[months.length - 1].month, months[months.length - 1].year) : '';
+  const boards = [];
+  for (const b of db.prepare(`SELECT id, record_id, new_value, changed_at, changed_by FROM audit_log
+      WHERE table_name = 'attendance_review_board' AND stage = 'ATTENDANCE_REVIEW_BOARD_PRINT' ORDER BY id`).all()) {
+    let snap = {}; try { snap = JSON.parse(b.new_value || '{}'); } catch { snap = {}; }
+    const ym = `${String(b.record_id).slice(0, 4)}-${String(b.record_id).slice(4, 6)}`;
+    if (ym < first || ym > last) continue;
+    const named = (snap.listed || []).find((x) => String(x[0]) === code);
+    const spotless = (snap.spotless || []).map(String).includes(code);
+    if (named || spotless) boards.push({ print_id: b.id, ym, to: snap.to || null, printed_at: b.changed_at, printed_by: b.changed_by,
+      as: named ? 'named' : 'on time every day', lates: named ? named[1] : 0, early: named ? named[2] : 0, missed: named ? named[3] : 0 });
+  }
+  const finance = db.prepare(`SELECT id, month, year, deduction_days, finance_status, is_applied_to_salary applied, remark, applied_at
+      FROM late_coming_deductions WHERE employee_code = ? AND remark LIKE '%[review run %' ORDER BY year, month, id`).all(code)
+    .filter((f) => { const ym = ymOf(f.month, f.year); return ym >= first && ym <= last; })
+    .map((f) => ({ id: f.id, ym: ymOf(f.month, f.year), deduction_days: f.deduction_days, finance_status: f.finance_status,
+      applied: !!f.applied, run_id: Number((/\[review run (\d+)\]/.exec(f.remark || '') || [])[1]) || null, sent_at: f.applied_at }));
+  const emp = db.prepare('SELECT code, name, department, designation FROM employees WHERE code = ? ORDER BY id LIMIT 1').get(code) || null;
+  return { code, employee: emp, months: out, boards, finance };
+}
+
 function notices(people, cfg) {
   const t = cfg.thresholds; const live = people.filter((p) => !p.held && p.cur);
   const noticeLate = live.filter((p) => p.cur.lates_counted >= t.notice_late)
@@ -1382,7 +1526,7 @@ function boardSnapshot(board) {
  * @param db better-sqlite3 handle
  * @param opts { month, year, config (merged), releaseDays [], prevReleaseDays [], overrides [] }
  */
-function computeAttendanceReview(db, { month, year, config, releaseDays = [], prevReleaseDays = [], overrides = [] }) {
+function computeAttendanceReview(db, { month, year, config, releaseDays = [], prevReleaseDays = [], overrides = [], noLadder = false, ladderCache }) {
   const cfg = mergeConfig(config);
   const cur = ymOf(month, year); const pm = prevMonth(month, year); const prev = ymOf(pm.month, pm.year);
   const mpPlan = missedOutPlan(db, month, year, cfg);
@@ -1395,6 +1539,9 @@ function computeAttendanceReview(db, { month, year, config, releaseDays = [], pr
   applyMissedOut(kept, mpPlan, cfg);
   classify(kept, cfg);
   const act = actions(kept, cfg, overrides, month, year);
+  // PR-7: the ladder applies to months from ladder_from when switched on (never inside a history look-up)
+  const ladder = !noLadder && cfg.ladder_rule === true && cur >= (cfg.ladder_from || '0000-00')
+    ? applyLadder(act, strikeHistory(db, month, year, cfg, ladderCache), cfg, month, year) : { rule: false };
   const nt = notices(kept, cfg);
   const { monthly, departments } = summarise(kept, cfg, cur, prev);
   const keptMap = new Map(kept.map((p) => [p.code, p]));
@@ -1435,7 +1582,8 @@ function computeAttendanceReview(db, { month, year, config, releaseDays = [], pr
       not_in_employee_master: live.filter((p) => !p.in_employee_master).map((p) => p.code) },
     criteria: { assessment_basis: cfg.assessment_basis, assess_fixed_miss_punch: cfg.assess_fixed_miss_punch !== false,
       thresholds: cfg.thresholds, stayed_late_mode: cfg.stayed_late_mode, early_exit_rule: cfg.early_exit_rule,
-      late_long_always_counted: cfg.late_long_always_counted === true, missed_out_rule: cfg.missed_out_rule === true, shift_fit: cfg.shift_fit, late_full_hours: cfg.late_full_hours !== false, loading_designation_patterns: cfg.loading_designation_patterns, remeasure: cfg.remeasure || {} },
+      late_long_always_counted: cfg.late_long_always_counted === true, missed_out_rule: cfg.missed_out_rule === true,
+      ladder_rule: cfg.ladder_rule === true, ladder_from: cfg.ladder_from, shift_fit: cfg.shift_fit, late_full_hours: cfg.late_full_hours !== false, loading_designation_patterns: cfg.loading_designation_patterns, remeasure: cfg.remeasure || {} },
     releaseDaysDetected: detectReleaseDays(db, month, year, cfg),
     shiftIssues: isMaster(cfg) ? [] : detectShiftIssues(db, month, year).filter((r) => !cfg.excluded_codes.includes(r.code)
       && !cfg.excluded_departments.map((d) => d.toUpperCase()).includes(String(r.department || '').toUpperCase())),
@@ -1443,6 +1591,8 @@ function computeAttendanceReview(db, { month, year, config, releaseDays = [], pr
     people: peopleOut, doubleDefaulters, regular,
     actionList: act.actionList, earlyExitWarnings: act.earlyExitWarnings,
     actionTotals: { people: act.actionList.length, deduction_notes: ded.length, warning_notes: act.actionList.length - ded.length,
+      ladder_warnings: [...act.actionList, ...act.earlyExitWarnings].filter((a) => a.ladder && a.ladder.downgraded_days).length,
+      hearings: [...act.actionList, ...act.earlyExitWarnings].filter((a) => a.ladder && a.ladder.hearing).length,
       deduction_days: ded.reduce((s, a) => s + a.deduction_days, 0), indicative_amount: ded.reduce((s, a) => s + a.indicative_amount, 0) },
     held: held.filter((p) => p.cur).map((p) => ({ code: p.code, name: p.name, department: p.department, late_days: p.cur.lates_counted, early_exits: p.cur.early_counted })),
     noticeLate: nt.noticeLate, noticeEarly: nt.noticeEarly,
@@ -1458,6 +1608,7 @@ function computeAttendanceReview(db, { month, year, config, releaseDays = [], pr
     standing: { people: Object.entries(cfg.standing_people).map(([code, v]) => ({ code, ...v, name: byCode.get(code)?.name || null, department: byCode.get(code)?.department || null })),
       departments: Object.entries(cfg.standing_departments).map(([department, v]) => ({ department, ...v })) },
     overridesApplied: act.overridesApplied,
+    ladder,
   };
 }
 
@@ -1600,4 +1751,5 @@ module.exports = {
   suggestions, applySuggestions, toStoredConfig, standingFrom, fitShift, MASTER_DAYS_SQL, LEGACY_REASON,
   noticeBoard, boardSnapshot, bulkMissPunchDays, istToday,
   missedOutPlan, applyMissedOut, d4Early, MISSED_OUT_TYPES,
+  strikeCodes, strikeHistory, applyLadder, storedReleaseDays, monthResult, personHistory,
 };
