@@ -32,6 +32,8 @@ const THRESHOLD_LABELS = {
   long_late_minutes: 'Long late from (minutes) — listed as a shift question; counted even on a full-hours day when ticked',
   d4_half_day_minutes: '2 h rule: early exit of this many minutes or more = ½ day', d4_long_minutes: '2 h rule: long early exit from (minutes)',
   d4_long_count: '2 h rule: long exits in the month before their minutes are deducted', d4_half_day_min_count: '2 h rule: number of 2 h exits in the month before each costs ½ day (fewer = warning)', missed_out_from: 'Missed OUT: counted from the person\'s Nth own missed punch',
+  ladder_window_months: 'Ladder: months looked back (this month included)', ladder_deduction_from: 'Ladder: months on a list before a deduction stands (fewer = warning)',
+  ladder_hearing_from: 'Ladder: months on a list before an HR hearing is added',
   missed_out_minutes: 'Missed OUT: counts as an early exit of (minutes)',
 }
 const LISTS = [
@@ -60,6 +62,7 @@ export default function AttendanceReviewConfig({ month, year }) {
       assessment_basis: c.assessment_basis || 'import', assess_fixed_miss_punch: c.assess_fixed_miss_punch !== false,
       contract_loaders_early_exempt: c.contract_loaders_early_exempt !== false,
       late_long_always_counted: c.late_long_always_counted === true, missed_out_rule: c.missed_out_rule === true,
+      ladder_rule: c.ladder_rule === true, ladder_from: c.ladder_from || '2026-08',
       board_footer_en: c.board_footer_en || '', board_footer_hi: c.board_footer_hi || '',
       people: Object.entries(c.standing_people || {}).map(([code, v]) => ({ ...v, code })),
       depts: Object.entries(c.standing_departments || {}).map(([department, v]) => ({ ...v, department })),
@@ -77,6 +80,7 @@ export default function AttendanceReviewConfig({ month, year }) {
         assessment_basis: form.assessment_basis, assess_fixed_miss_punch: !!form.assess_fixed_miss_punch,
         contract_loaders_early_exempt: !!form.contract_loaders_early_exempt,
         late_long_always_counted: !!form.late_long_always_counted, missed_out_rule: !!form.missed_out_rule,
+        ladder_rule: !!form.ladder_rule, ladder_from: form.ladder_from || '2026-08',
         board_footer_en: form.board_footer_en, board_footer_hi: form.board_footer_hi,
         // standing rules keep who set them and why; a row edited here keeps its origin fields
         standing_people: Object.fromEntries(form.people.filter((r) => r.code.trim()).map(({ code, ...v }) => [code.trim(), { ...v, reason: String(v.reason || '').trim() }])),
@@ -198,6 +202,14 @@ export default function AttendanceReviewConfig({ month, year }) {
               onChange={(e) => setForm((f) => ({ ...f, missed_out_rule: e.target.checked }))} />
             <span><span className="text-xs font-semibold text-slate-600">Missed OUT counts as an early exit</span><br />
               <span className="text-[11px] text-slate-400">From the person's {form.thresholds.missed_out_from ?? 5}th own missed punch in the month, each missed OUT counts as an early exit of {form.thresholds.missed_out_minutes ?? 120} min. System-failure days (many missed punches plant-wide) are not counted.</span></span></label>
+          <label className="flex items-start gap-2 text-sm">
+            <input aria-label="Escalation ladder" type="checkbox" className="mt-1" checked={!!form.ladder_rule}
+              onChange={(e) => setForm((f) => ({ ...f, ladder_rule: e.target.checked }))} />
+            <span><span className="text-xs font-semibold text-slate-600">Escalation ladder: warning → deduction → deduction + HR hearing</span><br />
+              <span className="text-[11px] text-slate-400">Counts the months the person was on a list in the last {form.thresholds.ladder_window_months ?? 3} months (this one included). First month: the deduction becomes a warning; from the {form.thresholds.ladder_deduction_from ?? 2}nd: deduction; from the {form.thresholds.ladder_hearing_from ?? 3}rd: deduction + HR hearing.</span>
+              <span className="flex items-center gap-2 mt-1 text-[11px] text-slate-500">Count months from
+                <input aria-label="Ladder counts from" type="month" className="input py-0.5 text-xs w-36" value={form.ladder_from || '2026-08'}
+                  onChange={(e) => setForm((f) => ({ ...f, ladder_from: e.target.value }))} /></span></span></label>
           <label className="flex items-start gap-2 text-sm">
             <input aria-label="Late not counted on a full-hours day" type="checkbox" className="mt-1" checked={!!form.late_full_hours}
               onChange={(e) => setForm((f) => ({ ...f, late_full_hours: e.target.checked }))} />
