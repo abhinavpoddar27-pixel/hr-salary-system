@@ -25,7 +25,7 @@
 - [x] F4 employee missing → 404 EMPLOYEE_NOT_FOUND
 - [x] F5 approval_preview.componentSum; amber card note when |sum − gross| > ₹1 (approval math unchanged, Q3a)
 - Known, not fixed: F6–F8 as listed in the planner's review (text held by the planner)
-- [x] jest file 23/23; check 31/31; P1-22 check 58/58
+- [x] jest file 23/23; check 31/31; P1-22 check 58/58; merged origin/main 4fa0e70f; full jest 102 suites / 1605 green
 
 ## CLAUDE.md entry
 ## Last Session — 2026-10-11 (N-MONEY: flag reject reverts in bulk; salary approval keeps components it was not given)
