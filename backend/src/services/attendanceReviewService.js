@@ -56,6 +56,7 @@ const DEFAULT_CONFIG = Object.freeze({
     d4_half_day_minutes: 120,      // D-4: each counted early exit of this many minutes or more = ½ day
     d4_long_minutes: 60,           // D-4: early exits of this many minutes or more …
     d4_long_count: 3,              // … this many or more in the month → the minutes of the ones under d4_half_day_minutes are deducted
+    d4_half_day_min_count: 2,      // D-4 (owner 11 Oct): ½ day per 2 h exit only from this many 2 h exits in the month; fewer → they count as long exits (minutes rule)
     missed_out_from: 5,            // MP-2: from the person's Nth own missed punch in the month (bulk-failure days not counted) …
     missed_out_minutes: 120,       // … each missed OUT counts as an early exit of this many minutes
   }),
@@ -299,9 +300,11 @@ SELECT c AS code, ym, COUNT(*) AS worked_days, SUM(f) AS worked_units, SUM(f*h*6
        SUM(CASE WHEN ise = 1 THEN COALESCE(wm,0) ELSE 0 END) AS early_wm_sum,
        -- D-4 buckets: exits >= @halfMin (½ day each) and @midMin .. @halfMin (minutes), plain and short-day versions
        SUM(CASE WHEN ise = 1 AND em >= @halfMin THEN 1 ELSE 0 END) AS early_half,
+       SUM(CASE WHEN ise = 1 AND em >= @halfMin THEN em ELSE 0 END) AS early_half_min,
        SUM(CASE WHEN ise = 1 AND em >= @midMin AND em < @halfMin THEN 1 ELSE 0 END) AS early_mid,
        SUM(CASE WHEN ise = 1 AND em >= @midMin AND em < @halfMin THEN em ELSE 0 END) AS early_mid_min,
        SUM(CASE WHEN ise = 1 AND short = 1 AND em >= @halfMin THEN 1 ELSE 0 END) AS early_short_half,
+       SUM(CASE WHEN ise = 1 AND short = 1 AND em >= @halfMin THEN em ELSE 0 END) AS early_short_half_min,
        SUM(CASE WHEN ise = 1 AND short = 1 AND em >= @midMin AND em < @halfMin THEN 1 ELSE 0 END) AS early_short_mid,
        SUM(CASE WHEN ise = 1 AND short = 1 AND em >= @midMin AND em < @halfMin THEN em ELSE 0 END) AS early_short_mid_min
 FROM z GROUP BY c, ym`;
@@ -568,7 +571,7 @@ function remeasureRows(db, month, year, cfg, releaseDays, prevReleaseDays, to = 
     const h = (toMin(rm.end) - toMin(rm.start)) / 60; const f = ['½P', 'WO½P'].includes(r.st) ? 0.5 : 1;
     const key = `${code}|${ym}`;
     const a = out.get(key) || { code, ym, worked_days: 0, worked_units: 0, sched_min: 0, shift_h: h, shift_h_missing: 0, late_raw: 0, late_excused: 0, lates: 0, late_min: 0, early_exits: 0, early_min: 0, early_long: 0, hours_excused: 0, remeasured: true,
-      long_lates: 0, long_late_min: 0, long_late_kept: 0, long_late_forgiven: 0, early_half: 0, early_mid: 0, early_mid_min: 0 };
+      long_lates: 0, long_late_min: 0, long_late_kept: 0, long_late_forgiven: 0, early_half: 0, early_half_min: 0, early_mid: 0, early_mid_min: 0 };
     a.worked_days += 1; a.worked_units += f; a.sched_min += f * h * 60;
     const inM = toMin(r.it); const outM = toMin(r.ot);
     const wmin = inM !== null && outM !== null && outM > inM ? outM - inM : null;
@@ -593,7 +596,7 @@ function remeasureRows(db, month, year, cfg, releaseDays, prevReleaseDays, to = 
       if (fullEarly) a.hours_excused += 1;
       else {
         a.early_exits += 1; a.early_min += earlyBy; if (earlyBy >= t.option_c_long_minutes) a.early_long += 1;
-        if (earlyBy >= t.d4_half_day_minutes) a.early_half += 1;
+        if (earlyBy >= t.d4_half_day_minutes) { a.early_half += 1; a.early_half_min += earlyBy; }
         else if (earlyBy >= t.d4_long_minutes) { a.early_mid += 1; a.early_mid_min += earlyBy; }
       }
     }
@@ -673,6 +676,7 @@ function applyExclusions(byCode, cfg) {
       m.early_long_counted = ee ? 0 : fit ? m.early_short_long : m.early_long;
       // D-4 buckets (re-measured rows never use the shift check, so they carry only the plain buckets)
       m.early_half_counted = ee ? 0 : (fit ? m.early_short_half : m.early_half) || 0;
+      m.early_half_min_counted = ee ? 0 : (fit ? m.early_short_half_min : m.early_half_min) || 0;
       m.early_mid_counted = ee ? 0 : (fit ? m.early_short_mid : m.early_mid) || 0;
       m.early_mid_min_counted = ee ? 0 : (fit ? m.early_short_mid_min : m.early_mid_min) || 0;
       m.long_lates_counted = p.loading ? 0 : (m.long_lates || 0);
@@ -730,21 +734,26 @@ function applyMissedOut(people, plan, cfg) {
       m.missed_out_days = n; m.missed_out_dates = dates;
       m.early_counted += n; m.early_min_counted += n * mins;
       if (mins >= t.option_c_long_minutes) m.early_long_counted += n;
-      if (mins >= t.d4_half_day_minutes) m.early_half_counted += n;
+      if (mins >= t.d4_half_day_minutes) { m.early_half_counted += n; m.early_half_min_counted = (m.early_half_min_counted || 0) + n * mins; }
       else if (mins >= t.d4_long_minutes) { m.early_mid_counted += n; m.early_mid_min_counted += n * mins; }
     }
   }
 }
 
 /**
- * D-4 (early_exit_rule 'd4'): ½ day per counted early exit of d4_half_day_minutes+; when exits of d4_long_minutes+ (the long ones
- * included) number d4_long_count or more, also the minutes of those under d4_half_day_minutes ÷ shift minutes.
+ * D-4 (early_exit_rule 'd4'): ½ day per counted early exit of d4_half_day_minutes+, but only when the month has
+ * d4_half_day_min_count or more of them (owner 11 Oct: "need 2"). With fewer, those exits are treated like the other long
+ * exits. When exits of d4_long_minutes+ (the 2 h ones included) number d4_long_count or more, the minutes of the long exits
+ * that are not charged as ½ days ÷ shift minutes are deducted too.
  * raw = unrounded days; days = rounded to the ½ day (minimum ½) when raw > 0.
  */
 function d4Early(m, t) {
   if (!m) return { half_days: 0, long_exits: 0, minutes: 0, raw: 0, days: 0 };
-  const half = m.early_half_counted || 0; const long = half + (m.early_mid_counted || 0);
-  const minutes = long >= t.d4_long_count ? (m.early_mid_min_counted || 0) : 0;
+  const two = m.early_half_counted || 0; const long = two + (m.early_mid_counted || 0);
+  const halfOn = two >= (t.d4_half_day_min_count ?? 1);
+  const half = halfOn ? two : 0;
+  const pool = (m.early_mid_min_counted || 0) + (halfOn ? 0 : (m.early_half_min_counted || 0));
+  const minutes = long >= t.d4_long_count ? pool : 0;
   const raw = 0.5 * half + (m.shift_h ? minutes / (m.shift_h * 60) : 0);
   return { half_days: half, long_exits: long, minutes, raw: r2(raw), days: raw > 0 ? roundDeduction(raw, t) : 0 };
 }
@@ -838,8 +847,9 @@ function actions(people, cfg, overrides, month, year) {
     if ((ov.get(p.code) || {}).action === 'exclude') continue;
     const c = p.cur;
     const d4 = d4Early(c, t);
-    // under D-4 a single 2 h+ exit (or a missed OUT under MP-2) is enough to be listed here; otherwise the 3+ warning line applies
-    if (c.early_counted < t.early_warning_min && !(cfg.early_exit_rule === 'd4' && d4.days > 0)) continue;
+    // under D-4 a 2 h+ exit (or a missed OUT under MP-2) is enough to be listed here — as a warning until the month has
+    // d4_half_day_min_count of them; otherwise the 3+ warning line applies
+    if (c.early_counted < t.early_warning_min && !(cfg.early_exit_rule === 'd4' && (d4.days > 0 || (c.early_half_counted || 0) > 0))) continue;
     const days = optionCDays(c, t);
     const line = { code: p.code, name: p.name, department: p.department, designation: p.designation, group: p.group,
       early_exits: c.early_counted, over_1h: c.early_long_counted, over_2h: c.early_half_counted || 0, missed_out_days: c.missed_out_days || 0,
@@ -1192,7 +1202,7 @@ function financeSendPlan(db, run) {
     create.push({ code: a.code, name: a.name, employee_id: e.id || null, company: e.company || null, deduction_days: a.deduction_days,
       late_count: a.late_days || 0, contractor, source: a._src,
       remark: a._src === 'early'
-        ? `Attendance Review ${ym} ${runTag(run.id)}: early exits — ${a.early_exits} exits${a.over_2h ? `, ${a.over_2h} of 2 h or more` : ''}${a.missed_out_days ? `, ${a.missed_out_days} missed OUT` : ''} (${a.d4 ? 'D-4 rule' : 'Option C'})`
+        ? `Attendance Review ${ym} ${runTag(run.id)}: early exits — ${a.early_exits} exits${a.over_2h ? `, ${a.over_2h} of 2 h or more` : ''}${a.missed_out_days ? `, ${a.missed_out_days} missed OUT` : ''}${a.d4 && a.d4.half_days ? `; ${a.d4.half_days} at ½ day each` : ''} (${a.d4 ? 'D-4 rule' : 'Option C'})`
         : `Attendance Review ${ym} ${runTag(run.id)}: ${a.late_days || 0} late, ${a.early_days || 0} early exits, ${a.workdays_lost} workdays lost`
           + (a.d4 && a.d4.half_days ? `; ${a.d4.half_days} exit(s) of 2 h or more at ½ day` : '')
           + (a.missed_out_days ? `; ${a.missed_out_days} missed OUT counted as 2 h early` : '')
