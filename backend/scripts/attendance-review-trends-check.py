@@ -101,7 +101,7 @@ try:
         print('\n— September finalised through the API —')
         g = api(pg, 'POST', '/api/analytics/attendance-review/runs', {'month': 9, 'year': 2026, 'releaseDays': [], 'overrides': []})
         rid = (g['body'] or {}).get('data', {}).get('id')
-        f = api(pg, 'PUT', f'/api/analytics/attendance-review/runs/{rid}/finalise')
+        f = api(pg, 'PUT', f'/api/analytics/attendance-review/runs/{rid}/finalise', {'acknowledge': 'Synthetic test month, checks reviewed'})
         check('Sep run generated + finalised', [True, 200], [g['status'] in (200, 201), f['status']])
         runs_before = q('SELECT COUNT(*) n FROM attendance_review_runs')[0]['n']
 
