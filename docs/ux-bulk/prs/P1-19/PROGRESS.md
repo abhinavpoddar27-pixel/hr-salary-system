@@ -13,4 +13,4 @@ Read PROMPT.md, PLAN.md, then this file. Never redo a ticked step. Planner appro
 - [ ] 8. CLAUDE.md Last Session entry; push; HEAD == origin
 
 ## Rulings
-(pending — Q1–Q3 in PLAN §4)
+Planner 11 Oct 2026: GO. Q1 backend untouched, found-not-fixed. Q2 date only, no reason box. Q3 browser local date.
