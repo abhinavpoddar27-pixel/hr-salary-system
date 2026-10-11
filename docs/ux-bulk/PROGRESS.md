@@ -9,7 +9,7 @@
 Programme:   UI/UX improvement + bulk input, HR Salary System (Indriyan / Asian Lakto)
 Base:        origin/main a5aec9a (10 Oct 2026). Re-check: git fetch origin; git log -1 origin/main
 Plan:        docs/ux-bulk/MASTER_PLAN.md (§5.2 = PR order, §6 = specs, §7 = bulk design, §14 = open questions)
-Current PR:  12 merged. 11 Oct: P1-05 #104, P1-24 #105, P1-23 #106 (Q6 = no self-approval), P1-25 #107 (employee edit cannot change salary; hr/admin only) — main 26fc35fc. Next: P1-13/15/16/17/19/20/21/22; N-9 fresh-reads PR; N-3 bank sheet includes held. Awaiting owner: Q5 (P1-07 retire legacy Stage 6 extra-duty tab — touches payroll.js bottom handlers). Lesson: re-sync open PRs after each merge (syncfast.sh, one build at a time).
+Current PR:  13 merged (P1-07 #109 11 Oct 10:16 IST, owner Q5 = remove). Next batch building in parallel: P1-15, P1-16, P1-17, P1-19, P1-20, P1-21, P1-22 (worktrees /home/claude/wt-p1-NN, port 31NN); then P1-13 (M), N-9 fresh reads, N-3. Lesson: re-sync open PRs after each merge (syncfast.sh, one vite build at a time — builders use flock /tmp/vite.lock).
 Asked, not answered: Q1 Q2 Q3 (P3-01/P5-02), Q4 (P1-04) — re-ask before those PRs
 Open Qs:     Q1 Q2 (needed by P3-01) · Q4 (P1-04) · Q5 (P1-07) · Q6 (P1-23) · Q10 (one-PR rule) — ask when the PR needs them
 Roles:       planner = new chat; builder = Claude Code agent session reading prs/<PR-ID>/PROMPT.md; Abhinav says "go" and merges in GitHub UI
@@ -64,7 +64,7 @@ Status values: `todo` · `plan` (Phase 0 written, waiting for go) · `build` · 
 | P1-04 | Stage 6 company-scope guard | merged #90 | fix/stage6-company-scope-guard | | | | Q4 default (always all companies); check 28/28, base 4/4 |
 | P1-05 | Stage 6 Apply Leave form reset | merged #104 | | | | | |
 | P1-06 | Leave rejection reason dropped + require | merged #91 | fix/leave-rejection-reason | | | | check 29/29; jest +5 |
-| P1-07 | Retire Payable OT grant tab + endpoint | todo | | | | | Q5, fragile payroll.js |
+| P1-07 | Retire Payable OT grant tab + endpoint | merged #109 | | | | | Q5, fragile payroll.js |
 | P1-08 | Stage 5 grid not refreshed after save | merged #92 | fix/stage5-grid-refresh | | | | +calendar + no-cache; check 34/34 |
 | P1-09 | Miss Punch banner based on filter | merged #97 | fix/misspunch-all-resolved-banner | | | | pending+financePending; check 33/33 |
 | P1-10 | Night Shift Undo → Reject pairing + confirm | merged #98 | fix/nightshift-undo-relabel | | | | check 44/44 |
@@ -147,6 +147,7 @@ Status values: `todo` · `plan` (Phase 0 written, waiting for go) · `build` · 
 | N-8 | P1-08 | Stage 5 editor: miss-punch cell stays red after edit; failed save has no page-level error | later PR |
 
 ## Session log (newest first; one line per meaningful event)
+- 11 Oct 2026 10:16 IST — P1-07 #109 merged (legacy Payable OT grant → 410, tab removed; built by planner directly). Next batch of 7 launched.
 - 11 Oct 2026 09:02 IST — #105 #106 #107 merged by owner (re-synced #106/#107 after each merge, CI green). Q5 explained to owner, awaiting yes/no.
 - 11 Oct 2026 00:43 IST — all 8 P1 PRs merged (#86 #90 #91 #92 #97 #98 #99 #100); each merge forced a dist/CLAUDE.md re-sync of the rest (done by planner, CI green each time). main = 18bef07.
 - 11 Oct 2026 ~00:30 IST — P1-09/10/11/12 built in parallel (planner approved Phase 0s) → PRs #97–#100. All 8 open branches synced with main (dist rebuilt, jest 87–88 suites green). Planner mod `ux-bulk-control` written (pane + /ux-status + status line).
