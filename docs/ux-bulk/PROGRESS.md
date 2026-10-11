@@ -9,7 +9,7 @@
 Programme:   UI/UX improvement + bulk input, HR Salary System (Indriyan / Asian Lakto)
 Base:        origin/main a5aec9a (10 Oct 2026). Re-check: git fetch origin; git log -1 origin/main
 Plan:        docs/ux-bulk/MASTER_PLAN.md (§5.2 = PR order, §6 = specs, §7 = bulk design, §14 = open questions)
-Current PR:  13 merged (P1-07 #109 11 Oct 10:16 IST, owner Q5 = remove). Next batch building in parallel: P1-15, P1-16, P1-17, P1-19, P1-20, P1-21, P1-22 (worktrees /home/claude/wt-p1-NN, port 31NN); then P1-13 (M), N-9 fresh reads, N-3. Lesson: re-sync open PRs after each merge (syncfast.sh, one vite build at a time — builders use flock /tmp/vite.lock).
+Current PR:  13 merged. OPEN + green (planner re-ran every browser check on the merged tree): #112 P1-15, #113 P1-16, #114 P1-17, #115 P1-19, #116 P1-20, #117 P1-21, #118 P1-22. Re-sync the rest after each merge (syncfast.sh, sequential). Next: P1-13 (M), N-9 fresh reads, N-3, money follow-ups N-16/N-17.
 Asked, not answered: Q1 Q2 Q3 (P3-01/P5-02), Q4 (P1-04) — re-ask before those PRs
 Open Qs:     Q1 Q2 (needed by P3-01) · Q4 (P1-04) · Q5 (P1-07) · Q6 (P1-23) · Q10 (one-PR rule) — ask when the PR needs them
 Roles:       planner = new chat; builder = Claude Code agent session reading prs/<PR-ID>/PROMPT.md; Abhinav says "go" and merges in GitHub UI
@@ -72,14 +72,14 @@ Status values: `todo` · `plan` (Phase 0 written, waiting for go) · `build` · 
 | P1-12 | Sidebar/Header hook order | merged #100 | fix/sidebar-header-hook-order | | | | 6/6 switches crash on main; check 58/58 |
 | P1-13 | Finance Verify company filter | todo | | | | | |
 | P1-14 | Bank columns + salary split | todo | | | | | |
-| P1-15 | Finance Verify flag reason + Approve gate | todo | | | | | |
-| P1-16 | Interventions Reject All | todo | | | | | |
-| P1-17 | Import overwrite checkbox + month | todo | | | | | |
+| P1-15 | Finance Verify flag reason + Approve gate | PR #112 green | | | | | |
+| P1-16 | Interventions Reject All | PR #113 green | | | | | |
+| P1-17 | Import overwrite checkbox + month | PR #114 green | | | | | |
 | P1-18 | DW drafts invisible | todo | | | | | |
-| P1-19 | Sales Mark Left date | todo | | | | | |
-| P1-20 | Leave form Comp Off + date order | todo | | | | | |
-| P1-21 | Bulk payslips 403 | todo | | | | | |
-| P1-22 | Salary change approver view | todo | | | | | |
+| P1-19 | Sales Mark Left date | PR #115 green | | | | | |
+| P1-20 | Leave form Comp Off + date order | PR #116 green | | | | | |
+| P1-21 | Bulk payslips 403 | PR #117 green | | | | | |
+| P1-22 | Salary change approver view | PR #118 green | | | | | |
 | P1-23 | Salary change self-approval | merged #106 | | | | | Q6 |
 | P1-25 | Employee edit cannot change salary (N-12) | merged #107 | | | | | |
 | P1-24 | Miss Punch stray "0" | merged #105 | | | | | |
@@ -142,11 +142,15 @@ Status values: `todo` · `plan` (Phase 0 written, waiting for go) · `build` · 
 | N-13 | P1-25 | POST /employees sets gross on create with no approval (P2-11 role-guard PR) | later PR |
 | N-14 | P1-23 | approve-flag has no maker-checker; salary-change approvals send no effectiveFrom; SalaryInput lists not no-cache | later PR |
 | N-15 | P1-09 | finance gets 403 from leave-automation/status on every Miss Punch visit | later PR (one line) |
+| N-16 | P1-16 | MONEY: PUT /finance-audit/bulk-approve rejects GROSS_STRUCTURE_CHANGE without reverting gross (single route does); no finance_rejections/audit row; bulk-approve + approve-flag have no finance/admin role guard | next money PR |
+| N-17 | P1-22 | MONEY: approving an Employee Master salary request zeroes conveyance (request has none); Salary Input request zeroes special allowance; effective date = UTC day | next money PR |
+| N-18 | P1-15/19/20 | Server-side gaps: flag reason no minimum; sign-off ignores company; Sales mark-left accepts any dol; leaves accept end < start | later PR |
 | N-10 | P1-11 | Dashboard KPI/readiness/dept table look like "nothing yet" on failure; salary-manual-flags returns success:true on DB error | later PR |
 | N-11 | P1-10/P1-12 | Night-shift reject irreversible + no role guard (→P2-11); no ESLint rules-of-hooks | later |
 | N-8 | P1-08 | Stage 5 editor: miss-punch cell stays red after edit; failed save has no page-level error | later PR |
 
 ## Session log (newest first; one line per meaningful event)
+- 11 Oct 2026 ~11:40 IST — 7 builders (P1-15/16/17/19/20/21/22) built in parallel, planner approved Phase 0s, re-ran all checks on merged trees (32/56/38/40/28/33/57 all pass) → PRs #112–#118, CI green, mergeable.
 - 11 Oct 2026 10:16 IST — P1-07 #109 merged (legacy Payable OT grant → 410, tab removed; built by planner directly). Next batch of 7 launched.
 - 11 Oct 2026 09:02 IST — #105 #106 #107 merged by owner (re-synced #106/#107 after each merge, CI green). Q5 explained to owner, awaiting yes/no.
 - 11 Oct 2026 00:43 IST — all 8 P1 PRs merged (#86 #90 #91 #92 #97 #98 #99 #100); each merge forced a dist/CLAUDE.md re-sync of the rest (done by planner, CI green each time). main = 18bef07.
