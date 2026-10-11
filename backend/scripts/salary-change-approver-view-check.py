@@ -30,7 +30,7 @@ BASE_MODE = '--base' in sys.argv
 PORT = int(os.environ.get('PORT', '3122')); BASE = f'http://127.0.0.1:{PORT}'
 WORK = tempfile.mkdtemp(prefix='sal-view-'); DB = os.path.join(WORK, 'hr_system.db')
 C = 'Asian Lakto Ind Ltd'
-NOTE = 'not in this request — approval sets it to 0'
+NOTE = 'not in this request — current value kept'  # N-17: absent component keeps the current value
 PW = {'admin': 'Admin@123', 'hr': 'Indriyan@2025', 'finance': 'Finance@2025'}
 PASS = FAIL = 0
 
@@ -182,13 +182,13 @@ try:
             print('\n— T2202: Employee Master gross-only change (no conveyance key) —')
             r2 = rows(card(pg, 'T2202'))
             check('rows = five + gross (no special: zero both sides)', FIVE + ['gross'], [x[0] for x in r2])
-            check('conveyance ₹1,000 → ₹0 changed with note', ('₹1,000', '₹0', True, True), (r2[3][3], r2[3][4], r2[3][1], r2[3][5]))
+            check('conveyance ₹1,000 kept (not in request), unchanged, with note', ('₹1,000', '₹1,000', False, True), (r2[3][3], r2[3][4], r2[3][1], r2[3][5]))
             check('only conveyance carries the note', ['conveyance'], [x[0] for x in r2 if x[5]])
             check('note text', NOTE, card(pg, 'T2202').get_by_test_id('missing-note').first.inner_text().strip())
             check('basic ₹7,500 → ₹9,000 changed', ('₹7,500', '₹9,000', True), (r2[0][3], r2[0][4], r2[0][1]))
             check('DA ₹0 → ₹0 not changed', ('₹0', '₹0', False), (r2[1][3], r2[1][4], r2[1][1]))
             check('gross ₹15,000 → ₹18,000', ('₹15,000', '₹18,000', True), (r2[5][3], r2[5][4], r2[5][1]))
-            check('decrease arrow ▼ on conveyance', True, '▼' in card(pg, 'T2202').locator('tr[data-component=conveyance]').inner_text())
+            check('no arrow on kept conveyance', False, '▼' in card(pg, 'T2202').locator('tr[data-component=conveyance]').inner_text())
 
             print('\n— T2203: Employee Master with special allowance —')
             r3 = rows(card(pg, 'T2203'))
@@ -206,7 +206,8 @@ try:
             check('T2205 NULL JSON: renders five + gross', FIVE + ['gross'], [x[0] for x in r5])
             check('T2205 Current all "—" (no old structure)', ['—'] * 5, [x[3] for x in r5[:5]])
             check('T2205 "No current structure on record"', 1, card(pg, 'T2205').get_by_test_id('no-current').count())
-            check('T2205 every proposed component noted (approval writes 0)', 5, sum(1 for x in r5 if x[5]))
+            check('T2205 every proposed component noted (current value kept)', 5, sum(1 for x in r5 if x[5]))
+            check('T2205 proposed = current structure values (kept)', ['₹7,500', '₹0', '₹3,000', '₹1,500', '₹3,000'], [x[4] for x in r5[:5]])
             r6 = rows(card(pg, 'T2206'))
             check('T2206 bad JSON: basic — → ₹8,000 changed', ('—', '₹8,000', True), (r6[0][3], r6[0][4], r6[0][1]))
             check('T2206 four notes (da, hra, conveyance, other)', ['da', 'hra', 'conveyance', 'other_allowances'], [x[0] for x in r6 if x[5]])

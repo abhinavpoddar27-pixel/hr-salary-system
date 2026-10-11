@@ -43,7 +43,7 @@ function state(e, reqId) {
 
 async function raise(as, code, gross = 18000) {
   const r = await api.request('POST', '/api/salary-input/request-change', {
-    as, body: { employeeCode: code, reason: 'synthetic raise', newStructure: { basic: gross * 0.5, hra: gross * 0.2, other_allowances: gross * 0.3 } },
+    as, body: { employeeCode: code, reason: 'synthetic raise', newStructure: { basic: gross * 0.5, da: 0, hra: gross * 0.2, conveyance: 0, other_allowances: gross * 0.3 } },
   });
   expect(r.status).toBe(200);
   return db.prepare("SELECT id FROM salary_change_requests WHERE employee_code = ? AND status = 'Pending' ORDER BY id DESC").get(code).id;

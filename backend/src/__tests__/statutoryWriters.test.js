@@ -281,7 +281,7 @@ describe('T9b — salary approval carries the in-force flags', () => {
 
 const approve = (id, effectiveFrom) => api.request('PUT', `/api/salary-input/approve/${id}`, { as: 'fin1', body: { effectiveFrom } });
 const auditCount = (code) => db.prepare('SELECT COUNT(*) c FROM audit_log WHERE employee_code = ?').get(code).c;
-const NEW_SPLIT = { gross_salary: 18000, basic: 12000, hra: 3600, other_allowances: 2400 };
+const NEW_SPLIT = { gross_salary: 18000, basic: 12000, da: 0, hra: 3600, conveyance: 0, special_allowance: 0, other_allowances: 2400 };
 
 describe('T11b — plant approval after the upload: back-dated refused, same-date in place, later-dated new row (10 Oct 2026 ruling)', () => {
   test('effectiveFrom before the 2026-09-01 row → 409, nothing written (master + request included), May–Oct byte-identical; bad format → 400', async () => {
