@@ -1,6 +1,6 @@
 # PR-9 — person drill-down: every day of the month (plan item G10)
 
-Branch `feat/attendance-review-person-days` (from main fa43014). Read only — no table written, no schema change, no
+Branch `feat/attendance-review-person-days` (stacked on PR-8 `feat/attendance-review-plant-late-days` #144 — merge #144 first; base main 92ff32fd). Read only — no table written, no schema change, no
 protected file.
 
 ## What
@@ -25,22 +25,36 @@ protected file.
 
 ## Progress
 - [x] service personMonthDays + personMonthInputs (exported first)
-- [ ] route
-- [ ] jest (invariant on both bases, every excuse kind, 400/404/403, nothing written)
-- [ ] api.js + UI
-- [ ] browser check + older scripts
-- [ ] self-debug / user simulation / v2
+- [x] route
+- [x] jest (invariant on both bases, every excuse kind, 400/404/403, nothing written) — 17
+- [x] api.js + UI
+- [x] PR-8 ticks followed (late_free_days from the run; verdict `excused:plant_late_day`; re-measure too)
+- [x] browser check 31/31 + older scripts
+- [x] self-debug / user simulation / v2
 
 ## Results
-(pending)
+- jest `attendanceReviewPersonDays.test.js` 17 (invariant for every person under 4 rule sets × both bases, every excuse
+  kind named, PR-8 tick, stored-run vs live inputs, null with no attendance, API 400/404/403/401, nothing written,
+  history route not shadowed). Full suite (on top of PR-8) 111 suites / 1999 tests, all green.
+- Browser `attendance-review-person-days-check.py` 31/31 (31 day rows = API, totals = month row, release-day reason,
+  live September on the master basis, re-measured day, no-master / night / 404 / 400 / hr 403, phone 390, nothing written).
+  Re-run: ladder 22, tab 49, plant-late-days 29.
+- v2 (planner review, 12 Oct): (1) made the drill-down follow PR-8's ticked plant-wide late days — without it, after both
+  PRs merge the day list would show a ticked day's late as counted while the review excused it (invariant broken).
+  (2) Phone: the day table sat inside the months table's own scroll box (two nested sideways scrolls; 555 px wide on a
+  390 px screen). Opened months now render BELOW the months table ("Every day — Oct 2026"), each in its own scroll box.
 
 ## Fragile
 - `DAY_TAIL_CUT` slices `PERSON_MONTH_TAIL` at `\nSELECT c AS code, ym, COUNT(*)` — if that SELECT line changes, the
   function throws (loud, not wrong).
-- `remeasureDays` mirrors `remeasureRows` by hand.
+- `remeasureDays` mirrors `remeasureRows` by hand (incl. the PR-8 plant-day excuse) — change both.
+- One request runs the plant-wide month SQL and filters to the person (≈ 1 s on the master basis for ~300 people; ≈ 0.4 s once #143's MATERIALIZED change is in).
 
 ## Session note (for CLAUDE.md, folded in by the planner)
-(pending)
+PR-9 (G10) person day drill-down: `GET /person/:code/days?month&year` → `personMonthDays` (engine SQL reused per day;
+only re-measure re-implemented in JS as `remeasureDays`); inputs = the month's stored run (config snapshot, release days,
+plant-wide late days) else rules in force + detected release days; `consistent` = counted days/minutes equal the engine.
+UI: person history → expand a month → every day below the months table.
 
 ## Resume
 Read this file + `git log --oneline fa43014..`; continue at the first unticked line.

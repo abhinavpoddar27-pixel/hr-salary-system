@@ -179,14 +179,18 @@ export function PersonHistory({ code, month, year, onClose }) {
                           </>
                         )}
                       </tr>
-                      {open[m.ym] && (
-                        <tr><td colSpan={9} className="px-1 py-2 max-w-0"><PersonMonthDays code={code} ym={m.ym} expect={m} /></td></tr>
-                      )}
                       </React.Fragment>
                     ))}
                   </tbody>
                 </table>
               </div>
+              {/* G10: opened months' days, below the months table (not inside it) so the day table scrolls in its own box on a phone */}
+              {d.months.filter((m) => open[m.ym]).map((m) => (
+                <div key={`days-${m.ym}`} className="min-w-0">
+                  <div className="font-semibold text-slate-700 mb-1">Every day — {ymLabel(m.ym)}</div>
+                  <PersonMonthDays code={code} ym={m.ym} expect={m} />
+                </div>
+              ))}
               <div>
                 <div className="font-semibold text-slate-700 mb-1">Notice board</div>
                 {d.boards.length ? (
