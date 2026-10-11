@@ -6,9 +6,9 @@ Read PROMPT.md, then PLAN.md. Phase 0 done; waiting for planner "go". Do not wri
 ## Steps
 - [x] Phase 0: read code (BatchImport, Records, routes/dailyWage.js import/list/submit), prod counts, PLAN.md
 - [x] go received (+ answers Q1–Q3)
-- [ ] jest baseline
-- [ ] A. BatchImport done screen
-- [ ] B. Records cards + ?status=
+- [x] jest baseline: 99 suites / 1566
+- [x] A. BatchImport done screen (+ useRef double-click guard: dblclick sent 2 submits, the 400 replaced the success — caught by the check)
+- [x] B. Records cards + ?status=
 - [ ] local build + check script + --base
 - [ ] self-debug / user sim / v2
 - [ ] merge origin/main, jest + check re-run, push, report
