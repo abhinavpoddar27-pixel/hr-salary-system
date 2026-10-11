@@ -168,7 +168,7 @@ function buildDocx(result, run = {}, { now = new Date() } = {}) {
   const ref = (i) => `HR/ATT/${MON3[result.meta.month - 1]}${String(result.meta.year).slice(2)}/${String(i + 1).padStart(2, '0')}`;
   const optionC = result.criteria?.early_exit_rule === 'option_c'; const d4 = result.criteria?.early_exit_rule === 'd4';
   const earlyDeducts = optionC || d4;
-  const earlyRuleText = d4 ? `2-hour rule: each exit of 2 hours or more is half a day; with ${t0(result).d4_long_count ?? 3} or more exits of 1 hour or more, their minutes are deducted too.${result.criteria?.missed_out_rule ? ` From the ${t0(result).missed_out_from ?? 5}th own missed punch in the month, each missed OUT counts as an early exit of 2 hours.` : ''}`
+  const earlyRuleText = d4 ? `2-hour rule: once a month has ${t0(result).d4_half_day_min_count ?? 1} or more exits of 2 hours or more, each is half a day; with ${t0(result).d4_long_count ?? 3} or more exits of 1 hour or more, their minutes are deducted too.${result.criteria?.missed_out_rule ? ` From the ${t0(result).missed_out_from ?? 5}th own missed punch in the month, each missed OUT counts as an early exit of 2 hours.` : ''}`
     : optionC ? 'Option C applies: ½ day per exit of 1 hour or more, plus ½ day per 3 shorter exits.' : 'Warning only.';
   const rel = (result.meta.release_days || []).map(fmtDay);
   const relText = rel.length ? `Plant-wide early-release days (${rel.join(', ')}) are not counted.` : '';
