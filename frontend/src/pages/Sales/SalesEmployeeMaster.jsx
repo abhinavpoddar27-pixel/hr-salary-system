@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react'
+import React, { useState, useMemo, useRef } from 'react'
 import { Link } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import toast from 'react-hot-toast'
@@ -699,6 +699,7 @@ export default function SalesEmployeeMaster() {
     onError: (err) => toast.error(err?.response?.data?.error || 'Update failed')
   })
 
+  const markLeftInFlight = useRef(false)   // two quick clicks → one PUT (isPending lags a render)
   const markLeftMut = useMutation({
     mutationFn: ({ code, company, dol }) => markSalesEmployeeLeft(code, company, { dol }),
     onSuccess: () => {
@@ -857,7 +858,12 @@ export default function SalesEmployeeMaster() {
           employee={confirmLeft}
           submitting={markLeftMut.isPending}
           onCancel={() => { if (!markLeftMut.isPending) setConfirmLeft(null) }}
-          onConfirm={(dol) => markLeftMut.mutate({ code: confirmLeft.code, company: confirmLeft.company, dol })}
+          onConfirm={(dol) => {
+            if (markLeftInFlight.current) return
+            markLeftInFlight.current = true
+            markLeftMut.mutate({ code: confirmLeft.code, company: confirmLeft.company, dol },
+              { onSettled: () => { markLeftInFlight.current = false } })
+          }}
         />
       )}
 
