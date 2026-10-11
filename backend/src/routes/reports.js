@@ -133,7 +133,7 @@ router.get('/overtime', (req, res) => {
 // GET PF monthly statement
 router.get('/pf-statement', requireHrFinanceOrAdmin, (req, res) => {
   const db = getDb();
-  const { month, year } = req.query;
+  const { month, year, company } = req.query;
 
   const employees = db.prepare(`
     SELECT sc.employee_code, e.name as employee_name, e.uan, e.pf_number, e.department,
@@ -145,8 +145,9 @@ router.get('/pf-statement', requireHrFinanceOrAdmin, (req, res) => {
     FROM salary_computations sc
     LEFT JOIN employees e ON sc.employee_code = e.code
     WHERE sc.month = ? AND sc.year = ? AND (COALESCE(sc.pf_employee,0) + COALESCE(sc.pf_employer,0)) > 0
+    ${company ? 'AND sc.company = ?' : ''}
     ORDER BY e.department, e.name
-  `).all(month, year);
+  `).all(...[month, year, company].filter(Boolean));
 
   const totals = {
     pfWages: employees.reduce((s, r) => s + (r.pf_wages || 0), 0),
@@ -162,7 +163,7 @@ router.get('/pf-statement', requireHrFinanceOrAdmin, (req, res) => {
 // GET ESI statement
 router.get('/esi-statement', requireHrFinanceOrAdmin, (req, res) => {
   const db = getDb();
-  const { month, year } = req.query;
+  const { month, year, company } = req.query;
 
   const employees = db.prepare(`
     SELECT sc.employee_code, e.name as employee_name, e.esi_number, e.department,
@@ -173,8 +174,9 @@ router.get('/esi-statement', requireHrFinanceOrAdmin, (req, res) => {
     FROM salary_computations sc
     LEFT JOIN employees e ON sc.employee_code = e.code
     WHERE sc.month = ? AND sc.year = ? AND (COALESCE(sc.esi_employee,0) + COALESCE(sc.esi_employer,0)) > 0
+    ${company ? 'AND sc.company = ?' : ''}
     ORDER BY e.department, e.name
-  `).all(month, year);
+  `).all(...[month, year, company].filter(Boolean));
 
   const totals = {
     esiWages: employees.reduce((s, r) => s + (r.esi_wages || 0), 0),
@@ -187,29 +189,42 @@ router.get('/esi-statement', requireHrFinanceOrAdmin, (req, res) => {
 });
 
 // GET bank transfer sheet (NEFT)
+// N-3: held salaries are NOT in this sheet (same rule as the bank NEFT file, exportFormats.generateBankFile:
+// salary_held = 0); they are reported separately as held {count, amount}. Account / IFSC: a blank primary
+// column falls back to the second one — the same expression the NEFT file uses (P1-14), so both list the same people.
 router.get('/bank-transfer', requireHrFinanceOrAdmin, (req, res) => {
   const db = getDb();
   const { month, year, company } = req.query;
+  const params = [month, year, company].filter(Boolean);
+  const scope = `sc.month = ? AND sc.year = ? AND sc.net_salary > 0 ${company ? 'AND sc.company = ?' : ''}`;
 
   const data = db.prepare(`
     SELECT sc.employee_code,
            e.name as employee_name,
-           COALESCE(e.account_number, e.bank_account) as account_number,
-           COALESCE(e.ifsc_code, e.ifsc) as ifsc_code,
+           COALESCE(NULLIF(TRIM(e.account_number), ''), e.bank_account) as account_number,
+           COALESCE(NULLIF(TRIM(e.ifsc_code), ''), e.ifsc) as ifsc_code,
            e.bank_name, e.department,
            sc.net_salary as net_pay
     FROM salary_computations sc
     LEFT JOIN employees e ON sc.employee_code = e.code
-    WHERE sc.month = ? AND sc.year = ? AND sc.net_salary > 0
-    ${company ? 'AND sc.company = ?' : ''}
+    WHERE ${scope}
+    AND COALESCE(sc.salary_held, 0) = 0
     ORDER BY e.department, e.name
-  `).all(...[month, year, company].filter(Boolean));
+  `).all(...params);
+
+  const held = db.prepare(`
+    SELECT COUNT(*) as count, COALESCE(SUM(sc.net_salary), 0) as amount
+    FROM salary_computations sc
+    WHERE ${scope}
+    AND COALESCE(sc.salary_held, 0) = 1
+  `).get(...params);
 
   res.json({
     success: true,
     data,
-    totalAmount: data.reduce((s, r) => s + (r.net_pay || 0), 0),
+    totalAmount: Math.round(data.reduce((s, r) => s + (r.net_pay || 0), 0) * 100) / 100,
     count: data.length,
+    held: { count: held.count, amount: Math.round(held.amount * 100) / 100 },
     month, year
   });
 });
@@ -233,22 +248,34 @@ router.get('/headcount', (req, res) => {
 });
 
 // GET audit trail
+// N-1: the timestamp column is changed_at (SQLite UTC 'YYYY-MM-DD HH:MM:SS'); it is also returned as created_at
+// for older screens (Settings → Audit tab). With month + year the rows are limited to that IST calendar month,
+// compared as a UTC range on the stored column. Newest 1,000 rows; total = all rows matching the filter.
+// audit_log has no company column — company is ignored here.
+const AUDIT_ROW_CAP = 1000;
 router.get('/audit-trail', requireHrFinanceOrAdmin, (req, res) => {
   const db = getDb();
   const { month, year, employeeCode, stage } = req.query;
 
-  let query = `SELECT al.*
-    FROM audit_log al
-    WHERE 1=1`;
+  let where = 'WHERE 1=1';
   const params = [];
 
-  if (stage) { query += ' AND al.stage = ?'; params.push(stage); }
-  if (employeeCode) { query += ' AND al.remark LIKE ?'; params.push(`%${employeeCode}%`); }
+  const m = parseInt(month, 10); const y = parseInt(year, 10);
+  if (m >= 1 && m <= 12 && y >= 2000 && y <= 2100) {
+    const start = `${y}-${String(m).padStart(2, '0')}-01 00:00:00`;
+    const ny = m === 12 ? y + 1 : y; const nm = m === 12 ? 1 : m + 1;
+    const end = `${ny}-${String(nm).padStart(2, '0')}-01 00:00:00`;
+    where += ` AND al.changed_at >= datetime(?, '-330 minutes') AND al.changed_at < datetime(?, '-330 minutes')`;
+    params.push(start, end);
+  }
+  if (stage) { where += ' AND al.stage = ?'; params.push(stage); }
+  if (employeeCode) { where += ' AND al.remark LIKE ?'; params.push(`%${employeeCode}%`); }
 
-  query += ' ORDER BY al.changed_at DESC LIMIT 1000';
-
-  const data = db.prepare(query).all(...params);
-  res.json({ success: true, data });
+  const data = db.prepare(`SELECT al.*, al.changed_at AS created_at
+    FROM audit_log al ${where}
+    ORDER BY al.changed_at DESC, al.id DESC LIMIT ${AUDIT_ROW_CAP}`).all(...params);
+  const total = db.prepare(`SELECT COUNT(*) AS n FROM audit_log al ${where}`).get(...params).n;
+  res.json({ success: true, data, total, truncated: total > data.length });
 });
 
 // GET PF ECR file (EPFO format)
