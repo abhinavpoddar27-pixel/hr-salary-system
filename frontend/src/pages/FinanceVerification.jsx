@@ -19,6 +19,9 @@ import clsx from 'clsx'
 import toast from 'react-hot-toast'
 import Modal from '../components/ui/Modal'
 
+// P1-15: a flag needs a written reason (UI rule only — POST /status has no minimum).
+const FLAG_REASON_MIN = 5
+
 function KPI({ label, value, color = 'blue' }) {
   const colors = { blue: 'text-blue-700', green: 'text-green-700', red: 'text-red-700', amber: 'text-amber-700', purple: 'text-purple-700' }
   return <div className="card p-3"><div className={clsx('text-xl font-bold', colors[color])}>{value}</div><div className="text-[10px] text-slate-400 uppercase font-medium">{label}</div></div>
@@ -36,6 +39,9 @@ export default function FinanceVerification() {
   const [statusFilter, setStatusFilter] = useState('')
   const [signoffModal, setSignoffModal] = useState(false)
   const [rejectReason, setRejectReason] = useState('')
+  // P1-15: Flag dialog — { employeeCode, name, category } or null; reason text kept separately.
+  const [flagTarget, setFlagTarget] = useState(null)
+  const [flagReason, setFlagReason] = useState('')
   const [expandedFlags, setExpandedFlags] = useState(new Set())
   const [flagCategory, setFlagCategory] = useState(deepFilter || 'all')
   // Miss-punch review tab state
@@ -53,7 +59,25 @@ export default function FinanceVerification() {
   const { data: soRes } = useQuery({ queryKey: ['fin-signoff', month, year], queryFn: () => getFinanceSignoffStatus(month, year), retry: 0 })
   const signoff = soRes?.data?.data
 
-  const verifyMut = useMutation({ mutationFn: setFinanceAuditStatus, onSuccess: () => { qc.invalidateQueries(['fin-dash']); qc.invalidateQueries(['fin-emps']); toast.success('Status updated') } })
+  const verifyMut = useMutation({
+    mutationFn: setFinanceAuditStatus,
+    onSuccess: (_r, vars) => {
+      qc.invalidateQueries({ queryKey: ['fin-dash'] }); qc.invalidateQueries({ queryKey: ['fin-emps'] })
+      if (vars?.status === 'flagged') closeFlagModal()
+      toast.success('Status updated')
+    },
+    onError: (e) => toast.error(e.response?.data?.error || 'Could not update status')
+  })
+  // P1-15: every Flag goes through the reason dialog. Reset on every open and close.
+  const openFlagModal = (target, defaultReason = '') => { setFlagReason(defaultReason || ''); setFlagTarget(target) }
+  const closeFlagModal = () => { setFlagTarget(null); setFlagReason('') }
+  const flagReasonOk = flagReason.trim().length >= FLAG_REASON_MIN
+  const submitFlag = () => {
+    if (!flagTarget || !flagReasonOk || verifyMut.isPending) return
+    verifyMut.mutate({ employeeCode: flagTarget.employeeCode, month, year, status: 'flagged', flagReason: flagReason.trim(), ...(flagTarget.category ? { flagCategory: flagTarget.category } : {}) })
+  }
+  // P1-15: mirrors POST /signoff — approve is refused while any row this month is flagged or rejected.
+  const openFlags = (dash?.summary?.flagged || 0) + (dash?.summary?.rejected || 0)
   const bulkMut = useMutation({ mutationFn: bulkVerifyEmployees, onSuccess: (r) => { qc.invalidateQueries(['fin-dash']); qc.invalidateQueries(['fin-emps']); toast.success(`${r.data.verified} employees verified`) } })
   const signoffMut = useMutation({ mutationFn: submitFinanceSignoff, onSuccess: () => { qc.invalidateQueries(['fin-signoff']); qc.invalidateQueries(['fin-dash']); setSignoffModal(false); toast.success('Sign-off submitted') }, onError: (e) => toast.error(e.response?.data?.error || 'Failed') })
 
@@ -279,13 +303,16 @@ export default function FinanceVerification() {
                       <td>
                         {s.audit_status === 'verified' && <span className="text-xs bg-green-100 text-green-700 px-2 py-0.5 rounded-full">Verified</span>}
                         {s.audit_status === 'flagged' && <span className="text-xs bg-amber-100 text-amber-700 px-2 py-0.5 rounded-full">Flagged</span>}
+                        {s.audit_status === 'flagged' && (
+                          <div data-testid="flag-reason" className="text-[10px] text-amber-700 mt-0.5 max-w-[220px] truncate" title={s.flag_reason || ''}>{s.flag_reason || '—'}</div>
+                        )}
                         {s.audit_status === 'rejected' && <span className="text-xs bg-red-100 text-red-700 px-2 py-0.5 rounded-full">Rejected</span>}
                         {!s.audit_status && <span className="text-xs text-slate-400">Pending</span>}
                       </td>
                       {canAct && (
                         <td className="flex gap-1">
                           <button onClick={() => verifyMut.mutate({ employeeCode: s.employee_code, month, year, status: 'verified' })} className="text-green-600 hover:bg-green-50 px-1 py-0.5 rounded text-[10px]" title="Verify">✓</button>
-                          <button onClick={() => verifyMut.mutate({ employeeCode: s.employee_code, month, year, status: 'flagged', flagReason: 'Flagged for review' })} className="text-amber-600 hover:bg-amber-50 px-1 py-0.5 rounded text-[10px]" title="Flag">⚠</button>
+                          <button onClick={() => openFlagModal({ employeeCode: s.employee_code, name: s.employee_name || s.employee_code })} className="text-amber-600 hover:bg-amber-50 px-1 py-0.5 rounded text-[10px]" title="Flag">⚠</button>
                         </td>
                       )}
                     </tr>
@@ -349,7 +376,7 @@ export default function FinanceVerification() {
                           }} className="text-blue-600 hover:bg-blue-50 px-2 py-1 rounded text-xs">Review</button>
                         )}
                         <button onClick={() => verifyMut.mutate({ employeeCode: f.employeeCode, month, year, status: 'verified' })} className="text-green-600 hover:bg-green-50 px-2 py-1 rounded text-xs">Verify</button>
-                        <button onClick={() => verifyMut.mutate({ employeeCode: f.employeeCode, month, year, status: 'flagged', flagReason: f.description, flagCategory: f.type })} className="text-amber-600 hover:bg-amber-50 px-2 py-1 rounded text-xs">Flag</button>
+                        <button onClick={() => openFlagModal({ employeeCode: f.employeeCode, name: f.employeeName || f.employeeCode, category: f.type }, f.description)} className="text-amber-600 hover:bg-amber-50 px-2 py-1 rounded text-xs">Flag</button>
                       </div>
                     )}
                   </div>
@@ -538,6 +565,24 @@ export default function FinanceVerification() {
         </Modal>
       )}
 
+      {/* P1-15: Flag reason dialog */}
+      {flagTarget && (
+        <Modal onClose={closeFlagModal} title="Flag employee">
+          <div className="space-y-3">
+            <p className="text-xs text-slate-600">{flagTarget.name} <span className="text-slate-400">({flagTarget.employeeCode})</span></p>
+            <label className="block text-xs font-medium text-slate-700">Reason for flagging (required)</label>
+            <textarea data-testid="flag-reason-input" value={flagReason} onChange={e => setFlagReason(e.target.value)} className="input w-full h-20 text-sm" placeholder="What needs checking before this salary can be approved?" autoFocus />
+            <div className="text-[11px] text-slate-500">At least {FLAG_REASON_MIN} characters ({flagReason.trim().length} typed). The month cannot be approved while this employee stays flagged.</div>
+            <div className="flex gap-2">
+              <button onClick={closeFlagModal} className="btn-secondary text-sm flex-1">Cancel</button>
+              <button data-testid="flag-confirm" onClick={submitFlag} disabled={!flagReasonOk || verifyMut.isPending} className="btn-primary text-sm flex-1 disabled:opacity-50 disabled:cursor-not-allowed">
+                {verifyMut.isPending ? 'Flagging...' : 'Flag employee'}
+              </button>
+            </div>
+          </div>
+        </Modal>
+      )}
+
       {/* Sign-off Modal */}
       {signoffModal && (
         <Modal onClose={() => setSignoffModal(false)} title="Monthly Sign-Off">
@@ -548,8 +593,15 @@ export default function FinanceVerification() {
               <p><strong>Flagged:</strong> {dash?.summary.flagged}</p>
               <p><strong>Total Net Salary:</strong> {fmtINR(dash?.summary.totalNetSalary || 0)}</p>
             </div>
+            {openFlags > 0 && (
+              <div data-testid="signoff-open-flags" className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+                {openFlags} still flagged — verify or resolve them before approving.
+              </div>
+            )}
             <div className="flex gap-3">
-              <button onClick={() => signoffMut.mutate({ month, year, status: 'approved' })} disabled={signoffMut.isPending} className="btn-success text-sm flex-1">
+              <button onClick={() => { if (dash && openFlags === 0) signoffMut.mutate({ month, year, status: 'approved' }) }} disabled={signoffMut.isPending || !dash || openFlags > 0}
+                title={openFlags > 0 ? `${openFlags} still flagged` : undefined}
+                className="btn-success text-sm flex-1 disabled:opacity-50 disabled:cursor-not-allowed">
                 Approve
               </button>
               <div className="flex-1">
