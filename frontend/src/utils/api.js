@@ -327,7 +327,6 @@ export const getCompanyConfig = (company) => api.get('/reports/company-config', 
 export const updateCompanyConfig = (id, data) => api.put(`/reports/company-config/${id}`, data)
 
 // ── Payroll Extended ──────────────────────────────────
-export const getBulkPayslips = (month, year, company) => api.get('/payroll/payslips/bulk', { params: { month, year, company } })
 export const downloadSalarySlipExcel = (month, year, company) => api.get('/payroll/salary-slip-excel', { params: { month, year, company }, responseType: 'blob' })
 export const getMonthEndChecklist = (month, year, company) => api.get('/payroll/month-end-checklist', { params: { month, year, company } })
 export const getSalaryComparison = (month, year, company) => api.get('/payroll/salary-comparison', { params: { month, year, company } })

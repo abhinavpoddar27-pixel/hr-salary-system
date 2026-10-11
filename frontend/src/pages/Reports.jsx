@@ -1,12 +1,13 @@
 import React, { useState, useEffect } from 'react'
 import { useQuery } from '@tanstack/react-query'
+import { Link } from 'react-router-dom'
 import toast from 'react-hot-toast'
 import {
   getAttendanceSummaryReport, getMissPunchReport, getSalaryRegister,
   getBankTransferSheet, getPFStatement, getESIStatement, getAuditTrail,
   getHeadcountReport, getPFECR, downloadPFECR, getESIContribution,
   downloadESIContribution, getBankSalaryFile, downloadBankSalaryFile,
-  getBulkPayslips, getCompanyConfig, getDepartmentPayroll,
+  getCompanyConfig, getDepartmentPayroll,
   getLeaveRegisterReport, downloadLeaveRegisterReport,
   getLWFRegister, downloadLWFRegister
 } from '../utils/api'
@@ -19,7 +20,6 @@ import { fmtINR, fmtINR2, fmtDate } from '../utils/formatters'
 import useExpandableRows from '../hooks/useExpandableRows'
 import DrillDownRow, { DrillDownChevron } from '../components/ui/DrillDownRow'
 import EmployeeQuickView from '../components/ui/EmployeeQuickView'
-import { downloadBulkPayslipsPDF } from '../utils/payslipPdf'
 
 const MONTH_NAMES = ['', 'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
 
@@ -261,8 +261,6 @@ export default function Reports() {
     }
   }
 
-  const [bulkPdfLoading, setBulkPdfLoading] = useState(false)
-
   async function handleDownloadFile(downloadFn, month, year, company) {
     try {
       const response = await downloadFn(month, year, company)
@@ -313,22 +311,6 @@ export default function Reports() {
     }
   }
 
-  async function handleBulkPayslips() {
-    setBulkPdfLoading(true)
-    try {
-      const res = await getBulkPayslips(month, year, companyFilter)
-      const payslips = res.data?.data || []
-      const companyConf = res.data?.companyConfig || null
-      if (payslips.length === 0) { toast.error('No payslips to generate'); return }
-      await downloadBulkPayslipsPDF(payslips, companyConf, month, year)
-      toast.success(`Generated ${payslips.length} payslips`)
-    } catch (err) {
-      toast.error('Failed to generate payslips')
-    } finally {
-      setBulkPdfLoading(false)
-    }
-  }
-
   const REPORTS = [
     { id: 'attendance', label: 'Attendance Summary', desc: 'Per-employee present/absent/LOP summary' },
     { id: 'misspunch', label: 'Miss Punch', desc: 'All miss punch cases and resolutions' },
@@ -339,7 +321,7 @@ export default function Reports() {
     { id: 'pf-ecr', label: 'PF ECR File', desc: 'EPFO Electronic Challan Return format' },
     { id: 'esi-contrib', label: 'ESI Contribution File', desc: 'ESIC portal upload format' },
     { id: 'bank-file', label: 'Bank Salary File', desc: 'PNB bulk salary upload CSV' },
-    { id: 'payslips', label: 'Payslips (Bulk PDF)', desc: 'Download all employee payslips' },
+    { id: 'payslips', label: 'Payslips', desc: 'Individual payslips are in Stage 7' },
     { id: 'audit', label: 'Audit Trail', desc: 'All field-level changes with before/after' },
     { id: 'department-payroll', label: 'Department Payroll', desc: 'Dept-wise payroll cost centre' },
     { id: 'leave-register', label: 'Leave Reports', desc: 'Monthly leave register + annual CL/EL summary' },
@@ -1010,24 +992,19 @@ export default function Reports() {
             </div>
           )}
 
-          {/* Bulk Payslips */}
+          {/* Payslips — bulk download disabled by company policy (GET /payroll/payslips/bulk answers 403).
+              No button and no request here; individual payslips are downloaded from Stage 7. */}
           {activeReport === 'payslips' && (
             <div className="space-y-4">
-              <div className="flex items-center justify-between">
-                <h3 className="text-base font-bold text-slate-800">Payslips — {MONTH_NAMES[month]} {year}</h3>
-                <button
-                  onClick={handleBulkPayslips}
-                  disabled={bulkPdfLoading}
-                  className="btn-primary text-sm"
-                >
-                  {bulkPdfLoading ? 'Generating PDF...' : 'Download All Payslips (PDF)'}
-                </button>
-              </div>
-              <div className="card p-6 text-center">
-                <div className="text-3xl mb-3">PDF</div>
-                <p className="text-slate-600 mb-2">Generate a single PDF containing all employee payslips for {MONTH_NAMES[month]} {year}.</p>
-                <p className="text-xs text-slate-400">Each payslip will be on a separate page with company header, earnings, deductions, and attendance summary.</p>
-                {companyFilter && <p className="text-xs text-blue-600 mt-2">Filtered to: {companyFilter}</p>}
+              <h3 className="text-base font-bold text-slate-800">Payslips — {MONTH_NAMES[month]} {year}</h3>
+              <div className="card p-6" data-testid="bulk-payslips-disabled-note">
+                <p className="text-slate-700 mb-2">Bulk payslips are disabled by company policy.</p>
+                <p className="text-sm text-slate-500 mb-4">
+                  Download individual payslips from Stage 7 (Salary Computation): open an employee's row there and use the payslip button.
+                </p>
+                <Link to="/pipeline/salary" className="btn-primary text-sm inline-block" data-testid="open-stage7-link">
+                  Open Stage 7
+                </Link>
               </div>
             </div>
           )}
