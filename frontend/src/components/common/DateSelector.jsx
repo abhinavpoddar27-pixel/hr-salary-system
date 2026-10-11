@@ -1,4 +1,4 @@
-import React, { useState, useCallback } from 'react'
+import React, { useState, useCallback, useEffect } from 'react'
 import { MONTH_OPTIONS, YEAR_OPTIONS } from '../../utils/formatters'
 import { useAppStore } from '../../store/appStore'
 import clsx from 'clsx'
@@ -35,6 +35,10 @@ export default function DateSelector({
   const [endDate, setEndDate] = useState('')
   const [singleDate, setSingleDate] = useState(new Date().toISOString().slice(0, 10))
   const [activePreset, setActivePreset] = useState(null)
+  // Follow the parent when it changes the month itself (e.g. Attendance Review → Trends opens a month). A change made
+  // here flows out through onChange and comes back equal, so this is a no-op for the selector's own changes.
+  useEffect(() => { if (initialMonth && initialMonth !== month) setMonth(initialMonth) }, [initialMonth]) // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { if (initialYear && initialYear !== year) setYear(initialYear) }, [initialYear]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const emit = useCallback((overrides = {}) => {
     const state = {
