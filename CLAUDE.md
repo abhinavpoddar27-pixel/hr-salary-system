@@ -15,6 +15,26 @@
 - **Not tested:** Railway; Safari/Firefox.
 - **Found, not fixed:** `downloadBulkPayslipsPDF` in `frontend/src/utils/payslipPdf.js` is now a dead export (no caller).
 
+## Last Session — 2026-10-11 (Attendance Review Trends T1–T3: month-by-month interactive charts)
+**Branch `feat/attendance-review-trends` (on origin/main 4645e973, #108 merged), NOT merged.** Owner ask 10 Oct: "no interactive pictorial diagrams" → "PR-2 first, then Trends".
+- **T1 API:** `GET /api/analytics/attendance-review/trends?from=YYYY-MM&to=YYYY-MM[&live=0]` (admin, ≤ 12 months, read only).
+  Each month from its FINAL run, else its DRAFT, else computed live with that month's rules + detected release days + no
+  overrides; `source` says which. Months without attendance → `skipped`. Returns per month: All / Company / Contract rates
+  (late %, early %, time lost %), action totals (deductions, warnings, days, indicative ₹), departments, action-list people;
+  plus `repeaters` (on the list in ≥ 2 months). Service: `trendRow` (tolerates older stored result shapes), `monthRange`,
+  `repeaters`. Bench: 300 people × 12 live months ≈ 3.5 s; one month ≈ 0.3 s.
+- **T2/T3 UI:** Attendance Review tab gets a "<Month> | Trends" switch. Trends (`AttendanceReviewTrends.jsx`, Recharts): range
+  3/6/12 months (kept while switching views), Workers All/Company/Contract, "Show as tables"; source line; 4 stat tiles with
+  change vs the first month; late/early line chart (solid point = final, hollow = can still change); action-list stacked bars
+  (tooltip: days + indicative ₹ in lakh); time-lost line; department × month heat map (one-hue blue, hover detail); repeat
+  names with per-month dots. Click a month anywhere → opens that month's review. Palette = dataviz reference slots 1–2
+  (validated, CVD ΔE 24.7); labels only on the latest point; legends on multi-series charts.
+- **Shared change:** `common/DateSelector.jsx` now follows `initialMonth/initialYear` when the parent changes them (no-op
+  for its own changes) — needed so "open this month" moves the picker too. Analytics passes `onSelectMonth` to the tab only.
+- **Verified:** `attendanceReviewTrends.test.js` 7 (all fail on old code); jest 96 / 1538; `scripts/attendance-review-trends-check.py`
+  31/31 (sources, tiles, charts, tooltip, heat-map hover, repeat dots, filters, tables, sticky range, click opens Sep FINAL
+  and the picker shows Sep, empty range, phone 390, nothing written); tab 49, suggestions 29, master 26, send-to-finance 28
+  re-run. **Not tested:** Railway / production data volume.
 ## Last Session — 2026-10-11 (P1-07: legacy "Grant Extra Duty" on Payable OT retired)
 **Branch `fix/retire-legacy-extra-duty-grant`, NOT merged.** Owner ruling Q5 (11 Oct). Log: `docs/ux-bulk/prs/P1-07/PROGRESS.md`.
 - **Bug:** Payable OT → "Grant Extra Duty" called `POST /payroll/grant-extra-duty`, which wrote a `day_corrections` row
