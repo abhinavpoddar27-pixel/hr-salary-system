@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react'
+import React, { useState, useMemo, useRef } from 'react'
 import { Link } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import toast from 'react-hot-toast'
@@ -15,7 +15,6 @@ import {
 } from '../../utils/api'
 import { useAppStore } from '../../store/appStore'
 import Modal from '../../components/ui/Modal'
-import ConfirmDialog from '../../components/ui/ConfirmDialog'
 import CompanyFilter from '../../components/shared/CompanyFilter'
 import {
   TA_DA_CLASS_LABELS,
@@ -583,6 +582,52 @@ function TaDaHistoryModal({ employee, currentUsername, onClose }) {
   )
 }
 
+// P1-19: Mark Left asks for the leaving date (sent as `dol`, the key the route reads).
+// Starts empty on every open; not in the future (browser local date); not before DOJ.
+function localToday() {
+  const d = new Date()
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+}
+const ISO_DATE_RE = /^\d{4}-\d{2}-\d{2}$/
+function fmtDmy(iso) { const [y, m, d] = iso.split('-'); return `${d}-${m}-${y}` }
+
+function MarkLeftDialog({ employee, onCancel, onConfirm, submitting }) {
+  const [dol, setDol] = useState('')
+  const today = localToday()
+  const doj = ISO_DATE_RE.test(String(employee.doj || '').slice(0, 10)) ? String(employee.doj).slice(0, 10) : null
+  let hint = ''
+  if (!dol) hint = 'Pick the leaving date'
+  else if (!ISO_DATE_RE.test(dol)) hint = 'Enter a valid date'
+  else if (dol > today) hint = "Leaving date can't be in the future"
+  else if (doj && dol < doj) hint = `Leaving date can't be before the joining date (${fmtDmy(doj)})`
+  const valid = !hint
+  return (
+    <Modal open onClose={onCancel} title={`Mark ${employee.code} as Left?`} size="sm">
+      <div className="p-5 space-y-4" data-testid="sales-mark-left-dialog">
+        <p className="text-sm text-slate-600 leading-relaxed">
+          {employee.name} ({employee.code}) will be set to Left with this leaving date. Any open loan is recovered
+          from the final salary of that cycle. This cannot be undone here (edit the row to reopen).
+        </p>
+        <div>
+          <label className="block text-xs font-medium text-slate-600 mb-1" htmlFor="sales-mark-left-dol">Leaving date *</label>
+          <input id="sales-mark-left-dol" type="date" value={dol} max={today} min={doj || undefined}
+            onChange={e => setDol(e.target.value)} data-testid="sales-mark-left-dol"
+            className="w-full border border-slate-300 rounded-lg px-2 py-1.5 text-sm" />
+          {hint && <p className="text-xs text-amber-700 mt-1" data-testid="sales-mark-left-hint">{hint}</p>}
+        </div>
+        <div className="flex flex-wrap justify-end gap-3">
+          <button type="button" onClick={onCancel} className="px-4 py-2 text-sm font-medium text-slate-600 bg-slate-100 hover:bg-slate-200 rounded-lg">Cancel</button>
+          <button type="button" disabled={!valid || submitting} onClick={() => onConfirm(dol)}
+            data-testid="sales-mark-left-confirm"
+            className="px-4 py-2 text-sm font-medium rounded-lg bg-red-600 hover:bg-red-700 text-white disabled:opacity-50 disabled:cursor-not-allowed">
+            {submitting ? 'Saving…' : 'Mark Left'}
+          </button>
+        </div>
+      </div>
+    </Modal>
+  )
+}
+
 export default function SalesEmployeeMaster() {
   const qc = useQueryClient()
   const { selectedCompany, user } = useAppStore()
@@ -654,8 +699,9 @@ export default function SalesEmployeeMaster() {
     onError: (err) => toast.error(err?.response?.data?.error || 'Update failed')
   })
 
+  const markLeftInFlight = useRef(false)   // two quick clicks → one PUT (isPending lags a render)
   const markLeftMut = useMutation({
-    mutationFn: ({ code, company }) => markSalesEmployeeLeft(code, company, {}),
+    mutationFn: ({ code, company, dol }) => markSalesEmployeeLeft(code, company, { dol }),
     onSuccess: () => {
       toast.success('Marked as Left')
       qc.invalidateQueries({ queryKey: ['sales-employees'] })
@@ -808,13 +854,16 @@ export default function SalesEmployeeMaster() {
       )}
 
       {confirmLeft && (
-        <ConfirmDialog
-          title={`Mark ${confirmLeft.code} as Left?`}
-          message={`${confirmLeft.name} will be set to status=Left with today as DOL. This cannot be undone from the UI (edit the row to reopen).`}
-          confirmText="Mark Left"
-          cancelText="Cancel"
-          onCancel={() => setConfirmLeft(null)}
-          onConfirm={() => markLeftMut.mutate({ code: confirmLeft.code, company: confirmLeft.company })}
+        <MarkLeftDialog
+          employee={confirmLeft}
+          submitting={markLeftMut.isPending}
+          onCancel={() => { if (!markLeftMut.isPending) setConfirmLeft(null) }}
+          onConfirm={(dol) => {
+            if (markLeftInFlight.current) return
+            markLeftInFlight.current = true
+            markLeftMut.mutate({ code: confirmLeft.code, company: confirmLeft.company, dol },
+              { onSettled: () => { markLeftInFlight.current = false } })
+          }}
         />
       )}
 

@@ -30,6 +30,54 @@ private plan D-4 / D-6 / MP-2.
   `scripts/attendance-review-early-rules-check.py` 29/29 (rules off → editor on → v2 keys → preview → draft → finalise → Send 4 incl. 3
   early-section rows + remarks → hr 403 → phone → payroll untouched); tab 49, trends 31, suggestions 29, master 26, send-to-finance 28,
   board 36 re-run green. **Not tested:** Railway; production data in the UI.
+
+## Last Session — 2026-10-11 (P1-19: Sales Mark Left always stored today's date)
+**Branch `fix/sales-mark-left-date`, NOT merged.** Frontend only (`pages/Sales/SalesEmployeeMaster.jsx`). Plan + log:
+`docs/ux-bulk/prs/P1-19/PLAN.md`, `PROGRESS.md`. Finding S-3. Planner rulings Q1 (backend untouched), Q2 (date only), Q3 (browser local date).
+- **Bug:** the Mark Left dialog sent an empty body; `PUT /api/sales/employees/:code/mark-left` falls back to today (UTC)
+  when `dol` is missing, so every sales leaver got the click date as DOL — and, with a loan, the wrong final payroll cycle
+  (`flagSalesBorrowerForExit` uses the cycle containing `dol`). The route already read `body.dol`.
+- **Fix:** `ConfirmDialog` replaced by a local `MarkLeftDialog` (on `Modal`): required "Leaving date", empty on every open,
+  `max` = browser-local today, `min` = row DOJ when it is YYYY-MM-DD; JS validation (typed dates bypass min/max) with a
+  hint (empty / future / before joining DD-MM-YYYY); mutation sends `{ dol }`. Cancel / ✕ / backdrop / Esc send nothing.
+  A `useRef` in-flight guard keeps a double click to one PUT. dist rebuilt (own commits). Backend + api.js untouched.
+- **Fragile:** the date rules are UI-only — the route still accepts any `dol` string. "Today" is the browser's date, the
+  route's own fallback is UTC (unused now the UI always sends a date). A DOJ stored in another format gives no min.
+- **Verified:** `backend/scripts/sales-mark-left-date-check.py` (Chromium, built dist, scratch DB, hr, fictional S901–S905,
+  port 3119) 40/40 — empty/future/before-DOJ disabled + hint, today allowed, past date → PUT `{dol}` + DB dol + audit remark
+  `dol=…`, 4 exits send nothing and reopen empty, no-DOJ rep, double click = 1 PUT (fails 4 with the guard removed), 390px,
+  0 page/console errors, 0 API ≥ 400. `--base` on an 868f5389 build 4/4: no field, DOL = today. jest 96 / 1537 before and after.
+- **Not tested:** Railway; Safari/Firefox date input; production data.
+- **Found, not fixed:** (1) the route has no server-side check on `dol` (format, future, before DOJ) — Q1, API callers can
+  still store anything. (2) Clicking the very top-left corner (5,5) with this Modal open does not close it (another
+  fixed layer sits above the overlay there); the rest of the backdrop closes it — shared `Modal`, pre-existing, harmless.
+## Last Session — 2026-10-11 (P1-17: Import — dead Overwrite checkbox; picked month never sent)
+**Branch `fix/import-month-and-dead-checkbox`, NOT merged.** Frontend only (`pages/Import.jsx`, `utils/api.js` 1 line). Plan + log:
+`docs/ux-bulk/prs/P1-17/PLAN.md`, `PROGRESS.md`. Findings P-7, P-8. Planner rulings Q1 (send the month, batch of other
+months is refused; hint + multi-file note), Q2 (`fresh` on the history read), Q3 (warning across all companies).
+- **Bug:** (P-7) the "Overwrite if month already imported" tick did nothing — `routes/import.js` reads `overwrite` and never
+  uses it; a re-import always upserts (snapshot + replay of corrections, Stage 6 + 7 recompute). (P-8) the upload sent no
+  month/year, so the server's UI-vs-file month refusal (L86–96) never fired: a September file uploaded with October
+  picked imported silently. Failed rows also showed `result.error` ("UI/file month mismatch"), never `userMessage`.
+- **Fix:** checkbox + state + `overwrite` field removed; FormData carries the picker's `month` + `year`; a line "Files will
+  be checked against {Mon YYYY}"; amber "This month is already imported ({companies}) — Stage 6 and 7 will be recomputed
+  and manual corrections replayed." when history has that month (any company); with > 1 file "Only files for {Mon YYYY}
+  will import."; drop-zone hint "(all for the month selected above)"; failed rows show `userMessage || error` (parse and
+  multi-month refusals now show their friendly text too). `getImportHistory` sends `no-cache` (server GET max-age=5).
+  Backend untouched. dist rebuilt (own commit).
+- **Fragile:** a multi-month batch now imports only the picked month (by ruling). The warning reads `/import/history`,
+  which ignores the company param — if that route starts filtering by company, the warning goes company-scoped. testids
+  `import-month-line`, `reimport-warning`, `multi-file-note`, `import-error` are read by the check script.
+- **Verified:** `backend/scripts/import-month-check.py` (Chromium, built dist, scratch DB, real hr login, fictional
+  T1701/T1702 .xls for Sep + Aug 2026 built in the script, port 3117) 38/38 twice — no checkbox; Oct picked + Sep file →
+  body month 10, server refusal text, DB counts unchanged; Sep → imports 60 rows, warning appears at once; re-import → no
+  duplicate rows; Aug hides warning; Aug + Sep batch → 1/2, Aug refused, no Aug rows; 390px; 0 page/console errors,
+  0 API ≥ 400. `--base` on a 868f5389 archive 3/3: checkbox, no month in body, Sep file imported under Oct.
+  jest 96 suites / 1537 before and after.
+- **Not tested:** Railway; Safari/Firefox; real EESL exports (synthetic layout from parser.test.js); a real two-sheet file.
+- **Found, not fixed:** (1) `routes/import.js` L188 still reads the unused `overwrite` (dead backend line). (2) Picking the
+  exact same file again after a successful import may not fire the input's `change` (seen in Playwright; react-dropzone
+  normally clears the input on click — unverified for a real dialog).
 ## Last Session — 2026-10-11 (P1-16: Interventions "Reject All" with no reason or confirm; header checkbox wrong)
 **Branch `fix/interventions-reject-all-confirm`, NOT merged.** Frontend only (`pages/FinanceAudit.jsx`, Manual Interventions tab).
 Plan + log: `docs/ux-bulk/prs/P1-16/PLAN.md`, `PROGRESS.md`. Finding F-10. Planner rulings Q1 (a), Q2, Q3 (11 Oct).
