@@ -262,4 +262,14 @@ describe('N-17 salary change approval keeps components the request did not name'
     }
     expect(latest(e).effective_from).toBe('2026-10-11');
   });
+  test('Stage 7 after an approval with a kept component: drift 0', async () => {
+    const e = emp();
+    const id = request(e, { gross_salary: 22000, basic: 11000, da: 0, hra: 4400, special_allowance: 2200, other_allowances: 2800 });
+    expect((await approve(id)).status).toBe(200);
+    S.plantMonth(db, e, 10, 2026);
+    const row = S.computePlant(db, e, 10, 2026);
+    expect(row.gross_salary).toBe(22000);
+    const drift = db.prepare('SELECT COUNT(*) n FROM salary_computations WHERE ABS(net_salary - (gross_earned - total_deductions)) > 1').get().n;
+    expect(drift).toBe(0);
+  });
 });
