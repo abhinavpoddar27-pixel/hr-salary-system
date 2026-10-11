@@ -172,3 +172,15 @@ Status values: `todo` · `plan` (Phase 0 written, waiting for go) · `build` · 
 
 - 11 Oct 2026 ~16:05 IST — #120 merged: dist out of git, CLAUDE.md edits only via docs PRs. Production verified serving the Railway-built bundle. #116–#118 given one final sync (dist dropped, CLAUDE.md entries moved to their PROGRESS.md); green + clean.
 - 11 Oct 2026 ~16:30 IST — #116, #117, #118 merged back to back with no re-sync (new process working). Batch P1-15…P1-22 complete.
+
+## Batch 2 (11 Oct 2026 ~16:45 IST) — file ownership to prevent conflicts
+| Build | Branch | Owned files |
+|---|---|---|
+| P1-13 | fix/finverify-company-scope | FinanceVerification.jsx, routes/financeVerification.js, (financeRedFlags.js), api.js finance-verification block only |
+| P1-14 ★ | fix/employee-bank-columns | Employees.jsx, routes/employees.js, (exportFormats.js read path) |
+| P1-18 | fix/dw-drafts-visible | DailyWageBatchImport.jsx, DailyWageRecords.jsx |
+| N-REP (N-1/2/3) | fix/reports-company-held-audit | routes/reports.js, Reports.jsx |
+| N-MONEY ★ (N-16/17) | fix/salary-flag-reject-revert | routes/financeAudit.js (approve-flag, bulk-approve), routes/salary-input.js (approve) |
+| N-FRESH (N-7/9/15) | fix/fresh-reads-after-actions | api.js 3 read helpers only, DayCalculation.jsx, MissPunch.jsx, NightShift.jsx |
+Rule: a builder touching a file it does not own STOPS and asks. Before each PR the planner runs `git merge-tree` of every
+open branch against main AND against each other; any overlap is fixed before the PR goes up.
