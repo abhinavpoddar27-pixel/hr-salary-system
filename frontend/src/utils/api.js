@@ -755,6 +755,8 @@ export const attendanceReviewQuality = (id) => api.get(`${AR}/runs/${id}/quality
 // PR-7: one person's months, ladder steps, notice-board prints and review finance rows (from the ladder start to `to`)
 export const attendanceReviewPerson = (code, to) => api.get(`${AR}/person/${encodeURIComponent(code)}`, { params: { to }, headers: arFresh })
 export const attendanceReviewTrends = (from, to) => api.get(`${AR}/trends`, { params: { from, to }, headers: arFresh })
+// T4: the Trends figures as a workbook
+export const attendanceReviewTrendsExport = (from, to) => api.get(`${AR}/trends/export.xlsx`, { params: { from, to }, responseType: 'blob', headers: arFresh })
 export const attendanceReviewFinance = (id) => api.get(`${AR}/runs/${id}/finance`, { headers: arFresh })
 export const attendanceReviewSendToFinance = (id) => api.post(`${AR}/runs/${id}/send-to-finance`)
 export const attendanceReviewBoard = (month, year, to, company, skipDays = []) =>
