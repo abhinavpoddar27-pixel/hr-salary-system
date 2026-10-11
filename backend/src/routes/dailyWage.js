@@ -314,7 +314,9 @@ function validateEntryRow(db, row, rowIndex) {
     if (isNaN(d.getTime())) {
       errors.push({ row: rowIndex, field: 'entry_date', error: `${prefix}entry_date is not a valid date` });
     }
-    const today = new Date().toISOString().slice(0, 10);
+    // IST calendar date (UTC+05:30, no DST) — the server clock is UTC, so a UTC date would call
+    // today's IST date "the future" between 00:00 and 05:30 IST.
+    const today = new Date(Date.now() + 330 * 60 * 1000).toISOString().slice(0, 10);
     if (row.entry_date > today) {
       errors.push({ row: rowIndex, field: 'entry_date', error: `${prefix}entry_date cannot be in the future` });
     }

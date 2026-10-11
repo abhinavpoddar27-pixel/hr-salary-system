@@ -5,6 +5,7 @@ import { getDWContractors, getDWEntry, createDWEntry, updateDWEntry, submitDWEnt
 import { useAppStore } from '../store/appStore'
 import clsx from 'clsx'
 import toast from 'react-hot-toast'
+import { todayIST } from '../utils/formatters'
 
 function fmt(n) { return (n || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) }
 
@@ -64,7 +65,7 @@ export default function DailyWageEntry() {
   }, [editId, editLoaded, allContractors])
 
   // ── Form state ──────────────────────────────────────────────
-  const today = new Date().toISOString().slice(0, 10)
+  const today = todayIST() // IST calendar date — a UTC date is yesterday between 00:00 and 05:30 IST
   const [entryDate, setEntryDate] = useState(today)
   const [inTime, setInTime] = useState('08:00')
   const [outTime, setOutTime] = useState('17:00')
