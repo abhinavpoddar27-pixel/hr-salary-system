@@ -130,6 +130,9 @@ export default function EmployeeSearchSelect({
             typed = typed.startsWith(label) ? typed.slice(label.length) : typed
           }
           setQuery(typed)
+          // Reset in the same render as the new query, so the highlighted row
+          // (and aria-activedescendant) never points past the new match list.
+          setActive(0)
           setOpen(true)
         }}
         onKeyDown={onKeyDown}
