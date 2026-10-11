@@ -10,6 +10,7 @@ const { getPolicyNumber } = require('../services/leaveEngine');
 const { setLeaveBalance } = require('../services/leaveBalanceGuard');
 const { requireHrOrAdmin, requireAdmin } = require('../middleware/roles');
 const { carryFlags } = require('../services/statutoryFlags');
+const { normAccount, normIfsc, readBankPairs, auditBankChange, BANK_PAIR_MISMATCH } = require('../services/bankPair');
 
 // Statutory flags PR-1 (R10): PF / ESI / LWF change only through the audited
 // statutory upload (/api/statutory-flags). Every writer in this file ignores
@@ -295,12 +296,20 @@ router.post('/', (req, res) => {
   const existing = db.prepare('SELECT id FROM employees WHERE code = ?').get(code);
   if (existing) return res.status(400).json({ success: false, error: 'Employee code already exists' });
 
+  // P1-14: the account / IFSC go into BOTH bank column pairs (A canonical, B mirror).
+  const acct = normAccount(bankAccount);
+  const ifscVal = normIfsc(ifsc);
   const result = db.prepare(`
-    INSERT INTO employees (code, name, father_name, dob, gender, department, designation, company, employment_type, contractor_group, date_of_joining, default_shift_id, bank_account, ifsc, bank_name, pf_number, uan, esi_number, status, is_data_complete)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'Active', 1)
-  `).run(code, name, fatherName, dob, gender, department, designation, company, employmentType || 'Permanent', contractorGroup, dateOfJoining, defaultShiftId, bankAccount, ifsc, bankName, pfNumber, uan, esiNumber);
+    INSERT INTO employees (code, name, father_name, dob, gender, department, designation, company, employment_type, contractor_group, date_of_joining, default_shift_id, account_number, bank_account, ifsc_code, ifsc, bank_name, pf_number, uan, esi_number, status, is_data_complete)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'Active', 1)
+  `).run(code, name, fatherName, dob, gender, department, designation, company, employmentType || 'Permanent', contractorGroup, dateOfJoining, defaultShiftId, acct, acct, ifscVal, ifscVal, bankName, pfNumber, uan, esiNumber);
 
   const empId = result.lastInsertRowid;
+  auditBankChange(db, {
+    emp: null, employeeId: empId, employeeCode: code,
+    account: { present: true, value: acct }, ifsc: { present: true, value: ifscVal },
+    user: req.user?.username, via: 'new employee',
+  });
 
   // Insert salary structure if provided
   if (basic > 0) {
@@ -451,6 +460,22 @@ router.put('/:code', requireHrOrAdmin, (req, res) => {
     }
   }
 
+  // P1-14: the two bank column pairs always hold the same value. Whichever name
+  // the caller sends, both columns are written (trimmed; IFSC upper-cased;
+  // blank → NULL). Both names sent with different values → 400.
+  const bankPairs = readBankPairs(updates);
+  if (!bankPairs.ok) {
+    return res.status(400).json({ success: false, code: BANK_PAIR_MISMATCH, error: bankPairs.error });
+  }
+  if (bankPairs.account.present) {
+    updates.account_number = bankPairs.account.value;
+    updates.bank_account = bankPairs.account.value;
+  }
+  if (bankPairs.ifsc.present) {
+    updates.ifsc_code = bankPairs.ifsc.value;
+    updates.ifsc = bankPairs.ifsc.value;
+  }
+
   const allowedFields = [
     'name', 'father_name', 'dob', 'gender', 'department', 'designation', 'company',
     'employment_type', 'contractor_group', 'date_of_joining', 'date_of_exit', 'exit_reason',
@@ -526,6 +551,11 @@ router.put('/:code', requireHrOrAdmin, (req, res) => {
   params.push(code);
 
   db.prepare(`UPDATE employees SET ${setClauses.join(', ')} WHERE code = ?`).run(...params);
+  auditBankChange(db, {
+    emp, employeeId: emp.id, employeeCode: emp.code,
+    account: bankPairs.account, ifsc: bankPairs.ifsc,
+    user: req.user?.username, via: 'employee edit',
+  });
 
   // ── Sync salary_structures whenever gross_salary or any statutory flag
   // changes via this generic PUT. Prevents the employees↔salary_structures
@@ -611,6 +641,25 @@ router.put('/:code/leaves', requireHrOrAdmin, (req, res) => {
 // When gross_salary changes, route through salary_change_requests for finance approval.
 // Non-salary fields (banking, statutory IDs, pt) are always applied immediately.
 // PF / ESI / LWF flags in the body are ignored (statutory upload only, R10).
+// P1-14 (Q2): is the submitted split the one already stored? Compared on the
+// values the form sends back (percentages, special as an amount, other allowance,
+// PF wage ceiling). A field left out of the body counts as unchanged.
+function splitUnchanged(struct, newGross, body) {
+  const near = (a, b) => Math.abs((Number(a) || 0) - (Number(b) || 0)) <= 0.01;
+  const sent = (k) => body[k] !== undefined && body[k] !== null && body[k] !== '';
+  if (!near(struct.gross_salary, newGross)) return false;
+  for (const [k, col] of [['basic_percent', 'basic_percent'], ['hra_percent', 'hra_percent'], ['da_percent', 'da_percent']]) {
+    if (sent(k) && !near(parseFloat(body[k]), struct[col])) return false;
+  }
+  if (sent('special_allowance_percent')) {
+    const amt = Math.round(newGross * (parseFloat(body.special_allowance_percent) || 0) / 100 * 100) / 100;
+    if (!near(amt, struct.special_allowance)) return false;
+  }
+  if (sent('other_allowance') && !near(parseFloat(body.other_allowance), struct.other_allowances)) return false;
+  if (sent('pf_wage_ceiling') && !near(parseFloat(body.pf_wage_ceiling), struct.pf_wage_ceiling)) return false;
+  return true;
+}
+
 router.put('/:code/salary', requireHrOrAdmin, (req, res) => {
   const db = getDb();
   const emp = db.prepare('SELECT * FROM employees WHERE code = ?').get(req.params.code);
@@ -620,8 +669,18 @@ router.put('/:code/salary', requireHrOrAdmin, (req, res) => {
     gross_salary, basic_percent, hra_percent, da_percent,
     special_allowance_percent, other_allowance,
     pf_applicable, esi_applicable, pt_applicable, pf_wage_ceiling,
-    uan, esi_number, account_number, bank_name, ifsc_code
+    uan, esi_number, bank_name
   } = req.body;
+
+  // P1-14: account / IFSC go into BOTH bank column pairs (A = account_number /
+  // ifsc_code, read first by the bank file; B = bank_account / ifsc, read by the
+  // payslip). A key left out keeps both stored columns as they are.
+  const bankPairs = readBankPairs(req.body);
+  if (!bankPairs.ok) {
+    return res.status(400).json({ success: false, code: BANK_PAIR_MISMATCH, error: bankPairs.error });
+  }
+  const acctPair = bankPairs.account;
+  const ifscPair = bankPairs.ifsc;
 
   const newGross = parseFloat(gross_salary) || 0;
   const currentGross = parseFloat(emp.gross_salary) || 0;
@@ -631,19 +690,28 @@ router.put('/:code/salary', requireHrOrAdmin, (req, res) => {
 
   // Always apply banking / statutory ID fields immediately (no approval needed)
   db.prepare(`UPDATE employees SET
-    uan = ?, esi_number = ?, bank_account = ?, bank_name = ?, ifsc = ?,
+    uan = ?, esi_number = ?,
+    account_number = ?, bank_account = ?, bank_name = ?, ifsc_code = ?, ifsc = ?,
     pt_applicable = ?,
     updated_at = datetime('now')
     WHERE code = ?`
   ).run(
     uan !== undefined ? uan || null : emp.uan,
     esi_number !== undefined ? esi_number || null : emp.esi_number,
-    account_number !== undefined ? account_number || null : emp.bank_account,
+    acctPair.present ? acctPair.value : emp.account_number,
+    acctPair.present ? acctPair.value : emp.bank_account,
     bank_name !== undefined ? bank_name || null : emp.bank_name,
-    ifsc_code !== undefined ? ifsc_code || null : emp.ifsc,
+    ifscPair.present ? ifscPair.value : emp.ifsc_code,
+    ifscPair.present ? ifscPair.value : emp.ifsc,
     pt_applicable !== undefined ? (pt_applicable ? 1 : 0) : (emp.pt_applicable ?? 1),
     req.params.code
   );
+
+  auditBankChange(db, {
+    emp, employeeId: emp.id, employeeCode: emp.code,
+    account: acctPair, ifsc: ifscPair,
+    user: req.user?.username, via: 'salary window',
+  });
 
   // Sync pt to salary_structures (NOT gross, NOT pf/esi/lwf)
   if (pt_applicable !== undefined) {
@@ -729,8 +797,16 @@ router.put('/:code/salary', requireHrOrAdmin, (req, res) => {
     const specialAllow = Math.round(newGross * specialPct / 100 * 100) / 100;
 
     const existing = db.prepare(
-      'SELECT id FROM salary_structures WHERE employee_id = ? ORDER BY effective_from DESC LIMIT 1'
+      'SELECT * FROM salary_structures WHERE employee_id = ? ORDER BY effective_from DESC LIMIT 1'
     ).get(emp.id);
+
+    // P1-14 (Q2): same gross AND same split → leave the structure exactly as it is.
+    // Rewriting it re-derived every amount from the percentages (106 live rows'
+    // amounts do not equal gross × stored %), so an untouched save changed pay.
+    // A changed split at the same gross still writes, as before.
+    if (existing && splitUnchanged(existing, newGross, req.body)) {
+      return res.json(withIgnored({ success: true, structureUnchanged: true, message: 'Saved — salary split unchanged' }));
+    }
 
     if (existing) {
       db.prepare(`UPDATE salary_structures SET

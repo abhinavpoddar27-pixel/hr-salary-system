@@ -11,7 +11,6 @@ import {
 import { useAppStore } from '../store/appStore'
 import DateSelector from '../components/common/DateSelector'
 import useDateSelector from '../hooks/useDateSelector'
-import CompanyFilter from '../components/shared/CompanyFilter'
 import { fmtINR } from '../utils/formatters'
 import { canFinance as canFinanceFn } from '../utils/role'
 import ReleaseHoldModal from '../components/ui/ReleaseHoldModal'
@@ -22,6 +21,10 @@ import Modal from '../components/ui/Modal'
 // P1-15: a flag needs a written reason (UI rule only — POST /status has no minimum).
 const FLAG_REASON_MIN = 5
 
+// P1-13: finance verification and the month sign-off cover every company (owner ruling,
+// 11 Oct 2026) — the backend ignores a company, so this page shows no company filter.
+const MONTH_NAMES = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December']
+
 function KPI({ label, value, color = 'blue' }) {
   const colors = { blue: 'text-blue-700', green: 'text-green-700', red: 'text-red-700', amber: 'text-amber-700', purple: 'text-purple-700' }
   return <div className="card p-3"><div className={clsx('text-xl font-bold', colors[color])}>{value}</div><div className="text-[10px] text-slate-400 uppercase font-medium">{label}</div></div>
@@ -29,7 +32,7 @@ function KPI({ label, value, color = 'blue' }) {
 
 export default function FinanceVerification() {
   const { month, year, dateProps } = useDateSelector({ mode: 'month', syncToStore: true })
-  const { selectedCompany, user } = useAppStore()
+  const { user } = useAppStore()
   const navigate = useNavigate()
   const [searchParams] = useSearchParams()
   const deepTab = searchParams.get('tab')
@@ -79,7 +82,10 @@ export default function FinanceVerification() {
   // P1-15: mirrors POST /signoff — approve is refused while any row this month is flagged or rejected.
   const openFlags = (dash?.summary?.flagged || 0) + (dash?.summary?.rejected || 0)
   const bulkMut = useMutation({ mutationFn: bulkVerifyEmployees, onSuccess: (r) => { qc.invalidateQueries(['fin-dash']); qc.invalidateQueries(['fin-emps']); toast.success(`${r.data.verified} employees verified`) } })
-  const signoffMut = useMutation({ mutationFn: submitFinanceSignoff, onSuccess: () => { qc.invalidateQueries(['fin-signoff']); qc.invalidateQueries(['fin-dash']); setSignoffModal(false); toast.success('Sign-off submitted') }, onError: (e) => toast.error(e.response?.data?.error || 'Failed') })
+  // P1-13: show the stored decision straight from the POST reply; only the dashboard is
+  // refetched (its read is no-cache). Refetching the sign-off status here could get the
+  // browser's 5 s cached copy from before the write and put the old banner back.
+  const signoffMut = useMutation({ mutationFn: submitFinanceSignoff, onSuccess: (res) => { const row = res?.data?.data; if (row) qc.setQueryData(['fin-signoff', month, year], { data: { success: true, data: row } }); qc.invalidateQueries({ queryKey: ['fin-dash'] }); setSignoffModal(false); toast.success('Sign-off submitted') }, onError: (e) => toast.error(e.response?.data?.error || 'Failed') })
 
   // ── Miss Punch Review (Phase 4b) ──────────────────────────
   // HR resolves miss punches in Stage 2; finance must approve before
@@ -160,10 +166,13 @@ export default function FinanceVerification() {
       <div className="flex items-center justify-between">
         <div>
           <h2 className="section-title">Finance Verification & Audit</h2>
-          <p className="section-subtitle mt-1">Review, verify, and sign off salary computations</p>
+          <p className="section-subtitle mt-1">Review, verify, and sign off salary computations — every company, one sign-off per month</p>
         </div>
-        <div className="flex items-center gap-3">
-          <CompanyFilter />
+        <div className="flex items-center gap-3 flex-wrap">
+          <span data-testid="finverify-scope-note" title="Finance verification and the month sign-off cover every company — the company filter does not apply here."
+            className="inline-flex items-center rounded-lg border border-slate-200 bg-slate-50 px-3 py-1.5 text-sm text-slate-600">
+            All companies
+          </span>
           <DateSelector {...dateProps} />
         </div>
       </div>
@@ -587,6 +596,7 @@ export default function FinanceVerification() {
       {signoffModal && (
         <Modal onClose={() => setSignoffModal(false)} title="Monthly Sign-Off">
           <div className="space-y-4">
+            <p data-testid="signoff-scope" className="text-xs text-slate-500">This sign-off covers all companies for {MONTH_NAMES[month - 1]} {year}.</p>
             <div className="text-sm">
               <p><strong>Total Employees:</strong> {dash?.summary.totalEmployees}</p>
               <p><strong>Verified:</strong> {dash?.summary.verified}</p>

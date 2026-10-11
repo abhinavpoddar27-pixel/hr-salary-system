@@ -4,6 +4,7 @@ import { useNavigate, Link } from 'react-router-dom'
 import toast from 'react-hot-toast'
 import * as XLSX from 'xlsx'
 import { getEmployees, getEmployee, createEmployee, updateEmployee, updateSalaryStructure, getLeaveBalances, updateLeaveBalance, getEmployeeDocuments, uploadEmployeeDocument, deleteEmployeeDocument, getEmployeeLoans, markEmployeeLeft, getShifts, bulkAssignShift, getLateComingEmployeeHistory, getDepartments } from '../utils/api'
+import api from '../utils/api'
 import { fmtINR } from '../utils/formatters'
 import { useAppStore } from '../store/appStore'
 import Modal from '../components/ui/Modal'
@@ -40,36 +41,70 @@ function formatLastPresent(dateStr) {
   return { text: `${d.getDate()} ${months[d.getMonth()]} ${d.getFullYear()}`, daysAgo: diff }
 }
 
-function SalaryModal({ employee, onClose }) {
-  const qc = useQueryClient()
-  const { selectedYear } = useAppStore()
+// P1-14: the bank columns come in two pairs (account_number / ifsc_code and
+// bank_account / ifsc). The server writes both; show whichever holds a value so a
+// save never blanks an account that sits only in the second pair.
+const firstFilled = (...vals) => {
+  for (const v of vals) if (v !== null && v !== undefined && String(v).trim() !== '') return String(v)
+  return ''
+}
 
-  const { data: empRes } = useQuery({
-    queryKey: ['employee-detail', employee.code],
-    queryFn: () => getEmployee(employee.code),
-    retry: 0
-  })
-  const emp = empRes?.data?.data || employee
-
-  const [form, setForm] = useState({
-    gross_salary: emp.gross_salary || emp.salary_structures?.gross_salary || '',
-    basic_percent: emp.salary_structures?.basic_percent || 50,
-    hra_percent: emp.salary_structures?.hra_percent || 20,
-    da_percent: emp.salary_structures?.da_percent || 0,
-    special_allowance_percent: emp.salary_structures?.special_allowance_percent || 0,
-    other_allowance: emp.salary_structures?.other_allowance || 0,
+// P1-14: the split comes from the latest salary structure (`salaryStructure` in
+// GET /employees/:code). Special allowance is stored as an amount, so its % is
+// derived from gross; other allowance lives in `other_allowances`.
+function salaryFormFromEmployee(emp) {
+  const ss = emp.salaryStructure || {}
+  const num = (v, d) => (v === null || v === undefined || v === '' || !Number.isFinite(Number(v)) ? d : Number(v))
+  const gross = num(emp.gross_salary, 0) || num(ss.gross_salary, 0)
+  const special = num(ss.special_allowance, 0)
+  return {
+    gross_salary: gross || '',
+    basic_percent: num(ss.basic_percent, 50),
+    hra_percent: num(ss.hra_percent, 20),
+    da_percent: num(ss.da_percent, 0),
+    special_allowance_percent: gross > 0 && special > 0 ? (special / gross) * 100 : 0,
+    other_allowance: num(ss.other_allowances, 0),
     // PF / ESI / LWF are NOT in the form (statutory flags PR-1, R10): they are
     // shown read-only from the live employee record below and change only via
-    // Admin → Statutory Flags. (The old `emp.salary_structures?.…` read never
-    // matched the API's `salaryStructure` key and defaulted PF/ESI to 1 — L4.)
-    pt_applicable: emp.salaryStructure?.pt_applicable ?? emp.pt_applicable ?? 1,
-    pf_wage_ceiling: emp.salary_structures?.pf_wage_ceiling || 15000,
+    // Admin → Statutory Flags.
+    pt_applicable: ss.pt_applicable ?? emp.pt_applicable ?? 1,
+    pf_wage_ceiling: num(ss.pf_wage_ceiling, 15000),
     uan: emp.uan || '',
     esi_number: emp.esi_number || '',
-    account_number: emp.account_number || '',
+    account_number: firstFilled(emp.account_number, emp.bank_account),
     bank_name: emp.bank_name || '',
-    ifsc_code: emp.ifsc_code || ''
+    ifsc_code: firstFilled(emp.ifsc_code, emp.ifsc)
+  }
+}
+
+function SalaryModal({ employee, onClose }) {
+  // P1-14: the form starts from the employee DETAIL (it carries salaryStructure),
+  // never from the list row — a list row has no structure, so the split showed
+  // 50/20 and a save wrote those defaults back. no-cache: the server answers GETs
+  // with max-age=5, so a reopen right after a save would show the old values.
+  const { data: empRes, isLoading, isError } = useQuery({
+    queryKey: ['employee-detail', employee.code],
+    queryFn: () => api.get(`/employees/${employee.code}`, { headers: { 'Cache-Control': 'no-cache' } }),
+    retry: 0,
+    staleTime: 0
   })
+  const detail = empRes?.data?.data
+  if (!detail) {
+    return (
+      <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4" onClick={onClose}>
+        <div className="bg-white rounded-xl shadow-2xl w-full max-w-sm p-5 text-sm text-slate-600" onClick={e => e.stopPropagation()} data-testid="salary-modal-loading">
+          {isLoading ? 'Loading salary structure…' : (isError ? 'Could not load this employee. Close and try again.' : 'Loading…')}
+          <div className="mt-3 text-right"><button onClick={onClose} className="btn-secondary">Close</button></div>
+        </div>
+      </div>
+    )
+  }
+  return <SalaryForm key={detail.code} employee={employee} emp={detail} onClose={onClose} />
+}
+
+function SalaryForm({ employee, emp, onClose }) {
+  const qc = useQueryClient()
+  const [form, setForm] = useState(() => salaryFormFromEmployee(emp))
 
   const updateMutation = useMutation({
     mutationFn: (data) => updateSalaryStructure(employee.code, data),
@@ -82,7 +117,9 @@ function SalaryModal({ employee, onClose }) {
       }
       qc.invalidateQueries(['employee-detail', employee.code])
       onClose()
-    }
+    },
+    // P1-14: a refused save (e.g. BANK_PAIR_MISMATCH) says why; the window stays open.
+    onError: (err) => toast.error(err?.response?.data?.error || 'Could not save — try again')
   })
 
   const gross = parseFloat(form.gross_salary) || 0
@@ -117,7 +154,9 @@ function SalaryModal({ employee, onClose }) {
             ].map(f => (
               <div key={f.key}>
                 <label className="label">{f.label}</label>
-                <input type="number" value={form[f.key]} onChange={e => setForm(prev => ({ ...prev, [f.key]: e.target.value }))} className="input" min="0" max="100" />
+                {/* P1-14: special % is derived from the stored amount, so it can carry many
+                    decimals — show 2; the full value is still sent until the field is edited. */}
+                <input type="number" value={f.key === 'special_allowance_percent' && typeof form[f.key] === 'number' ? Math.round(form[f.key] * 100) / 100 : form[f.key]} onChange={e => setForm(prev => ({ ...prev, [f.key]: e.target.value }))} className="input" min="0" max="100" />
               </div>
             ))}
             <div>

@@ -152,8 +152,10 @@ function generateESIFile(db, month, year, company) {
 function generateBankFile(db, month, year, company) {
   const employees = db.prepare(`
     SELECT sc.employee_code, e.name as employee_name,
-           COALESCE(e.account_number, e.bank_account) as account_number,
-           COALESCE(e.ifsc_code, e.ifsc) as ifsc_code,
+           -- P1-14: an empty account_number / ifsc_code ('' — 321 / 434 live rows) no
+           -- longer hides a filled-in bank_account / ifsc.
+           COALESCE(NULLIF(TRIM(e.account_number), ''), e.bank_account) as account_number,
+           COALESCE(NULLIF(TRIM(e.ifsc_code), ''), e.ifsc) as ifsc_code,
            e.bank_name, e.department, e.date_of_joining,
            sc.net_salary
     FROM salary_computations sc
