@@ -9,6 +9,8 @@
 - [x] full suite: base c942563f 99/1566 green; branch 98/100, 3 fail (statutoryWriters T11b ×2, salaryChangeSelfApproval ×1) — old 'absent→0' expectations; asked planner to edit (not my files)
 - [x] check script 29/29; --base 6/6 (gross not reverted, conveyance ₹0)
 - [x] merged origin/main c0d03075 (84fde3bf)
+- [x] planner yes: statutoryWriters NEW_SPLIT + salaryChangeSelfApproval raise() state every component; P1-22 script T2202/T2205 follow kept wording
+- [x] after merge: jest 101 suites / 1593 all green; new check 29/29; P1-22 check 58/58 (rebuilt dist)
 - [ ] scratch sim + drift 0
 - [ ] merge origin/main, push, report
 ## Rulings (planner, 11 Oct)
@@ -32,7 +34,6 @@
 - **Prod (counts, not repaired, Q4):** 43 employees had a non-zero conveyance zeroed by an approval; 1 GROSS flag rejected via
   bulk never reverted (gross has moved since).
 - **Fragile:** Salary-Input requests carry no special/gross → approved gross = request sum + kept special (shown red on the card).
-  `logAudit` writes through getDb() (same connection as the txn). Old P1-22 browser script asserts the old "approval sets it
-  to 0" note — superseded by `backend/scripts/salary-flag-revert-and-approve-check.py`.
+  `logAudit` writes through getDb() (same connection as the txn). P1-22 browser script updated to the kept-value wording.
 - **Verified:** new `salaryFlagRevertAndApprove.test.js` 19 (13 fail on c942563f; the 6 that pass are controls); check script
-  29/29, `--base` 6/6; Stage 7 drift 0. **Not tested:** Railway; production data.
+  29/29, `--base` 6/6; Stage 7 drift 0; P1-22 check 58/58; jest 101 suites / 1593. **Not tested:** Railway; production data.
