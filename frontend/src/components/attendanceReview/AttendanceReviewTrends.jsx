@@ -16,11 +16,18 @@ const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', '
 const C = { s1: '#2a78d6', s2: '#eb6834', grid: '#e7e5e4', axis: '#78716c', ink: '#0b0b0b', ink2: '#52514e' }
 // sequential blue, step 100 → 700
 const SEQ = ['#cde2fb', '#b7d3f6', '#9ec5f4', '#86b6ef', '#6da7ec', '#5598e7', '#3987e5', '#2a78d6', '#256abf', '#1c5cab', '#184f95', '#104281', '#0d366b']
-const SOURCE = { final: 'Final', draft: 'Draft', live: 'Not reviewed — computed now' }
+const SOURCE = { final: 'Final', draft: 'Draft', live: 'Not reviewed — computed now', what_if: 'What-if — computed now' }
 const GROUPS = [['all', 'All workers'], ['company', 'Company'], ['contract', 'Contract']]
-const RANGES = [3, 6, 12]
+const RANGES = [3, 6, 12, 18]
+// T5: '' = as saved (stored runs win); master / import = every month computed now on that basis (what-if)
+const BASES = [['', 'As saved'], ['master', 'Master shift'], ['import', 'Import shift']]
+const BASIS_LABEL = { master: 'master shift', import: 'import shift' }
 
 const pad = (n) => String(n).padStart(2, '0')
+/** The rules version a month was made with, e.g. "v7" / "defaults" / "rules ?" (older run that cannot be told). */
+const rulesTag = (r) => (!r ? 'rules ?' : r.version == null ? 'defaults' : `v${r.version}`)
+const rulesTitle = (r) => (!r ? 'Rules version not recorded for this saved review'
+  : r.version == null ? 'Built-in default rules (no saved version)' : `Rules version ${r.version}${r.effective_from ? `, in force from ${r.effective_from}` : ''}`)
 /** Direct label on the latest month only (selective labels; the tooltip carries the rest). */
 const lastLabel = (len) => function LastLabel({ x, y, value, index }) {
   if (index !== len - 1 || x == null || y == null) return null
@@ -145,12 +152,14 @@ export default function AttendanceReviewTrends({ month, year, onOpenMonth, range
   const [group, setGroup] = useState('all')
   const [tables, setTables] = useState(false)
   const [exporting, setExporting] = useState(false)
+  const [basis, setBasis] = useState('')
   const { from, to } = rangeEnding(month, year, n)
-  const q = useQuery({ queryKey: ['ar-trends', from, to], queryFn: () => attendanceReviewTrends(from, to), retry: 0, staleTime: 60_000 })
+  const q = useQuery({ queryKey: ['ar-trends', from, to, basis], queryFn: () => attendanceReviewTrends(from, to, basis || undefined), retry: 0, staleTime: 60_000 })
   const d = q.data?.data?.data
   const months = d?.months || []
+  const whatIf = !!basis
   const data = useMemo(() => months.map((m) => ({
-    ym: m.ym, x: label(m.ym), source: m.source,
+    ym: m.ym, x: label(m.ym), source: m.what_if ? 'what_if' : m.source, rules: m.rules, basis: m.basis,
     late: m[group].late_pct, early: m[group].early_pct, lost: m[group].time_lost_pct,
     late_days: m[group].late_days, early_exits: m[group].early_exits, people: m[group].people, worked: m[group].worked_days,
     deductions: m.action.deductions, warnings: m.action.warnings, deduction_days: m.action.deduction_days, amount: m.action.indicative_amount, on_list: m.action.people,
@@ -177,11 +186,18 @@ export default function AttendanceReviewTrends({ month, year, onOpenMonth, range
               className={clsx('px-3 py-1', group === k ? 'bg-slate-800 text-white' : 'bg-white text-slate-700 hover:bg-slate-50')}>{l}</button>
           ))}
         </div>
+        <span className="text-slate-600 ml-2">Measured on</span>
+        <div className="inline-flex rounded-md border border-slate-200 overflow-hidden" role="group" aria-label="Measured on" data-testid="ar-trends-basis">
+          {BASES.map(([k, l]) => (
+            <button key={k || 'saved'} type="button" aria-pressed={basis === k} onClick={() => setBasis(k)}
+              className={clsx('px-3 py-1', basis === k ? (k ? 'bg-amber-600 text-white' : 'bg-slate-800 text-white') : 'bg-white text-slate-700 hover:bg-slate-50')}>{l}</button>
+          ))}
+        </div>
         <label className="flex items-center gap-1.5 ml-auto text-slate-600"><input type="checkbox" checked={tables} onChange={(e) => setTables(e.target.checked)} /> Show as tables</label>
         <button type="button" className="btn-secondary" disabled={exporting || !d} data-testid="ar-trends-export" onClick={async () => {
           setExporting(true)
           try {
-            const res = await attendanceReviewTrendsExport(from, to)
+            const res = await attendanceReviewTrendsExport(from, to, basis || undefined)
             const name = /filename="([^"]+)"/.exec(res.headers?.['content-disposition'] || '')?.[1] || 'Attendance_Trends.xlsx'
             const url = URL.createObjectURL(res.data); const a = document.createElement('a'); a.href = url; a.download = name; document.body.appendChild(a); a.click(); a.remove()
             setTimeout(() => URL.revokeObjectURL(url), 1000)
@@ -189,16 +205,26 @@ export default function AttendanceReviewTrends({ month, year, onOpenMonth, range
         }}>{exporting ? 'Preparing…' : 'Download Excel'}</button>
       </div>
 
-      {q.isLoading && <div className="card p-6 text-sm text-slate-500">Working out {n} months… months without a final review are computed now, which takes a few seconds.</div>}
+      {whatIf && (
+        <div className="rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-900" data-testid="ar-trends-whatif">
+          What-if figures: every month below is computed now on the {BASIS_LABEL[basis]}, with today's rules for each month and no
+          overrides. These are not the saved reviews — choose “As saved” to see those.
+        </div>
+      )}
+      {q.isLoading && <div className="card p-6 text-sm text-slate-500">Working out {n} months… {whatIf ? 'every month is computed now' : 'months without a final review are computed now'}, which takes a few seconds.</div>}
       {q.isError && <div className="card p-6 text-sm text-red-700">{q.error?.response?.data?.error || 'Could not load trends.'}</div>}
       {d && months.length === 0 && <div className="card p-6 text-sm text-slate-500">No attendance in {label(from)} – {label(to)}.</div>}
 
       {d && months.length > 0 && (
         <>
           <p className="text-xs text-slate-600" data-testid="ar-trends-sources">
-            {months.map((m) => `${label(m.ym)}: ${SOURCE[m.source]}`).join(' · ')}
+            {months.map((m, i) => (
+              <React.Fragment key={m.ym}>{i > 0 && ' · '}{label(m.ym)}: {m.what_if ? 'What-if' : SOURCE[m.source]}{' '}
+                <span className="text-slate-500" data-testid="ar-trends-rules" data-ym={m.ym} title={rulesTitle(m.rules)}>({rulesTag(m.rules)} · {BASIS_LABEL[m.basis] || m.basis})</span>
+              </React.Fragment>
+            ))}
             {d.skipped?.length > 0 && <> · left out: {d.skipped.map((s) => `${label(s.ym)} (${s.reason})`).join(', ')}</>}
-            . Solid points are final reviews; hollow points can still change.
+            . {whatIf ? 'All points are what-if figures.' : 'Solid points are final reviews; hollow points can still change.'}
           </p>
 
           <div className="grid grid-cols-2 lg:grid-cols-4 gap-3" data-testid="ar-trends-stats">
@@ -213,14 +239,15 @@ export default function AttendanceReviewTrends({ month, year, onOpenMonth, range
               <div className="overflow-x-auto">
                 <table className="w-full text-sm">
                   <thead><tr className="bg-slate-50 text-xs text-slate-500 uppercase">
-                    {['Month', 'Source', 'People', 'Late %', 'Early exit %', 'Time lost %', 'On the list', 'Deductions', 'Warnings', 'Deduction days', 'Indicative ₹'].map((h, i) =>
-                      <th key={h} className={clsx('px-3 py-2 font-medium whitespace-nowrap', i > 1 ? 'text-right' : 'text-left')}>{h}</th>)}
+                    {['Month', 'Source', 'People', 'Late %', 'Early exit %', 'Time lost %', 'On the list', 'Deductions', 'Warnings', 'Deduction days', 'Indicative ₹', 'Rules'].map((h, i) =>
+                      <th key={h} className={clsx('px-3 py-2 font-medium whitespace-nowrap', i > 1 && i < 11 ? 'text-right' : 'text-left')}>{h}</th>)}
                   </tr></thead>
                   <tbody>{data.map((r) => (
                     <tr key={r.ym} className="border-t border-slate-100 cursor-pointer hover:bg-slate-50" onClick={() => open(r.ym)}>
                       <td className="px-3 py-1.5 font-medium">{r.x}</td><td className="px-3 py-1.5 text-slate-600">{SOURCE[r.source]}</td>
                       {[num(r.people), num(r.late, 1), num(r.early, 1), num(r.lost, 1), num(r.on_list), num(r.deductions), num(r.warnings), num(r.deduction_days, 1), inr(r.amount)]
                         .map((v, i) => <td key={i} className="px-3 py-1.5 text-right tabular-nums">{v}</td>)}
+                      <td className="px-3 py-1.5 text-slate-600 whitespace-nowrap" title={rulesTitle(r.rules)}>{rulesTag(r.rules)} · {BASIS_LABEL[r.basis] || r.basis}</td>
                     </tr>))}
                   </tbody>
                 </table>
