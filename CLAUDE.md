@@ -30,6 +30,65 @@ private plan D-4 / D-6 / MP-2.
   `scripts/attendance-review-early-rules-check.py` 29/29 (rules off → editor on → v2 keys → preview → draft → finalise → Send 4 incl. 3
   early-section rows + remarks → hr 403 → phone → payroll untouched); tab 49, trends 31, suggestions 29, master 26, send-to-finance 28,
   board 36 re-run green. **Not tested:** Railway; production data in the UI.
+## Last Session — 2026-10-11 (P1-16: Interventions "Reject All" with no reason or confirm; header checkbox wrong)
+**Branch `fix/interventions-reject-all-confirm`, NOT merged.** Frontend only (`pages/FinanceAudit.jsx`, Manual Interventions tab).
+Plan + log: `docs/ux-bulk/prs/P1-16/PLAN.md`, `PROGRESS.md`. Finding F-10. Planner rulings Q1 (a), Q2, Q3 (11 Oct).
+- **Bug:** Finance Audit → Manual Interventions "Reject All" (and "Approve All") fired `PUT /finance-audit/bulk-approve` on
+  one click, no confirm, no reason (`finance_approvals.comments` = ''). The header checkbox compared `filtered` (incl. live
+  punch/day rows) while it selected a different list, so it never showed checked with a live row on screen; it also ticked
+  already-approved/rejected rows (Reject All then flipped approved flags to rejected), and the selection survived filter changes
+  (hidden rows acted on). Bulk reject of a GROSS_STRUCTURE_CHANGE flag marked it rejected with NO gross revert (the single route reverts).
+- **Fix:** only pending, non-live rows are tickable (others show "—"); header box checked / indeterminate / disabled from exactly
+  that set; selection clears on type/status filter, month, year, company change; buttons act on selected ∩ tickable.
+  Reject All → window "Reject N flags?" with a per-type count, required reason (trimmed ≥ 5 chars, counter) sent as `comments`
+  (the key the route reads). GROSS_STRUCTURE_CHANGE rows are LEFT OUT of the bulk call; the window says how many and to reject
+  them one by one (row Reject reverts the gross) (Q1 a). Approve All → simple confirm naming the count (Q3). Cancel / ✕ / Esc /
+  backdrop send nothing; window locked while in flight; failed request keeps the window + error toast. Double-click guard via a
+  ref (isPending lags a render — the check caught 2 PUTs on a dblclick). dist rebuilt (own commits; hash-normalised vs a
+  868f5389 build only the FinanceAudit chunk differs). Backend untouched.
+- **Fragile:** `isSelectable` (non-live + `finance_approved === 0`) drives row boxes, header box, bulk buttons and the window —
+  keep them on the one helper. The GROSS left-out rule mirrors a server gap: if bulk-approve ever gains the revert, drop `isGross`
+  filtering. The single-row Reject comment window still doesn't require text (out of scope).
+- **Verified:** `backend/scripts/interventions-reject-all-check.py` (Chromium, built dist, scratch DB, real finance login, port
+  3116, fictional T96xx flags + one live punch correction) 56/56, three runs — tickable rows, header empty/indeterminate/checked/
+  disabled across filters, filter change clears, Reject All count + left-out note, reason < 5 / spaces → disabled, Cancel + Esc
+  send nothing, dblclick → 1 PUT with trimmed `comments`, DB exactly the 3 ticked rows rejected + 3 finance_approvals rows with
+  the reason, gross row + approved row untouched, row Reject reverts the gross, Approve All confirm/cancel/approve, 390px,
+  0 page/console errors, 0 API ≥ 400. `--base` on a 868f5389 worktree 8/8: one click rejects, no reason, approved row flipped,
+  gross rejected without revert. jest 96 suites / 1537 before and after.
+- **Not tested:** Railway; Safari/Firefox; admin role in the browser (same page, route has no role guard); all-gross selection
+  (window shows "Reject 0", Confirm disabled — read in code only).
+- **Found, not fixed:** (1) `PUT /finance-audit/bulk-approve` has no GROSS_STRUCTURE_CHANGE revert, no `finance_rejections`
+  row and no `audit_log` row (single `approve-flag` has all three). (2) `bulk-approve` and `approve-flag` have no finance/admin
+  role guard (router behind requireAuth only — any logged-in role can decide flags). (3) Single-row Reject accepts an empty comment.
+
+## Last Session — 2026-10-11 (P1-15: Finance Verification — Flag asks for a reason; Approve gated while flagged)
+**Branch `fix/finverify-flag-reason`, NOT merged.** Frontend only (`pages/FinanceVerification.jsx`, `utils/api.js` 2 reads).
+Plan + log: `docs/ux-bulk/prs/P1-15/PLAN.md`, `PROGRESS.md`. Finding F-12. Rulings Q1–Q4 (11 Oct 2026).
+- **Bug:** Employee Review "⚠" saved the fixed text 'Flagged for review' with no prompt; the Red Flags card "Flag" saved the
+  detector text with no prompt. Sign Off → Approve was always clickable although `POST /finance-verify/signoff` refuses
+  approve (400) while any `finance_audit_status` row of the month is `flagged` or `rejected`. Prod: 11 flagged (Mar 2026,
+  all red-flag texts, 0 'Flagged for review'), 0 sign-offs ever.
+- **Fix:** both Flag buttons open one reason dialog (≥ 5 trimmed chars, `FLAG_REASON_MIN`; live count; reset on every
+  open/close; closes on success only). The red-flag card pre-fills `f.description` (editable) and keeps `flagCategory` (Q1).
+  Stored reason shown under the "Flagged" pill (truncated, full text in tooltip) (Q2). Approve disabled with "N still
+  flagged — verify or resolve them before approving." where N = dashboard flagged + rejected (the server's rule; month-wide,
+  not company-scoped); disabled while the dashboard is loading; Reject still reachable. `verifyMut` gets an `onError`
+  toast. `getFinanceAuditDashboard` / `getFinanceAuditEmployees` send `fresh` (no-cache) so the gate follows a Verify at
+  once (Q3). Server untouched (Q4). dist rebuilt (own commit; api.js is in the index chunk, so most chunk hashes rotate).
+- **Fragile:** the gate's N must stay the server's rule (`status IN ('flagged','rejected')`, month+year) — change both
+  together. The 5-char minimum is UI only. A flag success closes the dialog even if it was reopened for someone else while
+  the request was in flight (same class as P1-05 Q3).
+- **Verified:** `backend/scripts/finverify-flag-reason-check.py` (Chromium, built dist, real finance login, fictional
+  T9561–T9563, current month, port 3115) 32/32 twice — empty/4 chars/spaces disabled, forced click + Cancel send nothing,
+  reopen empty, trimmed reason in POST + DB, row shows it, red-flag pre-fill edited → DB reason + `salary_held` category,
+  Approve disabled "2 still flagged" → verify one "1 still flagged" at once → seeded rejected row also blocks → all verified
+  → approve → signoff row approved, 390px, 0 page/console errors, 0 API ≥ 400. `--base` on an 868f5389 worktree 6/6: ⚠
+  posts 'Flagged for review' with no dialog, Approve enabled while flagged, click → 400. jest 96 suites / 1537 before and after.
+- **Not tested:** Railway; Safari/Firefox; admin role (same `canFinance` gate).
+- **Found, not fixed:** F-a `POST /status` has no server-side reason minimum. F-b sign-off gate + dashboard ignore company;
+  `/signoff-status` reads by month/year only. F-c no per-employee "rejected" action in the UI, yet rejected rows block
+  sign-off. F-d "Bulk Verify Clean Employees" skips already-flagged rows (one-by-one only).
 ## Last Session — 2026-10-11 (Attendance enforcement PR-5: mid-month notice board)
 **Branch `feat/attendance-review-notice-board` (on main 75d60ee6), NOT merged.** Plan: `docs/attendance-review/PR5_NOTICE_BOARD.md`; private plan D-8 / D-9 / MP-2.
 - **What:** Attendance Review tab → third view "Notice board": a printable A4 for the 1st up to a chosen day (default the 15th),
