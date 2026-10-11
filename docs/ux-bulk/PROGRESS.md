@@ -9,7 +9,7 @@
 Programme:   UI/UX improvement + bulk input, HR Salary System (Indriyan / Asian Lakto)
 Base:        origin/main a5aec9a (10 Oct 2026). Re-check: git fetch origin; git log -1 origin/main
 Plan:        docs/ux-bulk/MASTER_PLAN.md (§5.2 = PR order, §6 = specs, §7 = bulk design, §14 = open questions)
-Current PR:  14 merged (#112 P1-15 merged 11 Oct). OPEN + green + clean (re-synced after #112): #113 P1-16, #114 P1-17, #115 P1-19, #116 P1-20, #117 P1-21, #118 P1-22. Re-sync the rest after each merge (syncfast.sh, sequential). Next: P1-13 (M), N-9 fresh reads, N-3, money follow-ups N-16/N-17.
+Current PR:  15 merged (#112 P1-15, #113 P1-16 merged 11 Oct). OPEN + green + clean (re-synced after #112): #114 P1-17, #115 P1-19, #116 P1-20, #117 P1-21, #118 P1-22. Re-sync the rest after each merge (syncfast.sh, sequential). Next: P1-13 (M), N-9 fresh reads, N-3, money follow-ups N-16/N-17.
 Asked, not answered: Q1 Q2 Q3 (P3-01/P5-02), Q4 (P1-04) — re-ask before those PRs
 Open Qs:     Q1 Q2 (needed by P3-01) · Q4 (P1-04) · Q5 (P1-07) · Q6 (P1-23) · Q10 (one-PR rule) — ask when the PR needs them
 Roles:       planner = new chat; builder = Claude Code agent session reading prs/<PR-ID>/PROMPT.md; Abhinav says "go" and merges in GitHub UI
@@ -73,7 +73,7 @@ Status values: `todo` · `plan` (Phase 0 written, waiting for go) · `build` · 
 | P1-13 | Finance Verify company filter | todo | | | | | |
 | P1-14 | Bank columns + salary split | todo | | | | | |
 | P1-15 | Finance Verify flag reason + Approve gate | MERGED #112 | | | | | |
-| P1-16 | Interventions Reject All | PR #113 green | | | | | |
+| P1-16 | Interventions Reject All | MERGED #113 | | | | | |
 | P1-17 | Import overwrite checkbox + month | PR #114 green | | | | | |
 | P1-18 | DW drafts invisible | todo | | | | | |
 | P1-19 | Sales Mark Left date | PR #115 green | | | | | |
