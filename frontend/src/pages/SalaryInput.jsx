@@ -15,6 +15,14 @@ import EmployeeQuickView from '../components/ui/EmployeeQuickView'
 import api from '../utils/api'
 import { canFinance as canFinanceFn, canHR as canHRFn } from '../utils/role'
 
+// P1-23: same rule as the server (routes/salary-input.js) — trimmed, case-insensitive username; empty never matches.
+const SELF_DECIDE_TEXT = 'You raised this request — ask another finance or admin user to decide it.'
+const isOwnRequest = (user, req) => {
+  const a = String(user?.username || '').trim().toLowerCase()
+  const b = String(req?.requested_by || '').trim().toLowerCase()
+  return !!a && a === b
+}
+
 export default function SalaryInput() {
   const { selectedCompany, user } = useAppStore()
   // April 2026: gross-salary changes follow the HR-proposes / Finance-
@@ -258,7 +266,16 @@ export default function SalaryInput() {
                     {/* Approve / Reject are gated to Finance/Admin only.
                         HR can submit (request-change) but not approve their
                         own request — backend enforces the same gates. */}
-                    {canFinance ? (
+                    {canFinance && isOwnRequest(user, req) ? (
+                      // P1-23: the requester never decides their own request (admin included).
+                      <div className="text-right">
+                        <div className="flex gap-2 justify-end">
+                          <button disabled title={SELF_DECIDE_TEXT} className="btn-primary text-xs opacity-50 cursor-not-allowed">Approve</button>
+                          <button disabled title={SELF_DECIDE_TEXT} className="btn-ghost text-xs text-red-600 opacity-50 cursor-not-allowed">Reject</button>
+                        </div>
+                        <div className="text-[10px] text-slate-500 mt-1 max-w-xs" data-testid="self-decide-note">{SELF_DECIDE_TEXT}</div>
+                      </div>
+                    ) : canFinance ? (
                       <div className="flex gap-2">
                         <button onClick={() => approveMutation.mutate(req.id)} disabled={approveMutation.isPending} className="btn-primary text-xs">Approve</button>
                         <button onClick={() => { setRejectId(req.id); setRejectReason('') }} className="btn-ghost text-xs text-red-600">Reject</button>

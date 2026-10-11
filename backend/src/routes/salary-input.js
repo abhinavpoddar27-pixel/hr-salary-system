@@ -18,6 +18,16 @@ function isCalendarDate(v) {
 // force at the new row's own date.
 const STATUTORY_FLAG_FIELDS = ['pf_applicable', 'esi_applicable', 'lwf_applicable'];
 
+// P1-23 (owner ruling Q6, 11 Oct 2026): the person who raised a salary change
+// never decides it — admin included. Username compare, trimmed, case-insensitive;
+// an empty requested_by (legacy rows) blocks nobody.
+const sameUser = (a, b) => !!a && !!b && String(a).trim().toLowerCase() === String(b).trim().toLowerCase();
+const SELF_APPROVAL = {
+  success: false,
+  code: 'SELF_APPROVAL',
+  error: 'You raised this request — ask another finance or admin user to decide it.',
+};
+
 /**
  * GET /api/salary-input/all
  * Get all employees with their current salary structures
@@ -152,6 +162,7 @@ router.put('/approve/:id', requireFinanceOrAdmin, (req, res) => {
 
   const request = db.prepare('SELECT * FROM salary_change_requests WHERE id = ? AND status = ?').get(id, 'Pending');
   if (!request) return res.status(404).json({ success: false, error: 'Request not found or already processed' });
+  if (sameUser(req.user?.username, request.requested_by)) return res.status(403).json(SELF_APPROVAL);
 
   let newStructure;
   try { newStructure = JSON.parse(request.new_structure); } catch { newStructure = {}; }
@@ -262,6 +273,7 @@ router.put('/reject/:id', requireFinanceOrAdmin, (req, res) => {
   const rejectedBy = req.user?.username || 'finance';
   const request = db.prepare("SELECT * FROM salary_change_requests WHERE id = ? AND status = 'Pending'").get(id);
   if (!request) return res.status(404).json({ success: false, error: 'Request not found or already processed' });
+  if (sameUser(req.user?.username, request.requested_by)) return res.status(403).json(SELF_APPROVAL);
 
   // Archive snapshot BEFORE flipping status, mirroring the
   // archiveRejection() helper used by extra-duty grants.
