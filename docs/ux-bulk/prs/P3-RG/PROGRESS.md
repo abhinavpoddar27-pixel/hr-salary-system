@@ -7,7 +7,7 @@ NEW taxDeclarationReadGuard.test.js, backend/scripts/role-gaps-check.py, this fo
 
 ## Steps
 - [x] Phase 0: code read, PLAN.md written (SQL A–D + Q1–Q4 for planner)
-- [ ] planner go + SQL answers
+- [x] planner go + SQL answers
 - [ ] jest baseline (full, flock)
 - [ ] test file written, fails on 8abee969
 - [ ] backend guards
@@ -17,7 +17,8 @@ NEW taxDeclarationReadGuard.test.js, backend/scripts/role-gaps-check.py, this fo
 - [ ] merge origin/main, re-run, push, report
 
 ## Rulings
-(none yet)
+Planner 12 Oct: GO. SQL A = 0 calls ever to /api/tax-declarations*; C = 0 disagreeing flag rows; D = 0 verify calls.
+Q1 yes (parent badge uses helper). Q2 keep verified_by fallback. Q3 "Awaiting finance". Q4 no self-read exception.
 
 ## CLAUDE.md entry
 (to write at the end)
