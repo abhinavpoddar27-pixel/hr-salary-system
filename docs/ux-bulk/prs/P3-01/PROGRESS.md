@@ -12,7 +12,7 @@ GO received — building. Never commit frontend/dist; never edit CLAUDE.md; only
 - [x] engine.js + kinds/extraDuty.js + routes/bulk.js + server.js mount
 - [x] bulkExtraDuty.test.js 20 tests (incl. parity vs verbatim 8abee969 handler; mutation of audit text makes it fail); ED suites 55 unchanged
 - [x] frontend: bulkApi, ExtraDutyBulkGrant, CopyFromDate, BulkBatchList, page (F-11, btn-warning) — builds clean
-- [ ] bulk-ed-check.py + --base; regression ED scripts; drift query
+- [x] bulk-ed-check.py 45/45 (drift unchanged); --base on 8abee969 build 2/2; regression ed-finance-review-ux 25/25, ed-return-browser 16/16, ui-components 64/64
 - [ ] self-debug, user sim, v2; merge origin/main; full jest; push; independent review
 
 ## Rulings
