@@ -12,7 +12,8 @@ as A). That is exactly the path that crashes when a hook sits after a conditiona
 Checks:
   A. per role (real login, no switch): the visible sidebar labels (every parent expanded) + company selector.
   B. in-place switch A→B: no page error, no React hook error, shell still rendered, labels = the A-check labels
-     of role B, company selector = expected for B.
+     of role B, company selector = expected for B. Since P2-10 the nav follows GET /api/auth/permissions, so that
+     call is intercepted too and answers role B's real list (captured in A) — as the server would after a real change.
   C. 390px phone, hr: drawer opens, labels = hr labels, 0 errors.
   Overall: 0 page errors, 0 console errors (besides the known vite.svg 404), 0 API >= 400 in A + C (in B the
   token is still role A while the UI shows role B, so role-B reads may 403 — printed, not asserted).
@@ -123,13 +124,16 @@ try:
 
     with sync_playwright() as p:
         b = p.chromium.launch()
-        base_labels, base_sel, all_bad = {}, {}, []
+        base_labels, base_sel, all_bad, perms = {}, {}, [], {}
 
         print('\n— A. per role, real login, no switch —')
         for role in ('admin', 'hr', 'finance', 'viewer'):
             pg, log = new_page(b)
             login(pg, role)
             base_labels[role] = labels(pg); base_sel[role] = selector_shown(pg)
+            # P2-10: the nav follows GET /api/auth/permissions (the server's list for the token's role).
+            perms[role] = pg.evaluate("() => fetch('/api/auth/permissions', {headers: {Authorization: 'Bearer ' + "
+                                      "localStorage.getItem('hr_token'), 'Cache-Control': 'no-cache'}}).then(r => r.text())")
             print(f'  {role}: {len(base_labels[role])} labels, company selector {base_sel[role]}')
             check(f'{role}: shell rendered, 0 page errors', (False, []), (crashed(pg), log['errs']))
             check(f'{role}: 0 console errors', [], log['cons'])
@@ -152,6 +156,11 @@ try:
                 time.sleep(.8)  # let the shell paint as role A first
                 route.fulfill(status=200, content_type='application/json', body=body)
             pg.route('**/api/auth/me', handle)
+            # P2-10: a real role change changes the server's answer too — so /auth/permissions answers role B
+            # (the old dist never calls it, so --base is unaffected).
+            if not BASE_MODE:
+                pg.route('**/api/auth/permissions', lambda route, _req, body=perms[bb]:
+                         route.fulfill(status=200, content_type='application/json', body=body))
             pg.reload(); pg.wait_for_load_state('networkidle'); time.sleep(1.5)
             stored_role = pg.evaluate("() => JSON.parse(localStorage.getItem('hr_user')||'{}').role")
             hook_errs = [e for e in log['errs'] + log['cons'] if HOOK_ERR.search(e)]

@@ -62,7 +62,8 @@ Q2 fail open + amber line; Q4 "HR & Salary System"; Q6 "v<pkg> · <shortsha>".
   permissions 500 → amber line + fail open, 390 px. `--base` on 8abee969 7/7 (viewer 47, supervisor 46, hr Settings, "/" redirect,
   admin/hr/finance sets = the fix's sets).
 - **Not tested:** Railway (that RAILWAY_GIT_COMMIT_SHA reaches the vite build); Safari/Firefox.
-- **Script to update (not owned):** `backend/scripts/layout-hook-order-check.py` 54/58 — its 4 "labels = target role" asserts fake
-  the stored role while the token keeps the real role; the nav now follows the server (token) role by design. Its crash checks pass.
+- **Script updated (assigned by planner):** `backend/scripts/layout-hook-order-check.py` now also intercepts `/auth/permissions`
+  with role B's real list (captured in part A) during the in-place switch — the nav follows the server's list by design.
+  58/58 (was 54/58 before the update); crash checks unchanged.
 - **Found, not fixed:** viewer can read most of the hidden pages' data through the API (reads unguarded — R3, planner registered);
   supervisor Daily MIS → 403 `/leaves/on-leave-today`.
