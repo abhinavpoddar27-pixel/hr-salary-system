@@ -52,6 +52,11 @@ function buildWorkbook(result, run = {}) {
     ['Lates of 2 h or more (counted / forgiven by full hours)', `${(result.longLates || []).reduce((a, x) => a + (x.long_lates || 0), 0)} / ${(result.longLates || []).reduce((a, x) => a + (x.full_hours_forgiven || 0), 0)}`],
     ['Late notice names', (result.noticeLate || []).length], ['Early notice names', (result.noticeEarly || []).length],
     ['Release days (not counted)', (m.release_days || []).join(', ')],
+    // PR-8: only when the result knows about plant-wide late days (older stored results stay as they were)
+    ...(result.plantLateDays ? [
+      ['Plant-wide late days ticked (lates not counted)', (result.plantLateDays.ticked || []).join(', ') || 'none'],
+      ['Late arrivals not counted on those days', result.plantLateDays.lates_excused ?? 0],
+    ] : []),
     ['Gate passes recorded', result.gatePassCount],
     ['Early exits excused by a gate pass', result.gatePassExcused ?? 0],
     ['Measured against', result.criteria?.assessment_basis === 'master' ? "Each person's current master shift" : 'The shift the import matched (import basis)'],
@@ -173,7 +178,9 @@ function buildDocx(result, run = {}, { now = new Date() } = {}) {
   const earlyRuleText = d4 ? `2-hour rule: once a month has ${t0(result).d4_half_day_min_count ?? 1} or more exits of 2 hours or more, each is half a day; with ${t0(result).d4_long_count ?? 3} or more exits of 1 hour or more, their minutes are deducted too.${result.criteria?.missed_out_rule ? ` From the ${t0(result).missed_out_from ?? 5}th own missed punch in the month, each missed OUT counts as an early exit of 2 hours.` : ''}`
     : optionC ? 'Option C applies: ½ day per exit of 1 hour or more, plus ½ day per 3 shorter exits.' : 'Warning only.';
   const rel = (result.meta.release_days || []).map(fmtDay);
+  const lfd = ((result.plantLateDays && result.plantLateDays.ticked) || []).map(fmtDay);
   const relText = rel.length ? `Plant-wide early-release days (${rel.join(', ')}) are not counted.` : '';
+  const lateDayText = lfd.length ? ` Late arrivals on plant-wide late days (${lfd.join(', ')}) are not counted.` : '';
   const list = result.actionList || []; const ew = result.earlyExitWarnings || [];
   const ded = list.filter((a) => a.action === 'deduction'); const warn = list.filter((a) => a.action !== 'deduction');
   const chk = list.filter((a) => a.check_master_shift);
@@ -191,7 +198,7 @@ function buildDocx(result, run = {}, { now = new Date() } = {}) {
     para([tr(`Late Coming & Early Exit – Action List, ${ML}`, { size: 30, bold: true })], { after: 60 }),
     para([tr(`Prepared ${today} · HR Department · For HR and Finance only – not for display`, { size: 18, color: '595959' })], { after: 160 }),
     para([tr(`${people(list.length)}: ${ded.length} ${ded.length === 1 ? 'gets' : 'get'} a deduction note (${days(tot.deduction_days || 0)} in total, about ${inr(tot.indicative_amount)}), ${warn.length} ${warn.length === 1 ? 'gets' : 'get'} a warning note.${chk.length ? ` ${people(chk.length)} flagged "check master shift" – confirm the shift before issuing.` : ''}`, { size: 21 })], { after: 80 }),
-    para([tr(`Deduction = workdays actually lost (late minutes + early-exit minutes ÷ shift length), rounded to the nearest ${t.rounding_step ?? 0.5} day, minimum ${t.min_deduction ?? 0.5} day. Mornings after the person stayed late the previous evening are not counted.${fullLate ? ` Nor are lates${fullEarly ? ' or early exits' : ''} on days the full shift was still worked.` : ''} ${relText} ₹ amounts are indicative (monthly gross ÷ days in month × days); payroll gives the final figure.`, { size: 18, color: '404040' })], { after: 120 }),
+    para([tr(`Deduction = workdays actually lost (late minutes + early-exit minutes ÷ shift length), rounded to the nearest ${t.rounding_step ?? 0.5} day, minimum ${t.min_deduction ?? 0.5} day. Mornings after the person stayed late the previous evening are not counted.${fullLate ? ` Nor are lates${fullEarly ? ' or early exits' : ''} on days the full shift was still worked.` : ''}${lateDayText} ${relText} ₹ amounts are indicative (monthly gross ÷ days in month × days); payroll gives the final figure.`, { size: 18, color: '404040' })], { after: 120 }),
     table(['#', 'Code', 'Name', 'Department – Role', 'Late days', 'Early days', 'Time lost', 'Workdays lost', 'Action', 'Deduction', 'Indicative ₹', 'Remark'],
       list.map((p, i) => [{ v: i + 1, align: C }, { v: p.code, align: C }, { v: cleanName(p.name), bold: true }, `${p.department || ''} – ${p.designation || ''}`,
         { v: p.late_days, align: C }, { v: p.early_days, align: C }, hm(p.late_min + p.early_min), { v: Number(p.workdays_lost).toFixed(2), align: C },
@@ -236,7 +243,7 @@ function buildDocx(result, run = {}, { now = new Date() } = {}) {
       'If you must leave early, take a gate pass from your in-charge and show it at the gate.',
     ]),
     table(['S.No', 'Code', 'Name', 'Department', 'Early exits'], (result.noticeEarly || []).map((n, i) => [{ v: i + 1, align: C }, { v: n.code, align: C }, cleanName(n.name), n.department || '', { v: n.early_exits, align: C, bold: true }]), [600, 900, 3300, 2900, 1300], 16, true),
-    para(`${relText} Anyone who believes their record is wrong should meet HR within 3 working days.`.trim(), { size: 17, before: 60, after: 0 }),
+    para(`${relText}${lateDayText} Anyone who believes their record is wrong should meet HR within 3 working days.`.trim(), { size: 17, before: 60, after: 0 }),
     ...sign,
   ];
 
@@ -328,7 +335,7 @@ function buildTrendsWorkbook(data) {
     { k: 'listed', h: 'Action list', v: (r) => r.action.people }, { k: 'ded', h: 'Deductions', v: (r) => r.action.deductions }, { k: 'days', h: 'Deduction days', v: (r) => r.action.deduction_days },
     { k: 'ind', h: 'Indicative ₹', v: (r) => r.action.indicative_amount },
     { k: 'lm', h: 'Lates measured', v: (r) => W(r, 'lates.measured') }, { k: 'lsl', h: 'Excused: stayed late', v: (r) => W(r, 'lates.stayed_late') },
-    { k: 'lfh', h: 'Excused: full hours', v: (r) => W(r, 'lates.full_hours') }, { k: 'lld', h: 'Loaders', v: (r) => W(r, 'lates.loaders') }, { k: 'lc', h: 'Lates counted', v: (r) => W(r, 'lates.counted') },
+    { k: 'lfh', h: 'Excused: full hours', v: (r) => W(r, 'lates.full_hours') }, { k: 'lld', h: 'Loaders', v: (r) => W(r, 'lates.loaders') }, { k: 'lpl', h: 'Excused: plant-wide late days', v: (r) => (r.waterfall ? (r.waterfall.lates.plant_late_days ?? 0) : '') }, { k: 'lc', h: 'Lates counted', v: (r) => W(r, 'lates.counted') },
     { k: 'em', h: 'Early exits measured', v: (r) => W(r, 'early.measured') }, { k: 'efh', h: 'Excused: full hours ', v: (r) => W(r, 'early.full_hours') },
     { k: 'eex', h: 'Not assessed (exempt)', v: (r) => W(r, 'early.exempt') }, { k: 'emo', h: '+ missed OUT', v: (r) => W(r, 'early.missed_out') }, { k: 'ec', h: 'Early counted', v: (r) => W(r, 'early.counted') },
     { k: 'vl', h: '₹ value of time lost', v: (r) => W(r, 'value_lost_inr') },

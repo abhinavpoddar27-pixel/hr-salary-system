@@ -3830,6 +3830,7 @@ If description and screenshot are incoherent or unrelated, set summary_confidenc
       UNIQUE(month, year)
     );
   `);
+  safeAddColumn('attendance_review_runs', 'late_free_days', "TEXT DEFAULT '[]'");
 
   console.log('✅ Database schema initialized');
 }

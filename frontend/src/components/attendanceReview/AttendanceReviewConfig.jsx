@@ -34,6 +34,7 @@ const THRESHOLD_LABELS = {
   d4_long_count: '2 h rule: long exits in the month before their minutes are deducted', d4_half_day_min_count: '2 h rule: number of 2 h exits in the month before each costs ½ day (fewer = warning)', missed_out_from: 'Missed OUT: counted from the person\'s Nth own missed punch',
   ladder_window_months: 'Ladder: months looked back (this month included)', ladder_deduction_from: 'Ladder: months on a list before a deduction stands (fewer = warning)',
   ladder_hearing_from: 'Ladder: months on a list before an HR hearing is added',
+  plant_late_min_people: 'Plant-wide late day: people late that day at least', plant_late_min_share: 'Plant-wide late day: share of those at work late at least (0–1)',
   missed_out_minutes: 'Missed OUT: counts as an early exit of (minutes)',
 }
 const LISTS = [

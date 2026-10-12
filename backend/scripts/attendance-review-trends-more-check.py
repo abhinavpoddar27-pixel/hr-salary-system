@@ -121,7 +121,7 @@ try:
         time.sleep(1)
         wrow = pg.get_by_test_id('ar-trends-waterfall-late').locator('tbody tr').last.inner_text().split('\t')
         w = octm['waterfall']['lates']
-        check('late waterfall row (Oct) = API', [str(w['measured']), str(w['stayed_late']), str(w['full_hours']), str(w['loaders']), str(w['counted'])], [x.strip() for x in wrow[1:6]])
+        check('late waterfall row (Oct) = API', [str(w['measured']), str(w['stayed_late']), str(w['full_hours']), str(w['loaders']), str(w.get('plant_late_days', 0)), str(w['counted'])], [x.strip() for x in wrow[1:7]])  # PR-8 column
         top = pg.get_by_test_id('ar-trends-top').locator('tbody tr').first.inner_text()
         check('top person TT01 with a pattern label', True, 'TT01' in top and 'on a list in 3 months' in top)
         eff = pg.get_by_test_id('ar-trends-effect').inner_text()

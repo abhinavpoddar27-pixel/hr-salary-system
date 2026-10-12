@@ -748,8 +748,8 @@ export const statutoryFlagsUndoFile = (batchId) =>
 // Attendance Review (admin only). Every read skips the 5 s GET cache so a just-saved config or run shows at once.
 const AR = '/analytics/attendance-review'
 const arFresh = { 'Cache-Control': 'no-cache' }
-export const attendanceReviewPreview = (month, year, releaseDays = [], overrides = []) =>
-  api.get(AR, { params: { month, year, releaseDays: releaseDays.join(','), ...(overrides.length ? { overrides: JSON.stringify(overrides) } : {}) }, headers: arFresh })
+export const attendanceReviewPreview = (month, year, releaseDays = [], overrides = [], lateFreeDays = []) =>
+  api.get(AR, { params: { month, year, releaseDays: releaseDays.join(','), ...(overrides.length ? { overrides: JSON.stringify(overrides) } : {}), ...(lateFreeDays.length ? { lateFreeDays: lateFreeDays.join(',') } : {}) }, headers: arFresh })
 export const attendanceReviewConfig = (month, year) => api.get(`${AR}/config`, { params: { month, year }, headers: arFresh })
 export const attendanceReviewSaveConfig = (effective_from, config) => api.put(`${AR}/config`, { effective_from, config })
 // Apply ticked suggestions (accept / dismiss) as one new rules version effective that month

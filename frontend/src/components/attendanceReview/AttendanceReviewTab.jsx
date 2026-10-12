@@ -84,13 +84,13 @@ const SUG_KIND = {
 }
 
 /** Suggested leave-outs and data fixes: tick Accept or Dismiss, then Apply → one new rules version for this month. */
-function SuggestionsSection({ list, month, year, releaseDays, onApplied, readOnly }) {
+function SuggestionsSection({ list, month, year, releaseDays, lateFreeDays = [], onApplied, readOnly }) {
   const [pick, setPick] = useState({})   // key → 'accept' | 'dismiss'
   useEffect(() => { setPick({}) }, [month, year, list])
   const set = (k, v) => setPick((p) => { const n = { ...p }; if (n[k] === v) delete n[k]; else n[k] = v; return n })
   const accept = Object.keys(pick).filter((k) => pick[k] === 'accept'); const dismiss = Object.keys(pick).filter((k) => pick[k] === 'dismiss')
   const apply = useMutation({
-    mutationFn: () => attendanceReviewApplySuggestions({ month, year, accept, dismiss, releaseDays }),
+    mutationFn: () => attendanceReviewApplySuggestions({ month, year, accept, dismiss, releaseDays, lateFreeDays }),
     onSuccess: (r) => { toast.success(`Saved as rules version ${r.data.data.id}, effective ${r.data.data.effective_from}`); setPick({}); onApplied() },
     onError: (e) => toast.error(e.response?.data?.error || 'Could not apply', { duration: 8000 }),
   })
@@ -339,13 +339,15 @@ export default function AttendanceReviewTab({ selectedMonth, selectedYear, onSel
   // Release days + overrides being edited (seeded from the saved run, else from the preview's detection).
   const [releaseDays, setReleaseDays] = useState(null)
   const [overrides, setOverrides] = useState([])
-  useEffect(() => { setReleaseDays(null); setOverrides([]) }, [month, year])
-  useEffect(() => { if (run) { setReleaseDays(run.release_days || []); setOverrides(run.overrides || []) } }, [run?.id, run?.generated_at])
+  // PR-8: ticked plant-wide late days — never pre-ticked (owner ruling 11–12 Oct); seeded only from the saved run
+  const [lateFreeDays, setLateFreeDays] = useState([])
+  useEffect(() => { setReleaseDays(null); setOverrides([]); setLateFreeDays([]) }, [month, year])
+  useEffect(() => { if (run) { setReleaseDays(run.release_days || []); setOverrides(run.overrides || []); setLateFreeDays(run.late_free_days || []) } }, [run?.id, run?.generated_at])
 
   const previewDays = releaseDays || []
   const previewQ = useQuery({
-    queryKey: ['ar-preview', month, year, previewDays.join(','), JSON.stringify(overrides)],
-    queryFn: () => attendanceReviewPreview(month, year, previewDays, overrides),
+    queryKey: ['ar-preview', month, year, previewDays.join(','), JSON.stringify(overrides), lateFreeDays.join(',')],
+    queryFn: () => attendanceReviewPreview(month, year, previewDays, overrides, lateFreeDays),
     // Wait for the runs list so a FINAL month never computes a preview it will not show.
     enabled: !!month && !!year && runsQ.isSuccess && (!runMeta || runMeta.status === 'draft'),
     retry: 0,
@@ -362,12 +364,13 @@ export default function AttendanceReviewTab({ selectedMonth, selectedYear, onSel
 
   const isFinal = runMeta?.status === 'final'
   const runMatchesEdits = run && JSON.stringify(run.release_days || []) === JSON.stringify(previewDays) && JSON.stringify(run.overrides || []) === JSON.stringify(overrides)
+    && JSON.stringify(run.late_free_days || []) === JSON.stringify(lateFreeDays)
   // What the page shows: a final run as stored; a draft as stored unless the admin has changed release days (then the live preview).
   const data = isFinal ? run?.result : (run && runMatchesEdits ? run.result : preview)
   const showingStored = !!(run && (isFinal || runMatchesEdits))
 
   const gen = useMutation({
-    mutationFn: () => attendanceReviewGenerate({ month, year, releaseDays: previewDays, overrides }),
+    mutationFn: () => attendanceReviewGenerate({ month, year, releaseDays: previewDays, overrides, lateFreeDays }),
     onSuccess: (r) => { toast.success(r.status === 201 ? 'Draft created' : 'Draft regenerated'); qc.invalidateQueries({ queryKey: ['ar-runs'] }) },
   })
   // PR-4: data-quality check of the saved draft; Finalise goes through a window that lists the checks
@@ -391,6 +394,10 @@ export default function AttendanceReviewTab({ selectedMonth, selectedYear, onSel
   const detected = preview?.releaseDaysDetected || run?.result?.releaseDaysDetected || []
   const dayOptions = useMemo(() => [...new Set([...detected.map((d) => d.date), ...previewDays])].sort(), [detected, previewDays])
   const toggleDay = (d) => setReleaseDays((cur) => { const s = new Set(cur || []); s.has(d) ? s.delete(d) : s.add(d); return [...s].sort() })
+  // PR-8: plant-wide late days (detected on the preview / stored result; a ticked day stays listed even if no longer detected)
+  const lateDetected = preview?.plantLateDays?.detected || run?.result?.plantLateDays?.detected || []
+  const lateOptions = useMemo(() => [...new Set([...lateDetected.map((d) => d.date), ...lateFreeDays])].sort(), [lateDetected, lateFreeDays])
+  const toggleLateDay = (d) => setLateFreeDays((cur) => { const s = new Set(cur || []); s.has(d) ? s.delete(d) : s.add(d); return [...s].sort() })
 
   if (!month || !year) return <div className="card p-6 text-sm text-slate-500">Pick a month above.</div>
 
@@ -495,11 +502,32 @@ export default function AttendanceReviewTab({ selectedMonth, selectedYear, onSel
               <div className="text-xs font-semibold text-slate-600 mb-1">Overrides for this month (each needs a reason)</div>
               <OverridesEditor value={overrides} onChange={setOverrides} disabled={isFinal} />
             </div>
+            <div className="md:col-span-2" data-testid="ar-plant-late">
+              <div className="text-xs font-semibold text-slate-600 mb-1">Plant-wide late days (tick a day to stop counting its lates for everyone — early exits still count)</div>
+              {lateOptions.length === 0 && <p className="text-xs text-slate-400" data-testid="ar-plant-late-none">
+                None detected (no weekday with {data?.criteria?.thresholds?.plant_late_min_people ?? 15}+ people late and at least {Math.round((data?.criteria?.thresholds?.plant_late_min_share ?? 0.4) * 100)}% of those at work).</p>}
+              <div className="flex flex-wrap gap-2">
+                {lateOptions.map((d) => {
+                  const det = lateDetected.find((x) => x.date === d)
+                  return (
+                    <label key={d} className="flex items-center gap-1.5 text-sm bg-slate-50 rounded px-2 py-1 cursor-pointer" data-testid={`ar-plant-late-${d}`}>
+                      <input type="checkbox" checked={lateFreeDays.includes(d)} onChange={() => toggleLateDay(d)} data-testid={`ar-plant-late-tick-${d}`} />
+                      {fmtDay(d)}{det
+                        ? <span className="text-xs text-slate-500" data-testid={`ar-plant-late-info-${d}`}>· {det.late_people} of {det.assessed} late ({Math.round(det.share * 100)}%), median {det.median_late_minutes} min</span>
+                        : <span className="text-xs text-slate-400">· no longer detected</span>}
+                      {previewDays.includes(d) && <span className="text-[11px] text-slate-400">· also a release day</span>}
+                    </label>
+                  )
+                })}
+              </div>
+              {lateFreeDays.length > 0 && <p className="text-xs text-slate-600 mt-1" data-testid="ar-plant-late-excused">
+                {num(data?.plantLateDays?.lates_excused ?? 0)} late arrival(s) not counted because of the ticked day(s).</p>}
+            </div>
           </div>
         )}
-        {isFinal && (run?.release_days?.length > 0 || run?.overrides?.length > 0) && (
+        {isFinal && (run?.release_days?.length > 0 || run?.overrides?.length > 0 || run?.late_free_days?.length > 0) && (
           <div className="text-xs text-slate-600 pt-2 border-t border-slate-100">
-            Release days: {(run.release_days || []).map(fmtDay).join(', ') || 'none'} · Overrides: {(run.overrides || []).map((o) => `${o.code} ${OV_LABEL[o.action]} (“${o.reason}”)`).join('; ') || 'none'}
+            Release days: {(run.release_days || []).map(fmtDay).join(', ') || 'none'} · Plant-wide late days: {(run.late_free_days || []).map(fmtDay).join(', ') || 'none'} · Overrides: {(run.overrides || []).map((o) => `${o.code} ${OV_LABEL[o.action]} (“${o.reason}”)`).join('; ') || 'none'}
           </div>
         )}
       </div>
@@ -540,7 +568,7 @@ export default function AttendanceReviewTab({ selectedMonth, selectedYear, onSel
           )}
 
           {!isFinal && preview?.suggestions && (
-            <SuggestionsSection list={preview.suggestions} month={month} year={year} releaseDays={previewDays} readOnly={false}
+            <SuggestionsSection list={preview.suggestions} month={month} year={year} releaseDays={previewDays} lateFreeDays={lateFreeDays} readOnly={false}
               onApplied={() => { qc.invalidateQueries({ queryKey: ['ar-preview'] }); qc.invalidateQueries({ queryKey: ['ar-config'] }); qc.invalidateQueries({ queryKey: ['ar-quality'] }) }} />
           )}
           {data.assessment?.quality && <QualitySection q={data.assessment.quality} />}
