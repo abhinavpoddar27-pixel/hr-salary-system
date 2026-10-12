@@ -1,14 +1,14 @@
 # P3-01 PROGRESS
 ## RESUME
 Branch feat/bulk-ed-grant (base 8abee969), worktree /home/claude/wt-p3-01, port 3401. Read PLAN.md. Phase 0 done;
-WAITING for planner "go". Never commit frontend/dist; never edit CLAUDE.md; only owned files.
+GO received — building. Never commit frontend/dist; never edit CLAUDE.md; only owned files.
 
 ## Steps
 - [x] Phase 0: read code + prod counts (read-only); PLAN.md written
-- [ ] go received (rulings on Q-A, Q-B, Q-C)
-- [ ] jest baseline (suites/tests)
-- [ ] bulkSchema.js + schema.js one line
-- [ ] createGrant.js extraction + route + parity test
+- [x] go received 12 Oct: Q-A yes (HR_BULK_CREATE per row + summary), Q-B hr/admin only, Q-C picker 'Has left' line; result screen names saved/refused batches, refused batch re-check + save alone
+- [x] jest baseline 115 suites / 2040 tests (all pass)
+- [x] bulkSchema.js + schema.js one line
+- [x] createGrant.js extraction + route (ED tests 55/55); parity test in bulk test file (pending)
 - [ ] engine.js + kinds/extraDuty.js + routes/bulk.js + server.js mount
 - [ ] bulkExtraDuty.test.js
 - [ ] frontend: bulkApi, ExtraDutyBulkGrant, CopyFromDate, BulkBatchList, page (F-11, btn-warning)
