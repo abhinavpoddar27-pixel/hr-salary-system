@@ -399,6 +399,42 @@ function recomputeSalary(db, {
     return { cleared, staleRow };
   };
 
+  // Zero attendance this run, but a salary row is left from an earlier run
+  // (e.g. a day was paid, then corrected to absent — employee 60348, Sep 2026).
+  // Owner ruling 12 Oct 2026: remove that leftover row so the register, the
+  // bank file and the payslip stop paying a day Stage 6 no longer counts.
+  // Kept (and reported) instead when the row is finalised or carries a loan
+  // deduction — those need a person to look at them. Advances the old row
+  // recovered are released so the next payable month can recover them.
+  const leftoverRow = db.prepare(`
+    SELECT id, net_salary, payable_days, loan_recovery, is_finalised
+    FROM salary_computations WHERE employee_code = ? AND month = ? AND year = ?`);
+  const removeRow = db.prepare('DELETE FROM salary_computations WHERE id = ?');
+  const releaseAdvances = db.prepare(`
+    UPDATE salary_advances SET recovered = 0
+    WHERE employee_code = ? AND recovered = 1
+      AND ((recovery_month = ? AND recovery_year = ?) OR (month = ? AND year = ? AND recovery_month IS NULL))`);
+  const auditRemoval = db.prepare(`
+    INSERT INTO audit_log (table_name, record_id, field_name, old_value, new_value, changed_by, stage, remark, employee_code, action_type)
+    VALUES ('salary_computations', ?, 'row', ?, 'removed', 'system', 'salary_compute', ?, ?, 'stale_salary_row_removed')`);
+  const removed = [];
+  const keptStale = [];
+  const removeLeftoverSalaryRow = (emp, why) => {
+    const rows = leftoverRow.all(emp.code, month, year);
+    for (const row of rows) {
+      if (row.is_finalised === 1 || (row.loan_recovery || 0) !== 0) {
+        keptStale.push({ code: emp.code, id: row.id, netSalary: row.net_salary,
+          reason: row.is_finalised === 1 ? 'finalised' : 'carries a loan deduction' });
+        continue;
+      }
+      removeRow.run(row.id);
+      releaseAdvances.run(emp.code, month, year, month, year);
+      auditRemoval.run(row.id, `payable ${row.payable_days}, net ${row.net_salary}`,
+        `Stage 7 ${runId}: ${why} — earlier salary row removed`, emp.code);
+      removed.push({ code: emp.code, id: row.id, payableDays: row.payable_days, netSalary: row.net_salary });
+    }
+  };
+
   // One SAVEPOINT per employee (SPEC K25). better-sqlite3 runs a transaction
   // function called inside another transaction as a savepoint: if anything in
   // here throws, that employee's writes (salary row, advance / late-coming /
@@ -420,6 +456,7 @@ function recomputeSalary(db, {
       // Zero attendance — not an error, just not payable. Same reasoning.
       clearStale.run(emp.code, month, year);
       comp.loanSkipped = clearSkippedLoans(emp, comp.reason || 'zero attendance');
+      removeLeftoverSalaryRow(emp, comp.reason || 'zero attendance');
     }
     // else: a real failure — this employee genuinely was not recomputed, so
     // the marker stays and the banner keeps saying so.
@@ -489,7 +526,12 @@ function recomputeSalary(db, {
   }
 
   console.log(`[${requestId}] Computation complete: ${results.length} OK, ${errors.length} failed, ${held.length} held`);
-  return { results, errors, excluded, held, employeeCount: employees.length, loans };
+  if (removed.length || keptStale.length) {
+    console.warn(`[${requestId}] Zero-attendance salary rows ${month}/${year}: removed ${removed.length}, kept ${keptStale.length}`
+      + (keptStale.length ? ` (${keptStale.map((k) => `${k.code}: ${k.reason}`).join('; ')})` : ''));
+  }
+  return { results, errors, excluded, held, employeeCount: employees.length, loans,
+    staleSalaryRows: { removed, kept: keptStale } };
 }
 
 /** How many Stage 6 rows are waiting for a Stage 7 recompute. */

@@ -27,6 +27,8 @@
  *
  *   effectivePresent = daysPresent + daysHalfPresent + daysWOP + paidHolidays
  *                      (daysWOP counts — the employee actually showed up)
+ *                      + paid leave on absent working days (EL, and CL once
+ *                        it is paid) from LEAVE_COUNTS_FOR_WEEKLY_OFF_FROM
  *   daysPerWeeklyOff = workingDays / totalWeeklyOffs
  *
  * CONTRACTOR MODEL
@@ -55,6 +57,15 @@ const WEEKLY_OFF_LENIENCY = 2;
  * never changes pay that was already settled. Compare year*12+month.
  */
 const CL_PAID_FROM = 2026 * 12 + 9;
+
+/**
+ * Paid leave counts toward weekly-off eligibility from September 2026 payroll
+ * (owner ruling 12 Oct 2026). An approved EL — and a CL once CL is paid — that
+ * covers an absent working day is added to effectivePresent, so taking paid
+ * leave no longer costs the employee a weekly off. LWP never counts. Earlier
+ * months keep the old rule so a re-run never changes settled pay.
+ */
+const LEAVE_COUNTS_FOR_WEEKLY_OFF_FROM = 2026 * 12 + 9;
 
 /** Get all dates in a month as YYYY-MM-DD strings */
 function getMonthDates(month, year) {
@@ -392,7 +403,9 @@ function calculateDays(employeeCode, month, year, company, attendanceRecords, le
   let odDays = 0;
   let unpaidLeaveDays = 0;
   let paidClDays = 0;
+  let paidLeaveRestored = 0;   // EL / paid CL days that covered an absent working day
   const clIsPaid = (Number(year) * 12 + Number(month)) >= CL_PAID_FROM;
+  const leaveCountsForWeeklyOff = (Number(year) * 12 + Number(month)) >= LEAVE_COUNTS_FOR_WEEKLY_OFF_FROM;
   const consumedDates = new Set();
 
   function expandLeaveDates(startDate, endDate) {
@@ -478,12 +491,13 @@ function calculateDays(employeeCode, month, year, company, attendanceRecords, le
       if (leaveType === 'EL') {
         leaveElUsed += 1;
         // EL restores payable automatically via daysAbsent-- (no offset).
+        if (wasAbsent) paidLeaveRestored += 1;
       } else if (leaveType === 'CL') {
         leaveClUsed += 1;
         if (clIsPaid) {
           // Pay is restored by the daysAbsent-- above (no offset); this
           // counter only feeds the integrity check below.
-          if (wasAbsent) paidClDays += 1;
+          if (wasAbsent) { paidClDays += 1; paidLeaveRestored += 1; }
         } else {
           unpaidLeaveDays += 1;     // pre-Sep-2026 months: relabel only
         }
@@ -497,8 +511,10 @@ function calculateDays(employeeCode, month, year, company, attendanceRecords, le
   // daysPerWeeklyOff — how many working days "earn" one weekly off
   const daysPerWeeklyOff = totalWeeklyOffs > 0 ? workingDays / totalWeeklyOffs : workingDays;
 
-  // effectivePresent — WOP counts! They showed up.
-  const effectivePresent = daysPresent + daysHalfPresent + daysWOP + paidHolidays;
+  // effectivePresent — WOP counts! They showed up. From Sep 2026, paid leave
+  // on an absent working day counts too (LEAVE_COUNTS_FOR_WEEKLY_OFF_FROM).
+  const leaveForWeeklyOff = leaveCountsForWeeklyOff ? paidLeaveRestored : 0;
+  const effectivePresent = daysPresent + daysHalfPresent + daysWOP + paidHolidays + leaveForWeeklyOff;
   const threshold = workingDays - WEEKLY_OFF_LENIENCY;
 
   // ── Three-tier weekly off granting ──
