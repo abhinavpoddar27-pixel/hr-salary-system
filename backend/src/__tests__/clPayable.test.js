@@ -93,7 +93,8 @@ describe('CL is paid from September 2026', () => {
     const base = run(9, 2026, records(9, 2026), []);
     const withCl = run(9, 2026, records(9, 2026), [leave('CL', '2026-09-17')]);
     expect(withCl.totalPayableDays).toBe(base.totalPayableDays);
-    expect(withCl.clUsed).toBe(1);
+    // From Sep 2026 leave is charged only for what it pays (ruling 12 Oct 2026).
+    expect(withCl.clUsed).toBe(0);
   });
 
   test('a CL on a Sunday is ignored', () => {
