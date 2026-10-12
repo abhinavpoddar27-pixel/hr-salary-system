@@ -253,7 +253,7 @@ function buildDocx(result, run = {}, { now = new Date() } = {}) {
     para([tr('HR Department', { size: 20, bold: true, color: '1F3864' })], { after: 0 }),
     para([tr(`Ref: ${ref(i)}`, { size: 19, color: '595959' }), tr(`          Date: ${today}`, { size: 19, color: '595959' })], { after: 240 }),
     para([tr('To: ', { bold: true }), tr(`${cleanName(p.name)}  (Code ${p.code})`)], { after: 40 }),
-    para([tr('Department / Role: ', { bold: true }), tr(`${p.department || ''} – ${p.designation || ''}`)], { after: 200 }),
+    para([tr('Department / Role: ', { bold: true }), tr([p.department, p.designation].filter(Boolean).join(' – ') || '—')], { after: 200 }),
     para([tr('Subject: ', { bold: true }), tr(subj, { bold: true })], { after: 200 }),
   ];
   const facts = (p) => table(['Month', 'Late days', 'Early-exit days', 'Time lost'], [
@@ -266,6 +266,15 @@ function buildDocx(result, run = {}, { now = new Date() } = {}) {
   const hearing = (p) => (p.ladder && p.ladder.hearing
     ? [para([tr('HR hearing: ', { bold: true }), tr(`this is month ${p.ladder.step} in ${ladderWindow} with a note on your attendance. You are asked to meet HR within 3 working days of this note. Further repeats can lead to stricter action.`)], { before: 120 })]
     : []);
+  // D-4 on the action list: the early part is the larger of the minutes lost and the 2-hour charge. When the 2-hour
+  // charge is the larger, the note must say so — otherwise "2.87 workdays" next to "6.5 days" reads as an error.
+  const twoHourText = (p) => {
+    const d = p.d4; const shiftMin = p.shift_h ? p.shift_h * 60 : 0;
+    if (!d4 || !d || !d.half_days || !shiftMin || !(d.raw > p.early_min / shiftMin + 1e-9)) return [];
+    const mo = p.missed_out_days ? `, ${p.missed_out_days >= d.half_days ? (d.half_days === 1 ? 'a day' : 'all of them days') : `including ${p.missed_out_days} day${p.missed_out_days === 1 ? '' : 's'}`} on which you did not punch out (from the ${t0(result).missed_out_from ?? 5}th missed punch in a month, each missed OUT counts as leaving 2 hours early)` : '';
+    const extra = d.minutes ? ` The minutes of your other exits of 1 hour or more (${hm(d.minutes)}) are added too.` : '';
+    return [para(`Under the 2-hour rule, each day you left 2 hours or more before shift end counts as half a day. You did this on ${d.half_days} day${d.half_days === 1 ? '' : 's'}${mo}.${extra} So the early-leaving part is charged as ${Number(d.raw).toFixed(2)} days instead of the minutes alone.`, { before: 200 })];
+  };
   list.forEach((p, i) => {
     if (i > 0) notes.push(new Paragraph({ children: [new PageBreak()] }));
     const what = [p.late_days ? `came late on ${p.late_days} day${p.late_days > 1 ? 's' : ''}` : null, p.early_days ? `left before shift end on ${p.early_days} day${p.early_days > 1 ? 's' : ''}` : null].filter(Boolean).join(' and ') || 'lost working time';
@@ -281,6 +290,7 @@ function buildDocx(result, run = {}, { now = new Date() } = {}) {
     } else {
       notes.push(...head(p, i, `Late coming / early leaving, ${ML} – deduction of ${days(p.deduction_days)}`),
         para(`Our attendance record shows that in ${ML} you ${what}. Together this is ${hm(p.late_min + p.early_min)} of working time, equal to ${Number(p.workdays_lost).toFixed(2)} workdays.`), facts(p),
+        ...twoHourText(p),
         para([tr('As per company attendance policy, a deduction of '), tr(days(p.deduction_days), { bold: true }), tr(' will be made from your salary. Deductions are made in half-day steps, with a minimum of half a day.')], { before: 200 }),
         para(`Late mornings that followed an evening when you stayed late after your shift have not been counted.${fullText ? ` Days on which you still worked your full shift hours have not been counted either.` : ''}`),
         para('Further late coming or leaving early will lead to deductions every month and may lead to stricter action. If you believe this record is wrong, meet HR within 3 working days with the reason or proof.'),

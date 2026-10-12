@@ -103,6 +103,21 @@ describe('Word pack', () => {
     expect(text).not.toMatch('TEST FULL');
   });
 
+  test('D-4: a deduction note explains the 2-hour charge when it is larger than the minutes; blank role has no dash', async () => {
+    const db = F.newDb(); cast(db);
+    const r = result(db, { early_exit_rule: 'd4' });
+    const a = r.actionList.find((x) => x.code === 'X1');
+    Object.assign(a, { action: 'deduction', deduction_days: 2, shift_h: 12, early_days: 3, early_min: 400, designation: '',
+      missed_out_days: 3, d4: { half_days: 3, long_exits: 3, minutes: 0, raw: 1.5, days: 1.5 } });
+    const text = docxText(await X.buildDocx(r, { status: 'final' }));
+    expect(text).toMatch('Under the 2-hour rule, each day you left 2 hours or more before shift end counts as half a day. You did this on 3 days, all of them days on which you did not punch out');
+    expect(text).toMatch('So the early-leaving part is charged as 1.50 days instead of the minutes alone.');
+    expect(text).not.toMatch(/Department \/ Role: [^\n]*– \n/);
+    // minutes larger than the 2-hour charge → no extra sentence
+    Object.assign(a, { early_min: 1200, missed_out_days: 0 });
+    expect(docxText(await X.buildDocx(r, { status: 'final' }))).not.toMatch('Under the 2-hour rule');
+  });
+
   test('a month with nobody selected still produces a valid file', async () => {
     const db = F.newDb(); F.emp(db, 'X9'); F.month(db, 'X9', 2026, 10, 20);
     const text = docxText(await X.buildDocx(result(db), { status: 'final' }));
