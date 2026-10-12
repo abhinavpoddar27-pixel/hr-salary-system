@@ -19,6 +19,7 @@ import CompanyFilter from '../components/shared/CompanyFilter'
 import FinanceEarlyExitApprovals from '../components/FinanceEarlyExitApprovals'
 import clsx from 'clsx'
 import toast from 'react-hot-toast'
+import { normalizeRole } from '../utils/role'
 
 const CORRECTION_REASONS = [
   'Gate register mismatch', 'Production record mismatch',
@@ -447,8 +448,14 @@ function CorrectionsSummaryTab() {
 // ═══════════════════════════════════════════════════════════
 // MANUAL ATTENDANCE FLAGS TAB
 // ═══════════════════════════════════════════════════════════
+// N-MONEY2: the stored "verified" field is finance_verified (there is no
+// `verified` column); verified_by is set together with it.
+const isFlagVerified = (f) => Number(f.finance_verified) === 1 || !!f.verified_by
+
 function ManualFlagsTab() {
-  const { selectedCompany } = useAppStore()
+  const { selectedCompany, user } = useAppStore()
+  // PUT /finance-audit/manual-flags/:id/verify is finance/admin only (requireFinanceOrAdmin).
+  const canVerify = ['finance', 'admin'].includes(normalizeRole(user?.role))
   const { month, year } = useDateSelector({ mode: 'month', syncToStore: true })
   const queryClient = useQueryClient()
   const [verifyingId, setVerifyingId] = useState(null)
@@ -472,7 +479,7 @@ function ManualFlagsTab() {
     onError: () => toast.error('Failed to verify flag')
   })
 
-  const unverifiedCount = flags.filter(f => !f.verified && !f.verified_by).length
+  const unverifiedCount = flags.filter(f => !isFlagVerified(f)).length
 
   return (
     <div className="space-y-4">
@@ -509,7 +516,7 @@ function ManualFlagsTab() {
               </thead>
               <tbody>
                 {flags.map((f) => {
-                  const isVerified = f.verified || !!f.verified_by
+                  const isVerified = isFlagVerified(f)
                   return (
                     <tr key={f.id} className={clsx(isVerified && 'bg-green-50/40')}>
                       <td className="font-mono text-xs">{f.employee_code}</td>
@@ -535,7 +542,7 @@ function ManualFlagsTab() {
                       </td>
                       <td className="text-xs text-slate-500 max-w-[180px] truncate">{f.finance_remarks || '—'}</td>
                       <td className="text-center">
-                        {!isVerified && (
+                        {!isVerified && canVerify && (
                           <>
                             {verifyingId === f.id ? (
                               <div className="flex items-center gap-1" onClick={e => e.stopPropagation()}>
@@ -570,6 +577,9 @@ function ManualFlagsTab() {
                               </button>
                             )}
                           </>
+                        )}
+                        {!isVerified && !canVerify && (
+                          <span className="text-[11px] text-slate-400" data-testid="flag-verify-finance-only">Finance verifies</span>
                         )}
                       </td>
                     </tr>
@@ -1438,7 +1448,7 @@ export default function FinanceAudit() {
     retry: 0, staleTime: 60000
   })
   const attFlagsData = attFlagsRes?.data?.data || attFlagsRes?.data || []
-  const unverifiedFlagCount = attFlagsData.filter(f => !f.verified && !f.verified_by).length
+  const unverifiedFlagCount = attFlagsData.filter(f => !isFlagVerified(f)).length
 
   // Pending late coming deductions count for the tab badge
   const { data: latePendingRes } = useQuery({
