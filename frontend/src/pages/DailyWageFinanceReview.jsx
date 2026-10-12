@@ -1,4 +1,5 @@
 import React, { useState, useMemo } from 'react'
+import { todayIST, addDaysIso } from '../utils/formatters'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import {
   getDWFinancePending, getDWEntries,
@@ -54,8 +55,7 @@ export default function DailyWageFinanceReview() {
   const { data: approvedRes } = useQuery({
     queryKey: ['dw-entries-recently-approved'],
     queryFn: () => {
-      const d = new Date(); d.setDate(d.getDate() - 7)
-      return getDWEntries({ status: 'approved', date_from: d.toISOString().slice(0, 10), limit: 100 })
+      return getDWEntries({ status: 'approved', date_from: addDaysIso(todayIST(), -7), limit: 100 })
     },
     retry: 0, enabled: activeTab === 'approved'
   })

@@ -1,6 +1,6 @@
 import React, { useState, useMemo } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { fmtPct } from '../utils/formatters'
+import { fmtPct, todayIST, addDaysIso } from '../utils/formatters'
 import { Abbr } from '../components/ui/Tooltip'
 import AbbreviationLegend from '../components/ui/AbbreviationLegend'
 import useExpandableRows from '../hooks/useExpandableRows'
@@ -69,13 +69,8 @@ function useSortable(defaultKey = 'employee_name', defaultDir = 'asc') {
 
 export default function DailyMIS() {
   const { selectedCompany } = useAppStore()
-  const [selectedDate, setSelectedDate] = useState(() => {
-    // Use IST date (UTC+5:30) to avoid showing wrong day before 5:30 AM IST
-    const now = new Date();
-    const istOffset = 5.5 * 60 * 60 * 1000;
-    const ist = new Date(now.getTime() + istOffset + now.getTimezoneOffset() * 60 * 1000);
-    return ist.toISOString().split('T')[0];
-  })
+  // IST date (UTC+5:30) so the page never shows yesterday before 5:30 AM IST
+  const [selectedDate, setSelectedDate] = useState(() => todayIST())
   const [mainTab, setMainTab] = useState('today') // 'today' | 'previous'
   const [todaySubTab, setTodaySubTab] = useState('punched-in')
   const [shiftExpanded, setShiftExpanded] = useState({ day: false, night: false })
@@ -1021,9 +1016,7 @@ function OnLeaveTodaySection({ rows }) {
 function nextDayAfter(dateStr) {
   if (!dateStr) return '—'
   try {
-    const d = new Date(dateStr + 'T12:00:00')
-    d.setDate(d.getDate() + 1)
-    return d.toISOString().slice(0, 10)
+    return addDaysIso(dateStr, 1)
   } catch { return dateStr }
 }
 

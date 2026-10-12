@@ -5,7 +5,7 @@ import toast from 'react-hot-toast'
 import * as XLSX from 'xlsx'
 import { getEmployees, getEmployee, createEmployee, updateEmployee, updateSalaryStructure, getLeaveBalances, updateLeaveBalance, getEmployeeDocuments, uploadEmployeeDocument, deleteEmployeeDocument, getEmployeeLoans, markEmployeeLeft, getShifts, bulkAssignShift, getLateComingEmployeeHistory, getDepartments } from '../utils/api'
 import api from '../utils/api'
-import { fmtINR } from '../utils/formatters'
+import { fmtINR, todayIST } from '../utils/formatters'
 import { useAppStore } from '../store/appStore'
 import Modal from '../components/ui/Modal'
 import CalendarView from '../components/ui/CalendarView'
@@ -854,7 +854,7 @@ function MarkLeftLoans({ code }) {
 
 function MarkLeftModal({ employee, onClose }) {
   const qc = useQueryClient()
-  const [dateOfLeaving, setDateOfLeaving] = useState(new Date().toISOString().split('T')[0])
+  const [dateOfLeaving, setDateOfLeaving] = useState(() => todayIST())
   const [reason, setReason] = useState('')
 
   const mutation = useMutation({
@@ -1005,7 +1005,7 @@ export default function Employees() {
     ws['!cols'] = [{ wch: 8 }, { wch: 25 }, { wch: 18 }, { wch: 18 }, { wch: 22 }, { wch: 14 }, { wch: 8 }, { wch: 12 }, { wch: 10 }, { wch: 10 }, { wch: 14 }, { wch: 10 }, { wch: 14 }, { wch: 20 }]
     const wb = XLSX.utils.book_new()
     XLSX.utils.book_append_sheet(wb, ws, 'Employees')
-    const dateStr = new Date().toISOString().split('T')[0]
+    const dateStr = todayIST()
     XLSX.writeFile(wb, `Employee_Master_${selectedCompany || 'All'}_${dateStr}.xlsx`)
     toast.success('Employee data exported')
   }

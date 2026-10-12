@@ -1,5 +1,6 @@
 import { useState, useCallback } from 'react'
 import { useAppStore } from '../store/appStore'
+import { todayIST } from '../utils/formatters'
 
 /**
  * useDateSelector — Manages local date state for a page and provides
@@ -18,7 +19,7 @@ export default function useDateSelector({ mode = 'month', syncToStore = false } 
   const [dateRangeMode, setDateRangeMode] = useState('month')
   const [dateRangeStart, setDateRangeStart] = useState('')
   const [dateRangeEnd, setDateRangeEnd] = useState('')
-  const [date, setDate] = useState(new Date().toISOString().slice(0, 10))
+  const [date, setDate] = useState(() => todayIST())
 
   const handleDateChange = useCallback((state) => {
     if (state.month !== undefined) setMonth(state.month)
