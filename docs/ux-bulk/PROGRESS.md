@@ -228,3 +228,27 @@ After merge: one docs PR folds the 7 "## CLAUDE.md entry" blocks from each branc
 - #133–#139 all MERGED. #140 MERGED: statutoryWriters T9b built "today" in UTC while the route stamps IST (since #130) → failed nightly 00:00–05:30 IST; test now uses IST. Full suite run inside that window: only T9b failed, so no other date-boundary test.
 - #141 MERGED: CLAUDE.md entries for batch 3.
 - Lesson: run the full jest once between 00:00–05:30 IST in the integration step when a batch touches date handling.
+
+## Batch 4 (12 Oct 2026) — PRs #155–#160, opened, waiting for merge
+| PR | ID | Branch | Review | Checks |
+|---|---|---|---|---|
+| #155 | P3-01 bulk engine + ED bulk grant + F-11 | feat/bulk-ed-grant | SHIP WITH FIXES → F1 (undo compares whole row), F2 (save guard), F3 (text) applied | jest +22, bulk-ed 50/50 |
+| #156 | P3-PG payroll Stage 6/7/finalise guard | fix/payroll-stage-role-guard | SHIP | jest 20, script 21/21 |
+| #157 | P2-10 + P8-06 permissions, 404, name/version | feat/permissions-nav-guard | — | nav 80/80, hooks 58/58 |
+| #158 | P2-02 toast dedup | fix/toast-dedup | — | 29/29 + unit 10/10 |
+| #159 | P3-IST remaining IST "today" | fix/ist-today-remaining | — | 24/24 |
+| #160 | P3-RG tax-decl read guard, Verify hidden for HR, f.verified | fix/role-gaps-taxdecl-verify | — | jest 25, 36/36 |
+Integration (all 6 on 8abee969): jest 119/2120, build clean, all batch-4 checks + regressions (ED review 25, dialogs 111, fresh reads 39, reports 55, timeout 57) pass. No shared file.
+
+### Rulings (12 Oct)
+- Owner: Q1 P3-01 "Also approve as HR" offered, ticked. Q2 auto-split 50+50+9. Payroll guard hr/finance/admin (usage 90 d: only those roles). P2-10 viewer/supervisor follow the matrix (5 / 2 items); /settings admin only.
+- Planner: P3-01 one HR_BULK_CREATE audit row per grant; bulk routes HR/admin only; Left codes stay in the picker's "Has left" line. P2-10 fail-open with amber note; name "HR & Salary System"; version v<pkg> · <sha>. P2-02 page text wins, 1.5 s window. P3-IST JS month rollover kept; backend fallbacks → register. P3-RG no employee self-read (0 calls ever).
+
+### New register items
+- Stage 6/7 Run/Compute/Finalise buttons visible to roles the server now refuses (UI hide).
+- Server reads open to viewer (salary register etc. readable by API).
+- Supervisor Daily MIS → 403 on /leaves/on-leave-today; HR Finance Audit → 403 on /comp-off/pending (badge).
+- getManualAttendanceFlags lacks `fresh` (P3-RG works around).
+- P3-IST-BE: 36 backend UTC "today" lines in 11 routes; money one = new salary structure effective_from (employees.js:317/580).
+- Browser-clock month/year defaults: appStore.js:57-58, SalaryExplainer, LoanImport, LoanActionModals, SalesHolidayMaster, ContractorReport; loanUi.js own IST copy; minusMonthsIso duplicated (EmployeeProfile, DeptAnalytics) → formatters.js.
+- Single "+ New Grant" takes company from the top-bar filter, no active / finalised-month check.
