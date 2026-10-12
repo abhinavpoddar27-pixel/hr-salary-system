@@ -163,6 +163,58 @@ describe('N-19 — PUT /employees/:code/salary, same gross', () => {
   });
 });
 
+// ── F-1: approval writes the requested split percentages ───────────────
+describe('F-1 — PUT /salary-input/approve/:id writes the request\'s percentages', () => {
+  const latest = (id) => db.prepare('SELECT * FROM salary_structures WHERE employee_id = ? ORDER BY effective_from DESC, id DESC LIMIT 1').get(id);
+
+  test('split request approved → new structure carries the requested basic / hra / da %', async () => {
+    const e = S.plant(db, { code: code(), gross_salary: 20000 });
+    S.plantStructure(db, e, '2025-01-01', { gross_salary: 20000 });
+    await api.request('PUT', `/api/employees/${e.code}/salary`, { as: 'hr1', body: windowBody(structs(e.id)[0], { basic_percent: 40, hra_percent: 25, da_percent: 5 }) });
+    const id = pending(e.code)[0].id;
+    expect((await api.request('PUT', `/api/salary-input/approve/${id}`, { as: 'fin1', body: {} })).status).toBe(200);
+    const s = latest(e.id);
+    expect([s.basic_percent, s.hra_percent, s.da_percent]).toEqual([40, 25, 5]);
+    expect([s.basic, s.hra, s.da]).toEqual([8000, 5000, 1000]);
+  });
+
+  test('same-date approval (row already dated that day) also writes the requested %', async () => {
+    const e = S.plant(db, { code: code(), gross_salary: 20000 });
+    const today = new Date(Date.now() + 330 * 60000).toISOString().slice(0, 10);
+    S.plantStructure(db, e, today, { gross_salary: 20000 });
+    await api.request('PUT', `/api/employees/${e.code}/salary`, { as: 'hr1', body: windowBody(structs(e.id)[0], { basic_percent: 45 }) });
+    await api.request('PUT', `/api/salary-input/approve/${pending(e.code)[0].id}`, { as: 'fin1', body: {} });
+    const rows = structs(e.id);
+    expect(rows).toHaveLength(1);
+    expect(rows[0].basic_percent).toBe(45);
+    expect(rows[0].hra_percent).toBe(20);
+  });
+
+  test('a later gross change keeps the approved split (not the old %)', async () => {
+    const e = S.plant(db, { code: code(), gross_salary: 20000 });
+    S.plantStructure(db, e, '2025-01-01', { gross_salary: 20000 });
+    await api.request('PUT', `/api/employees/${e.code}/salary`, { as: 'hr1', body: windowBody(structs(e.id)[0], { basic_percent: 40, hra_percent: 30 }) });
+    await api.request('PUT', `/api/salary-input/approve/${pending(e.code)[0].id}`, { as: 'fin1', body: {} });
+    // the window re-reads the latest structure; HR now only raises the gross
+    await api.request('PUT', `/api/employees/${e.code}/salary`, { as: 'hr1', body: windowBody(latest(e.id), { gross_salary: 30000 }) });
+    const ns = JSON.parse(pending(e.code)[0].new_structure);
+    expect([ns.basic_percent, ns.hra_percent]).toEqual([40, 30]);
+    expect([ns.basic, ns.hra]).toEqual([12000, 9000]);
+    await api.request('PUT', `/api/salary-input/approve/${pending(e.code)[0].id}`, { as: 'fin1', body: {} });
+    const s = latest(e.id);
+    expect([s.gross_salary, s.basic_percent, s.hra_percent, s.basic]).toEqual([30000, 40, 30, 12000]);
+  });
+
+  test('a request without percentages keeps the in-force row\'s (today\'s behaviour)', async () => {
+    const e = S.plant(db, { code: code(), gross_salary: 20000 });
+    S.plantStructure(db, e, '2025-01-01', { gross_salary: 20000, basic_percent: 55, hra_percent: 15 });
+    expect((await api.request('POST', '/api/salary-input/request-change', { as: 'hr1', body: { employeeCode: e.code, newStructure: { basic: 11000, hra: 3000 }, reason: 'synthetic' } })).status).toBe(200);
+    await api.request('PUT', `/api/salary-input/approve/${pending(e.code)[0].id}`, { as: 'fin1', body: {} });
+    const s = latest(e.id);
+    expect([s.basic_percent, s.hra_percent, s.basic, s.hra]).toEqual([55, 15, 11000, 3000]);
+  });
+});
+
 // ── N-23 ───────────────────────────────────────────────────────────────
 describe('N-23 — flag decisions: maker-checker + reverted request', () => {
   /** Gross 15000 → 18000 through an approved request raised by `requester`, plus the Stage 7 flag. */
