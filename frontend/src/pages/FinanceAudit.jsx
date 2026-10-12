@@ -3,7 +3,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { useSearchParams, useNavigate } from 'react-router-dom'
 import { getFinanceReport, submitDayCorrection, getCorrectionHistory, getCorrectionsSummary, getManualAttendanceFlags, verifyManualFlag,
   getSalaryManualFlags, approveManualFlag, bulkApproveFlags, getReadinessCheck, getVarianceReport, getStatutoryCrosscheck,
-  getFinancePendingDeductions, reviewLateDeduction, bulkReviewLateDeductions, getLateComingDeductions,
+  getFinancePendingDeductions, reviewLateDeduction, bulkReviewLateDeductions, getLateComingDeductions, reverseLateDeduction,
   getCompOffPending, getCompOffList, reviewCompOff, bulkReviewCompOff,
   getLeaveRequests, approveLeaveRequest, rejectLeaveRequest } from '../utils/api'
 import { useAppStore } from '../store/appStore'
@@ -1024,13 +1024,19 @@ function StatutoryTab() {
 // ═══════════════════════════════════════════════════════════
 // LATE COMING AUDIT TAB (Phase 2)
 // ═══════════════════════════════════════════════════════════
+const REVERSE_MIN = 10 // same minimum as PUT /late-coming/finance-reverse
 function LateComingAuditTab() {
   const qc = useQueryClient()
   const { month, year } = useDateSelector({ mode: 'month', syncToStore: true })
-  const { selectedCompany } = useAppStore()
+  const { selectedCompany, user } = useAppStore()
   const [expandedId, setExpandedId] = useState(null)
   const [selected, setSelected] = useState(new Set())
   const [remarkModal, setRemarkModal] = useState(null) // { id|null, ids|null, action: 'approve'|'reject', bulk: bool }
+  // Reverse an APPROVED deduction (finance/admin; the server enforces the role and the 10-char reason)
+  const canReverse = ['finance', 'admin'].includes(String(user?.role || '').toLowerCase())
+  const [reverseTarget, setReverseTarget] = useState(null)
+  const [reverseText, setReverseText] = useState('')
+  const reverseBusy = useRef(false)
   const [remarkText, setRemarkText] = useState('')
 
   const { data: pendingRes } = useQuery({
@@ -1073,6 +1079,28 @@ function LateComingAuditTab() {
     },
     onError: (e) => toast.error(e?.response?.data?.error || 'Bulk update failed')
   })
+
+  const reverseMut = useMutation({
+    mutationFn: ({ id, remark }) => reverseLateDeduction(id, remark),
+    onSuccess: (res) => {
+      const d = res?.data || {}
+      qc.invalidateQueries({ queryKey: ['late-deductions-all'] })
+      qc.invalidateQueries({ queryKey: ['late-finance-pending'] })
+      qc.invalidateQueries({ queryKey: ['readiness'] })
+      qc.invalidateQueries({ queryKey: ['month-end-checklist'] })
+      setReverseTarget(null); setReverseText('')
+      if (d.needsStage7) toast.success(`Deduction reversed. Re-run Stage 7 (Compute Salary) for ${monthYearLabel(d.month, d.year)} to remove it from salary.`, { duration: 8000 })
+      else toast.success('Deduction reversed')
+    },
+    onError: (e) => toast.error(e?.response?.data?.error || 'Failed to reverse'),
+    onSettled: () => { reverseBusy.current = false }
+  })
+  const submitReverse = () => {
+    if (!reverseTarget || reverseBusy.current || reverseText.trim().length < REVERSE_MIN) return
+    reverseBusy.current = true
+    reverseMut.mutate({ id: reverseTarget.id, remark: reverseText.trim() })
+  }
+  const isReversed = (r) => r.finance_status === 'rejected' && String(r.finance_remark || '').startsWith('Reversed after approval')
 
   const approvedThisMonth = allDeds.filter(d => d.finance_status === 'approved').length
   const rejectedThisMonth = allDeds.filter(d => d.finance_status === 'rejected').length
@@ -1291,6 +1319,7 @@ function LateComingAuditTab() {
                 <th>Finance Remark</th>
                 <th>Reviewed By</th>
                 <th>Reviewed At</th>
+                {canReverse && <th></th>}
               </tr>
             </thead>
             <tbody>
@@ -1300,19 +1329,56 @@ function LateComingAuditTab() {
                   <td className="text-xs">{r.department || '—'}</td>
                   <td className="text-right text-xs font-mono">{r.deduction_days}</td>
                   <td className="text-xs text-slate-500 max-w-[180px] truncate" title={r.remark}>{r.remark}</td>
-                  <td>{statusBadge(r.finance_status)}</td>
+                  <td data-testid="late-decision">{isReversed(r)
+                    ? <span className="inline-block px-1.5 py-0.5 rounded text-[10px] font-medium bg-slate-200 text-slate-700">Reversed</span>
+                    : statusBadge(r.finance_status)}</td>
                   <td className="text-xs text-slate-500 max-w-[180px] truncate" title={r.finance_remark}>{r.finance_remark || '—'}</td>
                   <td className="text-xs">{r.finance_reviewed_by || '—'}</td>
                   <td className="text-xs text-slate-500">{fmtDate(r.finance_reviewed_at)}</td>
+                  {canReverse && <td>{r.finance_status === 'approved' && (
+                    <button type="button" data-testid="late-reverse" className="text-xs text-red-600 hover:underline"
+                      onClick={() => { setReverseTarget(r); setReverseText('') }}>Reverse</button>
+                  )}</td>}
                 </tr>
               ))}
               {historyRows.length === 0 && (
-                <tr><td colSpan={8} className="text-center py-6 text-slate-400">No reviewed deductions yet</td></tr>
+                <tr><td colSpan={canReverse ? 9 : 8} className="text-center py-6 text-slate-400">No reviewed deductions yet</td></tr>
               )}
             </tbody>
           </table>
         </div>
       </div>
+
+      {/* Reverse an approved deduction */}
+      {reverseTarget && (
+        <Modal onClose={() => { if (!reverseMut.isPending) { setReverseTarget(null); setReverseText('') } }}
+          title="Reverse approved deduction">
+          <div className="space-y-3" data-testid="late-reverse-dialog">
+            <div className="text-sm">
+              <span className="font-medium">{reverseTarget.name || reverseTarget.employee_code}</span>
+              <span className="text-slate-400"> ({reverseTarget.employee_code})</span> — {reverseTarget.deduction_days} day(s), {monthYearLabel(reverseTarget.month, reverseTarget.year)}
+            </div>
+            <div className="text-xs text-slate-600">
+              {reverseTarget.is_applied_to_salary === 1
+                ? 'This deduction is in the computed salary. After reversing, re-run Stage 7 (Compute Salary) for the month — until then the salary still includes it, and the month cannot be finalised.'
+                : 'This deduction is not in the salary yet; it will not be taken.'}
+            </div>
+            <textarea value={reverseText} onChange={e => setReverseText(e.target.value)} className="input w-full h-24"
+              placeholder="Why is this being reversed?" data-testid="late-reverse-reason" />
+            <div className={clsx('text-[11px]', reverseText.trim().length < REVERSE_MIN ? 'text-amber-600' : 'text-slate-400')}>
+              {reverseText.trim().length}/{REVERSE_MIN} characters minimum
+            </div>
+            <div className="flex gap-2">
+              <button type="button" onClick={submitReverse} data-testid="late-reverse-confirm"
+                disabled={reverseText.trim().length < REVERSE_MIN || reverseMut.isPending}
+                className="btn-danger text-sm disabled:opacity-50 disabled:cursor-not-allowed">
+                {reverseMut.isPending ? 'Reversing…' : 'Reverse deduction'}</button>
+              <button type="button" onClick={() => { setReverseTarget(null); setReverseText('') }} disabled={reverseMut.isPending}
+                className="btn-secondary text-sm">Cancel</button>
+            </div>
+          </div>
+        </Modal>
+      )}
 
       {/* Remark modal */}
       {remarkModal && (
