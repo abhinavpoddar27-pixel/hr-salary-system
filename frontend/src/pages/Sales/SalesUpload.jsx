@@ -5,7 +5,7 @@ import toast from 'react-hot-toast'
 import clsx from 'clsx'
 import {
   salesUploadFile,
-  salesUploadPreview,
+  salesUploadPreviewFresh,
   salesUploadMatch,
   salesUploadConfirm,
   getSalesEmployees,
@@ -185,6 +185,7 @@ function RejectionCard({ rejection }) {
 
 function TemplateUploadView() {
   const navigate = useNavigate()
+  const qc = useQueryClient()
   const { selectedCompany, selectedMonth, selectedYear } = useAppStore()
   const { dateProps } = useDateSelector({ mode: 'month', syncToStore: true })
   const fileInputRef = useRef(null)
@@ -223,6 +224,7 @@ function TemplateUploadView() {
       if (body && body.success) {
         setRejection(null)
         toast.success(`Template accepted — ${body.totalRows} rows uploaded`)
+        qc.invalidateQueries({ queryKey: ['sales-readiness'] })   // compute page: no stale "no upload yet"
         navigate('/sales/compute')
       } else {
         setRejection(body)
@@ -528,7 +530,7 @@ function PreviewView({ uploadId, onBack }) {
 
   const { data: res, isLoading } = useQuery({
     queryKey: ['sales-upload-preview', uploadId],
-    queryFn: () => salesUploadPreview(uploadId),
+    queryFn: () => salesUploadPreviewFresh(uploadId),
     refetchOnWindowFocus: false,
   })
   const data = res?.data?.data
@@ -571,6 +573,8 @@ function PreviewView({ uploadId, onBack }) {
         ? `Confirmed — excess: ${sum.accepted} accepted, ${sum.edited} edited, ${sum.rejected} rejected`
         : 'Matches confirmed — ready for Phase 3 compute')
       qc.invalidateQueries({ queryKey: ['sales-upload-preview', uploadId] })
+      // The compute page's readiness check ("no coordinator upload yet") must not be served from cache.
+      qc.invalidateQueries({ queryKey: ['sales-readiness'] })
     },
     onError: (err) => toast.error(err?.response?.data?.error || 'Confirm failed'),
   })
