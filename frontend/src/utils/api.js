@@ -478,7 +478,7 @@ export const getLateComingDailyDetail = (date, company) =>
 export const getLateComingEmployeeHistory = (employeeCode, months) =>
   api.get('/late-coming/employee-history', { params: { employeeCode, months } })
 export const getLateComingDeductions = (month, year, params) =>
-  api.get('/late-coming/deductions', { params: { month, year, ...params } })
+  api.get('/late-coming/deductions', { params: { month, year, ...params }, ...fresh })
 export const exportLateComingReport = (month, year, company) =>
   api.get('/late-coming/export', { params: { month, year, ...(company ? { company } : {}) }, responseType: 'blob' })
 export const getDailyMISLateComingSummary = (date, company) =>
@@ -498,6 +498,8 @@ export const reviewLateDeduction = (id, data) =>
   api.put(`/late-coming/finance-review/${id}`, data)
 export const bulkReviewLateDeductions = (data) =>
   api.put('/late-coming/finance-bulk-review', data)
+export const reverseLateDeduction = (id, remark) =>
+  api.put(`/late-coming/finance-reverse/${id}`, { remark })
 // Bulk shift assignment for Employee Master
 export const bulkAssignShift = (employeeCodes, shiftId, shiftCode) =>
   api.put('/employees/bulk-shift', { employeeCodes, shiftId, shiftCode })

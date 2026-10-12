@@ -571,6 +571,82 @@ router.get('/finance-pending', requireHrFinanceOrAdmin, (req, res) => {
   res.json({ success: true, data: enriched });
 });
 
+// ─── PUT /finance-reverse/:id ─────────────────────────────
+// Undo an APPROVED deduction (owner, 12 Oct 2026: people wrongly penalised). The row becomes 'rejected' with the
+// remark "Reversed after approval: …" and is_applied_to_salary = 0, so the next Stage 7 run drops it (Stage 7 only
+// reads approved rows). The person's day_calculations row is marked salary_stale, which shows the "recompute" banner
+// and blocks finalise until Stage 7 is re-run. A finalised month is refused — that salary has gone to the bank.
+const REVERSE_REMARK_MIN = 10;
+router.put('/finance-reverse/:id', requireFinanceOrAdmin, (req, res) => {
+  const db = getDb();
+  const id = parseInt(req.params.id, 10);
+  if (!id) return res.status(400).json({ success: false, error: 'id required' });
+  const remark = String((req.body || {}).remark || '').trim();
+  if (remark.length < REVERSE_REMARK_MIN) {
+    return res.status(400).json({ success: false, error: `Give the reason for reversing (at least ${REVERSE_REMARK_MIN} characters)` });
+  }
+  const existing = db.prepare('SELECT * FROM late_coming_deductions WHERE id = ?').get(id);
+  if (!existing) return res.status(404).json({ success: false, error: 'Deduction not found' });
+  if (existing.finance_status !== 'approved') {
+    return res.status(409).json({ success: false, error: `Only an approved deduction can be reversed (this one is ${existing.finance_status})` });
+  }
+  let finalised = null;
+  try {
+    finalised = db.prepare('SELECT 1 FROM monthly_imports WHERE month = ? AND year = ? AND is_finalised = 1 LIMIT 1')
+      .get(existing.month, existing.year);
+  } catch (e) { finalised = null; }
+  if (finalised) {
+    return res.status(409).json({ success: false, code: 'MONTH_FINALISED',
+      error: 'This month is finalised — its salary has been paid. The amount has to be returned in a later month instead.' });
+  }
+
+  const reviewer = req.user?.username || 'finance';
+  const wasApplied = existing.is_applied_to_salary === 1;
+  const newRemark = `Reversed after approval: ${remark}`;
+  let staleRows = 0;
+  const txn = db.transaction(() => {
+    const info = db.prepare(`
+      UPDATE late_coming_deductions
+      SET finance_status = 'rejected', finance_reviewed_by = ?, finance_reviewed_at = datetime('now'),
+          finance_remark = ?, is_applied_to_salary = 0, applied_to_salary_at = NULL
+      WHERE id = ? AND finance_status = 'approved'
+    `).run(reviewer, newRemark, id);
+    if (info.changes !== 1) throw new Error('CHANGED_SINCE_READ');
+    try {
+      staleRows = db.prepare('UPDATE day_calculations SET salary_stale = 1 WHERE employee_code = ? AND month = ? AND year = ?')
+        .run(existing.employee_code, existing.month, existing.year).changes;
+    } catch (e) { if (!/no such column/i.test(e.message || '')) throw e; }
+    try {
+      db.prepare(`
+        INSERT INTO finance_approvals
+          (employee_code, month, year, flag_id, status, reviewed_by, reviewed_at, comments)
+        VALUES (?, ?, ?, ?, 'reversed', ?, datetime('now'), ?)
+      `).run(existing.employee_code, existing.month, existing.year, id, reviewer, newRemark);
+    } catch (e) { /* finance_approvals insert should not break the reversal */ }
+    db.prepare(`
+      INSERT INTO audit_log
+        (table_name, record_id, field_name, old_value, new_value, changed_by, stage, remark, employee_code, action_type)
+      VALUES ('late_coming_deductions', ?, 'finance_status', 'approved', 'rejected', ?, 'late_coming', ?, ?, 'finance_reverse')
+    `).run(id, reviewer,
+      `Reversed ${existing.deduction_days} days deduction${wasApplied ? ' (was in salary — re-run Stage 7)' : ''}. ${remark}`,
+      existing.employee_code);
+  });
+  try { txn(); } catch (e) {
+    if (e.message === 'CHANGED_SINCE_READ') return res.status(409).json({ success: false, error: 'The deduction changed while you were reversing it — refresh and try again' });
+    throw e;
+  }
+
+  try {
+    const { createNotification } = require('../services/monthEndScheduler');
+    createNotification('hr', 'LATE_DED_REVERSED',
+      `Late coming deduction reversed by finance for ${existing.employee_code}${wasApplied ? ' — re-run Stage 7' : ''}`,
+      '/pipeline/salary');
+  } catch (e) {}
+
+  res.json({ success: true, id, status: 'rejected', wasApplied, needsStage7: wasApplied || staleRows > 0,
+    month: existing.month, year: existing.year });
+});
+
 // ─── PUT /finance-review/:id ──────────────────────────────
 // Approve or reject a single pending deduction.
 router.put('/finance-review/:id', requireFinanceOrAdmin, (req, res) => {
