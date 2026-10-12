@@ -14,6 +14,9 @@ import Modal from '../components/ui/Modal'
 import Button from '../components/ui/Button'
 import StatusBadge from '../components/ui/StatusBadge'
 import ReviewQueue from '../components/bulk/ReviewQueue'
+import ExtraDutyBulkGrant from '../components/bulk/ExtraDutyBulkGrant'
+import BulkBatchList from '../components/bulk/BulkBatchList'
+import { hrBulkApproveGrants } from '../utils/bulkApi'
 import { normalizeRole, canHR as canHRFn, canFinance as canFinanceFn } from '../utils/role'
 import clsx from 'clsx'
 import toast from 'react-hot-toast'
@@ -36,6 +39,7 @@ const FIN_FILTERS = [
 ]
 const finStatusOf = (g) => g.finance_status
 const isFinApprovable = (g) => g.status === 'APPROVED' && g.finance_status === 'UNREVIEWED'
+const isHrApprovable = (g) => g.status === 'PENDING'
 // Flagged / rejected rows are tinted on every tab (as before the ReviewQueue extraction).
 const grantRowProps = (g) => ({
   'data-fin': g.finance_status,
@@ -78,6 +82,7 @@ export default function ExtraDutyGrants() {
   // starts on the HR queue.
   const [activeTab, setActiveTab] = useState(role === 'finance' ? 'finance' : 'hr')
   const [showCreate, setShowCreate] = useState(false)
+  const [showBulk, setShowBulk] = useState(false)
   const [form, setForm] = useState({ employee_code: '', grant_date: '', grant_type: 'OVERNIGHT_STAY', duty_days: 1, verification_source: 'Gate Register', reference_number: '', remarks: '', original_punch_date: '' })
   const [rejectId, setRejectId] = useState(null)
   const [rejectReason, setRejectReason] = useState('')
@@ -92,7 +97,9 @@ export default function ExtraDutyGrants() {
 
   const { data: sumRes } = useQuery({ queryKey: ['edg-summary', month, year], queryFn: () => getExtraDutyGrantsSummary(month, year), retry: 0 })
   const summary = sumRes?.data?.data || {}
-  const { data: grantsRes } = useQuery({ queryKey: ['edg-list', month, year, activeTab], queryFn: () => activeTab === 'finance' ? getFinanceReviewQueue(month, year) : getExtraDutyGrants(month, year), retry: 0 })
+  const { data: grantsRes } = useQuery({ queryKey: ['edg-list', month, year, activeTab], queryFn: () => activeTab === 'finance' ? getFinanceReviewQueue(month, year)
+    : activeTab === 'hr' ? getExtraDutyGrants(month, year, { status: 'PENDING' }) // F-11: HR Queue = waiting for HR only
+    : getExtraDutyGrants(month, year), retry: 0 })
   const grants = grantsRes?.data?.data || []
 
   const isFinanceTab = activeTab === 'finance'
@@ -126,6 +133,11 @@ export default function ExtraDutyGrants() {
     setEditGrant(g)
     setEditForm({ duty_days: g.duty_days, grant_type: g.grant_type, verification_source: g.verification_source, reference_number: g.reference_number || '', remarks: g.remarks || '' })
   }
+  const refreshGrants = () => { qc.invalidateQueries({ queryKey: ['edg-list'] }); qc.invalidateQueries({ queryKey: ['edg-summary'] }); qc.invalidateQueries({ queryKey: ['bulk-batches'] }) }
+  const bulkHrApproveMut = useMutation({
+    mutationFn: (ids) => hrBulkApproveGrants(ids),
+    onSuccess: (res) => { refreshGrants(); toast.success(`${res?.data?.count || 0} grant(s) approved — sent to finance review`) }
+  })
   const bulkFinApproveMut = useMutation({
     mutationFn: (ids) => bulkFinanceApproveGrants(ids),
     onSuccess: (res) => { qc.invalidateQueries({ queryKey: ['edg-list'] }); qc.invalidateQueries({ queryKey: ['edg-summary'] }); toast.success(`${res?.data?.count || 0} grants approved`) }
@@ -181,8 +193,17 @@ export default function ExtraDutyGrants() {
       run: (ids, reason) => finReturnMut.mutateAsync({ ids, reason }) },
   ]
 
+  const hrActions = [
+    { id: 'hr-approve', label: n => `HR Approve (${n})`, variant: 'primary', eligible: isHrApprovable,
+      busy: bulkHrApproveMut.isPending, busyLabel: 'Approving...',
+      confirmTitle: 'Approve as HR?', confirmLabel: 'Approve',
+      confirmText: (n) => `Approve ${n} grant${n === 1 ? '' : 's'} as HR? They go to finance review.`,
+      run: ids => bulkHrApproveMut.mutateAsync(ids) },
+  ]
+  const isHrTab = activeTab === 'hr'
+
   return (
-    <div className="p-6 space-y-5 animate-fade-in">
+    <div className="p-4 md:p-6 space-y-5 animate-fade-in">
       <div className="flex items-center justify-between">
         <div><h2 className="section-title">Extra Duty Grants</h2><p className="section-subtitle mt-1">Manage overnight/extended shift grants with HR + Finance approval</p></div>
         <div className="flex items-center gap-3"><CompanyFilter /><DateSelector {...dateProps} /></div>
@@ -235,9 +256,16 @@ export default function ExtraDutyGrants() {
           ))}
         </div>
         <div className="ml-auto flex gap-2">
+          {canHR && <Button variant="secondary" className="text-sm" onClick={() => setShowBulk(true)} disabled={showBulk}>+ Bulk Grant</Button>}
           {canHR && <Button variant="primary" className="text-sm" onClick={() => setShowCreate(true)}>+ New Grant</Button>}
         </div>
       </div>
+
+      {canHR && showBulk && (
+        <ExtraDutyBulkGrant onClose={() => setShowBulk(false)} onSaved={refreshGrants} pageMonth={month} pageYear={year} />
+      )}
+
+      {isHrTab && <p className="text-xs text-slate-500" data-testid="hr-queue-hint">Grants waiting for HR approval. Approved and rejected grants are on <strong>All Grants</strong>.</p>}
 
       {/* key: a tab change remounts the queue, which resets its filter and selection. */}
       <ReviewQueue
@@ -249,15 +277,17 @@ export default function ExtraDutyGrants() {
         filters={isFinanceTab ? FIN_FILTERS : null}
         order={isFinanceTab ? FIN_SORT_RANK : null}
         filtersTestId="fin-filters"
-        selectable={isFinanceTab && canFinance}
-        allFilterActions={['approve']}
-        actions={finActions}
+        selectable={(isFinanceTab && canFinance) || (isHrTab && canHR)}
+        allFilterActions={isHrTab ? ['hr-approve'] : ['approve']}
+        actions={isHrTab ? hrActions : finActions}
         filterHint={(counts, f) => canFinance && (counts.FINANCE_REJECTED + counts.FINANCE_FLAGGED) > 0 && f === 'all' && (
           <span className="text-[11px] text-slate-500">To send rejected grants back to HR: pick <strong>Rejected</strong>, tick the header box, then <strong>↩ Return to HR</strong>.</span>
         )}
-        emptyText="No grants for this period"
+        emptyText={isHrTab ? 'Nothing waiting for HR approval this month' : 'No grants for this period'}
         emptyFilterText="No grants in this filter"
       />
+
+      {canHR && <BulkBatchList kind="extra-duty" month={month} year={year} onChanged={refreshGrants} />}
 
       {/* Create Modal */}
       {showCreate && (
@@ -309,11 +339,10 @@ export default function ExtraDutyGrants() {
               <textarea value={flagNotes} onChange={e => setFlagNotes(e.target.value)}
                 className="input w-full h-20" placeholder="Additional notes..." />
             </div>
-            <button onClick={() => finFlagMut.mutate({ id: flagId, reason: flagReason, notes: flagNotes })}
-              disabled={!flagReason || finFlagMut.isPending}
-              className="btn-warning w-full">
-              {finFlagMut.isPending ? 'Flagging...' : 'Flag for Review'}
-            </button>
+            <Button variant="warning" className="w-full" onClick={() => finFlagMut.mutate({ id: flagId, reason: flagReason, notes: flagNotes })}
+              disabled={!flagReason} busy={finFlagMut.isPending} busyLabel="Flagging...">
+              Flag for Review
+            </Button>
           </div>
         </Modal>
       )}
