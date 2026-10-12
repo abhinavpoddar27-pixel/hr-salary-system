@@ -156,12 +156,8 @@ export default function HeldSalariesRegister() {
         </div>
       </div>
 
-      {/* Diagnostic banner — mirrors the Extra Duty page so finance can
-          always see what the frontend thinks their role is. */}
-      <div className="rounded-lg border border-blue-200 bg-blue-50 px-4 py-2 text-[11px] text-blue-900 flex flex-wrap items-center gap-x-4 gap-y-1">
-        <span><strong>User:</strong> {user?.username || '(unknown)'}</span>
-        <span><strong>canFinance:</strong> <code className={clsx('px-1 rounded', canFinance ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800')}>{String(canFinance)}</code></span>
-        <Link to="/finance-verification?tab=held" className="ml-auto text-blue-600 hover:underline font-medium">
+      <div className="flex justify-end text-xs">
+        <Link to="/finance-verification?tab=held" className="text-blue-600 hover:underline font-medium">
           ← Back to Finance Verify
         </Link>
       </div>
