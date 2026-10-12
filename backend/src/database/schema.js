@@ -3832,6 +3832,7 @@ If description and screenshot are incoherent or unrelated, set summary_confidenc
   `);
   safeAddColumn('attendance_review_runs', 'late_free_days', "TEXT DEFAULT '[]'");
 
+  require('./bulkSchema').initBulkSchema(db); // P3-01 bulk engine tables (owner-approved one line)
   console.log('✅ Database schema initialized');
 }
 

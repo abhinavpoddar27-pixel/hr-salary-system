@@ -4,6 +4,7 @@ import { login } from '../utils/api'
 import { useAppStore } from '../store/appStore'
 import toast from 'react-hot-toast'
 import { readReturnTo, clearReturnTo, returnPathFor, isSafePath } from '../utils/sessionReturn'
+import { PRODUCT_NAME, VERSION_TEXT } from '../utils/appInfo'
 
 // P2-08: why the user is on this page after a forced sign-out
 const SIGNED_OUT_TEXT = {
@@ -59,7 +60,7 @@ export default function Login() {
           <div className="inline-flex items-center justify-center w-16 h-16 bg-blue-600 rounded-2xl shadow-lg mb-4">
             <span className="text-3xl">🏭</span>
           </div>
-          <h1 className="text-2xl font-bold text-white">HR Intelligence Platform</h1>
+          <h1 className="text-2xl font-bold text-white" data-testid="product-name">{PRODUCT_NAME}</h1>
           <p className="text-blue-300 text-sm mt-1">Indriyan Beverages / Asian Lakto Ind. Ltd.</p>
         </div>
 
@@ -128,7 +129,7 @@ export default function Login() {
         </div>
 
         <p className="text-center text-xs text-slate-600 mt-6">
-          HR & Salary Processing System v1.0
+          <span data-testid="app-version">{PRODUCT_NAME} {VERSION_TEXT}</span>
         </p>
       </div>
     </div>

@@ -1,4 +1,5 @@
 import React, { useState, useMemo } from 'react'
+import { todayIST } from '../utils/formatters'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import {
   getDWContractors, createDWContractor, updateDWContractor,
@@ -158,7 +159,7 @@ export default function DailyWageContractors() {
   }
   const openRateChange = (c) => {
     setShowRateChange(c)
-    setRateForm({ new_wage_rate: c.current_daily_wage_rate, new_commission_rate: c.current_commission_rate, effective_date: new Date().toISOString().slice(0, 10), remarks: '' })
+    setRateForm({ new_wage_rate: c.current_daily_wage_rate, new_commission_rate: c.current_commission_rate, effective_date: todayIST(), remarks: '' })
   }
   const submitForm = () => {
     const data = { ...form, current_daily_wage_rate: Number(form.current_daily_wage_rate) || 0, current_commission_rate: Number(form.current_commission_rate) || 0 }
