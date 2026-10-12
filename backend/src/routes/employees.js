@@ -639,24 +639,87 @@ router.put('/:code/leaves', requireHrOrAdmin, (req, res) => {
 
 // UPDATE salary structure (dedicated endpoint)
 // When gross_salary changes, route through salary_change_requests for finance approval.
-// Non-salary fields (banking, statutory IDs, pt) are always applied immediately.
+// N-19 (12 Oct 2026): a changed SPLIT at the same gross goes the same way — HR
+// raises, finance decides (P1-23: never the requester). Nothing in
+// salary_structures moves until finance approves.
+// Non-salary fields (banking, statutory IDs, pt, PF wage ceiling) are applied immediately.
 // PF / ESI / LWF flags in the body are ignored (statutory upload only, R10).
-// P1-14 (Q2): is the submitted split the one already stored? Compared on the
-// values the form sends back (percentages, special as an amount, other allowance,
-// PF wage ceiling). A field left out of the body counts as unchanged.
-function splitUnchanged(struct, newGross, body) {
+
+// The split Stage 7 auto-creates for an employee with no structure (salaryComputation.js).
+const DEFAULT_SPLIT = { basic_percent: 50, hra_percent: 20, da_percent: 0, special_allowance: 0, other_allowances: 0, pf_wage_ceiling: 15000 };
+
+/**
+ * N-19: read one split field. Missing / blank / unreadable → `fallback` (the
+ * stored value). 0 is a real value (the old `parseFloat(x) || 50` turned an
+ * explicit 0 into 50).
+ */
+function readSplitNum(body, key, fallback) {
+  const v = body[key];
+  if (v === undefined || v === null || (typeof v === 'string' && v.trim() === '')) return fallback;
+  const n = typeof v === 'number' ? v : Number(String(v).trim());
+  return Number.isFinite(n) ? n : fallback;
+}
+
+const numOr = (v, d) => (v === undefined || v === null || !Number.isFinite(Number(v)) ? d : Number(v));
+
+/** The split stored on a structure row (or the Stage 7 default when there is none). */
+function storedSplit(struct) {
+  const s = struct || DEFAULT_SPLIT;
+  const sGross = Number(s.gross_salary) || 0;
+  return {
+    basicPct: numOr(s.basic_percent, 50),
+    hraPct: numOr(s.hra_percent, 20),
+    daPct: numOr(s.da_percent, 0),
+    specialPct: sGross > 0 ? (Number(s.special_allowance) || 0) / sGross * 100 : 0,
+    other: numOr(s.other_allowances, 0),
+    pfCeiling: numOr(s.pf_wage_ceiling, 15000),
+  };
+}
+
+/** The split the window asks for; a field left out keeps the stored value. null + error when out of range. */
+function resolveSplit(body, stored) {
+  const split = {
+    basicPct: readSplitNum(body, 'basic_percent', stored.basicPct),
+    hraPct: readSplitNum(body, 'hra_percent', stored.hraPct),
+    daPct: readSplitNum(body, 'da_percent', stored.daPct),
+    specialPct: readSplitNum(body, 'special_allowance_percent', stored.specialPct),
+    other: readSplitNum(body, 'other_allowance', stored.other),
+    pfCeiling: readSplitNum(body, 'pf_wage_ceiling', stored.pfCeiling),
+  };
+  for (const k of ['basicPct', 'hraPct', 'daPct', 'specialPct']) {
+    if (split[k] < 0 || split[k] > 100) return { error: 'Salary split percentages must be between 0 and 100' };
+  }
+  if (split.other < 0 || split.pfCeiling < 0) return { error: 'Other allowance and PF wage ceiling cannot be negative' };
+  return { split };
+}
+
+const r2 = (x) => Math.round(x * 100) / 100;
+
+/** Component amounts the split gives at a gross (same formulas as before N-19). */
+function splitAmounts(gross, split) {
+  return {
+    basic: r2(gross * split.basicPct / 100),
+    da: r2(gross * split.daPct / 100),
+    hra: r2(gross * split.hraPct / 100),
+    special_allowance: r2(gross * split.specialPct / 100),
+    other_allowances: split.other,
+  };
+}
+
+/**
+ * P1-14 (Q2) / N-19: is the requested split the one already stored? Same gross,
+ * same percentages, same special + other amounts. PF wage ceiling is not part of
+ * the split (statutory, written directly). A field left out counts as unchanged.
+ */
+function splitUnchanged(struct, newGross, split) {
   const near = (a, b) => Math.abs((Number(a) || 0) - (Number(b) || 0)) <= 0.01;
-  const sent = (k) => body[k] !== undefined && body[k] !== null && body[k] !== '';
-  if (!near(struct.gross_salary, newGross)) return false;
-  for (const [k, col] of [['basic_percent', 'basic_percent'], ['hra_percent', 'hra_percent'], ['da_percent', 'da_percent']]) {
-    if (sent(k) && !near(parseFloat(body[k]), struct[col])) return false;
-  }
-  if (sent('special_allowance_percent')) {
-    const amt = Math.round(newGross * (parseFloat(body.special_allowance_percent) || 0) / 100 * 100) / 100;
-    if (!near(amt, struct.special_allowance)) return false;
-  }
-  if (sent('other_allowance') && !near(parseFloat(body.other_allowance), struct.other_allowances)) return false;
-  if (sent('pf_wage_ceiling') && !near(parseFloat(body.pf_wage_ceiling), struct.pf_wage_ceiling)) return false;
+  const s = struct || { ...DEFAULT_SPLIT, gross_salary: newGross };
+  if (!near(s.gross_salary, newGross)) return false;
+  if (!near(split.basicPct, numOr(s.basic_percent, 50))) return false;
+  if (!near(split.hraPct, numOr(s.hra_percent, 20))) return false;
+  if (!near(split.daPct, numOr(s.da_percent, 0))) return false;
+  if (!near(r2(newGross * split.specialPct / 100), s.special_allowance)) return false;
+  if (!near(split.other, s.other_allowances)) return false;
   return true;
 }
 
@@ -666,9 +729,7 @@ router.put('/:code/salary', requireHrOrAdmin, (req, res) => {
   if (!emp) return res.status(404).json({ success: false, error: 'Employee not found' });
 
   const {
-    gross_salary, basic_percent, hra_percent, da_percent,
-    special_allowance_percent, other_allowance,
-    pf_applicable, esi_applicable, pt_applicable, pf_wage_ceiling,
+    gross_salary, pt_applicable,
     uan, esi_number, bank_name
   } = req.body;
 
@@ -685,8 +746,17 @@ router.put('/:code/salary', requireHrOrAdmin, (req, res) => {
   const newGross = parseFloat(gross_salary) || 0;
   const currentGross = parseFloat(emp.gross_salary) || 0;
 
+  const currentStruct = db.prepare(
+    'SELECT * FROM salary_structures WHERE employee_id = ? ORDER BY effective_from DESC LIMIT 1'
+  ).get(emp.id);
+  // Validate the split BEFORE anything is written (N-19).
+  const resolved = resolveSplit(req.body, storedSplit(currentStruct));
+  if (resolved.error) return res.status(400).json({ success: false, code: 'SPLIT_OUT_OF_RANGE', error: resolved.error });
+  const split = resolved.split;
+
   const ignoredFields = ignoredFlagFields(req.body);
   const withIgnored = (body) => (ignoredFields.length ? { ...body, ignoredFields } : body);
+  const ptValue = pt_applicable !== undefined ? (pt_applicable ? 1 : 0) : (emp.pt_applicable ?? 1);
 
   // Always apply banking / statutory ID fields immediately (no approval needed)
   db.prepare(`UPDATE employees SET
@@ -703,7 +773,7 @@ router.put('/:code/salary', requireHrOrAdmin, (req, res) => {
     bank_name !== undefined ? bank_name || null : emp.bank_name,
     ifscPair.present ? ifscPair.value : emp.ifsc_code,
     ifscPair.present ? ifscPair.value : emp.ifsc,
-    pt_applicable !== undefined ? (pt_applicable ? 1 : 0) : (emp.pt_applicable ?? 1),
+    ptValue,
     req.params.code
   );
 
@@ -720,41 +790,12 @@ router.put('/:code/salary', requireHrOrAdmin, (req, res) => {
     } catch (e) { /* silent */ }
   }
 
-  // ── Gross is changing → route through finance approval ───────────────
-  if (newGross > 0 && Math.abs(newGross - currentGross) > 0.01) {
-    const requestedBy = req.user?.username || 'admin';
-
-    const basicPct = parseFloat(basic_percent) || 50;
-    const hraPct   = parseFloat(hra_percent)   || 20;
-    const daPct    = parseFloat(da_percent)    || 0;
-    const specialPct = parseFloat(special_allowance_percent) || 0;
-    const otherAllow = parseFloat(other_allowance) || 0;
-
-    const newStructure = {
-      gross_salary:     newGross,
-      basic:            Math.round(newGross * basicPct / 100 * 100) / 100,
-      da:               Math.round(newGross * daPct    / 100 * 100) / 100,
-      hra:              Math.round(newGross * hraPct   / 100 * 100) / 100,
-      special_allowance: Math.round(newGross * specialPct / 100 * 100) / 100,
-      other_allowances: otherAllow,
-      basic_percent:    basicPct,
-      hra_percent:      hraPct,
-      da_percent:       daPct,
-      // no pf/esi/lwf here: the approval carries the flags in force at its
-      // effective date (salary-input.js approve, structureForDate)
-      pt_applicable:    pt_applicable !== undefined ? (pt_applicable ? 1 : 0) : (emp.pt_applicable ?? 1),
-      pf_wage_ceiling:  pf_wage_ceiling || 15000
-    };
-
-    const currentStruct = db.prepare(
-      'SELECT * FROM salary_structures WHERE employee_id = ? ORDER BY effective_from DESC LIMIT 1'
-    ).get(emp.id);
-
-    // Don't create duplicate pending requests for the same employee
+  // Raise a finance-approval request (gross change, or a split change at the
+  // same gross). One Pending request per employee at a time.
+  const raiseRequest = (gross, reason, message) => {
     const existingPending = db.prepare(
       "SELECT id FROM salary_change_requests WHERE employee_code = ? AND status = 'Pending'"
     ).get(req.params.code);
-
     if (existingPending) {
       return res.json(withIgnored({
         success: true,
@@ -762,77 +803,72 @@ router.put('/:code/salary', requireHrOrAdmin, (req, res) => {
         message: 'A salary change request is already pending finance approval for this employee.'
       }));
     }
-
+    const newStructure = {
+      gross_salary: gross,
+      ...splitAmounts(gross, split),
+      basic_percent: split.basicPct,
+      hra_percent: split.hraPct,
+      da_percent: split.daPct,
+      // no pf/esi/lwf here: the approval carries the flags in force at its
+      // effective date (salary-input.js approve, structureForDate)
+      pt_applicable: ptValue,
+      pf_wage_ceiling: split.pfCeiling,
+    };
     db.prepare(`
       INSERT INTO salary_change_requests (
         employee_id, employee_code, requested_by, old_gross, new_gross,
         old_structure, new_structure, reason, status
       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'Pending')
     `).run(
-      emp.id, req.params.code, requestedBy,
-      currentGross, newGross,
+      emp.id, req.params.code, req.user?.username || 'admin',
+      currentGross, gross,
       JSON.stringify(currentStruct || {}),
       JSON.stringify(newStructure),
-      'Salary structure change via Employee Master'
+      reason
     );
+    return res.json(withIgnored({ success: true, pendingApproval: true, message }));
+  };
 
-    return res.json(withIgnored({
-      success: true,
-      pendingApproval: true,
-      message: 'Salary change submitted for finance approval. Current salary unchanged until approved.'
-    }));
+  // ── Gross is changing → route through finance approval ───────────────
+  if (newGross > 0 && Math.abs(newGross - currentGross) > 0.01) {
+    return raiseRequest(newGross, 'Salary structure change via Employee Master',
+      'Salary change submitted for finance approval. Current salary unchanged until approved.');
   }
 
-  // ── Gross is NOT changing — allow direct component/percentage updates ─
+  // ── Gross is NOT changing ─────────────────────────────────────────────
   if (newGross > 0 && Math.abs(newGross - currentGross) <= 0.01) {
-    const basicPct = parseFloat(basic_percent) || 50;
-    const hraPct   = parseFloat(hra_percent)   || 20;
-    const daPct    = parseFloat(da_percent)    || 0;
-    const specialPct = parseFloat(special_allowance_percent) || 0;
-    const otherAllow = parseFloat(other_allowance) || 0;
-
-    const basic      = Math.round(newGross * basicPct   / 100 * 100) / 100;
-    const hra        = Math.round(newGross * hraPct     / 100 * 100) / 100;
-    const da         = Math.round(newGross * daPct      / 100 * 100) / 100;
-    const specialAllow = Math.round(newGross * specialPct / 100 * 100) / 100;
-
-    const existing = db.prepare(
-      'SELECT * FROM salary_structures WHERE employee_id = ? ORDER BY effective_from DESC LIMIT 1'
-    ).get(emp.id);
+    // PF wage ceiling is statutory, not part of the split: written directly (as before).
+    const ceilingSent = req.body.pf_wage_ceiling !== undefined && req.body.pf_wage_ceiling !== null && req.body.pf_wage_ceiling !== '';
+    if (currentStruct && ceilingSent && Math.abs(split.pfCeiling - numOr(currentStruct.pf_wage_ceiling, 15000)) > 0.01) {
+      db.prepare("UPDATE salary_structures SET pf_wage_ceiling = ?, updated_at = datetime('now') WHERE id = ?")
+        .run(split.pfCeiling, currentStruct.id);
+    }
 
     // P1-14 (Q2): same gross AND same split → leave the structure exactly as it is.
-    // Rewriting it re-derived every amount from the percentages (106 live rows'
-    // amounts do not equal gross × stored %), so an untouched save changed pay.
-    // A changed split at the same gross still writes, as before.
-    if (existing && splitUnchanged(existing, newGross, req.body)) {
+    if (currentStruct && splitUnchanged(currentStruct, newGross, split)) {
       return res.json(withIgnored({ success: true, structureUnchanged: true, message: 'Saved — salary split unchanged' }));
     }
 
-    if (existing) {
-      db.prepare(`UPDATE salary_structures SET
-        gross_salary=?, basic=?, da=?, hra=?, special_allowance=?, other_allowances=?,
-        basic_percent=?, hra_percent=?, da_percent=?,
-        pt_applicable=?, pf_wage_ceiling=?,
-        updated_at=datetime('now')
-        WHERE id=?`).run(
-          newGross, basic, da, hra, specialAllow, otherAllow,
-          basicPct, hraPct, daPct,
-          pt_applicable !== undefined ? (pt_applicable ? 1 : 0) : (emp.pt_applicable ?? 1),
-          pf_wage_ceiling || 15000, existing.id
-      );
-    } else {
-      const carried = carryFlags(db, 'plant', emp.id, '2025-01-01');
-      db.prepare(`INSERT INTO salary_structures
-        (employee_id, effective_from, gross_salary, basic, da, hra, special_allowance, other_allowances,
-         basic_percent, hra_percent, da_percent, pf_applicable, esi_applicable, lwf_applicable, pt_applicable, pf_wage_ceiling)
-        VALUES (?, '2025-01-01', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
-          emp.id, newGross, basic, da, hra, specialAllow, otherAllow,
-          basicPct, hraPct, daPct,
-          carried.pf, carried.esi, carried.lwf,
-          pt_applicable !== undefined ? (pt_applicable ? 1 : 0) : 1,
-          pf_wage_ceiling || 15000
-      );
+    // N-19: a changed split moves pay (basic → PF base, HRA, special) — finance decides.
+    // With no structure on record the default 50/20 split is what Stage 7 would
+    // create, so that one is still created directly; any other split needs approval.
+    if (currentStruct || !splitUnchanged(null, newGross, split)) {
+      return raiseRequest(newGross, 'Salary split change via Employee Master (gross unchanged)',
+        'Salary split change submitted for finance approval. Current split unchanged until approved.');
     }
+
+    const amounts = splitAmounts(newGross, split);
+    const carried = carryFlags(db, 'plant', emp.id, '2025-01-01');
+    db.prepare(`INSERT INTO salary_structures
+      (employee_id, effective_from, gross_salary, basic, da, hra, special_allowance, other_allowances,
+       basic_percent, hra_percent, da_percent, pf_applicable, esi_applicable, lwf_applicable, pt_applicable, pf_wage_ceiling)
+      VALUES (?, '2025-01-01', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
+        emp.id, newGross, amounts.basic, amounts.da, amounts.hra, amounts.special_allowance, amounts.other_allowances,
+        split.basicPct, split.hraPct, split.daPct,
+        carried.pf, carried.esi, carried.lwf,
+        pt_applicable !== undefined ? (pt_applicable ? 1 : 0) : 1,
+        split.pfCeiling
+    );
   }
 
   res.json(withIgnored({ success: true, message: 'Salary structure updated' }));

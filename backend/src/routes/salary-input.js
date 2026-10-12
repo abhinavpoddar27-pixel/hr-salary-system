@@ -29,6 +29,22 @@ const COMPONENT_KEYS = ['basic', 'da', 'hra', 'conveyance', 'special_allowance',
 const present = (v) => v !== undefined && v !== null && v !== '';
 const money = (v) => Math.round((parseFloat(v) || 0) * 100) / 100;
 
+// N-MONEY2 (F-1): a split change from Employee Master carries basic/hra/da
+// percentages. Approval writes them (the window reads the percent columns, and a
+// later gross change rebuilds the split from them). A request without them keeps
+// the in-force row's percents, as before.
+const PERCENT_KEYS = ['basic_percent', 'hra_percent', 'da_percent'];
+function requestedPercents(newStructure) {
+  const out = {};
+  for (const k of PERCENT_KEYS) {
+    const v = (newStructure || {})[k];
+    if (!present(v)) continue;
+    const n = Number(v);
+    if (Number.isFinite(n) && n >= 0 && n <= 100) out[k] = n;
+  }
+  return out;
+}
+
 function resolveApproval(newStructure, current) {
   const ns = newStructure || {};
   const cur = current || {};
@@ -231,10 +247,12 @@ router.put('/approve/:id', requireFinanceOrAdmin, (req, res) => {
     newGross = resolved.gross;
     keptComponents = resolved.kept;
 
+    const pcts = requestedPercents(newStructure);
     const sameDate = db.prepare('SELECT id FROM salary_structures WHERE employee_id = ? AND effective_from = ?').all(emp.id, effectiveFrom);
     if (sameDate.length) {
       // A row already dated effectiveFrom: update its gross + components in
-      // place. It keeps its own flags, pt, percents and pf_wage_ceiling — a
+      // place. It keeps its own flags, pt, pf_wage_ceiling (and the percents the
+      // request does not name) — a
       // same-date twin would tie, and plant compute has no id tie-break.
       db.prepare(`
         UPDATE salary_structures SET
@@ -242,13 +260,19 @@ router.put('/approve/:id', requireFinanceOrAdmin, (req, res) => {
           updated_at = datetime('now')
         WHERE employee_id = ? AND effective_from = ?
       `).run(newGross, newBasic, newDa, newHra, newConv, newSpecial, newOther, emp.id, effectiveFrom);
+      // F-1: percentages the request names are written too (others keep the row's own).
+      for (const [col, val] of Object.entries(pcts)) {
+        db.prepare(`UPDATE salary_structures SET ${col} = ? WHERE employee_id = ? AND effective_from = ?`).run(val, emp.id, effectiveFrom);
+      }
     } else {
-      // Flags, pt, the three percent columns and pf_wage_ceiling come from the
-      // row compute uses at the new row's own date (in force, else latest) —
-      // never from the request JSON and never a default. Read inside the
+      // Flags, pt, pf_wage_ceiling (and any percent column the request does not
+      // name) come from the row compute uses at the new row's own date (in force,
+      // else latest) — never a default. Read inside the
       // transaction, before the insert.
       const inForce = structureForDate(db, 'plant', emp.id, effectiveFrom) || {};
       const carry = (col, dflt) => (inForce[col] === undefined || inForce[col] === null ? dflt : inForce[col]);
+      // F-1: a percent the request names wins; otherwise the in-force row's.
+      const pct = (col, dflt) => (pcts[col] !== undefined ? pcts[col] : carry(col, dflt));
 
       // Insert new salary structure WITH gross_salary so the latest-by-
       // effective_from lookup returns a consistent figure.
@@ -260,7 +284,7 @@ router.put('/approve/:id', requireFinanceOrAdmin, (req, res) => {
         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `).run(
         emp.id, newGross, newBasic, newDa, newHra, newConv, newSpecial, newOther,
-        carry('basic_percent', 50), carry('da_percent', 0), carry('hra_percent', 20),
+        pct('basic_percent', 50), pct('da_percent', 0), pct('hra_percent', 20),
         carry('pf_applicable', 0) ? 1 : 0, carry('esi_applicable', 0) ? 1 : 0, carry('lwf_applicable', 0) ? 1 : 0,
         carry('pt_applicable', 1) ? 1 : 0, carry('pf_wage_ceiling', 15000),
         effectiveFrom
