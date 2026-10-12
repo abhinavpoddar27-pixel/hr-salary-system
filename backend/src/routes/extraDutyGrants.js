@@ -426,19 +426,41 @@ router.get('/finance-review', (req, res) => {
   res.json({ success: true, data, summary });
 });
 
+// N-MONEY2 (12 Oct 2026): finance approves only an HR-approved grant that is
+// still waiting for finance (UNREVIEWED, or FLAGGED by finance). A
+// FINANCE_REJECTED grant goes back through "Return to HR" first; an already
+// approved one is not approved again. The UPDATE's WHERE re-checks the state.
+const FINANCE_APPROVABLE = ['UNREVIEWED', 'FINANCE_FLAGGED'];
+const financeStatusOf = (g) => g.finance_status || 'UNREVIEWED';
+
+// Returns { ok: true, grant } or { ok: false, status, error }. Caller supplies the transaction.
+function financeApproveGrant(db, id, user, stage) {
+  const grant = db.prepare('SELECT * FROM extra_duty_grants WHERE id = ?').get(id);
+  if (!grant) return { ok: false, status: 404, error: 'Grant not found' };
+  if (grant.status !== 'APPROVED') {
+    return { ok: false, status: 409, error: `HR has not approved this grant yet (it is ${grant.status}) — finance can approve only HR-approved grants.` };
+  }
+  const fs = financeStatusOf(grant);
+  if (fs === 'FINANCE_APPROVED') return { ok: false, status: 409, error: 'Finance has already approved this grant.' };
+  if (fs === 'FINANCE_REJECTED') {
+    return { ok: false, status: 409, error: 'Finance rejected this grant. Use "Return to HR" so HR can correct it and approve it again; finance then reviews it afresh.' };
+  }
+  if (!FINANCE_APPROVABLE.includes(fs)) return { ok: false, status: 409, error: `This grant cannot be approved in its current state (${fs}).` };
+  const info = db.prepare(`UPDATE extra_duty_grants SET finance_status = 'FINANCE_APPROVED', finance_reviewed_by = ?, finance_reviewed_at = datetime('now')
+    WHERE id = ? AND status = 'APPROVED' AND COALESCE(finance_status, 'UNREVIEWED') IN ('UNREVIEWED', 'FINANCE_FLAGGED')`).run(user, id);
+  if (info.changes !== 1) return { ok: false, status: 409, error: 'Grant changed while approving it — refresh and try again.' };
+  logAudit('extra_duty_grants', id, 'finance_status', fs, 'FINANCE_APPROVED', stage,
+    `${grant.employee_code} ${grant.grant_date}: ${grant.duty_days} day(s)`, user);
+  return { ok: true, grant };
+}
+
 // POST /:id/finance-approve
 router.post('/:id/finance-approve', requireFinanceOrAdmin, (req, res) => {
   const db = getDb();
-  const grant = db.prepare("SELECT * FROM extra_duty_grants WHERE id = ? AND status = 'APPROVED'").get(req.params.id);
-  if (!grant) return res.status(404).json({ success: false, error: 'Grant not found or not HR-approved' });
-
   const user = req.user?.username || 'finance';
-  db.prepare("UPDATE extra_duty_grants SET finance_status = 'FINANCE_APPROVED', finance_reviewed_by = ?, finance_reviewed_at = datetime('now') WHERE id = ?")
-    .run(user, req.params.id);
-
-  logAudit('extra_duty_grants', req.params.id, 'finance_status', grant.finance_status || 'UNREVIEWED',
-    'FINANCE_APPROVED', 'FINANCE_APPROVE',
-    `${grant.employee_code} ${grant.grant_date}: ${grant.duty_days} day(s)`, req.user?.username);
+  const result = db.transaction(() => financeApproveGrant(db, Number(req.params.id), user, 'FINANCE_APPROVE')).immediate();
+  if (!result.ok) return res.status(result.status).json({ success: false, error: result.error });
+  const grant = result.grant;
 
   try {
     const { createNotification } = require('../services/monthEndScheduler');
@@ -510,28 +532,22 @@ router.post('/:id/finance-reject', requireFinanceOrAdmin, (req, res) => {
   res.json({ success: true });
 });
 
-// POST /bulk-finance-approve
+// POST /bulk-finance-approve — same rule per grant; ineligible ones are
+// reported in `skipped` (like bulk-finance-return), the rest are approved.
 router.post('/bulk-finance-approve', requireFinanceOrAdmin, (req, res) => {
   const db = getDb();
-  const { ids } = req.body;
-  const stmt = db.prepare("UPDATE extra_duty_grants SET finance_status = 'FINANCE_APPROVED', finance_reviewed_by = ?, finance_reviewed_at = datetime('now') WHERE id = ? AND status = 'APPROVED'");
+  const ids = Array.isArray(req.body?.ids) ? [...new Set(req.body.ids.map(Number).filter(Number.isInteger))] : [];
+  if (ids.length === 0) return res.status(400).json({ success: false, error: 'No grants selected' });
   const user = req.user?.username || 'finance';
   let count = 0;
-  const txn = db.transaction(() => {
+  const skipped = [];
+  db.transaction(() => {
     for (const id of ids) {
-      const g = db.prepare('SELECT * FROM extra_duty_grants WHERE id = ?').get(id);
-      if (!g || g.status !== 'APPROVED') continue;
-      const info = stmt.run(user, id);
-      if (info.changes > 0) {
-        logAudit('extra_duty_grants', id, 'finance_status', g.finance_status || 'UNREVIEWED',
-          'FINANCE_APPROVED', 'FINANCE_BULK_APPROVE',
-          `${g.employee_code} ${g.grant_date}: ${g.duty_days} day(s)`, req.user?.username);
-        count++;
-      }
+      const r = financeApproveGrant(db, id, user, 'FINANCE_BULK_APPROVE');
+      if (r.ok) count++; else skipped.push({ id, error: r.error });
     }
-  });
-  txn();
-  res.json({ success: true, count });
+  }).immediate();
+  res.json({ success: true, count, skipped });
 });
 
 // POST /:id/finance-return — finance sends a rejected/flagged grant back to HR
