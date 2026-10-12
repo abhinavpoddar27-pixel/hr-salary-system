@@ -223,6 +223,23 @@ router.get('/person/:code', (req, res) => {
   }
 });
 
+// GET /person/:code/days?month&year — G10 (PR-9): every day of one month for one person — punches, the shift it was measured
+// on, and why each late / early exit was counted or excused. Same inputs as the month's stored run (final, else draft), else
+// the rules in force + detected release days. Read only.
+router.get('/person/:code/days', (req, res) => {
+  const code = String(req.params.code || '').trim();
+  if (!code || code.length > 20) return res.status(400).json({ success: false, error: 'employee code required' });
+  const my = parseMonth(req.query); if (!my) return res.status(400).json({ success: false, error: 'month and year required' });
+  try {
+    const data = svc.personMonthDays(getDb(), code, my.month, my.year);
+    if (!data) return res.status(404).json({ success: false, error: `No attendance for ${code} in ${my.year}-${String(my.month).padStart(2, '0')}` });
+    res.json({ success: true, data });
+  } catch (err) {
+    console.error('Attendance review person days error:', err.message);
+    res.status(500).json({ success: false, error: 'Failed to load the days: ' + err.message });
+  }
+});
+
 // ── notice board (PR-5) ──────────────────────────────────────────────────────────────────────────
 // GET  /board?month&year&to=YYYY-MM-DD[&company][&skipDays=a,b] — the board as it would print + this month's print history
 // POST /board/prints { month, year, to, company?, skipDays? } — recomputes, records the print (audit_log), returns what to print
