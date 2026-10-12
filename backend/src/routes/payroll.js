@@ -4,6 +4,8 @@ const { getDb, logAudit } = require('../database/db');
 const { generatePayslipData } = require('../services/salaryComputation');
 const { recomputeDays, recomputeSalary } = require('../services/recompute');
 const { requireFinanceOrAdmin, roleIn } = require('../middleware/roles');
+// N-MONEY2 (owner-approved): Stage 6 / Stage 7 / finalise are hr, finance or admin only (90 d use: admin, hr, finance).
+const requireHrFinanceOrAdmin = (req, res, next) => (roleIn(req, 'admin', 'hr', 'finance') ? next() : res.status(403).json({ success: false, error: 'HR, finance or admin access required' }));
 const { protectedWrite } = require('../services/protectedWrite');
 const XLSX = require('xlsx');
 
@@ -11,7 +13,7 @@ const XLSX = require('xlsx');
  * POST /api/payroll/calculate-days
  * Run day calculation for all employees in a month
  */
-router.post('/calculate-days', (req, res) => {
+router.post('/calculate-days', requireHrFinanceOrAdmin, (req, res) => {
   const db = getDb();
   const { month, year, company, employeeCodes } = req.body;
 
@@ -124,7 +126,7 @@ router.get('/day-calculations/:code', (req, res) => {
  * POST /api/payroll/compute-salary
  * Compute salary for all employees — with zero-day exclusion, gross change, holds
  */
-router.post('/compute-salary', (req, res) => {
+router.post('/compute-salary', requireHrFinanceOrAdmin, (req, res) => {
   const db = getDb();
   const { month, year, company, employeeCodes } = req.body;
 
@@ -758,7 +760,7 @@ router.put('/salary/:code/manual-deductions', (req, res) => {
 /**
  * POST /api/payroll/finalise
  */
-router.post('/finalise', (req, res) => {
+router.post('/finalise', requireHrFinanceOrAdmin, (req, res) => {
   const db = getDb();
   const { month, year, staleOverrideReason } = req.body;
 
