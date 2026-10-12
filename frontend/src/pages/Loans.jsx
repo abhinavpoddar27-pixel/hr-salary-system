@@ -74,6 +74,10 @@ export default function Loans() {
   const loansById = useMemo(() => Object.fromEntries(allLoans.map((l) => [l.id, l])), [allLoans])
   const namesByCode = useMemo(() => Object.fromEntries(allLoans.map((l) => [l.employee_code, l.employee_name])), [allLoans])
   const types = useMemo(() => [...new Set(allLoans.map((l) => l.loan_type))].sort(), [allLoans])
+  // P4-07 (finding F-18): approved loans not yet paid out — finance's next job.
+  const toDisburse = useMemo(() => allLoans.filter((l) => l.status === 'approved'), [allLoans])
+  const toDisburseAmount = useMemo(() => toDisburse.reduce((t, l) => t + (Number(l.principal_amount) || 0), 0), [toDisburse])
+  const openToDisburse = () => { setTab('loans'); setStatusTab('approved'); setTypeFilter(''); setSearch('') }
 
   const loans = useMemo(() => {
     const st = STATUS_TABS.find((t) => t.id === statusTab) || STATUS_TABS[0]
@@ -121,7 +125,15 @@ export default function Loans() {
         </div>
       )}
 
-      <div className="grid grid-cols-2 lg:grid-cols-5 gap-3">
+      <div className={clsx('grid grid-cols-2 gap-3', caps.canPay ? 'lg:grid-cols-6' : 'lg:grid-cols-5')}>
+        {caps.canPay && (
+          <button type="button" onClick={openToDisburse} className="text-left w-full h-full [&>div]:h-full" data-testid="tile-to-disburse-btn"
+            title="Show the approved loans waiting to be paid out">
+            <Tile label="Approved — to disburse" value={isLoading ? '…' : toDisburse.length}
+              sub={isLoading ? '' : `${rupees(toDisburseAmount)} to pay out · click to list`}
+              accent="border-l-green-500 hover:bg-green-50/50" testid="tile-to-disburse" />
+          </button>
+        )}
         <Tile label="Outstanding" value={rupees(stats?.outstanding || 0)} sub="active + recover at exit" accent="border-l-purple-400" testid="tile-outstanding" />
         <Tile label="Due this month" value={stats?.dueThisMonth?.count ?? 0}
           sub={stats ? `${rupees(stats.dueThisMonth.amount)} · ${monthLabel(stats.dueThisMonth.month, stats.dueThisMonth.year)}` : ''} accent="border-l-blue-400" />
