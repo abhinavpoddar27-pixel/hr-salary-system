@@ -56,7 +56,10 @@ describe('CL is paid from September 2026', () => {
     const base = run(9, 2026, absentOn(records(9, 2026), SEP), []);
     const withCl = run(9, 2026, absentOn(records(9, 2026), SEP), [leave('CL', SEP[0], SEP[2])]);
     expect(withCl.clUsed).toBe(3);
-    expect(withCl.totalPayableDays).toBe(base.totalPayableDays + 3);
+    // +3 CL days, and (from the 12 Oct weekly-off ruling) paid leave counts toward
+    // the weekly off, so the weekly off the plain absences cost comes back too.
+    expect(withCl.totalPayableDays).toBe(30);
+    expect(base.totalPayableDays).toBe(26);
     expect(withCl.uninformedAbsent).toBe(0);
   });
 
@@ -117,7 +120,8 @@ describe('CL is paid from September 2026', () => {
     expect(out.clUsed).toBe(1);
     expect(out.elUsed).toBe(2);
     expect(out.uninformedAbsent).toBe(2);
-    expect(out.totalPayableDays).toBe(base.totalPayableDays + 3);
+    // +3 leave days, +1 weekly off restored (paid leave counts toward it from Sep 2026)
+    expect(out.totalPayableDays).toBe(base.totalPayableDays + 4);
   });
 
   test('the integrity check stays quiet for paid CL', () => {
