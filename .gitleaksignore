@@ -1,0 +1,2 @@
+# False positive: a localStorage name ('ed_bulk_defaults_v1') matched generic-api-key (PR #155). Not a secret.
+31a1fb70be5ddffd368fb42f2b3e5c8a904d51bf:frontend/src/components/bulk/ExtraDutyBulkGrant.jsx:generic-api-key:28

@@ -25,7 +25,7 @@ const TYPES = [['OVERNIGHT_STAY', 'Overnight Stay'], ['EXTENDED_SHIFT', 'Extende
 const SOURCES = ['Gate Register', 'Production Office', 'Supervisor Confirmed', 'Other']
 const DUTY = [0.5, 1, 1.5, 2]
 const WEEKDAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
-const DEFAULTS_KEY = 'ed_bulk_defaults_v1'
+const DEFAULTS_STORE_NAME = 'ed_bulk_defaults_v1'
 const STATE_LABEL = { ok: 'Ready', warning: 'Ready — note', skipped: 'Already granted', error: 'Problem' }
 const STATE_CLS = {
   ok: 'bg-green-100 text-green-800', warning: 'bg-amber-100 text-amber-800',
@@ -36,7 +36,7 @@ const CHIPS = [['all', 'All'], ['ok', 'Ready'], ['warning', 'Ready — note'], [
 function loadDefaults() {
   const base = { grant_date: '', grant_type: 'OVERNIGHT_STAY', duty_days: 1, verification_source: 'Gate Register', reference_number: '', remarks: '' }
   try {
-    const d = JSON.parse(localStorage.getItem(DEFAULTS_KEY) || 'null')
+    const d = JSON.parse(localStorage.getItem(DEFAULTS_STORE_NAME) || 'null')
     if (d && typeof d === 'object') return { ...base, ...d, grant_date: '' }
   } catch { /* blocked storage */ }
   return base
@@ -44,7 +44,7 @@ function loadDefaults() {
 function saveDefaults(c) {
   try {
     const { grant_date, ...rest } = c
-    localStorage.setItem(DEFAULTS_KEY, JSON.stringify(rest))
+    localStorage.setItem(DEFAULTS_STORE_NAME, JSON.stringify(rest))
   } catch { /* blocked storage */ }
 }
 const dateInWords = (iso) => (iso ? `${fmtDate(iso)}, ${WEEKDAYS[isoDayOfWeek(iso)]}` : '')
