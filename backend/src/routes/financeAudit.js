@@ -1351,7 +1351,44 @@ function flagRefusal(status, body) {
   return err;
 }
 
+// N-23 (12 Oct 2026): maker-checker on flag decisions, same rule as P1-23
+// (salary-input.js): trimmed, case-insensitive username compare; an empty name
+// never matches. The person who caused a flag never decides it — admin included.
+const sameUser = (a, b) => !!a && !!b && String(a).trim().toLowerCase() === String(b).trim().toLowerCase();
+const isPerson = (u) => !!u && !['system', 'salary_compute'].includes(String(u).trim().toLowerCase());
+
+/**
+ * The salary change request behind a GROSS_STRUCTURE_CHANGE flag, when it can be
+ * identified reliably: the employee's LATEST approved request that changed the
+ * gross, and its new gross is the flag's new gross (± ₹1). Else null.
+ */
+function grossRequestForFlag(db, flag) {
+  if (flag.flag_type !== 'GROSS_STRUCTURE_CHANGE') return null;
+  const reqRow = db.prepare(`
+    SELECT * FROM salary_change_requests
+    WHERE employee_code = ? AND status = 'Approved' AND ABS(COALESCE(new_gross,0) - COALESCE(old_gross,0)) > 0.01
+    ORDER BY COALESCE(approved_at, created_at) DESC, id DESC LIMIT 1
+  `).get(flag.employee_code);
+  if (!reqRow) return null;
+  return Math.abs((Number(reqRow.new_gross) || 0) - (parseFloat(flag.manual_value) || 0)) <= GROSS_MOVED_TOLERANCE ? reqRow : null;
+}
+
+/** Who caused the flag: a person in changed_by, and the gross request's requester. */
+function flagCausers(db, flag) {
+  const causers = [];
+  if (isPerson(flag.changed_by)) causers.push(flag.changed_by);
+  const reqRow = grossRequestForFlag(db, flag);
+  if (reqRow && reqRow.requested_by) causers.push(reqRow.requested_by);
+  return causers;
+}
+
 function decideManualFlag(db, flag, { status, comments, reviewer, username }) {
+  // N-23: refuse BEFORE anything is written (the caller's transaction rolls back
+  // a whole batch on this throw).
+  if (flagCausers(db, flag).some((u) => sameUser(username, u))) {
+    throw flagRefusal(403, { code: 'SELF_APPROVAL', flagId: flag.id,
+      error: `Flag ${flag.id} (${flag.employee_code}): you made the change behind this flag — ask another finance or admin user to decide it. Nothing was changed.` });
+  }
   const approvedVal = status === 'APPROVED' ? 1 : status === 'REJECTED' ? -1 : 0;
   const wasRejected = Number(flag.finance_approved) === -1;
   const revert = status === 'REJECTED' && flag.flag_type === 'GROSS_STRUCTURE_CHANGE' && !wasRejected;
@@ -1424,8 +1461,23 @@ function decideManualFlag(db, flag, { status, comments, reviewer, username }) {
     logAudit('employees', emp.id, 'gross_salary',
       String(flag.manual_value), String(flag.system_value), 'FINANCE_GROSS_REVERT',
       `GROSS REVERT: Finance rejected gross change ${flag.manual_value} → ${flag.system_value} for ${flag.employee_code}`, username);
+
+    // N-23: the approved request behind this gross no longer reads plainly
+    // "Approved". status has no CHECK constraint; 'Reverted' + an audit row.
+    const reqRow = grossRequestForFlag(db, flag);
+    if (reqRow) {
+      const info = db.prepare("UPDATE salary_change_requests SET status = 'Reverted' WHERE id = ? AND status = 'Approved'").run(reqRow.id);
+      if (info.changes === 1) {
+        logAudit('salary_change_requests', reqRow.id, 'status', 'Approved', 'Reverted', 'FINANCE_GROSS_REVERT',
+          `Request ${reqRow.id} (${flag.employee_code}) reverted: finance rejected flag ${flag.id} (${flag.month}/${flag.year}), gross back to ${flag.system_value}`, username);
+      }
+    }
+    return { reverted: true };
   }
+  return { reverted: false };
 }
+
+const REVERT_NOTE = 'The gross was put back to its previous value — re-run Stage 7 (Compute Salary) for that month so pay follows.';
 
 // F2 (review): only the exact statuses the Finance Audit screen sends (plus CLEAR).
 const FLAG_STATUSES = ['APPROVED', 'REJECTED', 'CLEAR'];
@@ -1456,12 +1508,13 @@ router.put('/approve-flag/:flagId', requireFinanceOrAdmin, (req, res) => {
   const flag = db.prepare('SELECT * FROM salary_manual_flags WHERE id = ?').get(flagId);
   if (!flag) return res.status(404).json({ success: false, error: 'Flag not found' });
 
+  let result;
   try {
-    db.transaction(() => decideManualFlag(db, flag, { status, comments, reviewer, username: req.user?.username }))();
+    result = db.transaction(() => decideManualFlag(db, flag, { status, comments, reviewer, username: req.user?.username }))();
   } catch (e) {
     return sendFlagError(res, e, 'approve-flag');
   }
-  res.json({ success: true });
+  res.json(result.reverted ? { success: true, reverted: true, message: REVERT_NOTE } : { success: true });
 });
 
 // ─────────────────────────────────────────────────────────
@@ -1478,6 +1531,7 @@ router.put('/bulk-approve', requireFinanceOrAdmin, (req, res) => {
 
   const reviewer = req.user?.username || 'finance';
   let count = 0;
+  let reverted = 0;
   try {
     db.transaction(() => {
       const flags = [...new Set(flagIds.map(String))]
@@ -1485,14 +1539,14 @@ router.put('/bulk-approve', requireFinanceOrAdmin, (req, res) => {
         .filter(Boolean)
         .sort(newestFirst);
       for (const flag of flags) {
-        decideManualFlag(db, flag, { status, comments, reviewer, username: req.user?.username });
+        if (decideManualFlag(db, flag, { status, comments, reviewer, username: req.user?.username }).reverted) reverted++;
         count++;
       }
     })();
   } catch (e) {
     return sendFlagError(res, e, 'bulk-approve');
   }
-  res.json({ success: true, count });
+  res.json(reverted ? { success: true, count, reverted, message: `${reverted} gross change(s) put back. ${REVERT_NOTE}` } : { success: true, count });
 });
 
 // ─────────────────────────────────────────────────────────
