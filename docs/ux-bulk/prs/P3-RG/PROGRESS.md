@@ -8,9 +8,9 @@ NEW taxDeclarationReadGuard.test.js, backend/scripts/role-gaps-check.py, this fo
 ## Steps
 - [x] Phase 0: code read, PLAN.md written (SQL A–D + Q1–Q4 for planner)
 - [x] planner go + SQL answers
-- [ ] jest baseline (full, flock)
-- [ ] test file written, fails on 8abee969
-- [ ] backend guards
+- [x] jest baseline 115 suites / 2040 tests
+- [x] test file written, 9 of 25 fail on 8abee969
+- [x] backend guards (25/25 + route guards 291 green)
 - [ ] FinanceAudit canVerify + isFlagVerified
 - [ ] build + role-gaps-check.py (+ --base)
 - [ ] jest after, self-debug, v2
