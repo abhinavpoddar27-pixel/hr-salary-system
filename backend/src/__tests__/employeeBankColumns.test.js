@@ -147,17 +147,21 @@ describe('PUT /:code/salary — same gross, same split leaves the structure as i
     expect(row(code).account_number).toBe('121200001212');
   });
 
-  test('a changed split at the same gross still writes (today\'s behaviour)', async () => {
+  // N-MONEY2 (N-19): changed on purpose — a changed split at the same gross now
+  // goes to finance approval (was written straight into salary_structures).
+  test('a changed split at the same gross goes to finance approval, structure untouched', async () => {
     const code = nextCode();
     const id = addEmployee(code);
+    const before = struct(id);
     const r = await api.request('PUT', `/api/employees/${code}/salary`, {
       as: 'hr1', body: modalBody(id, { basic_percent: 45 }),
     });
     expect(r.status).toBe(200);
-    expect(r.body.structureUnchanged).toBeUndefined();
-    const s = struct(id)[0];
-    expect(s.basic_percent).toBe(45);
-    expect(s.basic).toBe(13500);
+    expect(r.body.pendingApproval).toBe(true);
+    expect(struct(id)).toEqual(before);
+    const ns = JSON.parse(db.prepare("SELECT new_structure FROM salary_change_requests WHERE employee_code = ? AND status = 'Pending'").get(code).new_structure);
+    expect(ns.basic_percent).toBe(45);
+    expect(ns.basic).toBe(13500);
   });
 
   test('a changed gross still goes to finance approval, structure untouched', async () => {
