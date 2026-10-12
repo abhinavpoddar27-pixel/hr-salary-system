@@ -217,6 +217,7 @@ app.use('/api/tax-declarations', requireAuth, require('./src/routes/taxDeclarati
 app.use('/api/portal',           requireAuth, require('./src/routes/employeePortal'));
 app.use('/api/finance-verify',   requireAuth, require('./src/routes/financeVerification'));
 app.use('/api/extra-duty-grants', requireAuth, require('./src/routes/extraDutyGrants'));
+app.use('/api/bulk',             requireAuth, require('./src/routes/bulk')); // P3-01 bulk entry (hr/admin inside)
 app.use('/api/late-coming',      requireAuth, require('./src/routes/lateComing'));
 app.use('/api/comp-off',         requireAuth, require('./src/routes/compensatoryOff'));
 app.use('/api/daily-wage',       requireAuth, require('./src/routes/dailyWage'));

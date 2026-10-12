@@ -18,6 +18,7 @@ import ErrorBoundary from '../components/ui/ErrorBoundary'
 import CompanyFilter from '../components/shared/CompanyFilter'
 import FinanceEarlyExitApprovals from '../components/FinanceEarlyExitApprovals'
 import clsx from 'clsx'
+import { normalizeRole } from '../utils/role'
 import toast from 'react-hot-toast'
 
 const CORRECTION_REASONS = [
@@ -447,8 +448,13 @@ function CorrectionsSummaryTab() {
 // ═══════════════════════════════════════════════════════════
 // MANUAL ATTENDANCE FLAGS TAB
 // ═══════════════════════════════════════════════════════════
+// P3-RG: the column is `finance_verified` (there is no `verified`); verified_by kept as a fallback (ruling Q2).
+const isFlagVerified = (f) => Number(f?.finance_verified) === 1 || !!f?.verified_by
+
 function ManualFlagsTab() {
-  const { selectedCompany } = useAppStore()
+  const { selectedCompany, user } = useAppStore()
+  // P3-RG: PUT /manual-flags/:id/verify is finance + admin only (P2-11 Q6) — HR sees status only.
+  const canVerify = ['finance', 'admin'].includes(normalizeRole(user?.role))
   const { month, year } = useDateSelector({ mode: 'month', syncToStore: true })
   const queryClient = useQueryClient()
   const [verifyingId, setVerifyingId] = useState(null)
@@ -463,16 +469,26 @@ function ManualFlagsTab() {
 
   const verifyMutation = useMutation({
     mutationFn: ({ id, finance_remarks }) => verifyManualFlag(id, { finance_remarks }),
-    onSuccess: (res) => {
+    onSuccess: (res, { id, finance_remarks }) => {
       toast.success(res?.data?.message || 'Flag verified')
       setVerifyingId(null)
       setFinanceRemarks('')
-      queryClient.invalidateQueries({ queryKey: ['manual-flags'] })
+      // P3-RG: the list GET is served with max-age=5 and this read sends no no-cache, so a refetch right
+      // after the verify got the pre-verify copy (row + badge stayed unverified). Mark the row in the cache
+      // from the server's 200 (same fields the route writes); re-read the server after the cache window.
+      const mark = (f) => (f.id === id ? { ...f, finance_verified: 1, verified_by: user?.username || f.verified_by || 'you', finance_remarks: finance_remarks || null } : f)
+      queryClient.setQueriesData({ queryKey: ['manual-flags'] }, (old) => {
+        if (!old?.data) return old
+        if (Array.isArray(old.data.data)) return { ...old, data: { ...old.data, data: old.data.data.map(mark) } }
+        if (Array.isArray(old.data)) return { ...old, data: old.data.map(mark) }
+        return old
+      })
+      setTimeout(() => queryClient.invalidateQueries({ queryKey: ['manual-flags'] }), 6000)
     },
     onError: () => toast.error('Failed to verify flag')
   })
 
-  const unverifiedCount = flags.filter(f => !f.verified && !f.verified_by).length
+  const unverifiedCount = flags.filter(f => !isFlagVerified(f)).length
 
   return (
     <div className="space-y-4">
@@ -509,7 +525,7 @@ function ManualFlagsTab() {
               </thead>
               <tbody>
                 {flags.map((f) => {
-                  const isVerified = f.verified || !!f.verified_by
+                  const isVerified = isFlagVerified(f)
                   return (
                     <tr key={f.id} className={clsx(isVerified && 'bg-green-50/40')}>
                       <td className="font-mono text-xs">{f.employee_code}</td>
@@ -535,7 +551,10 @@ function ManualFlagsTab() {
                       </td>
                       <td className="text-xs text-slate-500 max-w-[180px] truncate">{f.finance_remarks || '—'}</td>
                       <td className="text-center">
-                        {!isVerified && (
+                        {!isVerified && !canVerify && (
+                          <span className="text-xs text-slate-400" data-testid="flag-awaiting-finance">Awaiting finance</span>
+                        )}
+                        {!isVerified && canVerify && (
                           <>
                             {verifyingId === f.id ? (
                               <div className="flex items-center gap-1" onClick={e => e.stopPropagation()}>
@@ -1438,7 +1457,7 @@ export default function FinanceAudit() {
     retry: 0, staleTime: 60000
   })
   const attFlagsData = attFlagsRes?.data?.data || attFlagsRes?.data || []
-  const unverifiedFlagCount = attFlagsData.filter(f => !f.verified && !f.verified_by).length
+  const unverifiedFlagCount = attFlagsData.filter(f => !isFlagVerified(f)).length
 
   // Pending late coming deductions count for the tab badge
   const { data: latePendingRes } = useQuery({

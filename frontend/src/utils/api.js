@@ -1,5 +1,5 @@
 import axios from 'axios'
-import toast from 'react-hot-toast'
+import { apiErrorToast } from './toastDedup' // P2-02: one failure, one error toast
 import { installContextBufferInterceptors } from './apiContextBuffer'
 import { saveReturnTo, allowForcedUnload } from './sessionReturn'
 
@@ -42,7 +42,7 @@ api.interceptors.response.use(
       `[API Error] ${err.config?.url} → HTTP ${err.response?.status}`,
       requestId ? `| Trace ID: ${requestId}` : ''
     )
-    toast.error(msg)
+    apiErrorToast(msg) // P2-02: a page onError/catch toast within 1.5 s replaces this one (one toast per failure)
     return Promise.reject(err)
   }
 )

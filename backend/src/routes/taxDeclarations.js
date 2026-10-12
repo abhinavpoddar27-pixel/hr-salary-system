@@ -5,7 +5,7 @@ const requireHrFinanceOrAdmin = (req, res, next) => (roleIn(req, 'admin', 'hr', 
 const { getDb } = require('../database/db');
 const { calculateMonthlyTDS } = require('../services/tdsCalculation');
 
-router.get('/:employeeCode', (req, res) => {
+router.get('/:employeeCode', requireHrFinanceOrAdmin, (req, res) => { // P3-RG: was readable by any role
   const db = getDb();
   const { employeeCode } = req.params;
   const { financial_year } = req.query;
@@ -38,7 +38,7 @@ router.put('/:employeeCode', requireHrFinanceOrAdmin, (req, res) => {
   res.json({ success: true, tds });
 });
 
-router.get('/:employeeCode/calculate', (req, res) => {
+router.get('/:employeeCode/calculate', requireHrFinanceOrAdmin, (req, res) => { // P3-RG
   const db = getDb();
   const { employeeCode } = req.params;
   const { financial_year } = req.query;
