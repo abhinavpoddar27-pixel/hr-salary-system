@@ -9,8 +9,8 @@ GO received — building. Never commit frontend/dist; never edit CLAUDE.md; only
 - [x] jest baseline 115 suites / 2040 tests (all pass)
 - [x] bulkSchema.js + schema.js one line
 - [x] createGrant.js extraction + route (ED tests 55/55); parity test in bulk test file (pending)
-- [ ] engine.js + kinds/extraDuty.js + routes/bulk.js + server.js mount
-- [ ] bulkExtraDuty.test.js
+- [x] engine.js + kinds/extraDuty.js + routes/bulk.js + server.js mount
+- [x] bulkExtraDuty.test.js 20 tests (incl. parity vs verbatim 8abee969 handler; mutation of audit text makes it fail); ED suites 55 unchanged
 - [ ] frontend: bulkApi, ExtraDutyBulkGrant, CopyFromDate, BulkBatchList, page (F-11, btn-warning)
 - [ ] bulk-ed-check.py + --base; regression ED scripts; drift query
 - [ ] self-debug, user sim, v2; merge origin/main; full jest; push; independent review
