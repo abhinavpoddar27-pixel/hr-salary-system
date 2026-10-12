@@ -6,6 +6,7 @@ import Modal from '../components/ui/Modal'
 import { confirmDialog } from '../hooks/useConfirm'
 import clsx from 'clsx'
 import toast from 'react-hot-toast'
+import { todayIST } from '../utils/formatters'
 
 const STATUS_COLORS = {
   active: 'bg-green-100 text-green-700',
@@ -204,7 +205,7 @@ function CreateGatePassModal({ show, onClose, company, month, year }) {
   const isAdmin = user?.role === 'admin'
   const [empCode, setEmpCode] = useState('')
   const [empSearch, setEmpSearch] = useState('')
-  const [date, setDate] = useState(new Date().toISOString().split('T')[0])
+  const [date, setDate] = useState(() => todayIST())
   const [leaveType, setLeaveType] = useState('short_leave')
   const [remark, setRemark] = useState('')
   const [remarkError, setRemarkError] = useState(false)

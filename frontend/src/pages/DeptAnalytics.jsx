@@ -1,6 +1,14 @@
 import { useState, useEffect, useCallback } from 'react';
 import api from '../utils/api';
+import { todayIST } from '../utils/formatters';
 import { BarChart, Bar, Cell, LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts';
+
+// Months back from an IST 'YYYY-MM-DD' (JS setMonth rollover kept: 31 Aug − 6 → 3 Mar).
+function minusMonthsIso(iso, n) {
+  const d = new Date(`${iso}T00:00:00Z`)
+  d.setUTCMonth(d.getUTCMonth() - n)
+  return d.toISOString().slice(0, 10)
+}
 
 export default function DeptAnalytics() {
   const [fromDate, setFromDate] = useState('');
@@ -12,10 +20,9 @@ export default function DeptAnalytics() {
   const [activeTab, setActiveTab] = useState('health');
 
   useEffect(() => {
-    const t = new Date(), s = new Date();
-    s.setMonth(t.getMonth() - 6);
-    setToDate(t.toISOString().split('T')[0]);
-    setFromDate(s.toISOString().split('T')[0]);
+    const t = todayIST();
+    setToDate(t);
+    setFromDate(minusMonthsIso(t, 6));
   }, []);
 
   const fetchData = useCallback(async () => {

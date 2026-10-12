@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
+import { todayIST, istYearMonth } from '../utils/formatters';
 import api from '../utils/api';
 import { LineChart, Line, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts';
 
@@ -33,9 +34,16 @@ function SeverityBadge({ s }) {
   return <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${map[s] || map.Info}`}>{s}</span>;
 }
 
+// Months back from an IST 'YYYY-MM-DD' (JS setMonth rollover kept: 31 Aug − 6 → 3 Mar).
+function minusMonthsIso(iso, n) {
+  const d = new Date(`${iso}T00:00:00Z`)
+  d.setUTCMonth(d.getUTCMonth() - n)
+  return d.toISOString().slice(0, 10)
+}
+
 export default function EmployeeProfile() {
-  const today = new Date().toISOString().split('T')[0];
-  const sixAgo = (() => { const d = new Date(); d.setMonth(d.getMonth() - 6); return d.toISOString().split('T')[0]; })();
+  const today = todayIST();
+  const sixAgo = minusMonthsIso(today, 6);
 
   const [employees, setEmployees]   = useState([]);
   const [selectedCode, setSelected] = useState('');
@@ -366,7 +374,7 @@ export default function EmployeeProfile() {
                 <h3 className="font-semibold mb-2 text-sm text-gray-700">Current Leave Balances</h3>
                 <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
                   {(() => {
-                    const thisYear = new Date().getFullYear();
+                    const thisYear = istYearMonth().year;
                     const balRows = (leaveUsage?.balances || []).filter(b => b.year === thisYear);
                     const byType = Object.fromEntries(balRows.map(b => [b.leave_type, b]));
                     // SL was abolished in Sept 2026 (ruling 8), so its tile is
