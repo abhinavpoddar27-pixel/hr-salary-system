@@ -18,8 +18,8 @@ import ErrorBoundary from '../components/ui/ErrorBoundary'
 import CompanyFilter from '../components/shared/CompanyFilter'
 import FinanceEarlyExitApprovals from '../components/FinanceEarlyExitApprovals'
 import clsx from 'clsx'
-import toast from 'react-hot-toast'
 import { normalizeRole } from '../utils/role'
+import toast from 'react-hot-toast'
 import api from '../utils/api'
 
 const CORRECTION_REASONS = [
@@ -449,9 +449,8 @@ function CorrectionsSummaryTab() {
 // ═══════════════════════════════════════════════════════════
 // MANUAL ATTENDANCE FLAGS TAB
 // ═══════════════════════════════════════════════════════════
-// N-MONEY2: the stored "verified" field is finance_verified (there is no
-// `verified` column); verified_by is set together with it.
-const isFlagVerified = (f) => Number(f.finance_verified) === 1 || !!f.verified_by
+// P3-RG: the column is `finance_verified` (there is no `verified`); verified_by kept as a fallback (ruling Q2).
+const isFlagVerified = (f) => Number(f?.finance_verified) === 1 || !!f?.verified_by
 // Same read as getManualAttendanceFlags, sent no-cache: server.js answers GETs with
 // max-age=5, so the refetch right after a Verify got the pre-verify copy and the
 // row kept its Verify button. Used by the tab and its badge (one query key).
@@ -460,7 +459,7 @@ const getManualAttendanceFlagsFresh = (params) =>
 
 function ManualFlagsTab() {
   const { selectedCompany, user } = useAppStore()
-  // PUT /finance-audit/manual-flags/:id/verify is finance/admin only (requireFinanceOrAdmin).
+  // P3-RG: PUT /manual-flags/:id/verify is finance + admin only (P2-11 Q6) — HR sees status only.
   const canVerify = ['finance', 'admin'].includes(normalizeRole(user?.role))
   const { month, year } = useDateSelector({ mode: 'month', syncToStore: true })
   const queryClient = useQueryClient()
@@ -476,11 +475,21 @@ function ManualFlagsTab() {
 
   const verifyMutation = useMutation({
     mutationFn: ({ id, finance_remarks }) => verifyManualFlag(id, { finance_remarks }),
-    onSuccess: (res) => {
+    onSuccess: (res, { id, finance_remarks }) => {
       toast.success(res?.data?.message || 'Flag verified')
       setVerifyingId(null)
       setFinanceRemarks('')
-      queryClient.invalidateQueries({ queryKey: ['manual-flags'] })
+      // P3-RG: the list GET is served with max-age=5 and this read sends no no-cache, so a refetch right
+      // after the verify got the pre-verify copy (row + badge stayed unverified). Mark the row in the cache
+      // from the server's 200 (same fields the route writes); re-read the server after the cache window.
+      const mark = (f) => (f.id === id ? { ...f, finance_verified: 1, verified_by: user?.username || f.verified_by || 'you', finance_remarks: finance_remarks || null } : f)
+      queryClient.setQueriesData({ queryKey: ['manual-flags'] }, (old) => {
+        if (!old?.data) return old
+        if (Array.isArray(old.data.data)) return { ...old, data: { ...old.data, data: old.data.data.map(mark) } }
+        if (Array.isArray(old.data)) return { ...old, data: old.data.map(mark) }
+        return old
+      })
+      setTimeout(() => queryClient.invalidateQueries({ queryKey: ['manual-flags'] }), 6000)
     },
     onError: () => toast.error('Failed to verify flag')
   })
@@ -548,6 +557,9 @@ function ManualFlagsTab() {
                       </td>
                       <td className="text-xs text-slate-500 max-w-[180px] truncate">{f.finance_remarks || '—'}</td>
                       <td className="text-center">
+                        {!isVerified && !canVerify && (
+                          <span className="text-xs text-slate-400" data-testid="flag-awaiting-finance">Awaiting finance</span>
+                        )}
                         {!isVerified && canVerify && (
                           <>
                             {verifyingId === f.id ? (
@@ -583,9 +595,6 @@ function ManualFlagsTab() {
                               </button>
                             )}
                           </>
-                        )}
-                        {!isVerified && !canVerify && (
-                          <span className="text-[11px] text-slate-400" data-testid="flag-verify-finance-only">Finance verifies</span>
                         )}
                       </td>
                     </tr>

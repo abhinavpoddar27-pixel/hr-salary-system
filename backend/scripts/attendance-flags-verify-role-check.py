@@ -99,9 +99,9 @@ try:
             print('\n— hr —')
             check('hr: rows load (3 codes)', 3, sum(pg.get_by_text(c, exact=True).count() for c in ('T9871', 'T9872', 'T9873')))
             check('hr: no Verify button anywhere', 0, verify_buttons(pg))
-            check('hr: unverified row says "Finance verifies"', 1, row(pg, 'T9871').get_by_test_id('flag-verify-finance-only').count())
+            check('hr: unverified row says "Awaiting finance"', 1, row(pg, 'T9871').get_by_test_id('flag-awaiting-finance').count())
             check('hr: verified rows have no note', 0,
-                  row(pg, 'T9872').get_by_test_id('flag-verify-finance-only').count() + row(pg, 'T9873').get_by_test_id('flag-verify-finance-only').count())
+                  row(pg, 'T9872').get_by_test_id('flag-awaiting-finance').count() + row(pg, 'T9873').get_by_test_id('flag-awaiting-finance').count())
             check('hr: T9873 (finance_verified=1) counts as verified (✓)', 1, row(pg, 'T9873').get_by_text('✓').count())
             check('hr: Unverified KPI = 1', True, pg.locator('text=Unverified').count() >= 1)
             check('hr: 0 page errors', [], errs); check('hr: 0 console errors', [], cons); check('hr: 0 API ≥ 400', [], bad)
@@ -112,7 +112,7 @@ try:
             check('finance: exactly 1 Verify (only the unverified row)', 1, verify_buttons(pg))
             check('finance: Verify sits on T9871', 1, row(pg, 'T9871').get_by_role('button', name='Verify', exact=True).count())
             check('finance: T9873 has no Verify', 0, row(pg, 'T9873').get_by_role('button', name='Verify', exact=True).count())
-            check('finance: no "Finance verifies" note', 0, pg.get_by_test_id('flag-verify-finance-only').count())
+            check('finance: no "Awaiting finance" note', 0, pg.get_by_test_id('flag-awaiting-finance').count())
             row(pg, 'T9871').get_by_role('button', name='Verify', exact=True).click(); time.sleep(.3)
             pg.get_by_placeholder('Remarks...').fill('Checked gate register')
             with pg.expect_response(lambda r: '/manual-flags/' in r.url and r.request.method == 'PUT') as rr:

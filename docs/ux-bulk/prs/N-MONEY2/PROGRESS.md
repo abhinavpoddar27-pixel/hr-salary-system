@@ -65,3 +65,12 @@ Read this file, then `git log --oneline origin/main..HEAD`. State: BUILT, verifi
 - Q1 N-23: should the finance user who APPROVED the gross request also be barred from deciding its flag?
 - Q2 PF wage ceiling at the same gross is still a direct write (statutory per brief) — it moves PF; approval instead?
 - Q3 (out of scope, N-13) POST /employees still accepts gross on create with no approval.
+
+## Merge with main (12 Oct 2026, 23:55 IST)
+#156 (payroll Stage 6/7/finalise guard) and #160 (tax-declaration guard, manual-flag Verify for finance only,
+`finance_verified`) landed first and do items 4, 5 and the Verify half of 6. Conflicts resolved by taking main's
+payroll.js, taxDeclarations.js and FinanceAudit.jsx; this PR keeps only the no-cache read for the flags list on top
+(the row kept its Verify button for up to 5 s after a verify). Check script now expects main's "Awaiting finance"
+note. jest 120 suites / 2161 green; attendance-flags-verify-role-check 21/21.
+What this PR still adds: N-19 (split changes need approval, explicit 0 %, approved split sticks), N-23 (flag
+maker-checker + Reverted status), ED finance-approve state check.

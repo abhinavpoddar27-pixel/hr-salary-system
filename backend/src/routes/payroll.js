@@ -4,7 +4,6 @@ const { getDb, logAudit } = require('../database/db');
 const { generatePayslipData } = require('../services/salaryComputation');
 const { recomputeDays, recomputeSalary } = require('../services/recompute');
 const { requireFinanceOrAdmin, roleIn } = require('../middleware/roles');
-// N-MONEY2 (owner-approved): Stage 6 / Stage 7 / finalise are hr, finance or admin only (90 d use: admin, hr, finance).
 const requireHrFinanceOrAdmin = (req, res, next) => (roleIn(req, 'admin', 'hr', 'finance') ? next() : res.status(403).json({ success: false, error: 'HR, finance or admin access required' }));
 const { protectedWrite } = require('../services/protectedWrite');
 const XLSX = require('xlsx');
