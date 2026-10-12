@@ -157,9 +157,6 @@ function planRow(db, row, common, ctx) {
   return base('ok', 'create');
 }
 
-const GRANT_FIELDS_CHECKED = ['employee_code', 'grant_date', 'status', 'approved_by', 'approved_at', 'duty_days',
-  'grant_type', 'verification_source', 'reference_number', 'remarks', 'finance_status', 'is_processed'];
-
 function applyRow(db, row, plan, common, { batchId, user, options }) {
   const emp = plan.emp;
   const outcome = writeGrant(db, {
@@ -208,8 +205,12 @@ function undoable(db, bulkRow, batch) {
   if (g.status !== after.status || (g.approved_by || null) !== (after.approved_by || null) || (g.approved_at || null) !== (after.approved_at || null)) {
     return { ok: false, reason: `HR status changed since the batch (now ${HR_LABEL[g.status] || g.status})` };
   }
-  for (const f of GRANT_FIELDS_CHECKED) {
-    if (String(g[f] ?? '') !== String(after[f] ?? '')) return { ok: false, reason: 'Edited since the batch' };
+  // Review F1: the WHOLE current row must equal the after-image written by the batch — every column of
+  // SELECT *, none ignored (a finance reject → "Return to HR" round trip ends with the same status/finance
+  // fields but leaves finance_notes; any later write to any column means someone acted on the row).
+  const keys = new Set([...Object.keys(g), ...Object.keys(after)]);
+  for (const k of keys) {
+    if (JSON.stringify(g[k] ?? null) !== JSON.stringify(after[k] ?? null)) return { ok: false, reason: 'Changed since the batch' };
   }
   return { ok: true };
 }

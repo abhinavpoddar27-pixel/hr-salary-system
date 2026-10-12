@@ -117,10 +117,17 @@ export default function ExtraDutyBulkGrant({ onClose, onSaved, pageMonth, pageYe
   // ── Save ──
   const [hrApprove, setHrApprove] = useState(true)
   const [saving, setSaving] = useState(false)
+  // Review F2: a double click must start ONE save (state updates lag a render; a ref does not).
+  const inFlight = useRef(false)
   const [result, setResult] = useState(null) // { batches: [...] }
 
   const save = async () => {
+    if (inFlight.current) return
     if (!fresh || !pv || counts.error > 0 || !groups.length) return
+    inFlight.current = true
+    try { await runSave() } finally { inFlight.current = false; setSaving(false) }
+  }
+  const runSave = async () => {
     const ok = await confirmDialog({
       title: `Save ${applyTotal} grant${applyTotal === 1 ? '' : 's'}?`,
       message: `${dateInWords(common.grant_date)} · ${common.duty_days} day(s) each unless changed per row.\n` +
@@ -151,7 +158,6 @@ export default function ExtraDutyBulkGrant({ onClose, onSaved, pageMonth, pageYe
           codes: gRows.filter(r => r.state !== 'skipped').map(r => r.code), applyCount: g.applyCount })
       }
     }
-    setSaving(false)
     const refusedCodes = out.filter(b => b.status === 'refused').flatMap(b => b.codes)
     const keep = new Set(refusedCodes.map(c => c.toLowerCase()))
     setDraft(v => ({ codes: v.codes.filter(c => keep.has(c.toLowerCase())) }))

@@ -104,7 +104,7 @@ function apply(db, kindName, body, user) {
   if (p.res) return p.res;
   const { kind, common, rows } = p;
   if (!body.planHash) return fail(400, 'BULK_NO_PLAN', 'Check the rows first');
-  if (rows.length > BULK_PREVIEW_MAX) return fail(400, 'BULK_ROW_LIMIT', `At most ${BULK_MAX_ROWS} grants per batch`);
+  if (rows.length > BULK_PREVIEW_MAX) return fail(400, 'BULK_ROW_LIMIT', `Too many rows in one request (max ${BULK_PREVIEW_MAX}); a batch saves at most ${BULK_MAX_ROWS}`);
   const options = kind.normaliseOptions(body.options || {});
   const groupId = typeof body.groupId === 'string' ? body.groupId.slice(0, 64) : null;
   const groupIndex = Number.isInteger(body.groupIndex) ? body.groupIndex : null;

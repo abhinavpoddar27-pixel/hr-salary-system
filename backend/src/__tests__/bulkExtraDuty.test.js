@@ -254,6 +254,25 @@ describe('undo guards', () => {
     db.prepare("INSERT INTO monthly_imports (month, year, company, is_finalised) VALUES (9, 2026, ?, 1)").run(CO);
     expect((await undo(id)).body.rows[0].reason).toMatch(/finalised/);
   });
+  test('review F1: finance reject → Return to HR → undo refused (row has finance history)', async () => {
+    const id = await batchOf(['T9001', 'T9002'], { hrApprove: false });
+    const g = grant('T9001');
+    expect((await api.request('POST', `/api/extra-duty-grants/${g.id}/approve`, { as: 'hr1' })).status).toBe(200);
+    expect((await api.request('POST', `/api/extra-duty-grants/${g.id}/finance-reject`, { as: 'fin1', body: { finance_flag_reason: 'no gate entry' } })).status).toBe(200);
+    expect((await api.request('POST', `/api/extra-duty-grants/${g.id}/finance-return`, { as: 'fin1', body: { return_reason: 'check gate book' } })).status).toBe(200);
+    expect(grant('T9001')).toMatchObject({ status: 'PENDING', finance_status: 'UNREVIEWED', approved_by: null });
+    const r = await undo(id);
+    expect(r.status).toBe(409); expect(r.body.code).toBe('BULK_UNDO_BLOCKED');
+    expect(r.body.rows).toEqual([expect.objectContaining({ code: 'T9001', reason: 'Changed since the batch' })]);
+    expect(grant('T9001')).toBeTruthy(); expect(grant('T9002')).toBeTruthy();
+  });
+  test('review F1: payroll finalised after the save → undo refused', async () => {
+    const id = await batchOf(['T9001']);
+    db.prepare("INSERT INTO monthly_imports (month, year, company, is_finalised) VALUES (9, 2026, 'Any label', 1)").run();
+    const r = await undo(id);
+    expect(r.status).toBe(409); expect(r.body.rows[0].reason).toMatch(/finalised/);
+    expect(grant('T9001')).toBeTruthy();
+  });
   test('reason required', async () => {
     const id = await batchOf(['T9001']);
     expect((await undo(id, 'no')).status).toBe(400);

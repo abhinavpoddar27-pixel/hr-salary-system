@@ -15,7 +15,13 @@ BUILT, merged origin/main (up to date), pushed. Waiting for independent review; 
 - [x] bulk-ed-check.py 45/45 (drift unchanged); --base on 8abee969 build 2/2; regression ed-finance-review-ux 25/25, ed-return-browser 16/16, ui-components 64/64
 - [x] self-debug + user sim + v2 (draft cleared after a full save; copy-from-date waits for the employee list; draft-restore check) — check 48/48
 - [x] merge origin/main (already up to date at 8abee969); full jest 115/2040 → 116/2060 all pass
-- [ ] independent review (planner)
+- [x] independent review: SHIP WITH FIXES — applied:
+  F1 undoable() compares the WHOLE current row (every column of SELECT *) to the after-image, none ignored; new jest:
+  reject → Return to HR → undo = 409 (fails on the old field list), finalise after save → undo = 409.
+  F2 save() in-flight useRef (set before the confirm, reset in finally); check: double click → 1 confirm, 1 apply per batch.
+  (With the ref removed the check still passes — the confirm dialog's backdrop + 300 ms guard already swallow the 2nd click;
+  the ref is defence in depth.) F3 >1000-row message names both limits.
+  jest 116/2062 all pass; ED suites + bulk 77/77; bulk-ed-check 50/50.
 
 ## Rulings
 R1–R6, Q1 (offer HR approve, ticked), Q2 (auto-split) — final (owner).
@@ -45,17 +51,18 @@ HR", ticked), Q2 (auto-split ≤ 50); planner Q-A (one HR_BULK_CREATE audit per 
   `BulkBatchList` (recent batches, View rows, Undo with reason). **F-11:** HR Queue tab = PENDING only + ReviewQueue bar "HR
   Approve (N)" (existing `/bulk-approve`). Flag-for-Review submit now `<Button variant="warning">`. Helpers in `utils/bulkApi.js`.
 - **Fragile:** (1) The panel is inline, NOT a Modal — useConfirm dialogs (save confirm, undo prompt) must not open inside a Modal.
+  Undo compares the whole row — ANY later write to a grant (any column) blocks undo of its batch.
   (2) Plan hash = code, duty, state, action + fingerprint of employee and existing grant; a change to planRow's fingerprint makes
   every open preview stale (harmless: "check again"). (3) Kind interface: normaliseCommon/Rows/Options, periodOf, describe,
   context, planRow, applyRow, undoable, undoRow — later kinds plug in via engine KINDS. (4) logAudit is inside the batch txn
   only because getDb() is the same connection (a rolled-back batch leaves no audit rows — tested). (5) Cross-batch saves are
   NOT atomic by ruling Q2. (6) useConfirm dialogs ignore clicks in their first 300 ms — scripts must wait.
-- **Verified:** jest 115/2040 → 116/2060 (new bulkExtraDuty.test.js 20: parse/merge, unknown/Left/finalised/bad duty,
+- **Verified:** jest 115/2040 → 116/2062 (new bulkExtraDuty.test.js 22: parse/merge, unknown/Left/finalised/bad duty,
   skipped, BIOMETRIC_AUTO upgrade + undo byte-identical, 51 refused, 109 → 50/50/9 three batches one group, hash mismatch +
   duty change refused, error row refused, mid-batch throw → nothing incl. audit, HR-approve on/off, undo refused after finance
   review / HR edit / HR approve / processed / finalised, reason required, roles viewer+finance 403 / no token 401, reads, parity;
   a changed audit text makes parity fail). ED suites 55/55 unchanged. `backend/scripts/bulk-ed-check.py` (Chromium, built
-  dist, scratch DB, hr + finance, fictional T5xxx, port 3401) 48/48 — paste 60 (1 left in "Has left", 1 repeat, 1 already
+  dist, scratch DB, hr + finance, fictional T5xxx, port 3401) 50/50 — paste 60 (Save double-clicked → 1 apply per batch) (1 left in "Has left", 1 repeat, 1 already
   granted, 1 system entry, 1 at 0.5) → 58 rows → "Save 57 grants (2 batches: 50 + 7)" → DB + finance queue 57 → draft survives
   reload → undo batch 2 → undo refused after finance review → copy-from-date 40 + paste 20, data changed → "1 of 2 batches
   saved · 1 refused" → re-check → saved alone → single New Grant works → HR Queue pending only + bulk approve → 390 px → drift

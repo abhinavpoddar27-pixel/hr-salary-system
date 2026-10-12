@@ -71,12 +71,14 @@ try:
     with sync_playwright() as p:
         b = p.chromium.launch()
         errs, cerrs, bad = [], [], []
+        applies = []
 
         def page(user, pw, width=1440):
             ctx = b.new_context(viewport={'width': width, 'height': 900})
             pg = ctx.new_page()
             pg.on('pageerror', lambda e: errs.append(str(e)))
             pg.on('console', lambda m: cerrs.append(m.text) if m.type == 'error' else None)
+            pg.on('request', lambda r: applies.append(r.url) if r.method == 'POST' and r.url.endswith('/api/bulk/extra-duty/apply') else None)
             pg.on('response', lambda r: bad.append(f'{r.status} {r.request.method} {r.url.split(BASE)[-1]}') if '/api/' in r.url and r.status >= 400 else None)
             pg.goto(BASE + '/login'); pg.get_by_placeholder('admin').fill(user); pg.get_by_placeholder('••••••••').fill(pw)
             pg.get_by_role('button', name='Sign in').click(); pg.wait_for_url(lambda u: '/login' not in u)
@@ -125,8 +127,12 @@ try:
         shot(hr, 'b1-preview.png')
 
         print('\n— Save → 2 batches —')
-        save.click(); time.sleep(.5); hr.get_by_role('button', name='Save', exact=True).click()
+        save.dblclick(); time.sleep(.5)  # review F2: double click must start one save
+        check('one confirm dialog after a double click', 1, hr.get_by_role('button', name='Save', exact=True).count())
+        hr.get_by_role('button', name='Save', exact=True).dblclick()
         hr.wait_for_selector('[data-testid=ed-bulk-result]', timeout=15000); time.sleep(.5)
+        time.sleep(1)
+        check('double click → exactly 1 apply per batch (2)', 2, len(applies))
         check('result: 2 of 2 batches saved', '2 of 2 batches saved', hr.locator('[data-testid=ed-bulk-result-summary]').inner_text().strip())
         check('DB: 2 bulk batches', [(2,)], q("SELECT COUNT(*) FROM bulk_batches"))
         check('DB: 57 grants on the date by bulk, HR-approved by hr', [(57,)], q("SELECT COUNT(*) FROM extra_duty_grants WHERE grant_date=? AND status='APPROVED' AND approved_by='hr' AND verification_source='Gate Register' AND reference_number='GR-9'", DATE))
