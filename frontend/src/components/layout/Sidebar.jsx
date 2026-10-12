@@ -360,7 +360,7 @@ export default function Sidebar() {
         {!collapsed && (
           <div className="px-4 py-3 border-t border-slate-100">
             {permsFailed && (
-              <p className="text-xs text-amber-600 mb-1" data-testid="perms-failed">Couldn't load your access — showing all pages</p>
+              <p className="text-xs text-amber-600 mb-1" data-testid="perms-failed">Couldn't load your access</p>
             )}
             <p className="text-xs text-slate-400">{user?.username || 'user'} ({userRole})</p>
             <p className="text-xs text-slate-300" data-testid="app-version">{VERSION_TEXT}</p>

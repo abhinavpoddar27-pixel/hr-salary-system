@@ -89,10 +89,13 @@ function PageLoader() {
 // usePermissions — the same source the Sidebar uses). Otherwise "You don't have access" is shown in
 // place of the page: no redirect, no toast, and the page is never mounted (so it sends no requests).
 // The hook runs before any return (P1-12).
-function Guard({ perm, anyOf, children }) {
+function Guard({ perm, anyOf, subPerms, children }) {
   const { ready, can, canAny, role } = usePermissions()
+  const { pathname } = useLocation()
   if (!ready) return <PageLoader />
-  const allowed = anyOf ? canAny(anyOf) : can(perm)
+  // subPerms: a sub-path of a splat route with its own key (Analytics → Attendance Review is admin only)
+  const sub = subPerms && Object.keys(subPerms).find(p => pathname === p || pathname.startsWith(p + '/'))
+  const allowed = sub ? can(subPerms[sub]) : anyOf ? canAny(anyOf) : can(perm)
   if (!allowed) return <NoAccess role={role} />
   return children
 }
@@ -210,7 +213,7 @@ export default function App() {
           <Route path="/leave-management" element={<RequireAuth><Layout title="Leave Management"><Guard perm="leave-management"><LeaveManagement /></Guard></Layout></RequireAuth>} />
           <Route path="/workforce/contractor-report" element={<RequireAuth><Layout title="Contractor Report"><Guard perm="contractor-report"><ContractorReport /></Guard></Layout></RequireAuth>} />
           <Route path="/workforce/*" element={<RequireAuth><Layout title="Workforce Analytics"><Guard perm="workforce"><WorkforceAnalytics /></Guard></Layout></RequireAuth>} />
-          <Route path="/analytics/*" element={<RequireAuth><Layout title="Attendance Analytics"><Guard anyOf={['analytics', 'late-coming', 'early-exit', 'attendance-review']}><Analytics /></Guard></Layout></RequireAuth>} />
+          <Route path="/analytics/*" element={<RequireAuth><Layout title="Attendance Analytics"><Guard anyOf={['analytics', 'late-coming', 'early-exit']} subPerms={{ '/analytics/attendance-review': 'attendance-review' }}><Analytics /></Guard></Layout></RequireAuth>} />
           <Route path="/compliance/*" element={<RequireAuth><Layout title="Compliance"><Guard perm="compliance"><Compliance /></Guard></Layout></RequireAuth>} />
           <Route path="/reports" element={<RequireAuth><Layout title="Reports"><Guard perm="reports"><Reports /></Guard></Layout></RequireAuth>} />
           <Route path="/finance-audit" element={<RequireAuth><Layout title="Finance Audit"><Guard perm="finance-audit"><FinanceAudit /></Guard></Layout></RequireAuth>} />

@@ -1,7 +1,7 @@
 # P2-10 + P8-06 — one permissions source for nav / routes / Header; 404 page; one product name + build version
 
 Branch `feat/permissions-nav-guard` (on origin/main 8abee969) · Port 3403 · Findings X-2, X-8, X-15, X-16.
-Status: **Phase 0 — waiting for planner "go".** No feature code written.
+Status: **built** (rulings 12 Oct in PROGRESS.md). Fail-open keeps admin-only pages refused (ADMIN_ONLY_KEYS).
 
 ## 1. What is there today (FACT, read on 8abee969)
 - `backend/src/config/permissions.js` holds a role → page-key matrix. `GET /api/auth/permissions` returns
