@@ -63,36 +63,70 @@ router.get('/', (req, res) => {
   }
 });
 
-// GET /trends?from=YYYY-MM&to=YYYY-MM[&live=0] — one row per month (≤ 12) for the Trends charts. Each month comes from its
-// FINAL run, else its DRAFT, else (unless live=0) a live computation with that month's rules, release days as detected and
-// no overrides — labelled by source so the screen can say which is which. Months with no attendance are left out. Read only.
-const TREND_MAX = 12;
+// GET /trends?from=YYYY-MM&to=YYYY-MM[&live=0][&basis=master|import] — one row per month (≤ 18) for the Trends charts. Each
+// month comes from its FINAL run, else its DRAFT, else (unless live=0) a live computation with that month's rules, release days
+// as detected and no overrides — labelled by source so the screen can say which is which. Months with no attendance are left
+// out. Every row carries `rules` = the config version its figures were made with. With `basis` (T5/G4) EVERY month is computed
+// live on that basis (stored runs ignored, no overrides) and marked what_if — a what-if view, never the saved review. Read only.
+const TREND_MAX = 18;
+const TREND_BASES = ['master', 'import'];
 function parseYm(v) {
   const m = /^(\d{4})-(\d{2})$/.exec(String(v || ''));
   return m ? parseMonth({ year: m[1], month: m[2] }) : null;
 }
-/** Trends rows for a month range (each from its stored run, else live) + the T4 cross-month figures. */
-function buildTrends(db, months, allowLive) {
-  const runQ = db.prepare('SELECT id, status, result_json FROM attendance_review_runs WHERE month = ? AND year = ?');
+/** JSON with sorted keys, so two configs compare by content, not key order. */
+function canon(v) {
+  if (Array.isArray(v)) return `[${v.map(canon).join(',')}]`;
+  if (v && typeof v === 'object') return `{${Object.keys(v).sort().map((k) => `${JSON.stringify(k)}:${canon(v[k])}`).join(',')}}`;
+  return JSON.stringify(v === undefined ? null : v);
+}
+/**
+ * The rules version a stored run was made with: result.configSource (POST /runs sets it), else the saved version (in force
+ * for that month or earlier) whose merged config equals the run's config_snapshot, else built-in defaults (version null) if
+ * the snapshot equals them, else null (unknown).
+ */
+function storedRunRules(db, run, result, ym) {
+  const cs = result && result.configSource;
+  if (cs && cs.id != null) return { version: cs.id, effective_from: cs.effective_from || null, from: 'run' };
+  let snap; try { snap = canon(svc.mergeConfig(JSON.parse(run.config_snapshot))); } catch { return null; }
+  const saved = db.prepare('SELECT id, effective_from, config_json FROM attendance_review_config WHERE effective_from <= ? ORDER BY effective_from DESC, id DESC').all(ym);
+  for (const r of saved) {
+    let c; try { c = JSON.parse(r.config_json); } catch { continue; }
+    if (canon(svc.mergeConfig(c)) === snap) return { version: r.id, effective_from: r.effective_from, from: 'snapshot' };
+  }
+  if (canon(svc.mergeConfig({})) === snap) return { version: null, effective_from: null, from: 'snapshot' };
+  return null;
+}
+const liveRules = (source) => ({ version: source ? source.id : null, effective_from: source ? source.effective_from : null, from: 'live' });
+/** Trends rows for a month range (each from its stored run, else live; with `basis` all live on that basis) + the T4 figures. */
+function buildTrends(db, months, allowLive, basis = null) {
+  const runQ = db.prepare('SELECT id, status, config_snapshot, result_json FROM attendance_review_runs WHERE month = ? AND year = ?');
   const hasData = db.prepare('SELECT 1 FROM attendance_processed WHERE month = ? AND year = ? LIMIT 1');
   const rows = []; const skipped = [];
   const ladderCache = new Map(); // PR-7: months already loaded here are reused as ladder history for the later ones
   for (const { month, year } of months) {
     const ym = `${year}-${String(month).padStart(2, '0')}`;
-    const run = runQ.get(month, year);
+    const run = basis ? null : runQ.get(month, year);
     if (run) {
       let result; try { result = JSON.parse(run.result_json); } catch { result = null; }
-      if (result) { ladderCache.set(ym, { codes: svc.strikeCodes(result), source: run.status }); rows.push(svc.trendRow(result, { month, year, source: run.status, run_id: run.id })); continue; }
+      if (result) {
+        ladderCache.set(ym, { codes: svc.strikeCodes(result), source: run.status });
+        rows.push(svc.trendRow(result, { month, year, source: run.status, run_id: run.id, rules: storedRunRules(db, run, result, ym) }));
+        continue;
+      }
     }
     if (!hasData.get(month, year)) { skipped.push({ ym, reason: 'no attendance' }); continue; }
-    if (!allowLive) { skipped.push({ ym, reason: 'no review run' }); continue; }
-    const { config } = svc.loadConfig(db, ym);
+    if (!allowLive && !basis) { skipped.push({ ym, reason: 'no review run' }); continue; }
+    const loaded = svc.loadConfig(db, ym);
+    const config = basis ? { ...loaded.config, assessment_basis: basis } : loaded.config;
     const cfg = svc.mergeConfig(config);
     const rd = svc.detectReleaseDays(db, month, year, cfg).map((d) => d.date);
     const result = svc.computeAttendanceReview(db, { month, year, config, releaseDays: rd, prevReleaseDays: prevReleaseDays(db, month, year), ladderCache });
     ladderCache.set(ym, { codes: svc.strikeCodes(result), source: 'live' });
     if (!result.meta.people_assessed) { skipped.push({ ym, reason: 'no one assessed' }); continue; }
-    rows.push(svc.trendRow(result, { month, year, source: 'live' }));
+    const row = svc.trendRow(result, { month, year, source: 'live', rules: liveRules(loaded.source) });
+    if (basis) row.what_if = true;
+    rows.push(row);
   }
   // T4: per-month funnel + miss punches; across the range top people and effects
   for (const r of rows) {
@@ -100,7 +134,7 @@ function buildTrends(db, months, allowLive) {
     const bulkMin = svc.mergeConfig(svc.loadConfig(db, r.ym).config).thresholds.bulk_miss_punch_day;
     r.miss_punch = svc.missPunchRow(db, r.month, r.year, bulkMin, r.missed_out_counted);
   }
-  return { from: months[0], to: months[months.length - 1], months: rows, skipped, repeaters: svc.repeaters(rows),
+  return { from: months[0], to: months[months.length - 1], what_if: basis ? { basis } : null, months: rows, skipped, repeaters: svc.repeaters(rows),
     top_people: svc.topPeople(rows), effects: svc.effects(db, rows) };
 }
 
@@ -112,11 +146,19 @@ function trendMonths(req, res) {
   if (months.length > TREND_MAX) { res.status(400).json({ success: false, error: `At most ${TREND_MAX} months at a time` }); return null; }
   return months;
 }
+/** basis param: absent / '' → null (stored runs win); master | import → what-if; anything else → 400 sent, returns undefined. */
+function trendBasis(req, res) {
+  const b = req.query.basis;
+  if (b === undefined || b === '') return null;
+  if (!TREND_BASES.includes(b)) { res.status(400).json({ success: false, error: 'basis must be master or import' }); return undefined; }
+  return b;
+}
 
 router.get('/trends', (req, res) => {
   const months = trendMonths(req, res); if (!months) return;
+  const basis = trendBasis(req, res); if (basis === undefined) return;
   try {
-    const data = buildTrends(getDb(), months, req.query.live !== '0');
+    const data = buildTrends(getDb(), months, req.query.live !== '0', basis);
     // the people lists are for the export and the cross-month figures; the screen does not need them per month
     for (const r of data.months) delete r.people_counts;
     res.json({ success: true, data });
@@ -126,15 +168,16 @@ router.get('/trends', (req, res) => {
   }
 });
 
-// GET /trends/export.xlsx?from&to — T4: the Trends figures as a workbook (audited)
+// GET /trends/export.xlsx?from&to[&basis=master|import] — T4: the Trends figures as a workbook (audited); with basis = what-if
 router.get('/trends/export.xlsx', (req, res) => {
   const months = trendMonths(req, res); if (!months) return;
+  const basis = trendBasis(req, res); if (basis === undefined) return;
   try {
     const db = getDb();
-    const data = buildTrends(db, months, true);
+    const data = buildTrends(db, months, true, basis);
     const buf = require('../services/attendanceReviewExports').buildTrendsWorkbook(data);
-    const name = `Attendance_Trends_${data.months[0] ? data.months[0].ym : 'none'}_to_${data.months.length ? data.months[data.months.length - 1].ym : 'none'}.xlsx`;
-    logAudit('attendance_review_runs', 0, 'export', '', name, 'ATTENDANCE_REVIEW_EXPORT', `trends ${months.length} month(s)`, user(req));
+    const name = `Attendance_Trends_${data.months[0] ? data.months[0].ym : 'none'}_to_${data.months.length ? data.months[data.months.length - 1].ym : 'none'}${basis ? `_what-if-${basis}` : ''}.xlsx`;
+    logAudit('attendance_review_runs', 0, 'export', '', name, 'ATTENDANCE_REVIEW_EXPORT', `trends ${months.length} month(s)${basis ? ` what-if ${basis} basis` : ''}`, user(req));
     res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
     res.setHeader('Content-Disposition', `attachment; filename="${name}"`);
     res.send(buf);

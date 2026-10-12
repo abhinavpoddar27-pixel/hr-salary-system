@@ -379,6 +379,8 @@ WITH base AS (
  *        measured and the out can't excuse a late (full hours) or give a stayed-late exemption.
  *  Gate pass (short_leaves, not cancelled, first by id): out ≥ end − pass hours → not early; earlier → only the minutes beyond.
  */
+// T5 (perf): m1 / m3 / m5 are MATERIALIZED — SQLite otherwise flattens the chain and repeats every derived CASE expression
+// wherever a later step uses it (≈ 5× slower; 300 people × 1 month 3 s → 0.6 s). Results are byte-identical (tested).
 const MASTER_BASE = `
 WITH m0 AS (
   SELECT a.employee_code c, a.date d, a.status_final st, COALESCE(a.is_miss_punch,0) mp0, COALESCE(a.miss_punch_resolved,0) mpr,
@@ -389,7 +391,7 @@ WITH m0 AS (
   FROM attendance_processed a
   LEFT JOIN shifts sh ON sh.id = (SELECT e.default_shift_id FROM employees e WHERE e.code = a.employee_code ORDER BY e.id LIMIT 1)
   WHERE a.date BETWEEN @from AND @to),
-m1 AS (SELECT m0.*,
+m1 AS MATERIALIZED (SELECT m0.*,
   CASE WHEN mp0 = 1 AND (@fixMp = 0 OR mpr = 0) THEN 1 ELSE 0 END mp,
   CASE WHEN mp0 = 1 AND @fixMp = 1 AND mpr = 1 THEN 1 ELSE 0 END gr,
   CASE WHEN it IS NULL OR length(it) < 5 THEN NULL ELSE CAST(substr(it,1,2) AS INTEGER)*60 + CAST(substr(it,4,2) AS INTEGER) END inm,
@@ -409,7 +411,7 @@ m2 AS (SELECT m1.*,
   CASE WHEN enm < sm THEN sm WHEN isn AND mdur = 12 THEN @nightStart ELSE sm END s0,
   CAST(ROUND(mdur * 60) AS INTEGER) dmin
   FROM m1),
-m3 AS (SELECT m2.*,
+m3 AS MATERIALIZED (SELECT m2.*,
   CASE WHEN mode = 'night' AND inm IS NOT NULL AND inm < 720 THEN inm + 1440 ELSE inm END inabs,
   CASE WHEN gr = 1 AND otm IS NOT NULL AND s0 IS NOT NULL AND otm = (s0 + dmin) % 1440 THEN 1 ELSE 0 END onv,
   CASE WHEN st IN ${WORKED} AND mp = 0 AND mode IN ('day','night') AND half = 0 AND inm IS NOT NULL AND otm IS NOT NULL THEN 1 ELSE 0 END asx
@@ -417,7 +419,7 @@ m3 AS (SELECT m2.*,
 m4 AS (SELECT m3.*,
   CASE WHEN inm IS NULL OR otm IS NULL OR onv = 1 THEN NULL ELSE (otm - inm + 1440) % 1440 END wmx
   FROM m3),
-m5 AS (SELECT m4.*,
+m5 AS MATERIALIZED (SELECT m4.*,
   inabs - s0 lt,
   CASE WHEN wmx IS NULL THEN NULL ELSE (s0 + dmin) - (inabs + wmx) END er
   FROM m4),
@@ -1453,13 +1455,16 @@ const pickGroup = (g) => { const o = { ...ZERO_GROUP }; for (const k of Object.k
  * Reduces one month's review result (stored run or live) to the figures the Trends charts need. Tolerant of older stored
  * result shapes: a field a run never had reads as 0 / []. Codes and names appear only in action_people (admin screen).
  */
-function trendRow(result, { month, year, source, run_id = null }) {
+function trendRow(result, { month, year, source, run_id = null, rules = null }) {
   const ym = ymOf(month, year);
   const monthly = (result.trend && result.trend.monthly && result.trend.monthly[ym]) || {};
   const at = result.actionTotals || {};
   const list = result.actionList || [];
   return {
     ym, month, year, source, run_id,
+    // T5: the rules version the figures were made with — { version (config id, null = built-in defaults), effective_from, from }
+    // or null when it cannot be told (older run without configSource whose snapshot matches no saved version)
+    rules: rules || null,
     basis: (result.criteria && result.criteria.assessment_basis) || (result.assessment && result.assessment.basis) || 'import',
     people_assessed: (result.meta && result.meta.people_assessed) || 0,
     all: pickGroup(monthly.All), company: pickGroup(monthly.Company), contract: pickGroup(monthly.Contract),
