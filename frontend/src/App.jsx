@@ -12,6 +12,8 @@ import { getMe } from './utils/api'
 import { tracker } from './utils/sessionTracker'
 import useInactivityTimeout from './hooks/useInactivityTimeout'
 import SessionTimeoutDialog from './components/SessionTimeoutDialog'
+import NoAccess from './components/NoAccess'
+import usePermissions from './hooks/usePermissions'
 
 // Public page
 const Login = React.lazy(() => import('./pages/Login'))
@@ -70,6 +72,7 @@ const BugReportsInbox = React.lazy(() => import('./pages/admin/BugReportsInbox')
 const BugReportDetail = React.lazy(() => import('./pages/admin/BugReportDetail'))
 const RecordHistoryLookup = React.lazy(() => import('./pages/admin/RecordHistoryLookup'))
 const StatutoryFlags = React.lazy(() => import('./pages/StatutoryFlags'))
+const NotFound = React.lazy(() => import('./pages/NotFound'))
 
 function PageLoader() {
   return (
@@ -80,6 +83,18 @@ function PageLoader() {
       </div>
     </div>
   )
+}
+
+// P2-10: a page opens only when the role holds its key (backend/src/config/permissions.js via
+// usePermissions — the same source the Sidebar uses). Otherwise "You don't have access" is shown in
+// place of the page: no redirect, no toast, and the page is never mounted (so it sends no requests).
+// The hook runs before any return (P1-12).
+function Guard({ perm, anyOf, children }) {
+  const { ready, can, canAny, role } = usePermissions()
+  if (!ready) return <PageLoader />
+  const allowed = anyOf ? canAny(anyOf) : can(perm)
+  if (!allowed) return <NoAccess role={role} />
+  return children
 }
 
 function Layout({ children, title }) {
@@ -176,61 +191,62 @@ export default function App() {
           <Route path="/login" element={<Login />} />
 
           {/* Protected routes */}
-          <Route path="/" element={<RequireAuth><Layout title="Organisation Dashboard"><Dashboard /></Layout></RequireAuth>} />
+          <Route path="/" element={<RequireAuth><Layout title="Organisation Dashboard"><Guard perm="dashboard"><Dashboard /></Guard></Layout></RequireAuth>} />
           <Route path="/pipeline" element={<RequireAuth><Navigate to="/pipeline/import" replace /></RequireAuth>} />
-          <Route path="/pipeline/import" element={<RequireAuth><Layout title="Stage 1: Import Attendance Data"><Import /></Layout></RequireAuth>} />
-          <Route path="/pipeline/miss-punch" element={<RequireAuth><Layout title="Stage 2: Miss Punch Detection & Rectification"><MissPunch /></Layout></RequireAuth>} />
-          <Route path="/pipeline/shift-check" element={<RequireAuth><Layout title="Stage 3: Shift Verification"><ShiftVerification /></Layout></RequireAuth>} />
-          <Route path="/pipeline/night-shift" element={<RequireAuth><Layout title="Stage 4: Night Shift Pairing"><NightShift /></Layout></RequireAuth>} />
-          <Route path="/pipeline/corrections" element={<RequireAuth><Layout title="Stage 5: Manual Corrections"><AttendanceRegister /></Layout></RequireAuth>} />
-          <Route path="/pipeline/day-calc" element={<RequireAuth><Layout title="Stage 6: Day Calculation & Leave Adjustment"><DayCalculation /></Layout></RequireAuth>} />
-          <Route path="/pipeline/salary" element={<RequireAuth><Layout title="Stage 7: Salary Computation"><SalaryComputation /></Layout></RequireAuth>} />
-          <Route path="/held-salaries" element={<RequireAuth><Layout title="Held Salaries Register"><HeldSalariesRegister /></Layout></RequireAuth>} />
-          <Route path="/salary-advance" element={<RequireAuth><Layout title="Salary Advance"><SalaryAdvance /></Layout></RequireAuth>} />
-          <Route path="/payable-ot" element={<RequireAuth><Layout title="Payable OT / Extra Duty"><PayableOT /></Layout></RequireAuth>} />
-          <Route path="/salary-input" element={<RequireAuth><Layout title="Salary Input & Changes"><SalaryInput /></Layout></RequireAuth>} />
-          <Route path="/daily-mis" element={<RequireAuth><Layout title="Daily MIS"><DailyMIS /></Layout></RequireAuth>} />
-          <Route path="/loans" element={<RequireAuth><Layout title="Loan Management"><Loans /></Layout></RequireAuth>} />
-          <Route path="/loans/:id" element={<RequireAuth><Layout title="Loan Management"><LoanDetail /></Layout></RequireAuth>} />
-          <Route path="/leave-management" element={<RequireAuth><Layout title="Leave Management"><LeaveManagement /></Layout></RequireAuth>} />
-          <Route path="/workforce/contractor-report" element={<RequireAuth><Layout title="Contractor Report"><ContractorReport /></Layout></RequireAuth>} />
-          <Route path="/workforce/*" element={<RequireAuth><Layout title="Workforce Analytics"><WorkforceAnalytics /></Layout></RequireAuth>} />
-          <Route path="/analytics/*" element={<RequireAuth><Layout title="Attendance Analytics"><Analytics /></Layout></RequireAuth>} />
-          <Route path="/compliance/*" element={<RequireAuth><Layout title="Compliance"><Compliance /></Layout></RequireAuth>} />
-          <Route path="/reports" element={<RequireAuth><Layout title="Reports"><Reports /></Layout></RequireAuth>} />
-          <Route path="/finance-audit" element={<RequireAuth><Layout title="Finance Audit"><FinanceAudit /></Layout></RequireAuth>} />
-          <Route path="/finance-verification" element={<RequireAuth><Layout title="Finance Verification"><FinanceVerification /></Layout></RequireAuth>} />
-          <Route path="/extra-duty-grants" element={<RequireAuth><Layout title="Extra Duty Grants"><ExtraDutyGrants /></Layout></RequireAuth>} />
-          <Route path="/daily-wage/contractors" element={<RequireAuth><Layout title="Contractor Master"><DailyWageContractors /></Layout></RequireAuth>} />
-          <Route path="/daily-wage/new" element={<RequireAuth><Layout title="New Daily Wage Entry"><DailyWageEntry /></Layout></RequireAuth>} />
-          <Route path="/daily-wage/import" element={<RequireAuth><Layout title="Batch Import"><DailyWageBatchImport /></Layout></RequireAuth>} />
-          <Route path="/daily-wage/finance/review" element={<RequireAuth><Layout title="Daily Wage Finance Review"><DailyWageFinanceReview /></Layout></RequireAuth>} />
-          <Route path="/daily-wage/finance/payments" element={<RequireAuth><Layout title="Daily Wage Payments"><DailyWagePayments /></Layout></RequireAuth>} />
-          <Route path="/daily-wage/finance/dashboard" element={<RequireAuth><Layout title="Daily Wage Dashboard"><DailyWageDashboard /></Layout></RequireAuth>} />
-          <Route path="/daily-wage/reports" element={<RequireAuth><Layout title="Daily Wage Reports"><DailyWageReports /></Layout></RequireAuth>} />
-          <Route path="/daily-wage/audit" element={<RequireAuth><Layout title="Daily Wage Audit Log"><DailyWageAuditLog /></Layout></RequireAuth>} />
-          <Route path="/daily-wage" element={<RequireAuth><Layout title="Daily Wage Records"><DailyWageRecords /></Layout></RequireAuth>} />
-          <Route path="/session-analytics" element={<RequireAuth><Layout title="Session Analytics"><SessionAnalytics /></Layout></RequireAuth>} />
-          <Route path="/admin/query-tool" element={<RequireAuth><Layout title="Database Query Tool"><QueryTool /></Layout></RequireAuth>} />
-          <Route path="/admin/sql-console" element={<RequireAuth><Layout title="SQL Console (Read-Only)"><SqlConsole /></Layout></RequireAuth>} />
-          <Route path="/admin/bug-reports" element={<RequireAuth><Layout title="Bug Reports"><BugReportsInbox /></Layout></RequireAuth>} />
-          <Route path="/admin/bug-reports/:id" element={<RequireAuth><Layout title="Bug Report Detail"><BugReportDetail /></Layout></RequireAuth>} />
-          <Route path="/admin/record-history" element={<RequireAuth><Layout title="Record History"><RecordHistoryLookup /></Layout></RequireAuth>} />
-          <Route path="/admin/statutory-flags" element={<RequireAuth><Layout title="Statutory Flags"><StatutoryFlags /></Layout></RequireAuth>} />
-          <Route path="/dept-analytics" element={<RequireAuth><Layout title="Department & Org Analytics"><DeptAnalytics /></Layout></RequireAuth>} />
-          <Route path="/employee-profile" element={<RequireAuth><Layout title="Employee Intelligence Profile"><EmployeeProfile /></Layout></RequireAuth>} />
-          <Route path="/employees" element={<RequireAuth><Layout title="Employee Master"><Employees /></Layout></RequireAuth>} />
-          <Route path="/sales/employees" element={<RequireAuth><Layout title="Sales Employees"><SalesEmployeeMaster /></Layout></RequireAuth>} />
-          <Route path="/sales/holidays" element={<RequireAuth><Layout title="Sales Holidays"><SalesHolidayMaster /></Layout></RequireAuth>} />
-          <Route path="/sales/upload" element={<RequireAuth><Layout title="Upload Coordinator Sheet"><SalesUpload /></Layout></RequireAuth>} />
-          <Route path="/sales/compute" element={<RequireAuth><Layout title="Sales Salary Compute"><SalesSalaryCompute /></Layout></RequireAuth>} />
-          <Route path="/sales/payslip/:code" element={<RequireAuth><Layout title="Sales Payslip"><SalesPayslip /></Layout></RequireAuth>} />
-          <Route path="/sales/ta-da-approvals" element={<RequireAuth><Layout title="TA/DA Approvals"><SalesTaDaApprovals /></Layout></RequireAuth>} />
-          <Route path="/sales/ta-da-register" element={<RequireAuth><Layout title="TA/DA Register"><SalesTaDaRegister /></Layout></RequireAuth>} />
-          <Route path="/sales/ta-da-upload" element={<RequireAuth><Layout title="TA/DA Upload"><SalesTaDaUpload /></Layout></RequireAuth>} />
-          <Route path="/alerts" element={<RequireAuth><Layout title="Alerts"><Alerts /></Layout></RequireAuth>} />
-          <Route path="/settings/*" element={<RequireAuth><Layout title="Settings"><Settings /></Layout></RequireAuth>} />
-          <Route path="*" element={<Navigate to="/" replace />} />
+          <Route path="/pipeline/import" element={<RequireAuth><Layout title="Stage 1: Import Attendance Data"><Guard perm="import"><Import /></Guard></Layout></RequireAuth>} />
+          <Route path="/pipeline/miss-punch" element={<RequireAuth><Layout title="Stage 2: Miss Punch Detection & Rectification"><Guard perm="miss-punch"><MissPunch /></Guard></Layout></RequireAuth>} />
+          <Route path="/pipeline/shift-check" element={<RequireAuth><Layout title="Stage 3: Shift Verification"><Guard perm="shift-verify"><ShiftVerification /></Guard></Layout></RequireAuth>} />
+          <Route path="/pipeline/night-shift" element={<RequireAuth><Layout title="Stage 4: Night Shift Pairing"><Guard perm="night-shift"><NightShift /></Guard></Layout></RequireAuth>} />
+          <Route path="/pipeline/corrections" element={<RequireAuth><Layout title="Stage 5: Manual Corrections"><Guard perm="corrections"><AttendanceRegister /></Guard></Layout></RequireAuth>} />
+          <Route path="/pipeline/day-calc" element={<RequireAuth><Layout title="Stage 6: Day Calculation & Leave Adjustment"><Guard perm="day-calc"><DayCalculation /></Guard></Layout></RequireAuth>} />
+          <Route path="/pipeline/salary" element={<RequireAuth><Layout title="Stage 7: Salary Computation"><Guard perm="salary"><SalaryComputation /></Guard></Layout></RequireAuth>} />
+          <Route path="/held-salaries" element={<RequireAuth><Layout title="Held Salaries Register"><Guard perm="held-salaries-register"><HeldSalariesRegister /></Guard></Layout></RequireAuth>} />
+          <Route path="/salary-advance" element={<RequireAuth><Layout title="Salary Advance"><Guard perm="salary-advance"><SalaryAdvance /></Guard></Layout></RequireAuth>} />
+          <Route path="/payable-ot" element={<RequireAuth><Layout title="Payable OT / Extra Duty"><Guard perm="payable-ot"><PayableOT /></Guard></Layout></RequireAuth>} />
+          <Route path="/salary-input" element={<RequireAuth><Layout title="Salary Input & Changes"><Guard perm="salary-input"><SalaryInput /></Guard></Layout></RequireAuth>} />
+          <Route path="/daily-mis" element={<RequireAuth><Layout title="Daily MIS"><Guard perm="daily-mis"><DailyMIS /></Guard></Layout></RequireAuth>} />
+          <Route path="/loans" element={<RequireAuth><Layout title="Loan Management"><Guard perm="loans"><Loans /></Guard></Layout></RequireAuth>} />
+          <Route path="/loans/:id" element={<RequireAuth><Layout title="Loan Management"><Guard perm="loans"><LoanDetail /></Guard></Layout></RequireAuth>} />
+          <Route path="/leave-management" element={<RequireAuth><Layout title="Leave Management"><Guard perm="leave-management"><LeaveManagement /></Guard></Layout></RequireAuth>} />
+          <Route path="/workforce/contractor-report" element={<RequireAuth><Layout title="Contractor Report"><Guard perm="contractor-report"><ContractorReport /></Guard></Layout></RequireAuth>} />
+          <Route path="/workforce/*" element={<RequireAuth><Layout title="Workforce Analytics"><Guard perm="workforce"><WorkforceAnalytics /></Guard></Layout></RequireAuth>} />
+          <Route path="/analytics/*" element={<RequireAuth><Layout title="Attendance Analytics"><Guard anyOf={['analytics', 'late-coming', 'early-exit', 'attendance-review']}><Analytics /></Guard></Layout></RequireAuth>} />
+          <Route path="/compliance/*" element={<RequireAuth><Layout title="Compliance"><Guard perm="compliance"><Compliance /></Guard></Layout></RequireAuth>} />
+          <Route path="/reports" element={<RequireAuth><Layout title="Reports"><Guard perm="reports"><Reports /></Guard></Layout></RequireAuth>} />
+          <Route path="/finance-audit" element={<RequireAuth><Layout title="Finance Audit"><Guard perm="finance-audit"><FinanceAudit /></Guard></Layout></RequireAuth>} />
+          <Route path="/finance-verification" element={<RequireAuth><Layout title="Finance Verification"><Guard perm="finance-verification"><FinanceVerification /></Guard></Layout></RequireAuth>} />
+          <Route path="/extra-duty-grants" element={<RequireAuth><Layout title="Extra Duty Grants"><Guard perm="extra-duty-grants"><ExtraDutyGrants /></Guard></Layout></RequireAuth>} />
+          <Route path="/daily-wage/contractors" element={<RequireAuth><Layout title="Contractor Master"><Guard perm="daily-wage"><DailyWageContractors /></Guard></Layout></RequireAuth>} />
+          <Route path="/daily-wage/new" element={<RequireAuth><Layout title="New Daily Wage Entry"><Guard perm="daily-wage"><DailyWageEntry /></Guard></Layout></RequireAuth>} />
+          <Route path="/daily-wage/import" element={<RequireAuth><Layout title="Batch Import"><Guard perm="daily-wage"><DailyWageBatchImport /></Guard></Layout></RequireAuth>} />
+          <Route path="/daily-wage/finance/review" element={<RequireAuth><Layout title="Daily Wage Finance Review"><Guard perm="daily-wage-finance"><DailyWageFinanceReview /></Guard></Layout></RequireAuth>} />
+          <Route path="/daily-wage/finance/payments" element={<RequireAuth><Layout title="Daily Wage Payments"><Guard perm="daily-wage-finance"><DailyWagePayments /></Guard></Layout></RequireAuth>} />
+          <Route path="/daily-wage/finance/dashboard" element={<RequireAuth><Layout title="Daily Wage Dashboard"><Guard perm="daily-wage-finance"><DailyWageDashboard /></Guard></Layout></RequireAuth>} />
+          <Route path="/daily-wage/reports" element={<RequireAuth><Layout title="Daily Wage Reports"><Guard perm="daily-wage"><DailyWageReports /></Guard></Layout></RequireAuth>} />
+          <Route path="/daily-wage/audit" element={<RequireAuth><Layout title="Daily Wage Audit Log"><Guard perm="daily-wage-finance"><DailyWageAuditLog /></Guard></Layout></RequireAuth>} />
+          <Route path="/daily-wage" element={<RequireAuth><Layout title="Daily Wage Records"><Guard perm="daily-wage"><DailyWageRecords /></Guard></Layout></RequireAuth>} />
+          <Route path="/session-analytics" element={<RequireAuth><Layout title="Session Analytics"><Guard perm="session-analytics"><SessionAnalytics /></Guard></Layout></RequireAuth>} />
+          <Route path="/admin/query-tool" element={<RequireAuth><Layout title="Database Query Tool"><Guard perm="query-tool"><QueryTool /></Guard></Layout></RequireAuth>} />
+          <Route path="/admin/sql-console" element={<RequireAuth><Layout title="SQL Console (Read-Only)"><Guard perm="sql-console"><SqlConsole /></Guard></Layout></RequireAuth>} />
+          <Route path="/admin/bug-reports" element={<RequireAuth><Layout title="Bug Reports"><Guard perm="bug-reports"><BugReportsInbox /></Guard></Layout></RequireAuth>} />
+          <Route path="/admin/bug-reports/:id" element={<RequireAuth><Layout title="Bug Report Detail"><Guard perm="bug-reports"><BugReportDetail /></Guard></Layout></RequireAuth>} />
+          <Route path="/admin/record-history" element={<RequireAuth><Layout title="Record History"><Guard perm="record-history"><RecordHistoryLookup /></Guard></Layout></RequireAuth>} />
+          <Route path="/admin/statutory-flags" element={<RequireAuth><Layout title="Statutory Flags"><Guard perm="statutory-flags"><StatutoryFlags /></Guard></Layout></RequireAuth>} />
+          <Route path="/dept-analytics" element={<RequireAuth><Layout title="Department & Org Analytics"><Guard perm="dept-analytics"><DeptAnalytics /></Guard></Layout></RequireAuth>} />
+          <Route path="/employee-profile" element={<RequireAuth><Layout title="Employee Intelligence Profile"><Guard perm="employee-profile"><EmployeeProfile /></Guard></Layout></RequireAuth>} />
+          <Route path="/employees" element={<RequireAuth><Layout title="Employee Master"><Guard perm="employees"><Employees /></Guard></Layout></RequireAuth>} />
+          <Route path="/sales/employees" element={<RequireAuth><Layout title="Sales Employees"><Guard perm="sales-employees"><SalesEmployeeMaster /></Guard></Layout></RequireAuth>} />
+          <Route path="/sales/holidays" element={<RequireAuth><Layout title="Sales Holidays"><Guard perm="sales-holidays"><SalesHolidayMaster /></Guard></Layout></RequireAuth>} />
+          <Route path="/sales/upload" element={<RequireAuth><Layout title="Upload Coordinator Sheet"><Guard perm="sales-upload"><SalesUpload /></Guard></Layout></RequireAuth>} />
+          <Route path="/sales/compute" element={<RequireAuth><Layout title="Sales Salary Compute"><Guard perm="sales-compute"><SalesSalaryCompute /></Guard></Layout></RequireAuth>} />
+          <Route path="/sales/payslip/:code" element={<RequireAuth><Layout title="Sales Payslip"><Guard perm="sales-register"><SalesPayslip /></Guard></Layout></RequireAuth>} />
+          <Route path="/sales/ta-da-approvals" element={<RequireAuth><Layout title="TA/DA Approvals"><Guard perm="sales-tada-approve"><SalesTaDaApprovals /></Guard></Layout></RequireAuth>} />
+          <Route path="/sales/ta-da-register" element={<RequireAuth><Layout title="TA/DA Register"><Guard perm="sales-tada-compute"><SalesTaDaRegister /></Guard></Layout></RequireAuth>} />
+          <Route path="/sales/ta-da-upload" element={<RequireAuth><Layout title="TA/DA Upload"><Guard perm="sales-tada-compute"><SalesTaDaUpload /></Guard></Layout></RequireAuth>} />
+          <Route path="/alerts" element={<RequireAuth><Layout title="Alerts"><Guard perm="alerts"><Alerts /></Guard></Layout></RequireAuth>} />
+          <Route path="/settings/*" element={<RequireAuth><Layout title="Settings"><Guard perm="settings"><Settings /></Guard></Layout></RequireAuth>} />
+          {/* P8-06: unknown URL → a 404 page with a link home (was a silent redirect to "/") */}
+          <Route path="*" element={<RequireAuth><Layout title="Page not found"><NotFound /></Layout></RequireAuth>} />
         </Routes>
       </Suspense>
     </BrowserRouter>

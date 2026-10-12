@@ -5,6 +5,8 @@ import { useAppStore } from '../../store/appStore'
 import { normalizeRole } from '../../utils/role'
 import { salesTaDaRequestsPendingCount, getLeaveChangeFlags, getLoanStats } from '../../utils/api'
 import clsx from 'clsx'
+import usePermissions from '../../hooks/usePermissions'
+import { PRODUCT_NAME, COMPANY_LINE, VERSION_TEXT } from '../../utils/appInfo'
 
 // Pending TA/DA approval count — polls every 60s. Only mounted on the
 // child item that opts in via `tadaPendingBadge: true`, and the parent
@@ -80,142 +82,128 @@ function LoanQueueBadge({ role }) {
   )
 }
 
-// Roles that may read loans (routes/loans.js READ_ROLES). Supervisors and
-// employees get 403 from the API, so the entry is hidden from them.
-const LOAN_READ_ROLES = ['admin', 'hr', 'finance', 'viewer']
-
+// P2-10: every entry carries `perm` — a page key from backend/src/config/permissions.js, read through
+// usePermissions(). A parent shows when at least one child is visible. No role compares here.
 const nav = [
-  { label: 'Dashboard', icon: '🏠', to: '/' },
-  { label: 'Daily MIS', icon: '📊', to: '/daily-mis' },
+  { label: 'Dashboard', icon: '🏠', to: '/', perm: 'dashboard' },
+  { label: 'Daily MIS', icon: '📊', to: '/daily-mis', perm: 'daily-mis' },
   {
     label: 'Payroll', icon: '💰', to: '/pipeline',
     children: [
-      { label: '1. Import', icon: '📥', to: '/pipeline/import' },
-      { label: '2. Miss Punches', icon: '🔍', to: '/pipeline/miss-punch' },
-      { label: '3. Shift Check', icon: '🕐', to: '/pipeline/shift-check' },
-      { label: '4. Night Shift', icon: '🌙', to: '/pipeline/night-shift' },
-      { label: '5. Corrections', icon: '✏️', to: '/pipeline/corrections' },
-      { label: '6. Day Calc', icon: '📅', to: '/pipeline/day-calc' },
-      { label: '7. Salary', icon: '₹', to: '/pipeline/salary' },
-      { label: 'Held Salaries Register', icon: '🔒', to: '/held-salaries' },
-      { label: 'Salary Advance', icon: '💵', to: '/salary-advance' },
-      { label: 'Payable OT', icon: '⏱️', to: '/payable-ot' },
-      { label: 'Salary Input', icon: '📝', to: '/salary-input' },
-      { label: 'Loans', icon: '🏦', to: '/loans', loansRead: true, loanQueueBadge: true },
+      { label: '1. Import', icon: '📥', to: '/pipeline/import', perm: 'import' },
+      { label: '2. Miss Punches', icon: '🔍', to: '/pipeline/miss-punch', perm: 'miss-punch' },
+      { label: '3. Shift Check', icon: '🕐', to: '/pipeline/shift-check', perm: 'shift-verify' },
+      { label: '4. Night Shift', icon: '🌙', to: '/pipeline/night-shift', perm: 'night-shift' },
+      { label: '5. Corrections', icon: '✏️', to: '/pipeline/corrections', perm: 'corrections' },
+      { label: '6. Day Calc', icon: '📅', to: '/pipeline/day-calc', perm: 'day-calc' },
+      { label: '7. Salary', icon: '₹', to: '/pipeline/salary', perm: 'salary' },
+      { label: 'Held Salaries Register', icon: '🔒', to: '/held-salaries', perm: 'held-salaries-register' },
+      { label: 'Salary Advance', icon: '💵', to: '/salary-advance', perm: 'salary-advance' },
+      { label: 'Payable OT', icon: '⏱️', to: '/payable-ot', perm: 'payable-ot' },
+      { label: 'Salary Input', icon: '📝', to: '/salary-input', perm: 'salary-input' },
+      { label: 'Loans', icon: '🏦', to: '/loans', perm: 'loans', loanQueueBadge: true },
     ]
   },
-  { label: 'Leave Management', icon: '📋', to: '/leave-management', leaveFlagBadge: true },
+  { label: 'Leave Management', icon: '📋', to: '/leave-management', perm: 'leave-management', leaveFlagBadge: true },
   {
     label: 'Workforce', icon: '👥', to: '/workforce',
     children: [
-      { label: 'Headcount & Composition', to: '/workforce/headcount' },
-      { label: 'Hiring & Attrition', to: '/workforce/attrition' },
-      { label: 'Contractor Management', to: '/workforce/contractors' },
-      { label: 'Contractor Report', to: '/workforce/contractor-report', hrFinanceOrAdmin: true },
+      { label: 'Headcount & Composition', to: '/workforce/headcount', perm: 'workforce' },
+      { label: 'Hiring & Attrition', to: '/workforce/attrition', perm: 'workforce' },
+      { label: 'Contractor Management', to: '/workforce/contractors', perm: 'workforce' },
+      { label: 'Contractor Report', to: '/workforce/contractor-report', perm: 'contractor-report' },
     ]
   },
   {
     label: 'Attendance Analytics', icon: '📈', to: '/analytics',
     children: [
-      { label: 'Overview', to: '/analytics/overview' },
-      { label: 'Absenteeism', to: '/analytics/absenteeism' },
-      { label: 'Punctuality', to: '/analytics/punctuality' },
-      { label: 'Overtime', to: '/analytics/overtime' },
-      { label: 'Working Hours', to: '/analytics/hours' },
-      { label: 'Early Exit', to: '/analytics/early-exit' },
-      { label: 'Attendance Review', to: '/analytics/attendance-review', adminOnly: true },
+      { label: 'Overview', to: '/analytics/overview', perm: 'analytics' },
+      { label: 'Absenteeism', to: '/analytics/absenteeism', perm: 'analytics' },
+      { label: 'Punctuality', to: '/analytics/punctuality', perm: 'late-coming' },
+      { label: 'Overtime', to: '/analytics/overtime', perm: 'analytics' },
+      { label: 'Working Hours', to: '/analytics/hours', perm: 'analytics' },
+      { label: 'Early Exit', to: '/analytics/early-exit', perm: 'early-exit' },
+      { label: 'Attendance Review', to: '/analytics/attendance-review', perm: 'attendance-review' },
     ]
   },
   // Late Coming Phase 1: dedicated nav entry points to the Punctuality tab
   // where the new late-coming management UI lives.
-  { label: 'Late Coming', icon: '⏰', to: '/analytics/punctuality' },
+  { label: 'Late Coming', icon: '⏰', to: '/analytics/punctuality', perm: 'late-coming' },
   {
     label: 'Compliance', icon: '✅', to: '/compliance',
     children: [
-      { label: 'PF Compliance', to: '/compliance/pf' },
-      { label: 'ESI Compliance', to: '/compliance/esi' },
-      { label: 'Labour Law', to: '/compliance/labour-law' },
-      { label: 'Compliance Calendar', to: '/compliance/calendar' },
+      { label: 'PF Compliance', to: '/compliance/pf', perm: 'compliance' },
+      { label: 'ESI Compliance', to: '/compliance/esi', perm: 'compliance' },
+      { label: 'Labour Law', to: '/compliance/labour-law', perm: 'compliance' },
+      { label: 'Compliance Calendar', to: '/compliance/calendar', perm: 'compliance' },
     ]
   },
-  { label: 'Reports', icon: '📋', to: '/reports' },
-  { label: 'Finance Audit', icon: '🏦', to: '/finance-audit' },
-  { label: 'Finance Verify', icon: '🔐', to: '/finance-verification' },
-  { label: 'Extra Duty', icon: '⭐', to: '/extra-duty-grants' },
-  { label: 'Alerts', icon: '🔔', to: '/alerts' },
-  { label: 'Employees', icon: '👤', to: '/employees' },
+  { label: 'Reports', icon: '📋', to: '/reports', perm: 'reports' },
+  { label: 'Finance Audit', icon: '🏦', to: '/finance-audit', perm: 'finance-audit' },
+  { label: 'Finance Verify', icon: '🔐', to: '/finance-verification', perm: 'finance-verification' },
+  { label: 'Extra Duty', icon: '⭐', to: '/extra-duty-grants', perm: 'extra-duty-grants' },
+  { label: 'Alerts', icon: '🔔', to: '/alerts', perm: 'alerts' },
+  { label: 'Employees', icon: '👤', to: '/employees', perm: 'employees' },
   {
     label: 'Daily Wage', icon: '👷', to: '/daily-wage', children: [
-      { label: 'Records', to: '/daily-wage' },
-      { label: 'New Entry', to: '/daily-wage/new' },
-      { label: 'Batch Import', to: '/daily-wage/import' },
-      { label: 'Contractors', to: '/daily-wage/contractors' },
-      { label: 'Reports', to: '/daily-wage/reports' },
-      { label: 'Finance Review', to: '/daily-wage/finance/review', financeOnly: true },
-      { label: 'Payments', to: '/daily-wage/finance/payments', financeOnly: true },
-      { label: 'Dashboard', to: '/daily-wage/finance/dashboard', financeOnly: true },
-      { label: 'Audit Log', to: '/daily-wage/audit', financeOnly: true },
+      { label: 'Records', to: '/daily-wage', perm: 'daily-wage' },
+      { label: 'New Entry', to: '/daily-wage/new', perm: 'daily-wage' },
+      { label: 'Batch Import', to: '/daily-wage/import', perm: 'daily-wage' },
+      { label: 'Contractors', to: '/daily-wage/contractors', perm: 'daily-wage' },
+      { label: 'Reports', to: '/daily-wage/reports', perm: 'daily-wage' },
+      { label: 'Finance Review', to: '/daily-wage/finance/review', perm: 'daily-wage-finance' },
+      { label: 'Payments', to: '/daily-wage/finance/payments', perm: 'daily-wage-finance' },
+      { label: 'Dashboard', to: '/daily-wage/finance/dashboard', perm: 'daily-wage-finance' },
+      { label: 'Audit Log', to: '/daily-wage/audit', perm: 'daily-wage-finance' },
     ]
   },
   {
-    // Phase 2: parent widened from salesAllowed (hr+admin) to
-    // hrFinanceOrAdmin so finance can see the new TA/DA Approvals child.
-    // Existing 4 HR-facing children carry their own salesAllowed gate so
-    // finance only sees TA/DA Approvals under this section.
-    label: 'Sales', icon: '🛒', to: '/sales', hrFinanceOrAdmin: true,
+    label: 'Sales', icon: '🛒', to: '/sales',
     children: [
-      { label: 'Sales Employees', to: '/sales/employees', salesAllowed: true },
-      { label: 'Sales Holidays', to: '/sales/holidays', salesAllowed: true },
-      { label: 'Upload Sheet', to: '/sales/upload', salesAllowed: true },
-      { label: 'Compute Salaries', to: '/sales/compute', salesAllowed: true },
-      { label: 'TA/DA Register', to: '/sales/ta-da-register', salesAllowed: true },
-      { label: 'TA/DA Upload', to: '/sales/ta-da-upload', salesAllowed: true },
-      { label: 'TA/DA Approvals', to: '/sales/ta-da-approvals', tadaApprover: true, tadaPendingBadge: true },
+      { label: 'Sales Employees', to: '/sales/employees', perm: 'sales-employees' },
+      { label: 'Sales Holidays', to: '/sales/holidays', perm: 'sales-holidays' },
+      { label: 'Upload Sheet', to: '/sales/upload', perm: 'sales-upload' },
+      { label: 'Compute Salaries', to: '/sales/compute', perm: 'sales-compute' },
+      { label: 'TA/DA Register', to: '/sales/ta-da-register', perm: 'sales-tada-compute' },
+      { label: 'TA/DA Upload', to: '/sales/ta-da-upload', perm: 'sales-tada-compute' },
+      { label: 'TA/DA Approvals', to: '/sales/ta-da-approvals', perm: 'sales-tada-approve', tadaPendingBadge: true },
     ]
   },
-  { label: 'Employee Profile', icon: '🔬', to: '/employee-profile' },
-  { label: 'Dept Analytics', icon: '🏢', to: '/dept-analytics' },
-  { label: 'Salary Explainer', icon: '🤖', action: 'salaryExplainer', hrFinanceOrAdmin: true },
-  { label: 'Session Analytics', icon: '📊', to: '/session-analytics', adminOnly: true },
-  { label: 'Query Tool', icon: '🔎', to: '/admin/query-tool', adminOnly: true },
-  { label: 'SQL Console', icon: '🛠', to: '/admin/sql-console', adminOnly: true },
-  { label: 'Bug Reports', icon: '🐞', to: '/admin/bug-reports', adminOnly: true },
-  { label: 'Record History', icon: '🕰', to: '/admin/record-history', adminOnly: true },
-  { label: 'Statutory Flags', icon: '🧾', to: '/admin/statutory-flags', adminOnly: true },
+  { label: 'Employee Profile', icon: '🔬', to: '/employee-profile', perm: 'employee-profile' },
+  { label: 'Dept Analytics', icon: '🏢', to: '/dept-analytics', perm: 'dept-analytics' },
+  { label: 'Salary Explainer', icon: '🤖', action: 'salaryExplainer', perm: 'salary-explainer' },
+  { label: 'Session Analytics', icon: '📊', to: '/session-analytics', perm: 'session-analytics' },
+  { label: 'Query Tool', icon: '🔎', to: '/admin/query-tool', perm: 'query-tool' },
+  { label: 'SQL Console', icon: '🛠', to: '/admin/sql-console', perm: 'sql-console' },
+  { label: 'Bug Reports', icon: '🐞', to: '/admin/bug-reports', perm: 'bug-reports' },
+  { label: 'Record History', icon: '🕰', to: '/admin/record-history', perm: 'record-history' },
+  { label: 'Statutory Flags', icon: '🧾', to: '/admin/statutory-flags', perm: 'statutory-flags' },
   {
-    label: 'Settings', icon: '⚙️', to: '/settings', adminOnly: true,
+    label: 'Settings', icon: '⚙️', to: '/settings',
     children: [
-      { label: 'Shift Master', to: '/settings/shifts' },
-      { label: 'Holiday Master', to: '/settings/holidays' },
-      { label: 'Policy Config', to: '/settings/policy' },
-      { label: 'Audit Trail', to: '/settings/audit' },
-      { label: 'Usage Logs', to: '/settings/usage-logs' },
-      { label: 'User Management', to: '/settings/users' },
+      { label: 'Shift Master', to: '/settings/shifts', perm: 'settings' },
+      { label: 'Holiday Master', to: '/settings/holidays', perm: 'settings' },
+      { label: 'Policy Config', to: '/settings/policy', perm: 'settings' },
+      { label: 'Audit Trail', to: '/settings/audit', perm: 'settings' },
+      { label: 'Usage Logs', to: '/settings/usage-logs', perm: 'settings' },
+      { label: 'User Management', to: '/settings/users', perm: 'settings' },
     ]
   },
 ]
 
-function NavItem({ item, collapsed, depth = 0, userRole, onNavigate, onAction }) {
+// A leaf is visible when its key is allowed; a parent when any child is.
+function isVisible(item, can) {
+  if (item.children) return item.children.some(c => isVisible(c, can))
+  return can(item.perm)
+}
+
+function NavItem({ item, collapsed, depth = 0, userRole, can, onNavigate, onAction }) {
   const [open, setOpen] = React.useState(false)
   const location = useLocation()
   const isActive = item.to ? (location.pathname === item.to || location.pathname.startsWith(item.to + '/')) : false
   const hasChildren = item.children && item.children.length > 0
 
-  const hidden =
-    // Hide admin-only items from non-admin users
-    (item.adminOnly && userRole !== 'admin') ||
-    // Hide finance-only items from non-finance/non-admin users
-    (item.financeOnly && userRole !== 'finance' && userRole !== 'admin') ||
-    // Hide HR/Finance/Admin-only items from other roles (Salary Explainer)
-    (item.hrFinanceOrAdmin && !['hr', 'finance', 'admin'].includes(userRole)) ||
-    // Hide Sales section from roles without 'sales-employees' permission (hr + admin)
-    (item.salesAllowed && !['hr', 'admin'].includes(userRole)) ||
-    // Phase 2: TA/DA Approvals — finance and admin see it (HR can request via
-    // employee master, but cannot approve, so the approval queue is hidden
-    // from HR to avoid clutter).
-    (item.tadaApprover && !['finance', 'admin'].includes(userRole)) ||
-    // Loans PR-4: hide the Loans entry from roles the loan API refuses.
-    (item.loansRead && !LOAN_READ_ROLES.includes(userRole))
+  const hidden = !isVisible(item, can)
 
   // Auto-open active parent
   React.useEffect(() => {
@@ -247,15 +235,7 @@ function NavItem({ item, collapsed, depth = 0, userRole, onNavigate, onAction })
   }
 
   if (hasChildren) {
-    const visibleChildren = item.children.filter(c => {
-      if (c.adminOnly && userRole !== 'admin') return false
-      if (c.hrFinanceOrAdmin && !['hr', 'finance', 'admin'].includes(userRole)) return false
-      if (c.financeOnly && userRole !== 'finance' && userRole !== 'admin') return false
-      if (c.salesAllowed && !['hr', 'admin'].includes(userRole)) return false
-      if (c.tadaApprover && !['finance', 'admin'].includes(userRole)) return false
-      if (c.loansRead && !LOAN_READ_ROLES.includes(userRole)) return false
-      return true
-    })
+    const visibleChildren = item.children.filter(c => isVisible(c, can))
     return (
       <li>
         <button
@@ -273,7 +253,7 @@ function NavItem({ item, collapsed, depth = 0, userRole, onNavigate, onAction })
         {!collapsed && open && (
           <ul className="mt-1 ml-4 space-y-0.5 border-l-2 border-slate-100 pl-3">
             {visibleChildren.map(child => (
-              <NavItem key={child.to} item={child} collapsed={collapsed} depth={depth + 1} userRole={userRole} onNavigate={onNavigate} />
+              <NavItem key={child.to} item={child} collapsed={collapsed} depth={depth + 1} userRole={userRole} can={can} onNavigate={onNavigate} />
             ))}
           </ul>
         )}
@@ -309,6 +289,8 @@ export default function Sidebar() {
   // Normalised so legacy role strings ("Finance Team", "Admin") still
   // collapse to canonical form before any === 'admin' check downstream.
   const userRole = normalizeRole(user?.role)
+  // P2-10: what this role may open — the same source App.jsx routes and the Header use.
+  const { can, failed: permsFailed } = usePermissions()
 
   // Close sidebar on mobile after navigation
   const handleMobileNav = () => {
@@ -346,10 +328,10 @@ export default function Sidebar() {
         )}>
           {!collapsed && (
             <>
-              <div className="w-8 h-8 bg-blue-600 rounded-lg flex items-center justify-center text-white text-sm font-bold shrink-0">AL</div>
+              <div className="w-8 h-8 bg-blue-600 rounded-lg flex items-center justify-center text-white text-sm font-bold shrink-0">HR</div>
               <div className="min-w-0">
-                <div className="text-sm font-semibold text-slate-800 truncate">Asian Lakto</div>
-                <div className="text-xs text-slate-400">HR & Payroll System</div>
+                <div className="text-sm font-semibold text-slate-800 truncate" data-testid="product-name">{PRODUCT_NAME}</div>
+                <div className="text-xs text-slate-400 truncate">{COMPANY_LINE}</div>
               </div>
             </>
           )}
@@ -369,7 +351,7 @@ export default function Sidebar() {
         <nav className="flex-1 overflow-y-auto px-2 py-3">
           <ul className="space-y-0.5">
             {nav.map(item => (
-              <NavItem key={item.to || item.action || item.label} item={item} collapsed={collapsed} userRole={userRole} onNavigate={handleMobileNav} onAction={handleAction} />
+              <NavItem key={item.to || item.action || item.label} item={item} collapsed={collapsed} userRole={userRole} can={can} onNavigate={handleMobileNav} onAction={handleAction} />
             ))}
           </ul>
         </nav>
@@ -377,8 +359,11 @@ export default function Sidebar() {
         {/* Footer */}
         {!collapsed && (
           <div className="px-4 py-3 border-t border-slate-100">
-            <p className="text-xs text-slate-400">Indriyan Beverages</p>
-            <p className="text-xs text-slate-300">v1.1.0 • {user?.username || 'user'} ({userRole})</p>
+            {permsFailed && (
+              <p className="text-xs text-amber-600 mb-1" data-testid="perms-failed">Couldn't load your access — showing all pages</p>
+            )}
+            <p className="text-xs text-slate-400">{user?.username || 'user'} ({userRole})</p>
+            <p className="text-xs text-slate-300" data-testid="app-version">{VERSION_TEXT}</p>
           </div>
         )}
       </aside>
