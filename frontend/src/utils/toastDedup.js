@@ -13,26 +13,30 @@ import toast from 'react-hot-toast'
 
 export const CLAIM_WINDOW_MS = 1500
 
-let now = () => Date.now()
-let lastApiToast = null // { id, at } — the newest unclaimed API error toast
-const originalError = toast.error
+// State lives on the toast object, not in module variables, so a second copy of this module (Vite HMR in dev)
+// shares it with the wrapper that is already installed.
+const state = toast.__p202State || (toast.__p202State = {
+  last: null,                                   // { id, at } — the newest unclaimed API error toast
+  now: () => Date.now(),
+  originalError: toast.error,                   // react-hot-toast's own toast.error
+})
 
 export function apiErrorToast(msg) {
   const id = `api-error:${msg}`
-  originalError(msg, { id })
-  lastApiToast = { id, at: now() }
+  state.originalError(msg, { id })
+  state.last = { id, at: state.now() }
   return id
 }
 
 export function installToastDedup() {
   if (toast.error && toast.error.__p202Dedup) return
   const wrapped = (message, opts) => {
-    if (!(opts && opts.id) && lastApiToast && now() - lastApiToast.at <= CLAIM_WINDOW_MS) {
-      const { id } = lastApiToast
-      lastApiToast = null
-      return originalError(message, { ...(opts || {}), id })
+    const last = state.last
+    if (!(opts && opts.id) && last && state.now() - last.at <= CLAIM_WINDOW_MS) {
+      state.last = null
+      return state.originalError(message, { ...(opts || {}), id: last.id })
     }
-    return originalError(message, opts)
+    return state.originalError(message, opts)
   }
   wrapped.__p202Dedup = true
   toast.error = wrapped
@@ -40,8 +44,8 @@ export function installToastDedup() {
 
 // Test hook only (backend/scripts/toast-dedup-unit-check.mjs).
 export function __resetToastDedupForTest(clock) {
-  lastApiToast = null
-  if (clock) now = clock
+  state.last = null
+  if (clock) state.now = clock
 }
 
 installToastDedup()
