@@ -3,6 +3,7 @@ import { NavLink, useLocation } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
 import { useAppStore } from '../../store/appStore'
 import { normalizeRole } from '../../utils/role'
+import { usePermissions } from '../../utils/permissions'
 import { salesTaDaRequestsPendingCount, getLeaveChangeFlags, getLoanStats } from '../../utils/api'
 import clsx from 'clsx'
 
@@ -80,10 +81,10 @@ function LoanQueueBadge({ role }) {
   )
 }
 
-// Roles that may read loans (routes/loans.js READ_ROLES). Supervisors and
-// employees get 403 from the API, so the entry is hidden from them.
-const LOAN_READ_ROLES = ['admin', 'hr', 'finance', 'viewer']
-
+// P2-10: who sees an item comes from the permission matrix only
+// (utils/permissions.js). A link is shown when its route opens for the role
+// (`canPath(to)`); an item with `perm` uses that key instead; a parent is shown
+// when at least one child is.
 const nav = [
   { label: 'Dashboard', icon: '🏠', to: '/' },
   { label: 'Daily MIS', icon: '📊', to: '/daily-mis' },
@@ -101,7 +102,7 @@ const nav = [
       { label: 'Salary Advance', icon: '💵', to: '/salary-advance' },
       { label: 'Payable OT', icon: '⏱️', to: '/payable-ot' },
       { label: 'Salary Input', icon: '📝', to: '/salary-input' },
-      { label: 'Loans', icon: '🏦', to: '/loans', loansRead: true, loanQueueBadge: true },
+      { label: 'Loans', icon: '🏦', to: '/loans', loanQueueBadge: true },
     ]
   },
   { label: 'Leave Management', icon: '📋', to: '/leave-management', leaveFlagBadge: true },
@@ -111,7 +112,7 @@ const nav = [
       { label: 'Headcount & Composition', to: '/workforce/headcount' },
       { label: 'Hiring & Attrition', to: '/workforce/attrition' },
       { label: 'Contractor Management', to: '/workforce/contractors' },
-      { label: 'Contractor Report', to: '/workforce/contractor-report', hrFinanceOrAdmin: true },
+      { label: 'Contractor Report', to: '/workforce/contractor-report' },
     ]
   },
   {
@@ -123,12 +124,12 @@ const nav = [
       { label: 'Overtime', to: '/analytics/overtime' },
       { label: 'Working Hours', to: '/analytics/hours' },
       { label: 'Early Exit', to: '/analytics/early-exit' },
-      { label: 'Attendance Review', to: '/analytics/attendance-review', adminOnly: true },
+      { label: 'Attendance Review', to: '/analytics/attendance-review' },
     ]
   },
   // Late Coming Phase 1: dedicated nav entry points to the Punctuality tab
   // where the new late-coming management UI lives.
-  { label: 'Late Coming', icon: '⏰', to: '/analytics/punctuality' },
+  { label: 'Late Coming', icon: '⏰', to: '/analytics/punctuality', perm: 'late-coming' },
   {
     label: 'Compliance', icon: '✅', to: '/compliance',
     children: [
@@ -151,39 +152,37 @@ const nav = [
       { label: 'Batch Import', to: '/daily-wage/import' },
       { label: 'Contractors', to: '/daily-wage/contractors' },
       { label: 'Reports', to: '/daily-wage/reports' },
-      { label: 'Finance Review', to: '/daily-wage/finance/review', financeOnly: true },
-      { label: 'Payments', to: '/daily-wage/finance/payments', financeOnly: true },
-      { label: 'Dashboard', to: '/daily-wage/finance/dashboard', financeOnly: true },
-      { label: 'Audit Log', to: '/daily-wage/audit', financeOnly: true },
+      { label: 'Finance Review', to: '/daily-wage/finance/review', },
+      { label: 'Payments', to: '/daily-wage/finance/payments', },
+      { label: 'Dashboard', to: '/daily-wage/finance/dashboard', },
+      { label: 'Audit Log', to: '/daily-wage/audit', },
     ]
   },
   {
-    // Phase 2: parent widened from salesAllowed (hr+admin) to
-    // hrFinanceOrAdmin so finance can see the new TA/DA Approvals child.
-    // Existing 4 HR-facing children carry their own salesAllowed gate so
-    // finance only sees TA/DA Approvals under this section.
-    label: 'Sales', icon: '🛒', to: '/sales', hrFinanceOrAdmin: true,
+    // Finance sees only TA/DA Approvals here (the matrix gives finance no other sales key).
+    label: 'Sales', icon: '🛒', to: '/sales',
     children: [
-      { label: 'Sales Employees', to: '/sales/employees', salesAllowed: true },
-      { label: 'Sales Holidays', to: '/sales/holidays', salesAllowed: true },
-      { label: 'Upload Sheet', to: '/sales/upload', salesAllowed: true },
-      { label: 'Compute Salaries', to: '/sales/compute', salesAllowed: true },
-      { label: 'TA/DA Register', to: '/sales/ta-da-register', salesAllowed: true },
-      { label: 'TA/DA Upload', to: '/sales/ta-da-upload', salesAllowed: true },
-      { label: 'TA/DA Approvals', to: '/sales/ta-da-approvals', tadaApprover: true, tadaPendingBadge: true },
+      { label: 'Sales Employees', to: '/sales/employees' },
+      { label: 'Sales Holidays', to: '/sales/holidays' },
+      { label: 'Upload Sheet', to: '/sales/upload' },
+      { label: 'Compute Salaries', to: '/sales/compute' },
+      { label: 'TA/DA Register', to: '/sales/ta-da-register' },
+      { label: 'TA/DA Upload', to: '/sales/ta-da-upload' },
+      // HR may open the URL (reads the list) but approves nothing, so the menu entry needs the approve key.
+      { label: 'TA/DA Approvals', to: '/sales/ta-da-approvals', perm: 'sales-tada-approve', tadaPendingBadge: true },
     ]
   },
   { label: 'Employee Profile', icon: '🔬', to: '/employee-profile' },
   { label: 'Dept Analytics', icon: '🏢', to: '/dept-analytics' },
-  { label: 'Salary Explainer', icon: '🤖', action: 'salaryExplainer', hrFinanceOrAdmin: true },
-  { label: 'Session Analytics', icon: '📊', to: '/session-analytics', adminOnly: true },
-  { label: 'Query Tool', icon: '🔎', to: '/admin/query-tool', adminOnly: true },
-  { label: 'SQL Console', icon: '🛠', to: '/admin/sql-console', adminOnly: true },
-  { label: 'Bug Reports', icon: '🐞', to: '/admin/bug-reports', adminOnly: true },
-  { label: 'Record History', icon: '🕰', to: '/admin/record-history', adminOnly: true },
-  { label: 'Statutory Flags', icon: '🧾', to: '/admin/statutory-flags', adminOnly: true },
+  { label: 'Salary Explainer', icon: '🤖', action: 'salaryExplainer', perm: 'salary-explainer' },
+  { label: 'Session Analytics', icon: '📊', to: '/session-analytics' },
+  { label: 'Query Tool', icon: '🔎', to: '/admin/query-tool' },
+  { label: 'SQL Console', icon: '🛠', to: '/admin/sql-console' },
+  { label: 'Bug Reports', icon: '🐞', to: '/admin/bug-reports' },
+  { label: 'Record History', icon: '🕰', to: '/admin/record-history' },
+  { label: 'Statutory Flags', icon: '🧾', to: '/admin/statutory-flags' },
   {
-    label: 'Settings', icon: '⚙️', to: '/settings', adminOnly: true,
+    label: 'Settings', icon: '⚙️', to: '/settings',
     children: [
       { label: 'Shift Master', to: '/settings/shifts' },
       { label: 'Holiday Master', to: '/settings/holidays' },
@@ -195,27 +194,20 @@ const nav = [
   },
 ]
 
-function NavItem({ item, collapsed, depth = 0, userRole, onNavigate, onAction }) {
+// True when the item is visible under these permissions (see the comment above `nav`).
+function isVisible(item, perm) {
+  if (item.children && item.children.length > 0) return item.children.some(c => isVisible(c, perm))
+  if (item.perm) return perm.can(item.perm)
+  return item.to ? perm.canPath(item.to) : false
+}
+
+function NavItem({ item, collapsed, depth = 0, userRole, perm, onNavigate, onAction }) {
   const [open, setOpen] = React.useState(false)
   const location = useLocation()
   const isActive = item.to ? (location.pathname === item.to || location.pathname.startsWith(item.to + '/')) : false
   const hasChildren = item.children && item.children.length > 0
 
-  const hidden =
-    // Hide admin-only items from non-admin users
-    (item.adminOnly && userRole !== 'admin') ||
-    // Hide finance-only items from non-finance/non-admin users
-    (item.financeOnly && userRole !== 'finance' && userRole !== 'admin') ||
-    // Hide HR/Finance/Admin-only items from other roles (Salary Explainer)
-    (item.hrFinanceOrAdmin && !['hr', 'finance', 'admin'].includes(userRole)) ||
-    // Hide Sales section from roles without 'sales-employees' permission (hr + admin)
-    (item.salesAllowed && !['hr', 'admin'].includes(userRole)) ||
-    // Phase 2: TA/DA Approvals — finance and admin see it (HR can request via
-    // employee master, but cannot approve, so the approval queue is hidden
-    // from HR to avoid clutter).
-    (item.tadaApprover && !['finance', 'admin'].includes(userRole)) ||
-    // Loans PR-4: hide the Loans entry from roles the loan API refuses.
-    (item.loansRead && !LOAN_READ_ROLES.includes(userRole))
+  const hidden = !isVisible(item, perm)
 
   // Auto-open active parent
   React.useEffect(() => {
@@ -247,15 +239,7 @@ function NavItem({ item, collapsed, depth = 0, userRole, onNavigate, onAction })
   }
 
   if (hasChildren) {
-    const visibleChildren = item.children.filter(c => {
-      if (c.adminOnly && userRole !== 'admin') return false
-      if (c.hrFinanceOrAdmin && !['hr', 'finance', 'admin'].includes(userRole)) return false
-      if (c.financeOnly && userRole !== 'finance' && userRole !== 'admin') return false
-      if (c.salesAllowed && !['hr', 'admin'].includes(userRole)) return false
-      if (c.tadaApprover && !['finance', 'admin'].includes(userRole)) return false
-      if (c.loansRead && !LOAN_READ_ROLES.includes(userRole)) return false
-      return true
-    })
+    const visibleChildren = item.children.filter(c => isVisible(c, perm))
     return (
       <li>
         <button
@@ -273,7 +257,7 @@ function NavItem({ item, collapsed, depth = 0, userRole, onNavigate, onAction })
         {!collapsed && open && (
           <ul className="mt-1 ml-4 space-y-0.5 border-l-2 border-slate-100 pl-3">
             {visibleChildren.map(child => (
-              <NavItem key={child.to} item={child} collapsed={collapsed} depth={depth + 1} userRole={userRole} onNavigate={onNavigate} />
+              <NavItem key={child.to} item={child} collapsed={collapsed} depth={depth + 1} userRole={userRole} perm={perm} onNavigate={onNavigate} />
             ))}
           </ul>
         )}
@@ -309,6 +293,8 @@ export default function Sidebar() {
   // Normalised so legacy role strings ("Finance Team", "Admin") still
   // collapse to canonical form before any === 'admin' check downstream.
   const userRole = normalizeRole(user?.role)
+  // P2-10: one permission list for the whole menu. Until it is in, no item shows.
+  const perm = usePermissions()
 
   // Close sidebar on mobile after navigation
   const handleMobileNav = () => {
@@ -367,11 +353,18 @@ export default function Sidebar() {
 
         {/* Navigation */}
         <nav className="flex-1 overflow-y-auto px-2 py-3">
-          <ul className="space-y-0.5">
-            {nav.map(item => (
-              <NavItem key={item.to || item.action || item.label} item={item} collapsed={collapsed} userRole={userRole} onNavigate={handleMobileNav} onAction={handleAction} />
-            ))}
-          </ul>
+          {perm.ready ? (
+            <ul className="space-y-0.5">
+              {nav.map(item => (
+                <NavItem key={item.to || item.action || item.label} item={item} collapsed={collapsed} userRole={userRole} perm={perm} onNavigate={handleMobileNav} onAction={handleAction} />
+              ))}
+            </ul>
+          ) : perm.failed && !collapsed ? (
+            <div className="px-3 py-2 text-xs text-slate-500" data-testid="nav-perm-error">
+              Couldn't load the menu.{' '}
+              <button type="button" onClick={() => perm.retry()} className="text-blue-600 hover:underline">Retry</button>
+            </div>
+          ) : null}
         </nav>
 
         {/* Footer */}

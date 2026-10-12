@@ -1,5 +1,5 @@
 import React, { Suspense, useEffect } from 'react'
-import { BrowserRouter, Routes, Route, Navigate, useLocation } from 'react-router-dom'
+import { BrowserRouter, Routes, Route, Navigate, useLocation, Link } from 'react-router-dom'
 import Sidebar from './components/layout/Sidebar'
 import Header from './components/layout/Header'
 import ErrorBoundary from './components/ui/ErrorBoundary'
@@ -12,6 +12,7 @@ import { getMe } from './utils/api'
 import { tracker } from './utils/sessionTracker'
 import useInactivityTimeout from './hooks/useInactivityTimeout'
 import SessionTimeoutDialog from './components/SessionTimeoutDialog'
+import { usePermissions } from './utils/permissions'
 
 // Public page
 const Login = React.lazy(() => import('./pages/Login'))
@@ -82,6 +83,48 @@ function PageLoader() {
   )
 }
 
+// P2-10: plain view for a page the role may not open. Rendered instead of the
+// page, so the page never mounts and sends none of its API calls.
+function NoAccess({ role, showDashboard }) {
+  return (
+    <div className="flex-1 flex items-center justify-center p-6" data-testid="no-access">
+      <div className="max-w-md text-center bg-white border border-slate-200 rounded-xl px-6 py-8 shadow-sm">
+        <div className="text-3xl mb-2" aria-hidden="true">🔒</div>
+        <h2 className="text-base font-semibold text-slate-800">You don't have access to this page</h2>
+        <p className="mt-2 text-sm text-slate-500">
+          Your role ({role}) can't open this page. Ask an admin if you need it.
+        </p>
+        {showDashboard && (
+          <Link to="/" className="inline-block mt-4 text-sm font-medium text-blue-600 hover:underline">Go to Dashboard</Link>
+        )}
+      </div>
+    </div>
+  )
+}
+
+// P2-10: the route guard. Every page inside Layout passes through here; the
+// page key for the URL comes from utils/permissions.js (same table the sidebar
+// uses). While the permissions load, the page is not mounted.
+function PageGate({ children }) {
+  const location = useLocation()
+  const perm = usePermissions()
+  if (!perm.ready) {
+    if (perm.failed) {
+      return (
+        <div className="flex-1 flex items-center justify-center p-6" data-testid="perm-error">
+          <div className="text-center text-sm text-slate-600">
+            <p>Couldn't load what your role can open. Check the connection and try again.</p>
+            <button type="button" onClick={() => perm.retry()} className="mt-3 px-3 py-1.5 rounded-lg bg-blue-600 text-white text-sm">Try again</button>
+          </div>
+        </div>
+      )
+    }
+    return <PageLoader />
+  }
+  if (!perm.canPath(location.pathname)) return <NoAccess role={perm.role} showDashboard={perm.canPath('/')} />
+  return children
+}
+
 function Layout({ children, title }) {
   return (
     <div className="flex h-screen overflow-hidden bg-slate-50">
@@ -91,7 +134,7 @@ function Layout({ children, title }) {
         <main className="flex-1 overflow-y-auto">
           <ErrorBoundary>
             <Suspense fallback={<PageLoader />}>
-              {children}
+              <PageGate>{children}</PageGate>
             </Suspense>
           </ErrorBoundary>
         </main>

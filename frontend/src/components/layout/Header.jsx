@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom'
 import { useAppStore } from '../../store/appStore'
 import { logout } from '../../utils/api'
 import NotificationBell from './NotificationBell'
+import { usePermissions } from '../../utils/permissions'
 import toast from 'react-hot-toast'
 
 export default function Header({ title }) {
@@ -11,6 +12,8 @@ export default function Header({ title }) {
   const [showUserMenu, setShowUserMenu] = useState(false)
   // P1-12: read here, not inside the conditional company-selector block below.
   const selectedCompany = useAppStore(s => s.selectedCompany)
+  // P2-10 (X-8): the Settings link follows the permission matrix (admin only today).
+  const { can } = usePermissions()
 
   async function handleLogout() {
     try { await logout() } catch {}
@@ -84,12 +87,14 @@ export default function Header({ title }) {
                 <span className="inline-block mt-0.5 text-xs bg-blue-100 text-blue-700 px-2 py-0.5 rounded-full capitalize">{user?.role}</span>
               </div>
               <div className="py-1">
-                <button
-                  onClick={() => { setShowUserMenu(false); navigate('/settings/policy') }}
-                  className="w-full text-left px-4 py-2 text-sm text-slate-600 hover:bg-slate-50 flex items-center gap-2"
-                >
-                  Settings
-                </button>
+                {can('settings') && (
+                  <button
+                    onClick={() => { setShowUserMenu(false); navigate('/settings/policy') }}
+                    className="w-full text-left px-4 py-2 text-sm text-slate-600 hover:bg-slate-50 flex items-center gap-2"
+                  >
+                    Settings
+                  </button>
+                )}
                 <button
                   onClick={() => { setShowUserMenu(false); handleLogout() }}
                   className="w-full text-left px-4 py-2 text-sm text-red-600 hover:bg-red-50 flex items-center gap-2"
