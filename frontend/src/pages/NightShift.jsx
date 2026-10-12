@@ -1,4 +1,5 @@
 import React, { useState } from 'react'
+import { Link } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import toast from 'react-hot-toast'
 import { getNightShifts, confirmNightShift, rejectNightShift } from '../utils/api'
@@ -249,10 +250,13 @@ export default function NightShift() {
         {summary.mediumConfidence === 0 && summary.lowConfidence === 0 && pairs.length > 0 && (
           <div className="card p-4 bg-green-50 border-green-200 flex items-center gap-3 animate-slide-up">
             <span className="text-2xl">🌙</span>
-            <div>
+            <div className="flex-1 min-w-0">
               <p className="font-semibold text-green-700">All night shifts confirmed!</p>
-              <p className="text-sm text-green-600">{summary.total} night shifts paired. Proceed to Stage 5.</p>
+              <p className="text-sm text-green-600">{summary.total} night shifts paired. Next: Stage 5 — Corrections.</p>
             </div>
+            <Link to="/pipeline/corrections" className="btn-primary shrink-0" data-testid="ns-link-stage5">
+              Go to Stage 5 →
+            </Link>
           </div>
         )}
 
