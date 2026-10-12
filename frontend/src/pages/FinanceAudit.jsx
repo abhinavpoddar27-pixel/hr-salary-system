@@ -1,7 +1,7 @@
 import React, { useState, useMemo, useEffect, useRef } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { useSearchParams, useNavigate } from 'react-router-dom'
-import { getFinanceReport, submitDayCorrection, getCorrectionHistory, getCorrectionsSummary, getManualAttendanceFlags, verifyManualFlag,
+import { getFinanceReport, submitDayCorrection, getCorrectionHistory, getCorrectionsSummary, verifyManualFlag,
   getSalaryManualFlags, approveManualFlag, bulkApproveFlags, getReadinessCheck, getVarianceReport, getStatutoryCrosscheck,
   getFinancePendingDeductions, reviewLateDeduction, bulkReviewLateDeductions, getLateComingDeductions, reverseLateDeduction,
   getCompOffPending, getCompOffList, reviewCompOff, bulkReviewCompOff,
@@ -20,6 +20,7 @@ import FinanceEarlyExitApprovals from '../components/FinanceEarlyExitApprovals'
 import clsx from 'clsx'
 import toast from 'react-hot-toast'
 import { normalizeRole } from '../utils/role'
+import api from '../utils/api'
 
 const CORRECTION_REASONS = [
   'Gate register mismatch', 'Production record mismatch',
@@ -451,6 +452,11 @@ function CorrectionsSummaryTab() {
 // N-MONEY2: the stored "verified" field is finance_verified (there is no
 // `verified` column); verified_by is set together with it.
 const isFlagVerified = (f) => Number(f.finance_verified) === 1 || !!f.verified_by
+// Same read as getManualAttendanceFlags, sent no-cache: server.js answers GETs with
+// max-age=5, so the refetch right after a Verify got the pre-verify copy and the
+// row kept its Verify button. Used by the tab and its badge (one query key).
+const getManualAttendanceFlagsFresh = (params) =>
+  api.get('/finance-audit/manual-flags', { params, headers: { 'Cache-Control': 'no-cache' } })
 
 function ManualFlagsTab() {
   const { selectedCompany, user } = useAppStore()
@@ -463,7 +469,7 @@ function ManualFlagsTab() {
 
   const { data: res, isLoading } = useQuery({
     queryKey: ['manual-flags', month, year, selectedCompany],
-    queryFn: () => getManualAttendanceFlags({ month, year, company: selectedCompany }),
+    queryFn: () => getManualAttendanceFlagsFresh({ month, year, company: selectedCompany }),
     retry: 0
   })
   const flags = res?.data?.data || res?.data || []
@@ -1444,7 +1450,7 @@ export default function FinanceAudit() {
   // Legacy manual attendance flags
   const { data: attFlagsRes } = useQuery({
     queryKey: ['manual-flags', month, year, selectedCompany],
-    queryFn: () => getManualAttendanceFlags({ month, year, company: selectedCompany }),
+    queryFn: () => getManualAttendanceFlagsFresh({ month, year, company: selectedCompany }),
     retry: 0, staleTime: 60000
   })
   const attFlagsData = attFlagsRes?.data?.data || attFlagsRes?.data || []
