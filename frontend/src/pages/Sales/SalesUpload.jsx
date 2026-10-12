@@ -571,7 +571,7 @@ function PreviewView({ uploadId, onBack }) {
       const sum = r?.data?.excess_days_summary
       toast.success(sum
         ? `Confirmed — excess: ${sum.accepted} accepted, ${sum.edited} edited, ${sum.rejected} rejected`
-        : 'Matches confirmed — ready for Phase 3 compute')
+        : 'Matches confirmed — ready to compute salaries')
       qc.invalidateQueries({ queryKey: ['sales-upload-preview', uploadId] })
       // The compute page's readiness check ("no coordinator upload yet") must not be served from cache.
       qc.invalidateQueries({ queryKey: ['sales-readiness'] })
