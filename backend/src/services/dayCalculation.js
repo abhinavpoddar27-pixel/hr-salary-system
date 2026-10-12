@@ -67,6 +67,17 @@ const CL_PAID_FROM = 2026 * 12 + 9;
  */
 const LEAVE_COUNTS_FOR_WEEKLY_OFF_FROM = 2026 * 12 + 9;
 
+/**
+ * Leave is charged only for what it pays, from September 2026 payroll (owner
+ * ruling 12 Oct 2026). EL / paid CL on:
+ *   an absent working day  → pays the day,          counts 1   (unchanged)
+ *   a half day (½P / HP)   → pays the absent half,  counts 0.5 (was: pays 0, counts 1)
+ *   a day already worked   → pays nothing,           counts 0   (was: counts 1)
+ * The count is what el_used / cl_used store, and the leave engine debits the
+ * balance from it. Earlier months keep the old rule so settled pay never moves.
+ */
+const LEAVE_CHARGED_AS_PAID_FROM = 2026 * 12 + 9;
+
 /** Get all dates in a month as YYYY-MM-DD strings */
 function getMonthDates(month, year) {
   const dates = [];
@@ -406,6 +417,8 @@ function calculateDays(employeeCode, month, year, company, attendanceRecords, le
   let paidLeaveRestored = 0;   // EL / paid CL days that covered an absent working day
   const clIsPaid = (Number(year) * 12 + Number(month)) >= CL_PAID_FROM;
   const leaveCountsForWeeklyOff = (Number(year) * 12 + Number(month)) >= LEAVE_COUNTS_FOR_WEEKLY_OFF_FROM;
+  const leaveChargedAsPaid = (Number(year) * 12 + Number(month)) >= LEAVE_CHARGED_AS_PAID_FROM;
+  let halfDayLeaveRestored = 0;  // absent halves of ½P days paid by EL / paid CL
   const consumedDates = new Set();
 
   function expandLeaveDates(startDate, endDate) {
@@ -424,6 +437,7 @@ function calculateDays(employeeCode, month, year, company, attendanceRecords, le
   // whether a leave application actually restores an absence or is merely an
   // informational credit on a day the employee was already present/on WO.
   const absentDates = new Set();
+  const halfDates = new Set();   // working days worked half (½P / HP)
   for (const dateStr of allDates) {
     if (isPreDOJ(dateStr)) continue;
     const isWeeklyOff = getDayOfWeek(dateStr) === weeklyOffDay;
@@ -440,6 +454,7 @@ function calculateDays(employeeCode, month, year, company, attendanceRecords, le
       status === 'WO' || status === 'NH'
     );
     if (!isKnownNonAbsent) absentDates.add(dateStr);
+    else if (status === '½P' || status === 'HP') halfDates.add(dateStr);
   }
 
   // ── Apply OD (compensatory-off) first ──
@@ -484,26 +499,42 @@ function calculateDays(employeeCode, month, year, company, attendanceRecords, le
       }
       consumedDates.add(d);
       const wasAbsent = absentDates.has(d);
+      const wasHalf = !wasAbsent && halfDates.has(d);
       if (wasAbsent) {
         absentDates.delete(d);
         daysAbsent = Math.max(0, daysAbsent - 1);
       }
+      // From LEAVE_CHARGED_AS_PAID_FROM a paid leave counts what it pays:
+      // 1 on an absent day, 0.5 on a half day (its absent half is paid), 0 on
+      // a day already worked. Before that, every leave day counted 1.
+      const paidPortion = wasAbsent ? 1 : (wasHalf ? 0.5 : 0);
+      const isPaidType = leaveType === 'EL' || (leaveType === 'CL' && clIsPaid);
+      if (leaveChargedAsPaid && isPaidType && wasHalf) {
+        halfDates.delete(d);
+        halfDayLeaveRestored += 0.5;
+      }
       if (leaveType === 'EL') {
-        leaveElUsed += 1;
-        // EL restores payable automatically via daysAbsent-- (no offset).
+        leaveElUsed += leaveChargedAsPaid ? paidPortion : 1;
+        // EL restores payable automatically via daysAbsent-- (no offset);
+        // a half day's absent half via halfDayLeaveRestored.
         if (wasAbsent) paidLeaveRestored += 1;
+        else if (leaveChargedAsPaid && wasHalf) paidLeaveRestored += 0.5;
       } else if (leaveType === 'CL') {
-        leaveClUsed += 1;
+        leaveClUsed += leaveChargedAsPaid ? paidPortion : 1;
         if (clIsPaid) {
           // Pay is restored by the daysAbsent-- above (no offset); this
           // counter only feeds the integrity check below.
           if (wasAbsent) { paidClDays += 1; paidLeaveRestored += 1; }
+          else if (leaveChargedAsPaid && wasHalf) { paidClDays += 0.5; paidLeaveRestored += 0.5; }
         } else {
           unpaidLeaveDays += 1;     // pre-Sep-2026 months: relabel only
         }
       } else if (leaveType === 'LWP') {
         leaveLwpUsed += 1;
-        unpaidLeaveDays += 1;
+        // LWP relabels an absence as informed; it must not cut a day the
+        // employee worked (from LEAVE_CHARGED_AS_PAID_FROM — before that, an
+        // LWP on a worked or half day also deducted a day).
+        if (!leaveChargedAsPaid || wasAbsent) unpaidLeaveDays += 1;
       }
     }
   }
@@ -551,7 +582,8 @@ function calculateDays(employeeCode, month, year, company, attendanceRecords, le
   //   double-count as restored payable — they reclassify the absence
   //   from "uninformed" to "informed" without changing the payable total.
   let baseEntitlement = workingDays + paidWeeklyOffs + paidHolidays;
-  let totalAbsences = daysAbsent + daysHalfPresent + unpaidLeaveDays;
+  // halfDayLeaveRestored: the absent half of a ½P day paid by EL / paid CL.
+  let totalAbsences = daysAbsent + daysHalfPresent - halfDayLeaveRestored + unpaidLeaveDays;
   // WOP is ADDITIONAL — on top of entitlement
   let rawPayable = baseEntitlement - totalAbsences + daysWOP;
   const manualGrantDays = options.manualExtraDutyDays || 0;
