@@ -424,13 +424,8 @@ export default function FinanceVerification() {
           ExtraDutyGrants.jsx for consistency. */}
       {activeTab === 'misspunch' && (
         <div className="space-y-3">
-          {/* Diagnostic banner — same surface as Extra Duty page so finance
-              users can immediately see what role the frontend detects. */}
-          <div className="rounded-lg border border-blue-200 bg-blue-50 px-4 py-2 text-[11px] text-blue-900 flex flex-wrap items-center gap-x-4 gap-y-1">
-            <span><strong>User:</strong> {user?.username || '(unknown)'}</span>
-            <span><strong>Role:</strong> <code className="bg-blue-100 px-1 rounded">{JSON.stringify(user?.role)}</code></span>
-            <span><strong>canFinance:</strong> <code className={clsx('px-1 rounded', canAct ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800')}>{String(canAct)}</code></span>
-            <span className="ml-auto text-slate-500">{missPunches.length} pending review</span>
+          <div className="flex justify-end text-xs text-slate-500">
+            <span>{missPunches.length} pending review</span>
           </div>
 
           {canAct && mpSelectedIds.length > 0 && (
@@ -513,8 +508,6 @@ export default function FinanceVerification() {
       {activeTab === 'held' && (
         <div className="space-y-3">
           <div className="rounded-lg border border-blue-200 bg-blue-50 px-4 py-2 text-[11px] text-blue-900 flex flex-wrap items-center gap-x-4 gap-y-1">
-            <span><strong>User:</strong> {user?.username || '(unknown)'}</span>
-            <span><strong>canFinance:</strong> <code className={clsx('px-1 rounded', canAct ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800')}>{String(canAct)}</code></span>
             <span className="ml-auto text-slate-500">{heldSalaries.length} held</span>
             <button onClick={() => navigate('/pipeline/salary?filter=held')} className="text-blue-600 hover:underline font-medium">
               View in Stage 7 →

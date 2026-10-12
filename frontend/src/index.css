@@ -59,6 +59,17 @@
       disabled:opacity-50 disabled:cursor-not-allowed
       transition-all duration-150;
   }
+  .btn-warning {
+    @apply inline-flex items-center justify-center gap-2 px-4 py-2.5
+      bg-gradient-to-b from-amber-500 to-amber-600
+      text-white text-sm font-semibold rounded-xl
+      shadow-sm shadow-amber-200/50
+      hover:from-amber-600 hover:to-amber-700 hover:shadow-md
+      active:scale-[0.98]
+      focus:outline-none focus:ring-2 focus:ring-amber-400 focus:ring-offset-2
+      disabled:opacity-50 disabled:cursor-not-allowed
+      transition-all duration-150;
+  }
   .btn-ghost {
     @apply inline-flex items-center justify-center gap-2 px-3 py-2
       text-slate-600 text-sm font-medium rounded-xl
