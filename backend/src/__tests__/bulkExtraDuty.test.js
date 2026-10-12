@@ -52,7 +52,7 @@ beforeAll(() => {
   ins.run('S0901', 'Test Sales', 'SALES', CO, 'Active', null);
 });
 afterAll(() => api.close());
-beforeEach(() => { clearGrants(); db.prepare('DELETE FROM monthly_imports').run(); });
+beforeEach(() => { clearGrants(); db.prepare('DELETE FROM monthly_imports').run(); db.prepare('DELETE FROM audit_log').run(); });
 
 function seedAuto(code) {
   return db.prepare(`INSERT INTO extra_duty_grants (employee_code, grant_date, month, year, company, grant_type, duty_days,

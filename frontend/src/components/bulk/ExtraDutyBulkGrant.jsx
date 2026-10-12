@@ -59,7 +59,8 @@ export default function ExtraDutyBulkGrant({ onClose, onSaved, pageMonth, pageYe
 
   const { data: empRes } = useQuery({ queryKey: ['ed-bulk-employees'], queryFn: getEdEmployeesLite, staleTime: 60000, retry: 0 })
   const employees = empRes?.data?.data || []
-  const activeCodes = useMemo(() => new Set(employees.filter(e => /^active$/i.test(String(e.status || '').trim())).map(e => String(e.code))), [employees])
+  // null until the list has loaded, so CopyFromDate never drops everyone as "not active".
+  const activeCodes = useMemo(() => (employees.length ? new Set(employees.filter(e => /^active$/i.test(String(e.status || '').trim())).map(e => String(e.code))) : null), [employees])
 
   // ── Check (preview): re-run 400 ms after any change ──
   const request = useMemo(() => ({
@@ -154,7 +155,7 @@ export default function ExtraDutyBulkGrant({ onClose, onSaved, pageMonth, pageYe
     const refusedCodes = out.filter(b => b.status === 'refused').flatMap(b => b.codes)
     const keep = new Set(refusedCodes.map(c => c.toLowerCase()))
     setDraft(v => ({ codes: v.codes.filter(c => keep.has(c.toLowerCase())) }))
-    if (!refusedCodes.length) draft.markSaved()
+    if (!refusedCodes.length) draft.clear() // nothing left to save — start clean next time
     setResult({ batches: out, total: groups.length, date: common.grant_date })
     onSaved?.()
   }
