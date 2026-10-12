@@ -25,12 +25,17 @@ Read this file, then `git log --oneline origin/main..HEAD`. State: BUILT, verifi
 5. payroll.js guard lines (calculate-days, compute-salary, finalise) — a3e131a
 6. FinanceAudit.jsx attendance flags — 9ea3c3c, 9e7cd18 (no-cache read so Verify clears at once)
 7. Tests — 66e1105 (moneyPermissionBatch4.test.js 35; 24 fail on origin/main, the 11 that pass are controls)
+8. F-1 (planner ruling 12 Oct: salary-input.js handed over) — `PUT /salary-input/approve/:id` writes the request's
+   basic/hra/da_percent (0–100, present only) to the new row (insert path) and to a same-date row (update path);
+   a request without them keeps the in-force row's percents. resolveApproval unchanged. +4 tests (3 fail on dffb8fe;
+   the 4th — no-percent request — is the control).
 
 ## Verified
-- jest 116 suites / 2075 (was 115 / 2040). employeeBankColumns "changed split writes" test changed on purpose.
+- jest 116 suites / 2079 (was 115 / 2040). employeeBankColumns "changed split writes" test changed on purpose.
 - backend/scripts/attendance-flags-verify-role-check.py 21/21 twice; --base on origin/main 2/2 (hr sees Verify;
   a finance_verified=1 row without verified_by shows as unverified).
-- Re-run: ed-return-simulation.py 29/29, salary-flag-revert-and-approve-check.py 31/31. frontend build OK.
+- Re-run: ed-return-simulation.py 29/29, salary-flag-revert-and-approve-check.py 31/31, salary-change-approver-view-check.py
+  58/58 (after F-1). frontend build OK.
 
 ## CLAUDE.md entry
 ## Last Session — 2026-10-12 (N-MONEY2: money permission batch 4)
@@ -42,14 +47,13 @@ Read this file, then `git log --oneline origin/main..HEAD`. State: BUILT, verifi
 - **ED:** finance-approve only APPROVED + UNREVIEWED/FINANCE_FLAGGED (else 409; rejected → "Return to HR"); bulk → `skipped`.
 - **Guards:** GET /tax-declarations/:code(+/calculate) and POST /payroll/calculate-days, compute-salary, finalise → hr/finance/admin.
 - **UI:** Attendance Flags reads `finance_verified` (no `verified` column), Verify only for finance/admin, list read no-cache.
-- **Fragile:** request match = latest Approved gross-changing request; approval of a split request keeps OLD percent columns
-  (salary-input.js carries them) → the window shows stale % after approval. 'Reverted' has no badge in SalaryInput history.
-- **Verified:** jest 115/2040 → 116/2075; attendance-flags check 21/21, --base 2/2. **Not tested:** Railway; production data.
+- **F-1:** `PUT /salary-input/approve/:id` writes the request's basic/hra/da_percent (Employee Master requests carry them);
+  a request without them keeps the in-force row's % (Salary Input page). Later gross changes keep the approved split.
+- **Fragile:** request match = latest Approved gross-changing request. 'Reverted' has no badge in SalaryInput history.
+- **Verified:** jest 115/2040 → 116/2079; attendance-flags check 21/21, --base 2/2. **Not tested:** Railway; production data.
 
 ## Findings not fixed (outside owned files)
-- F-1 salary-input.js approve carries basic/hra/da_percent from the in-force row, not the request → after a split
-  approval the Employee Master window shows the old %; a later gross change re-derives from those old % and undoes
-  the split. Fix: write the request's percents (or derive from amounts) at approval.
+- F-1 FIXED on this branch (see Done 8).
 - F-2 SalaryInput.jsx history has no badge for status 'Reverted' (renders nothing).
 - F-3 ExtraDutyGrants.jsx bulk approve toast ignores `skipped`; single approve has no onError toast of its own.
 - F-4 hr gets a 403 from GET /comp-off/pending on every Finance Audit load (Comp Off tab badge).
