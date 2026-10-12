@@ -64,4 +64,4 @@ HR", ticked), Q2 (auto-split ≤ 50); planner Q-A (one HR_BULK_CREATE audit per 
 - **Not tested:** Railway; production data; Safari/Firefox; two people saving the same date at once from two machines (server
   hash + IMMEDIATE txn is the guard, jest covers the changed-data path).
 - **Found, not fixed:** single "+ New Grant" still takes company from the top-bar filter and does not check active/finalised
-  (unchanged by design); ED page header row does not wrap at 390 px (pre-existing).
+  (unchanged by design). Page padding changed p-6 → p-4 md:p-6 for phones; only the bulk panel's width was checked at 390 px.
