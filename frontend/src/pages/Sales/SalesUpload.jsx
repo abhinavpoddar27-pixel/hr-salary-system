@@ -584,6 +584,34 @@ function PreviewView({ uploadId, onBack }) {
     && excessAllResolved && upload?.status === 'uploaded'
   const isLocked = upload?.status !== 'uploaded'
 
+  // P4-05 (finding S-6): say in plain words why Confirm is disabled, and once the
+  // matches are confirmed offer the next step (compute this upload's cycle).
+  const excessPending = excess.filter(r => {
+    const st = excessActions[r.id]
+    return !st || st.action === 'pending'
+  }).length
+  const confirmBlockReasons = []
+  if (upload && upload.status !== 'uploaded') {
+    confirmBlockReasons.push(
+      upload.status === 'superseded' ? 'A newer upload for this cycle replaced this one.'
+        : upload.status === 'rejected' ? 'This upload was rejected.'
+        : 'These matches are already confirmed.')
+  } else {
+    if (low.length > 0) confirmBlockReasons.push(`${low.length} row${low.length === 1 ? '' : 's'} in the Low tab need${low.length === 1 ? 's' : ''} the right employee picked.`)
+    if (unmatched.length > 0) confirmBlockReasons.push(`${unmatched.length} row${unmatched.length === 1 ? ' has' : 's have'} no employee yet — link ${unmatched.length === 1 ? 'it' : 'them'} in the Unmatched tab.`)
+    if (excessPending > 0) confirmBlockReasons.push(`${excessPending} row${excessPending === 1 ? '' : 's'} in the Excess Days tab need${excessPending === 1 ? 's' : ''} Accept, Edit or Reject.`)
+  }
+  const confirmed = !!upload && ['matched', 'computed', 'finalized'].includes(upload.status)
+  const setMonthYear = useAppStore(s => s.setMonthYear)
+  const setSelectedCompany = useAppStore(s => s.setSelectedCompany)
+  const navigate = useNavigate()
+  const goToCompute = () => {
+    // Compute reads the cycle from the global month/company — point it at this upload's.
+    setMonthYear(upload.month, upload.year)
+    setSelectedCompany(upload.company)
+    navigate('/sales/compute')
+  }
+
   const rowsForTab = tab === 'matched' ? matched
     : tab === 'low' ? low
     : tab === 'unmatched' ? unmatched
@@ -629,16 +657,34 @@ function PreviewView({ uploadId, onBack }) {
             )}
           </div>
         </div>
-        <div className="flex items-center gap-2">
-          <button onClick={onBack} className="btn-secondary btn-sm">
-            ← Upload another
-          </button>
-          <button
-            onClick={() => confirmMut.mutate()}
-            disabled={!canConfirm || confirmMut.isPending}
-            className="btn-primary btn-sm">
-            {confirmMut.isPending ? 'Confirming…' : 'Confirm Matches'}
-          </button>
+        <div className="flex flex-col items-end gap-1">
+          <div className="flex items-center gap-2">
+            <button onClick={onBack} className="btn-secondary btn-sm">
+              ← Upload another
+            </button>
+            {confirmed ? (
+              <button onClick={goToCompute} className="btn-primary btn-sm" data-testid="sales-go-compute">
+                Go to Compute →
+              </button>
+            ) : (
+              <button
+                onClick={() => confirmMut.mutate()}
+                disabled={!canConfirm || confirmMut.isPending}
+                className="btn-primary btn-sm" data-testid="sales-confirm">
+                {confirmMut.isPending ? 'Confirming…' : 'Confirm Matches'}
+              </button>
+            )}
+          </div>
+          {!confirmed && !canConfirm && confirmBlockReasons.length > 0 && (
+            <div className="text-xs text-amber-700 text-right max-w-md" data-testid="sales-confirm-reason">
+              <span className="font-semibold">Confirm is off: </span>{confirmBlockReasons.join(' ')}
+            </div>
+          )}
+          {confirmed && (
+            <div className="text-xs text-green-700 text-right" data-testid="sales-confirmed-note">
+              Matches confirmed — next, compute salaries for {MONTHS[upload.month]} {upload.year}.
+            </div>
+          )}
         </div>
       </div>
 

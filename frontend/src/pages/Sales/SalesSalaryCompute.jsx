@@ -1,5 +1,5 @@
 import React, { useState, useMemo, useRef } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { Link, useNavigate } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import toast from 'react-hot-toast'
 import clsx from 'clsx'
@@ -261,6 +261,98 @@ export default function SalesSalaryCompute() {
     }
   }
 
+  // P4-05 (finding S-4): the readiness banner is shown in BOTH modes — before the
+  // first compute (where it matters most) and on the register. One element, two places.
+  const readinessBanner = (
+    readiness && (readiness.summary.blockers > 0 || readiness.summary.warnings > 0) && (
+      <div data-testid="sales-readiness" className={clsx(
+        'mb-3 rounded-lg border px-4 py-3',
+        readiness.summary.blockers > 0
+          ? 'bg-red-50 border-red-300 text-red-800'
+          : 'bg-amber-50 border-amber-300 text-amber-800'
+      )}>
+        <div className="flex items-center justify-between gap-3 flex-wrap">
+          <div className="flex items-center gap-3 text-sm flex-wrap">
+            <span className="font-semibold">
+              {readiness.summary.blockers > 0 ? '🔴' : '⚠️'}{' '}
+              {readiness.summary.blockers} blocker{readiness.summary.blockers === 1 ? '' : 's'}
+              {' · '}
+              {readiness.summary.warnings} warning{readiness.summary.warnings === 1 ? '' : 's'}
+              {' · '}
+              {readiness.summary.ok} ready
+            </span>
+            <span className="text-xs opacity-75">
+              {readiness.summary.blockers > 0
+                ? `Salary will not compute for ${readiness.summary.blockers} entry/entries (missing gross salary). Fix in master before running.`
+                : 'Compute will run; downstream exports may exclude flagged employees.'}
+            </span>
+          </div>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => setReadinessExpanded(v => !v)}
+              className="text-xs underline hover:no-underline"
+            >
+              {readinessExpanded ? 'Hide ▲' : 'View details ▼'}
+            </button>
+            <button
+              onClick={() => readinessQ.refetch()}
+              className="text-xs underline hover:no-underline disabled:opacity-50"
+              disabled={readinessQ.isFetching}
+            >
+              {readinessQ.isFetching ? 'Refreshing…' : 'Refresh ↻'}
+            </button>
+          </div>
+        </div>
+        {/* P4-05: cycle-level warnings (e.g. no coordinator upload yet) are shown
+            up front, not only inside "View details". */}
+        {readiness.cycle_warnings?.length > 0 && (
+          <div className="mt-2 text-sm" data-testid="sales-cycle-warnings">
+            {readiness.cycle_warnings.map((w, i) => (
+              <div key={`cwt${i}`}>
+                • {w.reason_label}
+                {w.reason_code === 'NO_ATTENDANCE_UPLOADED' && (
+                  <>{' — '}<Link to="/sales/upload" className="font-semibold underline hover:no-underline" data-testid="sales-link-upload">Upload the coordinator sheet →</Link></>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
+        {readinessExpanded && (
+          <div className="mt-3 max-h-64 overflow-y-auto text-xs">
+            {readiness.summary.blockers > 0 && (
+              <div className="mb-2">
+                <div className="font-semibold mb-1">BLOCKERS — salary will not compute (fix master first)</div>
+                {readiness.issues.filter(i => i.severity === 'blocker').map((i, idx) => (
+                  <div key={`b${idx}`} className="font-mono">
+                    <span className="inline-block w-16">{i.code}</span>
+                    <span className="inline-block w-40 truncate">{i.name}</span>
+                    <span className="inline-block w-32 truncate opacity-75">{i.city || '—'}</span>
+                    <span className="inline-block w-16">Class {i.ta_da_class ?? '—'}</span>
+                    <span>{i.reason_label}</span>
+                  </div>
+                ))}
+              </div>
+            )}
+            {readiness.issues.filter(i => i.severity === 'warning').length > 0 && (
+              <div>
+                <div className="font-semibold mb-1">WARNINGS — salary will compute; TA/DA register or NEFT export may be incomplete</div>
+                {readiness.issues.filter(i => i.severity === 'warning').map((i, idx) => (
+                  <div key={`w${idx}`} className="font-mono">
+                    <span className="inline-block w-16">{i.code}</span>
+                    <span className="inline-block w-40 truncate">{i.name}</span>
+                    <span className="inline-block w-32 truncate opacity-75">{i.city || '—'}</span>
+                    <span className="inline-block w-16">Class {i.ta_da_class ?? '—'}</span>
+                    <span>{i.reason_label}</span>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+    )
+  )
+
   // ── Pre-compute mode ─────────────────────────────────
   if (monthYearReady && !regLoading && !hasRows) {
     return (
@@ -280,6 +372,8 @@ export default function SalesSalaryCompute() {
             <DateSelector {...dateProps} />
           </div>
         </div>
+
+        {readinessBanner}
 
         <div className="card p-8 text-center">
           <div className="text-4xl mb-3">₹</div>
@@ -348,86 +442,7 @@ export default function SalesSalaryCompute() {
         <div className="card p-6 text-sm text-slate-400">Loading…</div>
       )}
 
-      {readiness && (readiness.summary.blockers > 0 || readiness.summary.warnings > 0) && (
-        <div className={clsx(
-          'mb-3 rounded-lg border px-4 py-3',
-          readiness.summary.blockers > 0
-            ? 'bg-red-50 border-red-300 text-red-800'
-            : 'bg-amber-50 border-amber-300 text-amber-800'
-        )}>
-          <div className="flex items-center justify-between gap-3 flex-wrap">
-            <div className="flex items-center gap-3 text-sm flex-wrap">
-              <span className="font-semibold">
-                {readiness.summary.blockers > 0 ? '🔴' : '⚠️'}{' '}
-                {readiness.summary.blockers} blocker{readiness.summary.blockers === 1 ? '' : 's'}
-                {' · '}
-                {readiness.summary.warnings} warning{readiness.summary.warnings === 1 ? '' : 's'}
-                {' · '}
-                {readiness.summary.ok} ready
-              </span>
-              <span className="text-xs opacity-75">
-                {readiness.summary.blockers > 0
-                  ? `Salary will not compute for ${readiness.summary.blockers} entry/entries (missing gross salary). Fix in master before running.`
-                  : 'Compute will run; downstream exports may exclude flagged employees.'}
-              </span>
-            </div>
-            <div className="flex items-center gap-2">
-              <button
-                onClick={() => setReadinessExpanded(v => !v)}
-                className="text-xs underline hover:no-underline"
-              >
-                {readinessExpanded ? 'Hide ▲' : 'View details ▼'}
-              </button>
-              <button
-                onClick={() => readinessQ.refetch()}
-                className="text-xs underline hover:no-underline disabled:opacity-50"
-                disabled={readinessQ.isFetching}
-              >
-                {readinessQ.isFetching ? 'Refreshing…' : 'Refresh ↻'}
-              </button>
-            </div>
-          </div>
-          {readinessExpanded && (
-            <div className="mt-3 max-h-64 overflow-y-auto text-xs">
-              {readiness.cycle_warnings?.length > 0 && (
-                <div className="mb-2 italic">
-                  {readiness.cycle_warnings.map((w, i) => (
-                    <div key={`cw${i}`}>• {w.reason_label}</div>
-                  ))}
-                </div>
-              )}
-              {readiness.summary.blockers > 0 && (
-                <div className="mb-2">
-                  <div className="font-semibold mb-1">BLOCKERS — salary will not compute (fix master first)</div>
-                  {readiness.issues.filter(i => i.severity === 'blocker').map((i, idx) => (
-                    <div key={`b${idx}`} className="font-mono">
-                      <span className="inline-block w-16">{i.code}</span>
-                      <span className="inline-block w-40 truncate">{i.name}</span>
-                      <span className="inline-block w-32 truncate opacity-75">{i.city || '—'}</span>
-                      <span className="inline-block w-16">Class {i.ta_da_class ?? '—'}</span>
-                      <span>{i.reason_label}</span>
-                    </div>
-                  ))}
-                </div>
-              )}
-              {readiness.issues.filter(i => i.severity === 'warning').length > 0 && (
-                <div>
-                  <div className="font-semibold mb-1">WARNINGS — salary will compute; TA/DA register or NEFT export may be incomplete</div>
-                  {readiness.issues.filter(i => i.severity === 'warning').map((i, idx) => (
-                    <div key={`w${idx}`} className="font-mono">
-                      <span className="inline-block w-16">{i.code}</span>
-                      <span className="inline-block w-40 truncate">{i.name}</span>
-                      <span className="inline-block w-32 truncate opacity-75">{i.city || '—'}</span>
-                      <span className="inline-block w-16">Class {i.ta_da_class ?? '—'}</span>
-                      <span>{i.reason_label}</span>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
-          )}
-        </div>
-      )}
+      {readinessBanner}
 
       {lastExcluded.length > 0 && (
         <div className="bg-amber-50 border border-amber-200 rounded-lg p-4 text-sm text-amber-800">
