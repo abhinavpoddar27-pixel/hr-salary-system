@@ -47,6 +47,15 @@ const { normalizeCompany } = require('./salaryComputation');
 /** Hardcoded lenience: max absent working days before ANY weekly off is lost */
 const WEEKLY_OFF_LENIENCY = 2;
 
+/**
+ * CL is paid leave from September 2026 payroll (owner ruling 12 Oct 2026).
+ * From this month on, an approved CL day restores a payable day exactly like
+ * EL. Earlier months keep the old rule (CL relabels the absence, payable
+ * unchanged) so a re-run of an old month — e.g. June 2025, 195.5 CL days —
+ * never changes pay that was already settled. Compare year*12+month.
+ */
+const CL_PAID_FROM = 2026 * 12 + 9;
+
 /** Get all dates in a month as YYYY-MM-DD strings */
 function getMonthDates(month, year) {
   const dates = [];
@@ -369,9 +378,10 @@ function calculateDays(employeeCode, month, year, company, attendanceRecords, le
   // Rules:
   //   EL  → daysAbsent--          (absence restored as paid leave — payable ↑)
   //   OD  → daysPresent++         (comp-off grant restores day as worked — payable ↑)
-  //   CL  → daysAbsent-- + unpaidLeaveDays++  (reclassify absence; payable unchanged)
-  //   SL  → same as CL (treated as informed but unpaid for pipeline math)
-  //   LWP → same as CL
+  //   CL  → from CL_PAID_FROM (Sep 2026): daysAbsent-- only (paid, like EL)
+  //         before that: daysAbsent-- + unpaidLeaveDays++ (payable unchanged)
+  //   SL  → abolished Sept 2026: counted in sl_used only, day left as found
+  //   LWP → daysAbsent-- + unpaidLeaveDays++ (informed but unpaid)
   //
   // consumedDates prevents a single calendar date from being consumed by both
   // a comp-off grant and an overlapping leave application.
@@ -381,6 +391,8 @@ function calculateDays(employeeCode, month, year, company, attendanceRecords, le
   let leaveLwpUsed = 0;
   let odDays = 0;
   let unpaidLeaveDays = 0;
+  let paidClDays = 0;
+  const clIsPaid = (Number(year) * 12 + Number(month)) >= CL_PAID_FROM;
   const consumedDates = new Set();
 
   function expandLeaveDates(startDate, endDate) {
@@ -468,7 +480,13 @@ function calculateDays(employeeCode, month, year, company, attendanceRecords, le
         // EL restores payable automatically via daysAbsent-- (no offset).
       } else if (leaveType === 'CL') {
         leaveClUsed += 1;
-        unpaidLeaveDays += 1;
+        if (clIsPaid) {
+          // Pay is restored by the daysAbsent-- above (no offset); this
+          // counter only feeds the integrity check below.
+          if (wasAbsent) paidClDays += 1;
+        } else {
+          unpaidLeaveDays += 1;     // pre-Sep-2026 months: relabel only
+        }
       } else if (leaveType === 'LWP') {
         leaveLwpUsed += 1;
         unpaidLeaveDays += 1;
@@ -513,8 +531,8 @@ function calculateDays(employeeCode, month, year, company, attendanceRecords, le
   // After leave post-processing:
   //   daysAbsent has been decremented for every restored absence
   //   daysPresent has been incremented for every OD (comp-off) grant
-  //   unpaidLeaveDays (CL+SL+LWP) is added back so those absences don't
-  //   double-count as restored payable — CL/SL/LWP reclassify the absence
+  //   unpaidLeaveDays (LWP, and CL before Sep 2026) is added back so those absences don't
+  //   double-count as restored payable — they reclassify the absence
   //   from "uninformed" to "informed" without changing the payable total.
   let baseEntitlement = workingDays + paidWeeklyOffs + paidHolidays;
   let totalAbsences = daysAbsent + daysHalfPresent + unpaidLeaveDays;
@@ -536,7 +554,7 @@ function calculateDays(employeeCode, month, year, company, attendanceRecords, le
   // Substituting and simplifying gives the expression below. If this
   // mismatches, either a ghost record slipped through, the status
   // classification is missing a new code, or the leave accounting drifted.
-  const expectedPayable = daysPresent + daysHalfPresent + paidWeeklyOffs + paidHolidays + daysWOP + manualGrantDays + leaveElUsed;
+  const expectedPayable = daysPresent + daysHalfPresent + paidWeeklyOffs + paidHolidays + daysWOP + manualGrantDays + leaveElUsed + paidClDays;
   if (Math.abs(finalPayable - expectedPayable) > 0.01) {
     console.warn(
       `${RID} Integrity warning ${employeeCode} ${month}/${year}: ` +
@@ -603,8 +621,9 @@ function calculateDays(employeeCode, month, year, company, attendanceRecords, le
     totalAbsences: Math.round(totalAbsences * 100) / 100,
     effectivePresent: Math.round(effectivePresent * 100) / 100,
 
-    // Leave fields (Phase 2 — April 2026). CL/SL/LWP reclassify absences
-    // without changing payable; EL restores payable; OD restores as present.
+    // Leave fields (Phase 2 — April 2026). LWP (and CL before Sep 2026)
+    // reclassify absences without changing payable; EL and CL (from Sep 2026)
+    // restore payable; OD restores as present.
     clUsed: Math.round(leaveClUsed * 100) / 100,
     elUsed: Math.round(leaveElUsed * 100) / 100,
     slUsed: Math.round(leaveSlUsed * 100) / 100,
