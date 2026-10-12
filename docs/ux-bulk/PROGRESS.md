@@ -229,7 +229,7 @@ After merge: one docs PR folds the 7 "## CLAUDE.md entry" blocks from each branc
 - #141 MERGED: CLAUDE.md entries for batch 3.
 - Lesson: run the full jest once between 00:00–05:30 IST in the integration step when a batch touches date handling.
 
-## Batch 4 (12 Oct 2026) — PRs #155–#160, opened, waiting for merge
+## Batch 4 (12 Oct 2026) — PRs #155–#160, ALL MERGED 12 Oct (docs fold #162; symlink cleanup #161)
 | PR | ID | Branch | Review | Checks |
 |---|---|---|---|---|
 | #155 | P3-01 bulk engine + ED bulk grant + F-11 | feat/bulk-ed-grant | SHIP WITH FIXES → F1 (undo compares whole row), F2 (save guard), F3 (text) applied | jest +22, bulk-ed 50/50 |
@@ -252,3 +252,6 @@ Integration (all 6 on 8abee969): jest 119/2120, build clean, all batch-4 checks 
 - P3-IST-BE: 36 backend UTC "today" lines in 11 routes; money one = new salary structure effective_from (employees.js:317/580).
 - Browser-clock month/year defaults: appStore.js:57-58, SalaryExplainer, LoanImport, LoanActionModals, SalesHolidayMaster, ContractorReport; loanUi.js own IST copy; minusMonthsIso duplicated (EmployeeProfile, DeptAnalytics) → formatters.js.
 - Single "+ New Grant" takes company from the top-bar filter, no active / finalised-month check.
+
+### Batch 4 close-out
+- All six merged 12 Oct. #159 stalled because commit 571e6bd5 (#155) committed two node_modules symlinks (planner's `git add -A`); main deploy was unaffected. #161 untracks them and ignores node_modules as file or dir. #162 folds CLAUDE.md entries + the staging rule.
