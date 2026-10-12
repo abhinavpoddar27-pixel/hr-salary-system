@@ -1,5 +1,4 @@
 import React, { useState, useMemo } from 'react'
-import { todayIST, addDaysIso } from '../utils/formatters'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import {
   getDWFinancePending, getDWEntries,
@@ -10,8 +9,17 @@ import { useAppStore } from '../store/appStore'
 import { canFinance as canFinanceFn } from '../utils/role'
 import clsx from 'clsx'
 import toast from 'react-hot-toast'
+import { todayIST, addDaysIso } from '../utils/formatters'
 
 function fmt(n) { return (n || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) }
+
+// The four finance queues, in tab order (P4-04).
+const QUEUES = [
+  { key: 'pending', label: 'Pending review', tab: 'Pending Review', hint: 'waiting for your decision', tone: 'text-amber-600' },
+  { key: 'corrections', label: 'Needs correction', tab: 'Needs Correction', hint: 'sent back to HR', tone: 'text-red-600' },
+  { key: 'flagged', label: 'Flagged', tab: 'Flagged', hint: 'held for a closer look', tone: 'text-orange-600' },
+  { key: 'approved', label: 'Approved', tab: 'Recently Approved', hint: 'in the last 7 days', tone: 'text-green-600' },
+]
 
 const STATUS_STYLES = {
   pending_finance: 'bg-amber-100 text-amber-700',
@@ -29,6 +37,33 @@ export default function DailyWageFinanceReview() {
   const [remarks, setRemarks] = useState({}) // { [entryId]: string }
   const [selectedIds, setSelectedIds] = useState([])
   const [expandedCtx, setExpandedCtx] = useState(null)
+
+  // "Recently approved" = the last 7 days counted in IST (P2-03 rule: never the UTC date).
+  const approvedFrom = addDaysIso(todayIST(), -7)
+
+  // ── Queue counts up front (P4-04, finding D-2) ───────────────
+  // The tab lists below only load when their tab is open, so the counts were
+  // empty until clicked. GET /entries returns a whole-table status summary with
+  // any page, so a one-row read gives every queue count; the approved count is
+  // the total of a one-row read over the same 7-day window as the tab.
+  const { data: countsRes, isError: countsFailed } = useQuery({
+    queryKey: ['dw-finance-counts'],
+    queryFn: () => getDWEntries({ limit: 1 }),
+    retry: 0
+  })
+  const { data: approvedCountRes } = useQuery({
+    queryKey: ['dw-finance-counts', 'approved', approvedFrom],
+    queryFn: () => getDWEntries({ status: 'approved', date_from: approvedFrom, limit: 1 }),
+    retry: 0
+  })
+  const queueSummary = countsRes?.data?.summary || null
+  const approvedRecentCount = approvedCountRes?.data?.pagination?.total ?? null
+  const queueCount = (key) => {
+    if (key === 'approved') return approvedRecentCount
+    if (!queueSummary) return null
+    const col = { pending: 'pending_finance', corrections: 'needs_correction', flagged: 'flagged' }[key]
+    return Number(queueSummary[col] || 0)
+  }
 
   // ── Queries ─────────────────────────────────────────────────
   const { data: pendingRes, isLoading: loadingPending } = useQuery({
@@ -54,9 +89,7 @@ export default function DailyWageFinanceReview() {
 
   const { data: approvedRes } = useQuery({
     queryKey: ['dw-entries-recently-approved'],
-    queryFn: () => {
-      return getDWEntries({ status: 'approved', date_from: addDaysIso(todayIST(), -7), limit: 100 })
-    },
+    queryFn: () => getDWEntries({ status: 'approved', date_from: approvedFrom, limit: 100 }),
     retry: 0, enabled: activeTab === 'approved'
   })
   const approvedEntries = approvedRes?.data?.data || []
@@ -67,6 +100,7 @@ export default function DailyWageFinanceReview() {
     qc.invalidateQueries({ queryKey: ['dw-entries-needs-correction'] })
     qc.invalidateQueries({ queryKey: ['dw-entries-flagged'] })
     qc.invalidateQueries({ queryKey: ['dw-entries-recently-approved'] })
+    qc.invalidateQueries({ queryKey: ['dw-finance-counts'] })
   }
 
   const approveMut = useMutation({
@@ -150,14 +184,31 @@ export default function DailyWageFinanceReview() {
         <p className="text-sm text-slate-500 mt-0.5">Review and approve daily wage entries</p>
       </div>
 
+      {/* Queue counts up front — click a card to open that queue */}
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-3" data-testid="dw-queue-counts">
+        {QUEUES.map(q => {
+          const n = queueCount(q.key)
+          return (
+            <button key={q.key} type="button" data-testid={`dw-count-${q.key}`}
+              onClick={() => { setActiveTab(q.key); setSelectedIds([]) }}
+              className={clsx('text-left rounded-lg border px-4 py-3 transition-colors',
+                activeTab === q.key ? 'border-blue-500 bg-blue-50' : 'border-slate-200 bg-white hover:bg-slate-50')}>
+              <div className="text-xs font-semibold text-slate-500 uppercase tracking-wide">{q.label}</div>
+              <div className={clsx('text-2xl font-bold mt-0.5', n > 0 ? q.tone : 'text-slate-400')} data-testid={`dw-count-${q.key}-value`}>
+                {n == null ? (countsFailed ? '—' : '…') : n}
+              </div>
+              <div className="text-xs text-slate-500">{q.hint}</div>
+            </button>
+          )
+        })}
+      </div>
+      {countsFailed && (
+        <p className="text-xs text-amber-700">Couldn't load the queue counts — open a tab to see its entries.</p>
+      )}
+
       {/* Tabs */}
       <div className="flex gap-1 border-b border-slate-200">
-        {[
-          { key: 'pending', label: 'Pending Review', count: pendingEntries.length },
-          { key: 'corrections', label: 'Needs Correction', count: correctionEntries.length },
-          { key: 'flagged', label: 'Flagged', count: flaggedEntries.length },
-          { key: 'approved', label: 'Recently Approved', count: null }
-        ].map(t => (
+        {QUEUES.map(q => ({ key: q.key, label: q.tab, count: queueCount(q.key) })).map(t => (
           <button key={t.key} onClick={() => { setActiveTab(t.key); setSelectedIds([]) }}
             className={clsx('px-4 py-2 text-sm font-medium border-b-2 -mb-px transition-colors',
               activeTab === t.key ? 'border-blue-600 text-blue-700' : 'border-transparent text-slate-500 hover:text-slate-700')}>

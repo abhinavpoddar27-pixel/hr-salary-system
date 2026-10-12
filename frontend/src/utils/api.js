@@ -641,6 +641,9 @@ export const salesUploadTemplate = ({ file, month, year, company }) => {
   })
 }
 export const salesUploadPreview = (uploadId) => api.get(`/sales/upload/${uploadId}/preview`)
+// P4-NEXT: no-cache read for the upload preview screen — a refetch right after a manual match or Confirm
+// otherwise got the browser's 5-second copy (server.js max-age=5), so the row stayed "Unmatched".
+export const salesUploadPreviewFresh = (uploadId) => api.get(`/sales/upload/${uploadId}/preview`, fresh)
 export const salesUploadMatch = (uploadId, rowId, data) => api.put(`/sales/upload/${uploadId}/match/${rowId}`, data)
 export const salesUploadConfirm = (uploadId, body) => api.post(`/sales/upload/${uploadId}/confirm`, body || {})
 

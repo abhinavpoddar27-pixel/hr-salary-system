@@ -1,4 +1,5 @@
 import React, { useState, useCallback } from 'react'
+import { Link } from 'react-router-dom'
 import { useDropzone } from 'react-dropzone'
 import { useQueryClient } from '@tanstack/react-query'
 import toast from 'react-hot-toast'
@@ -449,13 +450,23 @@ export default function Import() {
                             <>queued now — nothing left to correct.</>
                           ) : result.autoStage6.reason === 'miss_punches_outstanding' ? (
                             <>
-                              waiting on {result.autoStage6.backlog?.awaitingHr ?? 0} miss punch(es) with HR
-                              and {result.autoStage6.backlog?.awaitingFinance ?? 0} with finance.
+                              waiting on{' '}
+                              <Link to="/pipeline/miss-punch?state=hr-pending" className="font-semibold underline hover:no-underline" data-testid="imp-link-mp-hr">
+                                {result.autoStage6.backlog?.awaitingHr ?? 0} miss punch(es) with HR
+                              </Link>
+                              {' '}and{' '}
+                              <Link to="/pipeline/miss-punch?state=finance-pending" className="font-semibold underline hover:no-underline" data-testid="imp-link-mp-finance">
+                                {result.autoStage6.backlog?.awaitingFinance ?? 0} with finance
+                              </Link>.
                             </>
                           ) : result.autoStage6.reason === 'stage_6_already_done' ? (
-                            <>already run for this cycle — re-run it from Stage 6 if you need to.</>
+                            <>already run for this cycle — re-run it from{' '}
+                              <Link to="/pipeline/day-calc" className="font-semibold underline hover:no-underline" data-testid="imp-link-stage6">Stage 6</Link>
+                              {' '}if you need to.</>
                           ) : result.autoStage6.reason === 'auto_stage6_disabled' ? (
-                            <>switched off. Run Stage 6 by hand.</>
+                            <>switched off. Run{' '}
+                              <Link to="/pipeline/day-calc" className="font-semibold underline hover:no-underline" data-testid="imp-link-stage6">Stage 6</Link>
+                              {' '}by hand.</>
                           ) : result.autoStage6.reason === 'month_finalized' ? (
                             <>this month is finalized, so nothing was recalculated.</>
                           ) : (

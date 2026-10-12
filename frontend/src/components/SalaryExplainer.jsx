@@ -234,6 +234,25 @@ export default function SalaryExplainer() {
     return () => document.removeEventListener('mousedown', handler)
   }, [])
 
+  // N-24: the floating button (and the "?" legend under it) sit over the bottom
+  // right corner of the page's scroll area, covering the row buttons of the last
+  // rows of long tables. While the button is shown, give the page's <main> scroll
+  // area room at the bottom so the last row can always be scrolled clear of it.
+  // Restored when the button goes away (panel open, sign-out, unmount).
+  const showTrigger = isAuthenticated && allowedRole && !salaryExplainerOpen
+  useEffect(() => {
+    if (!showTrigger) return undefined
+    const main = document.querySelector('main')
+    if (!main) return undefined
+    const before = main.style.paddingBottom
+    main.style.paddingBottom = '7rem'   // button top sits ~6.5rem above the viewport bottom
+    main.dataset.explainerRoom = '1'
+    return () => {
+      main.style.paddingBottom = before
+      delete main.dataset.explainerRoom
+    }
+  }, [showTrigger])
+
   // Debounced employee search.
   useEffect(() => {
     if (!search || search.trim().length < 1) {

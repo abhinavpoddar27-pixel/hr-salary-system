@@ -1,4 +1,5 @@
 import React, { useState, useMemo } from 'react'
+import { Link, useSearchParams } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import toast from 'react-hot-toast'
 import Modal, { ModalBody, ModalFooter } from '../components/ui/Modal'
@@ -24,6 +25,8 @@ import EmployeeQuickView from '../components/ui/EmployeeQuickView'
 
 const SOURCES = ['Gate Register', 'Production Office', 'Supervisor Confirmed', 'Other']
 const ISSUE_LABELS = { MISSING_IN: 'Missing IN', MISSING_OUT: 'Missing OUT', NO_PUNCH: 'No Punch', NIGHT_UNPAIRED: 'Night Unpaired' }
+// The status chips below; `?state=` may pre-select one (P4-02).
+const MISS_PUNCH_STATES = ['all', 'hr-pending', 'finance-pending', 'approved', 'rejected']
 
 function SortIcon({ field, sortField, sortDir }) {
   if (sortField !== field) return <span className="text-slate-300 ml-1">↕</span>
@@ -88,7 +91,13 @@ export default function MissPunch() {
   // Default to 'all' so nothing is hidden from the user — the old default
   // ('resolved=false') hid every HR-resolved-finance-pending row which was
   // the root cause of the "45 miss punches" confusion.
-  const [filterState, setFilterState] = useState('all')
+  // P4-02: links from other pages ("waiting on N with HR") open this page on the
+  // matching chip via ?state=… — only the known chip keys are honoured.
+  const [searchParams] = useSearchParams()
+  const [filterState, setFilterState] = useState(() => {
+    const s = searchParams.get('state')
+    return MISS_PUNCH_STATES.includes(s) ? s : 'all'
+  })
   const [bulkModal, setBulkModal] = useState(false)
   const [bulkForm, setBulkForm] = useState({ inTime: '', outTime: '', source: 'Gate Register', remark: '' })
   const [sortField, setSortField] = useState('date')
@@ -158,6 +167,18 @@ export default function MissPunch() {
     (p) => p.month === month && (!selectedCompany || p.company === selectedCompany)
   )
   const autoStage6 = period?.auto_stage6 || null
+  // P4-02: the two waiting counts open their chip in the list below.
+  const pendingButtons = autoStage6 ? (
+    <>
+      <button type="button" onClick={() => setFilterState('hr-pending')} className="underline hover:no-underline" data-testid="mp-pending-hr">
+        {autoStage6.awaitingHr} awaiting HR
+      </button>
+      {' · '}
+      <button type="button" onClick={() => setFilterState('finance-pending')} className="underline hover:no-underline" data-testid="mp-pending-finance">
+        {autoStage6.awaitingFinance} awaiting finance
+      </button>
+    </>
+  ) : null
 
   // N-9: every status chip / dept / type view is cached (staleTime 30 s) — after any action mark them all stale
   // (prefix), so the current view refetches now and the others when opened. getMissPunches sends no-cache.
@@ -274,18 +295,24 @@ export default function MissPunch() {
                 <span className="font-semibold">Day calculation has run.</span>{' '}
                 {autoStage6.autoRanAt
                   ? `Started automatically at ${fmtIstTime(autoStage6.autoRanAt)} IST.`
-                  : 'Run manually from Stage 6.'}
+                  : 'Run manually from Stage 6.'}{' '}
+                <Link to="/pipeline/day-calc" className="font-semibold underline hover:no-underline" data-testid="mp-link-stage6">
+                  Open Stage 6 →
+                </Link>
               </span>
             ) : !autoStage6.enabled ? (
               <span>
                 <span className="font-semibold">Automatic day calculation is switched off.</span>{' '}
-                Pending: {autoStage6.awaitingHr} awaiting HR · {autoStage6.awaitingFinance} awaiting finance.
-                Run Stage 6 by hand when the queue is clear.
+                Pending: {pendingButtons}.
+                Run Stage 6 by hand when the queue is clear.{' '}
+                <Link to="/pipeline/day-calc" className="font-semibold underline hover:no-underline" data-testid="mp-link-stage6">
+                  Open Stage 6 →
+                </Link>
               </span>
             ) : (
               <span>
                 <span className="font-semibold">
-                  Pending: {autoStage6.awaitingHr} awaiting HR · {autoStage6.awaitingFinance} awaiting finance.
+                  Pending: {pendingButtons}.
                 </span>{' '}
                 Day calculation runs automatically when both reach 0.
               </span>
@@ -604,9 +631,12 @@ export default function MissPunch() {
               <span className="text-3xl">✅</span>
               <div>
                 <p className="font-bold text-emerald-700">All miss punches resolved!</p>
-                <p className="text-sm text-emerald-600">Proceed to Stage 3: Shift Verification</p>
+                <p className="text-sm text-emerald-600">Next: Stage 3 — Shift Verification</p>
               </div>
             </div>
+            <Link to="/pipeline/shift-check" className="btn-primary shrink-0" data-testid="mp-link-stage3">
+              Go to Stage 3 →
+            </Link>
           </div>
         )}
 
