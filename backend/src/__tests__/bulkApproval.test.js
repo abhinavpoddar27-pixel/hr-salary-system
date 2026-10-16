@@ -218,6 +218,26 @@ describe('undo (Q-A2) and reads', () => {
     expect(target()).toHaveLength(0);
     expect(batch(id).status).toBe('undone');
   });
+  test('review F3: the creator cannot undo their own approval-kind batch (second person, Q6) — admin included', async () => {
+    const [id] = await sendAll(rowsOf(1), 'admin1');
+    expect((await act(id, 'approve', 'fin1')).status).toBe(200);
+    const own = await api.request('POST', `/api/bulk/batches/${id}/undo`, { as: 'admin1', body: { reason: 'wrong batch' } });
+    expect(own.status).toBe(403);
+    expect(own.body.code).toBe('SELF_APPROVAL');
+    expect(batch(id).status).toBe('applied');
+    expect((await api.request('POST', `/api/bulk/batches/${id}/undo`, { as: 'admin2', body: { reason: 'wrong batch' } })).status).toBe(200);
+  });
+  test('review F1: a read role with no visible kinds gets 200 [] (admin approval=1 queue with no approval kinds)', async () => {
+    const engine = require('../services/bulk/engine');
+    const spy = jest.spyOn(engine, 'visibleKinds').mockReturnValue([]);
+    try {
+      for (const as of ['admin1', 'fin1', 'hr1']) {
+        const r = await api.request('GET', '/api/bulk/batches?approval=1&status=submitted&sinceDays=30', { as });
+        expect([as, r.status, r.body.data]).toEqual([as, 200, []]);
+      }
+      expect((await api.request('GET', '/api/bulk/batches', { as: 'view1' })).status).toBe(403);
+    } finally { spy.mockRestore(); }
+  });
   test('lists: finance sees approval kinds only; status filter; hr sees its kinds; detail carries columns + note', async () => {
     const [a] = await sendAll(rowsOf(1, 9501));
     const [b] = await sendAll(rowsOf(1, 9601));

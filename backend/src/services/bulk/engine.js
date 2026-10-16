@@ -27,6 +27,8 @@ if (process.env.BULK_TEST_KINDS === '1') KINDS['test-approval'] = require('./kin
 function getKind(name) { return Object.prototype.hasOwnProperty.call(KINDS, name) ? KINDS[name] : null; }
 
 /* ── P5-01 kind hooks. Every default is the extra-duty expression, so ED is byte-identical. ── */
+// Review F5: an approval kind's inputOf and rowFromInput must mirror EXACTLY — approve rebuilds every row from the stored
+// input_json via rowFromInput and re-plans it; anything inputOf drops cannot be planned again (the hash then refuses).
 const DEFAULT_ROLES = { create: ['admin', 'hr'], approve: ['admin', 'finance'] };
 const rolesOf = (kind) => ({ ...DEFAULT_ROLES, ...(kind.roles || {}) });
 const needsApproval = (kind) => kind.requiresApproval === true;
@@ -305,10 +307,11 @@ function approve(db, batchId, user) {
       }
       const counts = countStates(planned);
       const money = kind.moneyTotal ? kind.moneyTotal(planned) : null;
-      db.prepare(`UPDATE bulk_batches SET status = 'applied', approved_by = ?, approved_at = datetime('now'),
+      const upd2 = db.prepare(`UPDATE bulk_batches SET status = 'applied', approved_by = ?, approved_at = datetime('now'),
         applied_at = datetime('now'), ok_count = ?, warn_count = ?, skipped_count = ?, money_total = ?
         WHERE id = ? AND status = 'submitted'`).run(user, counts.ok, counts.warning, counts.skipped,
         money === null || money === undefined ? batch.money_total : Math.round(money * 100) / 100, batchId);
+      if (upd2.changes !== 1) bulkThrow(409, 'BULK_NOT_SUBMITTED', 'This batch was decided by someone else meanwhile — nothing was applied');
       logAudit('bulk_batches', batchId, 'status', 'submitted', 'applied', 'BULK_APPROVE',
         `${batch.kind} ${kind.describe(common)}: ${applied} row(s) approved and applied, raised by ${batch.created_by}` +
         (money !== null && money !== undefined ? `, total ₹${Math.round(money * 100) / 100}` : '') + `, bulk batch #${batchId}`, user);
@@ -332,10 +335,11 @@ function decide(db, batchId, action, reason, user) {
   try {
     return db.transaction(() => {
       const { batch, kind } = loadSubmitted(db, batchId, user);
-      db.prepare(`UPDATE bulk_batches SET status = ?, decided_by = ?, decided_at = datetime('now'),
+      const info = db.prepare(`UPDATE bulk_batches SET status = ?, decided_by = ?, decided_at = datetime('now'),
         reject_reason = CASE WHEN ? = 'rejected' THEN ? ELSE reject_reason END,
         return_note = CASE WHEN ? = 'returned' THEN ? ELSE return_note END
         WHERE id = ? AND status = 'submitted'`).run(status, user, status, why, status, why, batchId);
+      if (info.changes !== 1) bulkThrow(409, 'BULK_NOT_SUBMITTED', 'This batch was decided by someone else meanwhile');
       logAudit('bulk_batches', batchId, 'status', 'submitted', status, action === 'return' ? 'BULK_RETURN' : 'BULK_REJECT',
         `${batch.kind} bulk batch #${batchId} ${status} (raised by ${batch.created_by}). ${action === 'return' ? 'Note' : 'Reason'}: "${why}"`, user);
       say(db, rolesOf(kind).create.find(r => r !== 'admin') || 'admin', action === 'return' ? 'BULK_RETURNED' : 'BULK_REJECTED',
@@ -358,6 +362,10 @@ function undo(db, batchId, reason, user) {
       if (batch.status !== 'applied') bulkThrow(409, 'BULK_NOT_UNDOABLE', `This batch is ${batch.status} — it cannot be undone`);
       const kind = getKind(batch.kind);
       if (!kind) bulkThrow(409, 'BULK_UNKNOWN_KIND', `Unknown bulk type "${batch.kind}"`);
+      // Review F3 (planner ruling, Q6): an approval-kind batch is undone by a second person, never its creator.
+      if (needsApproval(kind) && sameUser(user, batch.created_by)) {
+        bulkThrow(403, 'SELF_APPROVAL', 'You saved this batch — ask another finance or admin user to undo it.');
+      }
       const rows = db.prepare(`SELECT * FROM bulk_rows WHERE batch_id = ? AND target_id IS NOT NULL AND undone = 0
         AND state IN ('ok','warning') ORDER BY row_no`).all(batchId);
       const blocked = [];

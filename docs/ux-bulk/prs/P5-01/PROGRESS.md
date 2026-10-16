@@ -15,7 +15,7 @@ Read PLAN.md, then this file. State line below says where we are. Rulings are bi
 - Q-A5 "Bulk batches (N)" tab last on Finance Verification — OK.
 
 ## Baseline → after
-jest 121 suites / 2172 tests → 122 / 2188 (all green; new bulkApproval.test.js 16). bulkExtraDuty.test.js 22/22 UNMODIFIED.
+jest 121 suites / 2172 tests → 122 / 2188 → after review fixes 122 / 2190 (all green; bulkApproval.test.js 18). bulkExtraDuty.test.js 22/22 UNMODIFIED.
 
 ## Done
 - [x] Phase 0 plan (1e8c39b)
@@ -28,6 +28,19 @@ jest 121 suites / 2172 tests → 122 / 2188 (all green; new bulkApproval.test.js
 - [x] Self-review fixes (v2): (1) default `rowFromInput` (engine no longer requires the hook); (2) finance queue asks `approval=1` so
       admin's queue never lists extra-duty batches (+ test); (3) on a server refusal at Approve the confirm dialog stayed open over the
       red banner (caught by the check script) — it now closes and the banner names the rows; a network failure keeps it open.
+
+## Independent review (SHIP WITH FIXES) — applied 16 Oct
+- F1 (Medium): GET /batches with no visible kind for a read role (admin's `?approval=1` queue when no approval kind is
+  registered, i.e. production before P5-04) answered 403 → Finance Verification toasted on every load. Now 200 `[]`.
+  jest: admin/finance/hr with no visible kinds → 200 [] (fails on the pre-fix route); viewer still 403. With P5-04 merged,
+  salary-revision is an approval kind, so the badge lists it.
+- F2 (Low, recorded as intended): finance GET /batches without `kind` is 200 (was 403 on P3-01) — it lists approval kinds
+  only; extra-duty batches stay hidden from finance (`?kind=extra-duty` → 403, tested).
+- F3 (Low, planner ruling Q6): the creator of an approval-kind batch cannot undo it → 403 SELF_APPROVAL (admin included).
+  ED undo unchanged. Test added.
+- F4 (Low): approve / decide check `.changes === 1` on the status UPDATE, else 409 BULK_NOT_SUBMITTED (rolls back).
+- F5 (Low): engine comment — an approval kind's inputOf and rowFromInput must mirror exactly.
+- Verified: bulkApproval 16 → 18 + bulkExtraDuty 22 green; full jest 122 / 2190 (was 2188); bulk-approval-check.py 36/36.
 
 ## Next
 Planner independent review. Then P5-04 when the planner says N-PF is ready.
