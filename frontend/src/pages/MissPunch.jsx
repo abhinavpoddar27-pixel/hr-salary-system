@@ -34,8 +34,15 @@ function SortIcon({ field, sortField, sortDir }) {
 }
 
 function EditRow({ record, onSave, onCancel }) {
-  const [inTime, setInTime] = useState(record.in_time_final || record.in_time_original || '')
-  const [outTime, setOutTime] = useState(record.out_time_final || record.out_time_original || '')
+  // A single evening punch flagged "Missing IN" is the person's exit (Oct 2026): EESL stores it
+  // as the IN time, so offer it as OUT and leave IN for HR to fill from the gate register.
+  const loneEveningPunch = record.miss_punch_type === 'MISSING_IN'
+    && !(record.out_time_final || record.out_time_original)
+    && !!(record.in_time_final || record.in_time_original)
+  const [inTime, setInTime] = useState(loneEveningPunch ? '' : (record.in_time_final || record.in_time_original || ''))
+  const [outTime, setOutTime] = useState(loneEveningPunch
+    ? (record.in_time_final || record.in_time_original)
+    : (record.out_time_final || record.out_time_original || ''))
   const [source, setSource] = useState('Gate Register')
   const [remark, setRemark] = useState('')
   const [convertToLeave, setConvertToLeave] = useState(false)
