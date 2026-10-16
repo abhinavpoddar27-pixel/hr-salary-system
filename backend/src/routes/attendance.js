@@ -746,7 +746,9 @@ router.post('/deduplicate', requireHrOrAdmin, (req, res) => {
       // These are archival tables and don't affect the user-facing miss punch view
 
       // Re-run miss punch detection
-      db.prepare('UPDATE attendance_processed SET is_miss_punch = 0, miss_punch_type = NULL WHERE month = ? AND year = ?')
+      // Resolved rows keep their flag: Stage 6 reads HR's resolution only through it
+      // (finance pending → biometric status, rejected → ½P), and finance's queue lists them.
+      db.prepare('UPDATE attendance_processed SET is_miss_punch = 0, miss_punch_type = NULL WHERE month = ? AND year = ? AND COALESCE(miss_punch_resolved, 0) = 0')
         .run(month, year);
     });
     txn();
