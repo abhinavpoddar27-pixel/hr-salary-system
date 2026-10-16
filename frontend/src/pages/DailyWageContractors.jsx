@@ -1,5 +1,5 @@
-import React, { useState, useMemo } from 'react'
-import { todayIST } from '../utils/formatters'
+import React, { useState, useMemo, useRef } from 'react'
+import { todayIST, fmtDate } from '../utils/formatters'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import {
   getDWContractors, createDWContractor, updateDWContractor,
@@ -11,6 +11,7 @@ import { useAppStore } from '../store/appStore'
 import { canHR as canHRFn, canFinance as canFinanceFn } from '../utils/role'
 import clsx from 'clsx'
 import toast from 'react-hot-toast'
+import ConfirmDialog from '../components/ui/ConfirmDialog'
 
 // ── Helpers ───────────────────────────────────────────────────
 function fmt(n) { return (n || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) }
@@ -88,6 +89,9 @@ export default function DailyWageContractors() {
   const [rateForm, setRateForm] = useState(emptyRateForm)
   const [rejectRemarks, setRejectRemarks] = useState('')
   const [rejectingId, setRejectingId] = useState(null)
+  // P6-06: confirm before Deactivate (A1) and rate Approve (A2). { kind: 'deactivate', c } | { kind: 'approve', r }
+  const [confirm, setConfirm] = useState(null)
+  const confirmInFlight = useRef(false) // isPending lags a render — a double click must send one request
 
   // ── Queries ────────────────────────────────────────────────
   const { data: contractorsRes, isLoading } = useQuery({
@@ -122,8 +126,9 @@ export default function DailyWageContractors() {
   })
   const deactivateMut = useMutation({
     mutationFn: deactivateDWContractor,
-    onSuccess: () => { invalidateAll(); toast.success('Contractor deactivated') },
-    onError: (e) => toast.error(e.response?.data?.error || 'Failed')
+    onSuccess: () => { invalidateAll(); setConfirm(null); toast.success('Contractor deactivated') },
+    onError: (e) => toast.error(e.response?.data?.error || 'Failed'),
+    onSettled: () => { confirmInFlight.current = false }
   })
   const reactivateMut = useMutation({
     mutationFn: reactivateDWContractor,
@@ -137,9 +142,17 @@ export default function DailyWageContractors() {
   })
   const approveRateMut = useMutation({
     mutationFn: approveDWRateChange,
-    onSuccess: () => { invalidateAll(); toast.success('Rate change approved') },
-    onError: (e) => toast.error(e.response?.data?.error || 'Failed')
+    onSuccess: () => { invalidateAll(); setConfirm(null); toast.success('Rate change approved') },
+    onError: (e) => toast.error(e.response?.data?.error || 'Failed'),
+    onSettled: () => { confirmInFlight.current = false }
   })
+  const confirmBusy = deactivateMut.isPending || approveRateMut.isPending
+  const runConfirm = () => {
+    if (!confirm || confirmInFlight.current) return
+    confirmInFlight.current = true
+    if (confirm.kind === 'deactivate') deactivateMut.mutate(confirm.c.id)
+    else approveRateMut.mutate(confirm.r.id)
+  }
   const rejectRateMut = useMutation({
     mutationFn: ({ id, remarks }) => rejectDWRateChange(id, remarks),
     onSuccess: () => { invalidateAll(); setRejectingId(null); setRejectRemarks(''); toast.success('Rate change rejected') },
@@ -273,7 +286,7 @@ export default function DailyWageContractors() {
                           <td colSpan={7} className="px-4 py-4 bg-slate-50/70">
                             <ExpandedRow contractor={c} canHR={canHR} onEdit={() => openEdit(c)}
                               onRateChange={() => openRateChange(c)}
-                              onDeactivate={() => deactivateMut.mutate(c.id)}
+                              onDeactivate={() => setConfirm({ kind: 'deactivate', c })}
                               onReactivate={() => reactivateMut.mutate(c.id)} />
                           </td>
                         </tr>
@@ -290,10 +303,47 @@ export default function DailyWageContractors() {
       {/* ── Tab: Rate Approvals ───────────────────────────────── */}
       {activeTab === 'rate-approvals' && (
         <RateApprovals pendingRates={pendingRates} canFinance={canFinance}
-          onApprove={(id) => approveRateMut.mutate(id)}
+          onApprove={(r) => setConfirm({ kind: 'approve', r })}
           onReject={(id) => { setRejectingId(id); setRejectRemarks('') }}
           approving={approveRateMut.isPending} />
       )}
+
+      {/* ── P6-06 confirms ───────────────────────────────────── */}
+      {confirm?.kind === 'deactivate' && (
+        <ConfirmDialog
+          title={`Deactivate ${confirm.c.contractor_name}?`}
+          message={<span data-testid="confirm-deactivate">New daily-wage entries for this contractor will be refused, and their draft entries can no longer be edited. You can reactivate the contractor later.</span>}
+          confirmText={deactivateMut.isPending ? 'Deactivating…' : 'Deactivate'}
+          variant="danger"
+          busy={confirmBusy}
+          onConfirm={runConfirm}
+          onCancel={() => setConfirm(null)}
+        />
+      )}
+      {confirm?.kind === 'approve' && (() => {
+        const r = confirm.r
+        const oldTotal = (r.old_wage_rate || 0) + (r.old_commission_rate || 0)
+        const newTotal = (r.new_wage_rate || 0) + (r.new_commission_rate || 0)
+        return (
+          <ConfirmDialog
+            title={`Approve the rate change for ${r.contractor_name}?`}
+            message={
+              <span className="block space-y-1" data-testid="confirm-approve-rate">
+                <span className="block">Wage ₹{fmt(r.old_wage_rate)} → ₹{fmt(r.new_wage_rate)}</span>
+                <span className="block">Commission ₹{fmt(r.old_commission_rate)} → ₹{fmt(r.new_commission_rate)}</span>
+                <span className="block font-medium">Total per worker ₹{fmt(oldTotal)} → ₹{fmt(newTotal)}</span>
+                <span className="block pt-1">New rates apply from today. The effective date on the request ({fmtDate(r.effective_date)}) is recorded but not used yet.</span>
+                <span className="block">This cannot be undone here — a further change needs a new request.</span>
+              </span>
+            }
+            confirmText={approveRateMut.isPending ? 'Approving…' : 'Approve rates'}
+            variant="warning"
+            busy={confirmBusy}
+            onConfirm={runConfirm}
+            onCancel={() => setConfirm(null)}
+          />
+        )
+      })()}
 
       {/* ── Add/Edit Modal ────────────────────────────────────── */}
       <Overlay open={showAddEdit} onClose={() => { setShowAddEdit(false); setEditingContractor(null) }}
@@ -536,7 +586,7 @@ function RateApprovals({ pendingRates, canFinance, onApprove, onReject, approvin
             </div>
             {canFinance && (
               <div className="flex gap-2 flex-shrink-0">
-                <button onClick={() => onApprove(r.id)} disabled={approving}
+                <button onClick={() => onApprove(r)} disabled={approving}
                   className="px-3 py-1.5 text-xs font-medium rounded-lg bg-green-600 text-white hover:bg-green-700 disabled:opacity-50">Approve</button>
                 <button onClick={() => onReject(r.id)}
                   className="px-3 py-1.5 text-xs font-medium rounded-lg bg-red-50 text-red-600 border border-red-200 hover:bg-red-100">Reject</button>

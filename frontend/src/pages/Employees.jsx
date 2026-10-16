@@ -8,6 +8,7 @@ import api from '../utils/api'
 import { fmtINR, todayIST } from '../utils/formatters'
 import { useAppStore } from '../store/appStore'
 import Modal from '../components/ui/Modal'
+import ConfirmDialog from '../components/ui/ConfirmDialog'
 import CalendarView from '../components/ui/CalendarView'
 import { Abbr } from '../components/ui/Tooltip'
 import CompanyFilter from '../components/shared/CompanyFilter'
@@ -419,10 +420,20 @@ function EmployeeProfileModal({ employee, onClose }) {
     onSuccess: () => { toast.success('Document uploaded'); refetchDocs(); }
   })
 
+  // P6-06: document delete asks first — the server removes the file from disk for good.
+  const [docToDelete, setDocToDelete] = useState(null)
+  const deleteInFlight = useRef(false) // isPending lags a render — a double click must send one request
   const deleteMutation = useMutation({
     mutationFn: (id) => deleteEmployeeDocument(id),
-    onSuccess: () => { toast.success('Document deleted'); refetchDocs(); }
+    onSuccess: () => { toast.success('Document deleted'); setDocToDelete(null); refetchDocs(); },
+    onError: (e) => toast.error(e?.response?.data?.error || 'Could not delete the document'),
+    onSettled: () => { deleteInFlight.current = false }
   })
+  const confirmDeleteDoc = () => {
+    if (!docToDelete || deleteInFlight.current) return
+    deleteInFlight.current = true
+    deleteMutation.mutate(docToDelete.id)
+  }
 
   const handleUpload = () => {
     const file = fileRef.current?.files[0]
@@ -732,13 +743,24 @@ function EmployeeProfileModal({ employee, onClose }) {
                       <td className="py-1.5 text-right text-slate-400">{d.file_size ? `${(d.file_size / 1024).toFixed(0)} KB` : '—'}</td>
                       <td className="py-1.5 text-slate-400 text-xs">{d.created_at?.split('T')[0]}</td>
                       <td className="py-1.5">
-                        <button onClick={() => deleteMutation.mutate(d.id)}
+                        <button onClick={() => setDocToDelete(d)}
                           className="text-red-500 text-xs hover:text-red-700">Delete</button>
                       </td>
                     </tr>
                   ))}
                 </tbody>
               </table>
+            )}
+            {docToDelete && (
+              <ConfirmDialog
+                title={`Delete ${docToDelete.file_name}?`}
+                message={<span data-testid="confirm-delete-doc">{docToDelete.document_type} for {emp.name || employee.code} ({employee.code}). The file is deleted from the server for good — this cannot be undone. Keep a copy first if you may need it.</span>}
+                confirmText={deleteMutation.isPending ? 'Deleting…' : 'Delete document'}
+                variant="danger"
+                busy={deleteMutation.isPending}
+                onConfirm={confirmDeleteDoc}
+                onCancel={() => setDocToDelete(null)}
+              />
             )}
           </div>
         )}
