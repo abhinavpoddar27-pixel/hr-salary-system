@@ -17,6 +17,8 @@ import ReleaseHoldModal from '../components/ui/ReleaseHoldModal'
 import clsx from 'clsx'
 import toast from 'react-hot-toast'
 import Modal from '../components/ui/Modal'
+import BulkApprovalQueue from '../components/bulk/BulkApprovalQueue'
+import { getBulkQueue } from '../utils/bulkApi'
 
 // P1-15: a flag needs a written reason (UI rule only — POST /status has no minimum).
 const FLAG_REASON_MIN = 5
@@ -37,7 +39,7 @@ export default function FinanceVerification() {
   const [searchParams] = useSearchParams()
   const deepTab = searchParams.get('tab')
   const deepFilter = searchParams.get('filter')
-  const [activeTab, setActiveTab] = useState(deepTab === 'redflags' ? 'flags' : deepTab === 'misspunch' ? 'misspunch' : deepTab === 'held' ? 'held' : 'dashboard')
+  const [activeTab, setActiveTab] = useState(deepTab === 'redflags' ? 'flags' : deepTab === 'misspunch' ? 'misspunch' : deepTab === 'held' ? 'held' : deepTab === 'bulk' ? 'bulk' : 'dashboard')
   const [search, setSearch] = useState('')
   const [statusFilter, setStatusFilter] = useState('')
   const [signoffModal, setSignoffModal] = useState(false)
@@ -153,12 +155,16 @@ export default function FinanceVerification() {
   // `includes(user.role)` used to silently fail for legacy rows that
   // stored "Finance" / "Finance Team" / "finance " instead of "finance".
   const canAct = canFinanceFn(user)
+  // P5-01: bulk batches waiting for finance (count for the tab label).
+  const { data: bulkQueueRes } = useQuery({ queryKey: ['bulk-queue'], queryFn: () => getBulkQueue(), enabled: canAct, retry: 0 })
+  const bulkWaiting = (bulkQueueRes?.data?.data || []).filter(b => b.status === 'submitted').length
   const tabs = [
     { id: 'dashboard', label: 'Audit Dashboard' },
     { id: 'employees', label: 'Employee Review' },
     { id: 'flags', label: `Red Flags (${redFlags.length})` },
     { id: 'misspunch', label: `Miss Punch Review${missPunches.length ? ` (${missPunches.length})` : ''}` },
     { id: 'held', label: `Held Salaries${heldSalaries.length ? ` (${heldSalaries.length})` : ''}` },
+    ...(canAct ? [{ id: 'bulk', label: `Bulk batches${bulkWaiting ? ` (${bulkWaiting})` : ''}` }] : []),
   ]
 
   return (
@@ -499,6 +505,8 @@ export default function FinanceVerification() {
           </div>
         </div>
       )}
+
+      {activeTab === 'bulk' && canAct && <BulkApprovalQueue />}
 
       {/* ── Held Salaries Tab (Phase 5c) ─────────────────────
           Lists all currently-held salaries and lets finance release

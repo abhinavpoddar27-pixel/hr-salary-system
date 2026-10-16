@@ -23,8 +23,8 @@ jest 121 suites / 2172 tests, all green (b0ed242).
 - [x] Step 2 engine submit/approve/decide + kind hooks (ED defaults byte-identical)
 - [x] Step 3 routes per-route gates (ED 403 bodies identical)
 - [x] Step 4 test kind (BULK_TEST_KINDS=1 only) + bulkApproval.test.js 16/16; bulkExtraDuty 22/22 unmodified
-- [ ] Step 5 frontend (bulkApi, BulkApprovalQueue, FV tab, BulkBatchList, statusMap)
+- [x] Step 5 frontend (bulkApi +5, BulkApprovalQueue, FV tab ~10 lines, BulkBatchList note + canUndo, statusMap +3); vite build clean
 - [ ] Step 6 Playwright check + verify + v2
 
 ## Next
-Step 5 frontend.
+Step 6 Playwright check script backend/scripts/bulk-approval-check.py.
