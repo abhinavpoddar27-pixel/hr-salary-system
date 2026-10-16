@@ -3,6 +3,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import toast from 'react-hot-toast'
 import clsx from 'clsx'
 import Modal from '../ui/Modal'
+import ConfirmDialog from '../ui/ConfirmDialog'
 import {
   getLeaveRecomputePreview, downloadLeaveRecomputePreview, applyLeaveRecompute,
   updateLeaveAutomationSettings, getLeaveChangeFlags, clearLeaveChangeFlag,
@@ -71,6 +72,10 @@ export default function LeaveAutomationTab({ year, status }) {
   const [dragOver, setDragOver] = useState(false)
   const [confirmText, setConfirmText] = useState('')
   const [applyNote, setApplyNote] = useState('')
+  // P6-06: confirm before a switch change (A5/E1), "There is none" (E2) and removing an outside grant (A4).
+  // { kind: 'switch', key, value } | { kind: 'ackNone' } | { kind: 'removeGrant', g }
+  const [confirm, setConfirm] = useState(null)
+  const confirmInFlight = useRef(false) // isPending lags a render — a double click must send one request
 
   const invalidate = () => {
     queryClient.invalidateQueries({ queryKey: ['leave-automation-status'] })
@@ -91,9 +96,11 @@ export default function LeaveAutomationTab({ year, status }) {
     mutationFn: (data) => updateLeaveAutomationSettings(data),
     onSuccess: (res) => {
       toast.success(res?.data?.changed?.length ? 'Setting saved' : 'Already set')
+      setConfirm(null)
       invalidate()
     },
     onError: (err) => toast.error(err?.response?.data?.error || 'Could not save the setting'),
+    onSettled: () => { confirmInFlight.current = false },
   })
 
   const { data: flagsRes, isLoading: flagsLoading, isError: flagsError } = useQuery({
@@ -156,15 +163,50 @@ export default function LeaveAutomationTab({ year, status }) {
 
   const ackNone = useMutation({
     mutationFn: () => acknowledgeNoExternalGrants(),
-    onSuccess: () => { toast.success('Recorded — nothing was given outside the system'); invalidate() },
+    onSuccess: () => { toast.success('Recorded — nothing was given outside the system'); setConfirm(null); invalidate() },
     onError: (err) => toast.error(err?.response?.data?.error || 'Could not record that'),
+    onSettled: () => { confirmInFlight.current = false },
   })
 
   const removeGrant = useMutation({
     mutationFn: (id) => deleteLeaveExternalGrant(id),
-    onSuccess: () => { toast.success('Grant removed'); invalidate() },
+    onSuccess: () => { toast.success('Grant removed'); setConfirm(null); invalidate() },
     onError: (err) => toast.error(err?.response?.data?.error || 'Could not remove that grant'),
+    onSettled: () => { confirmInFlight.current = false },
   })
+
+  const confirmBusy = settings.isPending || ackNone.isPending || removeGrant.isPending
+  const runConfirm = () => {
+    if (!confirm || confirmInFlight.current) return
+    confirmInFlight.current = true
+    if (confirm.kind === 'switch') settings.mutate({ [confirm.key]: confirm.value })
+    else if (confirm.kind === 'ackNone') ackNone.mutate()
+    else removeGrant.mutate(confirm.g.id)
+  }
+  const confirmCopy = (() => {
+    if (!confirm) return null
+    if (confirm.kind === 'switch' && confirm.key === 'automation_enabled') {
+      return confirm.value
+        ? { title: 'Turn leave automation on?', confirmText: 'Turn on', variant: 'danger',
+            message: 'From now on, earned and casual leave balances are recalculated and saved for every employee whenever attendance or an approval changes. A finalized month is never changed.' }
+        : { title: 'Turn leave automation off?', confirmText: 'Turn off', variant: 'danger',
+            message: 'Leave balances stop updating until it is turned back on. Balances already saved stay as they are.' }
+    }
+    if (confirm.kind === 'switch') {
+      return confirm.value
+        ? { title: 'Turn automatic day calculation on?', confirmText: 'Turn on', variant: 'danger',
+            message: 'Stage 6 will run by itself for a month the first time every miss punch in it is resolved by HR and decided by finance. Salary is not recomputed by this.' }
+        : { title: 'Turn automatic day calculation off?', confirmText: 'Turn off', variant: 'danger',
+            message: 'Stage 6 will run only when someone runs it by hand.' }
+    }
+    if (confirm.kind === 'ackNone') {
+      return { title: 'Record that no leave was given outside the system?', confirmText: 'Record "none"', variant: 'danger',
+        message: 'This unblocks writing leave balances from a recompute. It cannot be undone here — if you later find leave that was given outside the app, upload the list.' }
+    }
+    const g = confirm.g
+    return { title: 'Remove this outside-the-system grant?', confirmText: 'Remove grant', variant: 'danger',
+      message: `${g.employee_code} · ${g.leave_type || 'EL'} · ${g.days} day(s) · ${g.month}/${g.year} · ${String(g.mode).replace(/_/g, ' ')}. Balances recomputed after this will no longer count it. This cannot be undone here, and the same row cannot be uploaded again.` }
+  })()
 
   const takeFile = (file) => {
     if (!file) return
@@ -187,14 +229,14 @@ export default function LeaveAutomationTab({ year, status }) {
               hint="Recompute earned and casual leave whenever attendance or an approval changes. Off means nothing is written."
               checked={automationOn}
               busy={settings.isPending}
-              onChange={(v) => settings.mutate({ automation_enabled: v })}
+              onChange={(v) => setConfirm({ kind: 'switch', key: 'automation_enabled', value: v })}
             />
             <Toggle
               label="Automatic day calculation"
               hint="Run Stage 6 by itself the first time every miss punch for a month is resolved by HR and decided by finance."
               checked={autoStage6On}
               busy={settings.isPending}
-              onChange={(v) => settings.mutate({ auto_stage6_enabled: v })}
+              onChange={(v) => setConfirm({ kind: 'switch', key: 'auto_stage6_enabled', value: v })}
             />
           </div>
         </Card>
@@ -269,7 +311,7 @@ export default function LeaveAutomationTab({ year, status }) {
               <button
                 className="underline font-medium"
                 disabled={ackNone.isPending}
-                onClick={() => ackNone.mutate()}
+                onClick={() => setConfirm({ kind: 'ackNone' })}
               >
                 There is none
               </button>
@@ -298,7 +340,7 @@ export default function LeaveAutomationTab({ year, status }) {
                       <button
                         className="text-red-600 hover:underline"
                         disabled={removeGrant.isPending}
-                        onClick={() => removeGrant.mutate(g.id)}
+                        onClick={() => setConfirm({ kind: 'removeGrant', g })}
                       >
                         Remove
                       </button>
@@ -352,6 +394,18 @@ export default function LeaveAutomationTab({ year, status }) {
           </div>
         )}
       </Card>
+
+      {confirmCopy && (
+        <ConfirmDialog
+          title={confirmCopy.title}
+          message={<span data-testid="leave-auto-confirm">{confirmCopy.message}</span>}
+          confirmText={confirmBusy ? 'Saving…' : confirmCopy.confirmText}
+          variant={confirmCopy.variant}
+          busy={confirmBusy}
+          onConfirm={runConfirm}
+          onCancel={() => setConfirm(null)}
+        />
+      )}
 
       {/* ── Preview modal ──────────────────────────────────────────────── */}
       <Modal open={previewOpen} onClose={() => setPreviewOpen(false)} title={`EL recompute preview — ${year}`} size="xl">
