@@ -5,7 +5,7 @@ Branch `feat/bulk-salary-revision` (on feat/bulk-approval-stage 70d98cb + origin
 Read PLAN.md (FINAL DESIGN at the bottom), then this file, then `git log --oneline 70d98cb..HEAD`. Rulings below are binding.
 
 ## State
-Step 2 of 6 done.
+Step 4 of 6 done (backend complete, UI next).
 
 ## Rulings (planner, 16 Oct 2026)
 - Q-B1 Salary Input header button → inline panel SalaryRevisionBulk.jsx (not a Modal) + BulkBatchList.
@@ -29,5 +29,13 @@ jest 123 suites / 2202 tests, all green (f370a6c).
    file holding a structure INSERT — the INSERT moved, so the list now names `services/salaryChange.js` (the scan itself still covers every
    file; one line changed in the test, on purpose).
 
+3. Kind `services/bulk/kinds/salaryRevision.js` registered in engine KINDS. The "Stage 7 already computed" line is a NOTE
+   (message only, not a warning state) so a Stage 7 run between send and approve does not refuse the batch; the undo
+   fingerprint is taken at approval. A finalised month ON OR AFTER the effective month is an error row (no retro change).
+4. `bulkSalaryRevision.test.js` 16/16 (modes + ₹1 rounding, errors/skip/warn, finalised + re-run note, roles, 51 → 50+1,
+   submit writes nothing, approve → structures/gross/requests/audit + R10 carry, parity vs single path, same-date update,
+   self-approval, Q-B8 conflict → 409 nothing written, mid-batch throw → nothing incl. audit, later-dated row, undo
+   restore byte-identical + Reverted, undo blocked by Stage 7 / later change / finalised).
+
 ## Next
-3. kind `kinds/salaryRevision.js` + register. 4. jest `bulkSalaryRevision.test.js`. 5. UI. 6. check script + verify.
+5. UI (SalaryRevisionBulk.jsx + SalaryInput header + bulkApi). 6. check script + full verify.
