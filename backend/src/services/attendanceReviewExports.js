@@ -50,7 +50,7 @@ function buildWorkbook(result, run = {}) {
     ['Deduction days', t.deduction_days], ['Indicative amount (₹, payroll decides)', t.indicative_amount],
     ['Early-exit section (warnings and early-exit deductions)', (result.earlyExitWarnings || []).length],
     ['Lates of 2 h or more (counted / forgiven by full hours)', `${(result.longLates || []).reduce((a, x) => a + (x.long_lates || 0), 0)} / ${(result.longLates || []).reduce((a, x) => a + (x.full_hours_forgiven || 0), 0)}`],
-    ['Late notice names', (result.noticeLate || []).length], ['Early notice names', (result.noticeEarly || []).length],
+    ['Late notice names', (result.noticeLate || []).length], ['Early notice names', (result.noticeEarly || []).length], ['Missed-punch notice names', (result.noticeMissed || []).length],
     ['Release days (not counted)', (m.release_days || []).join(', ')],
     // PR-8: only when the result knows about plant-wide late days (older stored results stay as they were)
     ...(result.plantLateDays ? [
@@ -101,6 +101,7 @@ function buildWorkbook(result, run = {}) {
   ]), 'Missed OUT');
   XLSX.utils.book_append_sheet(wb, sheet(result.noticeLate || [], [{ k: 'code', h: 'Code' }, { k: 'name', h: 'Name', w: 26 }, { k: 'department', h: 'Department', w: 18 }, { k: 'late_days', h: 'Late days' }]), 'Notice late');
   XLSX.utils.book_append_sheet(wb, sheet(result.noticeEarly || [], [{ k: 'code', h: 'Code' }, { k: 'name', h: 'Name', w: 26 }, { k: 'department', h: 'Department', w: 18 }, { k: 'early_exits', h: 'Early exits' }]), 'Notice early');
+  XLSX.utils.book_append_sheet(wb, sheet(result.noticeMissed || [], [{ k: 'code', h: 'Code' }, { k: 'name', h: 'Name', w: 26 }, { k: 'department', h: 'Department', w: 18 }, { k: 'missed_punches', h: 'Missed punches' }]), 'Notice missed punch');
   XLSX.utils.book_append_sheet(wb, sheet(result.departments || [], [
     { k: 'department', h: 'Department', w: 20 }, { k: 'people', h: 'People' }, { k: 'worked_days', h: 'Worked days' }, { k: 'late_days', h: 'Late days' },
     { k: 'early_exits', h: 'Early exits' }, { k: 'late_min', h: 'Late min' }, { k: 'early_min', h: 'Early min' }, { k: 'sched_min', h: 'Scheduled min' },
@@ -245,6 +246,18 @@ function buildDocx(result, run = {}, { now = new Date() } = {}) {
     table(['S.No', 'Code', 'Name', 'Department', 'Early exits'], (result.noticeEarly || []).map((n, i) => [{ v: i + 1, align: C }, { v: n.code, align: C }, cleanName(n.name), n.department || '', { v: n.early_exits, align: C, bold: true }]), [600, 900, 3300, 2900, 1300], 16, true),
     para(`${relText}${lateDayText} Anyone who believes their record is wrong should meet HR within 3 working days.`.trim(), { size: 17, before: 60, after: 0 }),
     ...sign,
+    // Missed punches (16 Oct 2026) — only when someone is named; stored runs from before have no list
+    ...((result.noticeMissed || []).length ? [
+      new Paragraph({ children: [new PageBreak()] }),
+      ...noticeHead('Missed Punches', `The following employees missed a punch (in or out) on ${t.board_miss_punch_min ?? 3} or more days in ${ML}.`, [
+        'Punch in when you arrive and punch out when you leave, every day.',
+        'A day with only one punch is checked against the gate register. Without proof it is counted as absent.',
+        'Days when the machine failed for many people are not counted here.',
+      ]),
+      table(['S.No', 'Code', 'Name', 'Department', 'Missed punches'], result.noticeMissed.map((n, i) => [{ v: i + 1, align: C }, { v: n.code, align: C }, cleanName(n.name), n.department || '', { v: n.missed_punches, align: C, bold: true }]), [600, 900, 3300, 2900, 1300], 16, true),
+      para('Anyone who believes their record is wrong should meet HR within 3 working days.', { size: 17, before: 60, after: 0 }),
+      ...sign,
+    ] : []),
   ];
 
   // Section 3 — one note per person

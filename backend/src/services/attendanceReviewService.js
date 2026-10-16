@@ -1685,6 +1685,40 @@ function repeaters(rows) {
 /** Today's date in IST (YYYY-MM-DD). */
 function istToday(now = new Date()) { return new Date(now.getTime() + 330 * 60000).toISOString().slice(0, 10); }
 
+/**
+ * A person's own missed punches between two dates: every flagged miss punch, whatever the day's status (owner
+ * ruling 16 Oct 2026 — a single-punch day EESL marks absent is a missed punch too), not on the skipped days.
+ * Returns Map(code → count). Used by the mid-month board and the monthly missed-punch notice.
+ */
+function personalMissPunches(db, from, to, skipDays = []) {
+  const rows = db.prepare(`SELECT employee_code c, COUNT(*) n FROM attendance_processed
+      WHERE is_miss_punch = 1 AND date BETWEEN ? AND ?
+        AND date NOT IN (SELECT value FROM json_each(?)) GROUP BY employee_code`).all(from, to, JSON.stringify(skipDays || []));
+  return new Map(rows.map((r) => [String(r.c), r.n]));
+}
+
+/**
+ * Monthly missed-punch notice (16 Oct 2026): people with at least `board_miss_punch_min` own missed punches in the
+ * month (bulk-failure days left out, days before today IST only). Left-out and held people are not listed.
+ * Names, codes and counts only.
+ */
+function missedPunchNotice(db, month, year, cfg, today = istToday()) {
+  const t = cfg.thresholds; const ym = ymOf(month, year); const from = `${ym}-01`;
+  const monthEnd = `${ym}-${pad(daysInMonth(month, year))}`;
+  const end = monthEnd < today ? monthEnd : addDays(today, -1);
+  if (end < from) return [];
+  const bulk = bulkMissPunchDays(db, from, end, t.bulk_miss_punch_day).map((b) => b.date);
+  const mp = personalMissPunches(db, from, end, bulk);
+  const codes = [...mp.keys()].filter((c) => mp.get(c) >= t.board_miss_punch_min);
+  if (!codes.length) return [];
+  const empMap = loadEmployees(db, codes);
+  const exCodes = new Set(cfg.excluded_codes); const exDept = new Set(cfg.excluded_departments.map((d) => d.toUpperCase()));
+  const held = new Set(cfg.held_codes);
+  return codes.map((code) => { const e = empMap.get(code) || {}; return { code, name: e.name || null, department: e.department || null, missed_punches: mp.get(code) }; })
+    .filter((p) => !exCodes.has(p.code) && !exDept.has(String(p.department || '').toUpperCase()) && !held.has(p.code))
+    .sort((a, b) => b.missed_punches - a.missed_punches || a.code.localeCompare(b.code));
+}
+
 /** Bulk-failure days: at least `min` miss-punch rows plant-wide on that day (system cause, not people). */
 function bulkMissPunchDays(db, from, to, min) {
   return db.prepare(`SELECT date, COUNT(*) n FROM attendance_processed WHERE is_miss_punch = 1 AND date BETWEEN ? AND ?
@@ -1701,7 +1735,7 @@ const fmtDay = (iso) => { const [y, m, d] = iso.split('-').map(Number); return `
 /**
  * Mid-month notice board (PR-5, plan D-8 / D-9 / MP-2). Names + codes + counts only — no ₹, no minutes.
  * Lates and early exits are the review's COUNTED figures for the 1st → `to` (same basis, rules, standing leave-outs,
- * release days as detected up to `to`). Missed punches: worked-status rows with is_miss_punch on days that are not
+ * release days as detected up to `to`). Missed punches: every flagged miss punch (any day status, 16 Oct 2026) on days that are not
  * bulk-failure days, before today (IST). Left-out and held people are not shown. Read only.
  * @param opts { month, year, to 'YYYY-MM-DD' (in the month), config, company?, skipDays? [], today? 'YYYY-MM-DD' }
  */
@@ -1720,10 +1754,7 @@ function noticeBoard(db, { month, year, to, config, company = null, skipDays = [
   const mpEnd = end < today ? end : addDays(today, -1);
   const bulk = mpEnd >= from ? bulkMissPunchDays(db, from, mpEnd, t.bulk_miss_punch_day) : [];
   const skip = [...new Set([...bulk.map((b) => b.date), ...(skipDays || [])])];
-  const mpRows = mpEnd >= from ? db.prepare(`SELECT employee_code c, COUNT(*) n FROM attendance_processed
-      WHERE is_miss_punch = 1 AND date BETWEEN ? AND ? AND status_final IN ${WORKED}
-        AND date NOT IN (SELECT value FROM json_each(?)) GROUP BY employee_code`).all(from, mpEnd, JSON.stringify(skip)) : [];
-  const mp = new Map(mpRows.map((r) => [String(r.c), r.n]));
+  const mp = mpEnd >= from ? personalMissPunches(db, from, mpEnd, skip) : new Map();
 
   const codes = [...new Set([...sqlRows.map((r) => r.code), ...remRows.map((r) => r.code), ...mp.keys()])];
   const empMap = loadEmployees(db, codes);
@@ -1865,7 +1896,7 @@ function computeAttendanceReview(db, { month, year, config, releaseDays = [], pr
       hearings: [...act.actionList, ...act.earlyExitWarnings].filter((a) => a.ladder && a.ladder.hearing).length,
       deduction_days: ded.reduce((s, a) => s + a.deduction_days, 0), indicative_amount: ded.reduce((s, a) => s + a.indicative_amount, 0) },
     held: held.filter((p) => p.cur).map((p) => ({ code: p.code, name: p.name, department: p.department, late_days: p.cur.lates_counted, early_exits: p.cur.early_counted })),
-    noticeLate: nt.noticeLate, noticeEarly: nt.noticeEarly,
+    noticeLate: nt.noticeLate, noticeEarly: nt.noticeEarly, noticeMissed: missedPunchNotice(db, month, year, cfg),
     longLates,
     missedOut: { rule: cfg.missed_out_rule === true, from: cfg.thresholds.missed_out_from, minutes: cfg.thresholds.missed_out_minutes, bulk_days: mpPlan.bulk.filter((d) => d.startsWith(cur)),
       people: live.filter((p) => (p.cur.missed_out_days || 0) > 0 || (p.cur.personal_missed_punches || 0) >= cfg.thresholds.missed_out_from)
@@ -2310,7 +2341,7 @@ module.exports = {
   roundDeduction, optionCDays, prevMonth, daysInMonth, computeAttendanceReview,
   financeSendPlan, financeStatus, runTag, trendRow, monthRange, repeaters,
   suggestions, applySuggestions, toStoredConfig, standingFrom, fitShift, MASTER_DAYS_SQL, LEGACY_REASON,
-  noticeBoard, boardSnapshot, bulkMissPunchDays, istToday,
+  noticeBoard, boardSnapshot, bulkMissPunchDays, istToday, missedPunchNotice, personalMissPunches,
   missedOutPlan, applyMissedOut, d4Early, MISSED_OUT_TYPES,
   strikeCodes, strikeHistory, applyLadder, storedReleaseDays, monthResult, personHistory,
   monthAnalytics, funnelRow, missPunchRow, topPeople, effects, LATE_BANDS, EARLY_BANDS,
