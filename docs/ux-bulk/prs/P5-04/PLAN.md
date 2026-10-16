@@ -146,3 +146,26 @@ What undo does:
 - **Q-B6** Stage 7 will then raise a `GROSS_STRUCTURE_CHANGE` manual flag per person. Finance approves again in Finance Audit, which is today's behaviour for single approvals too. Leave it, or auto-mark flags that a batch already approved? Recommendation: leave it this PR and record it as a follow-up. It is an R8 concern.
 - **Q-B7** May I make the employees.js L645–724 move (§7)? If not, the fallback is a new `salarySplit.js` plus a parity test pinning the copy in employees.js until B's file is free. That is weaker.
 - **Q-B8** While a batch is `submitted`, the single Salary Input / Employee Master path can still raise a request for the same person. That shows up at approval as a conflict, and the whole batch is refused (R3; finance returns it). Accept? Blocking it in the single path needs employees.js 726–880 (B's range).
+
+---
+## FINAL DESIGN (16 Oct 2026, after planner rulings Q-B1…Q-B8 — supersedes the open questions above)
+- **Moves (Q-B7):** `services/salarySplit.js` ← employees.js `DEFAULT_SPLIT…splitUnchanged` verbatim (+ new `buildRevisionStructure`
+  = the object `raiseRequest` builds); employees.js imports them, handler bytes unchanged. `services/salaryChange.js` ← salary-input.js
+  helpers (isCalendarDate, COMPONENT_KEYS, resolveApproval, requestedPercents, requestedCeiling, istToday, sameUser, SELF_APPROVAL)
+  + `approveSalaryChange(db, {id, actor, approvedBy, effectiveFrom})` = the approve body (incl. N-PF requestedCeiling) returning
+  `{ok, effectiveFrom, gross, keptComponents}` or `{ok:false, status, body}` with the SAME JSON; the route is a thin call.
+- **Kind `salary-revision`** (requiresApproval; roles default hr/admin create, finance/admin approve). Common `{effective_from, reason}`
+  (default 1st of next IST month); rows `{code, new_gross | pct, effective_from?}`. `REVISION_GROSS_ROUND = 1` (Q-B2).
+  planRow errors: not found / not Active / both-or-neither / gross ≤ 0 / % outside −50…+100 / bad date / month finalised (Q-B5) /
+  later-dated structure / pending salary_change_request (Q-B8). Skipped: same gross. Warnings: no structure (default 50/20), change
+  > 25 %, not the 1st (Q-B3), Stage 7 already ran for the month (re-run it, Q-B5), conveyance kept on top (Q-B4).
+- **Approve (engine txn):** per row INSERT a Pending request (requested_by = batch creator) then `approveSalaryChange` (approver =
+  finance user, effectiveFrom = row date); audit rows stage `SALARY_REVISION_BULK` (request status, employees.gross_salary, structure).
+  after_json keeps structAfter, sameDate flag, structBefore, empBefore (gross + updated_at) and a Stage 7 fingerprint (salary_computations
+  rows of that employee for months ≥ effective).
+- **Undo (finance/admin, reason):** blocked if request not Approved / later request / gross or structure row changed / later-dated
+  structure / a month ≥ effective finalised / Stage 7 fingerprint differs. Restores structure (delete or same-date restore, every column)
+  + employees.gross_salary/updated_at; request → 'Reverted'; audit.
+- **UI:** SalaryInput header button "+ Bulk revision" (hr/admin) → inline `components/bulk/SalaryRevisionBulk.jsx` + `BulkBatchList
+  kind="salary-revision" canUndo={finance}`; finance decides in Finance Verification → Bulk batches (reviewColumns: every component).
+- Q-B6 GROSS_STRUCTURE_CHANGE flags left as is (follow-up). No schema change.
