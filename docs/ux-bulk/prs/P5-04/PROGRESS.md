@@ -40,6 +40,12 @@ statutoryWriters. One test line changed on purpose: statutoryWriterGuard T10b sa
    (c) the header button was not clickable at 390 px → header wraps; (d) preview rows are mapped back to their input by the
    server-echoed `input` (repeated codes are merged, so position matching was wrong).
 
+## P5-01 review fixes merged (16 Oct)
+origin/feat/bulk-approval-stage f684bac (F1–F5) merged in (no rebase). F3: the batch creator cannot undo their own
+salary-revision batch (403 SELF_APPROVAL) — the tests and the check script already undo as a second person. F1: with
+salary-revision registered, the finance/admin queue lists it. After merge: bulkSalaryRevision + bulkApproval +
+bulkExtraDuty 56/56; full jest 124 / 2220 green; bulk-salary-revision-check.py 42/42.
+
 ## Next
 Planner independent review (MONEY). Then PR.
 
@@ -80,7 +86,7 @@ Rulings Q-B1…Q-B8 (16 Oct), Q6, R3, R5, R8.
   (2) `buildRevisionStructure` must stay equal to `raiseRequest`'s object (parity test). (3) Stage 7 rows are NOT in the plan
   hash on purpose — a Stage 7 run between send and approve does not refuse the batch. (4) After apply, Stage 7 raises a
   GROSS_STRUCTURE_CHANGE flag per person (Q-B6, follow-up). (5) statutoryWriterGuard T10b names services/salaryChange.js.
-- **Verified:** jest 123/2202 → 124/2218 (new bulkSalaryRevision.test.js 16 incl. parity vs the single path on the same DB,
+- **Verified:** jest 123/2202 → 124/2218 (124/2220 after merging the P5-01 review fixes; new bulkSalaryRevision.test.js 16 incl. parity vs the single path on the same DB,
   Q-B8 conflict 409 nothing written, mid-batch throw → nothing incl. audit, undo restore + blocks). `backend/scripts/
   bulk-salary-revision-check.py` (Chromium, built dist, scratch DB, real hr/finance/admin logins, fictional T9501–T9506, port 3504)
   42/42 — paste incl. a % row + a conflict row left out, ₹7,500 total, double click → 1 batch, 390 px, finance sees every
