@@ -13,6 +13,7 @@ import useExpandableRows from '../hooks/useExpandableRows'
 import DrillDownRow, { DrillDownChevron } from '../components/ui/DrillDownRow'
 import EmployeeQuickView from '../components/ui/EmployeeQuickView'
 import api from '../utils/api'
+import StatusBadge from '../components/ui/StatusBadge'
 import { canFinance as canFinanceFn, canHR as canHRFn } from '../utils/role'
 
 // P1-23: same rule as the server (routes/salary-input.js) — trimmed, case-insensitive username; empty never matches.
@@ -440,6 +441,7 @@ export default function SalaryInput() {
                         {h.status === 'Approved' && <span className="badge-green text-xs">Approved</span>}
                         {h.status === 'Rejected' && <span className="badge-red text-xs">Rejected</span>}
                         {h.status === 'Pending' && <span className="badge-yellow text-xs">Pending</span>}
+                        {h.status === 'Reverted' && <StatusBadge domain="salary_change" status="Reverted" size="xs" title="Gross change undone after a finance flag reject" />}
                       </td>
                       <td>{h.approved_by || '—'}</td>
                       <td className="font-mono text-xs">{h.created_at?.split('T')[0] || '—'}</td>
