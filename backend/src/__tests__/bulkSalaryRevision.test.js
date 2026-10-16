@@ -270,6 +270,80 @@ describe('submit → approve', () => {
   });
 });
 
+describe('H1 — first open payroll month (planner ruling, supersedes Q-B3)', () => {
+  const kind = () => require('../services/bulk/kinds/salaryRevision');
+  test('(a) an effective month later than the first open month with data is refused; equal is fine', async () => {
+    const a = person(20000); const b = person(20000);
+    db.prepare("INSERT INTO monthly_imports (month, year, company, is_finalised) VALUES (10, 2026, 'X', 0)").run();
+    const p = await preview([{ code: a.code, new_gross: 21000 }, { code: b.code, new_gross: 21000, effective_from: '2026-10-01' }]);
+    expect(p.body.rows[0].state).toBe('error');
+    expect(p.body.rows[0].messages.join(' ')).toMatch(/Effective month must be the first open payroll month \(Oct 2026\) — the app cannot hold a salary change for a later month/);
+    expect(p.body.rows[1].state).not.toBe('error');
+  });
+  test('(a) an unfinalised month with Stage 7 rows only (no import row) also counts; finalised months do not', async () => {
+    const a = person(20000);
+    db.prepare("INSERT INTO monthly_imports (month, year, company, is_finalised) VALUES (8, 2026, 'X', 1)").run();
+    db.prepare("INSERT INTO salary_computations (employee_code, month, year, company, gross_salary, net_salary) VALUES ('T0000', 8, 2026, 'X', 1, 1)").run();
+    db.prepare("INSERT INTO salary_computations (employee_code, month, year, company, gross_salary, net_salary) VALUES ('T0000', 9, 2026, 'X', 1, 1)").run();
+    expect(kind().firstOpenMonth(db)).toBe('2026-09-01');
+    const p = await preview([{ code: a.code, new_gross: 21000 }]);
+    expect(p.body.rows[0].messages.join(' ')).toMatch(/\(Sep 2026\)/);
+  });
+  test('(a) re-checked at approve: an earlier month imported after submit → approve refused, nothing written', async () => {
+    const a = person(20000); const b = person(20000);
+    const { ids } = await send([{ code: a.code, new_gross: 21000 }, { code: b.code, new_gross: 21000, effective_from: '2026-10-01' }]);
+    db.prepare("INSERT INTO monthly_imports (month, year, company, is_finalised) VALUES (10, 2026, 'X', 0)").run();
+    const before = snapshotMoney();
+    const r = await act(ids[0], 'approve', 'fin1');
+    expect(r.status).toBe(409);
+    expect(r.body.code).toBe('BULK_ROW_ERROR');
+    expect(r.body.rows.map(x => x.code)).toEqual([a.code]);
+    expect(snapshotMoney()).toBe(before);
+  });
+  test('(b) default effective date = 1st of the first open month; none → 1st of the current IST month', async () => {
+    const a = person(20000);
+    const istMonth = `${new Date(Date.now() + 330 * 60000).toISOString().slice(0, 7)}-01`;
+    expect(kind().defaultEffectiveFrom(db)).toBe(istMonth);
+    let d = await api.request('GET', '/api/bulk/salary-revision/defaults', { as: 'hr1' });
+    expect(d.body.data).toEqual({ effective_from: istMonth, firstOpen: null });
+    db.prepare("INSERT INTO monthly_imports (month, year, company, is_finalised) VALUES (9, 2026, 'X', 1)").run();
+    db.prepare("INSERT INTO monthly_imports (month, year, company, is_finalised) VALUES (10, 2026, 'X', 0)").run();
+    db.prepare("INSERT INTO monthly_imports (month, year, company, is_finalised) VALUES (11, 2026, 'X', 0)").run();
+    d = await api.request('GET', '/api/bulk/salary-revision/defaults', { as: 'hr1' });
+    expect(d.body.data).toEqual({ effective_from: '2026-10-01', firstOpen: '2026-10-01' });
+    expect((await api.request('GET', '/api/bulk/salary-revision/defaults', { as: 'fin1' })).status).toBe(403);
+    const p = await preview([{ code: a.code, new_gross: 21000 }], {});
+    expect(p.body.common.effective_from).toBe('2026-10-01');
+    expect(p.body.rows[0].state).not.toBe('error');
+  });
+  test('(c) undo blocked by a Stage 7 re-run of an EARLIER open month after approval', async () => {
+    const a = person(20000);
+    db.prepare("INSERT INTO monthly_imports (month, year, company, is_finalised) VALUES (10, 2026, 'X', 0)").run();
+    db.prepare("INSERT INTO salary_computations (employee_code, month, year, company, gross_salary, net_salary) VALUES (?, 10, 2026, 'X', 20000, 19000)").run(a.code);
+    const { ids } = await send([{ code: a.code, new_gross: 21000 }], { effective_from: '2026-10-01' });
+    expect((await act(ids[0], 'approve', 'fin1')).status).toBe(200);
+    // a later-dated revision can't be made (H1 a), so "earlier month" = October re-run with the new master gross
+    db.prepare("UPDATE salary_computations SET gross_salary = 21000, net_salary = 20000 WHERE employee_code = ? AND month = 10").run(a.code);
+    const r = await act(ids[0], 'undo', 'fin2', { reason: 'wrong list' });
+    expect(r.status).toBe(409);
+    expect(r.body.rows[0].reason).toMatch(/Stage 7/);
+  });
+  test('(c) fingerprint covers months BEFORE the effective month too (rows added there block undo)', async () => {
+    const a = person(20000);
+    const id = (await send([{ code: a.code, new_gross: 21000 }])).ids[0];
+    expect((await act(id, 'approve', 'fin1')).status).toBe(200);
+    db.prepare("INSERT INTO salary_computations (employee_code, month, year, company, gross_salary, net_salary) VALUES (?, 9, 2026, 'X', 21000, 20000)").run(a.code);
+    const r = await act(id, 'undo', 'fin2', { reason: 'wrong list' });
+    expect(r.status).toBe(409);
+    expect(r.body.rows[0].reason).toMatch(/Stage 7/);
+  });
+  test('(d) the not-the-1st warning says pay follows the gross for every month computed after approval', async () => {
+    const a = person(20000, { struct: { conveyance: 0, other_allowances: 6000 } });
+    const p = await preview([{ code: a.code, new_gross: 21000, effective_from: '2026-11-15' }]);
+    expect(p.body.rows[0].messages.join(' ')).toMatch(/every month's salary computed from then on pays the new gross/);
+  });
+});
+
 describe('undo (finance/admin, reason)', () => {
   async function applied(rows) {
     const { ids } = await send(rows);

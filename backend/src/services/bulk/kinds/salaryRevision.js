@@ -32,16 +32,30 @@ const monthIdx = (iso) => Number(iso.slice(0, 4)) * 12 + Number(iso.slice(5, 7))
 const monthLabelOf = (iso) => `${MONTHS[Number(iso.slice(5, 7)) - 1]} ${iso.slice(0, 4)}`;
 const blank = (v) => v === undefined || v === null || (typeof v === 'string' && v.trim() === '');
 
-/** Ruling Q-B3: the default effective date is the 1st of next month in IST. */
-function firstOfNextMonthIST(now = Date.now()) {
-  const t = istToday(now);
-  let y = Number(t.slice(0, 4)); let m = Number(t.slice(5, 7)) + 1;
-  if (m > 12) { m = 1; y += 1; }
-  return `${y}-${String(m).padStart(2, '0')}-01`;
+/** 1st of the current IST month. */
+function firstOfThisMonthIST(now = Date.now()) {
+  return `${istToday(now).slice(0, 7)}-01`;
 }
 
-function normaliseCommon(c) {
-  const effective_from = blank(c.effective_from) ? firstOfNextMonthIST() : String(c.effective_from).trim();
+/**
+ * H1 (planner ruling, supersedes Q-B3): Stage 7 pays employees.gross_salary for EVERY month it computes, whatever the
+ * structure's date. So a revision may only take effect from the FIRST OPEN payroll month: the earliest month that is not
+ * finalised and has data (a monthly_imports row or salary_computations rows). Months after it cannot be held for later.
+ * Returns 'YYYY-MM-01' or null when no unfinalised month has data.
+ */
+function firstOpenMonth(db) {
+  const r = db.prepare(`SELECT y, m FROM (
+      SELECT year y, month m FROM monthly_imports GROUP BY year, month HAVING MAX(COALESCE(is_finalised, 0)) = 0
+      UNION SELECT s.year, s.month FROM salary_computations s
+        WHERE NOT EXISTS (SELECT 1 FROM monthly_imports f WHERE f.year = s.year AND f.month = s.month AND f.is_finalised = 1)
+    ) ORDER BY y, m LIMIT 1`).get();
+  return r ? `${r.y}-${String(r.m).padStart(2, '0')}-01` : null;
+}
+/** Default effective date (H1 b): 1st of the first open payroll month, else 1st of the current IST month. */
+const defaultEffectiveFrom = (db) => (db && firstOpenMonth(db)) || firstOfThisMonthIST();
+
+function normaliseCommon(c, db) {
+  const effective_from = blank(c.effective_from) ? defaultEffectiveFrom(db) : String(c.effective_from).trim();
   const fields = {};
   if (!isCalendarDate(effective_from)) fields.effective_from = 'Pick a valid effective date';
   const reason = String(c.reason ?? '').trim();
@@ -83,7 +97,7 @@ function rowFromInput(input, rowNo) {
 const normaliseOptions = () => ({});
 const periodOf = (c) => ({ month: c.month, year: c.year });
 const describe = (c) => (c && c.effective_from ? `from ${ddmmyyyy(c.effective_from)}${c.reason ? ` · ${c.reason}` : ''}` : '');
-const context = () => ({});
+const context = (db) => ({ firstOpen: firstOpenMonth(db) });
 
 function findEmployee(db, code) {
   const exact = db.prepare('SELECT * FROM employees WHERE code = ?').get(code);
@@ -94,10 +108,20 @@ function findEmployee(db, code) {
 /** The latest structure the way PUT /employees/:code/salary reads it (the split source). */
 const latestStructureOf = (db, empId) => db.prepare('SELECT * FROM salary_structures WHERE employee_id = ? ORDER BY effective_from DESC LIMIT 1').get(empId) || null;
 const pendingRequestOf = (db, code) => db.prepare("SELECT id FROM salary_change_requests WHERE employee_code = ? AND status = 'Pending' ORDER BY id LIMIT 1").get(code) || null;
-/** Stage 7 rows of this employee for the effective month and later — the "Stage 7 used the period" signal. */
-function stage7Rows(db, code, date) {
+/**
+ * Stage 7 rows of this employee for EVERY unfinalised month (H1 c) — Stage 7 pays the master gross for any month it
+ * re-runs, so a re-run of an earlier open month after approval also used the new pay. The "Stage 7 used it" signal.
+ */
+function stage7Rows(db, code) {
   return db.prepare(`SELECT month, year, company, gross_salary, gross_earned, total_deductions, net_salary
-    FROM salary_computations WHERE employee_code = ? AND (year * 12 + month) >= ? ORDER BY year, month, company`).all(code, monthIdx(date));
+    FROM salary_computations s WHERE employee_code = ?
+      AND NOT EXISTS (SELECT 1 FROM monthly_imports f WHERE f.year = s.year AND f.month = s.month AND f.is_finalised = 1)
+    ORDER BY year, month, company`).all(code);
+}
+/** Stage 7 rows of this employee for the effective month and later (the "re-run Stage 7 for <Mon>" note). */
+function stage7RowsFrom(db, code, date) {
+  return db.prepare(`SELECT month, year FROM salary_computations WHERE employee_code = ? AND (year * 12 + month) >= ?
+    ORDER BY year, month`).all(code, monthIdx(date));
 }
 function finalisedFrom(db, date) {
   return db.prepare(`SELECT month, year FROM monthly_imports WHERE is_finalised = 1 AND (year * 12 + month) >= ?
@@ -111,7 +135,7 @@ function num(v) {
 }
 
 /** @returns { state, action, messages[], display, fingerprint, emp?, ... } */
-function planRow(db, row, common) {
+function planRow(db, row, common, ctx = {}) {
   const messages = [];
   const date = row.dateRaw || common.effective_from;
   row.date = date;
@@ -147,6 +171,10 @@ function planRow(db, row, common) {
 
   const fin = finalisedFrom(db, date);
   if (fin) return err(`Payroll for ${MONTHS[fin.month - 1]} ${fin.year} is finalised — pick a date after it`);
+  // H1 a: the effective month must not be later than the first open payroll month.
+  if (ctx.firstOpen && monthIdx(date) > monthIdx(ctx.firstOpen)) {
+    return err(`Effective month must be the first open payroll month (${monthLabelOf(ctx.firstOpen)}) — the app cannot hold a salary change for a later month`);
+  }
   const later = structureDatedAfter(db, 'plant', emp.id, date);
   if (later) return err(`A salary structure dated ${ddmmyyyy(later.latestDate)} already exists — date this change on or after it`);
   const pending = pendingRequestOf(db, emp.code);
@@ -160,7 +188,7 @@ function planRow(db, row, common) {
     display[`old_${k}`] = inForce ? r2(Number(inForce[k]) || 0) : null;
     display[`new_${k}`] = r2(resolved.components[k]);
   }
-  const s7 = stage7Rows(db, emp.code, date);
+  const s7 = stage7RowsFrom(db, emp.code, date);
   const fingerprint = {
     emp: [emp.id, String(emp.status || ''), oldGross, emp.pt_applicable ?? null],
     latest: latest ? [latest.id, latest.effective_from, latest.gross_salary, latest.updated_at] : null,
@@ -175,7 +203,7 @@ function planRow(db, row, common) {
   if (oldGross > 0 && Math.abs(newGross - oldGross) / oldGross * 100 > BIG_CHANGE_PCT) {
     warn.push(`Change of more than ${BIG_CHANGE_PCT}% (${r2((newGross - oldGross) / oldGross * 100)}%) — check it is right`);
   }
-  if (date.slice(8, 10) !== '01') warn.push(`Not the 1st — salary for a month uses the structure in force on the 1st, so this pays from the month after ${monthLabelOf(date)}`);
+  if (date.slice(8, 10) !== '01') warn.push(`Not the 1st — after approval, every month's salary computed from then on pays the new gross (${monthLabelOf(date)} included); the date only marks the structure`);
   const conv = resolved.components.conveyance || 0;
   if (conv > 0 && resolved.kept.includes('conveyance')) warn.push(`Conveyance ${conv} kept on top of the split, as a single approval does`);
   messages.push(...warn);
@@ -217,7 +245,7 @@ function applyRow(db, row, plan, common, { batchId, user, requestedBy }) {
     targetTable: 'salary_change_requests', targetId: reqId,
     before: { struct: structBefore, emp: empBefore },
     after: { requestId: reqId, employeeId: emp.id, effectiveFrom: date, sameDate: r.sameDate, struct: structAfter, emp: empAfter,
-      stage7: stage7Rows(db, emp.code, date) },
+      stage7: stage7Rows(db, emp.code) },
   };
 }
 
@@ -246,7 +274,7 @@ function undoable(db, bulkRow) {
   if (laterStruct) return { ok: false, reason: `A later salary structure exists (from ${ddmmyyyy(laterStruct.effective_from)})` };
   const fin = finalisedFrom(db, after.effectiveFrom);
   if (fin) return { ok: false, reason: `Payroll for ${MONTHS[fin.month - 1]} ${fin.year} is finalised` };
-  if (JSON.stringify(stage7Rows(db, req.employee_code, after.effectiveFrom)) !== JSON.stringify(after.stage7 || [])) {
+  if (JSON.stringify(stage7Rows(db, req.employee_code)) !== JSON.stringify(after.stage7 || [])) {
     return { ok: false, reason: 'Salary (Stage 7) was computed with the new pay since — undo is not safe' };
   }
   return { ok: true };
@@ -299,5 +327,5 @@ module.exports = {
   ],
   normaliseCommon, normaliseRows, normaliseOptions, periodOf, describe, context,
   planRow, applyRow, undoable, undoRow,
-  REVISION_GROSS_ROUND, firstOfNextMonthIST,
+  REVISION_GROSS_ROUND, firstOpenMonth, defaultEffectiveFrom,
 };

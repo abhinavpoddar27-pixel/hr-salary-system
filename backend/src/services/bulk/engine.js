@@ -92,10 +92,10 @@ function countStates(planned) {
   return c;
 }
 
-function prepare(kindName, body) {
+function prepare(kindName, body, db) {
   const kind = getKind(kindName);
   if (!kind) return { res: fail(404, 'BULK_UNKNOWN_KIND', `Unknown bulk type "${kindName}"`) };
-  const c = kind.normaliseCommon(body?.common || {});
+  const c = kind.normaliseCommon(body?.common || {}, db); // P5-04: a kind may read the DB for its defaults
   if (!c.ok) return { res: fail(400, 'BULK_BAD_COMMON', c.error, { fields: c.fields }) };
   const n = kind.normaliseRows(body?.rows);
   if (!n.rows.length) return { res: fail(400, 'BULK_NO_ROWS', 'Add at least one person') };
@@ -104,7 +104,7 @@ function prepare(kindName, body) {
 
 /** Plan only. Groups = applicable rows in order, ≤ 50 each; every skipped row rides with group 0. */
 function preview(db, kindName, body) {
-  const p = prepare(kindName, body);
+  const p = prepare(kindName, body, db);
   if (p.res) return p.res;
   if (p.rows.length > BULK_PREVIEW_MAX) return fail(400, 'BULK_PREVIEW_LIMIT', `Check at most ${BULK_PREVIEW_MAX} people at a time`);
   const planned = planAll(db, p.kind, p.common, p.rows);
@@ -131,7 +131,7 @@ function preview(db, kindName, body) {
 
 /** Apply ONE group as ONE batch. */
 function apply(db, kindName, body, user) {
-  const p = prepare(kindName, body);
+  const p = prepare(kindName, body, db);
   if (p.res) return p.res;
   const { kind, common, rows } = p;
   if (needsApproval(kind)) return fail(409, 'BULK_NEEDS_APPROVAL', 'This kind is sent to finance for approval — use "Send to finance"');
@@ -215,7 +215,7 @@ const QUEUE_LINK = '/finance-verification?tab=bulk';
 
 /** P5-01: approval kinds — save ONE group as ONE batch with status 'submitted'. Nothing is applied. */
 function submit(db, kindName, body, user) {
-  const p = prepare(kindName, body);
+  const p = prepare(kindName, body, db);
   if (p.res) return p.res;
   const { kind, common, rows } = p;
   if (!needsApproval(kind)) return fail(409, 'BULK_NO_APPROVAL_STAGE', 'This kind is saved directly — use Save');

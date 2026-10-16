@@ -6,8 +6,9 @@ import IconButton from '../ui/IconButton'
 import ScrollTable from '../ui/ScrollTable'
 import useDraft, { DraftRestoredBanner } from '../../hooks/useDraft'
 import { confirmDialog } from '../../hooks/useConfirm'
-import { bulkPreview, bulkSubmit } from '../../utils/bulkApi'
+import { bulkPreview, bulkSubmit, getSalaryRevisionDefaults } from '../../utils/bulkApi'
 import { fmtINR, fmtDate, todayIST } from '../../utils/formatters'
+import { DATE_RE, normDate, cleanNum, parseRevisionLines } from '../../utils/revisionParse'
 
 /**
  * Salary revision batch (P5-04). Inline panel — NOT a Modal (useConfirm dialogs must not open inside a Modal).
@@ -23,47 +24,8 @@ const STATE_CLS = {
 }
 const CHIPS = [['all', 'All'], ['ok', 'Ready'], ['warning', 'Ready — check'], ['skipped', 'No change'], ['error', 'Problems']]
 
-/** 1st of next month in IST (ruling Q-B3: Stage 7 reads the structure in force on the 1st). */
-function firstOfNextMonth() {
-  const [y, m] = todayIST().split('-').map(Number)
-  return m === 12 ? `${y + 1}-01-01` : `${y}-${String(m + 1).padStart(2, '0')}-01`
-}
-const DATE_RE = /^\d{4}-\d{2}-\d{2}$/
-/** dd-mm-yyyy / dd/mm/yyyy → yyyy-mm-dd (Indian order, never guessed as US). */
-function normDate(t) {
-  const s = String(t || '').trim()
-  if (DATE_RE.test(s)) return s
-  const m = /^(\d{1,2})[-/.](\d{1,2})[-/.](\d{4})$/.exec(s)
-  return m ? `${m[3]}-${m[2].padStart(2, '0')}-${m[1].padStart(2, '0')}` : null
-}
-const cleanNum = (t) => String(t ?? '').replace(/[₹,\s]/g, '')
-
-/**
- * One row per line: "CODE VALUE [DATE]" (tab, space or semicolon separated; comma only when nothing else).
- * VALUE ending in % = % increase, else the mode decides. Amounts may carry commas / ₹.
- * Returns { rows: [{code, new_gross|pct, effective_from?}], bad: [line] }.
- */
-export function parseRevisionLines(text, mode) {
-  const rows = []; const bad = []
-  for (const raw of String(text || '').split(/\r?\n/)) {
-    const line = raw.trim()
-    if (!line) continue
-    // Tabs (Excel copy) first; else spaces/semicolons — so "T9503 27,500" keeps its amount; commas only for "T9501,22000".
-    const sep = line.includes('\t') ? /\t+/ : /[\s;]/.test(line) ? /[\s;]+/ : /[,;]+/
-    const parts = line.split(sep).map(p => p.trim()).filter(Boolean)
-    if (parts.length < 2) { bad.push(line); continue }
-    const [code, value, date] = parts
-    const isPct = /%$/.test(value) || mode === 'pct'
-    const n = cleanNum(value.replace(/%$/, ''))
-    if (n === '' || !Number.isFinite(Number(n))) { bad.push(line); continue }
-    const row = { code: code.replace(/\.0$/, '') }
-    if (isPct) row.pct = Number(n); else row.new_gross = Number(n)
-    if (date) { const d = normDate(date); if (!d) { bad.push(line); continue } row.effective_from = d }
-    rows.push(row)
-  }
-  return { rows, bad }
-}
-
+/** Fallback default before the server answers: 1st of the current IST month (H1 b — the server's first open payroll month wins). */
+const firstOfThisMonth = () => `${todayIST().slice(0, 7)}-01`
 /** First sheet: columns Code + (New Gross | % Increase) [+ Effective From]; header names matched loosely. */
 function rowsFromSheet(ws) {
   const json = XLSX.utils.sheet_to_json(ws, { defval: '', raw: false })
@@ -91,9 +53,19 @@ const money = (v) => (v === null || v === undefined ? '—' : fmtINR(v))
 const COMPONENTS = [['basic', 'Basic'], ['da', 'DA'], ['hra', 'HRA'], ['conveyance', 'Conv.'], ['special_allowance', 'Special'], ['other_allowances', 'Other']]
 
 export default function SalaryRevisionBulk({ onClose, onSent }) {
-  const draft = useDraft('salary-revision-bulk', { date: firstOfNextMonth(), reason: '', mode: 'gross', text: '' })
+  const draft = useDraft('salary-revision-bulk', { date: '', reason: '', mode: 'gross', text: '' })
   const { date, reason, mode, text } = draft.value
   const set = (patch) => draft.setValue(v => ({ ...v, ...patch }))
+  // H1 b: default = 1st of the first open payroll month (server); fill only an empty date (a restored draft keeps its own).
+  const [firstOpen, setFirstOpen] = useState(null)
+  useEffect(() => {
+    let live = true
+    getSalaryRevisionDefaults()
+      .then(res => { if (!live) return; const d = res.data?.data || {}; setFirstOpen(d.firstOpen || null)
+        draft.setValue(v => (v.date ? v : { ...v, date: d.effective_from || firstOfThisMonth() })) })
+      .catch(() => { if (live) draft.setValue(v => (v.date ? v : { ...v, date: firstOfThisMonth() })) })
+    return () => { live = false }
+  }, []) // eslint-disable-line react-hooks/exhaustive-deps
   const parsed = useMemo(() => parseRevisionLines(text, mode), [text, mode])
   const fileRef = useRef(null)
 
@@ -264,7 +236,8 @@ export default function SalaryRevisionBulk({ onClose, onSent }) {
           <div>
             <label className="label" htmlFor="sr-date">Effective from *</label>
             <input id="sr-date" type="date" className="input w-full" value={date} onChange={e => set({ date: e.target.value })} />
-            {notFirst && <div className="text-[11px] text-amber-700 mt-0.5" data-testid="sr-date-warning">Not the 1st — salary for a month uses the structure in force on the 1st, so this pays from the next month.</div>}
+            {firstOpen && <div className="text-[11px] text-slate-500 mt-0.5" data-testid="sr-first-open">First open payroll month: {fmtDate(firstOpen).slice(3)} — the date can't be later (salary follows the master gross for every month computed after approval).</div>}
+            {notFirst && <div className="text-[11px] text-amber-700 mt-0.5" data-testid="sr-date-warning">Not the 1st — every month computed after approval pays the new gross; the date only marks the structure.</div>}
           </div>
           <div className="sm:col-span-2">
             <label className="label" htmlFor="sr-reason">Reason (shown to finance)</label>
