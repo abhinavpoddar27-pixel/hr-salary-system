@@ -229,6 +229,12 @@ describe('undo (Q-A2) and reads', () => {
     const sub = await api.request('GET', '/api/bulk/batches?status=submitted', { as: 'fin1' });
     expect(sub.body.data.map(x => x.id)).toEqual([a]);
     expect((await api.request('GET', '/api/bulk/batches?kind=extra-duty', { as: 'fin1' })).status).toBe(403);
+    // admin's queue (approval=1) never lists direct-kind batches
+    db.prepare("INSERT INTO bulk_batches (kind, status, created_by) VALUES ('extra-duty', 'applied', 'hr1')").run();
+    const admQ = await api.request('GET', '/api/bulk/batches?approval=1&status=submitted,returned,rejected,applied&sinceDays=30', { as: 'admin1' });
+    expect(admQ.body.data.every(x => x.kind === KIND)).toBe(true);
+    const admAll = await api.request('GET', '/api/bulk/batches', { as: 'admin1' });
+    expect(admAll.body.data.some(x => x.kind === 'extra-duty')).toBe(true);
     const hr = await api.request('GET', `/api/bulk/batches?kind=${KIND}`, { as: 'hr1' });
     const ret = hr.body.data.find(x => x.id === b);
     expect(ret.status).toBe('returned'); expect(ret.returnNote).toBe('check amounts'); expect(ret.decidedBy).toBe('fin1');

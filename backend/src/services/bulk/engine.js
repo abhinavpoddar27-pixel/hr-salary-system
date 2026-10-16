@@ -35,6 +35,8 @@ const hashRowOf = (kind, r) => (kind.hashRow ? kind.hashRow(r)
 const inputOf = (kind, r) => (kind.inputOf ? kind.inputOf(r) : { code: r.code, duty_days: r.duty });
 const displayExtraOf = (kind, r) => (kind.displayExtra ? kind.displayExtra(r) : { dutyDays: r.duty });
 const nounOf = (kind) => kind.noun || 'grants';
+const rowFromInputOf = (kind, input, rowNo) => (kind.rowFromInput ? kind.rowFromInput(input, rowNo)
+  : { rowNo, code: String(input.code || ''), dutyRaw: input.duty_days, messages: [] });
 
 /** Same username, trimmed, case-insensitive; an empty name never matches (salary-input.js P1-23 rule). */
 const sameUser = (a, b) => !!a && !!b && String(a).trim().toLowerCase() === String(b).trim().toLowerCase();
@@ -284,7 +286,7 @@ function approve(db, batchId, user) {
       const rows = stored.map((s) => {
         let input = {};
         try { input = JSON.parse(s.input_json || '{}'); } catch { /* keep {} */ }
-        return kind.rowFromInput(input, s.row_no);
+        return rowFromInputOf(kind, input, s.row_no);
       });
       const planned = checkedPlan(db, batch.kind, kind, common, rows, batch.plan_hash,
         { changedText: 'Data changed since this batch was sent — nothing was applied. Return it so they check again.' });

@@ -63,8 +63,9 @@ router.get('/extra-duty/people', requireHrOrAdmin, (req, res) => {
 router.get('/batches', (req, res) => {
   const role = roleOf(req);
   if (!READ_ROLES.includes(role)) return deny(res, ['admin', 'hr']);
-  const visible = engine.visibleKinds(role);
-  const { kind, status, month, year, limit, sinceDays } = req.query;
+  const { kind, status, month, year, limit, sinceDays, approval } = req.query;
+  // approval=1 → the finance queue: approval kinds only (admin would otherwise also see extra-duty batches).
+  const visible = engine.visibleKinds(role).filter(k => approval !== '1' || engine.needsApproval(engine.getKind(k)));
   if (kind && !visible.includes(kind)) {
     const k = engine.getKind(kind);
     return deny(res, k ? engine.rolesOf(k).create : ['admin', 'hr']);

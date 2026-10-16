@@ -94,6 +94,8 @@ export default function BulkApprovalQueue() {
         setRefused({ id, error: d.error || 'Not done', code: d.code, rows: Array.isArray(d.rows) ? d.rows : [] })
         refresh()
         if (done) toast.success(`${done} batch(es) ${doneWord}`)
+        // A server refusal is shown in the banner above — close the dialog. A network failure keeps it open.
+        if (err?.response) return
         throw err
       }
     }
