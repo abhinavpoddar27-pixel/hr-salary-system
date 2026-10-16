@@ -154,12 +154,14 @@ describe('N-19 — PUT /employees/:code/salary, same gross', () => {
     expect(structs(b.id)).toHaveLength(0);
   });
 
-  test('PF wage ceiling (statutory) is still written directly', async () => {
+  // N-PF (owner ruling 16 Oct 2026): changed on purpose — the ceiling now goes to finance approval.
+  test('PF wage ceiling change at the same gross → finance approval, not a direct write', async () => {
     const e = S.plant(db, { code: code(), gross_salary: 20000 });
     S.plantStructure(db, e, '2025-01-01', { gross_salary: 20000 });
     const r = await api.request('PUT', `/api/employees/${e.code}/salary`, { as: 'hr1', body: windowBody(structs(e.id)[0], { pf_wage_ceiling: 21000 }) });
-    expect(r.body.structureUnchanged).toBe(true);
-    expect(structs(e.id)[0].pf_wage_ceiling).toBe(21000);
+    expect(r.body.pendingApproval).toBe(true);
+    expect(structs(e.id)[0].pf_wage_ceiling).toBe(15000);
+    expect(pending(e.code)).toHaveLength(1);
   });
 });
 
