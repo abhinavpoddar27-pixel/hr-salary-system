@@ -70,7 +70,9 @@ router.get('/batches', (req, res) => {
     const k = engine.getKind(kind);
     return deny(res, k ? engine.rolesOf(k).create : ['admin', 'hr']);
   }
-  if (!kind && !visible.length && role !== 'finance') return deny(res, ['admin', 'hr']);
+  // Review F1: a read role with no visible kinds (e.g. admin's ?approval=1 queue when no approval kind is
+  // registered) gets an empty list, never a 403 — Finance Verification loads it on every visit.
+  if (!kind && !visible.length) return res.json({ success: true, data: [] });
   res.json({ success: true, data: engine.listBatches(getDb(), { kind, kinds: kind ? undefined : visible, status, month, year, limit, sinceDays }) });
 });
 router.get('/batches/:id', (req, res) => {
