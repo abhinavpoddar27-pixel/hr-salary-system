@@ -45,6 +45,20 @@ function requestedPercents(newStructure) {
   return out;
 }
 
+// N-PF (owner ruling 16 Oct 2026): a PF wage ceiling change from Employee Master
+// is approved like a split change. The request's ceiling is written only when it
+// differs from the request's own snapshot (old_structure; none → 15000), so the
+// many older requests that just echo the ceiling keep the in-force value. null = none.
+function requestedCeiling(newStructure, oldStructure) {
+  const v = (newStructure || {}).pf_wage_ceiling;
+  if (!present(v)) return null;
+  const n = Number(v);
+  if (!Number.isFinite(n) || n < 0) return null;
+  const o = (oldStructure || {}).pf_wage_ceiling;
+  const was = present(o) && Number.isFinite(Number(o)) ? Number(o) : 15000;
+  return Math.abs(n - was) > 0.01 ? n : null;
+}
+
 function resolveApproval(newStructure, current) {
   const ns = newStructure || {};
   const cur = current || {};
@@ -217,6 +231,9 @@ router.put('/approve/:id', requireFinanceOrAdmin, (req, res) => {
 
   let newStructure;
   try { newStructure = JSON.parse(request.new_structure); } catch { newStructure = {}; }
+  let oldStructure;
+  try { oldStructure = JSON.parse(request.old_structure); } catch { oldStructure = {}; }
+  const ceiling = requestedCeiling(newStructure, oldStructure);
 
   const emp = db.prepare('SELECT id FROM employees WHERE code = ?').get(request.employee_code);
   if (!emp) return res.status(404).json({ success: false, error: 'Employee not found' });
@@ -264,6 +281,10 @@ router.put('/approve/:id', requireFinanceOrAdmin, (req, res) => {
       for (const [col, val] of Object.entries(pcts)) {
         db.prepare(`UPDATE salary_structures SET ${col} = ? WHERE employee_id = ? AND effective_from = ?`).run(val, emp.id, effectiveFrom);
       }
+      // N-PF: a requested ceiling change is written too.
+      if (ceiling !== null) {
+        db.prepare('UPDATE salary_structures SET pf_wage_ceiling = ? WHERE employee_id = ? AND effective_from = ?').run(ceiling, emp.id, effectiveFrom);
+      }
     } else {
       // Flags, pt, pf_wage_ceiling (and any percent column the request does not
       // name) come from the row compute uses at the new row's own date (in force,
@@ -286,7 +307,7 @@ router.put('/approve/:id', requireFinanceOrAdmin, (req, res) => {
         emp.id, newGross, newBasic, newDa, newHra, newConv, newSpecial, newOther,
         pct('basic_percent', 50), pct('da_percent', 0), pct('hra_percent', 20),
         carry('pf_applicable', 0) ? 1 : 0, carry('esi_applicable', 0) ? 1 : 0, carry('lwf_applicable', 0) ? 1 : 0,
-        carry('pt_applicable', 1) ? 1 : 0, carry('pf_wage_ceiling', 15000),
+        carry('pt_applicable', 1) ? 1 : 0, ceiling !== null ? ceiling : carry('pf_wage_ceiling', 15000),
         effectiveFrom
       );
     }
@@ -362,3 +383,4 @@ router.put('/reject/:id', requireFinanceOrAdmin, (req, res) => {
 module.exports = router;
 module.exports.resolveApproval = resolveApproval;
 module.exports.istToday = istToday;
+module.exports.requestedCeiling = requestedCeiling;
