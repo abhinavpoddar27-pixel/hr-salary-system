@@ -251,7 +251,7 @@ function buildDocx(result, run = {}, { now = new Date() } = {}) {
       new Paragraph({ children: [new PageBreak()] }),
       ...noticeHead('Missed Punches', `The following employees missed a punch (in or out) on ${t.board_miss_punch_min ?? 3} or more days in ${ML}.`, [
         'Punch in when you arrive and punch out when you leave, every day.',
-        'A day with only one punch is checked against the gate register. Without proof it is counted as absent.',
+        ...(String((result.meta && result.meta.ym) || '') >= '2026-10' ? ['A day with only one punch is checked against the gate register. Without proof it is counted as absent.'] : []),
         'Days when the machine failed for many people are not counted here.',
       ]),
       table(['S.No', 'Code', 'Name', 'Department', 'Missed punches'], result.noticeMissed.map((n, i) => [{ v: i + 1, align: C }, { v: n.code, align: C }, cleanName(n.name), n.department || '', { v: n.missed_punches, align: C, bold: true }]), [600, 900, 3300, 2900, 1300], 16, true),

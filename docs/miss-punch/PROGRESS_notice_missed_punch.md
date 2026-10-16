@@ -38,5 +38,13 @@ add to this.
 - `personalMissPunches` and the board's skip list must stay the same rule for board and monthly notice.
 - The monthly notice uses the real IST "today", so a review for the current month counts up to yesterday.
 
+## Independent review notes (16 Oct)
+- No bugs found. Known differences, by design: the monthly list does not use the board's hand-skipped days
+  (those are per print); the MP-2 missed-OUT rule (`missedOutPlan`, off by default) still counts worked days
+  only, so its "personal missed punches" can be lower than the notice count. The Word one-punch sentence is
+  printed only from October 2026. A long October list runs onto a second page (a Word table flows; the
+  one-page rule of #163 is the printed mid-month board, unchanged).
+- From October, single-punch rows (PR #164) also count toward the 40-a-day bulk-failure threshold.
+
 ## Not tested
 Railway; a printed Word page on the HR PC.
