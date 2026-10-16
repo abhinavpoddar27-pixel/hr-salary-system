@@ -110,8 +110,11 @@ function SalaryForm({ employee, emp, onClose }) {
     mutationFn: (data) => updateSalaryStructure(employee.code, data),
     onSuccess: (response) => {
       const data = response?.data || response
-      if (data?.pendingApproval) {
-        toast.success('Salary change submitted for finance approval', { duration: 5000 })
+      if (data?.alreadyPending) {
+        // F-6: nothing new was raised — say so, not "submitted".
+        toast(data.message || 'A salary change request is already pending finance approval.', { icon: 'ℹ️', duration: 6000 })
+      } else if (data?.pendingApproval) {
+        toast.success(data.message || 'Salary change submitted for finance approval', { duration: 5000 })
       } else {
         toast.success('Salary structure saved')
       }

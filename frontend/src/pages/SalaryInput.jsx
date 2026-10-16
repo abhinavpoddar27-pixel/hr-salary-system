@@ -47,6 +47,15 @@ const componentRows = (os, ns, preview) => {
     })
     .filter((r) => r.key !== 'special_allowance' || (r.oldVal || 0) !== 0 || r.newVal !== 0)
 }
+// N-PF: the PF wage ceiling row — same rule as the server (salary-input.js requestedCeiling):
+// the request's ceiling counts only when it differs from the request's own snapshot (none → 15000).
+const ceilingChange = (os, ns) => {
+  const v = ns && ns.pf_wage_ceiling
+  if (v === undefined || v === null || v === '' || !Number.isFinite(Number(v)) || Number(v) < 0) return null
+  const o = os && os.pf_wage_ceiling
+  const was = o !== undefined && o !== null && o !== '' && Number.isFinite(Number(o)) ? Number(o) : 15000
+  return Math.abs(Number(v) - was) > 0.01 ? { oldVal: was, newVal: Number(v) } : null
+}
 const todayLabel = () => new Date().toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' })
 
 export default function SalaryInput() {
@@ -323,6 +332,7 @@ export default function SalaryInput() {
                     const compSum = preview && preview.componentSum != null ? num(preview.componentSum) : null
                     const sumOff = compSum !== null && Math.abs(compSum - writeGross) > 1
                     const arrow = (o, n) => (n > (o || 0) ? '▲' : '▼')
+                    const ceil = ceilingChange(os, ns)
                     return (
                       <div className="mt-3 max-w-3xl" data-testid="change-table">
                         {noCurrent && <p className="text-[11px] text-slate-500 mb-1" data-testid="no-current">No current structure on record.</p>}
@@ -358,6 +368,15 @@ export default function SalaryInput() {
                                   {grossChanged && <span className="mr-1">{arrow(num(req.old_gross), writeGross)}</span>}{fmtINR(writeGross)}
                                 </td>
                               </tr>
+                              {ceil && (
+                                <tr data-component="pf_wage_ceiling" data-changed="1" className="border-t border-slate-200 bg-amber-50">
+                                  <td className="px-2 py-1">PF wage ceiling</td>
+                                  <td className="px-2 py-1 text-right font-mono">{fmtINR(ceil.oldVal)}</td>
+                                  <td className="px-2 py-1 text-right font-mono font-bold text-amber-800">
+                                    <span className="mr-1">{arrow(ceil.oldVal, ceil.newVal)}</span>{fmtINR(ceil.newVal)}
+                                  </td>
+                                </tr>
+                              )}
                               {sumOff && (
                                 <tr className="bg-amber-50" data-testid="component-sum-note">
                                   <td colSpan={3} className="px-2 py-1 text-[11px] text-amber-800 font-semibold">
