@@ -709,7 +709,7 @@ function splitAmounts(gross, split) {
 /**
  * P1-14 (Q2) / N-19: is the requested split the one already stored? Same gross,
  * same percentages, same special + other amounts. PF wage ceiling is not part of
- * the split (statutory, written directly). A field left out counts as unchanged.
+ * the split (N-PF: its change is checked on its own, also by approval). A field left out counts as unchanged.
  */
 function splitUnchanged(struct, newGross, split) {
   const near = (a, b) => Math.abs((Number(a) || 0) - (Number(b) || 0)) <= 0.01;
@@ -800,6 +800,7 @@ router.put('/:code/salary', requireHrOrAdmin, (req, res) => {
       return res.json(withIgnored({
         success: true,
         pendingApproval: true,
+        alreadyPending: true, // F-6: nothing new raised — the window says so
         message: 'A salary change request is already pending finance approval for this employee.'
       }));
     }
@@ -837,24 +838,31 @@ router.put('/:code/salary', requireHrOrAdmin, (req, res) => {
 
   // ── Gross is NOT changing ─────────────────────────────────────────────
   if (newGross > 0 && Math.abs(newGross - currentGross) <= 0.01) {
-    // PF wage ceiling is statutory, not part of the split: written directly (as before).
-    const ceilingSent = req.body.pf_wage_ceiling !== undefined && req.body.pf_wage_ceiling !== null && req.body.pf_wage_ceiling !== '';
-    if (currentStruct && ceilingSent && Math.abs(split.pfCeiling - numOr(currentStruct.pf_wage_ceiling, 15000)) > 0.01) {
-      db.prepare("UPDATE salary_structures SET pf_wage_ceiling = ?, updated_at = datetime('now') WHERE id = ?")
-        .run(split.pfCeiling, currentStruct.id);
-    }
+    // N-PF (owner ruling 16 Oct 2026): a PF wage ceiling change goes to finance
+    // approval like a split change (no direct write). A ceiling left out / blank
+    // resolves to the stored one, so it counts as unchanged.
+    const ceilingChanged = Math.abs(split.pfCeiling - numOr(currentStruct ? currentStruct.pf_wage_ceiling : 15000, 15000)) > 0.01;
+    const splitSame = splitUnchanged(currentStruct, newGross, split);
 
-    // P1-14 (Q2): same gross AND same split → leave the structure exactly as it is.
-    if (currentStruct && splitUnchanged(currentStruct, newGross, split)) {
+    // P1-14 (Q2): same gross, same split, same ceiling → leave the structure exactly as it is.
+    if (currentStruct && splitSame && !ceilingChanged) {
       return res.json(withIgnored({ success: true, structureUnchanged: true, message: 'Saved — salary split unchanged' }));
     }
 
     // N-19: a changed split moves pay (basic → PF base, HRA, special) — finance decides.
-    // With no structure on record the default 50/20 split is what Stage 7 would
-    // create, so that one is still created directly; any other split needs approval.
-    if (currentStruct || !splitUnchanged(null, newGross, split)) {
-      return raiseRequest(newGross, 'Salary split change via Employee Master (gross unchanged)',
-        'Salary split change submitted for finance approval. Current split unchanged until approved.');
+    // With no structure on record the default 50/20 split (ceiling 15000) is what
+    // Stage 7 would create, so that one is still created directly; anything else
+    // needs approval. Split + ceiling → one request.
+    if (currentStruct || !splitSame || ceilingChanged) {
+      if (splitSame) {
+        return raiseRequest(newGross, 'PF wage ceiling change via Employee Master (gross unchanged)',
+          'PF wage ceiling change submitted for finance approval. Current ceiling unchanged until approved.');
+      }
+      return ceilingChanged
+        ? raiseRequest(newGross, 'Salary split and PF wage ceiling change via Employee Master (gross unchanged)',
+          'Salary split and PF wage ceiling change submitted for finance approval. Current values unchanged until approved.')
+        : raiseRequest(newGross, 'Salary split change via Employee Master (gross unchanged)',
+          'Salary split change submitted for finance approval. Current split unchanged until approved.');
     }
 
     const amounts = splitAmounts(newGross, split);
