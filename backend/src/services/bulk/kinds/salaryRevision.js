@@ -281,7 +281,9 @@ module.exports = {
   hashRow: (r) => [r.code, r.date ?? null, r.newGross ?? null, r.plan.state, r.plan.action, r.plan.fingerprint],
   inputOf: (r) => ({ code: r.code, new_gross: r.grossRaw, pct: r.pctRaw, effective_from: r.dateRaw }),
   rowFromInput,
-  displayExtra: () => ({}),
+  // The row's own input rides back on the preview so the screen sends exactly what it checked (codes repeated in
+  // the paste are merged, so preview rows cannot be matched to pasted lines by position).
+  displayExtra: (r) => ({ input: { code: r.code, new_gross: r.grossRaw, pct: r.pctRaw, effective_from: r.dateRaw } }),
   moneyTotal: (planned) => r2(planned.filter(r => APPLICABLE(r.plan)).reduce((s, r) => s + (r.plan.display.delta || 0), 0)),
   reviewColumns: [
     { key: 'code', label: 'Code', type: 'text' }, { key: 'name', label: 'Name', type: 'text' },

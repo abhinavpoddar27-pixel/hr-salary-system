@@ -5,7 +5,7 @@ Branch `feat/bulk-salary-revision` (on feat/bulk-approval-stage 70d98cb + origin
 Read PLAN.md (FINAL DESIGN at the bottom), then this file, then `git log --oneline 70d98cb..HEAD`. Rulings below are binding.
 
 ## State
-Step 4 of 6 done (backend complete, UI next).
+Step 6 in progress — UI built, check script 42/42; regressions + full jest next.
 
 ## Rulings (planner, 16 Oct 2026)
 - Q-B1 Salary Input header button → inline panel SalaryRevisionBulk.jsx (not a Modal) + BulkBatchList.
