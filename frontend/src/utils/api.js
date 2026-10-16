@@ -377,7 +377,8 @@ export const approveLeaveRequest = (id, data = {}) => api.post(`/finance-audit/l
 export const rejectLeaveRequest = (id, reason) => api.post(`/finance-audit/leave-requests/${id}/reject`, { reason })
 export const withdrawLeaveRequest = (id) => api.post(`/finance-audit/leave-requests/${id}/withdraw`)
 export const markPresentCorrection = (data) => api.post('/finance-audit/corrections/mark-present', data)
-export const getManualAttendanceFlags = (params) => api.get('/finance-audit/manual-flags', { params })
+// fresh (FRESH): Finance Audit → Attendance Flags re-reads this right after a Verify (server GET max-age=5) — no-cache
+export const getManualAttendanceFlags = (params) => api.get('/finance-audit/manual-flags', { params, ...fresh })
 export const verifyManualFlag = (id, data) => api.put(`/finance-audit/manual-flags/${id}/verify`, data)
 export const getSalaryManualFlags = (month, year, company) => api.get('/finance-audit/salary-manual-flags', { params: { month, year, company } })
 export const approveManualFlag = (flagId, data) => api.put(`/finance-audit/approve-flag/${flagId}`, data)
