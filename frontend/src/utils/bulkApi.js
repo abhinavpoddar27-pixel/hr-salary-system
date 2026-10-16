@@ -13,3 +13,10 @@ export const getEdEmployeesLite = () => api.get('/bulk/extra-duty/employees', fr
 export const getEdPeopleOnDate = (date) => api.get('/bulk/extra-duty/people', { params: { date }, ...fresh })
 // Existing HR bulk approve route (no helper in api.js yet) — used by the HR Queue bar (F-11).
 export const hrBulkApproveGrants = (ids) => api.post('/extra-duty-grants/bulk-approve', { ids })
+
+// P5-01 — approval stage (submit + finance decisions on batches).
+export const bulkSubmit = (kind, data) => api.post(`/bulk/${kind}/submit`, data)
+export const getBulkQueue = (params = {}) => api.get('/bulk/batches', { params: { approval: 1, status: 'submitted,returned,rejected,applied', sinceDays: 30, limit: 100, ...params }, ...fresh })
+export const approveBulkBatch = (id) => api.post(`/bulk/batches/${id}/approve`, {})
+export const rejectBulkBatch = (id, reason) => api.post(`/bulk/batches/${id}/reject`, { reason })
+export const returnBulkBatch = (id, note) => api.post(`/bulk/batches/${id}/return`, { note })

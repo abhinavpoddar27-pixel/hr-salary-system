@@ -56,6 +56,20 @@ function initBulkSchema(db) {
     CREATE INDEX IF NOT EXISTS idx_bulk_rows_batch ON bulk_rows(batch_id, row_no);
     CREATE UNIQUE INDEX IF NOT EXISTS idx_bulk_rows_key ON bulk_rows(batch_id, row_key);
   `);
+
+  // P5-01 approval stage: who submitted / decided, reason, note, ₹ total. Additive, safe every boot.
+  const have = new Set(db.prepare('PRAGMA table_info(bulk_batches)').all().map(c => c.name));
+  const add = (col, type) => { if (!have.has(col)) db.exec(`ALTER TABLE bulk_batches ADD COLUMN ${col} ${type}`); };
+  add('submitted_by', 'TEXT');
+  add('submitted_at', 'TEXT');
+  add('approved_by', 'TEXT');
+  add('approved_at', 'TEXT');
+  add('decided_by', 'TEXT');
+  add('decided_at', 'TEXT');
+  add('reject_reason', 'TEXT');
+  add('return_note', 'TEXT');
+  add('money_total', 'REAL');
+  db.exec('CREATE INDEX IF NOT EXISTS idx_bulk_batches_status_kind ON bulk_batches(status, kind)');
 }
 
 module.exports = { initBulkSchema };
