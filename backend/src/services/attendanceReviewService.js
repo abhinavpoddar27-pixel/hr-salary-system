@@ -91,8 +91,8 @@ const DEFAULT_CONFIG = Object.freeze({
   contract_loaders_early_exempt: true,      // contractor workers with a loading designation: early exits not counted (owner ruling 11 Oct 2026)
   dismissed_suggestions: Object.freeze({}), // { key: { by, at } } — a dismissed suggestion is not shown again
   // notice board footer (PR-5); {date} = the last attendance day the board covers
-  board_footer_en: 'These names are from attendance up to {date}. At month end, working time lost to late coming and early leaving is deducted from salary (at least half a day, in half-day steps). Leaving without punching out is recorded too. Come on time and punch in and out every day.',
-  board_footer_hi: 'ये नाम {date} तक की हाज़िरी के आधार पर हैं। महीने के अंत में देर से आने और जल्दी जाने से गँवाया गया काम का समय वेतन से काटा जाएगा (कम से कम आधा दिन, आधे-आधे दिन के हिसाब से)। बिना पंच किए जाना भी दर्ज होता है। रोज़ समय पर आएँ और आते-जाते समय पंच करें।',
+  board_footer_en: 'Counted up to {date}. At month end, time lost to late coming and early leaving is cut from salary (at least half a day). Come on time and punch in and out every day.',
+  board_footer_hi: '{date} तक की गिनती। महीने के अंत में देर से आने और जल्दी जाने का समय वेतन से कटेगा (कम से कम आधा दिन)। रोज़ समय पर आएँ और आते-जाते पंच करें।',
   remeasure: Object.freeze({}),             // { code: { start, end 'HH:MM', late_grace 9, early_grace 15, left_late 'system'|'shift'|'off', left_late_minutes 20, hours_complete false, hours_grace 10 } }
 });
 

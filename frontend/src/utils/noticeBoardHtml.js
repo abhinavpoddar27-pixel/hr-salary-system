@@ -27,32 +27,42 @@ export function noticeBoardHtml(board, print = null) {
       <td class="c${x.flags.early ? ' hit' : ''}">${x.early_exits}</td>
       <td class="c${x.flags.missed ? ' hit' : ''}">${x.missed_punches}</td>
     </tr>`).join('')
+  const dense = board.listed.length + Math.ceil(board.spotless.length / 4) > 34 ? ' dense' : ''
   const spot = board.spotless.map((x) => `<li><span class="nm">${esc(x.name)}</span> <span class="code">${esc(x.code)}</span></li>`).join('')
   const ref = print
-    ? `Notice No. ${esc(print.number)} · printed ${esc(istStamp(print.printed_at))} by ${esc(print.printed_by)}`
+    ? `Notice No. ${esc(print.number)} · ${esc(istStamp(print.printed_at).split(',')[0])}`
     : 'DRAFT — not yet printed'
   return `<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><title>Attendance notice ${esc(day(m.from))} – ${esc(day(covered))}</title>
 <style>
-  @page { size: A4 portrait; margin: 12mm 11mm 14mm; }
+  @page { size: A4 portrait; margin: 0; }
   * { box-sizing: border-box; }
   html, body { margin: 0; background: #fff; color: #111; }
   body { font: 10.5pt/1.35 "Noto Sans", "Noto Sans Devanagari", "Nirmala UI", Mangal, Arial, sans-serif; padding: 0; }
-  .sheet { max-width: 188mm; margin: 0 auto; }
-  @media screen { body { padding: 12mm 11mm; } }
+  .sheet { max-width: 210mm; margin: 0 auto; padding: 10mm 11mm; }
   header { border-bottom: 2.5px solid #111; padding-bottom: 6px; margin-bottom: 8px; display: flex; justify-content: space-between; gap: 12px; align-items: flex-end; }
   h1 { font-size: 19pt; margin: 0; letter-spacing: .02em; }
   h1 .hi { font-weight: 600; margin-left: 8px; }
   .period { font-size: 12pt; font-weight: 600; margin-top: 2px; }
   .ref { font-size: 8.5pt; color: #444; text-align: right; white-space: nowrap; }
   .ref.draft { color: #b45309; font-weight: 700; }
-  h2 { font-size: 12pt; margin: 12px 0 4px; }
+  h2 { font-size: 12pt; margin: 10px 0 4px; }
   h2 .hi { font-weight: 500; }
-  .rule { font-size: 9pt; color: #333; margin: 0 0 5px; }
+  .rule { font-size: 8.5pt; color: #333; margin: 0 0 4px; }
   table { width: 100%; border-collapse: collapse; }
   thead { display: table-header-group; }
   tr { page-break-inside: avoid; }
-  th, td { border: 1px solid #555; padding: 3px 5px; vertical-align: top; }
+  th, td { border: 1px solid #555; padding: 2px 5px; vertical-align: top; }
+  .sheet.dense { line-height: 1.2; padding: 6mm 9mm; }
+  .dense header { margin-bottom: 4px; padding-bottom: 4px; }
+  .dense th, .dense td { padding: 0 4px; font-size: 8.5pt; }
+  .dense td.hit { font-size: 9.5pt; }
+  .dense th { font-size: 8pt; line-height: 1.1; }
+  .dense h2 { margin: 6px 0 2px; }
+  .dense footer { margin-top: 6px; font-size: 9pt; }
+  .dense ul.spot { font-size: 8.5pt; line-height: 1.15; }
+  .dense ul.spot li { padding: 0; }
+  .dense td.code, .dense .code { font-size: 8pt; }
   th { background: #eee; font-size: 9pt; text-align: left; }
   th.c, td.c { text-align: center; width: 15mm; }
   td.n { width: 8mm; text-align: right; color: #555; }
@@ -60,15 +70,16 @@ export function noticeBoardHtml(board, print = null) {
   td.dept { font-size: 9pt; }
   td.hit { font-weight: 800; font-size: 12pt; background: #f3f3f3; }
   .empty { border: 1px dashed #888; padding: 10px; text-align: center; color: #333; }
-  ul.spot { columns: 3; column-gap: 8mm; margin: 0; padding: 0; list-style: none; font-size: 9.5pt; }
+  ul.spot { columns: 4; column-gap: 8mm; margin: 0; padding: 0; list-style: none; font-size: 9.5pt; }
   ul.spot li { break-inside: avoid; padding: 1px 0; border-bottom: 1px dotted #ccc; }
   ul.spot .code { color: #444; font-size: 8.5pt; }
-  footer { margin-top: 12px; border-top: 2px solid #111; padding-top: 6px; font-size: 10pt; }
-  footer p { margin: 0 0 5px; }
+  ul.spot .nm, ul.spot .code { white-space: nowrap; }
+  footer { margin-top: 10px; border-top: 2px solid #111; padding-top: 5px; font-size: 10pt; page-break-inside: avoid; }
+  footer p { margin: 0 0 4px; }
   footer .hi { font-size: 10.5pt; }
   .small { font-size: 8pt; color: #555; }
 </style></head>
-<body><div class="sheet">
+<body><div class="sheet${dense}">
   <header>
     <div>
       <h1>Attendance Notice <span class="hi">हाज़िरी सूचना</span></h1>
@@ -77,23 +88,21 @@ export function noticeBoardHtml(board, print = null) {
     <div class="ref${print ? '' : ' draft'}">${ref}</div>
   </header>
 
-  <h2>Late coming, early leaving and missed punches so far <span class="hi">· अब तक देर से आना, जल्दी जाना और पंच छूटना</span></h2>
-  <p class="rule">Named: ${th.late} or more late arrivals, ${th.early} or more early exits, or ${th.missed} or more missed punches. The figure that put a name here is in bold.<br>
-  नाम तब है जब: ${th.late} या अधिक बार देर से आए, ${th.early} या अधिक बार जल्दी गए, या ${th.missed} या अधिक बार पंच छूटा। जिस कारण नाम आया, वह संख्या मोटे अक्षरों में है।</p>
+  <h2>Late coming, early leaving, missed punches <span class="hi">· देर से आना, जल्दी जाना, पंच छूटना</span></h2>
+  <p class="rule">Late ${th.late}+ · Left early ${th.early}+ · Missed punch ${th.missed}+ times <span class="hi">· देर ${th.late}+ · जल्दी ${th.early}+ · पंच छूटा ${th.missed}+ बार</span></p>
   ${board.listed.length ? `<table>
     <thead><tr><th>#</th><th>Code<br>कोड</th><th>Name<br>नाम</th><th>Department<br>विभाग</th>
       <th class="c">Late<br>देर से आए</th><th class="c">Left early<br>जल्दी गए</th><th class="c">Missed punch<br>पंच छूटा</th></tr></thead>
     <tbody>${rows}</tbody></table>`
     : '<div class="empty">No one so far. <span class="hi">अब तक किसी का नाम नहीं।</span></div>'}
 
-  <h2>On time every day <span class="hi">· रोज़ समय पर</span></h2>
-  <p class="rule">No late arrival, no early exit and no missed punch so far — thank you. <span class="hi">अब तक न देर, न जल्दी, न पंच छूटा — धन्यवाद।</span></p>
+  <h2>On time every day — thank you <span class="hi">· रोज़ समय पर — धन्यवाद</span></h2>
   ${board.spotless.length ? `<ul class="spot">${spot}</ul>` : '<div class="empty">—</div>'}
 
   <footer>
     <p class="hi">${esc(board.footer.hi)}</p>
     <p>${esc(board.footer.en)}</p>
-    <p class="small">Counts from attendance up to ${esc(day(covered))}. Corrections: see HR. · गलती लगे तो HR से मिलें।</p>
+    <p class="small">Corrections: see HR · गलती लगे तो HR से मिलें</p>
   </footer>
 </div></body></html>`
 }
