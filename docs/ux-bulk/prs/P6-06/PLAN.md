@@ -28,7 +28,7 @@ dialog must stay open while the request runs. Pattern per page: one local `confi
 Focus: Cancel first on danger (P2-01 rule); headless Dialog returns focus to the opener on close.
 Copy (plain words, concrete object, design:ux-copy pass in build):
 - A1 title "Deactivate {contractor_name}?" — "New daily-wage entries for this contractor will be refused, and draft entries can no longer be edited. You can reactivate later." Button "Deactivate".
-- A2 title "Approve the rate change for {name}?" — "Wage {fmtINR2 old} → {new}, commission {old} → {new}, total per worker {old} → {new}. Effective date on the request: {fmtDate}. The new rates apply to every entry saved from now on. This cannot be undone here — a further change needs a new request." Button "Approve rates", variant **warning** (amber, approve is not delete — Q3).
+- A2 title "Approve the rate change for {name}?" — "Wage {fmtINR2 old} → {new}, commission {old} → {new}, total per worker {old} → {new}. Effective date on the request: {fmtDate}. The new rates apply to every entry saved from now on. This cannot be undone here — a further change needs a new request." Button "Approve rates", variant **warning** (amber, approve is not delete; first focus Confirm per P2-01 — Q3).
 - A4 title "Remove this outside-the-system grant?" — "{code} · {type} · {days} day(s) · {Month YYYY} · {how given}. Balances recomputed after this will no longer count it. This cannot be undone here, and the same row cannot be uploaded again." Button "Remove grant".
 - A5 ON: "Turn leave automation on?" — "From now on earned and casual leave balances are recalculated and saved for every employee whenever attendance or an approval changes. A finalized month is never changed." OFF: "Turn leave automation off?" — "Balances stop updating until it is turned back on." Button "Turn on" / "Turn off". Checkbox stays at its server value until the save succeeds (it is already controlled by `status`).
 Destructive buttons use ConfirmDialog's red danger style. No new component, no api.js / backend change.
@@ -65,5 +65,5 @@ jest full suite before/after (no backend change expected); `npm run build`. Regr
 ## 9. Questions
 - Q1 A3 (document delete) is in Employees.jsx = builder B's file. Hand it to builder B, or let me make that one hunk after B lands?
 - Q2 Include E1 (auto day-calc toggle), E2 ("There is none"), E3 (flag Clear)? Recommend E1 + E2 (same file, same pattern, org-wide); E3 skip.
-- Q3 Rate approve: amber (approve) or red (danger)? Recommend amber with first focus on Cancel.
+- Q3 Rate approve: amber `warning` (P2-01 rule → first focus on Confirm, like Early Exit Approve) or red `danger` (first focus on Cancel)? Recommend amber, matching P2-01's Approve convention.
 - Q4 Rate approve copy states "effective date is not applied separately" (G1) — OK to show that to finance?
