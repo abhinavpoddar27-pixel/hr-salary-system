@@ -49,6 +49,18 @@ function singlePunchFrom(opts) {
   return SINGLE_PUNCH_FROM_DEFAULT;
 }
 
+/** The one punch time of a row with exactly one punch, as { at: 'HH:MM', h, side: 'in'|'out' }; else null. */
+function lonePunch(rec) {
+  const inTime = rec.in_time_final || rec.in_time_original;
+  const outTime = rec.out_time_final || rec.out_time_original;
+  if (!!inTime === !!outTime) return null;
+  const at = String(inTime || outTime);
+  const h = parseInt(at.split(':')[0], 10);
+  return Number.isNaN(h) ? null : { at, h, side: inTime ? 'in' : 'out' };
+}
+const EVENING_FROM_H = 17;   // a lone punch from 17:00 is an exit, or a night check-in
+const MORNING_TO_H = 12;     // a lone punch before 12:00 can be a night shift's exit
+
 /** Issue type for a single-punch absent day, or null when the rule does not apply. */
 function singlePunchIssue(rec, ctx) {
   if (!ctx.from || !rec.date || rec.date < ctx.from) return null;
@@ -56,19 +68,45 @@ function singlePunchIssue(rec, ctx) {
   if (!SINGLE_PUNCH_STATUSES.includes(status)) return null;
   if (rec.status_final && rec.status_original && rec.status_final !== rec.status_original) return null; // HR re-labelled
   if (rec.is_night_out_only || rec.night_pair_date) return null; // part of a night pair
+  const one = lonePunch(rec);
+  if (!one) return null; // none or both → not a single punch
+  const prev = ctx.lone.get(`${rec.employee_code}|${addDaysIso(rec.date, -1)}`);
+  const next = ctx.lone.get(`${rec.employee_code}|${addDaysIso(rec.date, 1)}`);
+  // A night shift the pairing missed: lone evening punch on D + lone morning punch on D+1.
+  // The morning one is that shift's exit (the shift is paid on D) → not raised on its own,
+  // or one shift could be resolved into two paid days.
+  if (one.h < MORNING_TO_H && prev && prev.h >= EVENING_FROM_H) return null;
   // The day is closed once this person's next day has a punch (night pairing has had its
   // chance), or two days have passed, or it is a month's last day and the month is over.
-  const next = addDaysIso(rec.date, 1);
-  const closed = ctx.punchedDays.has(`${rec.employee_code}|${next}`)
+  const nextDate = addDaysIso(rec.date, 1);
+  const closed = ctx.punchedDays.has(`${rec.employee_code}|${nextDate}`)
     || rec.date <= ctx.twoDaysAgo
-    || (next.slice(8) === '01' && rec.date < ctx.today);
+    || (nextDate.slice(8) === '01' && rec.date < ctx.today);
   if (!closed) return null;
-  const inTime = rec.in_time_final || rec.in_time_original;
-  const outTime = rec.out_time_final || rec.out_time_original;
-  if (!!inTime === !!outTime) return null; // none or both → not a single punch
-  if (outTime) return 'MISSING_IN';
-  const h = parseInt(String(inTime).split(':')[0], 10);
-  return h >= 17 ? 'MISSING_IN' : 'MISSING_OUT'; // a lone evening punch is the exit
+  if (one.h >= EVENING_FROM_H) return next && next.h < MORNING_TO_H ? 'NIGHT_UNPAIRED' : 'MISSING_IN';
+  return one.side === 'out' ? 'MISSING_IN' : 'MISSING_OUT';
+}
+
+/**
+ * Rows of the day before / after the records' date range for these employees (another month's file),
+ * so a night shift across a month end is seen whole. Best effort: no DB → none.
+ */
+function neighbourRows(records) {
+  if (!records.length) return [];
+  let min = null; let max = null; const codes = new Set();
+  for (const r of records) {
+    if (!r.date) continue;
+    if (!min || r.date < min) min = r.date;
+    if (!max || r.date > max) max = r.date;
+    codes.add(String(r.employee_code));
+  }
+  if (!min) return [];
+  try {
+    const { getDb } = require('../database/db');
+    return getDb().prepare(`SELECT employee_code, date, in_time_original, in_time_final, out_time_original, out_time_final
+      FROM attendance_processed WHERE date IN (?, ?)`).all(addDaysIso(min, -1), addDaysIso(max, 1))
+      .filter((r) => codes.has(String(r.employee_code)));
+  } catch { return []; }
 }
 
 /**
@@ -76,18 +114,22 @@ function singlePunchIssue(rec, ctx) {
  * Must be called after night shift pairing is complete.
  *
  * @param {Array} records - attendance_processed records
- * @param {Object} [opts] - { singlePunchFrom: 'YYYY-MM-DD' | null, today: 'YYYY-MM-DD' } (tests)
+ * @param {Object} [opts] - { singlePunchFrom: 'YYYY-MM-DD' | null, today: 'YYYY-MM-DD', neighbours: rows } (tests)
  * @returns {Array} missPunchList - records flagged as miss punches with issue type
  */
 function detectMissPunches(records, opts = {}) {
   const missPunches = [];
   const today = (opts && opts.today) || istToday();
-  const ctx = { from: singlePunchFrom(opts), today, twoDaysAgo: addDaysIso(today, -2), punchedDays: new Set() };
+  const ctx = { from: singlePunchFrom(opts), today, twoDaysAgo: addDaysIso(today, -2), punchedDays: new Set(), lone: new Map() };
   if (ctx.from) {
-    for (const r of records) {
-      if (r.date && (r.in_time_final || r.in_time_original || r.out_time_final || r.out_time_original)) {
+    const around = opts && Array.isArray(opts.neighbours) ? opts.neighbours : neighbourRows(records);
+    for (const r of [...around, ...records]) {
+      if (!r.date) continue;
+      if (r.in_time_final || r.in_time_original || r.out_time_final || r.out_time_original) {
         ctx.punchedDays.add(`${r.employee_code}|${r.date}`);
       }
+      const one = lonePunch(r);
+      if (one) ctx.lone.set(`${r.employee_code}|${r.date}`, one);
     }
   }
 
@@ -307,7 +349,9 @@ function resolveMissPunch(db, recordId, { inTime, outTime, source, remark, conve
       // minimum; below that the status is left alone. Stage 6 still uses this only
       // after finance approves (dayCalculation.effectiveStatusForDay).
       const curStatus = existing.status_final || existing.status_original;
-      if (finalOut && existing.is_miss_punch === 1 && SINGLE_PUNCH_STATUSES.includes(curStatus)) {
+      const spFrom = singlePunchFrom({});
+      if (finalOut && existing.is_miss_punch === 1 && SINGLE_PUNCH_STATUSES.includes(curStatus)
+        && spFrom && existing.date >= spFrom && existing.status_original === curStatus) {
         const [ih, im] = String(finalIn).split(':').map(Number);
         const [oh, om] = String(finalOut).split(':').map(Number);
         let hrs = ((oh * 60 + om) - (ih * 60 + im)) / 60;

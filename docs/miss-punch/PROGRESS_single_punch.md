@@ -23,10 +23,22 @@ reached the Miss Punch page and were paid as absences with no review. 2026 to da
   "Mark absent" (convert) path unchanged.
 - Screen: a lone evening punch flagged Missing IN pre-fills as the OUT time; IN is left empty.
 
+## Independent review fixes (16 Oct)
+- **Night shifts the pairing missed** (lone 20:00 on D + lone morning punch on D+1, the exit stored as an IN):
+  D is raised as NIGHT_UNPAIRED (IN kept, HR adds the OUT → 12 h → one P) and D+1 is not raised — otherwise
+  one shift could be resolved into two paid days. Detection also reads the day before / after the file's range
+  from the database, so a night shift across a month end is seen whole.
+- **Reimport / dedupe dropped the flag** on resolved rows (pre-existing for all miss punches): `import.js`
+  replay now restores `is_miss_punch` + type from the snapshot; `POST /attendance/deduplicate` resets the flag
+  only on unresolved rows. Without this a reimport paid HR's resolution as P before finance decided
+  (Stage 6 reads a resolved day only through the flag).
+- **Status upgrade scoped**: only for dates from the rule's start date and only when HR has not re-labelled the day.
+
 ## Verified
-- New `backend/src/__tests__/singlePunchMissPunch.test.js` 15 (10 fail on main b0ed242; the 5 that pass are
-  controls: September untouched, not-raised cases, existing rules byte-identical, convert, ordinary day).
-- Full jest 122 suites / 2187 pass.
+- New `backend/src/__tests__/singlePunchMissPunch.test.js` 21 (incl. night / month-end / scoping cases).
+- Full jest 122 suites / 2193 pass.
+- `backend/scripts/single-punch-reimport-check.py` (real import of a synthetic Oct .xls + reimport) 10/10;
+  with the import.js / attendance.js fixes reverted 4 fail (reimport pays the day before finance).
 - `backend/scripts/single-punch-sim.py` (real server.js, scratch DB, real hr + finance logins) 13/13:
   re-detect via POST /attendance/deduplicate → 7 Oct on the list as Missing IN, a no-punch absence not
   listed; resolve → P + audit; Stage 6 before finance: no change; after finance approve: +1 present day.
@@ -37,8 +49,9 @@ reached the Miss Punch page and were paid as absences with no review. 2026 to da
 ## Fragile
 - The 17:00 split (lone IN-only punch at/after 17:00 = exit) is in `singlePunchIssue`.
 - Detection only sees one month's rows; the month-end rule covers the last day.
-- `POST /attendance/deduplicate` resets every miss-punch flag and re-detects (pre-existing): a resolved
-  single-punch day then drops off the list but keeps P + its finance decision.
+- A lone evening punch whose next day is not in the database yet (month end before the next file) is raised as
+  Missing IN; HR's gate times still give one day.
+- From October single-punch rows count toward the 40-a-day bulk-failure threshold the Attendance Review uses.
 
 ## Not tested
 Railway; a real EESL import file for October (detection path is the same function).

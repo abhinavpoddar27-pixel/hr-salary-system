@@ -92,7 +92,7 @@ describe('detection', () => {
     row(mockDb, 'SP6', '2026-10-15', 'A', '19:50', null, { night: 1 }); // yesterday, no 16 Oct row yet
     expect(detect(mockDb)).toEqual([]);
     expect(types(detect(mockDb, { today: '2026-10-17' }))).toEqual({ 'SP6|2026-10-15': 'MISSING_IN' });
-    row(mockDb, 'SP6', '2026-10-16', 'A', '08:00', null);               // next day has a punch (itself still open today)
+    row(mockDb, 'SP6', '2026-10-16', 'P', '08:00', '20:00');            // next day has a punch
     expect(types(detect(mockDb))).toEqual({ 'SP6|2026-10-15': 'MISSING_IN' });
   });
 
@@ -127,6 +127,64 @@ describe('detection', () => {
     expect(detectMissPunches(all(mockDb), { today: TODAY })).toEqual([]);
     setPolicy(mockDb, 'single_punch_miss_punch_from', '2026-10-01');
     expect(detectMissPunches(all(mockDb), { today: TODAY })).toHaveLength(1);
+  });
+});
+
+describe('night shifts the pairing missed (review fix)', () => {
+  beforeEach(() => { mockDb = newDb(); });
+
+  test('lone 20:00 on D + lone 08:05 on D+1 → D is a night shift to check, D+1 is not raised', () => {
+    emp(mockDb, 'SN1');
+    row(mockDb, 'SN1', '2026-10-14', 'A', '20:00', null);
+    row(mockDb, 'SN1', '2026-10-15', 'A', '08:05', null); // EESL stored the exit as an IN
+    expect(types(detect(mockDb, { today: '2026-10-20' }))).toEqual({ 'SN1|2026-10-14': 'NIGHT_UNPAIRED' });
+  });
+
+  test('across a month end: 31 Oct evening + 1 Nov morning in the next file → 1 Nov not raised', () => {
+    emp(mockDb, 'SN2');
+    row(mockDb, 'SN2', '2026-10-31', 'A', '20:00', null);
+    row(mockDb, 'SN2', '2026-11-01', 'A', '08:00', null);
+    const nov = mockDb.prepare("SELECT * FROM attendance_processed WHERE month = 11").all();
+    const oct = mockDb.prepare("SELECT * FROM attendance_processed WHERE month = 10").all();
+    // November's run sees 31 Oct from the database
+    expect(detectMissPunches(nov, { today: '2026-11-05' })).toEqual([]);
+    // October's run, re-run after November is in, sees 1 Nov
+    expect(types(detectMissPunches(oct, { today: '2026-11-05' }))).toEqual({ 'SN2|2026-10-31': 'NIGHT_UNPAIRED' });
+  });
+
+  test('resolving the night day with gate times 20:00 → 08:00 gives one P', () => {
+    emp(mockDb, 'SN3');
+    const id = row(mockDb, 'SN3', '2026-10-14', 'A', '20:00', null);
+    row(mockDb, 'SN3', '2026-10-15', 'A', '08:05', null);
+    applyMissPunchFlags(mockDb, detect(mockDb, { today: '2026-10-20' }));
+    resolveMissPunch(mockDb, id, { inTime: '20:00', outTime: '08:05', source: 'Gate Register', remark: '' });
+    expect(get(mockDb, id).status_final).toBe('P');
+    expect(mockDb.prepare("SELECT is_miss_punch FROM attendance_processed WHERE date = '2026-10-15'").get().is_miss_punch).toBe(0);
+  });
+
+  test('a day worker: lone 19:22 exit, next day a normal full day → still Missing IN', () => {
+    emp(mockDb, 'SN4');
+    row(mockDb, 'SN4', '2026-10-14', 'A', '19:22', null);
+    row(mockDb, 'SN4', '2026-10-15', 'P', '08:00', '20:00');
+    expect(types(detect(mockDb, { today: '2026-10-20' }))).toEqual({ 'SN4|2026-10-14': 'MISSING_IN' });
+  });
+});
+
+describe('the status upgrade is limited to the rule (review fix)', () => {
+  beforeEach(() => { mockDb = newDb(); });
+  test('a September miss punch with status A resolved with times keeps A (no change before 1 Oct)', () => {
+    emp(mockDb, 'SU1');
+    const id = row(mockDb, 'SU1', '2026-09-24', 'A', '19:22', null);
+    mockDb.prepare("UPDATE attendance_processed SET is_miss_punch = 1, miss_punch_type = 'MISSING_IN' WHERE id = ?").run(id);
+    resolveMissPunch(mockDb, id, { inTime: '08:00', outTime: '19:22', source: 'Gate Register', remark: '' });
+    expect(get(mockDb, id).status_final).toBe('A');
+  });
+  test('a day HR re-labelled to A (biometric said P) is not upgraded by the rule', () => {
+    emp(mockDb, 'SU2');
+    const id = row(mockDb, 'SU2', '2026-10-06', 'P', '08:00', null, { final: 'A' });
+    mockDb.prepare("UPDATE attendance_processed SET is_miss_punch = 1, miss_punch_type = 'MISSING_OUT' WHERE id = ?").run(id);
+    resolveMissPunch(mockDb, id, { inTime: '08:00', outTime: '20:00', source: 'Gate Register', remark: '' });
+    expect(mockDb.prepare("SELECT COUNT(*) n FROM audit_log WHERE record_id = ? AND field_name = 'status_final'").get(id).n).toBe(0);
   });
 });
 
