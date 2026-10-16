@@ -1,4 +1,6 @@
-# F151 — N-MONEY2 follow-ups F-2, F-3, F-6 (frontend only)
+# F151 — N-MONEY2 follow-ups F-2, F-3 (frontend only)
+
+> Planner ruling 16 Oct: F-6 MOVED to N-PF (`alreadyPending` flag + Employees.jsx toast there). The F-6 section below is kept for history only.
 Branch `fix/n-money2-followups` off origin/main b0ed242 (worktree /home/claude/wt-f151). Source: findings in
 docs/ux-bulk/prs/N-MONEY2/PROGRESS.md (#151). Phase 0 — no code yet. Each fix = the smallest change.
 

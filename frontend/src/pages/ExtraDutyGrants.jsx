@@ -136,7 +136,16 @@ export default function ExtraDutyGrants() {
   })
   const bulkFinApproveMut = useMutation({
     mutationFn: (ids) => bulkFinanceApproveGrants(ids),
-    onSuccess: (res) => { qc.invalidateQueries({ queryKey: ['edg-list'] }); qc.invalidateQueries({ queryKey: ['edg-summary'] }); toast.success(`${res?.data?.count || 0} grants approved`) }
+    onSuccess: (res) => {
+      qc.invalidateQueries({ queryKey: ['edg-list'] }); qc.invalidateQueries({ queryKey: ['edg-summary'] })
+      // F151 F-3: say how many the server skipped (not HR-approved or already decided).
+      const n = res?.data?.count || 0
+      const m = res?.data?.skipped?.length || 0
+      const why = 'not HR-approved or already decided'
+      if (!m) toast.success(`Approved ${n}`)
+      else if (n) toast.success(`Approved ${n} · Skipped ${m} (${why})`, { duration: 6000 })
+      else toast(`Nothing approved · Skipped ${m} (${why})`, { icon: 'ℹ️', duration: 6000 })
+    }
   })
 
   // One column list for every tab. The Finance Review tab adds chips, ordering, the
