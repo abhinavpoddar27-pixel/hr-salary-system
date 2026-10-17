@@ -319,7 +319,7 @@ export default function DailyWageContractors() {
         <RateApprovals pendingRates={pendingRates} canFinance={canFinance}
           onApprove={(r) => setConfirm({ kind: 'approve', r })}
           onReject={(id) => { setRejectingId(id); setRejectRemarks('') }}
-          approving={approveRateMut.isPending} />
+          approving={approveRateMut.isPending} username={user?.username} />
       )}
 
       {/* ── P6-06 confirms ───────────────────────────────────── */}
@@ -584,7 +584,12 @@ function ExpandedRow({ contractor: c, canHR, onEdit, onRateChange, onDeactivate,
 }
 
 // ── Rate Approvals Tab ───────────────────────────────────────
-function RateApprovals({ pendingRates, canFinance, onApprove, onReject, approving }) {
+// G2: mirrors the server's sameUser (dailyWage.js) by hand — the server is the real gate.
+const isOwnRequest = (username, proposedBy) =>
+  !!username && !!proposedBy && String(username).trim().toLowerCase() === String(proposedBy).trim().toLowerCase()
+const SELF_DECIDE_TEXT = 'You raised this request — another finance or admin user must decide it.'
+
+function RateApprovals({ pendingRates, canFinance, onApprove, onReject, approving, username }) {
   if (pendingRates.length === 0) {
     return <div className="text-center py-12 text-slate-400">No pending rate changes</div>
   }
@@ -610,14 +615,20 @@ function RateApprovals({ pendingRates, canFinance, onApprove, onReject, approvin
                 {r.remarks && <span className="ml-2 text-slate-500">— {r.remarks}</span>}
               </div>
             </div>
-            {canFinance && (
-              <div className="flex gap-2 flex-shrink-0">
-                <button onClick={() => onApprove(r)} disabled={approving}
-                  className="px-3 py-1.5 text-xs font-medium rounded-lg bg-green-600 text-white hover:bg-green-700 disabled:opacity-50">Approve</button>
-                <button onClick={() => onReject(r.id)}
-                  className="px-3 py-1.5 text-xs font-medium rounded-lg bg-red-50 text-red-600 border border-red-200 hover:bg-red-100">Reject</button>
-              </div>
-            )}
+            {canFinance && (() => {
+              const own = isOwnRequest(username, r.proposed_by)
+              return (
+                <div className="flex flex-col items-end gap-1 flex-shrink-0">
+                  <div className="flex gap-2">
+                    <button onClick={() => { if (!own) onApprove(r) }} disabled={approving || own} title={own ? SELF_DECIDE_TEXT : undefined}
+                      className="px-3 py-1.5 text-xs font-medium rounded-lg bg-green-600 text-white hover:bg-green-700 disabled:opacity-50 disabled:cursor-not-allowed">Approve</button>
+                    <button onClick={() => { if (!own) onReject(r.id) }} disabled={own} title={own ? SELF_DECIDE_TEXT : undefined}
+                      className="px-3 py-1.5 text-xs font-medium rounded-lg bg-red-50 text-red-600 border border-red-200 hover:bg-red-100 disabled:opacity-50 disabled:cursor-not-allowed">Reject</button>
+                  </div>
+                  {own && <p className="text-xs text-amber-700 max-w-[16rem] text-right" data-testid="dw-rate-self-note">{SELF_DECIDE_TEXT}</p>}
+                </div>
+              )
+            })()}
           </div>
         </div>
       ))}

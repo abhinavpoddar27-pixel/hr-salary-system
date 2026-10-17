@@ -11,6 +11,16 @@ function dwAudit(db, entityType, entityId, action, oldValues, newValues, user) {
   `).run(entityType, entityId, action, oldValues ? JSON.stringify(oldValues) : null, newValues ? JSON.stringify(newValues) : null, user);
 }
 
+// ── G2: maker-checker on rate changes ────────────────────────
+// Same rule as salary-input.js (P1-23 / P5-01): trimmed, case-insensitive username compare; an empty name
+// blocks nobody (legacy rows). Admin included — a second person always decides.
+const sameUser = (a, b) => !!a && !!b && String(a).trim().toLowerCase() === String(b).trim().toLowerCase();
+const SELF_APPROVAL = {
+  success: false,
+  code: 'SELF_APPROVAL',
+  error: 'You raised this request — ask another finance or admin user to decide it.'
+};
+
 // ── G1: rates apply from their effective date ────────────────
 // IST calendar date (UTC+05:30, no DST) — the server clock is UTC.
 function istToday() {
@@ -308,6 +318,7 @@ router.put('/rates/:id/approve', requireFinanceOrAdmin, (req, res) => {
   if (rate.approval_status !== 'pending') {
     return res.status(400).json({ success: false, error: `Rate change is already ${rate.approval_status}` });
   }
+  if (sameUser(req.user?.username, rate.proposed_by)) return res.status(403).json(SELF_APPROVAL);
   if (!isRealIsoDate(rate.effective_date)) {
     return res.status(400).json({ success: false, error: 'This rate change has an invalid effective date — reject it and propose it again' });
   }
@@ -382,6 +393,7 @@ router.put('/rates/:id/reject', requireFinanceOrAdmin, (req, res) => {
   if (rate.approval_status !== 'pending') {
     return res.status(400).json({ success: false, error: `Rate change is already ${rate.approval_status}` });
   }
+  if (sameUser(req.user?.username, rate.proposed_by)) return res.status(403).json(SELF_APPROVAL);
 
   const { remarks } = req.body;
   const user = req.user?.username || 'system';
