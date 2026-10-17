@@ -529,6 +529,9 @@ export const proposeDWRateChange = (id, data) => api.post(`/daily-wage/contracto
 export const approveDWRateChange = (id) => api.put(`/daily-wage/rates/${id}/approve`)
 export const rejectDWRateChange = (id, remarks) => api.put(`/daily-wage/rates/${id}/reject`, { remarks })
 export const getPendingDWRateChanges = () => api.get('/daily-wage/rates/pending')
+// G1: rates apply from their effective date — the rate an entry dated `date` is priced at, and what an approval would touch
+export const getDWRateOn = (id, date) => api.get(`/daily-wage/contractors/${id}/rate-on`, { params: { date }, ...fresh })
+export const getDWRateImpact = (id) => api.get(`/daily-wage/rates/${id}/impact`, fresh)
 export const getDWAuditLog = (params) => api.get('/daily-wage/audit', { params })
 // DW Entries
 // fresh (N-FRESH, for P1-18): the records list is re-read right after Submit-all — no-cache

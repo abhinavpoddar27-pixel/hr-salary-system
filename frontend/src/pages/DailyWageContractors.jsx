@@ -5,7 +5,7 @@ import {
   getDWContractors, createDWContractor, updateDWContractor,
   deactivateDWContractor, reactivateDWContractor,
   getDWContractorRates, proposeDWRateChange,
-  getPendingDWRateChanges, approveDWRateChange, rejectDWRateChange
+  getPendingDWRateChanges, approveDWRateChange, rejectDWRateChange, getDWRateImpact
 } from '../utils/api'
 import { useAppStore } from '../store/appStore'
 import { canHR as canHRFn, canFinance as canFinanceFn } from '../utils/role'
@@ -107,6 +107,15 @@ export default function DailyWageContractors() {
     retry: 0
   })
   const pendingRates = pendingRatesRes?.data?.data || []
+  // G1: what approving the rate change in the confirm would do to entries already saved
+  const approveTarget = confirm?.kind === 'approve' ? confirm.r : null
+  const { data: impactRes, isLoading: impactLoading, isError: impactError } = useQuery({
+    queryKey: ['dw-rate-impact', approveTarget?.id],
+    queryFn: () => getDWRateImpact(approveTarget.id),
+    enabled: !!approveTarget,
+    retry: 0
+  })
+  const impact = impactRes?.data?.data
 
   // ── Mutations ──────────────────────────────────────────────
   const invalidateAll = () => {
@@ -142,7 +151,12 @@ export default function DailyWageContractors() {
   })
   const approveRateMut = useMutation({
     mutationFn: approveDWRateChange,
-    onSuccess: () => { invalidateAll(); setConfirm(null); toast.success('Rate change approved') },
+    onSuccess: (res) => {
+      invalidateAll()
+      qc.invalidateQueries({ queryKey: ['dw-entries'] })
+      setConfirm(null)
+      toast.success(res?.data?.message || 'Rate change approved', { duration: 6000 })
+    },
     onError: (e) => toast.error(e.response?.data?.error || 'Failed'),
     onSettled: () => { confirmInFlight.current = false }
   })
@@ -305,7 +319,7 @@ export default function DailyWageContractors() {
         <RateApprovals pendingRates={pendingRates} canFinance={canFinance}
           onApprove={(r) => setConfirm({ kind: 'approve', r })}
           onReject={(id) => { setRejectingId(id); setRejectRemarks('') }}
-          approving={approveRateMut.isPending} />
+          approving={approveRateMut.isPending} username={user?.username} />
       )}
 
       {/* ── P6-06 confirms ───────────────────────────────────── */}
@@ -332,7 +346,19 @@ export default function DailyWageContractors() {
                 <span className="block">Wage ₹{fmt(r.old_wage_rate)} → ₹{fmt(r.new_wage_rate)}</span>
                 <span className="block">Commission ₹{fmt(r.old_commission_rate)} → ₹{fmt(r.new_commission_rate)}</span>
                 <span className="block font-medium">Total per worker ₹{fmt(oldTotal)} → ₹{fmt(newTotal)}</span>
-                <span className="block pt-1">New rates apply from today. The effective date on the request ({fmtDate(r.effective_date)}) is recorded but not used yet.</span>
+                <span className="block pt-1" data-testid="confirm-rate-applies">
+                  {impact && !impact.applies_now
+                    ? <>These rates apply to entries dated {fmtDate(r.effective_date)} onward. Until then the current rates stay.</>
+                    : <>These rates apply to entries dated {fmtDate(r.effective_date)} onward.</>}
+                </span>
+                {impactLoading && <span className="block text-slate-400">Checking entries already saved…</span>}
+                {impactError && <span className="block text-amber-700">Could not check entries already saved — the approval still re-prices only drafts.</span>}
+                {impact && impact.drafts_to_reprice > 0 && (
+                  <span className="block" data-testid="confirm-rate-reprice">{impact.drafts_to_reprice} draft {impact.drafts_to_reprice === 1 ? 'entry' : 'entries'} dated from {fmtDate(r.effective_date)} will be re-priced.</span>
+                )}
+                {impact && impact.kept.count > 0 && (
+                  <span className="block text-amber-700" data-testid="confirm-rate-kept">{impact.kept.count} {impact.kept.count === 1 ? 'entry' : 'entries'} dated after {fmtDate(r.effective_date)} {impact.kept.count === 1 ? 'is' : 'are'} already with finance or paid and keep the old rate.</span>
+                )}
                 <span className="block">This cannot be undone here — a further change needs a new request.</span>
               </span>
             }
@@ -558,7 +584,12 @@ function ExpandedRow({ contractor: c, canHR, onEdit, onRateChange, onDeactivate,
 }
 
 // ── Rate Approvals Tab ───────────────────────────────────────
-function RateApprovals({ pendingRates, canFinance, onApprove, onReject, approving }) {
+// G2: mirrors the server's sameUser (dailyWage.js) by hand — the server is the real gate.
+const isOwnRequest = (username, proposedBy) =>
+  !!username && !!proposedBy && String(username).trim().toLowerCase() === String(proposedBy).trim().toLowerCase()
+const SELF_DECIDE_TEXT = 'You raised this request — another finance or admin user must decide it.'
+
+function RateApprovals({ pendingRates, canFinance, onApprove, onReject, approving, username }) {
   if (pendingRates.length === 0) {
     return <div className="text-center py-12 text-slate-400">No pending rate changes</div>
   }
@@ -584,14 +615,20 @@ function RateApprovals({ pendingRates, canFinance, onApprove, onReject, approvin
                 {r.remarks && <span className="ml-2 text-slate-500">— {r.remarks}</span>}
               </div>
             </div>
-            {canFinance && (
-              <div className="flex gap-2 flex-shrink-0">
-                <button onClick={() => onApprove(r)} disabled={approving}
-                  className="px-3 py-1.5 text-xs font-medium rounded-lg bg-green-600 text-white hover:bg-green-700 disabled:opacity-50">Approve</button>
-                <button onClick={() => onReject(r.id)}
-                  className="px-3 py-1.5 text-xs font-medium rounded-lg bg-red-50 text-red-600 border border-red-200 hover:bg-red-100">Reject</button>
-              </div>
-            )}
+            {canFinance && (() => {
+              const own = isOwnRequest(username, r.proposed_by)
+              return (
+                <div className="flex flex-col items-end gap-1 flex-shrink-0">
+                  <div className="flex gap-2">
+                    <button onClick={() => { if (!own) onApprove(r) }} disabled={approving || own} title={own ? SELF_DECIDE_TEXT : undefined}
+                      className="px-3 py-1.5 text-xs font-medium rounded-lg bg-green-600 text-white hover:bg-green-700 disabled:opacity-50 disabled:cursor-not-allowed">Approve</button>
+                    <button onClick={() => { if (!own) onReject(r.id) }} disabled={own} title={own ? SELF_DECIDE_TEXT : undefined}
+                      className="px-3 py-1.5 text-xs font-medium rounded-lg bg-red-50 text-red-600 border border-red-200 hover:bg-red-100 disabled:opacity-50 disabled:cursor-not-allowed">Reject</button>
+                  </div>
+                  {own && <p className="text-xs text-amber-700 max-w-[16rem] text-right" data-testid="dw-rate-self-note">{SELF_DECIDE_TEXT}</p>}
+                </div>
+              )
+            })()}
           </div>
         </div>
       ))}

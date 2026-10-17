@@ -11,6 +11,93 @@ function dwAudit(db, entityType, entityId, action, oldValues, newValues, user) {
   `).run(entityType, entityId, action, oldValues ? JSON.stringify(oldValues) : null, newValues ? JSON.stringify(newValues) : null, user);
 }
 
+// ── G2: maker-checker on rate changes ────────────────────────
+// Same rule as salary-input.js (P1-23 / P5-01): trimmed, case-insensitive username compare; an empty name
+// blocks nobody (legacy rows). Admin included — a second person always decides.
+const sameUser = (a, b) => !!a && !!b && String(a).trim().toLowerCase() === String(b).trim().toLowerCase();
+const SELF_APPROVAL = {
+  success: false,
+  code: 'SELF_APPROVAL',
+  error: 'You raised this request — ask another finance or admin user to decide it.'
+};
+
+// ── G1: rates apply from their effective date ────────────────
+// IST calendar date (UTC+05:30, no DST) — the server clock is UTC.
+function istToday() {
+  return new Date(Date.now() + 330 * 60 * 1000).toISOString().slice(0, 10);
+}
+// YYYY-MM-DD that is a real calendar date (2026-02-30 is refused).
+function isRealIsoDate(s) {
+  if (typeof s !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(s)) return false;
+  const d = new Date(s + 'T00:00:00Z');
+  return !isNaN(d.getTime()) && d.toISOString().slice(0, 10) === s;
+}
+// The rate in force for a contractor on a date:
+//   the approved change with the latest effective_date <= date (tie: highest id) → its new rates;
+//   else, if approved changes exist, the earliest one's old rates (the rate before any change);
+//   else the contractor master's rates.
+function rateOn(db, contractor, date) {
+  const hit = db.prepare(`
+    SELECT id, new_wage_rate, new_commission_rate FROM dw_rate_history
+    WHERE contractor_id = ? AND approval_status = 'approved' AND effective_date <= ?
+    ORDER BY effective_date DESC, id DESC LIMIT 1
+  `).get(contractor.id, date);
+  if (hit) return { wage: hit.new_wage_rate, commission: hit.new_commission_rate, source: 'rate_change', rate_change_id: hit.id };
+  const first = db.prepare(`
+    SELECT id, old_wage_rate, old_commission_rate FROM dw_rate_history
+    WHERE contractor_id = ? AND approval_status = 'approved'
+    ORDER BY effective_date ASC, id ASC LIMIT 1
+  `).get(contractor.id);
+  if (first && first.old_wage_rate != null && first.old_commission_rate != null) {
+    return { wage: first.old_wage_rate, commission: first.old_commission_rate, source: 'before_change', rate_change_id: first.id };
+  }
+  return { wage: contractor.current_daily_wage_rate, commission: contractor.current_commission_rate, source: 'contractor', rate_change_id: null };
+}
+// current_* means "in force today (IST)". A future-dated approval is promoted lazily here.
+function refreshCurrentRates(db) {
+  const today = istToday();
+  const rows = db.prepare(`
+    SELECT * FROM dw_contractors c
+    WHERE EXISTS (SELECT 1 FROM dw_rate_history r WHERE r.contractor_id = c.id AND r.approval_status = 'approved')
+  `).all();
+  const upd = db.prepare("UPDATE dw_contractors SET current_daily_wage_rate = ?, current_commission_rate = ?, updated_at = datetime('now') WHERE id = ?");
+  let changed = 0;
+  for (const c of rows) {
+    const r = rateOn(db, c, today);
+    if (r.wage !== c.current_daily_wage_rate || r.commission !== c.current_commission_rate) {
+      upd.run(r.wage, r.commission, c.id);
+      changed++;
+    }
+  }
+  return changed;
+}
+const r2 = (n) => Math.round(n * 100) / 100;
+// One price function for create, edit and re-price (was copied in insertEntry and PUT /entries).
+function priceEntry(rates, workerCount, allocations) {
+  const wc = Number(workerCount);
+  const totalWage = r2(wc * rates.wage);
+  const totalComm = r2(wc * rates.commission);
+  return {
+    totalWage, totalComm, totalLiability: r2(totalWage + totalComm),
+    allocations: (allocations || []).map(a => {
+      const awc = Number(a.worker_count);
+      return { department: String(a.department).trim(), worker_count: awc, wage: r2(awc * rates.wage), comm: r2(awc * rates.commission) };
+    })
+  };
+}
+const DRAFT_STATUSES = ['hr_entered', 'needs_correction'];
+// Entries a change effective from `date` would touch: drafts (re-priced) and everything else (kept).
+function rateChangeImpact(db, contractorId, date) {
+  const rows = db.prepare(`SELECT status, COUNT(*) n FROM dw_entries WHERE contractor_id = ? AND entry_date >= ? GROUP BY status`).all(contractorId, date);
+  const byStatus = {};
+  let drafts = 0; let kept = 0;
+  for (const r of rows) {
+    if (DRAFT_STATUSES.includes(r.status)) drafts += r.n;
+    else { kept += r.n; byStatus[r.status] = r.n; }
+  }
+  return { drafts, kept: { count: kept, byStatus } };
+}
+
 // ═══════════════════════════════════════════════════════════════
 //  CONTRACTOR MASTER CRUD
 // ═══════════════════════════════════════════════════════════════
@@ -18,6 +105,7 @@ function dwAudit(db, entityType, entityId, action, oldValues, newValues, user) {
 // GET / — List all contractors (optionally filter by is_active)
 router.get('/contractors', (req, res) => {
   const db = getDb();
+  refreshCurrentRates(db); // G1: a future-dated change takes over once its date is reached
   const { is_active, search } = req.query;
   let query = 'SELECT * FROM dw_contractors WHERE 1=1';
   const params = [];
@@ -38,6 +126,7 @@ router.get('/contractors', (req, res) => {
 // GET /contractors/:id — Single contractor detail
 router.get('/contractors/:id', (req, res) => {
   const db = getDb();
+  refreshCurrentRates(db);
   const contractor = db.prepare('SELECT * FROM dw_contractors WHERE id = ?').get(req.params.id);
   if (!contractor) return res.status(404).json({ success: false, error: 'Contractor not found' });
   res.json({ success: true, data: contractor });
@@ -144,6 +233,17 @@ router.put('/contractors/:id/reactivate', requireHrOrAdmin, (req, res) => {
 //  RATE MANAGEMENT
 // ═══════════════════════════════════════════════════════════════
 
+// GET /contractors/:id/rate-on?date=YYYY-MM-DD — the rate an entry dated `date` is priced at (G1)
+router.get('/contractors/:id/rate-on', (req, res) => {
+  const db = getDb();
+  const contractor = db.prepare('SELECT * FROM dw_contractors WHERE id = ?').get(req.params.id);
+  if (!contractor) return res.status(404).json({ success: false, error: 'Contractor not found' });
+  const date = req.query.date || istToday();
+  if (!isRealIsoDate(date)) return res.status(400).json({ success: false, error: 'date must be a real YYYY-MM-DD date' });
+  const r = rateOn(db, contractor, date);
+  res.json({ success: true, data: { date, wage_rate: r.wage, commission_rate: r.commission, source: r.source, rate_change_id: r.rate_change_id } });
+});
+
 // GET /contractors/:id/rates — Rate history for a contractor
 router.get('/contractors/:id/rates', (req, res) => {
   const db = getDb();
@@ -170,6 +270,7 @@ router.post('/contractors/:id/rates', requireHrOrAdmin, (req, res) => {
     return res.status(400).json({ success: false, error: 'new_commission_rate must be >= 0' });
   }
   if (!effective_date) return res.status(400).json({ success: false, error: 'effective_date is required' });
+  if (!isRealIsoDate(effective_date)) return res.status(400).json({ success: false, error: 'effective_date must be a real date in YYYY-MM-DD form' });
 
   const result = db.prepare(`
     INSERT INTO dw_rate_history (contractor_id, old_wage_rate, new_wage_rate, old_commission_rate, new_commission_rate, effective_date, proposed_by, remarks)
@@ -197,7 +298,19 @@ router.post('/contractors/:id/rates', requireHrOrAdmin, (req, res) => {
   res.json({ success: true, id: result.lastInsertRowid });
 });
 
-// PUT /rates/:id/approve — Finance approves a rate change
+// GET /rates/:id/impact — what approving this change would do to existing entries (G1, for the confirm)
+router.get('/rates/:id/impact', (req, res) => {
+  const db = getDb();
+  const rate = db.prepare('SELECT * FROM dw_rate_history WHERE id = ?').get(req.params.id);
+  if (!rate) return res.status(404).json({ success: false, error: 'Rate change not found' });
+  const impact = rateChangeImpact(db, rate.contractor_id, rate.effective_date);
+  res.json({ success: true, data: { effective_date: rate.effective_date, applies_now: rate.effective_date <= istToday(), drafts_to_reprice: impact.drafts, kept: impact.kept } });
+});
+
+// PUT /rates/:id/approve — Finance approves a rate change.
+// G1: the new rates apply to entries DATED on/after effective_date. Drafts (hr_entered / needs_correction)
+// dated from then are re-priced; entries already with finance, approved, flagged, paid or rejected keep
+// the rate they were saved with (owner ruling 17 Oct). current_* changes now only if the date has come.
 router.put('/rates/:id/approve', requireFinanceOrAdmin, (req, res) => {
   const db = getDb();
   const rate = db.prepare('SELECT * FROM dw_rate_history WHERE id = ?').get(req.params.id);
@@ -205,26 +318,71 @@ router.put('/rates/:id/approve', requireFinanceOrAdmin, (req, res) => {
   if (rate.approval_status !== 'pending') {
     return res.status(400).json({ success: false, error: `Rate change is already ${rate.approval_status}` });
   }
+  if (sameUser(req.user?.username, rate.proposed_by)) return res.status(403).json(SELF_APPROVAL);
+  if (!isRealIsoDate(rate.effective_date)) {
+    return res.status(400).json({ success: false, error: 'This rate change has an invalid effective date — reject it and propose it again' });
+  }
 
   const user = req.user?.username || 'system';
+  const today = istToday();
   const doApprove = db.transaction(() => {
-    // Approve the rate change
     db.prepare(`
       UPDATE dw_rate_history SET approval_status = 'approved', approved_by = ?, approved_at = datetime('now')
-      WHERE id = ?
+      WHERE id = ? AND approval_status = 'pending'
     `).run(user, req.params.id);
+    const contractor = db.prepare('SELECT * FROM dw_contractors WHERE id = ?').get(rate.contractor_id);
 
-    // Update the contractor's current rates
-    db.prepare(`
-      UPDATE dw_contractors SET current_daily_wage_rate = ?, current_commission_rate = ?, updated_at = datetime('now')
+    // Re-price drafts dated on/after the effective date at the rate in force on THEIR date.
+    const drafts = db.prepare(`
+      SELECT * FROM dw_entries WHERE contractor_id = ? AND entry_date >= ?
+        AND status IN ('hr_entered','needs_correction') ORDER BY entry_date, id
+    `).all(rate.contractor_id, rate.effective_date);
+    const allocStmt = db.prepare('SELECT * FROM dw_department_allocations WHERE entry_id = ? ORDER BY id');
+    const updEntry = db.prepare(`
+      UPDATE dw_entries SET wage_rate_applied = ?, commission_rate_applied = ?,
+        total_wage_amount = ?, total_commission_amount = ?, total_liability = ?, updated_at = datetime('now')
       WHERE id = ?
-    `).run(rate.new_wage_rate, rate.new_commission_rate, rate.contractor_id);
+    `);
+    const updAlloc = db.prepare('UPDATE dw_department_allocations SET allocated_wage_amount = ?, allocated_commission_amount = ? WHERE id = ?');
+    const repricedIds = [];
+    let delta = 0;
+    for (const e of drafts) {
+      const rates = rateOn(db, contractor, e.entry_date);
+      if (rates.wage === e.wage_rate_applied && rates.commission === e.commission_rate_applied) continue;
+      const allocs = allocStmt.all(e.id);
+      const p = priceEntry(rates, e.total_worker_count, allocs);
+      updEntry.run(rates.wage, rates.commission, p.totalWage, p.totalComm, p.totalLiability, e.id);
+      allocs.forEach((a, i) => updAlloc.run(p.allocations[i].wage, p.allocations[i].comm, a.id));
+      dwAudit(db, 'entry', e.id, 'reprice_rate_change', {
+        wage_rate_applied: e.wage_rate_applied, commission_rate_applied: e.commission_rate_applied,
+        total_wage_amount: e.total_wage_amount, total_commission_amount: e.total_commission_amount, total_liability: e.total_liability
+      }, {
+        rate_change_id: rate.id, wage_rate_applied: rates.wage, commission_rate_applied: rates.commission,
+        total_wage_amount: p.totalWage, total_commission_amount: p.totalComm, total_liability: p.totalLiability
+      }, user);
+      delta += p.totalLiability - e.total_liability;
+      repricedIds.push(e.id);
+    }
+    const impact = rateChangeImpact(db, rate.contractor_id, rate.effective_date);
+    refreshCurrentRates(db); // current_* = rate in force today (unchanged when the date is in the future)
+    return { repricedIds, delta: r2(delta), kept: impact.kept };
   });
 
-  doApprove();
-
-  dwAudit(db, 'rate_change', Number(req.params.id), 'approve', { approval_status: 'pending' }, { approval_status: 'approved' }, user);
-  res.json({ success: true, message: 'Rate change approved and applied' });
+  const out = doApprove();
+  const appliesNow = rate.effective_date <= today;
+  dwAudit(db, 'rate_change', Number(req.params.id), 'approve', { approval_status: 'pending' }, {
+    approval_status: 'approved', effective_date: rate.effective_date, repriced: out.repricedIds.length, kept: out.kept.count
+  }, user);
+  const parts = [appliesNow
+    ? `Rate change approved — applies to entries dated ${rate.effective_date} onward.`
+    : `Rate change approved — applies from ${rate.effective_date}; the current rates stay until then.`];
+  if (out.repricedIds.length) parts.push(`${out.repricedIds.length} draft ${out.repricedIds.length === 1 ? 'entry' : 'entries'} re-priced.`);
+  if (out.kept.count) parts.push(`${out.kept.count} ${out.kept.count === 1 ? 'entry' : 'entries'} already with finance or paid keep the old rate.`);
+  res.json({
+    success: true, message: parts.join(' '), effective_date: rate.effective_date, applies_now: appliesNow,
+    repriced: { count: out.repricedIds.length, ids: out.repricedIds, liability_delta: out.delta },
+    kept: out.kept
+  });
 });
 
 // PUT /rates/:id/reject — Finance rejects a rate change
@@ -235,6 +393,7 @@ router.put('/rates/:id/reject', requireFinanceOrAdmin, (req, res) => {
   if (rate.approval_status !== 'pending') {
     return res.status(400).json({ success: false, error: `Rate change is already ${rate.approval_status}` });
   }
+  if (sameUser(req.user?.username, rate.proposed_by)) return res.status(403).json(SELF_APPROVAL);
 
   const { remarks } = req.body;
   const user = req.user?.username || 'system';
@@ -316,7 +475,7 @@ function validateEntryRow(db, row, rowIndex) {
     }
     // IST calendar date (UTC+05:30, no DST) — the server clock is UTC, so a UTC date would call
     // today's IST date "the future" between 00:00 and 05:30 IST.
-    const today = new Date(Date.now() + 330 * 60 * 1000).toISOString().slice(0, 10);
+    const today = istToday();
     if (row.entry_date > today) {
       errors.push({ row: rowIndex, field: 'entry_date', error: `${prefix}entry_date cannot be in the future` });
     }
@@ -389,12 +548,14 @@ function validateEntryRow(db, row, rowIndex) {
 // ── Insert a single entry + allocations (called inside a transaction) ──
 function insertEntry(db, row, user, company) {
   const c = row._contractor;
-  const wageRate = c.current_daily_wage_rate;
-  const commRate = c.current_commission_rate;
+  const rates = rateOn(db, c, row.entry_date); // G1: the rate in force on the entry's own date
+  const wageRate = rates.wage;
+  const commRate = rates.commission;
   const wc = Number(row.total_worker_count);
-  const totalWage = Math.round(wc * wageRate * 100) / 100;
-  const totalComm = Math.round(wc * commRate * 100) / 100;
-  const totalLiability = Math.round((totalWage + totalComm) * 100) / 100;
+  const p = priceEntry(rates, wc, row.department_allocations);
+  const totalWage = p.totalWage;
+  const totalComm = p.totalComm;
+  const totalLiability = p.totalLiability;
 
   const result = db.prepare(`
     INSERT INTO dw_entries (contractor_id, entry_date, in_time, out_time,
@@ -415,15 +576,8 @@ function insertEntry(db, row, user, company) {
     INSERT INTO dw_department_allocations (entry_id, department, worker_count, allocated_wage_amount, allocated_commission_amount)
     VALUES (?, ?, ?, ?, ?)
   `);
-  for (const a of row.department_allocations) {
-    const awc = Number(a.worker_count);
-    insertAlloc.run(
-      entryId,
-      a.department.trim(),
-      awc,
-      Math.round(awc * wageRate * 100) / 100,
-      Math.round(awc * commRate * 100) / 100
-    );
+  for (const a of p.allocations) {
+    insertAlloc.run(entryId, a.department, a.worker_count, a.wage, a.comm);
   }
 
   return entryId;
@@ -548,7 +702,8 @@ router.post('/entries', requireHrOrAdmin, (req, res) => {
   if (!contractor) return res.status(400).json({ success: false, error: 'Contractor not found or inactive' });
 
   // Check contractor has rates set (either initial or at least one approved rate change)
-  if (contractor.current_daily_wage_rate <= 0 && contractor.current_commission_rate <= 0) {
+  const gateRates = rateOn(db, contractor, isRealIsoDate(req.body.entry_date) ? req.body.entry_date : istToday());
+  if (gateRates.wage <= 0 && gateRates.commission <= 0) {
     return res.status(400).json({ success: false, error: 'Contractor has no rates configured. Set wage or commission rate first.' });
   }
 
@@ -730,12 +885,14 @@ router.put('/entries/:id', requireHrOrAdmin, (req, res) => {
     return res.status(400).json({ success: false, error: errors[0].error, errors });
   }
 
-  const wageRate = contractor.current_daily_wage_rate;
-  const commRate = contractor.current_commission_rate;
+  const rates = rateOn(db, contractor, row.entry_date); // G1: the rate in force on the entry's date
+  const wageRate = rates.wage;
+  const commRate = rates.commission;
   const wc = Number(row.total_worker_count);
-  const totalWage = Math.round(wc * wageRate * 100) / 100;
-  const totalComm = Math.round(wc * commRate * 100) / 100;
-  const totalLiability = Math.round((totalWage + totalComm) * 100) / 100;
+  const priced = priceEntry(rates, wc, row.department_allocations);
+  const totalWage = priced.totalWage;
+  const totalComm = priced.totalComm;
+  const totalLiability = priced.totalLiability;
   const newStatus = entry.status === 'needs_correction' ? 'hr_entered' : entry.status;
 
   const doUpdate = db.transaction(() => {
@@ -760,15 +917,8 @@ router.put('/entries/:id', requireHrOrAdmin, (req, res) => {
       INSERT INTO dw_department_allocations (entry_id, department, worker_count, allocated_wage_amount, allocated_commission_amount)
       VALUES (?, ?, ?, ?, ?)
     `);
-    for (const a of row.department_allocations) {
-      const awc = Number(a.worker_count);
-      insertAlloc.run(
-        req.params.id,
-        a.department.trim(),
-        awc,
-        Math.round(awc * wageRate * 100) / 100,
-        Math.round(awc * commRate * 100) / 100
-      );
+    for (const a of priced.allocations) {
+      insertAlloc.run(req.params.id, a.department, a.worker_count, a.wage, a.comm);
     }
   });
 
