@@ -290,8 +290,9 @@ export const downloadLeaveLapseReport = (params) =>
 export const getSalaryStale = (params) => api.get('/features/salary-stale', { params })
 
 // ── Compensatory Off / OD (Phase 4) ─────────────────────
-export const getCompOffList = (params) => api.get('/comp-off', { params })
-export const getCompOffPending = (params) => api.get('/comp-off/pending', { params })
+// fresh (FRESH-2): Finance Audit Comp Off re-reads these right after a review — no-cache past the server's 5 s GET cache
+export const getCompOffList = (params) => api.get('/comp-off', { params, ...fresh })
+export const getCompOffPending = (params) => api.get('/comp-off/pending', { params, ...fresh })
 export const createCompOff = (data) => api.post('/comp-off', data)
 export const reviewCompOff = (id, data) => api.put(`/comp-off/${id}/finance-review`, data)
 export const bulkReviewCompOff = (data) => api.put('/comp-off/bulk-review', data)
@@ -363,11 +364,12 @@ export const updateComplianceItem = (id, data) => api.put(`/settings/compliance/
 export const generateComplianceCalendar = (year) => api.post(`/settings/compliance/generate/${year}`)
 
 // ── Finance Audit ────────────────────────────────────────
-export const getFinanceReport = (month, year, company) => api.get('/finance-audit/report', { params: { month, year, company } })
+// fresh (FRESH-2): Finance Audit reads re-read right after a correction / decision — no-cache past the server's 5 s GET cache
+export const getFinanceReport = (month, year, company) => api.get('/finance-audit/report', { params: { month, year, company }, ...fresh })
 export const submitDayCorrection = (data) => api.post('/finance-audit/day-correction', data)
 export const submitPunchCorrection = (data) => api.post('/finance-audit/punch-correction', data)
-export const getCorrectionHistory = (code, month, year) => api.get(`/finance-audit/corrections/${code}`, { params: { month, year } })
-export const getCorrectionsSummary = (month, year) => api.get('/finance-audit/corrections-summary', { params: { month, year } })
+export const getCorrectionHistory = (code, month, year) => api.get(`/finance-audit/corrections/${code}`, { params: { month, year }, ...fresh })
+export const getCorrectionsSummary = (month, year) => api.get('/finance-audit/corrections-summary', { params: { month, year }, ...fresh })
 export const getCorrectionReasons = () => api.get('/finance-audit/reasons')
 export const applyLeaveCorrection = (data) => api.post('/finance-audit/corrections/apply-leave', data)
 // Stage 6 leave requests: HR raises (apply-leave as hr), finance approves or rejects.
@@ -380,10 +382,10 @@ export const markPresentCorrection = (data) => api.post('/finance-audit/correcti
 // fresh (FRESH): Finance Audit → Attendance Flags re-reads this right after a Verify (server GET max-age=5) — no-cache
 export const getManualAttendanceFlags = (params) => api.get('/finance-audit/manual-flags', { params, ...fresh })
 export const verifyManualFlag = (id, data) => api.put(`/finance-audit/manual-flags/${id}/verify`, data)
-export const getSalaryManualFlags = (month, year, company) => api.get('/finance-audit/salary-manual-flags', { params: { month, year, company } })
+export const getSalaryManualFlags = (month, year, company) => api.get('/finance-audit/salary-manual-flags', { params: { month, year, company }, ...fresh })
 export const approveManualFlag = (flagId, data) => api.put(`/finance-audit/approve-flag/${flagId}`, data)
 export const bulkApproveFlags = (data) => api.put('/finance-audit/bulk-approve', data)
-export const getReadinessCheck = (month, year) => api.get('/finance-audit/readiness-check', { params: { month, year } })
+export const getReadinessCheck = (month, year) => api.get('/finance-audit/readiness-check', { params: { month, year }, ...fresh })
 export const getVarianceReport = (month, year) => api.get('/finance-audit/variance-report', { params: { month, year } })
 export const getStatutoryCrosscheck = (month, year, company) => api.get('/finance-audit/statutory-crosscheck', { params: { month, year, company } })
 
@@ -493,8 +495,9 @@ export const getLeaveRegisterReport = (params) =>
 export const downloadLeaveRegisterReport = (params) =>
   api.get('/reports/leave-register', { params: { ...params, download: 'xlsx' }, responseType: 'blob' })
 // Phase 2 — finance approval workflow
+// fresh (FRESH-2): Finance Audit Late Coming re-reads this right after a review — no-cache
 export const getFinancePendingDeductions = (month, year, company) =>
-  api.get('/late-coming/finance-pending', { params: { month, year, ...(company ? { company } : {}) } })
+  api.get('/late-coming/finance-pending', { params: { month, year, ...(company ? { company } : {}) }, ...fresh })
 export const reviewLateDeduction = (id, data) =>
   api.put(`/late-coming/finance-review/${id}`, data)
 export const bulkReviewLateDeductions = (data) =>
@@ -592,11 +595,12 @@ export const getContractorGridReport = (params) => api.get('/contractor-report/g
 
 // ── Early Exit Deductions ─────────────────────────────────
 export const submitEarlyExitDeduction = (data) => api.post('/early-exit-deductions', data)
-export const getEarlyExitDeductions = (params) => api.get('/early-exit-deductions', { params })
+// fresh (FRESH-2): Finance Audit Early Exit re-reads these right after approve / reject — no-cache
+export const getEarlyExitDeductions = (params) => api.get('/early-exit-deductions', { params, ...fresh })
 export const getEarlyExitDeduction = (id) => api.get(`/early-exit-deductions/${id}`)
 export const reviseEarlyExitDeduction = (id, data) => api.put(`/early-exit-deductions/${id}`, data)
 export const cancelEarlyExitDeduction = (id) => api.delete(`/early-exit-deductions/${id}`)
-export const getEarlyExitPendingFinance = (params) => api.get('/early-exit-deductions/finance/pending', { params })
+export const getEarlyExitPendingFinance = (params) => api.get('/early-exit-deductions/finance/pending', { params, ...fresh })
 export const approveEarlyExitDeduction = (id) => api.put(`/early-exit-deductions/${id}/approve`)
 export const rejectEarlyExitDeduction = (id, data) => api.put(`/early-exit-deductions/${id}/reject`, data)
 
