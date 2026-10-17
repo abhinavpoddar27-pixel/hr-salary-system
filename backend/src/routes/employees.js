@@ -987,10 +987,20 @@ router.get('/meta/departments', (req, res) => {
 /**
  * GET /api/employees/:code/documents
  */
+// G3: removal is a soft delete — the row and the file stay, the list hides them,
+// and an audit_log row says who removed it. Columns are added lazily (schema.js untouched).
+const { ensureEmployeeDocsSoftDelete } = require('../database/employeeDocsSchema');
+function auditDocument(db, doc, { field, oldValue, newValue, changedBy, remark, actionType }) {
+  db.prepare(`INSERT INTO audit_log (table_name, record_id, field_name, old_value, new_value, changed_by, stage, remark, employee_code, action_type)
+              VALUES ('employee_documents', ?, ?, ?, ?, ?, 'employee_documents', ?, ?, ?)`)
+    .run(doc.id, field, oldValue, newValue, changedBy, remark, doc.employee_code, actionType);
+}
+
 router.get('/:code/documents', (req, res) => {
   const db = getDb();
+  ensureEmployeeDocsSoftDelete(db);
   const docs = db.prepare(`
-    SELECT * FROM employee_documents WHERE employee_code = ? ORDER BY created_at DESC
+    SELECT * FROM employee_documents WHERE employee_code = ? AND deleted_at IS NULL ORDER BY created_at DESC
   `).all(req.params.code);
   res.json({ success: true, data: docs });
 });
@@ -1010,15 +1020,25 @@ router.post('/:code/documents', requireHrOrAdmin, docUpload.single('file'), (req
   const emp = db.prepare('SELECT id FROM employees WHERE code = ?').get(code);
   if (!emp) return res.status(404).json({ success: false, error: 'Employee not found' });
 
-  const result = db.prepare(`
-    INSERT INTO employee_documents (employee_id, employee_code, document_type, file_name, file_path, file_size, mime_type, uploaded_by, remarks)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-  `).run(
-    emp.id, code, documentType || 'Other',
-    req.file.originalname, req.file.path,
-    req.file.size, req.file.mimetype,
-    uploadedBy, remarks || ''
-  );
+  ensureEmployeeDocsSoftDelete(db);
+  const type = documentType || 'Other';
+  const result = db.transaction(() => {
+    const r = db.prepare(`
+      INSERT INTO employee_documents (employee_id, employee_code, document_type, file_name, file_path, file_size, mime_type, uploaded_by, remarks)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      emp.id, code, type,
+      req.file.originalname, req.file.path,
+      req.file.size, req.file.mimetype,
+      uploadedBy, remarks || ''
+    );
+    auditDocument(db, { id: r.lastInsertRowid, employee_code: code }, {
+      field: 'document', oldValue: null, newValue: `${type} · ${req.file.originalname}`,
+      changedBy: uploadedBy, remark: `Document uploaded: ${type} · ${req.file.originalname}`,
+      actionType: 'document_upload',
+    });
+    return r;
+  })();
 
   res.json({ success: true, id: result.lastInsertRowid, message: 'Document uploaded' });
 });
@@ -1029,7 +1049,8 @@ router.post('/:code/documents', requireHrOrAdmin, docUpload.single('file'), (req
  */
 router.get('/documents/:id/download', (req, res) => {
   const db = getDb();
-  const doc = db.prepare('SELECT * FROM employee_documents WHERE id = ?').get(req.params.id);
+  ensureEmployeeDocsSoftDelete(db);
+  const doc = db.prepare('SELECT * FROM employee_documents WHERE id = ? AND deleted_at IS NULL').get(req.params.id);
   if (!doc) return res.status(404).json({ success: false, error: 'Document not found' });
 
   if (!fs.existsSync(doc.file_path)) {
@@ -1041,20 +1062,29 @@ router.get('/documents/:id/download', (req, res) => {
 
 /**
  * DELETE /api/employees/documents/:id
- * Delete a document
+ * Remove a document (G3: soft delete — row and file kept, audit row written).
  */
 router.delete('/documents/:id', requireHrOrAdmin, (req, res) => {
   const db = getDb();
-  const doc = db.prepare('SELECT * FROM employee_documents WHERE id = ?').get(req.params.id);
+  ensureEmployeeDocsSoftDelete(db);
+  const doc = db.prepare('SELECT * FROM employee_documents WHERE id = ? AND deleted_at IS NULL').get(req.params.id);
   if (!doc) return res.status(404).json({ success: false, error: 'Document not found' });
 
-  // Remove file from disk
-  if (fs.existsSync(doc.file_path)) {
-    fs.unlinkSync(doc.file_path);
-  }
-
-  db.prepare('DELETE FROM employee_documents WHERE id = ?').run(req.params.id);
-  res.json({ success: true, message: 'Document deleted' });
+  const by = req.user?.username || 'unknown';
+  const removed = db.transaction(() => {
+    const r = db.prepare(`UPDATE employee_documents SET deleted_at = datetime('now'), deleted_by = ?
+                          WHERE id = ? AND deleted_at IS NULL`).run(by, doc.id);
+    if (r.changes !== 1) return false;
+    const stamp = db.prepare('SELECT deleted_at FROM employee_documents WHERE id = ?').get(doc.id).deleted_at;
+    auditDocument(db, doc, {
+      field: 'deleted_at', oldValue: null, newValue: stamp, changedBy: by,
+      remark: `Document removed: ${doc.document_type} · ${doc.file_name} (file kept on server)`,
+      actionType: 'document_delete',
+    });
+    return true;
+  })();
+  if (!removed) return res.status(404).json({ success: false, error: 'Document not found' });
+  res.json({ success: true, message: 'Document removed' });
 });
 
 /**

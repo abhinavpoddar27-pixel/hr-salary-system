@@ -228,7 +228,7 @@ try:
             open_del(); wait_dialog(pg)
             check('A3: dialog title names the file', 1, dialog(pg).get_by_text('Delete test_doc_1.pdf?').count())
             txt = dialog(pg).get_by_test_id('confirm-delete-doc').inner_text()
-            check('A3: dialog names the employee + says it cannot be undone', True, 'T9501' in txt and 'cannot be undone' in txt)
+            check('A3: dialog names the employee + says the file is kept (G3)', True, 'T9501' in txt and 'file stays on the server' in txt)
             check('A3: profile window still open behind the dialog', True, pg.get_by_text('TEST EMP 1').count() >= 1)
             pg.keyboard.press('Escape'); time.sleep(.4)
             check('A3: Esc closes only the confirm, profile stays', True, pg.get_by_role('button', name='Documents', exact=True).count() == 1)
@@ -237,8 +237,8 @@ try:
             check('A3: profile window still open after the cancels', 1, pg.get_by_role('button', name='Documents', exact=True).count())
             busy_and_fail(pg, st, open_del, '**/employees/documents/*', 'Delete document', 'A3')
             confirm_once(pg, st, open_del, 'Delete document', A3, 'A3')
-            check('A3: DB row + file gone, the other document kept', ([(1,)], False, True),
-                  (q("SELECT COUNT(*) FROM employee_documents"), os.path.exists(f1), os.path.exists(os.path.join(DOCS, 'test_doc_2.pdf'))))
+            check('A3: row hidden (soft delete), file kept, the other document live (G3)', ([(1,)], [(1,)], True, True),
+                  (q("SELECT COUNT(*) FROM employee_documents WHERE deleted_at IS NULL"), q("SELECT COUNT(*) FROM employee_documents WHERE file_name='test_doc_1.pdf' AND deleted_at IS NOT NULL AND deleted_by='hr'"), os.path.exists(f1), os.path.exists(os.path.join(DOCS, 'test_doc_2.pdf'))))
             check('A3: profile window still open after delete', 1, pg.get_by_role('button', name='Documents', exact=True).count())
             check('A3: 0 page errors', [], st['errs']); check('A3: 0 API ≥ 400', [], st['bad'])
         ctx.close()
