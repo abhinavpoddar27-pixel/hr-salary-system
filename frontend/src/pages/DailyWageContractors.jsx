@@ -5,7 +5,7 @@ import {
   getDWContractors, createDWContractor, updateDWContractor,
   deactivateDWContractor, reactivateDWContractor,
   getDWContractorRates, proposeDWRateChange,
-  getPendingDWRateChanges, approveDWRateChange, rejectDWRateChange
+  getPendingDWRateChanges, approveDWRateChange, rejectDWRateChange, getDWRateImpact
 } from '../utils/api'
 import { useAppStore } from '../store/appStore'
 import { canHR as canHRFn, canFinance as canFinanceFn } from '../utils/role'
@@ -107,6 +107,15 @@ export default function DailyWageContractors() {
     retry: 0
   })
   const pendingRates = pendingRatesRes?.data?.data || []
+  // G1: what approving the rate change in the confirm would do to entries already saved
+  const approveTarget = confirm?.kind === 'approve' ? confirm.r : null
+  const { data: impactRes, isLoading: impactLoading, isError: impactError } = useQuery({
+    queryKey: ['dw-rate-impact', approveTarget?.id],
+    queryFn: () => getDWRateImpact(approveTarget.id),
+    enabled: !!approveTarget,
+    retry: 0
+  })
+  const impact = impactRes?.data?.data
 
   // ── Mutations ──────────────────────────────────────────────
   const invalidateAll = () => {
@@ -142,7 +151,12 @@ export default function DailyWageContractors() {
   })
   const approveRateMut = useMutation({
     mutationFn: approveDWRateChange,
-    onSuccess: () => { invalidateAll(); setConfirm(null); toast.success('Rate change approved') },
+    onSuccess: (res) => {
+      invalidateAll()
+      qc.invalidateQueries({ queryKey: ['dw-entries'] })
+      setConfirm(null)
+      toast.success(res?.data?.message || 'Rate change approved', { duration: 6000 })
+    },
     onError: (e) => toast.error(e.response?.data?.error || 'Failed'),
     onSettled: () => { confirmInFlight.current = false }
   })
@@ -332,7 +346,19 @@ export default function DailyWageContractors() {
                 <span className="block">Wage ₹{fmt(r.old_wage_rate)} → ₹{fmt(r.new_wage_rate)}</span>
                 <span className="block">Commission ₹{fmt(r.old_commission_rate)} → ₹{fmt(r.new_commission_rate)}</span>
                 <span className="block font-medium">Total per worker ₹{fmt(oldTotal)} → ₹{fmt(newTotal)}</span>
-                <span className="block pt-1">New rates apply from today. The effective date on the request ({fmtDate(r.effective_date)}) is recorded but not used yet.</span>
+                <span className="block pt-1" data-testid="confirm-rate-applies">
+                  {impact && !impact.applies_now
+                    ? <>These rates apply to entries dated {fmtDate(r.effective_date)} onward. Until then the current rates stay.</>
+                    : <>These rates apply to entries dated {fmtDate(r.effective_date)} onward.</>}
+                </span>
+                {impactLoading && <span className="block text-slate-400">Checking entries already saved…</span>}
+                {impactError && <span className="block text-amber-700">Could not check entries already saved — the approval still re-prices only drafts.</span>}
+                {impact && impact.drafts_to_reprice > 0 && (
+                  <span className="block" data-testid="confirm-rate-reprice">{impact.drafts_to_reprice} draft {impact.drafts_to_reprice === 1 ? 'entry' : 'entries'} dated from {fmtDate(r.effective_date)} will be re-priced.</span>
+                )}
+                {impact && impact.kept.count > 0 && (
+                  <span className="block text-amber-700" data-testid="confirm-rate-kept">{impact.kept.count} {impact.kept.count === 1 ? 'entry' : 'entries'} dated after {fmtDate(r.effective_date)} {impact.kept.count === 1 ? 'is' : 'are'} already with finance or paid and keep the old rate.</span>
+                )}
                 <span className="block">This cannot be undone here — a further change needs a new request.</span>
               </span>
             }
