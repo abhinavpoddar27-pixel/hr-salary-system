@@ -131,8 +131,8 @@ import.js, api.js, permissions.js, Sidebar, App.jsx.
 create with components → employee + structure rows identical to base, one review `to_verify`, one audit row, one
 finance notification; create without salary → no review; create response still 200 when the review insert throws
 (forced) and the structure is still written; GET role matrix (hr/finance/admin 200, viewer/supervisor/employee 403);
-verify by finance 200; admin creator → admin verify 403, " ADMIN " variant 403; finance creator (if possible via
-admin-only? no — hr+admin create) covered by admin; correction note < 5 → 400; verify after verify → 409; concurrent
+verify by finance 200; admin creator → admin verify 403, " ADMIN " variant 403 (only hr + admin can create and hr
+cannot verify, so admin is the only real self case); hr verify → 403 role; correction note < 5 → 400; verify after verify → 409; concurrent
 double verify → one 200 + one 409; correction → hr notification, no salary row changed; "changed since" join shows a
 later request; **Stage 7**: compute for a joiner with an open review == compute with the review row deleted
 (net/gross identical) — payroll not blocked. Then full jest under `flock /tmp/jest.lock`.
