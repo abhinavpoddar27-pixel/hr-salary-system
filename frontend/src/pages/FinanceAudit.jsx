@@ -18,7 +18,7 @@ import ErrorBoundary from '../components/ui/ErrorBoundary'
 import CompanyFilter from '../components/shared/CompanyFilter'
 import FinanceEarlyExitApprovals from '../components/FinanceEarlyExitApprovals'
 import clsx from 'clsx'
-import { normalizeRole } from '../utils/role'
+import { normalizeRole, canFinance } from '../utils/role'
 import toast from 'react-hot-toast'
 
 const CORRECTION_REASONS = [
@@ -702,7 +702,8 @@ function ReadinessTab({ onTab, navigate }) {
 function ManualInterventionsTab() {
   const qc = useQueryClient()
   const { month, year } = useDateSelector({ mode: 'month', syncToStore: true })
-  const { selectedCompany } = useAppStore()
+  const { selectedCompany, user } = useAppStore()
+  const canDecide = canFinance(user) // STAGE-BTN: approve-flag / bulk-approve are finance+admin on the server
   const [filterType, setFilterType] = useState('')
   const [filterStatus, setFilterStatus] = useState('')
   const [selected, setSelected] = useState(new Set())
@@ -757,7 +758,7 @@ function ManualInterventionsTab() {
   const isLive = (f) => f._live === true || (typeof f.id === 'string' && /^(pc|dc)-/.test(f.id))
   // P1-16: only pending, non-live rows can be ticked. The header box, the bulk
   // buttons and the confirm window all work on exactly this set.
-  const isSelectable = (f) => !isLive(f) && f.finance_approved === 0
+  const isSelectable = (f) => canDecide && !isLive(f) && f.finance_approved === 0
   const selectable = filtered.filter(isSelectable)
   const selectedRows = selectable.filter(f => selected.has(f.id))
   const allTicked = selectable.length > 0 && selectedRows.length === selectable.length
@@ -870,8 +871,8 @@ function ManualInterventionsTab() {
                   <td>
                     {live ? (
                       <span className="text-[10px] text-slate-300" title="Auto-included from source table">—</span>
-                    ) : !isPending ? (
-                      <span className="text-[10px] text-slate-300" title="Already decided">—</span>
+                    ) : (!isPending || !canDecide) ? (
+                      <span className="text-[10px] text-slate-300" title={isPending ? 'Finance decides this flag' : 'Already decided'}>—</span>
                     ) : (
                       <input type="checkbox" data-testid={`flag-box-${f.id}`} checked={selected.has(f.id)} onChange={() => toggleSelect(f.id)} />
                     )}
@@ -890,6 +891,8 @@ function ManualInterventionsTab() {
                   <td>
                     {live ? (
                       <span className="text-[10px] text-slate-400">{f.finance_approved ? 'Applied' : 'Auto-included'}</span>
+                    ) : isPending && !canDecide ? (
+                      <span className="text-xs text-slate-400" data-testid="flag-awaiting-finance">Awaiting finance</span>
                     ) : isPending && (
                       <div className="flex gap-1">
                         <button onClick={() => handleApprove(f.id, 'APPROVED')} className="text-green-600 hover:bg-green-50 px-1.5 py-0.5 rounded text-xs font-medium">Approve</button>
@@ -1051,7 +1054,7 @@ function LateComingAuditTab() {
   const [selected, setSelected] = useState(new Set())
   const [remarkModal, setRemarkModal] = useState(null) // { id|null, ids|null, action: 'approve'|'reject', bulk: bool }
   // Reverse an APPROVED deduction (finance/admin; the server enforces the role and the 10-char reason)
-  const canReverse = ['finance', 'admin'].includes(String(user?.role || '').toLowerCase())
+  const canReverse = canFinance(user) // STAGE-BTN: one helper (was a raw lowercase compare)
   const [reverseTarget, setReverseTarget] = useState(null)
   const [reverseText, setReverseText] = useState('')
   const reverseBusy = useRef(false)
@@ -1195,7 +1198,7 @@ function LateComingAuditTab() {
       <div className="card p-4">
         <div className="flex items-center justify-between mb-3">
           <h4 className="font-semibold text-sm">Pending Deductions ({pending.length})</h4>
-          {selected.size > 0 && (
+          {canReverse && selected.size > 0 && (
             <div className="flex items-center gap-2">
               <span className="text-xs text-slate-500">{selected.size} selected</span>
               <button onClick={() => openBulk('approve')} className="btn-primary text-xs">Bulk Approve</button>
@@ -1207,7 +1210,7 @@ function LateComingAuditTab() {
           <table className="table-compact w-full">
             <thead>
               <tr>
-                <th><input type="checkbox" onChange={selectAll} checked={selected.size === pending.length && pending.length > 0} /></th>
+                <th>{canReverse && <input type="checkbox" onChange={selectAll} checked={selected.size === pending.length && pending.length > 0} />}</th>
                 <th></th>
                 <th>Employee</th>
                 <th>Dept</th>
@@ -1226,7 +1229,7 @@ function LateComingAuditTab() {
                 return (
                   <React.Fragment key={d.id}>
                     <tr className="bg-amber-50/40 hover:bg-amber-50">
-                      <td><input type="checkbox" checked={selected.has(d.id)} onChange={() => toggleSelect(d.id)} /></td>
+                      <td>{canReverse && <input type="checkbox" checked={selected.has(d.id)} onChange={() => toggleSelect(d.id)} />}</td>
                       <td>
                         <button onClick={() => setExpandedId(isExpanded ? null : d.id)} className="text-slate-400 hover:text-slate-700 text-xs">
                           {isExpanded ? '▼' : '▶'}
@@ -1244,10 +1247,12 @@ function LateComingAuditTab() {
                       <td className="text-xs">{d.applied_by}</td>
                       <td className="text-xs text-slate-500">{fmtDate(d.applied_at)}</td>
                       <td>
+                        {canReverse ? (
                         <div className="flex gap-1">
                           <button onClick={() => openApprove(d.id)} className="text-green-600 hover:bg-green-50 px-1.5 py-0.5 rounded text-xs font-medium">Approve</button>
                           <button onClick={() => openReject(d.id)} className="text-red-600 hover:bg-red-50 px-1.5 py-0.5 rounded text-xs font-medium">Reject</button>
                         </div>
+                        ) : <span className="text-xs text-slate-400" data-testid="late-awaiting-finance">Awaiting finance</span>}
                       </td>
                     </tr>
                     {isExpanded && (
@@ -1478,7 +1483,8 @@ export default function FinanceAudit() {
   const { data: compOffPendingRes } = useQuery({
     queryKey: ['comp-off-finance-pending', month, year, selectedCompany],
     queryFn: () => getCompOffPending({ month, year, company: selectedCompany }),
-    retry: 0, staleTime: 60000
+    retry: 0, staleTime: 60000,
+    enabled: canFinance(user) // STAGE-BTN Q4: /comp-off/pending is finance+admin — hr got a 403 on every load
   })
   const pendingCompOffCount = (compOffPendingRes?.data?.data || []).length
 
@@ -1583,7 +1589,8 @@ function LeaveRequestsTab({ month, year }) {
   // month/year come from the page's DateSelector as props: a second
   // useDateSelector here kept its own first value and did not follow it.
   const qc = useQueryClient()
-  const { selectedCompany } = useAppStore()
+  const { selectedCompany, user } = useAppStore()
+  const canDecide = canFinance(user) // STAGE-BTN: leave-requests approve/reject are finance+admin on the server
   const [rejectFor, setRejectFor] = useState(null)
   const [rejectReason, setRejectReason] = useState('')
 
@@ -1659,6 +1666,7 @@ function LeaveRequestsTab({ month, year }) {
                     <td className="max-w-[220px] text-xs text-slate-600">{r.reason}</td>
                     <td className="text-xs text-slate-500 whitespace-nowrap">{r.requested_by}<br />{r.applied_at}</td>
                     <td className="text-right whitespace-nowrap">
+                      {!canDecide ? <span className="text-xs text-slate-400" data-testid="leave-awaiting-finance">Awaiting finance</span> : <>
                       <button
                         onClick={() => approveMut.mutate(r.id)}
                         disabled={!r.can_decide || approveMut.isPending || short || notAbsent}
@@ -1671,6 +1679,7 @@ function LeaveRequestsTab({ month, year }) {
                         title={!r.can_decide ? 'You raised this request — withdraw it from Stage 6 instead' : ''}
                         className="text-xs px-2 py-1 rounded bg-red-50 text-red-700 border border-red-200 hover:bg-red-100 disabled:opacity-40 disabled:cursor-not-allowed"
                       >Reject</button>
+                      </>}
                     </td>
                   </tr>
                 )

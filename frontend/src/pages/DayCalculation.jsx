@@ -2,7 +2,7 @@ import React, { useState, useMemo } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import toast from 'react-hot-toast'
 import { getDayCalculations, calculateDays, getEmployeeDailyAttendance, applyLeaveCorrection, getEmployeeLeaveBalance, getDayCalcStaleness, getLeaveRequests, withdrawLeaveRequest } from '../utils/api'
-import { normalizeRole } from '../utils/role'
+import { normalizeRole, canRunPayroll } from '../utils/role'
 import Modal from '../components/ui/Modal'
 import { useAppStore } from '../store/appStore'
 import CompanyFilter from '../components/shared/CompanyFilter'
@@ -41,6 +41,7 @@ export default function DayCalculation() {
   // directly (POST /finance-audit/corrections/apply-leave decides by role).
   const role = normalizeRole(user?.role)
   const canApplyDirect = role === 'admin' || role === 'finance'
+  const canRun = canRunPayroll(user) // STAGE-BTN: the server refuses other roles (payroll.js P3-PG)
   const queryClient = useQueryClient()
   const [expandedRow, setExpandedRow] = useState(null)
   const [search, setSearch] = useState('')
@@ -257,6 +258,7 @@ export default function DayCalculation() {
             <DateSelector {...dateProps} />
           </div>
           <div className="flex flex-col items-end gap-1">
+            {canRun ? (
             <button
               onClick={() => calcMutation.mutate()}
               disabled={calcMutation.isPending}
@@ -264,6 +266,11 @@ export default function DayCalculation() {
             >
               {calcMutation.isPending ? '⏳ Calculating...' : '▶ Run Day Calculation'}
             </button>
+            ) : (
+              <p data-testid="stage6-run-refused" className="text-xs text-slate-500 max-w-xs text-right">
+                Only HR, finance or admin can run the day calculation.
+              </p>
+            )}
             {selectedCompany && (
               <p data-testid="stage6-all-companies-note" className="text-xs text-slate-500 max-w-xs text-right">
                 Day calculation always runs for all companies, so no employee's days are cut. The list below still shows {selectedCompany} only.
@@ -289,6 +296,7 @@ export default function DayCalculation() {
                 Re-run Stage 6 so finance-approved resolutions flow in and finance-rejected ones get the ½P credit.
               </div>
             </div>
+            {canRun && (
             <button
               onClick={() => calcMutation.mutate()}
               disabled={calcMutation.isPending}
@@ -296,6 +304,7 @@ export default function DayCalculation() {
             >
               {calcMutation.isPending ? 'Recalculating...' : 'Recalculate Days'}
             </button>
+            )}
           </div>
         )}
 
