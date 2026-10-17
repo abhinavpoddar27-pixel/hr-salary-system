@@ -5,7 +5,7 @@ Branch `feat/bulk-salary-revision` (on feat/bulk-approval-stage 70d98cb + origin
 Read PLAN.md (FINAL DESIGN at the bottom), then this file, then `git log --oneline 70d98cb..HEAD`. Rulings below are binding.
 
 ## State
-**Phase 3 HAND-OFF — built, verified, pushed. MONEY PR: waiting for the planner's independent review.**
+**Phase 3 HAND-OFF — Q-EM rule change built, verified, pushed (17 Oct). main 892f7f7 merged in. MONEY PR: planner review.**
 
 ## Rulings (planner, 16 Oct 2026)
 - Q-B1 Salary Input header button → inline panel SalaryRevisionBulk.jsx (not a Modal) + BulkBatchList.
@@ -24,6 +24,9 @@ Read PLAN.md (FINAL DESIGN at the bottom), then this file, then `git log --oneli
   (c) Undo fingerprint = this person's Stage 7 rows in EVERY unfinalised month. (d) Not-the-1st warning says pay follows the
   gross for every month computed after approval; the "re-run Stage 7 for <Mon>" note stays.
 - **L3:** a comma-only pasted line "T9501,22,000" = code + one amount (first comma splits, the rest's commas stripped).
+- **Q-EM (owner, 17 Oct 2026, narrows H1):** a month is open ONLY with Stage 7 rows (salary_computations) and not finalised
+  (monthly_imports.is_finalised=1 for that year/month). Import-only months are ignored. None open → 1st of current IST month.
+  Same definition as the H1c undo fingerprint (`stage7Rows`, unchanged). Owner will finalise Feb–Sep 2026 in the app.
 - Q6 second person decides (engine). R3 all-or-nothing, R5 ≤ 50 + auto-split, R8 never twice.
 
 ## Baseline → after
@@ -66,15 +69,28 @@ bulkExtraDuty 56/56; full jest 124 / 2220 green; bulk-salary-revision-check.py 4
   re-run and by a row added in an earlier month; d: wording). Named suites + bulk suites 172/172. Full jest 124 / 2227.
   bulk-salary-revision-check.py 44/44 (new: default = first open month Nov 2026, December date refused, comma-only paste).
 
-## Production fact (counts only, read-only, 16 Oct)
+## Production fact (counts only, read-only, 16 Oct — superseded by Q-EM: now Feb 2026)
 monthly_imports has NO finalised month since Jan 2026: Feb–Oct 2026 are all unfinalised with Stage 7 rows (also Apr–May and
 Jul–Dec 2025 unfinalised, import rows only, no Stage 7 rows). So on production today the first open payroll month is
 **Apr 2025**: the default date would be 01-04-2025 and any later date is refused. Until earlier months are finalised (or the
 rule is scoped, e.g. to months with Stage 7 rows / the last N months), HR cannot use the bulk revision for a current date.
 Planner / owner decision — not changed here.
 
+## Q-EM (17 Oct)
+1. `git merge origin/main` (892f7f7, 22 behind) — clean, no conflicts; pushed 9734d06.
+2. `firstOpenMonth(db)` = earliest (year, month) in salary_computations with no finalised monthly_imports row; the
+   monthly_imports-only UNION branch removed. Doc comments updated; no copy mentioned imports.
+3. Tests: existing H1 tests now seed a Stage 7 row where they relied on an import-only month; new Q-EM (a) import-only
+   2025 months ignored, (b) Feb–Sep finalised + Oct Stage 7 → Oct 2026, 1 Nov refused / 1 Oct allowed, (c) nothing open →
+   current IST month. bulkSalaryRevision 23 → 26. Named suites + statutoryWriterGuard + bulkApproval + bulkExtraDuty 10
+   suites / 226 green. Full jest 126 suites / 2256 green.
+4. Check script scratch data: Apr 2025 import-only (ignored), Oct 2026 finalised with a Stage 7 row, Nov 2026 Stage 7 row
+   (zero-money placeholder T9599) → first open Nov 2026. bulk-salary-revision-check 44/44, salary-revision-parse-check 11/11,
+   bulk-approval-check 36/36, bulk-ed-check 50/50, drift (Nov 2026) 0 of 7 rows.
+5. Production read-only: new SQL returns **Feb 2026** (Feb–Oct 2026 each have Stage 7 rows, none finalised).
+
 ## Next
-Planner review of H1/L3 + the production fact above. Then PR.
+Planner review of Q-EM. Owner finalises Feb–Sep 2026 → first open month becomes Oct 2026. Then PR.
 
 ## Found / follow-up (not fixed)
 - Q-B6: after a bulk revision, Stage 7 raises a GROSS_STRUCTURE_CHANGE manual flag per person — finance approves twice (R8).
@@ -85,7 +101,7 @@ Planner review of H1/L3 + the production fact above. Then PR.
   re-running an EARLIER month's Stage 7 pays that month at the new gross. Same as the single path.
 
 ## CLAUDE.md entry
-## Last Session — 2026-10-16 (P5-04: bulk salary revision — first approval kind on the bulk engine)
+## Last Session — 2026-10-17 (P5-04: bulk salary revision — first approval kind on the bulk engine)
 **Branch `feat/bulk-salary-revision` (on feat/bulk-approval-stage + fix/pf-ceiling-approval), NOT merged. MONEY PR —
 independent review before PR.** Plan + log: `docs/ux-bulk/prs/P5-04/PLAN.md`, `PROGRESS.md`. MASTER_PLAN §6 P5-04, §7.4 B3.
 Rulings Q-B1…Q-B8 (16 Oct), Q6, R3, R5, R8.
@@ -95,8 +111,8 @@ Rulings Q-B1…Q-B8 (16 Oct), Q6, R3, R5, R8.
   `{ok:false, status, body}`; PUT /salary-input/approve/:id is a thin call with the same replies (N-17, N-MONEY2 percents,
   N-PF ceiling, R10 flags, STRUCTURE_DATED_LATER, SELF_APPROVAL unchanged).
 - **Kind `salary-revision`** (`services/bulk/kinds/salaryRevision.js`, requiresApproval; hr/admin send, finance/admin decide):
-  rows code + new gross OR % (rounded to ₹1) + optional own date; common effective date (H1: default 1st of the first open
-  payroll month = earliest unfinalised month with import or Stage 7 rows, from `GET /api/bulk/salary-revision/defaults`;
+  rows code + new gross OR % (rounded to ₹1) + optional own date; common effective date (H1 + Q-EM: default 1st of the first
+  open payroll month = earliest month with Stage 7 rows that is not finalised — import-only months ignored; none → 1st of IST month, from `GET /api/bulk/salary-revision/defaults`;
   a later month is an error row, because Stage 7 pays the master gross for every month it computes).
   Errors: not found / not active / both-or-neither / gross ≤ 0 / % outside −50…+100 / bad date / a finalised month on or after
   the date / later-dated structure / a Pending salary_change_request (Q-B8). Skipped: same gross. Warnings: no structure (50/20
@@ -115,13 +131,13 @@ Rulings Q-B1…Q-B8 (16 Oct), Q6, R3, R5, R8.
   (2) `buildRevisionStructure` must stay equal to `raiseRequest`'s object (parity test). (3) Stage 7 rows are NOT in the plan
   hash on purpose — a Stage 7 run between send and approve does not refuse the batch. (4) After apply, Stage 7 raises a
   GROSS_STRUCTURE_CHANGE flag per person (Q-B6, follow-up). (5) statutoryWriterGuard T10b names services/salaryChange.js.
-- **Verified:** jest 123/2202 → 124/2227 (after P5-01 review fixes + H1/L3; new bulkSalaryRevision.test.js 23 incl. parity vs the single path on the same DB,
+- **Verified:** jest 123/2202 → 126/2256 (after P5-01 review fixes + H1/L3 + Q-EM + main 892f7f7; new bulkSalaryRevision.test.js 26 incl. parity vs the single path on the same DB,
   Q-B8 conflict 409 nothing written, mid-batch throw → nothing incl. audit, undo restore + blocks). `backend/scripts/
   bulk-salary-revision-check.py` 44/44 (Chromium, built dist, scratch DB, real hr/finance/admin logins, fictional T9501–T9506, port 3504)
   44/44 — default = first open month, a later date refused, paste incl. a % row + a conflict row left out, ₹7,500 total, double click → 1 batch, 390 px, finance sees every
   component + approves, structures/gross/requests/audit, undo, re-send, admin self-approval 403, Stage 6+7 pays the new gross,
   undo after Stage 7 refused, drift 0, 0 page/console errors. `--base` on b0ed242 2/2. Regressions bulk-approval 36/36,
   bulk-ed 50/50, pf-ceiling-approval 38/38.
-- **Production caution:** no month has been finalised since Jan 2026, so the first open payroll month is Apr 2025 today —
-  the default and the H1 rule refuse any current date until earlier months are finalised (planner/owner decision).
+- **Production (Q-EM, 17 Oct):** first open payroll month is Feb 2026 today (Feb–Oct 2026 have Stage 7 rows, none finalised);
+  owner will finalise Feb–Sep in the app → Oct 2026. Until then any date after Feb 2026 is refused.
 - **Not tested:** Railway; production data; Excel upload in the browser (paste path only); Safari/Firefox.

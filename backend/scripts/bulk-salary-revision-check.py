@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """P5-04 — bulk salary revision: browser check (Chromium, built dist, real hr / finance / admin logins).
 
-Scratch DATA_DIR, fictional people only (T9501–T9506, "Test Person A–F"), effective 2026-11-01, November attendance seeded so
+Scratch DATA_DIR, fictional people only (T9501–T9506, "Test Person A–F"), effective 2026-11-01 (first open month: Stage 7 rows, not finalised — Q-EM), November attendance seeded so
 Stage 6 + 7 can run. hr pastes rows on Salary Input → "+ Bulk revision" (one % row, one conflict row left out) → sends;
 finance opens Finance Verification → Bulk batches, sees every component and the ₹ total, approves → structures + gross change;
 undo works; re-sent + approved again → Stage 7 pays the new gross → undo refused. Self-approval refused. Drift query.
@@ -74,6 +74,15 @@ def seed():
                 in_time_original, out_time_original, in_time_final, out_time_final) VALUES (?, ?, ?, ?, ?, 11, 2026, ?, ?, ?, ?)""",
                       (code, day, st, st, C, *io, *io))
     c.execute("INSERT INTO monthly_imports (month, year, file_name, company, stage_1_done) VALUES (11, 2026, 'sim-nov.xls', ?, 1)", (C,))
+    # Q-EM (owner, 17 Oct 2026): a month is open only with Stage 7 rows and not finalised. Scratch shape:
+    #  Apr 2025 import-only, unfinalised, no Stage 7 rows → ignored; Oct 2026 finalised with Stage 7 rows → closed;
+    #  Nov 2026 has a Stage 7 placeholder row (fictional T9599, all zero so drift stays 0) → the first open month.
+    c.execute("INSERT INTO monthly_imports (month, year, file_name, company, stage_1_done) VALUES (4, 2025, 'sim-apr25.xls', ?, 1)", (C,))
+    c.execute("INSERT INTO monthly_imports (month, year, file_name, company, stage_1_done, is_finalised) VALUES (10, 2026, 'sim-oct.xls', ?, 1, 1)", (C,))
+    c.execute("INSERT INTO salary_computations (employee_code, month, year, company, gross_salary, gross_earned, total_deductions, net_salary) "
+              "VALUES ('T9599', 10, 2026, ?, 0, 0, 0, 0)", (C,))
+    c.execute("INSERT INTO salary_computations (employee_code, month, year, company, gross_salary, gross_earned, total_deductions, net_salary) "
+              "VALUES ('T9599', 11, 2026, ?, 0, 0, 0, 0)", (C,))
     # T9504: a single-path request already waiting for finance → conflict row (Q-B8)
     eid = c.execute("SELECT id FROM employees WHERE code='T9504'").fetchone()[0]
     c.execute("INSERT INTO salary_change_requests (employee_id, employee_code, requested_by, old_gross, new_gross, old_structure, new_structure, reason, status) "
@@ -137,7 +146,7 @@ try:
         hr.wait_for_selector('[data-testid=sr-bulk-panel]')
         check('panel opens inline (no dialog)', 0, hr.get_by_role('dialog').count())
         hr.wait_for_function("document.querySelector('#sr-date').value !== ''")
-        check('default date = 1st of the first open payroll month (H1 b: Nov 2026 has data)', EFF, hr.locator('#sr-date').input_value())
+        check('default date = 1st of the first open payroll month (Q-EM: Nov 2026 has Stage 7 rows; import-only Apr 2025 and finalised Oct 2026 ignored)', EFF, hr.locator('#sr-date').input_value())
         check('panel names the first open payroll month', True, 'Nov-2026' in hr.locator('[data-testid=sr-first-open]').inner_text())
         hr.locator('#sr-reason').fill('annual increment test')
         hr.locator('[data-testid=sr-text]').fill('T9506 23000 01-12-2026')

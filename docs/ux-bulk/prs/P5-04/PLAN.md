@@ -169,3 +169,17 @@ What undo does:
 - **UI:** SalaryInput header button "+ Bulk revision" (hr/admin) → inline `components/bulk/SalaryRevisionBulk.jsx` + `BulkBatchList
   kind="salary-revision" canUndo={finance}`; finance decides in Finance Verification → Bulk batches (reviewColumns: every component).
 - Q-B6 GROSS_STRUCTURE_CHANGE flags left as is (follow-up). No schema change.
+
+## Q-EM ruling (owner, 17 Oct 2026 — narrows H1's "open month" definition)
+The owner will finalise Feb–Sep 2026 in the app. A month counts as **open** ONLY if it has `salary_computations` (Stage 7)
+rows AND is not finalised (no `monthly_imports` row with `is_finalised = 1` for that year/month). Import-only months with no
+Stage 7 rows are ignored (production has Apr–May + Jul–Dec 2025 like this; they can never pay anything). No open month →
+1st of the current IST month. `firstOpenMonth(db)` is now:
+```sql
+SELECT s.year, s.month FROM salary_computations s
+ WHERE NOT EXISTS (SELECT 1 FROM monthly_imports f WHERE f.year=s.year AND f.month=s.month AND f.is_finalised=1)
+ GROUP BY s.year, s.month ORDER BY s.year, s.month LIMIT 1
+```
+H1a refusal, H1b default, H1d wording unchanged. H1c undo fingerprint (`stage7Rows`) already used exactly this definition
+(Stage 7 rows, not finalised) — unchanged. No user-facing copy mentioned imports, so no copy change.
+Production (read-only, 17 Oct): returns **Feb 2026** today; after Feb–Sep are finalised it will be Oct 2026.

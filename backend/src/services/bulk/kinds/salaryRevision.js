@@ -39,16 +39,15 @@ function firstOfThisMonthIST(now = Date.now()) {
 
 /**
  * H1 (planner ruling, supersedes Q-B3): Stage 7 pays employees.gross_salary for EVERY month it computes, whatever the
- * structure's date. So a revision may only take effect from the FIRST OPEN payroll month: the earliest month that is not
- * finalised and has data (a monthly_imports row or salary_computations rows). Months after it cannot be held for later.
- * Returns 'YYYY-MM-01' or null when no unfinalised month has data.
+ * structure's date. So a revision may only take effect from the FIRST OPEN payroll month. Q-EM (owner, 17 Oct 2026): a
+ * month is "open" ONLY when it has Stage 7 rows (salary_computations) and is not finalised (no monthly_imports row with
+ * is_finalised = 1 for that year/month). Import-only months with no Stage 7 rows are ignored — they can never pay anything.
+ * Same definition as the undo fingerprint (stage7Rows). Returns 'YYYY-MM-01' or null when no month is open.
  */
 function firstOpenMonth(db) {
-  const r = db.prepare(`SELECT y, m FROM (
-      SELECT year y, month m FROM monthly_imports GROUP BY year, month HAVING MAX(COALESCE(is_finalised, 0)) = 0
-      UNION SELECT s.year, s.month FROM salary_computations s
-        WHERE NOT EXISTS (SELECT 1 FROM monthly_imports f WHERE f.year = s.year AND f.month = s.month AND f.is_finalised = 1)
-    ) ORDER BY y, m LIMIT 1`).get();
+  const r = db.prepare(`SELECT s.year y, s.month m FROM salary_computations s
+      WHERE NOT EXISTS (SELECT 1 FROM monthly_imports f WHERE f.year = s.year AND f.month = s.month AND f.is_finalised = 1)
+      GROUP BY s.year, s.month ORDER BY s.year, s.month LIMIT 1`).get();
   return r ? `${r.y}-${String(r.m).padStart(2, '0')}-01` : null;
 }
 /** Default effective date (H1 b): 1st of the first open payroll month, else 1st of the current IST month. */
@@ -111,6 +110,7 @@ const pendingRequestOf = (db, code) => db.prepare("SELECT id FROM salary_change_
 /**
  * Stage 7 rows of this employee for EVERY unfinalised month (H1 c) — Stage 7 pays the master gross for any month it
  * re-runs, so a re-run of an earlier open month after approval also used the new pay. The "Stage 7 used it" signal.
+ * Q-EM: the same "has Stage 7 rows, not finalised" definition as firstOpenMonth.
  */
 function stage7Rows(db, code) {
   return db.prepare(`SELECT month, year, company, gross_salary, gross_earned, total_deductions, net_salary
