@@ -96,7 +96,7 @@ export const updateEmployeeLeaves = (code, data) => api.put(`/employees/${code}/
 export const updateLeaveBalance = (code, data) => api.put(`/employees/${code}/leaves`, data)
 export const getDepartments = () => api.get('/employees/departments')
 export const getDepartmentsMeta = () => api.get('/employees/meta/departments')
-export const getEmployeeDocuments = (code) => api.get(`/employees/${code}/documents`)
+export const getEmployeeDocuments = (code) => api.get(`/employees/${code}/documents`, fresh) // G3: no-cache — a remove/upload must show at once (server GET max-age=5)
 export const uploadEmployeeDocument = (code, formData) => api.post(`/employees/${code}/documents`, formData, { headers: { 'Content-Type': 'multipart/form-data' } })
 export const downloadEmployeeDocument = (id) => api.get(`/employees/documents/${id}/download`, { responseType: 'blob' })
 export const deleteEmployeeDocument = (id) => api.delete(`/employees/documents/${id}`)
