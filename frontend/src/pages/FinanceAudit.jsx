@@ -87,6 +87,10 @@ function ReportTab({ highlightEmployee, onClearHighlight }) {
       setCorrectionModal(null)
       setCorrForm({ correctedDays: '', reason: '', notes: '' })
       queryClient.invalidateQueries({ queryKey: ['finance-report'] })
+      queryClient.invalidateQueries({ queryKey: ['correction-history'] })
+      queryClient.invalidateQueries({ queryKey: ['corrections-summary'] })
+      queryClient.invalidateQueries({ queryKey: ['salary-manual-flags'] })
+      queryClient.invalidateQueries({ queryKey: ['readiness'] })
     },
     onError: () => toast.error('Failed to save correction')
   })
@@ -731,7 +735,7 @@ function ManualInterventionsTab() {
 
   const approveMut = useMutation({
     mutationFn: ({ id, status, comments }) => approveManualFlag(id, { status, comments }),
-    onSuccess: () => { qc.invalidateQueries(['salary-manual-flags']); qc.invalidateQueries(['readiness']); toast.success('Flag updated') }
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ['salary-manual-flags'] }); qc.invalidateQueries({ queryKey: ['readiness'] }); toast.success('Flag updated') }
   })
 
   const closeBulkModal = () => { setBulkModal(null); setBulkReason('') }
@@ -741,7 +745,7 @@ function ManualInterventionsTab() {
   const bulkMut = useMutation({
     mutationFn: (data) => bulkApproveFlags(data),
     onSettled: () => { bulkInFlight.current = false },
-    onSuccess: () => { qc.invalidateQueries(['salary-manual-flags']); qc.invalidateQueries(['readiness']); setSelected(new Set()); closeBulkModal(); toast.success('Bulk action complete') },
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ['salary-manual-flags'] }); qc.invalidateQueries({ queryKey: ['readiness'] }); setSelected(new Set()); closeBulkModal(); toast.success('Bulk action complete') },
     onError: (err) => toast.error(err?.response?.data?.error || 'Bulk action failed — nothing was changed')
   })
 
@@ -1076,10 +1080,10 @@ function LateComingAuditTab() {
   const reviewMut = useMutation({
     mutationFn: ({ id, status, remark }) => reviewLateDeduction(id, { status, remark }),
     onSuccess: () => {
-      qc.invalidateQueries(['late-finance-pending'])
-      qc.invalidateQueries(['late-deductions-all'])
-      qc.invalidateQueries(['readiness'])
-      qc.invalidateQueries(['month-end-checklist'])
+      qc.invalidateQueries({ queryKey: ['late-finance-pending'] })
+      qc.invalidateQueries({ queryKey: ['late-deductions-all'] })
+      qc.invalidateQueries({ queryKey: ['readiness'] })
+      qc.invalidateQueries({ queryKey: ['month-end-checklist'] })
       toast.success('Deduction updated')
     },
     onError: (e) => toast.error(e?.response?.data?.error || 'Failed to update')
@@ -1088,10 +1092,10 @@ function LateComingAuditTab() {
   const bulkMut = useMutation({
     mutationFn: (data) => bulkReviewLateDeductions(data),
     onSuccess: (res) => {
-      qc.invalidateQueries(['late-finance-pending'])
-      qc.invalidateQueries(['late-deductions-all'])
-      qc.invalidateQueries(['readiness'])
-      qc.invalidateQueries(['month-end-checklist'])
+      qc.invalidateQueries({ queryKey: ['late-finance-pending'] })
+      qc.invalidateQueries({ queryKey: ['late-deductions-all'] })
+      qc.invalidateQueries({ queryKey: ['readiness'] })
+      qc.invalidateQueries({ queryKey: ['month-end-checklist'] })
       setSelected(new Set())
       toast.success(`${res?.data?.count || 0} deductions updated`)
     },
@@ -1759,9 +1763,10 @@ function CompOffAuditTab() {
   const reviewMut = useMutation({
     mutationFn: ({ id, status, finance_remark }) => reviewCompOff(id, { status, finance_remark }),
     onSuccess: () => {
-      qc.invalidateQueries(['comp-off-finance-pending'])
-      qc.invalidateQueries(['comp-off-all'])
-      qc.invalidateQueries(['comp-off-list'])
+      qc.invalidateQueries({ queryKey: ['comp-off-finance-pending'] })
+      qc.invalidateQueries({ queryKey: ['comp-off-all'] })
+      qc.invalidateQueries({ queryKey: ['comp-off-list'] })
+      qc.invalidateQueries({ queryKey: ['readiness'] })
       toast.success('Comp-off updated')
     },
     onError: (e) => toast.error(e?.response?.data?.error || 'Review failed')
@@ -1770,9 +1775,10 @@ function CompOffAuditTab() {
   const bulkMut = useMutation({
     mutationFn: (data) => bulkReviewCompOff(data),
     onSuccess: (res) => {
-      qc.invalidateQueries(['comp-off-finance-pending'])
-      qc.invalidateQueries(['comp-off-all'])
-      qc.invalidateQueries(['comp-off-list'])
+      qc.invalidateQueries({ queryKey: ['comp-off-finance-pending'] })
+      qc.invalidateQueries({ queryKey: ['comp-off-all'] })
+      qc.invalidateQueries({ queryKey: ['comp-off-list'] })
+      qc.invalidateQueries({ queryKey: ['readiness'] })
       setSelected(new Set())
       toast.success(`${res?.data?.count || 0} comp-off requests updated`)
     },

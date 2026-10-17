@@ -44,6 +44,8 @@ export default function FinanceEarlyExitApprovals({ month, year }) {
       toast.success('Deduction approved')
       queryClient.invalidateQueries({ queryKey: ['early-exit-deductions-pending'] })
       queryClient.invalidateQueries({ queryKey: ['early-exit-deductions-approved'] })
+      queryClient.invalidateQueries({ queryKey: ['early-exit-finance-pending'] })
+      queryClient.invalidateQueries({ queryKey: ['readiness'] })
     }
   })
 
@@ -55,6 +57,8 @@ export default function FinanceEarlyExitApprovals({ month, year }) {
       setRejectRemark('')
       queryClient.invalidateQueries({ queryKey: ['early-exit-deductions-pending'] })
       queryClient.invalidateQueries({ queryKey: ['early-exit-deductions-rejected'] })
+      queryClient.invalidateQueries({ queryKey: ['early-exit-finance-pending'] })
+      queryClient.invalidateQueries({ queryKey: ['readiness'] })
     }
   })
 
