@@ -130,7 +130,7 @@ describe('T10b — every structure INSERT lists pf/esi/lwf', () => {
   test('the scan finds the known writers (sanity)', () => {
     expect(sites.length).toBeGreaterThanOrEqual(12);
     const files = new Set(sites.map((s) => s.file));
-    for (const f of ['routes/employees.js', 'routes/salary-input.js', 'routes/sales.js', 'services/salaryComputation.js', 'database/schema.js', 'services/statutoryFlags.js']) {
+    for (const f of ['routes/employees.js', 'services/salaryChange.js' /* P5-04: approve body moved here (Q-B7) */, 'routes/sales.js', 'services/salaryComputation.js', 'database/schema.js', 'services/statutoryFlags.js']) {
       expect(files.has(f)).toBe(true);
     }
   });

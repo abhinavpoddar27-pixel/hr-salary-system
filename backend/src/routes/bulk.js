@@ -59,6 +59,13 @@ router.get('/extra-duty/people', requireHrOrAdmin, (req, res) => {
   res.json({ success: true, data: extraDuty.peopleOnDate(getDb(), date) });
 });
 
+// P5-04 / H1 b: the default effective date for a salary revision (1st of the first open payroll month).
+router.get('/salary-revision/defaults', requireHrOrAdmin, (req, res) => {
+  const db = getDb();
+  const kind = engine.getKind('salary-revision');
+  res.json({ success: true, data: { effective_from: kind.defaultEffectiveFrom(db), firstOpen: kind.firstOpenMonth(db) } });
+});
+
 // Lists: only kinds the role may create, or (approval kinds) decide. Asking for any other kind → 403.
 router.get('/batches', (req, res) => {
   const role = roleOf(req);
