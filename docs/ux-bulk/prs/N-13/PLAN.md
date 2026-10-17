@@ -45,7 +45,53 @@ creator never verifies their own (403, trimmed case-insensitive, admin included)
 FACT: the uncontrolled path (create with salary) has never been used in production; every recent joiner's salary
 was finance-approved. INFERENCE: this PR closes a hole before anyone uses it; there is nothing to backfill.
 
-## 3. Design (smallest change)
+## Re-scope 17 Oct 2026 — "Close the API gap" (owner ruling; replaces §3–§8 below)
+
+The review-queue design (§3–§8: new table, new Finance Verification tab, verify / correction flow) is
+**dropped**. Q1–Q10 below are superseded; Q2 and Q3 are answered by the ruling itself.
+
+**1. `POST /api/employees` refuses salary.** Keys checked (`CREATE_SALARY_KEYS`): `basic, da, hra, conveyance,
+otherAllowances` (the five the handler read and wrote into `salary_structures`), plus `gross_salary, grossSalary,
+other_allowances, special_allowance, specialAllowance`. A key with a real value → 400
+`{success:false, code:'SALARY_VIA_SALARY_INPUT', error:'Create the employee first, then set salary in Salary Input
+(finance approves it).', fields:[…]}` BEFORE any read or write (so before the duplicate-code check). undefined / null /
+'' / whitespace / 0 / '0' = not sent → create proceeds. A non-numeric value ('abc') is refused, not dropped. The
+structure INSERT on create is deleted. The UI form sends none of these keys → form path unchanged.
+
+**2. `POST /api/employees/bulk-import` (admin) never writes gross.** Employee fields import as before. The UPSERT
+inserts gross 0 for a NEW row and no longer updates gross ON CONFLICT; the direct `salary_structures` INSERT and the
+`syncSalaryStructureFromEmployee` repair call are removed. Per row with gross > 0: stored gross equal (±0.01) →
+`unchanged`, no request; different → `raiseSalaryChangeRequest()` → one Pending `salary_change_requests` row,
+`requested_by` = importing admin, `new_structure` = the file's components (basic, hra, conv, cca→other, special =
+gross − rest, percents, pt; never pf/esi/lwf); a Pending one already open → `already_pending`, nothing new. Finance
+decides in Salary Input; the importer gets 403 `SELF_APPROVAL` (existing salary-input.js rule). Response:
+`results.rows[] = {code, employee: created|updated, salary: request_raised|unchanged|already_pending|no_gross}` plus
+`requestsRaised / salaryUnchanged / salaryAlreadyPending`; `salaryCreated` removed (no caller reads it — grep).
+
+**Shared helper:** `raiseSalaryChangeRequest(db, {...})` in `routes/employees.js` = the INSERT + one-pending check
+lifted out of `PUT /:code/salary`'s `raiseRequest` (that route's replies are byte-identical). Not the P5-04
+`services/salaryChange.js` (not on main; not copied).
+
+**Not touched:** salary-input.js (approve/reject/self-approval), salaryComputation.js, payroll.js, schema.js,
+frontend, sales master.
+
+**Production (read-only, counts):** bulk-import called once ever (17 Mar 2026, 1 POST) — that day 977 employees and
+919 structures (all with gross) were created, i.e. every bulk-imported gross went straight in with no request;
+`salary_change_requests` starts 13 Apr 2026. `POST /api/employees` 14 calls; `usage_logs.details` stores only
+`{status, duration}` (server.js usage middleware), so whether any carried salary keys **cannot be told from logs**;
+0 structures in production have the create-path shape (basic > 0, gross NULL/0, dated the create day) → none did.
+
+**Tests:** new `newEmployeeSalaryGate.test.js` (26; 21 fail on origin/main — the 5 that pass are controls: create
+without salary, finance 403, bulk admin-only, no-gross row, PUT /salary path). Changed on purpose: see PROGRESS.
+HTTP check `backend/scripts/new-employee-salary-gate-check.js` (real server.js, real admin/hr/finance logins).
+
+**Risks:** (a) a re-import of the master file now raises a request for every employee whose file gross differs from
+the stored one (one per employee; re-import while pending raises nothing). (b) A new employee from bulk-import has
+gross 0 until finance approves — Stage 7 skips/pays nothing for them until then (by ruling: finance first).
+(c) The bulk-import ON CONFLICT no longer repairs a structure whose gross drifted from the master (the 60052 repair);
+GET /:code self-heal and integrity-fix still do that.
+
+## (superseded) 3. Design (smallest change)
 
 ### 3.1 Where the item is stored — new table, own schema helper
 `backend/src/database/newSalaryReviewSchema.js` → `ensureNewSalaryReviewSchema(db)` (CREATE TABLE / INDEX IF NOT
@@ -153,7 +199,7 @@ raises correction (short note refused) → hr notification; hr opening Finance V
   is impossible (finance cannot create employees). Fine, but if the finance user is away items wait (payroll not blocked).
 - Lazy schema: the table appears on first create / first list read, not at boot.
 
-## 8. Questions (recommended answer in brackets)
+## 8. (superseded by the re-scope) Questions
 - **Q1** Trigger = POST /employees writes a salary structure (basic > 0). [Yes — that is the only "salary on create" the route stores.]
 - **Q2** Start accepting `gross_salary` on create? [No — today it is dropped; keeping it dropped is "exactly as now". Record as a fact in the PROGRESS entry.]
 - **Q3** Bulk-import (admin, own INSERT, gross direct) — out of scope since it does not use the create function. [Yes, out of scope; register N-13b "bulk-import writes gross with no review" — last used Mar 2026.]
