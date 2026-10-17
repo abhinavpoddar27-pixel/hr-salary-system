@@ -258,15 +258,18 @@ try:
             txt = dialog(pg).get_by_test_id('confirm-approve-rate').inner_text()
             check('A2: title names the contractor', 1, dialog(pg).get_by_text('Approve the rate change for TEST GANG BETA?').count())
             check('A2: old → new wage / commission / total in ₹', True, all(s in txt for s in ('450.00', '520.00', '40.00', '45.00', '490.00', '565.00')))
-            check('A2: says new rates apply from today, effective date not used yet', True,
-                  'New rates apply from today' in txt and 'recorded but not used yet' in txt and f'01-Nov-{YEAR}' in txt)
+            time.sleep(.6); txt = dialog(pg).get_by_test_id('confirm-approve-rate').inner_text()
+            # G1: the change applies from its effective date (01-Nov, future) — the "not used yet" sentence is gone
+            check('A2: says the rates apply to entries dated from the effective date', True,
+                  f'entries dated 01-Nov-{YEAR} onward' in txt and 'not used yet' not in txt)
             check('A2: Confirm is amber (warning)', True, 'bg-amber-600' in (dialog(pg).get_by_role('button', name='Approve rates').get_attribute('class') or ''))
             pg.keyboard.press('Escape'); no_dialog(pg)
             first_focus(pg, open_appr, 'Approve rates', 'A2')
             cancel_paths(pg, st, open_appr, A2, 'A2', rate)
             busy_and_fail(pg, st, open_appr, '**/rates/*/approve', 'Approve rates', 'A2')
             confirm_once(pg, st, open_appr, 'Approve rates', A2, 'A2')
-            check('A2: DB approved + new rates on the contractor', [('approved', 520.0, 45.0)], rate())
+            # G1: effective 01-Nov is in the future → approved, the contractor keeps the current rates until then
+            check('A2: DB approved; current rates stay until the effective date', [('approved', 450.0, 40.0)], rate())
             check('A2: 0 page errors', [], st['errs']); check('A2: 0 API ≥ 400', [], st['bad'])
         ctx.close()
         stop(); start()
