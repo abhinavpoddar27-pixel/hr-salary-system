@@ -20,7 +20,7 @@ import EmployeeQuickView from '../components/ui/EmployeeQuickView'
 import api from '../utils/api'
 import { downloadPayslipPDF } from '../utils/payslipPdf'
 import ConfirmDialog from '../components/ui/ConfirmDialog'
-import { canFinance as canFinanceFn } from '../utils/role'
+import { canFinance as canFinanceFn, canRunPayroll } from '../utils/role'
 import ReleaseHoldModal from '../components/ui/ReleaseHoldModal'
 
 export default function SalaryComputation() {
@@ -36,6 +36,7 @@ export default function SalaryComputation() {
   // that here so HR users don't see a Release button they can't actually
   // click. Both pages (Stage 7 + Finance Verify) use the same gate.
   const canFinance = canFinanceFn(user)
+  const canRun = canRunPayroll(user) // STAGE-BTN: compute + finalise are hr/finance/admin on the server (P3-PG)
   const [showDetails, setShowDetails] = useState(null)
   const [calendarEmployee, setCalendarEmployee] = useState(null)
   const [payslipEmployee, setPayslipEmployee] = useState(null)
@@ -592,10 +593,17 @@ export default function SalaryComputation() {
               <p className="section-subtitle mt-1">{monthYearLabel(month, year)} — Compute, review, and finalise salary.</p>
             </div>
             <div className="flex flex-wrap gap-2" data-testid="stage7-actions">
+              {canRun && (
               <button onClick={() => computeMutation.mutate()} disabled={computeMutation.isPending} className="btn-primary whitespace-nowrap">
                 {computeMutation.isPending ? 'Computing...' : 'Compute Salary'}
               </button>
-              {allSalaries.length > 0 && !allSalaries[0]?.is_finalised && (
+              )}
+              {!canRun && (
+                <p data-testid="stage7-run-refused" className="text-xs text-slate-500 self-center">
+                  Only HR, finance or admin can compute or finalise salary.
+                </p>
+              )}
+              {canRun && allSalaries.length > 0 && !allSalaries[0]?.is_finalised && (
                 staleCount > 0 && !isAdmin ? (
                   <button
                     disabled
@@ -841,6 +849,7 @@ export default function SalaryComputation() {
                   {staleOpen ? 'Hide' : 'Show'} the {staleCount} employee code{staleCount === 1 ? '' : 's'}
                 </button>
               </div>
+              {canRun && (
               <button
                 onClick={() => computeMutation.mutate()}
                 disabled={computeMutation.isPending}
@@ -848,6 +857,7 @@ export default function SalaryComputation() {
               >
                 {computeMutation.isPending ? 'Computing…' : 'Compute Salary'}
               </button>
+              )}
             </div>
             {staleOpen && (
               <div className="mt-2 flex flex-wrap gap-1 max-h-32 overflow-y-auto">
