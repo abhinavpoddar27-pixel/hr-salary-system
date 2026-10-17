@@ -7,6 +7,45 @@
 - Why: both files changed in every PR, so each merge put every other open PR into conflict.
 - **Never `git add -A` in a worktree whose `node_modules` are symlinks.** `.gitignore` said `node_modules/` (folders only), so two symlinks were committed to main with #155 and blocked merges until #161. Stage files by name.
 
+> Folded 16 Oct 2026: batch-4 parallel stream #150–#153 (missed by the #162 fold).
+
+## Last Session — 2026-10-12 (N-MONEY2: money permission batch 4)
+**Branch `fix/money-permission-batch4`, MERGED (#151). MONEY PR.** Plan + log: `docs/ux-bulk/prs/N-MONEY2/PROGRESS.md`.
+- **N-19:** `PUT /employees/:code/salary` same gross + changed split → salary_change_requests (finance decides, P1-23 applies);
+  untouched save still `structureUnchanged`; explicit 0 % kept (was 50/20); bad range → 400 SPLIT_OUT_OF_RANGE. PF ceiling + pt direct.
+- **N-23:** approve-flag / bulk-approve refuse 403 SELF_APPROVAL when the decider requested the gross change behind the flag
+  (bulk: whole batch). A gross revert sets the matching request to status 'Reverted' + audit row; reply says re-run Stage 7.
+- **ED:** finance-approve only APPROVED + UNREVIEWED/FINANCE_FLAGGED (else 409; rejected → "Return to HR"); bulk → `skipped`.
+- **Guards:** GET /tax-declarations/:code(+/calculate) and POST /payroll/calculate-days, compute-salary, finalise → hr/finance/admin.
+- **UI:** Attendance Flags reads `finance_verified` (no `verified` column), Verify only for finance/admin, list read no-cache.
+- **F-1:** `PUT /salary-input/approve/:id` writes the request's basic/hra/da_percent (Employee Master requests carry them);
+  a request without them keeps the in-force row's % (Salary Input page). Later gross changes keep the approved split.
+- **Fragile:** request match = latest Approved gross-changing request. 'Reverted' has no badge in SalaryInput history.
+- **Verified:** jest 115/2040 → 116/2079; attendance-flags check 21/21, --base 2/2. **Not tested:** Railway; production data.
+
+## Last Session — 2026-10-12 (P4-NEXT: next-step links, DW queue counts, sales blockers + Go to Compute, loans to-disburse tile, explainer room)
+**Branch `feat/next-step-links-batch4`, MERGED (#153).** Frontend only. Plan + log: `docs/ux-bulk/prs/P4-NEXT/PROGRESS.md`. Findings P-12, D-2, S-4, S-6, F-18, N-24.
+- **P4-02:** Miss Punch "Go to Stage 3", Night Shift "Go to Stage 5", Stage 6 links in the auto-Stage-6 banner, its waiting counts open their chip; Import "waiting on N with HR / finance" → `/pipeline/miss-punch?state=hr-pending|finance-pending` (MissPunch honours known `?state=` keys). Month = global store.
+- **P4-04:** DW Finance Review count cards (pending / needs correction / flagged / approved 7 d) from GET /entries `summary` (limit 1) — load with the page; tab badges same counts; 7-day window = `addDaysIso(todayIST(), -7)`.
+- **P4-05:** Sales Compute readiness banner in pre-compute mode too; cycle warning "no upload" shown up front + Upload link. Sales Upload: plain reason under a disabled Confirm; after confirm "Go to Compute" (sets store month/year/company to the upload's). Preview read is now no-cache (`salesUploadPreviewFresh`) — a match used to look undone for 5 s; confirm/template upload invalidate `['sales-readiness']`.
+- **P4-07:** Loans tile "Approved — to disburse" (finance/admin = `caps.canPay`): count + ₹ principal of `approved` loans; click → Loans tab, Approved filter.
+- **N-24:** while the Salary Explainer button shows, `<main>` gets 7rem bottom padding (set/restored from SalaryExplainer.jsx).
+- **Fragile:** N-24 padding is set on `document.querySelector('main')` (Layout in App.jsx) — a second `<main>` or a Layout change breaks it. DW counts rely on GET /entries returning the whole-table `summary`.
+- **Verified:** `backend/scripts/next-step-links-check.py` 51/51 (hr + finance, built dist, 1440 + 390 px, 0 errors / 0 API ≥ 400); `--base` on 8abee96 28/28 (no links, no pre-compute banner, no reason, stale preview, explainer covers the last row). No backend source change (jest not affected).
+- **Not tested:** Railway; Safari/Firefox; the real import path for the "waiting on" line (response intercepted).
+
+## Last Session — 2026-10-12 (P6-07: debug role banners removed; .btn-warning)
+**Branch `feat/ui-polish-batch4`, MERGED (#152).** P6-07 + .btn-warning (feat/ui-polish-batch4).** Debug role banners removed from ExtraDutyGrants, HeldSalariesRegister
+and FinanceVerification; `.btn-warning` added to index.css. Check script `ui-polish-batch4-check.py` 14/14.
+
+## Last Session — 2026-10-12 (half-day EL/CL: leave is charged only for what it pays)
+**Branch `fix/half-day-leave`, MERGED (#150). PROTECTED FILE `dayCalculation.js` (owner-approved).** Log: `docs/half-day-leave/PROGRESS.md`.
+- From Sep 2026 payroll: EL / paid CL on a half day (½P/HP) pays the absent half and counts 0.5 (was: paid 0, counted 1); on a day already worked it counts 0 (was 1). LWP on a worked or half day no longer deducts. `el_used`/`cl_used` store the paid count. Months before Sep 2026 unchanged.
+- Sep 2026 effect (read-only): 1 EL on a half day (+0.5 day pay, EL 0.5), 2 EL on worked days (pay same, EL 0). After merge: Stage 6 (All companies) → Stage 7 for September.
+- **Fragile:** the Sep-2026 cut-over lives in dayCalculation.js; clPayable.test.js CL-on-worked-day now expects 0 on purpose.
+- **Verified:** halfDayLeave.test.js 11 (7 fail on old code); jest 116/2051; cl-payable 9/9, leave-automation 70/70.
+- **Found, not fixed:** leave engine counts a half day as 0.25 toward EL accrual (days_half_present already 0.5 per day, then × 0.5).
+
 ## Last Session — 2026-10-12 (P3-RG: tax declaration reads role-guarded; HR sees flag status only; finance_verified read)
 **Branch `fix/role-gaps-taxdecl-verify`, MERGED (#160).** Plan + log: `docs/ux-bulk/prs/P3-RG/PLAN.md`, `PROGRESS.md`.
 Follow-ups from P2-11 / P2-03. Rulings Q1–Q4 (12 Oct): badge uses the helper; keep the verified_by fallback;

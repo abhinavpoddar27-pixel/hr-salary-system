@@ -544,7 +544,7 @@ export default function AttendanceReviewTab({ selectedMonth, selectedYear, onSel
       {!loading && data && (
         <>
           {/* ── summary ── */}
-          <div className="grid grid-cols-2 md:grid-cols-4 xl:grid-cols-7 gap-3">
+          <div className="grid grid-cols-2 md:grid-cols-4 xl:grid-cols-8 gap-3">
             <Stat label="People assessed" value={num(data.meta?.people_assessed)} sub={`${num(data.meta?.excluded_people)} excluded by config`} />
             <Stat label="Action list" value={num(t.people)} sub={`${num(t.deduction_notes)} deductions · ${num(t.warning_notes)} warnings`} tone="red" />
             <Stat label="Deduction days" value={num(t.deduction_days, 1)} tone="red" />
@@ -552,6 +552,7 @@ export default function AttendanceReviewTab({ selectedMonth, selectedYear, onSel
             <Stat label="Early-exit warnings" value={num(data.earlyExitWarnings?.length)} tone="amber" />
             <Stat label="Late notice" value={num(data.noticeLate?.length)} sub="names on the board" tone="blue" />
             <Stat label="Early notice" value={num(data.noticeEarly?.length)} sub="names on the board" tone="blue" />
+            <Stat label="Missed-punch notice" value={data.noticeMissed ? num(data.noticeMissed.length) : '—'} sub={data.noticeMissed ? 'names on the board' : 'regenerate to see'} tone="blue" />
           </div>
           {!showingStored && runMeta && !isFinal && <p className="text-xs text-amber-700">Showing a live preview with your unsaved changes — regenerate the draft to save it.</p>}
           <p className="text-xs text-slate-600" data-testid="ar-basis">
@@ -659,6 +660,11 @@ export default function AttendanceReviewTab({ selectedMonth, selectedYear, onSel
             </Section>
             <Section title="Notice board — leaving early" count={data.noticeEarly?.length} defaultOpen={false} note="Release days are not counted.">
               <Table rows={data.noticeEarly} cols={[{ k: 'code', h: 'Code' }, { k: 'name', h: 'Name' }, { k: 'department', h: 'Department' }, { k: 'early_exits', h: 'Early exits', right: true }]} />
+            </Section>
+            <Section title="Notice board — missed punches" count={data.noticeMissed?.length} defaultOpen={false} note={data.noticeMissed
+              ? `${data.criteria?.thresholds?.board_miss_punch_min ?? 3}+ own missed punches in the month, any day status (a one-punch day counts). Days the machine failed for many people are not counted.`
+              : 'This saved run is older than the missed-punch notice — regenerate the draft to see it.'}>
+              <Table rows={data.noticeMissed || []} cols={[{ k: 'code', h: 'Code' }, { k: 'name', h: 'Name' }, { k: 'department', h: 'Department' }, { k: 'missed_punches', h: 'Missed punches', right: true }]} />
             </Section>
           </div>
 

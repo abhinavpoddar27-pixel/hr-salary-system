@@ -57,6 +57,7 @@ export const STATUS_MAP = {
     Pending: { label: 'Pending', tone: 'amber' },
     Approved: { label: 'Approved', tone: 'green' },
     Rejected: { label: 'Rejected', tone: 'red' },
+    Reverted: { label: 'Reverted', tone: 'orange' }, // F151 F-2: gross change undone by a flag reject (N-23)
   },
   // components/loans/loanUi.js LOAN_STATE — loans.status
   loan: {

@@ -230,6 +230,7 @@ router.post('/upload', requireHrOrAdmin, upload.array('files', 20), async (req, 
           // after the upsert so HR's resolution work survives a reimport.
           correctionSnapshot = db.prepare(`
             SELECT employee_code, date, status_final, in_time_final, out_time_final,
+                   is_miss_punch, miss_punch_type,
                    miss_punch_resolved, correction_source, correction_remark,
                    miss_punch_finance_status, miss_punch_finance_reviewed_by,
                    miss_punch_finance_reviewed_at, miss_punch_finance_notes,
@@ -331,6 +332,8 @@ router.post('/upload', requireHrOrAdmin, upload.array('files', 20), async (req, 
               db.prepare(`
                 UPDATE attendance_processed SET
                   status_final = ?, in_time_final = ?, out_time_final = ?,
+                  is_miss_punch = CASE WHEN ? = 1 THEN 1 ELSE is_miss_punch END,
+                  miss_punch_type = CASE WHEN ? = 1 THEN ? ELSE miss_punch_type END,
                   miss_punch_resolved = ?, correction_source = ?, correction_remark = ?,
                   miss_punch_finance_status = ?, miss_punch_finance_reviewed_by = ?,
                   miss_punch_finance_reviewed_at = ?, miss_punch_finance_notes = ?,
@@ -338,6 +341,10 @@ router.post('/upload', requireHrOrAdmin, upload.array('files', 20), async (req, 
                 WHERE id = ?
               `).run(
                 snap.status_final, snap.in_time_final, snap.out_time_final,
+                // keep the miss-punch flag: Stage 6 reads a resolved day only through it
+                // (finance pending → biometric status), so dropping it would pay HR's
+                // resolution before finance has decided
+                snap.is_miss_punch, snap.is_miss_punch, snap.miss_punch_type,
                 snap.miss_punch_resolved, snap.correction_source, snap.correction_remark,
                 snap.miss_punch_finance_status, snap.miss_punch_finance_reviewed_by,
                 snap.miss_punch_finance_reviewed_at, snap.miss_punch_finance_notes,

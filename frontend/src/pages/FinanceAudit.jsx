@@ -5,7 +5,7 @@ import { getFinanceReport, submitDayCorrection, getCorrectionHistory, getCorrect
   getSalaryManualFlags, approveManualFlag, bulkApproveFlags, getReadinessCheck, getVarianceReport, getStatutoryCrosscheck,
   getFinancePendingDeductions, reviewLateDeduction, bulkReviewLateDeductions, getLateComingDeductions, reverseLateDeduction,
   getCompOffPending, getCompOffList, reviewCompOff, bulkReviewCompOff,
-  getLeaveRequests, approveLeaveRequest, rejectLeaveRequest } from '../utils/api'
+  getLeaveRequests, approveLeaveRequest, rejectLeaveRequest, getManualAttendanceFlags } from '../utils/api'
 import { useAppStore } from '../store/appStore'
 import DateSelector from '../components/common/DateSelector'
 import useDateSelector from '../hooks/useDateSelector'
@@ -20,7 +20,6 @@ import FinanceEarlyExitApprovals from '../components/FinanceEarlyExitApprovals'
 import clsx from 'clsx'
 import { normalizeRole } from '../utils/role'
 import toast from 'react-hot-toast'
-import api from '../utils/api'
 
 const CORRECTION_REASONS = [
   'Gate register mismatch', 'Production record mismatch',
@@ -451,11 +450,6 @@ function CorrectionsSummaryTab() {
 // ═══════════════════════════════════════════════════════════
 // P3-RG: the column is `finance_verified` (there is no `verified`); verified_by kept as a fallback (ruling Q2).
 const isFlagVerified = (f) => Number(f?.finance_verified) === 1 || !!f?.verified_by
-// Same read as getManualAttendanceFlags, sent no-cache: server.js answers GETs with
-// max-age=5, so the refetch right after a Verify got the pre-verify copy and the
-// row kept its Verify button. Used by the tab and its badge (one query key).
-const getManualAttendanceFlagsFresh = (params) =>
-  api.get('/finance-audit/manual-flags', { params, headers: { 'Cache-Control': 'no-cache' } })
 
 function ManualFlagsTab() {
   const { selectedCompany, user } = useAppStore()
@@ -468,7 +462,7 @@ function ManualFlagsTab() {
 
   const { data: res, isLoading } = useQuery({
     queryKey: ['manual-flags', month, year, selectedCompany],
-    queryFn: () => getManualAttendanceFlagsFresh({ month, year, company: selectedCompany }),
+    queryFn: () => getManualAttendanceFlags({ month, year, company: selectedCompany }),
     retry: 0
   })
   const flags = res?.data?.data || res?.data || []
@@ -479,9 +473,8 @@ function ManualFlagsTab() {
       toast.success(res?.data?.message || 'Flag verified')
       setVerifyingId(null)
       setFinanceRemarks('')
-      // P3-RG: the list GET is served with max-age=5 and this read sends no no-cache, so a refetch right
-      // after the verify got the pre-verify copy (row + badge stayed unverified). Mark the row in the cache
-      // from the server's 200 (same fields the route writes); re-read the server after the cache window.
+      // P3-RG: mark the row in the cache from the server's 200 (same fields the route writes) so it flips at
+      // once; FRESH: the list read is no-cache now (api.js), so re-read the server straight away.
       const mark = (f) => (f.id === id ? { ...f, finance_verified: 1, verified_by: user?.username || f.verified_by || 'you', finance_remarks: finance_remarks || null } : f)
       queryClient.setQueriesData({ queryKey: ['manual-flags'] }, (old) => {
         if (!old?.data) return old
@@ -489,7 +482,7 @@ function ManualFlagsTab() {
         if (Array.isArray(old.data)) return { ...old, data: old.data.map(mark) }
         return old
       })
-      setTimeout(() => queryClient.invalidateQueries({ queryKey: ['manual-flags'] }), 6000)
+      queryClient.invalidateQueries({ queryKey: ['manual-flags'] })
     },
     onError: () => toast.error('Failed to verify flag')
   })
@@ -1459,7 +1452,7 @@ export default function FinanceAudit() {
   // Legacy manual attendance flags
   const { data: attFlagsRes } = useQuery({
     queryKey: ['manual-flags', month, year, selectedCompany],
-    queryFn: () => getManualAttendanceFlagsFresh({ month, year, company: selectedCompany }),
+    queryFn: () => getManualAttendanceFlags({ month, year, company: selectedCompany }),
     retry: 0, staleTime: 60000
   })
   const attFlagsData = attFlagsRes?.data?.data || attFlagsRes?.data || []

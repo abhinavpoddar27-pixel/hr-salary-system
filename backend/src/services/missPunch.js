@@ -9,20 +9,144 @@ const { calcShiftMetrics } = require('../utils/shiftMetrics');
 
 const PRESENT_STATUSES = ['P', 'WOP', '½P', 'WO½P'];
 
+// ── Single-punch days (Oct 2026, owner ruling 16 Oct) ──────────────────────
+// EESL marks a day with ONE punch as absent (it reads a lone evening check-out
+// as a late check-in: 19:22 → 20:00 = 38 min). Those days used to be skipped
+// below (status not present) and became silent absences no one reviewed.
+// Now a day with exactly one punch and status A / WO is raised as a miss punch
+// so HR checks it against the gate register.
+//   - Only dates on/after SINGLE_PUNCH_FROM (no clean-up of past months).
+//     policy_config 'single_punch_miss_punch_from' = 'YYYY-MM-DD' overrides it,
+//     'off' turns the rule off.
+//   - Only once the next day's data is in (the 19 Sep ruling: an open shift is
+//     not a miss punch) — so a night check-in is paired first.
+//   - Only rows HR has not re-labelled (status_final = status_original).
+const SINGLE_PUNCH_FROM_DEFAULT = '2026-10-01';
+const SINGLE_PUNCH_STATUSES = ['A', 'WO'];
+const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
+
+function istToday() {
+  return new Date(Date.now() + 330 * 60000).toISOString().slice(0, 10);
+}
+function addDaysIso(iso, n) {
+  const d = new Date(`${iso}T00:00:00Z`);
+  d.setUTCDate(d.getUTCDate() + n);
+  return d.toISOString().slice(0, 10);
+}
+
+/** Start date of the single-punch rule; null = rule off. */
+function singlePunchFrom(opts) {
+  if (opts && Object.prototype.hasOwnProperty.call(opts, 'singlePunchFrom')) return opts.singlePunchFrom;
+  try {
+    const { getDb } = require('../database/db');
+    const row = getDb().prepare("SELECT value FROM policy_config WHERE key = 'single_punch_miss_punch_from'").get();
+    if (row) {
+      const v = String(row.value || '').trim();
+      if (v.toLowerCase() === 'off') return null;
+      if (ISO_DATE.test(v)) return v;
+    }
+  } catch { /* no DB / no row → default */ }
+  return SINGLE_PUNCH_FROM_DEFAULT;
+}
+
+/** The one punch time of a row with exactly one punch, as { at: 'HH:MM', h, side: 'in'|'out' }; else null. */
+function lonePunch(rec) {
+  const inTime = rec.in_time_final || rec.in_time_original;
+  const outTime = rec.out_time_final || rec.out_time_original;
+  if (!!inTime === !!outTime) return null;
+  const at = String(inTime || outTime);
+  const h = parseInt(at.split(':')[0], 10);
+  return Number.isNaN(h) ? null : { at, h, side: inTime ? 'in' : 'out' };
+}
+const EVENING_FROM_H = 17;   // a lone punch from 17:00 is an exit, or a night check-in
+const MORNING_TO_H = 12;     // a lone punch before 12:00 can be a night shift's exit
+
+/** Issue type for a single-punch absent day, or null when the rule does not apply. */
+function singlePunchIssue(rec, ctx) {
+  if (!ctx.from || !rec.date || rec.date < ctx.from) return null;
+  const status = rec.status_final || rec.status_original;
+  if (!SINGLE_PUNCH_STATUSES.includes(status)) return null;
+  if (rec.status_final && rec.status_original && rec.status_final !== rec.status_original) return null; // HR re-labelled
+  if (rec.is_night_out_only || rec.night_pair_date) return null; // part of a night pair
+  const one = lonePunch(rec);
+  if (!one) return null; // none or both → not a single punch
+  const prev = ctx.lone.get(`${rec.employee_code}|${addDaysIso(rec.date, -1)}`);
+  const next = ctx.lone.get(`${rec.employee_code}|${addDaysIso(rec.date, 1)}`);
+  // A night shift the pairing missed: lone evening punch on D + lone morning punch on D+1.
+  // The morning one is that shift's exit (the shift is paid on D) → not raised on its own,
+  // or one shift could be resolved into two paid days.
+  if (one.h < MORNING_TO_H && prev && prev.h >= EVENING_FROM_H) return null;
+  // The day is closed once this person's next day has a punch (night pairing has had its
+  // chance), or two days have passed, or it is a month's last day and the month is over.
+  const nextDate = addDaysIso(rec.date, 1);
+  const closed = ctx.punchedDays.has(`${rec.employee_code}|${nextDate}`)
+    || rec.date <= ctx.twoDaysAgo
+    || (nextDate.slice(8) === '01' && rec.date < ctx.today);
+  if (!closed) return null;
+  if (one.h >= EVENING_FROM_H) return next && next.h < MORNING_TO_H ? 'NIGHT_UNPAIRED' : 'MISSING_IN';
+  return one.side === 'out' ? 'MISSING_IN' : 'MISSING_OUT';
+}
+
+/**
+ * Rows of the day before / after the records' date range for these employees (another month's file),
+ * so a night shift across a month end is seen whole. Best effort: no DB → none.
+ */
+function neighbourRows(records) {
+  if (!records.length) return [];
+  let min = null; let max = null; const codes = new Set();
+  for (const r of records) {
+    if (!r.date) continue;
+    if (!min || r.date < min) min = r.date;
+    if (!max || r.date > max) max = r.date;
+    codes.add(String(r.employee_code));
+  }
+  if (!min) return [];
+  try {
+    const { getDb } = require('../database/db');
+    return getDb().prepare(`SELECT employee_code, date, in_time_original, in_time_final, out_time_original, out_time_final
+      FROM attendance_processed WHERE date IN (?, ?)`).all(addDaysIso(min, -1), addDaysIso(max, 1))
+      .filter((r) => codes.has(String(r.employee_code)));
+  } catch { return []; }
+}
+
 /**
  * Detect miss punches in processed attendance records.
  * Must be called after night shift pairing is complete.
  *
  * @param {Array} records - attendance_processed records
+ * @param {Object} [opts] - { singlePunchFrom: 'YYYY-MM-DD' | null, today: 'YYYY-MM-DD', neighbours: rows } (tests)
  * @returns {Array} missPunchList - records flagged as miss punches with issue type
  */
-function detectMissPunches(records) {
+function detectMissPunches(records, opts = {}) {
   const missPunches = [];
+  const today = (opts && opts.today) || istToday();
+  const ctx = { from: singlePunchFrom(opts), today, twoDaysAgo: addDaysIso(today, -2), punchedDays: new Set(), lone: new Map() };
+  if (ctx.from) {
+    const around = opts && Array.isArray(opts.neighbours) ? opts.neighbours : neighbourRows(records);
+    for (const r of [...around, ...records]) {
+      if (!r.date) continue;
+      if (r.in_time_final || r.in_time_original || r.out_time_final || r.out_time_original) {
+        ctx.punchedDays.add(`${r.employee_code}|${r.date}`);
+      }
+      const one = lonePunch(r);
+      if (one) ctx.lone.set(`${r.employee_code}|${r.date}`, one);
+    }
+  }
 
   for (const rec of records) {
     const status = rec.status_final || rec.status_original;
     const inTime = rec.in_time_final || rec.in_time_original;
     const outTime = rec.out_time_final || rec.out_time_original;
+
+    const singleIssue = singlePunchIssue(rec, ctx);
+    if (singleIssue) {
+      missPunches.push({
+        id: rec.id, employee_code: rec.employee_code, date: rec.date, status,
+        in_time: inTime, out_time: outTime, issue_type: singleIssue,
+        department: rec.department, company: rec.company
+      });
+      continue;
+    }
 
     // Skip if already paired as night shift (handled)
     if (rec.is_night_shift && rec.is_night_out_only) continue;
@@ -217,6 +341,31 @@ function resolveMissPunch(db, recordId, { inTime, outTime, source, remark, conve
         m.shiftName,
         recordId
       );
+
+      // ── Single-punch absent day resolved with times → worked day (Oct 2026) ──
+      // The day was flagged with status A/WO (EESL's reading of one punch). Typing
+      // the missing time must make it a worked day, or it stays absent. Full day
+      // when hours reach the shift's full-day minimum, half day from its half-day
+      // minimum; below that the status is left alone. Stage 6 still uses this only
+      // after finance approves (dayCalculation.effectiveStatusForDay).
+      const curStatus = existing.status_final || existing.status_original;
+      const spFrom = singlePunchFrom({});
+      if (finalOut && existing.is_miss_punch === 1 && SINGLE_PUNCH_STATUSES.includes(curStatus)
+        && spFrom && existing.date >= spFrom && existing.status_original === curStatus) {
+        const [ih, im] = String(finalIn).split(':').map(Number);
+        const [oh, om] = String(finalOut).split(':').map(Number);
+        let hrs = ((oh * 60 + om) - (ih * 60 + im)) / 60;
+        if (hrs < 0) hrs += 24;
+        const full = Number(shift && shift.min_hours_full_day) || 8;
+        const half = Number(shift && shift.min_hours_half_day) || 4;
+        const isWO = curStatus === 'WO';
+        const newStatus = hrs >= full ? (isWO ? 'WOP' : 'P') : hrs >= half ? (isWO ? 'WO½P' : '½P') : null;
+        if (newStatus && !Number.isNaN(hrs)) {
+          db.prepare('UPDATE attendance_processed SET status_final = ? WHERE id = ?').run(newStatus, recordId);
+          logAudit('attendance_processed', recordId, 'status_final', curStatus, newStatus, 'Stage 2',
+            `${source}: single punch resolved (${Math.round(hrs * 100) / 100} h)${remark ? ` — ${remark}` : ''}`);
+        }
+      }
 
       // ── Gap 3: Night pair dissolution ──
       // If this record was paired as a night shift and the corrected punch is
