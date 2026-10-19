@@ -420,12 +420,12 @@ function EmployeeProfileModal({ employee, onClose }) {
     onSuccess: () => { toast.success('Document uploaded'); refetchDocs(); }
   })
 
-  // P6-06: document delete asks first — the server removes the file from disk for good.
+  // P6-06: document delete asks first. G3: the server hides the row, keeps the file and records who removed it.
   const [docToDelete, setDocToDelete] = useState(null)
   const deleteInFlight = useRef(false) // isPending lags a render — a double click must send one request
   const deleteMutation = useMutation({
     mutationFn: (id) => deleteEmployeeDocument(id),
-    onSuccess: () => { toast.success('Document deleted'); setDocToDelete(null); refetchDocs(); },
+    onSuccess: () => { toast.success('Document removed'); setDocToDelete(null); refetchDocs(); },
     onError: (e) => toast.error(e?.response?.data?.error || 'Could not delete the document'),
     onSettled: () => { deleteInFlight.current = false }
   })
@@ -754,7 +754,7 @@ function EmployeeProfileModal({ employee, onClose }) {
             {docToDelete && (
               <ConfirmDialog
                 title={`Delete ${docToDelete.file_name}?`}
-                message={<span data-testid="confirm-delete-doc">{docToDelete.document_type} for {emp.name || employee.code} ({employee.code}). The file is deleted from the server for good — this cannot be undone. Keep a copy first if you may need it.</span>}
+                message={<span data-testid="confirm-delete-doc">{docToDelete.document_type} for {emp.name || employee.code} ({employee.code}). It is removed from this list and a record of who removed it is kept. The file stays on the server — ask admin if it is needed again.</span>}
                 confirmText={deleteMutation.isPending ? 'Deleting…' : 'Delete document'}
                 variant="danger"
                 busy={deleteMutation.isPending}
