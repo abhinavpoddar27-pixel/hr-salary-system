@@ -20,3 +20,5 @@ export const getBulkQueue = (params = {}) => api.get('/bulk/batches', { params: 
 export const approveBulkBatch = (id) => api.post(`/bulk/batches/${id}/approve`, {})
 export const rejectBulkBatch = (id, reason) => api.post(`/bulk/batches/${id}/reject`, { reason })
 export const returnBulkBatch = (id, note) => api.post(`/bulk/batches/${id}/return`, { note })
+// P5-04 / H1 b: default effective date for a salary revision (1st of the first open payroll month).
+export const getSalaryRevisionDefaults = () => api.get('/bulk/salary-revision/defaults', fresh)
