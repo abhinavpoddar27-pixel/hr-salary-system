@@ -1,6 +1,6 @@
 import React, { useState, useMemo } from 'react'
 import { Link } from 'react-router-dom'
-import { useQuery, useMutation } from '@tanstack/react-query'
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import toast from 'react-hot-toast'
 import { fmtINR } from '../utils/formatters'
 import { Abbr } from '../components/ui/Tooltip'
@@ -15,6 +15,8 @@ import EmployeeQuickView from '../components/ui/EmployeeQuickView'
 import api from '../utils/api'
 import StatusBadge from '../components/ui/StatusBadge'
 import { canFinance as canFinanceFn, canHR as canHRFn } from '../utils/role'
+import SalaryRevisionBulk from '../components/bulk/SalaryRevisionBulk'
+import BulkBatchList from '../components/bulk/BulkBatchList'
 
 // P1-23: same rule as the server (routes/salary-input.js) — trimmed, case-insensitive username; empty never matches.
 const SELF_DECIDE_TEXT = 'You raised this request — ask another finance or admin user to decide it.'
@@ -74,6 +76,8 @@ export default function SalaryInput() {
   const [editForm, setEditForm] = useState({ basic: 0, da: 0, hra: 0, conveyance: 0, other_allowances: 0 })
   const [reason, setReason] = useState('')
   const [tab, setTab] = useState('employees') // employees | pending | history
+  const [showBulk, setShowBulk] = useState(false) // P5-04 bulk salary revision panel (inline, not a Modal)
+  const qc = useQueryClient()
   // Reject-reason modal state for the new gated reject endpoint
   const [rejectId, setRejectId] = useState(null)
   const [rejectReason, setRejectReason] = useState('')
@@ -156,13 +160,18 @@ export default function SalaryInput() {
   return (
     <div className="animate-fade-in">
       <div className="p-6 space-y-5 w-full min-w-0">
-        <div className="flex items-start justify-between">
+        <div className="flex flex-wrap items-start justify-between gap-3">
           <div>
             <h2 className="section-title">Salary Input & Changes</h2>
             <p className="section-subtitle mt-1">View and manage employee salary structures. Changes require admin approval.</p>
           </div>
-          <CompanyFilter />
+          <div className="flex items-center gap-2">
+            {canHR && <button type="button" className="btn-secondary text-sm whitespace-nowrap" data-testid="sr-bulk-open" onClick={() => setShowBulk(v => !v)}>{showBulk ? 'Hide bulk revision' : '+ Bulk revision'}</button>}
+            <CompanyFilter />
+          </div>
         </div>
+        {showBulk && <><SalaryRevisionBulk onClose={() => setShowBulk(false)} onSent={() => { refetchPending(); qc.invalidateQueries({ queryKey: ['bulk-batches'] }) }} />
+          <BulkBatchList kind="salary-revision" whatLabel="Revision" canUndo={canFinance} /></>}
 
         {/* Tabs */}
         <div className="flex gap-1 border-b border-slate-200 pb-0">

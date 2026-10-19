@@ -38,6 +38,16 @@ export function canFinance(user) {
   return r === 'admin' || r === 'finance'
 }
 
+/**
+ * True if the user may run Stage 6 / Stage 7 / finalise (hr, finance, admin).
+ * Mirrors payroll.js requireHrFinanceOrAdmin on calculate-days, compute-salary
+ * and finalise (P3-PG) — change both together.
+ */
+export function canRunPayroll(user) {
+  const r = normalizeRole(user?.role)
+  return r === 'admin' || r === 'hr' || r === 'finance'
+}
+
 /** True if the user is admin. */
 export function isAdmin(user) {
   return normalizeRole(user?.role) === 'admin'

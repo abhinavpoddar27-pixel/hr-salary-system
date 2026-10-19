@@ -2,6 +2,7 @@ import React, { useState, useMemo } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { getEarlyExitPendingFinance, getEarlyExitDeductions, approveEarlyExitDeduction, rejectEarlyExitDeduction } from '../utils/api'
 import { useAppStore } from '../store/appStore'
+import { canFinance } from '../utils/role'
 import { fmtINR } from '../utils/formatters'
 import Modal from '../components/ui/Modal'
 import { confirmDialog } from '../hooks/useConfirm'
@@ -9,7 +10,8 @@ import clsx from 'clsx'
 import toast from 'react-hot-toast'
 
 export default function FinanceEarlyExitApprovals({ month, year }) {
-  const { selectedCompany } = useAppStore()
+  const { selectedCompany, user } = useAppStore()
+  const canDecide = canFinance(user) // STAGE-BTN: approve/reject are finance+admin on the server
   const queryClient = useQueryClient()
   const [subTab, setSubTab] = useState('pending')
   const [rejectModal, setRejectModal] = useState(null)
@@ -44,6 +46,8 @@ export default function FinanceEarlyExitApprovals({ month, year }) {
       toast.success('Deduction approved')
       queryClient.invalidateQueries({ queryKey: ['early-exit-deductions-pending'] })
       queryClient.invalidateQueries({ queryKey: ['early-exit-deductions-approved'] })
+      queryClient.invalidateQueries({ queryKey: ['early-exit-finance-pending'] })
+      queryClient.invalidateQueries({ queryKey: ['readiness'] })
     }
   })
 
@@ -55,6 +59,8 @@ export default function FinanceEarlyExitApprovals({ month, year }) {
       setRejectRemark('')
       queryClient.invalidateQueries({ queryKey: ['early-exit-deductions-pending'] })
       queryClient.invalidateQueries({ queryKey: ['early-exit-deductions-rejected'] })
+      queryClient.invalidateQueries({ queryKey: ['early-exit-finance-pending'] })
+      queryClient.invalidateQueries({ queryKey: ['readiness'] })
     }
   })
 
@@ -173,7 +179,10 @@ export default function FinanceEarlyExitApprovals({ month, year }) {
 
       {/* Content */}
       <div className="card overflow-hidden">
-        {subTab === 'pending' && renderTable(pending, true)}
+        {subTab === 'pending' && !canDecide && (
+          <p data-testid="early-exit-awaiting-finance" className="px-3 py-2 text-xs text-slate-500 border-b">Finance or admin approves or rejects these deductions.</p>
+        )}
+        {subTab === 'pending' && renderTable(pending, canDecide)}
         {subTab === 'approved' && renderTable(approved, false)}
         {subTab === 'rejected' && renderTable(rejected, false)}
       </div>

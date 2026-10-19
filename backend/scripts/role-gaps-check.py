@@ -152,10 +152,9 @@ try:
             check('hr: Verified KPI 2', 2, kpi(pg, 'Verified'))
             check('hr: tab badge 2', 2, badge(pg))
             check('hr: 0 verify PUTs', 0, len(puts))
-            # Known pre-existing (not this PR): the page's comp-off tab badge calls GET /comp-off/pending (finance+admin)
-            # for every role → HR gets one 403 + its console line on load. Counted, then excluded.
+            # STAGE-BTN (Q4): the comp-off tab badge read is now finance/admin only, so hr sends no /comp-off/pending.
             known = [x for x in bad if '/api/comp-off/pending' in x]
-            check('hr: known comp-off/pending 403 (pre-existing, reported)', True, len(known) >= 1)
+            check('hr: no comp-off/pending 403 (badge read gated, STAGE-BTN)', 0, len(known))
             bad = [x for x in bad if '/api/comp-off/pending' not in x]
             cons = [x for x in cons if 'comp-off/pending' not in x and 'status of 403' not in x]
             check('hr: 0 page errors', [], errs); check('hr: 0 other console errors', [], cons); check('hr: 0 other API ≥ 400', [], bad)
