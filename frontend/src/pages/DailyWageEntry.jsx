@@ -1,11 +1,11 @@
 import React, { useState, useMemo, useRef, useEffect } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import { useQuery, useMutation } from '@tanstack/react-query'
-import { getDWContractors, getDWEntry, createDWEntry, updateDWEntry, submitDWEntry, checkDWDuplicates } from '../utils/api'
+import { getDWContractors, getDWEntry, createDWEntry, updateDWEntry, submitDWEntry, checkDWDuplicates, getDWRateOn } from '../utils/api'
 import { useAppStore } from '../store/appStore'
 import clsx from 'clsx'
 import toast from 'react-hot-toast'
-import { todayIST } from '../utils/formatters'
+import { todayIST, fmtDate } from '../utils/formatters'
 
 function fmt(n) { return (n || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) }
 
@@ -79,8 +79,18 @@ export default function DailyWageEntry() {
   const [contractorError, setContractorError] = useState(false)
 
   // ── Computed values ─────────────────────────────────────────
-  const wageRate = selectedContractor?.current_daily_wage_rate || 0
-  const commRate = selectedContractor?.current_commission_rate || 0
+  // G1: preview at the rate in force on the ENTRY DATE (what the server saves), not today's rate
+  const validDate = /^\d{4}-\d{2}-\d{2}$/.test(entryDate || '')
+  const { data: rateOnRes } = useQuery({
+    queryKey: ['dw-rate-on', selectedContractor?.id, entryDate],
+    queryFn: () => getDWRateOn(selectedContractor.id, entryDate),
+    enabled: !!selectedContractor && validDate,
+    retry: 0
+  })
+  const rateOnData = rateOnRes?.data?.data
+  const rateOnMatches = rateOnData && rateOnData.date === entryDate
+  const wageRate = (rateOnMatches ? rateOnData.wage_rate : selectedContractor?.current_daily_wage_rate) || 0
+  const commRate = (rateOnMatches ? rateOnData.commission_rate : selectedContractor?.current_commission_rate) || 0
   const totalWC = Number(totalWorkers) || 0
   const allocSum = allocations.reduce((s, a) => s + (Number(a.worker_count) || 0), 0)
   const allocMatch = totalWC > 0 && allocSum === totalWC
@@ -218,10 +228,13 @@ export default function DailyWageEntry() {
         </div>
         {contractorError && <p className="text-xs text-red-600 mt-1">Contractor is required</p>}
         {selectedContractor && (
-          <div className="mt-2 flex items-center gap-4 text-sm bg-blue-50 rounded-lg px-3 py-2">
+          <div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-1 text-sm bg-blue-50 rounded-lg px-3 py-2" data-testid="entry-rate-preview">
             <span className="text-slate-600">Wage Rate: <strong className="text-blue-700">{fmt(wageRate)}</strong></span>
             <span className="text-slate-600">Commission: <strong className="text-blue-700">{fmt(commRate)}</strong></span>
             <span className="text-slate-600">Total/Worker: <strong className="text-blue-700">{fmt(wageRate + commRate)}</strong></span>
+            {rateOnMatches && rateOnData.source !== 'contractor' && (
+              <span className="text-xs text-slate-500" data-testid="entry-rate-note">Rate in force on {fmtDate(entryDate)}</span>
+            )}
           </div>
         )}
       </div>
