@@ -286,10 +286,31 @@ router.get('/:code', (req, res) => {
   res.json({ success: true, data: { ...emp, salaryStructure: salaryStruct, leaveBalances } });
 });
 
+// N-13: salary keys POST / refuses. `basic, da, hra, conveyance, otherAllowances`
+// are the keys the handler used to write into salary_structures; the rest are
+// the other spellings a client could send for the same money.
+const CREATE_SALARY_KEYS = ['gross_salary', 'grossSalary', 'basic', 'da', 'hra', 'conveyance',
+  'otherAllowances', 'other_allowances', 'special_allowance', 'specialAllowance'];
+const SALARY_VIA_SALARY_INPUT_MSG = 'Create the employee first, then set salary in Salary Input (finance approves it).';
+const isEmptySalaryValue = (v) => v === undefined || v === null
+  || (typeof v === 'string' && v.trim() === '') || (Number.isFinite(Number(v)) && Number(v) === 0);
+function createSalaryKeys(body) {
+  return CREATE_SALARY_KEYS.filter((k) => body && Object.prototype.hasOwnProperty.call(body, k) && !isEmptySalaryValue(body[k]));
+}
+
 // CREATE employee
 router.post('/', requireHrOrAdmin, (req, res) => {
   const db = getDb();
-  const { code, name, fatherName, dob, gender, department, designation, company, employmentType, contractorGroup, dateOfJoining, defaultShiftId, bankAccount, ifsc, bankName, pfNumber, uan, esiNumber, basic, da, hra, conveyance, otherAllowances } = req.body;
+  const { code, name, fatherName, dob, gender, department, designation, company, employmentType, contractorGroup, dateOfJoining, defaultShiftId, bankAccount, ifsc, bankName, pfNumber, uan, esiNumber } = req.body;
+
+  // N-13 (owner ruling 17 Oct 2026): salary is never set on create. It goes
+  // through Salary Input → salary_change_requests → finance approves. A salary
+  // key with a real value refuses the whole create (nothing written); an
+  // empty one (undefined / null / '' / 0) counts as not sent.
+  const salaryKeys = createSalaryKeys(req.body);
+  if (salaryKeys.length) {
+    return res.status(400).json({ success: false, code: 'SALARY_VIA_SALARY_INPUT', error: SALARY_VIA_SALARY_INPUT_MSG, fields: salaryKeys });
+  }
 
   if (!code || !name) return res.status(400).json({ success: false, error: 'code and name are required' });
 
@@ -310,12 +331,6 @@ router.post('/', requireHrOrAdmin, (req, res) => {
     account: { present: true, value: acct }, ifsc: { present: true, value: ifscVal },
     user: req.user?.username, via: 'new employee',
   });
-
-  // Insert salary structure if provided
-  if (basic > 0) {
-    // New employee → statutory flags start off (explicit: live DEFAULT is 1, L3).
-    db.prepare(`INSERT INTO salary_structures (employee_id, effective_from, basic, da, hra, conveyance, other_allowances, pf_applicable, esi_applicable, lwf_applicable) VALUES (?, date('now'), ?, ?, ?, ?, ?, 0, 0, 0)`).run(empId, basic || 0, da || 0, hra || 0, conveyance || 0, otherAllowances || 0);
-  }
 
   // Initialize leave balances for current year (CL + EL only — SL abolished Apr 2026).
   // CL is the pro-rated entitlement for the joining month, off
@@ -648,6 +663,35 @@ router.put('/:code/leaves', requireHrOrAdmin, (req, res) => {
 // P5-04: the split helpers live in services/salarySplit.js (shared with the bulk salary revision).
 const { numOr, storedSplit, resolveSplit, splitAmounts, splitUnchanged } = require('../services/salarySplit');
 
+/**
+ * One Pending salary_change_requests row per employee (P1-23 / N-19 / N-PF).
+ * Shared by PUT /:code/salary and POST /bulk-import (N-13) so both raise the
+ * request the same way; finance decides it in Salary Input (requester can never
+ * decide their own — salary-input.js SELF_APPROVAL). Returns
+ * { alreadyPending: true } when one is already open (nothing written), else
+ * { raised: true, id }.
+ */
+function raiseSalaryChangeRequest(db, { emp, code, requestedBy, oldGross, newGross, oldStructure, newStructure, reason }) {
+  const existingPending = db.prepare(
+    "SELECT id FROM salary_change_requests WHERE employee_code = ? AND status = 'Pending'"
+  ).get(code);
+  if (existingPending) return { alreadyPending: true, id: existingPending.id };
+  const info = db.prepare(`
+    INSERT INTO salary_change_requests (
+      employee_id, employee_code, requested_by, old_gross, new_gross,
+      old_structure, new_structure, reason, status
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'Pending')
+  `).run(
+    emp.id, code, requestedBy,
+    oldGross, newGross,
+    JSON.stringify(oldStructure || {}),
+    JSON.stringify(newStructure),
+    reason
+  );
+  return { raised: true, id: info.lastInsertRowid };
+}
+
+
 router.put('/:code/salary', requireHrOrAdmin, (req, res) => {
   const db = getDb();
   const emp = db.prepare('SELECT * FROM employees WHERE code = ?').get(req.params.code);
@@ -718,17 +762,6 @@ router.put('/:code/salary', requireHrOrAdmin, (req, res) => {
   // Raise a finance-approval request (gross change, or a split change at the
   // same gross). One Pending request per employee at a time.
   const raiseRequest = (gross, reason, message) => {
-    const existingPending = db.prepare(
-      "SELECT id FROM salary_change_requests WHERE employee_code = ? AND status = 'Pending'"
-    ).get(req.params.code);
-    if (existingPending) {
-      return res.json(withIgnored({
-        success: true,
-        pendingApproval: true,
-        alreadyPending: true, // F-6: nothing new raised — the window says so
-        message: 'A salary change request is already pending finance approval for this employee.'
-      }));
-    }
     const newStructure = {
       gross_salary: gross,
       ...splitAmounts(gross, split),
@@ -740,18 +773,18 @@ router.put('/:code/salary', requireHrOrAdmin, (req, res) => {
       pt_applicable: ptValue,
       pf_wage_ceiling: split.pfCeiling,
     };
-    db.prepare(`
-      INSERT INTO salary_change_requests (
-        employee_id, employee_code, requested_by, old_gross, new_gross,
-        old_structure, new_structure, reason, status
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'Pending')
-    `).run(
-      emp.id, req.params.code, req.user?.username || 'admin',
-      currentGross, gross,
-      JSON.stringify(currentStruct || {}),
-      JSON.stringify(newStructure),
-      reason
-    );
+    const raised = raiseSalaryChangeRequest(db, {
+      emp, code: req.params.code, requestedBy: req.user?.username || 'admin',
+      oldGross: currentGross, newGross: gross, oldStructure: currentStruct, newStructure, reason,
+    });
+    if (raised.alreadyPending) {
+      return res.json(withIgnored({
+        success: true,
+        pendingApproval: true,
+        alreadyPending: true, // F-6: nothing new raised — the window says so
+        message: 'A salary change request is already pending finance approval for this employee.'
+      }));
+    }
     return res.json(withIgnored({ success: true, pendingApproval: true, message }));
   };
 
@@ -1059,7 +1092,8 @@ router.post('/bulk-import', requireAdmin, (req, res) => {
       bank_name = COALESCE(NULLIF(excluded.bank_name, ''), employees.bank_name),
       ifsc = COALESCE(NULLIF(excluded.ifsc, ''), employees.ifsc),
       ifsc_code = COALESCE(NULLIF(excluded.ifsc_code, ''), employees.ifsc_code),
-      gross_salary = CASE WHEN excluded.gross_salary > 0 THEN excluded.gross_salary ELSE employees.gross_salary END,
+      -- N-13: gross is NOT updated on conflict — a different gross in the file
+      -- raises a salary_change_requests row below (finance approves).
       -- pf/esi/lwf are NOT updated on conflict (statutory upload only, R10);
       -- a new row gets 0 from the employees_statutory_default_off trigger.
       -- Preserve manually marked Left/Inactive/Exited status on bulk re-import
@@ -1071,14 +1105,6 @@ router.post('/bulk-import', requireAdmin, (req, res) => {
       updated_at = datetime('now')
   `);
 
-  const insertSalary = db.prepare(`
-    INSERT INTO salary_structures (
-      employee_id, effective_from, gross_salary,
-      basic, da, hra, conveyance, special_allowance, other_allowances,
-      basic_percent, hra_percent, da_percent,
-      pf_applicable, esi_applicable, lwf_applicable, pt_applicable, pf_wage_ceiling
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, 0, ?, ?)
-  `);
 
   // CL per year comes from policy_config.cl_entitlement_base and is pro-rated by
   // joining month — the old hard-coded 12 predates the Sept 2026 ruling.
@@ -1088,8 +1114,11 @@ router.post('/bulk-import', requireAdmin, (req, res) => {
     VALUES (?, ?, ?, ?, ?)
   `);
 
-  let inserted = 0, updated = 0, salaryCreated = 0, errors = 0;
+  let inserted = 0, updated = 0, errors = 0;
+  let requestsRaised = 0, salaryUnchanged = 0, salaryAlreadyPending = 0;
   const errorDetails = [];
+  const rows = [];
+  const importedBy = req.user?.username || 'admin';
   const ignoredFields = [...new Set(empList.flatMap((e) => ignoredFlagFields(e)))];
 
   const txn = db.transaction(() => {
@@ -1098,7 +1127,7 @@ router.post('/bulk-import', requireAdmin, (req, res) => {
         const isActive = (emp.lastSeenSortKey || 0) >= ACTIVE_CUTOFF;
         const status = isActive ? 'Active' : 'Left';
 
-        const gross = emp.gross_salary || 0;
+        const gross = Number(emp.gross_salary) || 0; // N-13: numeric — it is compared and stored on a request
         const basic = emp.basic || 0;
         // pf/esi from the import file are ignored (statutory upload only, R10)
         const pfApplicable = 0;
@@ -1123,39 +1152,47 @@ router.post('/bulk-import', requireAdmin, (req, res) => {
           emp.uan || '', emp.aadhaar || '', emp.aadhaar || '',
           emp.account_number || '', emp.account_number || '',
           emp.bank_name || '', emp.ifsc || '', emp.ifsc || '',
-          gross, pfApplicable, esiApplicable, ptApplicable,
+          // N-13: a NEW row starts with no gross; the file's gross becomes a
+          // finance request below. (An existing row keeps its gross — ON CONFLICT.)
+          0, pfApplicable, esiApplicable, ptApplicable,
           status, gross > 0 ? 1 : 0, emp.category || ''
         );
 
         if (existing) { updated++; } else { inserted++; }
 
-        const empRow = db.prepare('SELECT id FROM employees WHERE code = ?').get(emp.code);
+        const empRow = db.prepare('SELECT id, gross_salary FROM employees WHERE code = ?').get(emp.code);
         if (!empRow) continue;
 
+        // N-13 (owner ruling 17 Oct 2026): the file's gross never reaches
+        // employees.gross_salary or salary_structures directly. A gross that
+        // differs from the stored one raises ONE Pending salary_change_requests
+        // row (requested_by = the importing admin; finance decides; the admin
+        // can never approve it — SELF_APPROVAL in salary-input.js).
+        let salary = 'no_gross';
         if (gross > 0) {
-          const existingSalary = db.prepare('SELECT * FROM salary_structures WHERE employee_id = ? ORDER BY effective_from DESC LIMIT 1').get(empRow.id);
-          if (!existingSalary) {
-            const effectiveFrom = emp.date_of_joining || '2025-04-01';
+          const storedGross = Number(empRow.gross_salary) || 0;
+          if (Math.abs(storedGross - gross) <= 0.01) {
+            salary = 'unchanged'; salaryUnchanged++;
+          } else {
+            const currentStruct = db.prepare('SELECT * FROM salary_structures WHERE employee_id = ? ORDER BY effective_from DESC LIMIT 1').get(empRow.id);
             const specialAllowance = Math.max(0, gross - basic - (emp.hra || 0) - (emp.cca || 0) - (emp.conv || 0));
-            insertSalary.run(
-              empRow.id, effectiveFrom, gross,
-              basic, 0, emp.hra || 0, emp.conv || 0, specialAllowance, emp.cca || 0,
-              basicPct, hraPct, 0,
-              ptApplicable, 15000
-            );
-            salaryCreated++;
-          } else if (Math.abs((existingSalary.gross_salary || 0) - gross) > 1
-                     || (existingSalary.pt_applicable ?? 1) !== (ptApplicable ?? 1)) {
-            // Existing structure drifted from the incoming import values —
-            // repair it in the same transaction. Without this, bulk re-imports
-            // silently leave Stage 7 reading stale gross from the struct while
-            // employees.gross_salary shows the new value (the 60052 bug).
-            syncSalaryStructureFromEmployee(db, empRow.id, {
+            const newStructure = {
               gross_salary: gross,
-              pt_applicable: ptApplicable
+              basic, da: 0, hra: emp.hra || 0, conveyance: emp.conv || 0,
+              special_allowance: specialAllowance, other_allowances: emp.cca || 0,
+              basic_percent: basicPct, hra_percent: hraPct, da_percent: 0,
+              pt_applicable: ptApplicable,
+            };
+            const raised = raiseSalaryChangeRequest(db, {
+              emp: empRow, code: emp.code, requestedBy: importedBy,
+              oldGross: storedGross, newGross: gross, oldStructure: currentStruct, newStructure,
+              reason: 'Salary from employee bulk import',
             });
+            if (raised.alreadyPending) { salary = 'already_pending'; salaryAlreadyPending++; }
+            else { salary = 'request_raised'; requestsRaised++; }
           }
         }
+        rows.push({ code: emp.code, employee: existing ? 'updated' : 'created', salary });
 
         for (const year of [2025, 2026]) {
           const clOpeningBulk = computeClEntitlement(emp.date_of_joining || null, year, bulkClBase);
@@ -1180,7 +1217,9 @@ router.post('/bulk-import', requireAdmin, (req, res) => {
     success: true,
     ...(ignoredFields.length ? { ignoredFields } : {}),
     results: {
-      inserted, updated, salaryCreated, errors,
+      inserted, updated, errors,
+      // N-13: salary is never written by the import — see `rows[].salary`.
+      requestsRaised, salaryUnchanged, salaryAlreadyPending, rows,
       errorDetails: errorDetails.length > 0 ? errorDetails : undefined,
       database: { totalEmployees: totalAll, active: totalActive, left: totalLeft, salaryStructures: totalSalary }
     }

@@ -117,14 +117,24 @@ describe('T9a — plant master writers keep the uploaded flags', () => {
     expect(r.status).toBe(200);
     expect(r.body.ignoredFields).toEqual(['pf_applicable', 'esi_applicable']);
     expect(snapshot(e)).toEqual(before);
-    expect(S.master(db, e).gross_salary).toBe(17000);
+    // N-13 (17 Oct 2026): the file's gross is a finance request, not a direct
+    // write — the master keeps 15000 and the request carries no flags.
+    expect(S.master(db, e).gross_salary).toBe(15000);
+    const req = db.prepare("SELECT new_gross, new_structure FROM salary_change_requests WHERE employee_code = 'W107' AND status = 'Pending'").get();
+    expect(req.new_gross).toBe(17000);
+    expect(JSON.parse(req.new_structure).pf_applicable).toBeUndefined();
   });
 
-  test('bulk-import of a NEW employee with pf/esi = 1 → master and structure 0', async () => {
+  // N-13: bulk-import no longer inserts a structure (the gross becomes a request);
+  // the structure arrives at finance approval, which carries the flags in force (0).
+  test('bulk-import of a NEW employee with pf/esi = 1 → master 0, no structure; approved request → structure 0', async () => {
     await api.request('POST', '/api/employees/bulk-import', { as: 'boss', body: { employees: [
       { code: 'W108', name: 'SYNTH', gross_salary: 14000, basic: 7000, pf_applicable: 1, esi_applicable: 1, lastSeenSortKey: 202609, date_of_joining: '2026-09-01' },
     ] } });
     const e = { id: db.prepare("SELECT id FROM employees WHERE code = 'W108'").get().id };
+    expect(snapshot(e)).toEqual({ master: { pf: 0, esi: 0, lwf: 0 }, rows: [] });
+    const id = db.prepare("SELECT id FROM salary_change_requests WHERE employee_code = 'W108' AND status = 'Pending'").get().id;
+    expect((await api.request('PUT', `/api/salary-input/approve/${id}`, { as: 'fin1', body: { effectiveFrom: '2026-09-01' } })).status).toBe(200);
     expect(snapshot(e)).toEqual({ master: { pf: 0, esi: 0, lwf: 0 }, rows: [{ d: '2026-09-01', pf: 0, esi: 0, lwf: 0 }] });
   });
 
@@ -210,13 +220,18 @@ describe('T8b — new employees land with flags OFF on the DEFAULT 1 tables (L3)
     expect(sc).toMatchObject({ pf_employee: 0, esi_employee: 0 });
   });
 
-  test('POST /employees with basic > 0 (flags in body) → master + structure 0; Stage 7 PF/ESI 0', async () => {
+  // N-13 (17 Oct 2026): POST /employees refuses salary fields, so this create
+  // sends flags only; the salary arrives through the request path (PUT /:code/salary
+  // → finance approves), whose new structure must carry the flags in force (0).
+  test('POST /employees (flags in body) → master 0; approved salary request → structure 0; Stage 7 PF/ESI 0', async () => {
     const r = await api.request('POST', '/api/employees', { as: 'boss', body: {
-      code: 'W121', name: 'NEW', company: S.COMPANY, basic: 7000, hra: 2000, pf_applicable: 1, esi_applicable: 1,
+      code: 'W121', name: 'NEW', company: S.COMPANY, pf_applicable: 1, esi_applicable: 1,
     } });
     expect(r.body).toMatchObject({ success: true, ignoredFields: ['pf_applicable', 'esi_applicable'] });
     const e = { id: r.body.id, code: 'W121', company: S.COMPANY };
-    db.prepare('UPDATE employees SET gross_salary = 12000 WHERE id = ?').run(e.id);
+    expect((await api.request('PUT', '/api/employees/W121/salary', { as: 'hr1', body: { gross_salary: 12000 } })).body.pendingApproval).toBe(true);
+    const id = db.prepare("SELECT id FROM salary_change_requests WHERE employee_code = 'W121' AND status = 'Pending'").get().id;
+    expect((await api.request('PUT', `/api/salary-input/approve/${id}`, { as: 'fin1', body: { effectiveFrom: '2026-09-01' } })).status).toBe(200);
     expect(snapshot(e).master).toEqual({ pf: 0, esi: 0, lwf: 0 });
     expect(S.plantRows(db, e).map(S.flags)).toEqual([{ pf: 0, esi: 0, lwf: 0 }]);
     S.plantMonth(db, e, 9, 2026);

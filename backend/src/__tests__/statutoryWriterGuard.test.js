@@ -128,7 +128,8 @@ describe('T10b — every structure INSERT lists pf/esi/lwf', () => {
   const sites = structureInserts();
 
   test('the scan finds the known writers (sanity)', () => {
-    expect(sites.length).toBeGreaterThanOrEqual(12);
+    // N-13 (17 Oct 2026): POST /employees and bulk-import no longer insert structures (two fewer sites; 11 found on this branch).
+    expect(sites.length).toBeGreaterThanOrEqual(11);
     const files = new Set(sites.map((s) => s.file));
     for (const f of ['routes/employees.js', 'services/salaryChange.js' /* P5-04: approve body moved here (Q-B7) */, 'routes/sales.js', 'services/salaryComputation.js', 'database/schema.js', 'services/statutoryFlags.js']) {
       expect(files.has(f)).toBe(true);
