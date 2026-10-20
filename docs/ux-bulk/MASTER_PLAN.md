@@ -65,6 +65,10 @@ Tags used everywhere: **FACT** (checked in code or production, read-only) · **I
 | R9 | 8 Oct 2026 | Only finance may reopen a finance-rejected ED grant ("Return to HR"); HR cannot override a finance rejection. |
 | R10 | standing | Statutory PF/ESI/LWF flags change by upload only (statutory-flags project). Bulk master edit must not offer these fields. |
 | R11 | standing | Never push to main; merge in the GitHub web UI only; Phase 0 gate on every build; fragile files untouched without explicit approval (§10). |
+| R12 | 17 Oct 2026 | Q-EM: bulk salary revision effective month ≤ first open payroll month = earliest month with Stage 7 rows and not finalised. |
+| R13 | 17 Oct 2026 | N-13: salary is never set on employee create; bulk employee import raises finance requests. |
+| R14 | 17 Oct 2026 | G1: a back-dated daily-wage rate change re-prices drafts only. |
+| R15 | 16 Oct 2026 | N-PF: PF wage ceiling change at the same gross needs finance approval. |
 
 ---
 
@@ -636,6 +640,9 @@ Columns: ID · Sev (High/Med/Low) · Eff (S < 1 h, M ≈ half-day, L > 1 day) ·
 | Q9 | P2-11 | Any role that currently writes through an unguarded route and must keep doing so? (answered from usage_logs first) | Decide per route after the query |
 | Q10 | all | May two Low polish findings in the same file share one PR? | Yes for Low only |
 | Q11 | P5-02 | Can company be changed in bulk master edit? | No — separate ruling |
+| Q12 | PF-S7 | Should Stage 7 honour per-employee `pf_wage_ceiling` (today: policy 15000)? Protected salaryComputation.js change. | Owner call |
+| Q13 | Q-B6 | After a bulk revision, skip the duplicate GROSS_STRUCTURE_CHANGE flag (finance already approved the batch)? | Yes, mark flags from an approved batch as pre-approved |
+| Q14 | N-13b | Should bulk employee import rows themselves need review, or only their gross (done)? | Gross only (done); rows as today |
 
 ---
 

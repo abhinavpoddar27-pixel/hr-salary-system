@@ -31,6 +31,13 @@ Never:       push to main · touch fragile files without approval · commit PII 
 | 10 Oct 2026 | R12 | P1-02: drop the blank monthly Basic/HRA CSV columns (no backend change to the shared endpoint) |
 | 10 Oct 2026 | R13 | Held-row marking in Reports → Salary Register is a later separate PR (N-4), not part of P1-02 |
 | 10 Oct 2026 | R8 | Save employee time; never make people re-enter the same thing |
+| 16 Oct 2026 | B5-scope | Batch 5 = P5-01 + first approval kind, P6-06, FRESH, #151 follow-ups, docs fold #150–#153 |
+| 16 Oct 2026 | B5-kind | First approval kind = bulk salary revision (P5-04), money PR |
+| 16 Oct 2026 | N-PF | PF wage ceiling change at the same gross needs finance approval |
+| 17 Oct 2026 | Q-EM | First open payroll month = earliest month with Stage 7 rows and not finalised (import-only months ignored); owner finalises Feb–Sep 2026 in the app |
+| 17 Oct 2026 | N-13 | Re-scoped: create refuses salary fields; bulk employee import raises finance requests (no review queue) |
+| 17 Oct 2026 | G1-Q1 | Back-dated DW rate change re-prices drafts only (hr_entered / needs_correction); anything with finance or paid keeps its rate |
+| 17 Oct 2026 | B6-review | Second independent money reviews skipped; owner chose merge, then check |
 
 ## Answers to open questions (fill as answered)
 | Q | Answer | Date |
@@ -255,3 +262,42 @@ Integration (all 6 on 8abee969): jest 119/2120, build clean, all batch-4 checks 
 
 ### Batch 4 close-out
 - All six merged 12 Oct. #159 stalled because commit 571e6bd5 (#155) committed two node_modules symlinks (planner's `git add -A`); main deploy was unaffected. #161 untracks them and ignores node_modules as file or dir. #162 folds CLAUDE.md entries + the staging rule.
+
+## Batch 5 (16 Oct 2026) — PRs #166–#171, ALL MERGED 16 Oct
+| PR | ID | Branch | Review | Checks |
+|---|---|---|---|---|
+| #166 | P5-01 bulk engine approval stage + Bulk batches queue | feat/bulk-approval-stage | SHIP WITH FIXES (F1–F5 applied) | bulkApproval 18, check 36/36 |
+| #167 | N-PF PF ceiling change → finance approval | fix/pf-ceiling-approval | SHIP (4 Lows registered) | pfCeilingApproval 14, check 38/38 |
+| #168 | F151 Reverted badge, ED approve skipped toast | fix/n-money2-followups | — | 16/16 |
+| #169 | P6-06 confirms before destructive actions | feat/destructive-confirms | — | 115/115 |
+| #170 | FRESH manual flags no-cache, immediate re-read | fix/manual-flags-fresh | — | 20/20 |
+| #171 | docs fold #150–#153 | docs/claude-md-batch4b | — | — |
+
+## Batch 6 (17–19 Oct 2026) — PRs #172–#178, ALL MERGED 19 Oct (main b2badcab)
+| PR | ID | Branch | Review | Checks |
+|---|---|---|---|---|
+| #172 | P5-04 bulk salary revision (money) | feat/bulk-salary-revision | review 1 SHIP WITH FIXES (H1/M2/L3 fixed); review 2 skipped by owner | bulkSalaryRevision 26, check 44/44, parse 11/11 |
+| #173 | N-13 salary only via approval (money) | feat/n13-new-salary-review | skipped by owner | newEmployeeSalaryGate 26, HTTP 26/26 |
+| #174 | FRESH-2 Finance Audit no-cache + prefix invalidation | fix/finance-audit-fresh-reads | — | 38/38 |
+| #175 | G1 DW rate from effective date, drafts re-priced (money) | fix/dw-rate-effective-date | skipped by owner | dwRateEffectiveDate 10, 28/28 |
+| #176 | G2 DW rate proposer cannot decide | fix/dw-rate-maker-checker | — | dwRateMakerChecker 9, 28/28 |
+| #177 | G3 document soft delete + audit | fix/doc-delete-audit | — | 8 tests, 22/22 |
+| #178 | STAGE-BTN hide refused buttons; comp-off badge finance only | fix/stage67-button-roles | — | 32/32 |
+Merge: one employees.js conflict (#172 vs #173) resolved by keeping main's salarySplit helpers + N-13's raiseSalaryChangeRequest. Post-merge on b2badcab (19 Oct): jest 130/2309, build clean, 13 check scripts 0 failures. Production: running b2badcab; bulk_batches columns present; employee_documents soft-delete columns added on first documents use (0 rows); drift = the 1 known Feb 2026 row; first open payroll month = Feb 2026 (only Jan finalised).
+
+### New register items (batches 5–6)
+- FRESH-3: 18 bare-array invalidateQueries on Settings 7, Employees 3, Compliance 2, FinanceVerification 2, Import 2, WorkforceAnalytics 2.
+- PF-S7: Stage 7 caps PF with the policy ceiling, not per-employee pf_wage_ceiling.
+- N-PF lows: non-numeric/huge ceiling, gross 0 with split/ceiling says "updated", already-pending drops new values.
+- Q-B6: after a bulk revision Stage 7 raises GROSS_STRUCTURE_CHANGE flags → finance approves twice.
+- BulkBatchList "View rows" uses ED wording for every kind.
+- G2: requester Withdraw; admin can still propose DW rate changes.
+- G3: no restore screen for removed documents; documents list/download reads not role-guarded; DOCS_DIR persistence unverified.
+- N-13b: bulk employee import still creates employee rows without finance review (gross now goes through requests).
+- Fail-open viewer on Stage 6/7 reads /features/salary-stale and /finance-audit/leave-requests → 403 (pre-existing).
+
+### Owner items after batch 6
+- Finalise Feb–Sep 2026 (sign-off → Finalise; irreversible) so P5-04 accepts Oct dates.
+- The one pending DW rate change (effective 10 Apr, raised by admin) must be decided by the other finance/admin user; re-prices 1 draft.
+- Railway: confirm DOCS_DIR is on a persistent volume.
+
