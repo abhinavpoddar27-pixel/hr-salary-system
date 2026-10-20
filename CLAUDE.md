@@ -7,6 +7,286 @@
 - Why: both files changed in every PR, so each merge put every other open PR into conflict.
 - **Never `git add -A` in a worktree whose `node_modules` are symlinks.** `.gitignore` said `node_modules/` (folders only), so two symlinks were committed to main with #155 and blocked merges until #161. Stage files by name.
 
+> Folded 20 Oct 2026: batch 5 (#166–#170) and batch 6 (#172–#178), UI/UX + bulk programme.
+> Batch 6 owner rulings 17 Oct: Q-EM = first open payroll month counts only months with Stage 7 rows and not finalised (owner finalises Feb–Sep 2026 in the app); N-13 re-scoped to "close the API gap"; G1 = re-price drafts only.
+
+## Last Session — 2026-10-17 (STAGE-BTN: Stage 6/7/finalise and finance-only buttons hidden from roles the server refuses)
+**Branch `fix/stage67-button-roles`, MERGED (#178).** Frontend only. Plan + log: `docs/ux-bulk/prs/STAGE-BTN/PLAN.md`, `PROGRESS.md`.
+- **Before:** Stage 6 Run / Recalculate and Stage 7 Compute / Finalise showed for every role (server: hr/finance/admin, P3-PG);
+  Finance Audit showed Approve/Reject/ticks on Interventions, Late Coming, Leave Requests and Early Exit to hr (server: finance/admin)
+  → 403 toasts; the comp-off tab badge called `/comp-off/pending` for every role → hr 403 on each load.
+- **Now:** `utils/role.js canRunPayroll`; refused roles see one line ("Only HR, finance or admin can …") instead of the buttons;
+  hr sees "Awaiting finance" on Finance Audit rows; FinanceEarlyExitApprovals pending table `showActions = canFinance(user)`;
+  comp-off badge read `enabled: canFinance(user)`. Register / `.salreg` / COLS / pins and payroll.js untouched.
+- **Fragile:** the UI gates mirror server roles by hand — change both. Stage 6/7 pages are route-guarded (P2-10), so the
+  refused line only shows when permissions fail open.
+- **Verified:** stage-buttons-roles-check 32/32, `--base` 11/11; role-gaps 36/36 (comp-off assert updated), interventions 56/56,
+  wide-layout 47/47; jest 125/2230 before = after. **Not tested:** Railway; Safari/Firefox; admin in the browser.
+
+## Last Session — 2026-10-17 (G3: employee document delete is a soft delete with an audit trail)
+**Branch `fix/doc-delete-audit`, MERGED (#177).** Plan + log: `docs/ux-bulk/prs/G3/PLAN.md`, `PROGRESS.md`. Rulings Q1–Q7 (17 Oct).
+- **Bug:** `DELETE /api/employees/documents/:id` unlinked the file and deleted the row — no audit row, no way back.
+  Upload wrote no audit row either. Prod: 0 document rows, 0 doc audit rows.
+- **Fix:** `database/employeeDocsSchema.js` `ensureEmployeeDocsSoftDelete(db)` (lazy, once per handle, schema.js untouched):
+  nullable `deleted_at`, `deleted_by` + index `(employee_code, deleted_at)`. DELETE = one txn: UPDATE … WHERE deleted_at
+  IS NULL + audit_log row (`table_name employee_documents`, field `deleted_at`, stage `employee_documents`, action
+  `document_delete`, remark "Document removed: <type> · <file> (file kept on server)", employee_code); file kept; reply
+  "Document removed"; already removed → 404. List and download hide removed rows (download 404 for every role). Upload =
+  same txn + `document_upload` audit row. Employees.jsx: P6-06 red confirm kept, text "It is removed from this list and a
+  record of who removed it is kept. The file stays on the server — ask admin if it is needed again.", toast "Document
+  removed". `getEmployeeDocuments` sends no-cache.
+- **Fragile:** any new reader of employee_documents must add `deleted_at IS NULL` (and call the helper first on a fresh
+  DB). Files of removed documents stay in DOCS_DIR forever (no restore screen — register Q4). Files live in DOCS_DIR —
+  if that is not on the Railway volume they vanish on redeploy (owner check Q6).
+- **Verified:** jest 126/2238 (new suite 8, 5 fail on base); check 22/22, `--base` hard delete; P6-06 115/115.
+- **Not tested:** Railway; Safari/Firefox; a real Railway DOCS_DIR path.
+
+## Last Session — 2026-10-17 (G2: daily-wage rate change — proposer can never approve or reject it)
+**Branch `fix/dw-rate-maker-checker` (stacked on G1), MERGED (#176). MONEY.** Plan + log: `docs/ux-bulk/prs/G2/PLAN.md`, `PROGRESS.md`.
+- `PUT /api/daily-wage/rates/:id/approve` and `/reject` refuse 403 `SELF_APPROVAL` when the deciding user is the
+  proposer (trimmed, case-insensitive; admin included; empty proposer stays decidable). Checked after 404 / already-decided,
+  before any write. Rate Approvals card: own request → buttons disabled + note `dw-rate-self-note`.
+- **Fragile:** compare is on username (renaming a user unlocks their old requests); UI `isOwnRequest` mirrors server
+  `sameUser` by hand — change both. No Withdraw; admin can still propose (register).
+- **Verified:** dwRateMakerChecker.test.js 9 (4 fail on G1); check script 28/28, `--base` 4/4; jest 127/2249.
+- **Not tested:** Railway; production data; Safari/Firefox.
+- **Production:** the one pending rate change was proposed by an admin — the OTHER finance/admin user must decide it.
+
+## Last Session — 2026-10-17 (G1: daily-wage rate change applies from its effective date; drafts re-priced)
+**Branch `fix/dw-rate-effective-date`, MERGED (#175). MONEY PR.** Plan + log: `docs/ux-bulk/prs/G1/PLAN.md`, `PROGRESS.md`.
+- **Bug:** `PUT /daily-wage/rates/:id/approve` applied new contractor rates at once; `effective_date` was stored, never used.
+  Every new entry (even one back-dated before the change) took the latest rate; a future-dated change applied early.
+- **Fix (`routes/dailyWage.js`):** rate for an entry = approved change with the latest effective_date ≤ entry_date (tie:
+  highest id) → its new rates; before any approved change → the earliest change's old rates; no history → master.
+  Approve (one txn): drafts (hr_entered/needs_correction) dated ≥ effective date re-priced + audit `reprice_rate_change`;
+  everything else keeps its rate (owner ruling "drafts only"); reply `repriced`/`kept`. current_* = rate in force today
+  (IST) — a future change is promoted lazily by `refreshCurrentRates` on GET /contractors(/:id) and approve. New
+  `GET /rates/:id/impact`, `GET /contractors/:id/rate-on?date=`. Propose: effective_date must be a real date (400).
+  UI: confirm states the date, re-price count and kept count; Entry preview = the rate the server saves.
+- **Fragile:** (1) `old_*` on a history row is the rate at PROPOSAL time — the "before any change" fallback uses the
+  earliest approved row's old_*; proposals raised out of order make that approximate. (2) GET /contractors writes
+  (refreshCurrentRates) — only when a value differs. (3) Every new rate reader must call `rateOn`, never current_*.
+  (4) The confirm's kept count includes rejected entries (they are not re-priced either).
+- **Verified:** new `dwRateEffectiveDate.test.js` 10 (9 fail on 892f7f73); full jest 126 suites / 2240.
+  `backend/scripts/dw-rate-effective-date-check.py` (Chromium, built dist, scratch DB, finance + hr, fictional TEST GANG
+  GAMMA/DELTA, port 3504) 28/28: confirm copy + counts, 2 drafts re-priced, before/approved/paid byte-identical, DW total
+  moved by exactly the drafts' delta (2 × ₹315), 2 audit rows, future change keeps current rates, Entry preview old/new by
+  date, back-dated save at the old rate = preview, 390 px, 0 page errors, 0 API ≥ 400. `--base` on 892f7f73 10/10.
+  Regression: destructive-confirms-check 115/115 (A2 copy updated), dw-drafts-visible-check 37/37.
+- **Not tested:** Railway; production data; Safari/Firefox; a change approved exactly at IST midnight.
+- **Production:** 1 rate change ever (pending, effective 2026-04-10, raised by an admin user); after deploy approving it
+  re-prices 1 draft, moves nothing sent to finance or paid.
+
+## Last Session — 2026-10-17 (FRESH-2: Finance Audit reads no-cache; decisions refresh exactly what they change)
+**Branch `fix/finance-audit-fresh-reads`, MERGED (#174).** Frontend only (`utils/api.js` 10 reads, `pages/FinanceAudit.jsx`
+mutation onSuccess lines, `components/FinanceEarlyExitApprovals.jsx` 2 onSuccess blocks). Plan + log:
+`docs/ux-bulk/prs/FRESH-2/PLAN.md`, `PROGRESS.md`. Register item from FRESH (#170). Rulings Q1–Q5 (17 Oct).
+- **Before:** 10 Finance Audit reads had no `fresh` (server GET max-age=5 → a refetch inside 5 s got the old copy); 18
+  bare-array `invalidateQueries([...])` calls — TanStack 5.90.20 reads an array as an empty filter → invalidates and refetches
+  EVERY active query (companies, every tab badge, …); day correction refreshed only the report; Early Exit approve/reject
+  left the page badge (60 s staleTime) and Readiness stale.
+- **Now:** getFinanceReport, getCorrectionHistory, getCorrectionsSummary, getSalaryManualFlags, getReadinessCheck,
+  getFinancePendingDeductions, getEarlyExitPendingFinance, getEarlyExitDeductions, getCompOffPending, getCompOffList send
+  `fresh` (Dashboard + Leave Management callers get no-cache too — harmless). All 18 calls are `{ queryKey: [prefix] }`;
+  comp-off review/bulk also hit `readiness`; day correction also hits `correction-history`, `corrections-summary`,
+  `salary-manual-flags`, `readiness`; Early Exit approve/reject also hit `early-exit-finance-pending`, `readiness`.
+- **Fragile:** bare arrays used to refresh everything by accident — any new mutation must name every key it changes
+  (Readiness counts flags, punch/day corrections, late, early exit, comp-off, leave requests, salary rows).
+  getVarianceReport / getStatutoryCrosscheck deliberately stay cached (Q4).
+- **Verified:** `backend/scripts/finance-audit-fresh-check.py` (Chromium, built dist, scratch DB, finance/admin/hr, fictional
+  T960x, port 3503) 38/38 — every one of the 10 reads no-cache, approve on Interventions/Late re-reads only its own lists
+  (no /settings/companies etc.), badges drop at once (incl. Early Exit page badge), Readiness re-read after comp-off, day
+  correction shows Correction History + Interventions badge without reload, 390 px, 0 page errors, 0 API ≥ 400;
+  `--base` on 892f7f73 13/13 (stale behaviour recorded) and the fix checks on 892f7f73 fail 20. Regression manual-flags-fresh
+  20/20, finance-audit-readiness 31/31, interventions-reject-all 56/56, fresh-reads 39/39. jest 125/2230 (no backend change).
+- **Not tested:** Railway; Safari/Firefox (`no-cache` request header).
+- **Register (FRESH-3):** 18 bare-array calls in other pages (Settings 7, Employees 3, Compliance 2, FinanceVerification 2,
+  Import 2, WorkforceAnalytics 2).
+
+## Last Session — 2026-10-17 (N-13: salary never set on employee create; bulk-import gross goes to finance)
+**Branch `feat/n13-new-salary-review`, MERGED (#173). MONEY PR — second independent review not run (owner chose merge, then check; post-merge checks green 19 Oct).** Plan + log:
+`docs/ux-bulk/prs/N-13/PLAN.md` ("Re-scope 17 Oct 2026"), `PROGRESS.md`. Owner ruling 17 Oct "Close the API gap".
+- **Before:** `POST /api/employees` took basic/da/hra/conveyance/otherAllowances and inserted a `salary_structures` row
+  (Stage 7 paid the component sum) with no request or audit; `POST /employees/bulk-import` (admin) wrote the file's gross
+  straight into `employees.gross_salary` + a structure (or re-synced it) — no finance step.
+- **Now:** POST / with any salary key holding a real value → 400 `SALARY_VIA_SALARY_INPUT` ("Create the employee first,
+  then set salary in Salary Input (finance approves it)."), `fields`, nothing written; undefined/null/''/0 = not sent.
+  Bulk-import keeps importing employee fields; gross is never written — a different gross raises ONE Pending
+  `salary_change_requests` row (requested_by = importer, reason "Salary from employee bulk import"); equal → none;
+  pending already → none. Reply `results.rows[] {code, employee, salary: request_raised|unchanged|already_pending|no_gross}`.
+  Finance approves in Salary Input; the importer gets 403 SELF_APPROVAL. Shared `raiseSalaryChangeRequest()` in
+  employees.js (PUT /:code/salary uses it; replies unchanged).
+- **Fragile:** (1) a new salary key spelling must be added to `CREATE_SALARY_KEYS`. (2) A bulk-imported new employee has
+  gross 0 and no structure until finance approves. (3) Bulk re-import no longer repairs a drifted structure gross
+  (GET /:code self-heal and integrity-fix still do). (4) `salaryCreated` is gone from the bulk-import reply.
+- **Verified:** jest 125/2230 → 126/2256 (new `newEmployeeSalaryGate.test.js` 26, 21 fail on origin/main);
+  statutoryWriters ×3 + statutoryWriterGuard ×1 changed on purpose. `node backend/scripts/new-employee-salary-gate-check.js`
+  (real server.js, port 3502, real logins) 26/26; `--base` on origin/main 18 fail. Drift 0.
+- **Not tested:** Railway; production data; browser (no frontend change).
+
+## Last Session — 2026-10-17 (P5-04: bulk salary revision — first approval kind on the bulk engine)
+**Branch `feat/bulk-salary-revision` (on feat/bulk-approval-stage + fix/pf-ceiling-approval), MERGED (#172). MONEY PR —
+independent review before PR.** Plan + log: `docs/ux-bulk/prs/P5-04/PLAN.md`, `PROGRESS.md`. MASTER_PLAN §6 P5-04, §7.4 B3.
+Rulings Q-B1…Q-B8 (16 Oct), Q6, R3, R5, R8.
+- **Moves (no behaviour change):** split helpers `employees.js` → `services/salarySplit.js` (+ `buildRevisionStructure` = the
+  object Employee Master's `raiseRequest` builds); approve helpers + body `salary-input.js` → `services/salaryChange.js`
+  `approveSalaryChange(db, {id, actor, approvedBy, effectiveFrom})` → `{ok, effectiveFrom, gross, keptComponents, sameDate}` or
+  `{ok:false, status, body}`; PUT /salary-input/approve/:id is a thin call with the same replies (N-17, N-MONEY2 percents,
+  N-PF ceiling, R10 flags, STRUCTURE_DATED_LATER, SELF_APPROVAL unchanged).
+- **Kind `salary-revision`** (`services/bulk/kinds/salaryRevision.js`, requiresApproval; hr/admin send, finance/admin decide):
+  rows code + new gross OR % (rounded to ₹1) + optional own date; common effective date (H1 + Q-EM: default 1st of the first
+  open payroll month = earliest month with Stage 7 rows that is not finalised — import-only months ignored; none → 1st of IST month, from `GET /api/bulk/salary-revision/defaults`;
+  a later month is an error row, because Stage 7 pays the master gross for every month it computes).
+  Errors: not found / not active / both-or-neither / gross ≤ 0 / % outside −50…+100 / bad date / a finalised month on or after
+  the date / later-dated structure / a Pending salary_change_request (Q-B8). Skipped: same gross. Warnings: no structure (50/20
+  default), > 25 %, not the 1st, conveyance kept. Note (not a state): "Stage 7 already computed — re-run". Submit writes no
+  salary table. Approve (engine IMMEDIATE txn): per row INSERT a Pending request (requested_by = batch creator, reason "Salary
+  revision — bulk batch #N") → `approveSalaryChange` (approved_by = finance) → 3 audit rows stage `SALARY_REVISION_BULK`
+  (request status, employees.gross_salary, salary_structures) — this path only. money_total = Σ Δ monthly gross.
+  Undo (finance/admin other than the batch creator, reason): blocked if request not Approved / a later request / gross or
+  structure row changed / a later-dated structure / a finalised month ≥ effective / this person's Stage 7 rows in ANY
+  unfinalised month differ from the approve-time fingerprint; restores the structure (delete, or same-date row every column) + employees.gross_salary/updated_at, request → 'Reverted'.
+- **UI:** Salary Input header "+ Bulk revision" (hr/admin) → inline `components/bulk/SalaryRevisionBulk.jsx` (paste or Excel,
+  gross / % mode, check table with Basic/DA/HRA/Conv./Special/Other old → new, Δ/month, ₹ total, "Send N to finance (batches)")
+  + `BulkBatchList kind="salary-revision"` (undo finance/admin). Finance decides in Finance Verification → Bulk batches
+  (reviewColumns show every component).
+- **Fragile:** (1) the kind echoes each row's input in its preview `input` — the panel sends exactly that; keep `displayExtra`.
+  (2) `buildRevisionStructure` must stay equal to `raiseRequest`'s object (parity test). (3) Stage 7 rows are NOT in the plan
+  hash on purpose — a Stage 7 run between send and approve does not refuse the batch. (4) After apply, Stage 7 raises a
+  GROSS_STRUCTURE_CHANGE flag per person (Q-B6, follow-up). (5) statutoryWriterGuard T10b names services/salaryChange.js.
+- **Verified:** jest 123/2202 → 126/2256 (after P5-01 review fixes + H1/L3 + Q-EM + main 892f7f7; new bulkSalaryRevision.test.js 26 incl. parity vs the single path on the same DB,
+  Q-B8 conflict 409 nothing written, mid-batch throw → nothing incl. audit, undo restore + blocks). `backend/scripts/
+  bulk-salary-revision-check.py` 44/44 (Chromium, built dist, scratch DB, real hr/finance/admin logins, fictional T9501–T9506, port 3504)
+  44/44 — default = first open month, a later date refused, paste incl. a % row + a conflict row left out, ₹7,500 total, double click → 1 batch, 390 px, finance sees every
+  component + approves, structures/gross/requests/audit, undo, re-send, admin self-approval 403, Stage 6+7 pays the new gross,
+  undo after Stage 7 refused, drift 0, 0 page/console errors. `--base` on b0ed242 2/2. Regressions bulk-approval 36/36,
+  bulk-ed 50/50, pf-ceiling-approval 38/38.
+- **Production (Q-EM, 17 Oct):** first open payroll month is Feb 2026 today (Feb–Oct 2026 have Stage 7 rows, none finalised);
+  owner will finalise Feb–Sep in the app → Oct 2026. Until then any date after Feb 2026 is refused.
+- **Not tested:** Railway; production data; Excel upload in the browser (paste path only); Safari/Firefox.
+
+## Last Session — 2026-10-16 (FRESH: Attendance Flags list read via api.js with no-cache; re-read at once after Verify)
+**Branch `fix/manual-flags-fresh`, MERGED (#170).** Frontend only (`utils/api.js` 1 line, `pages/FinanceAudit.jsx` Attendance
+Flags lines). Plan + log: `docs/ux-bulk/prs/FRESH/PLAN.md`, `PROGRESS.md`. Register item from P3-RG. Rulings Q1–Q2 (16 Oct).
+- **Before:** `getManualAttendanceFlags` (api.js) sent no no-cache and had 0 callers; the page used a local no-cache copy
+  (9e7cd18) and still re-read the list 6 s after a Verify (#160 workaround; the timer also fired after leaving the tab).
+- **Now:** api.js helper sends `fresh`; the tab and its badge use it (same request, same query key); after a Verify the row is
+  marked in the cache from the 200 (kept) and the list is re-read straight away; local copy and unused `import api` removed.
+- **Fragile:** the cache patch still mirrors the fields the verify route writes (finance_verified, verified_by, finance_remarks).
+- **Verified:** `backend/scripts/manual-flags-fresh-check.py` (Chromium, built dist, scratch DB, finance + hr, fictional T958x,
+  port 3504) 20/20 — every list GET no-cache; Verify → row ✓ + badge 2→1 at once; exactly 1 re-read within 1.5 s, none at
+  3–8.5 s; reload < 5 s later still verified; leaving the tab → no late GET; hr Awaiting finance, no Verify; 390 px; 0 page
+  errors, 0 API ≥ 400. `--base` on b0ed242 2/2 (no re-read within 1.5 s; re-read at ~6 s). Regression role-gaps 36/36,
+  attendance-flags-verify-role 21/21. jest 121/2172 unchanged.
+- **Not tested:** Railway; Safari/Firefox.
+- **Register (not fixed, planner):** 10 Finance Audit reads re-read after a write with no `fresh` (getFinanceReport,
+  getCorrectionHistory, getCorrectionsSummary, getSalaryManualFlags, getReadinessCheck, getFinancePendingDeductions,
+  getEarlyExitPendingFinance, getEarlyExitDeductions, getCompOffPending, getCompOffList) and 16 bare-array
+  `invalidateQueries([...])` calls in FinanceAudit.jsx (v5 reads them as "invalidate everything").
+
+## Last Session — 2026-10-16 (P6-06: destructive actions ask first — DW deactivate / rate approve, document delete, leave automation)
+**Branch `feat/destructive-confirms`, MERGED (#169).** Frontend only. Plan + log: `docs/ux-bulk/prs/P6-06/PLAN.md`, `PROGRESS.md`.
+Findings D-6, H-10. Rulings Q1–Q4 (16 Oct): A3 done here (document-delete lines only); E1 + E2 in, E3 out; rate approve amber;
+plain "effective date not used yet" line. Prod (counts): 15 contractors (0 inactive), 1 pending rate change, 0 documents,
+44 active outside grants; leave automation switched on/off/on 5× within a minute on 9 Oct.
+- **Before:** one click, no question: DW contractor Deactivate, DW rate Approve (new rates live at once), employee document
+  Delete (file removed from disk, no audit row), outside-the-system grant Remove (soft delete; the row can't be uploaded again),
+  Leave automation and Automatic day calculation switches (org-wide), "There is none" (unblocks writing balances).
+- **Now:** each opens the P2-01 `ConfirmDialog` naming the object (contractor; old → new wage / commission / total per worker
+  in ₹ + effective date; file + type + employee; code · type · days · month · how given) and saying what happens, with
+  "cannot be undone here" where true. `busy` while the request runs (buttons disabled, Esc/backdrop ignored); closes on success;
+  stays open on failure with the existing toast; Cancel/Esc/backdrop send nothing; a `useRef` in-flight guard keeps a double
+  click to one request. Danger = red + first focus Cancel; rate approve amber + first focus Confirm. The switch checkbox stays at
+  the server value until the save succeeds. testids `confirm-deactivate`, `confirm-approve-rate`, `confirm-delete-doc`,
+  `leave-auto-confirm`.
+- **Fragile:** (1) the document confirm sits INSIDE the profile Modal (one headless Dialog nested in another) — it is a
+  ConfirmDialog, not a useConfirm dialog (that one must never open inside a Modal, P2-01 note). (2) The rate-approve text says
+  the effective date is not used — true until G1 is fixed; change the text with it. (3) Copy mirrors the server routes
+  (deactivate refuses new entries + draft edits; grant remove blocks re-upload) — change both together.
+- **Verified:** `backend/scripts/destructive-confirms-check.py` (Chromium, built dist, scratch DB, hr / finance / admin with a
+  server restart per role, fictional TEST GANG ALPHA/BETA + T9501, port 3503) 115/115 twice — per action: dialog text, first
+  focus, Cancel / Esc / backdrop = 0 requests + DB unchanged, busy (held request) = all buttons disabled + Esc ignored, forced
+  500 = dialog stays + one toast, double-click Confirm = 1 request + DB effect, profile window stays open around A3, 390 px,
+  0 page errors, 0 API ≥ 400. `--base` on b0ed242 4/4: one click sends with no dialog (deactivate, document delete, rate
+  approve, automation switch). jest 121/2172 before = after. Regression: ui-dialog-confirm 111/111, dw-drafts-visible 37/37,
+  ist-today-remaining 24/24.
+- **Not tested:** Railway; Safari/Firefox; screen reader.
+- **Found, not fixed (planner register G1–G4):** G1 rate approve applies the rates at once and never uses `effective_date`;
+  G2 rate approve has no maker-checker; G3 document delete is a hard delete with no audit row; G4 a removed outside grant still
+  blocks re-uploading the same row (OI-15). E3 change-flag "Clear" still one click (ruling: skip).
+
+## Last Session — 2026-10-16 (F151: N-MONEY2 follow-ups — Reverted badge, bulk ED approve says what it skipped)
+**Branch `fix/n-money2-followups`, MERGED (#168).** Frontend only. Plan + log: `docs/ux-bulk/prs/F151/PLAN.md`, `PROGRESS.md`.
+Findings F-2, F-3 from #151 (F-6 moved to N-PF). Rulings Q1–Q3 (16 Oct).
+- **F-2:** Salary Input → Change History showed an empty status for a request set to 'Reverted' (N-23 gross revert). Now an
+  orange "Reverted" pill via StatusBadge; `statusMap.salary_change` gains `Reverted`.
+- **F-3:** Extra Duty bulk finance approve ignored the server's `skipped` list. Toast now "Approved N · Skipped M (not
+  HR-approved or already decided)", or an info toast "Nothing approved · Skipped M (…)". Single approve unchanged (the global
+  interceptor already gives one toast per failure).
+- **Fragile:** the old three status spans in SalaryInput history are still hand-written — a fifth status needs a line there too.
+- **Verified:** `backend/scripts/n-money2-followups-check.py` 16/16 ×2, `--base` 7/7; jest 121/2172 unchanged.
+- **Not tested:** Railway; Safari/Firefox.
+
+## Last Session — 2026-10-16 (N-PF: PF wage ceiling change at the same gross needs finance approval; F-6)
+**Branch `fix/pf-ceiling-approval`, MERGED (#167). MONEY PR.** Plan + log: `docs/ux-bulk/prs/N-PF/PLAN.md`, `PROGRESS.md`.
+Owner ruling 16 Oct 2026; planner rulings Q1–Q4 + F-6 moved here.
+- **Before:** `PUT /employees/:code/salary` wrote `salary_structures.pf_wage_ceiling` straight onto the latest row at the
+  same gross — no request, no approval, no audit row (prod: 0 rows ≠ 15000, so nothing changed this way yet).
+- **Now:** a changed ceiling raises a `salary_change_requests` row like the N-19 split change (one pending per employee,
+  P1-23 / Q6 self-approval rule); ceiling + split or ceiling + gross = ONE request. No schema change: the ceiling rides in
+  `new_structure` JSON, the old value is the `old_structure` snapshot. `PUT /salary-input/approve/:id` writes the
+  requested ceiling only when it differs from that snapshot (`requestedCeiling`), else carries the in-force one as before.
+  Salary Input Pending card shows "PF wage ceiling ₹old → ₹new". **F-6:** "already pending" reply carries
+  `alreadyPending: true`; Employee Master shows it as an info toast and shows the server's own message for new requests.
+- **Fragile:** (1) `ceilingChange` in SalaryInput.jsx mirrors `requestedCeiling` in salary-input.js by hand — change both.
+  (2) Approval compares with the request-time snapshot; safe only because the ceiling now changes only through approval
+  (bulk import / Stage 7 auto-create write 15000 on NEW rows only). (3) Stage 7 ignores the per-employee ceiling (uses the
+  policy value) — this PR is governance only; follow-up registered.
+- **Verified:** jest 121/2172 → 122/2186 (new `pfCeilingApproval.test.js` 14, 10 fail on b0ed242; N-19 direct-write test
+  flipped on purpose). `backend/scripts/pf-ceiling-approval-check.py` 38/38 ×2, `--base` 4/4. Drift 0 on scratch DB.
+- **Not tested:** Railway; production data; Safari/Firefox.
+
+## Last Session — 2026-10-16 (P5-01: bulk engine approval stage + finance "Bulk batches" queue)
+**Branch `feat/bulk-approval-stage`, MERGED (#166).** Plan + log: `docs/ux-bulk/prs/P5-01/PLAN.md`, `PROGRESS.md`. MASTER_PLAN §6 P5-01,
+§7.2. Rulings R3, R4, Q6 (second person always, admin too), planner Q-A1…Q-A5 (16 Oct).
+- **Engine (`services/bulk/engine.js`):** kinds may set `requiresApproval: true` → `POST /api/bulk/:kind/submit` saves ONE group as ONE
+  batch `status='submitted'` (same re-plan + hash + error-row refusal + 50 cap as apply), stores full `input_json` per row, applies
+  NOTHING, audit `BULK_SUBMIT`, one finance notification (link `/finance-verification?tab=bulk`). `apply` on an approval kind → 409
+  `BULK_NEEDS_APPROVAL`; `submit` on a direct kind → 409 `BULK_NO_APPROVAL_STAGE`. `POST /batches/:id/approve` (finance/admin) = ONE
+  IMMEDIATE txn: approver = creator → 403 `SELF_APPROVAL` (trimmed, case-insensitive, admin included); rows rebuilt from `input_json`,
+  re-planned, hash vs the stored plan_hash → any change 409 `BULK_PLAN_CHANGED` / `BULK_ROW_ERROR` ("Return it so they check again"),
+  nothing written, batch stays submitted; else `applyRow` per row with ctx `{user: approver, requestedBy: creator}`, batch → `applied`
+  (approved_by/at, applied_at), audit `BULK_APPROVE`. `/reject` (reason ≥ 5) → `rejected`; `/return` (note ≥ 5) → `returned`, kept as
+  history — the creator sends a NEW batch (Q-A1). No withdraw (Q-A4). Undo unchanged; for approval kinds undo = finance/admin with reason (Q-A2).
+- **Kind hooks (all optional; defaults = the ED expressions, so ED is byte-identical):** `requiresApproval`, `roles {create, approve}`
+  (default hr+admin / finance+admin), `hashRow`, `inputOf`, `rowFromInput`, `displayExtra`, `moneyTotal` (→ `bulk_batches.money_total`),
+  `reviewColumns` (finance row view: key/label/type text|money|date|pct), `label`, `noun`, `nothingToSave`.
+- **Schema (`bulkSchema.js`, ALTER-if-missing):** bulk_batches + submitted_by/at, approved_by/at, decided_by/at, reject_reason,
+  return_note, money_total; index (status, kind). schema.js untouched.
+- **Routes (`routes/bulk.js`):** the global `router.use(requireHrOrAdmin)` is replaced by per-route gates; ED's 403 bodies identical.
+  Lists: a role sees kinds it creates, or approval kinds it decides; `?approval=1` = approval kinds only (finance queue);
+  `?status=a,b`, `?sinceDays=` filters.
+- **UI:** Finance Verification → new last tab "Bulk batches (N waiting)" (finance/admin, deep link `?tab=bulk`) =
+  `components/bulk/BulkApprovalQueue.jsx` on ReviewQueue: chips Waiting / Returned / Rejected / Approved (decided ones for 30 days),
+  kind, sent by, when, rows, change / month ₹ (fmtINR), Open → rows with the kind's columns + messages; Approve (confirm with ₹ total) /
+  Return (note) / Reject (reason); own batches disabled with "another finance user decides it"; a refusal shows a red banner naming the
+  rows. `BulkBatchList` shows the return / reject note under the batch; new props `whatLabel`, `canUndo`. statusMap bulk_batch +
+  submitted "Waiting for finance" / returned / rejected. Calls in `utils/bulkApi.js` (api.js untouched).
+- **Test-only kind `kinds/testApproval.js`:** registered ONLY when `BULK_TEST_KINDS=1` (jest + check script); its own table
+  `bulk_test_target` is created on first use — never on Railway.
+- **Fragile:** (1) approve re-plans from `input_json` — an approval kind MUST store everything its `rowFromInput` needs. (2) Decision
+  notifications go to `roles.create` minus admin (hr today). (3) A batch refused at approve stays `submitted` until finance returns or
+  rejects it. (4) `logAudit` is inside the txn only because getDb() is the same connection (a rolled-back approve leaves no audit — tested).
+- **Verified:** jest 121/2172 → 122/2188 (new `bulkApproval.test.js` 16: submit writes nothing, apply refused, self-approval 403 incl.
+  admin + case/space variant, role guard per route × role, plan changed → 409 nothing written, mid-batch throw (row 37/40) → nothing
+  incl. audit, reject/return reason ≥ 5, decided batch not approvable, concurrent double approve → one 200 + one 409, 51 refused, 109 →
+  3 batches one group, undo finance/admin + blocked when moved on, lists/visibility/detail columns, admin queue = approval kinds only).
+  bulkExtraDuty 22/22 unmodified. `backend/scripts/bulk-approval-check.py` (Chromium, built dist, scratch DB, real finance/admin/hr
+  logins, server restarted for the login limiter, port 3501) 36/36 ×2; `--base` on b0ed242 3/3 (no /submit, no tab). ED regression
+  `bulk-ed-check.py` 50/50.
+- **Not tested:** Railway; Safari/Firefox; a real approval kind (first one is P5-04); the creator's "send a new batch" path in a browser
+  (the test kind has no panel — API only).
+
 > Folded 16 Oct 2026: batch-4 parallel stream #150–#153 (missed by the #162 fold).
 
 ## Last Session — 2026-10-12 (N-MONEY2: money permission batch 4)
