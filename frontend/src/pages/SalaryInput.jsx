@@ -170,8 +170,9 @@ export default function SalaryInput() {
             <CompanyFilter />
           </div>
         </div>
-        {showBulk && <><SalaryRevisionBulk onClose={() => setShowBulk(false)} onSent={() => { refetchPending(); qc.invalidateQueries({ queryKey: ['bulk-batches'] }) }} />
-          <BulkBatchList kind="salary-revision" whatLabel="Revision" canUndo={canFinance} /></>}
+        {showBulk && <SalaryRevisionBulk onClose={() => setShowBulk(false)} onSent={() => { refetchPending(); qc.invalidateQueries({ queryKey: ['bulk-batches'] }) }} />}
+        {/* BULK-WORD Q3: finance/admin see recent revision batches (and can undo) without opening HR's panel. */}
+        {(showBulk || canFinance) && <BulkBatchList kind="salary-revision" whatLabel="Revision" canUndo={canFinance} />}
 
         {/* Tabs */}
         <div className="flex gap-1 border-b border-slate-200 pb-0">

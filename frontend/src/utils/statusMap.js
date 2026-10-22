@@ -95,6 +95,7 @@ export const STATUS_MAP = {
     previewed: { label: 'Previewed', tone: 'blue' },
     pending_approval: { label: 'Pending approval', tone: 'amber' },
     submitted: { label: 'Waiting for finance', tone: 'amber' },
+    approved: { label: 'Approved', tone: 'green' },
     returned: { label: 'Returned', tone: 'orange' },
     rejected: { label: 'Rejected', tone: 'red' },
     applied: { label: 'Applied', tone: 'green' },
