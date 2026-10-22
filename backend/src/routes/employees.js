@@ -2,6 +2,7 @@ const express = require('express');
 const router = express.Router();
 const path = require('path');
 const fs = require('fs');
+const { istToday, istYearMonth, istYear, istAddDays, istAddMonths, IST_TODAY_SQL } = require('../utils/istDate'); // P3-IST-BE
 const multer = require('multer');
 const { getDb } = require('../database/db');
 const { safeTrigger, queueLeaveRecalc } = require('../services/leaveTriggers');
@@ -281,7 +282,7 @@ router.get('/:code', (req, res) => {
     salaryStruct = db.prepare('SELECT * FROM salary_structures WHERE employee_id = ? ORDER BY effective_from DESC LIMIT 1').get(emp.id);
   }
 
-  const leaveBalances = db.prepare('SELECT * FROM leave_balances WHERE employee_id = ? AND year = ?').all(emp.id, new Date().getFullYear());
+  const leaveBalances = db.prepare('SELECT * FROM leave_balances WHERE employee_id = ? AND year = ?').all(emp.id, istYear());
 
   res.json({ success: true, data: { ...emp, salaryStructure: salaryStruct, leaveBalances } });
 });
@@ -335,7 +336,7 @@ router.post('/', requireHrOrAdmin, (req, res) => {
   // Initialize leave balances for current year (CL + EL only — SL abolished Apr 2026).
   // CL is the pro-rated entitlement for the joining month, off
   // policy_config.cl_entitlement_base — never a hard-coded number.
-  const year = new Date().getFullYear();
+  const year = istYear();
   const clBase = getPolicyNumber(db, 'cl_entitlement_base', 7);
   const clOpening = computeClEntitlement(dateOfJoining || null, year, clBase);
   for (const type of ['CL', 'EL']) {
@@ -592,7 +593,7 @@ router.put('/:code', requireHrOrAdmin, (req, res) => {
       db.prepare('UPDATE salary_structures SET basic = ?, da = ?, hra = ?, conveyance = ?, other_allowances = ? WHERE id = ?')
         .run(updates.basic || 0, updates.da || 0, updates.hra || 0, updates.conveyance || 0, updates.otherAllowances || 0, existing.id);
     } else {
-      const today = new Date().toISOString().slice(0, 10);
+      const today = istToday();
       const carried = carryFlags(db, 'plant', emp.id, today);
       db.prepare('INSERT INTO salary_structures (employee_id, effective_from, basic, da, hra, conveyance, other_allowances, pf_applicable, esi_applicable, lwf_applicable) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
         .run(emp.id, today, updates.basic || 0, updates.da || 0, updates.hra || 0, updates.conveyance || 0, updates.otherAllowances || 0, carried.pf, carried.esi, carried.lwf);
@@ -609,7 +610,7 @@ router.put('/:code', requireHrOrAdmin, (req, res) => {
     && String(updates.employment_type || '') !== String(emp.employment_type || '');
   if (dojChanged || typeChanged) {
     safeTrigger('employee.update', () => queueLeaveRecalc(db, {
-      company: emp.company || null, month: null, year: new Date().getFullYear(),
+      company: emp.company || null, month: null, year: istYear(),
       employeeCodes: [emp.code], reason: dojChanged ? 'doj_changed' : 'employment_type_changed',
       actor: req.user?.username || 'hr',
     }));
@@ -624,7 +625,7 @@ router.get('/:code/leaves', (req, res) => {
   const emp = db.prepare('SELECT id FROM employees WHERE code = ?').get(req.params.code);
   if (!emp) return res.status(404).json({ success: false, error: 'Employee not found' });
 
-  const year = req.query.year || new Date().getFullYear();
+  const year = req.query.year || istYear();
   const balances = db.prepare('SELECT * FROM leave_balances WHERE employee_id = ? AND year = ?').all(emp.id, year);
   res.json({ success: true, data: balances });
 });
@@ -871,7 +872,7 @@ router.put('/:code/mark-left', requireHrOrAdmin, (req, res) => {
     // 1. Set status = 'Left', is_active = 0, date_of_exit
     // Also set inactive_since (for reactivation cutoff) and auto_inactive = 0
     // so the import auto-detector treats this as a MANUAL mark, not a system guess.
-    const exitDate = date_of_leaving || new Date().toISOString().split('T')[0];
+    const exitDate = date_of_leaving || istToday();
     db.prepare(`UPDATE employees SET
         status = 'Left',
         is_data_complete = 0,

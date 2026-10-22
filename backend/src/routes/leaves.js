@@ -1,6 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const { getDb, logAudit } = require('../database/db');
+const { istToday, istYearMonth, istYear, istAddDays, istAddMonths, IST_TODAY_SQL } = require('../utils/istDate'); // P3-IST-BE
 const { safeTrigger, queueLeaveRecalc, checkAutoStage6 } = require('../services/leaveTriggers');
 const { roleIn } = require('../middleware/roles');
 const { adjustLeaveBalance } = require('../services/leaveBalanceGuard');
@@ -422,7 +423,7 @@ router.get('/summary', (req, res) => {
 router.get('/balances', (req, res) => {
   const db = getDb();
   const { company, year, department, search } = req.query;
-  const currentYear = year || new Date().getFullYear();
+  const currentYear = year || istYear();
 
   // No ELSE 0 inside MAX: with it a negative EL (over-used) showed as 0.
   let query = `
@@ -454,7 +455,7 @@ router.get('/balances', (req, res) => {
 router.get('/balances/:code', (req, res) => {
   const db = getDb();
   const { year } = req.query;
-  const currentYear = year || new Date().getFullYear();
+  const currentYear = year || istYear();
 
   const rows = db.prepare(`
     SELECT lb.leave_type, lb.opening, lb.accrued, lb.used, lb.balance
@@ -498,7 +499,7 @@ router.post('/adjust', (req, res) => {
   const emp = db.prepare('SELECT id, company FROM employees WHERE code = ?').get(employee_code);
   if (!emp) return res.status(404).json({ success: false, error: 'Employee not found' });
 
-  const currentYear = new Date().getFullYear();
+  const currentYear = istYear();
 
   // This is the path employee 23725 went to -5 EL and -2 CL on: a Debit branch
   // that subtracted whatever it was handed, with no floor anywhere. Both
@@ -521,18 +522,18 @@ router.post('/adjust', (req, res) => {
   const { oldBalance, newBalance } = moved;
 
   // Insert leave transaction
-  const now = new Date();
+  const ist = istYearMonth();
   db.prepare(`
     INSERT INTO leave_transactions (employee_id, employee_code, company, leave_type, transaction_type, days, balance_after, reference_month, reference_year, reason, approved_by)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-  `).run(emp.id, employee_code, emp.company, leave_type, transaction_type, days, newBalance, now.getMonth() + 1, now.getFullYear(), reason || '', 'admin');
+  `).run(emp.id, employee_code, emp.company, leave_type, transaction_type, days, newBalance, ist.month, ist.year, reason || '', 'admin');
 
   logAudit('leave_balances', emp.id, leave_type, oldBalance, newBalance, 'leave_adjustment', reason || '', req.user?.username);
 
   safeTrigger('leave.adjust', () => queueLeaveRecalc(db, {
     company: emp.company || null,
     month: null,
-    year: now.getFullYear(),
+    year: ist.year,
     employeeCodes: [employee_code],
     reason: 'manual_adjustment',
     actor: req.user?.username || 'admin',
@@ -624,7 +625,7 @@ router.post('/bulk-adjust', (req, res) => {
           continue;
         }
 
-        const currentYear = new Date().getFullYear();
+        const currentYear = istYear();
 
         // Same floor as /adjust. A row that would go below zero is reported in
         // `errors` and skipped; the rest of the batch still applies.
@@ -646,11 +647,11 @@ router.post('/bulk-adjust', (req, res) => {
         }
         const { oldBalance, newBalance } = moved;
 
-        const now = new Date();
+        const ist = istYearMonth();
         db.prepare(`
           INSERT INTO leave_transactions (employee_id, employee_code, company, leave_type, transaction_type, days, balance_after, reference_month, reference_year, reason, approved_by)
           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        `).run(emp.id, employee_code, emp.company, leave_type, transaction_type, days, newBalance, now.getMonth() + 1, now.getFullYear(), reason || '', 'admin');
+        `).run(emp.id, employee_code, emp.company, leave_type, transaction_type, days, newBalance, ist.month, ist.year, reason || '', 'admin');
 
         logAudit('leave_balances', emp.id, leave_type, oldBalance, newBalance, 'leave_adjustment', reason || '', req.user?.username);
         processed++;
@@ -667,7 +668,7 @@ router.post('/bulk-adjust', (req, res) => {
   safeTrigger('leave.bulkAdjust', () => queueLeaveRecalc(db, {
     company: null,
     month: null,
-    year: new Date().getFullYear(),
+    year: istYear(),
     employeeCodes: null,
     reason: 'bulk_adjustment',
     actor: req.user?.username || 'admin',
@@ -683,7 +684,7 @@ router.post('/bulk-adjust', (req, res) => {
  */
 router.get('/accrual-ledger/:code', (req, res) => {
   const db = getDb();
-  const year = parseInt(req.query.year) || new Date().getFullYear();
+  const year = parseInt(req.query.year) || istYear();
   const rows = db.prepare(`
     SELECT year, month, leave_type, opening_balance, accrued, used, lapsed,
            closing_balance, paid_days_this_month, paid_days_ytd, el_earned_ytd, company
@@ -703,7 +704,7 @@ router.get('/accrual-ledger/:code', (req, res) => {
  */
 router.get('/annual-summary/:code', (req, res) => {
   const db = getDb();
-  const year = parseInt(req.query.year) || new Date().getFullYear();
+  const year = parseInt(req.query.year) || istYear();
   const code = req.params.code;
 
   const empty = { opening: 0, used: 0, lapsed: 0, closing: 0 };
@@ -792,7 +793,7 @@ router.get('/on-leave-today', (req, res) => {
     FROM leave_applications la
     JOIN employees e ON la.employee_code = e.code
     WHERE la.status = 'Approved'
-      AND date('now') BETWEEN la.start_date AND la.end_date
+      AND ${IST_TODAY_SQL} BETWEEN la.start_date AND la.end_date
   `;
   const params = [];
   if (company) { query += ' AND e.company = ?'; params.push(company); }
