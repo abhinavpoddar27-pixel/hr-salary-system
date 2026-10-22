@@ -160,11 +160,12 @@ describe('PUT /salary-input/approve/:id — the requested ceiling', () => {
   test('same-date approval (row already dated today) writes the ceiling in place', async () => {
     const e = S.plant(db, { code: code(), gross_salary: 20000 });
     S.plantStructure(db, e, todayIST(), { gross_salary: 20000 });
-    await save(e, windowBody(structs(e.id)[0], { pf_wage_ceiling: 0 }));
+    // N-PF-LOWS (ruling Q3): a 0 ceiling is now refused — the same-date path uses 19000.
+    await save(e, windowBody(structs(e.id)[0], { pf_wage_ceiling: 19000 }));
     expect((await approve(pending(e.code)[0].id)).status).toBe(200);
     const rows = structs(e.id);
     expect(rows).toHaveLength(1);
-    expect(rows[0].pf_wage_ceiling).toBe(0);
+    expect(rows[0].pf_wage_ceiling).toBe(19000);
   });
 
   test('the requester never decides it — hr requester (403 for a finance-role check) and admin requester', async () => {
@@ -204,7 +205,10 @@ describe('PUT /salary-input/approve/:id — the requested ceiling', () => {
     expect(requestedCeiling({ pf_wage_ceiling: 21000 }, { pf_wage_ceiling: 15000 })).toBe(21000);
     expect(requestedCeiling({ pf_wage_ceiling: 21000 }, {})).toBe(21000);
     expect(requestedCeiling({ pf_wage_ceiling: 15000 }, {})).toBeNull();
-    expect(requestedCeiling({ pf_wage_ceiling: 0 }, { pf_wage_ceiling: 15000 })).toBe(0);
+    // N-PF-LOWS (Q1/Q3): 0 and anything above ₹1,00,000 are never written.
+    expect(requestedCeiling({ pf_wage_ceiling: 0 }, { pf_wage_ceiling: 15000 })).toBeNull();
+    expect(requestedCeiling({ pf_wage_ceiling: 100001 }, {})).toBeNull();
+    expect(requestedCeiling({ pf_wage_ceiling: 100000 }, {})).toBe(100000);
     expect(requestedCeiling({ pf_wage_ceiling: -5 }, {})).toBeNull();
     expect(requestedCeiling({ pf_wage_ceiling: 'abc' }, {})).toBeNull();
     expect(requestedCeiling({}, {})).toBeNull();

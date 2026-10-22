@@ -119,12 +119,16 @@ describe('N-19 — PUT /employees/:code/salary, same gross', () => {
     expect(ns.basic).toBe(18000);
   });
 
-  test('unreadable text keeps the stored value; out of range → 400, nothing written', async () => {
+  // N-PF-LOWS (ruling Q2, changed on purpose): unreadable text used to keep the stored value
+  // silently; it is now refused with 400 NOT_A_NUMBER and nothing is written.
+  test('unreadable text → 400 NOT_A_NUMBER; out of range → 400, nothing written', async () => {
     const e = S.plant(db, { code: code(), gross_salary: 20000 });
     S.plantStructure(db, e, '2025-01-01', { gross_salary: 20000 });
     const before = structs(e.id);
-    const r1 = await api.request('PUT', `/api/employees/${e.code}/salary`, { as: 'hr1', body: windowBody(before[0], { basic_percent: 'abc' }) });
-    expect(r1.body.structureUnchanged).toBe(true);
+    const r1 = await api.request('PUT', `/api/employees/${e.code}/salary`, { as: 'hr1', body: windowBody(before[0], { basic_percent: 'abc', account_number: '999900009999' }) });
+    expect(r1.status).toBe(400);
+    expect(r1.body.code).toBe('NOT_A_NUMBER');
+    expect(db.prepare('SELECT account_number FROM employees WHERE id = ?').get(e.id).account_number).toBeNull();
     const r2 = await api.request('PUT', `/api/employees/${e.code}/salary`, { as: 'hr1', body: windowBody(before[0], { basic_percent: 140, account_number: '999900009999' }) });
     expect(r2.status).toBe(400);
     expect(r2.body.code).toBe('SPLIT_OUT_OF_RANGE');
