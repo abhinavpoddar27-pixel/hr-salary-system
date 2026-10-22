@@ -155,8 +155,13 @@ try:
             pg.locator('select').filter(has=pg.locator('option', has_text='Festival')).first.select_option('Festival')
             pg.get_by_role('button', name='Add Holiday').click()
         act('holiday add', pg, st, holiday_add, ['/settings/holidays'])
-        if not BASE_MODE:
-            check('holiday add: row shown at once', 1, pg.locator('tbody tr', has_text='TEST FRESH3 HOLIDAY').count())
+        shown = pg.locator('tbody tr', has_text='TEST FRESH3 HOLIDAY').count()
+        if BASE_MODE:
+            check('old holiday add: new row NOT shown (re-read served from the 5 s browser cache)', 0, shown)
+            pg.wait_for_timeout(5600); go(pg, '/settings/holidays')  # past the 5 s browser cache
+            pg.locator('tbody tr', has_text='TEST FRESH3 HOLIDAY').wait_for(timeout=15000)
+        else:
+            check('holiday add: row shown at once', 1, shown)
 
         def holiday_remove():
             pg.locator('tbody tr', has_text='TEST FRESH3 HOLIDAY').get_by_role('button', name='Remove').click()
