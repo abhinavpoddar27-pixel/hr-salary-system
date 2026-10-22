@@ -2,7 +2,7 @@ const express = require('express');
 const router = express.Router();
 const { requireHrOrAdmin } = require('../middleware/roles'); // P2-11 role guards
 const { getDb } = require('../database/db');
-const { IST_TODAY_SQL } = require('../utils/istDate'); // P3-IST-BE
+const { istToday } = require('../utils/istDate'); // P3-IST-BE
 const { calculateAdvances } = require('../services/advanceCalculation');
 
 /**
@@ -67,9 +67,9 @@ router.put('/:id/mark-paid', requireHrOrAdmin, (req, res) => {
   const { paymentMode } = req.body;
 
   db.prepare(`
-    UPDATE salary_advances SET paid = 1, paid_date = ${IST_TODAY_SQL}, payment_mode = ?
+    UPDATE salary_advances SET paid = 1, paid_date = ?, payment_mode = ?
     WHERE id = ? AND is_eligible = 1
-  `).run(paymentMode || 'Bank Transfer', id);
+  `).run(istToday(), paymentMode || 'Bank Transfer', id);
 
   res.json({ success: true, message: 'Advance marked as paid' });
 });
@@ -83,13 +83,14 @@ router.put('/batch-mark-paid', requireHrOrAdmin, (req, res) => {
   const { ids, paymentMode } = req.body;
 
   const stmt = db.prepare(`
-    UPDATE salary_advances SET paid = 1, paid_date = ${IST_TODAY_SQL}, payment_mode = ?
+    UPDATE salary_advances SET paid = 1, paid_date = ?, payment_mode = ?
     WHERE id = ? AND is_eligible = 1
   `);
 
+  const paidDate = istToday();
   const txn = db.transaction(() => {
     for (const id of ids) {
-      stmt.run(paymentMode || 'Bank Transfer', id);
+      stmt.run(paidDate, paymentMode || 'Bank Transfer', id);
     }
   });
   txn();

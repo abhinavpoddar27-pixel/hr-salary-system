@@ -1,7 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const { getDb, logAudit } = require('../database/db');
-const { istYearMonth, istYear, IST_TODAY_SQL } = require('../utils/istDate'); // P3-IST-BE
+const { istToday, istYearMonth, istYear } = require('../utils/istDate'); // P3-IST-BE
 const { safeTrigger, queueLeaveRecalc, checkAutoStage6 } = require('../services/leaveTriggers');
 const { roleIn } = require('../middleware/roles');
 const { adjustLeaveBalance } = require('../services/leaveBalanceGuard');
@@ -793,9 +793,9 @@ router.get('/on-leave-today', (req, res) => {
     FROM leave_applications la
     JOIN employees e ON la.employee_code = e.code
     WHERE la.status = 'Approved'
-      AND ${IST_TODAY_SQL} BETWEEN la.start_date AND la.end_date
+      AND ? BETWEEN la.start_date AND la.end_date
   `;
-  const params = [];
+  const params = [istToday()];
   if (company) { query += ' AND e.company = ?'; params.push(company); }
   query += ' ORDER BY e.department, e.name';
 
