@@ -173,6 +173,15 @@ describe('single approved salary change — stamped, not asked again', () => {
     expect(flagOf(e).finance_approved).toBe(-1);
   });
 
+  test('finance cleared it back to pending by hand (CLEAR) → not re-stamped', async () => {
+    const { e, f } = await approvedChange(18000);
+    await list();
+    expect((await api.request('PUT', `/api/finance-audit/approve-flag/${f.id}`, { as: 'fin2', body: { status: 'CLEAR' } })).status).toBe(200);
+    await list(); await ready();
+    expect(flagOf(e).finance_approved).toBe(0);
+    expect(auditRows(f.id).map((x) => x.stage)).toEqual(['FLAG_PREAPPROVED', 'FINANCE_FLAG_CLEAR']);
+  });
+
   test('a flag approved by hand is left alone even if values change', async () => {
     const { e, f } = await approvedChange(18000);
     // finance decides first, by hand (before any read stamps it)

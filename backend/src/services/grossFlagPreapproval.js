@@ -15,8 +15,8 @@
  *   - withdraws an auto-approval (back to pending, audit FLAG_PREAPPROVAL_WITHDRAWN) when the flag no longer matches
  *     the request it was stamped for (Stage 7's flag UPSERT keeps finance_approved when the values change), and
  *     re-stamps it when a newer eligible request now matches.
- *   - never touches a finalised month, a flag finance decided by hand (approved / rejected / cleared), or any other
- *     flag type.
+ *   - never touches a finalised month, a flag finance decided by hand (approved / rejected / cleared back to pending),
+ *     or any other flag type.
  * Writes go on the passed db handle (audit included), in one transaction. Idempotent: a second call writes nothing.
  */
 
@@ -132,6 +132,10 @@ function syncGrossFlagPreapprovals(db, month, year) {
         if (!req) continue;
       }
       if (approved !== 0) continue;
+      // A person set it back to pending by hand (status CLEAR) — their decision stands; only a flag nobody decided,
+      // or one whose auto-approval was withdrawn, is stamped.
+      const last = latestDecision(db, flag.id);
+      if (last && !last.auto && last.row.status !== 'WITHDRAWN') continue;
       const req = eligibleRequest(db, flag);
       if (req && stamp(db, flag, req)) out.stamped++;
     }
