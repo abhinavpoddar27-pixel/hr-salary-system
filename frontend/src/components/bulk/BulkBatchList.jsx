@@ -11,21 +11,22 @@ import toast from 'react-hot-toast'
  * Undo one batch after asking for a reason (≥ 5 characters). Returns true when undone.
  * Shared by BulkBatchList and the bulk result screens. Never call from inside an open <Modal>.
  */
-export async function undoBatchWithReason(batch) {
+export async function undoBatchWithReason(batch, { direct } = {}) {
   const label = `batch #${batch.id}${batch.summary ? ` (${batch.summary})` : ''}`
   const reason = await promptDialog({
     title: `Undo ${label}?`,
     message: batch.requiresApproval
       ? `Reverses the ${batch.applyCount ?? ''} row(s) this approved batch applied. Refused if anything has moved on since. Reason (at least 5 characters):`
-      : `Removes the ${batch.applyCount ?? ''} grant(s) this batch saved and puts back any system entry it replaced. ` +
-        'Refused if HR or finance has already acted on any of them. Reason (at least 5 characters):',
+      // P5-02: a non-grant direct kind passes its own wording; extra duty keeps the original text.
+      : direct || (`Removes the ${batch.applyCount ?? ''} grant(s) this batch saved and puts back any system entry it replaced. ` +
+        'Refused if HR or finance has already acted on any of them. Reason (at least 5 characters):'),
     confirmText: 'Undo batch', placeholder: 'e.g. wrong date', inputLabel: 'Reason for undo', variant: 'danger',
   })
   if (reason === null) return false
   if (String(reason).trim().length < 5) { toast.error('Give a reason of at least 5 characters'); return false }
   try {
     const res = await undoBulkBatch(batch.id, String(reason).trim())
-    toast.success(batch.requiresApproval ? `Batch #${batch.id} undone — ${res?.data?.undone ?? 0} row(s) reversed`
+    toast.success(batch.requiresApproval || direct ? `Batch #${batch.id} undone — ${res?.data?.undone ?? 0} row(s) reversed`
       : `Batch #${batch.id} undone — ${res?.data?.undone ?? 0} grant(s) removed or restored`)
     return true
   } catch (err) {
@@ -48,7 +49,7 @@ export async function undoBatchWithReason(batch) {
  *        canUndo (P5-01: approval kinds are undone by finance/admin — the caller decides; default true).
  * P5-01: approval kinds show "Waiting for finance" and the finance note on returned / rejected batches.
  */
-export default function BulkBatchList({ kind, month, year, onChanged, whatLabel = 'Grant', canUndo = true }) {
+export default function BulkBatchList({ kind, month, year, onChanged, whatLabel = 'Grant', canUndo = true, undoDirectText }) {
   const qc = useQueryClient()
   const [openId, setOpenId] = useState(null)
   const { data, isLoading } = useQuery({
@@ -66,7 +67,7 @@ export default function BulkBatchList({ kind, month, year, onChanged, whatLabel 
   const rows = detail?.data?.data?.rows || []
 
   const doUndo = async (b) => {
-    if (await undoBatchWithReason(b)) {
+    if (await undoBatchWithReason(b, { direct: undoDirectText })) {
       qc.invalidateQueries({ queryKey: ['bulk-batches'] })
       qc.invalidateQueries({ queryKey: ['bulk-batch'] })
       onChanged?.()
@@ -111,7 +112,7 @@ export default function BulkBatchList({ kind, month, year, onChanged, whatLabel 
                         <div className="max-h-64 overflow-auto">
                           {rows.map(r => (
                             <div key={r.rowNo} className="text-[11px] py-0.5">
-                              <span className="font-mono">{r.code}</span> {r.name} · {r.state === 'skipped' ? 'left as is' : r.action === 'update' ? 'replaced system entry' : 'created'}
+                              <span className="font-mono">{r.code}</span> {r.name} · {r.state === 'skipped' ? 'left as is' : r.changeText ? r.changeText : r.action === 'update' ? 'replaced system entry' : 'created'}
                               {r.undone ? ' · undone' : ''}{r.messages?.length ? <span className="text-slate-500"> — {r.messages.join('; ')}</span> : null}
                             </div>
                           ))}

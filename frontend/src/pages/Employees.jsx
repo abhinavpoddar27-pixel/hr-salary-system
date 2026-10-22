@@ -3,7 +3,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { useNavigate, Link } from 'react-router-dom'
 import toast from 'react-hot-toast'
 import * as XLSX from 'xlsx'
-import { getEmployees, getEmployee, createEmployee, updateEmployee, updateSalaryStructure, getLeaveBalances, updateLeaveBalance, getEmployeeDocuments, uploadEmployeeDocument, deleteEmployeeDocument, getEmployeeLoans, markEmployeeLeft, getShifts, bulkAssignShift, getLateComingEmployeeHistory, getDepartments } from '../utils/api'
+import { getEmployees, getEmployee, createEmployee, updateEmployee, updateSalaryStructure, getLeaveBalances, updateLeaveBalance, getEmployeeDocuments, uploadEmployeeDocument, deleteEmployeeDocument, getEmployeeLoans, markEmployeeLeft, getShifts, getLateComingEmployeeHistory, getDepartments } from '../utils/api'
 import api from '../utils/api'
 import { fmtINR, todayIST } from '../utils/formatters'
 import { useAppStore } from '../store/appStore'
@@ -17,6 +17,8 @@ import useExpandableRows from '../hooks/useExpandableRows'
 import DrillDownRow, { DrillDownChevron } from '../components/ui/DrillDownRow'
 import EmployeeQuickView from '../components/ui/EmployeeQuickView'
 import { LOAN_STATE, stateCls, stateLabel } from '../components/loans/loanUi'
+import EmployeeMasterBulkEdit from '../components/bulk/EmployeeMasterBulkEdit'
+import BulkBatchList from '../components/bulk/BulkBatchList'
 
 // Late Coming Phase 1 follow-up: the shifts table still contains legacy
 // DAY/NIGHT/GEN/DUBLE rows because historical attendance records reference
@@ -946,9 +948,9 @@ export default function Employees() {
   const [markLeftEmp, setMarkLeftEmp] = useState(null)
   const [sortField, setSortField] = useState('name')
   const [sortDir, setSortDir] = useState('asc')
-  // Late Coming Phase 1: bulk-select + bulk shift assignment state
+  // Late Coming Phase 1: bulk-select. P5-02: the selection opens the bulk edit panel ("Set field for N").
   const [selectedCodes, setSelectedCodes] = useState(new Set())
-  const [showBulkShift, setShowBulkShift] = useState(false)
+  const [bulkEdit, setBulkEdit] = useState(null) // { codes, field } while the panel is open
   const { toggle, isExpanded } = useExpandableRows()
   const qcEmp = useQueryClient()
 
@@ -958,8 +960,6 @@ export default function Employees() {
     retry: 0
   })
   const employees = empsRes?.data?.data || []
-  const { data: shiftsListRes } = useQuery({ queryKey: ['shifts'], queryFn: getShifts, retry: 0 })
-  const allShifts = shiftsListRes?.data?.data || []
   const { data: deptsRes } = useQuery({ queryKey: ['departments'], queryFn: getDepartments, retry: 0, staleTime: 300000 })
   const allDepartments = deptsRes?.data?.departments || []
 
@@ -972,17 +972,6 @@ export default function Employees() {
     })
   }
   const clearSelection = () => setSelectedCodes(new Set())
-
-  const bulkShiftMutation = useMutation({
-    mutationFn: ({ shiftId, shiftCode }) => bulkAssignShift(Array.from(selectedCodes), shiftId, shiftCode),
-    onSuccess: (res) => {
-      toast.success(`Shift updated for ${res?.data?.updated || selectedCodes.size} employees`)
-      qcEmp.invalidateQueries(['employees'])
-      clearSelection()
-      setShowBulkShift(false)
-    },
-    onError: (err) => toast.error(err?.response?.data?.error || 'Bulk shift assignment failed')
-  })
 
   const departments = allDepartments.length > 0 ? allDepartments : [...new Set(employees.map(e => e.department).filter(Boolean))].sort()
 
@@ -1092,11 +1081,16 @@ export default function Employees() {
           {canBulkAssignShift && selectedCodes.size > 0 && (
             <>
               <span className="text-sm text-slate-600">{selectedCodes.size} selected</span>
-              <button onClick={() => setShowBulkShift(true)} className="btn-secondary text-sm">
-                Assign Shift
+              <button onClick={() => setBulkEdit({ codes: Array.from(selectedCodes), field: 'shift' })} className="btn-secondary text-sm" data-testid="me-set-field">
+                Set field for {selectedCodes.size}
               </button>
               <button onClick={clearSelection} className="text-xs text-slate-400 hover:text-slate-600">Clear</button>
             </>
+          )}
+          {canBulkAssignShift && !bulkEdit && (
+            <button onClick={() => setBulkEdit({ codes: [], field: '' })} className="px-3 py-1.5 text-sm font-medium rounded-lg border border-slate-300 text-slate-600 hover:bg-slate-50" data-testid="me-open">
+              Bulk edit
+            </button>
           )}
           <button onClick={exportExcel} className="px-3 py-1.5 text-sm font-medium rounded-lg border border-slate-300 text-slate-600 hover:bg-slate-50">
             Export .xlsx
@@ -1106,6 +1100,26 @@ export default function Employees() {
           </button>
         </div>
       </div>
+
+      {/* P5-02: bulk edit panel (inline — useConfirm dialogs must not open inside a Modal) */}
+      {canBulkAssignShift && bulkEdit && (
+        <div className="space-y-3">
+          <EmployeeMasterBulkEdit
+            key={bulkEdit.codes.join(',') + bulkEdit.field}
+            employees={employees}
+            listCodes={filtered.map(e => e.code)}
+            initialCodes={bulkEdit.codes}
+            initialField={bulkEdit.field}
+            onClose={() => setBulkEdit(null)}
+            onSaved={() => { qcEmp.invalidateQueries({ queryKey: ['employees'] }); qcEmp.invalidateQueries({ queryKey: ['bulk-batches'] }); clearSelection() }}
+          />
+          <div className="grid grid-cols-1 xl:grid-cols-2 gap-3">
+            <BulkBatchList kind="master-edit" whatLabel="Change" onChanged={() => qcEmp.invalidateQueries({ queryKey: ['employees'] })}
+              undoDirectText="Puts back the values this batch changed. Refused if anything has changed since. Reason (at least 5 characters):" />
+            <BulkBatchList kind="master-edit-sensitive" whatLabel="Sent to finance" canUndo={user?.role === 'admin'} />
+          </div>
+        </div>
+      )}
 
       {/* Table */}
       <div className="card overflow-hidden">
@@ -1266,54 +1280,6 @@ export default function Employees() {
       {profileEmp && <EmployeeProfileModal employee={profileEmp} onClose={() => setProfileEmp(null)} />}
       {markLeftEmp && <MarkLeftModal employee={markLeftEmp} onClose={() => setMarkLeftEmp(null)} />}
 
-      {/* Late Coming Phase 1: Bulk shift assignment modal */}
-      {showBulkShift && (
-        <BulkShiftModal
-          count={selectedCodes.size}
-          shifts={allShifts.filter(s => !LEGACY_SHIFT_CODES.has(s.code))}
-          onConfirm={(shiftId, shiftCode) => bulkShiftMutation.mutate({ shiftId, shiftCode })}
-          isPending={bulkShiftMutation.isPending}
-          onClose={() => setShowBulkShift(false)}
-        />
-      )}
-    </div>
-  )
-}
-
-function BulkShiftModal({ count, shifts, onConfirm, onClose, isPending }) {
-  const [shiftId, setShiftId] = useState('')
-  const chosen = shifts.find(s => s.id === parseInt(shiftId))
-  return (
-    <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4" onClick={onClose}>
-      <div className="bg-white rounded-xl shadow-2xl w-full max-w-md" onClick={e => e.stopPropagation()}>
-        <div className="p-5 border-b">
-          <h3 className="font-bold text-slate-800">Assign Shift</h3>
-          <p className="text-xs text-slate-500">Applies to {count} selected employees</p>
-        </div>
-        <div className="p-5 space-y-4">
-          <div>
-            <label className="label">Shift</label>
-            <select value={shiftId} onChange={e => setShiftId(e.target.value)} className="select">
-              <option value="">— Select shift —</option>
-              {shifts.map(s => (
-                <option key={s.id} value={s.id}>
-                  {s.code} ({s.start_time} - {s.end_time})
-                </option>
-              ))}
-            </select>
-          </div>
-        </div>
-        <div className="p-5 border-t flex gap-2">
-          <button
-            disabled={!chosen || isPending}
-            onClick={() => onConfirm(chosen.id, chosen.code)}
-            className="btn-primary flex-1 disabled:opacity-50"
-          >
-            {isPending ? 'Saving…' : `Assign ${chosen?.code || '…'} to ${count}`}
-          </button>
-          <button onClick={onClose} className="btn-secondary">Cancel</button>
-        </div>
-      </div>
     </div>
   )
 }

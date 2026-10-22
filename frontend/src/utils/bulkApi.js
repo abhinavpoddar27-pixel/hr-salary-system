@@ -22,3 +22,6 @@ export const rejectBulkBatch = (id, reason) => api.post(`/bulk/batches/${id}/rej
 export const returnBulkBatch = (id, note) => api.post(`/bulk/batches/${id}/return`, { note })
 // P5-04 / H1 b: default effective date for a salary revision (1st of the first open payroll month).
 export const getSalaryRevisionDefaults = () => api.get('/bulk/salary-revision/defaults', fresh)
+// P5-02: employee master bulk edit — field table + lists, and current values for the export sheet.
+export const getMasterEditMeta = () => api.get('/bulk/master-edit/meta', fresh)
+export const exportMasterEdit = (data) => api.post('/bulk/master-edit/export', data)
