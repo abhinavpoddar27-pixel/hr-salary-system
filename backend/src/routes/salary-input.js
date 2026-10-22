@@ -8,7 +8,9 @@ const { structureForDate } = require('../services/statutoryFlags');
 // shared with the bulk salary revision so both paths approve the same way.
 const {
   STATUTORY_FLAG_FIELDS, resolveApproval, istToday, requestedCeiling, sameUser, SELF_APPROVAL, approveSalaryChange,
+  raiseSalaryChangeRequest,
 } = require('../services/salaryChange');
+const { checkRequestStructure } = require('../services/salarySplit');
 
 /**
  * GET /api/salary-input/all
@@ -54,34 +56,38 @@ router.post('/request-change', requireHrOrAdmin, (req, res) => {
   const emp = db.prepare('SELECT id, code FROM employees WHERE code = ?').get(employeeCode);
   if (!emp) return res.status(404).json({ success: false, error: 'Employee not found' });
 
+  // N-PF-LOWS: same number rules as Employee Master (text → NOT_A_NUMBER, negatives /
+  // percents outside 0–100 / ceiling outside (0, ₹1,00,000] → SPLIT_OUT_OF_RANGE). Nothing written.
+  const bad = checkRequestStructure(newStructure);
+  if (bad) return res.status(400).json({ success: false, code: bad.code, field: bad.field, error: `${bad.error} — nothing was saved` });
+
   // Get current salary structure
   const current = db.prepare(`
     SELECT * FROM salary_structures WHERE employee_id = ?
     ORDER BY effective_from DESC LIMIT 1
   `).get(emp.id);
 
+  const num = (v) => parseFloat(v) || 0;
   const oldGross = current
-    ? (current.basic || 0) + (current.da || 0) + (current.hra || 0) +
-      (current.conveyance || 0) + (current.other_allowances || 0)
+    ? num(current.basic) + num(current.da) + num(current.hra) + num(current.conveyance) + num(current.other_allowances)
     : 0;
 
-  const newGross = (newStructure.basic || 0) + (newStructure.da || 0) + (newStructure.hra || 0) +
-    (newStructure.conveyance || 0) + (newStructure.other_allowances || 0);
+  const newGross = num(newStructure.basic) + num(newStructure.da) + num(newStructure.hra) +
+    num(newStructure.conveyance) + num(newStructure.other_allowances);
 
-  db.prepare(`
-    INSERT INTO salary_change_requests (
-      employee_id, employee_code, requested_by, old_gross, new_gross,
-      old_structure, new_structure, reason, status
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'Pending')
-  `).run(
-    emp.id, employeeCode, requestedBy,
-    oldGross, newGross,
-    JSON.stringify(current || {}),
-    JSON.stringify(newStructure),
-    reason || ''
-  );
-
-  res.json({ success: true, message: 'Salary change request submitted for approval', ...(ignoredFields.length ? { ignoredFields } : {}) });
+  // N-PF-LOWS (ruling Q8): one Pending request per employee, the same rule as Employee Master.
+  const raised = raiseSalaryChangeRequest(db, {
+    emp, code: emp.code, requestedBy, oldGross, newGross,
+    oldStructure: current, newStructure, reason: reason || '',
+  });
+  const extra = ignoredFields.length ? { ignoredFields } : {};
+  if (raised.alreadyPending) {
+    return res.json({
+      success: true, pendingApproval: true, alreadyPending: true, notSaved: true, ...extra,
+      message: 'A salary change request is already pending finance approval for this employee — this request was not saved.',
+    });
+  }
+  res.json({ success: true, message: 'Salary change request submitted for approval', ...extra });
 });
 
 /**

@@ -6,6 +6,7 @@
  * request (N-17 kept components, N-MONEY2 percents, N-PF ceiling, R10 flags carried).
  */
 const { structureForDate, structureDatedAfter } = require('./statutoryFlags');
+const { ceilingInRange } = require('./salarySplit');
 
 /** 'YYYY-MM-DD' with month 01–12 and a day that exists in that month (leap years included). */
 function isCalendarDate(v) {
@@ -56,7 +57,8 @@ function requestedCeiling(newStructure, oldStructure) {
   const v = (newStructure || {}).pf_wage_ceiling;
   if (!present(v)) return null;
   const n = Number(v);
-  if (!Number.isFinite(n) || n < 0) return null;
+  // N-PF-LOWS (Q1/Q3): only a ceiling in range (> 0, ≤ PF_CEILING_MAX) is ever written.
+  if (!ceilingInRange(n)) return null;
   const o = (oldStructure || {}).pf_wage_ceiling;
   const was = present(o) && Number.isFinite(Number(o)) ? Number(o) : 15000;
   return Math.abs(n - was) > 0.01 ? n : null;
@@ -214,7 +216,35 @@ function approveSalaryChange(db, { id, actor, approvedBy, effectiveFrom: request
   return { ok: true, effectiveFrom, gross: newGross, keptComponents, employeeId: emp.id, sameDate: sameDateRow };
 }
 
+/**
+ * One Pending salary_change_requests row per employee (P1-23 / N-19 / N-PF).
+ * Moved here from routes/employees.js (N-PF-LOWS, ruling Q8) so PUT /employees/:code/salary,
+ * POST /employees/bulk-import and POST /salary-input/request-change all raise a request the same
+ * way; finance decides it in Salary Input (the requester never decides their own — SELF_APPROVAL).
+ * Returns { alreadyPending: true, id } when one is already open (nothing written), else { raised: true, id }.
+ */
+function raiseSalaryChangeRequest(db, { emp, code, requestedBy, oldGross, newGross, oldStructure, newStructure, reason }) {
+  const existingPending = db.prepare(
+    "SELECT id FROM salary_change_requests WHERE employee_code = ? AND status = 'Pending'"
+  ).get(code);
+  if (existingPending) return { alreadyPending: true, id: existingPending.id };
+  const info = db.prepare(`
+    INSERT INTO salary_change_requests (
+      employee_id, employee_code, requested_by, old_gross, new_gross,
+      old_structure, new_structure, reason, status
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'Pending')
+  `).run(
+    emp.id, code, requestedBy,
+    oldGross, newGross,
+    JSON.stringify(oldStructure || {}),
+    JSON.stringify(newStructure),
+    reason
+  );
+  return { raised: true, id: info.lastInsertRowid };
+}
+
 module.exports = {
+  raiseSalaryChangeRequest,
   isCalendarDate, STATUTORY_FLAG_FIELDS, COMPONENT_KEYS, present, money, PERCENT_KEYS, requestedPercents, requestedCeiling,
   resolveApproval, istToday, sameUser, SELF_APPROVAL, approveSalaryChange,
 };

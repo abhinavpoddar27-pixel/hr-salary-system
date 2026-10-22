@@ -661,35 +661,11 @@ router.put('/:code/leaves', requireHrOrAdmin, (req, res) => {
 // PF / ESI / LWF flags in the body are ignored (statutory upload only, R10).
 
 // P5-04: the split helpers live in services/salarySplit.js (shared with the bulk salary revision).
-const { numOr, storedSplit, resolveSplit, splitAmounts, splitUnchanged } = require('../services/salarySplit');
+const { numOr, storedSplit, resolveSplit, splitAmounts, splitUnchanged, splitDiffers, isBlank } = require('../services/salarySplit');
 
-/**
- * One Pending salary_change_requests row per employee (P1-23 / N-19 / N-PF).
- * Shared by PUT /:code/salary and POST /bulk-import (N-13) so both raise the
- * request the same way; finance decides it in Salary Input (requester can never
- * decide their own — salary-input.js SELF_APPROVAL). Returns
- * { alreadyPending: true } when one is already open (nothing written), else
- * { raised: true, id }.
- */
-function raiseSalaryChangeRequest(db, { emp, code, requestedBy, oldGross, newGross, oldStructure, newStructure, reason }) {
-  const existingPending = db.prepare(
-    "SELECT id FROM salary_change_requests WHERE employee_code = ? AND status = 'Pending'"
-  ).get(code);
-  if (existingPending) return { alreadyPending: true, id: existingPending.id };
-  const info = db.prepare(`
-    INSERT INTO salary_change_requests (
-      employee_id, employee_code, requested_by, old_gross, new_gross,
-      old_structure, new_structure, reason, status
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'Pending')
-  `).run(
-    emp.id, code, requestedBy,
-    oldGross, newGross,
-    JSON.stringify(oldStructure || {}),
-    JSON.stringify(newStructure),
-    reason
-  );
-  return { raised: true, id: info.lastInsertRowid };
-}
+// N-PF-LOWS (ruling Q8): raiseSalaryChangeRequest moved to services/salaryChange.js (shared with
+// POST /salary-input/request-change and POST /bulk-import).
+const { raiseSalaryChangeRequest } = require('../services/salaryChange');
 
 
 router.put('/:code/salary', requireHrOrAdmin, (req, res) => {
@@ -712,16 +688,41 @@ router.put('/:code/salary', requireHrOrAdmin, (req, res) => {
   const acctPair = bankPairs.account;
   const ifscPair = bankPairs.ifsc;
 
-  const newGross = parseFloat(gross_salary) || 0;
+  // N-PF-LOWS (ruling Q4): a gross that is text or negative is refused, not read as "no gross".
+  let newGross = 0;
+  if (!isBlank(gross_salary)) {
+    const g = typeof gross_salary === 'number' ? gross_salary
+      : (typeof gross_salary === 'string' ? Number(gross_salary.trim()) : NaN);
+    if (!Number.isFinite(g)) {
+      return res.status(400).json({ success: false, code: 'NOT_A_NUMBER', field: 'gross_salary', error: 'Gross salary must be a number — nothing was saved' });
+    }
+    if (g < 0) {
+      return res.status(400).json({ success: false, code: 'GROSS_OUT_OF_RANGE', field: 'gross_salary', error: 'Gross salary cannot be negative — nothing was saved' });
+    }
+    newGross = g;
+  }
   const currentGross = parseFloat(emp.gross_salary) || 0;
 
   const currentStruct = db.prepare(
     'SELECT * FROM salary_structures WHERE employee_id = ? ORDER BY effective_from DESC LIMIT 1'
   ).get(emp.id);
-  // Validate the split BEFORE anything is written (N-19).
-  const resolved = resolveSplit(req.body, storedSplit(currentStruct));
-  if (resolved.error) return res.status(400).json({ success: false, code: 'SPLIT_OUT_OF_RANGE', error: resolved.error });
+  // Validate the split BEFORE anything is written (N-19). N-PF-LOWS: text → NOT_A_NUMBER,
+  // ceiling outside (0, PF_CEILING_MAX] → SPLIT_OUT_OF_RANGE.
+  const stored = storedSplit(currentStruct);
+  const resolved = resolveSplit(req.body, stored);
+  if (resolved.error) {
+    return res.status(400).json({ success: false, code: resolved.code || 'SPLIT_OUT_OF_RANGE', field: resolved.field, error: resolved.error });
+  }
   const split = resolved.split;
+
+  // N-PF-LOWS (L3, ruling Q5): with no gross the split / ceiling cannot be requested.
+  // Refuse the whole save (nothing written) instead of dropping the change and saying "updated".
+  if (!(newGross > 0) && splitDiffers(stored, split)) {
+    return res.status(400).json({
+      success: false, code: 'GROSS_REQUIRED', field: 'gross_salary',
+      error: 'Enter the gross salary to change the split or PF wage ceiling — nothing was saved',
+    });
+  }
 
   const ignoredFields = ignoredFlagFields(req.body);
   const withIgnored = (body) => (ignoredFields.length ? { ...body, ignoredFields } : body);
@@ -782,7 +783,8 @@ router.put('/:code/salary', requireHrOrAdmin, (req, res) => {
         success: true,
         pendingApproval: true,
         alreadyPending: true, // F-6: nothing new raised — the window says so
-        message: 'A salary change request is already pending finance approval for this employee.'
+        notSaved: true, // N-PF-LOWS (L4, ruling Q7): the new salary values were dropped; bank/IDs were saved
+        message: 'A salary change request is already pending finance approval for this employee — the new salary values were not saved. Bank and ID details were saved.'
       }));
     }
     return res.json(withIgnored({ success: true, pendingApproval: true, message }));
@@ -837,6 +839,10 @@ router.put('/:code/salary', requireHrOrAdmin, (req, res) => {
     );
   }
 
+  // N-PF-LOWS (L3): with no gross only bank / ID / PT fields were written — say so.
+  if (!(newGross > 0)) {
+    return res.json(withIgnored({ success: true, message: 'Saved — bank and ID details' }));
+  }
   res.json(withIgnored({ success: true, message: 'Salary structure updated' }));
 });
 
