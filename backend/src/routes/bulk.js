@@ -34,6 +34,18 @@ function deny(res, roles) {
 }
 const READ_ROLES = ['admin', 'hr', 'finance'];
 
+/**
+ * P5-02 review fix 3: a kind with `redactRow` (employee master edit — account / PAN / UAN / ESI number) shows those
+ * values in full only to finance and admin (ruling Q6); every other role gets the last 4. bulk_rows keep the full
+ * values (needed to apply on approval).
+ */
+function redactFor(req, kindName, result, opts = {}) {
+  const kind = engine.getKind(kindName);
+  if (!kind || typeof kind.redactRow !== 'function' || !result || !Array.isArray(result.rows)) return result;
+  if (['admin', 'finance'].includes(roleOf(req))) return result;
+  return { ...result, rows: result.rows.map(r => kind.redactRow(r, opts)) };
+}
+
 /** :kind routes — the kind's create roles. Unknown kind → hr/admin gate, then the engine's 404. */
 function gateCreate(req, res, next) {
   const kind = engine.getKind(req.params.kind);
@@ -103,7 +115,8 @@ router.get('/batches/:id', (req, res) => {
     return res.status(404).json({ success: false, error: 'Batch not found' });
   }
   if (!engine.visibleKinds(role).includes(batch.kind)) return deny(res, kind ? engine.rolesOf(kind).create : ['admin', 'hr']);
-  res.json({ success: true, data: engine.getBatch(getDb(), id) });
+  const data = engine.getBatch(getDb(), id);
+  res.json({ success: true, data: redactFor(req, batch.kind, data) });
 });
 
 // Undo: direct kinds = their create roles (ED hr/admin, unchanged); approval kinds = finance/admin
@@ -145,8 +158,8 @@ router.post('/batches/:id/return', requireFinanceOrAdmin, gateDecide, (req, res)
   send(res, engine.decide(getDb(), id, 'return', req.body?.note ?? req.body?.reason, userOf(req)));
 });
 
-router.post('/:kind/preview', gateCreate, (req, res) => send(res, engine.preview(getDb(), req.params.kind, req.body || {})));
-router.post('/:kind/apply', gateCreate, (req, res) => send(res, engine.apply(getDb(), req.params.kind, req.body || {}, userOf(req))));
-router.post('/:kind/submit', gateCreate, (req, res) => send(res, engine.submit(getDb(), req.params.kind, req.body || {}, userOf(req))));
+router.post('/:kind/preview', gateCreate, (req, res) => send(res, redactFor(req, req.params.kind, engine.preview(getDb(), req.params.kind, req.body || {}), { keepInput: true })));
+router.post('/:kind/apply', gateCreate, (req, res) => send(res, redactFor(req, req.params.kind, engine.apply(getDb(), req.params.kind, req.body || {}, userOf(req)))));
+router.post('/:kind/submit', gateCreate, (req, res) => send(res, redactFor(req, req.params.kind, engine.submit(getDb(), req.params.kind, req.body || {}, userOf(req)))));
 
 module.exports = router;

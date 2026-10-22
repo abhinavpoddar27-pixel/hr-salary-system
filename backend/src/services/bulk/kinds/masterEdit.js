@@ -121,18 +121,28 @@ function stage7OpenRows(db, code) {
     ORDER BY year, month`).all(code);
 }
 /**
- * Has the plant bank (NEFT) file for a month gone out? The plant route keeps no export stamp, so the only record is a
- * download of GET /api/reports/bank-salary-file?…&download=true in usage_logs (any company). Conservative: any
- * download for that month and year counts.
+ * Has the plant bank (NEFT) file for a month gone out? The plant routes keep no export stamp, so the only record is
+ * usage_logs (path = the request URL with its query): a download of GET /api/reports/bank-salary-file?…&download=true,
+ * or any read of GET /api/reports/bank-transfer (the bank transfer sheet, saved as CSV in the browser) for that month
+ * and year, any company. Conservative. Filtered in SQL (review fix 2) — this runs inside the IMMEDIATE batch txn.
  */
+const QS = "('&' || substr(path, instr(path, '?') + 1) || '&')";
 function bankFileDownloaded(db, month, year) {
+  const m = String(parseInt(month, 10)); const y = String(parseInt(year, 10));
   try {
-    const rows = db.prepare(`SELECT path FROM usage_logs WHERE path LIKE '/api/reports/bank-salary-file%' AND path LIKE '%download=true%'`).all();
-    return rows.some((r) => {
-      const q = new URLSearchParams(String(r.path).split('?')[1] || '');
-      return Number(q.get('month')) === Number(month) && Number(q.get('year')) === Number(year);
-    });
+    return !!db.prepare(`SELECT 1 FROM usage_logs
+      WHERE ((path LIKE '/api/reports/bank-salary-file?%' AND ${QS} LIKE '%&download=true&%')
+             OR path LIKE '/api/reports/bank-transfer?%')
+        AND (${QS} LIKE '%&month=' || ? || '&%' OR ${QS} LIKE '%&month=0' || ? || '&%')
+        AND ${QS} LIKE '%&year=' || ? || '&%'
+      LIMIT 1`).get(m, m, y);
   } catch { return false; }
+}
+/** The latest finalised month in which this person was paid (Stage 7 row), or null. */
+function lastFinalisedPaidMonth(db, code) {
+  return db.prepare(`SELECT s.month, s.year FROM salary_computations s
+      JOIN monthly_imports f ON f.month = s.month AND f.year = s.year AND f.is_finalised = 1
+    WHERE s.employee_code = ? ORDER BY s.year DESC, s.month DESC LIMIT 1`).get(code) || null;
 }
 function finalisedMonth(db, month, year) {
   return !!db.prepare('SELECT 1 FROM monthly_imports WHERE month = ? AND year = ? AND is_finalised = 1 LIMIT 1').get(month, year);
@@ -150,6 +160,10 @@ function accountHolder(db, value, empId) {
   return hit ? hit.code : null;
 }
 
+/* ── Personal numbers: shown as the last 4 only, except to finance / admin (review fix 3, ruling Q6) ── */
+const MASKED_FIELDS = new Set(['account', 'pan', 'uan', 'esi_number']);
+const maskIf = (field, v) => (MASKED_FIELDS.has(field) && !blank(v) ? maskTail(String(v)) : v);
+
 /* ── Rows ── */
 function rowFromInput(input, rowNo) {
   const obj = input && typeof input === 'object' ? input : { code: input };
@@ -161,9 +175,12 @@ function rowFromInput(input, rowNo) {
   if (obj.base && typeof obj.base === 'object') {
     for (const [k, v] of Object.entries(obj.base)) base[String(k).trim().toLowerCase()] = v;
   }
-  return { rowNo, code: txt(obj.code), changes, base, noMeta: obj.noMeta === true, messages: [] };
+  // numeric: fields whose sheet cell was a number, not text (a long account loses digits in Excel — review fix 5).
+  const numeric = Array.isArray(obj.numeric) ? obj.numeric.map(v => String(v).trim().toLowerCase()).filter(Boolean) : [];
+  return { rowNo, code: txt(obj.code), changes, base, noMeta: obj.noMeta === true, numeric, messages: [] };
 }
-const inputOf = (r) => ({ code: r.code, changes: r.changes, base: r.base, noMeta: r.noMeta === true });
+const inputOf = (r) => ({ code: r.code, changes: r.changes, base: r.base, noMeta: r.noMeta === true,
+  ...(r.numeric && r.numeric.length ? { numeric: r.numeric } : {}) });
 
 /** Repeated codes are merged (first kept). For the sensitive kind, a PAN / UAN / ESI number repeated in the list is an error on every row holding it. */
 function makeNormaliseRows(withDupCheck) {
@@ -230,7 +247,7 @@ function baseChecks(db, row, allowed, ctx) {
   for (const f of fields) {
     if (!(f in row.base)) continue;
     const now = currentValue(db, emp, f);
-    if (!sameText(now, row.base[f])) return fail(`${FIELDS[f].label} changed since you downloaded the sheet (now "${now || 'blank'}") — download again`);
+    if (!sameText(now, row.base[f])) return fail(`${FIELDS[f].label} changed since you downloaded the sheet (now "${maskIf(f, now) || 'blank'}") — download again`);
   }
   return { ok: true, emp, messages, display, fields, ctx };
 }
@@ -350,6 +367,7 @@ function planDetails(db, row, ctx, b) {
     const oldV = currentValue(db, emp, f);
     let v;
     if (f === 'account') {
+      if ((row.numeric || []).includes('account')) return err('Bank account is a number cell in the sheet, so Excel may have changed its last digits — type the account as text');
       v = digits(raw);
       if (v && !ACCOUNT_RE.test(v)) return err('Bank account must be 6 to 20 digits');
     } else if (f === 'ifsc') {
@@ -372,14 +390,14 @@ function planDetails(db, row, ctx, b) {
       if (v.length > TEXT_MAX) return err(`${FIELDS[f].label} is too long (max ${TEXT_MAX} characters)`);
     }
     if (v === txt(oldV) || (f === 'pan' && v === txt(oldV).toUpperCase())) continue;
-    if (row.dupInList && row.dupInList[f]) return err(`${FIELDS[f].label} ${v} is also given for ${row.dupInList[f]} in this list — one person each`);
+    if (row.dupInList && row.dupInList[f]) return err(`${FIELDS[f].label} ${maskIf(f, v)} is also given for ${row.dupInList[f]} in this list — one person each`);
     if (v && (f === 'pan' || f === 'uan' || f === 'esi_number')) {
       const other = holderOf(db, f, v, emp.id, { upper: f === 'pan' });
-      if (other) return err(`${FIELDS[f].label} ${v} already belongs to ${other}`);
+      if (other) return err(`${FIELDS[f].label} ${maskIf(f, v)} already belongs to employee ${other}`);
     }
     if (v && f === 'account') {
       const other = accountHolder(db, v, emp.id);
-      if (other) warn.push(`Bank account ${v} is also on ${other} — check it is right`);
+      if (other) warn.push(`Bank account ${maskIf(f, v)} is also on employee ${other} — check it is right`);
     }
     if (!v) warn.push(`${FIELDS[f].label} will be cleared`);
     if (f === 'company') {
@@ -425,6 +443,10 @@ function planExit(db, row, ctx, b) {
   if (reason.length < EXIT_REASON_MIN) return err(`Give a reason for leaving (at least ${EXIT_REASON_MIN} characters)`);
   const m = Number(date.slice(5, 7)); const y = Number(date.slice(0, 4));
   if (finalisedMonth(db, m, y)) return err(`Payroll for ${monLabel(m, y)} is finalised — the leaving date cannot be in it`);
+  const lastPaid = lastFinalisedPaidMonth(db, emp.code);
+  if (lastPaid && monthIdx(y, m) < monthIdx(lastPaid.year, lastPaid.month)) {
+    return err(`This person was paid in ${monLabel(lastPaid.month, lastPaid.year)}, which is finalised — the leaving date cannot be in an earlier month`);
+  }
   const warn = [];
   const loans = db.prepare(`SELECT COUNT(*) n FROM loans WHERE borrower_type = 'plant' AND employee_code = ?
     AND status IN ('requested','approved','active') AND exit_flag = 0`).get(emp.code);
@@ -491,6 +513,12 @@ function applySensitive(db, row, plan, common, { batchId, user, requestedBy }) {
     const masked = c.field === 'pan' || c.field === 'uan' || c.field === 'esi_number';
     auditField(db, emp, c.field, masked ? maskTail(c.old) : c.old, masked ? maskTail(c.new) : c.new, user, 'MASTER_BULK_EDIT_FINANCE',
       remark(`${FIELDS[c.field].label} changed`));
+  }
+  if (cols.includes('company')) {
+    // Review fix 1: open-month day calculations are now stale, so /finalise refuses until Stage 6/7 are re-run.
+    db.prepare(`UPDATE day_calculations SET salary_stale = 1 WHERE employee_code = ?
+      AND NOT EXISTS (SELECT 1 FROM monthly_imports f WHERE f.year = day_calculations.year AND f.month = day_calculations.month AND f.is_finalised = 1)`)
+      .run(emp.code);
   }
   const after = snapshotCols(db, emp.id, cols);
   const stage7 = cols.includes('company') ? stage7OpenRows(db, emp.code) : null;
@@ -564,6 +592,28 @@ const sensitive = {
   planRow: planSensitive, applyRow: applySensitive, undoable: undoableSensitive, undoRow: undoSensitive,
 };
 
+/**
+ * Review fix 3: what a role other than finance / admin sees of a row (preview, refused rows, batch detail).
+ * Account, PAN, UAN and ESI number → last 4. keepInput: the creator's own preview keeps `input` (the panel saves
+ * from it); everywhere else the input is masked too.
+ */
+function redactRow(row, { keepInput = false } = {}) {
+  if (!row || typeof row !== 'object') return row;
+  const out = { ...row };
+  if (Array.isArray(row.changes)) {
+    out.changes = row.changes.map(c => ({ ...c, old: maskIf(c.field, c.old), new: maskIf(c.field, c.new) }));
+    if (out.changes.some(c => MASKED_FIELDS.has(c.field)) && out.changes.every(c => FIELDS[c.field])) {
+      out.changeText = out.changes.filter(c => c.field !== 'exit').map(c => describeChange(c.field, c.old, c.new)).join('; ') || row.changeText;
+    }
+  }
+  if (!keepInput && row.input && typeof row.input === 'object') {
+    const mask = (o) => (o && typeof o === 'object' ? Object.fromEntries(Object.entries(o).map(([k, v]) => [k, maskIf(k, v)])) : o);
+    out.input = { ...row.input, changes: mask(row.input.changes), base: mask(row.input.base) };
+  }
+  return out;
+}
+sensitive.redactRow = redactRow;
+
 /** Read helper for the screen: shifts, departments, designations, contractor groups, companies + field table. */
 function meta(db) {
   const list = (col) => db.prepare(`SELECT TRIM(${col}) v, COUNT(*) n FROM employees WHERE status = 'Active' AND TRIM(COALESCE(${col}, '')) != ''
@@ -590,4 +640,5 @@ function exportRows(db, { fields, codes }) {
     values: Object.fromEntries(keep.map(f => [f, currentValue(db, e, f)])) }));
 }
 
-module.exports = { direct, sensitive, meta, exportRows, FIELDS, REFUSED, DIRECT_FIELDS, DETAIL_FIELDS, CANONICAL_COMPANIES, currentValue, bankFileDownloaded };
+module.exports = { direct, sensitive, meta, exportRows, FIELDS, REFUSED, DIRECT_FIELDS, DETAIL_FIELDS, CANONICAL_COMPANIES, currentValue, bankFileDownloaded,
+  redactRow, MASKED_FIELDS };

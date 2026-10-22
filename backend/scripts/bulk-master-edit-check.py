@@ -185,6 +185,8 @@ try:
         hr.wait_for_selector('[data-testid=me-sheet-line]'); time.sleep(1.5)
         check('4 changed people read (unchanged cells ignored)', True, '4 people with changes' in hr.locator('[data-testid=me-sheet-line]').inner_text())
         check('stale row T8004 refused (changed since download)', True, 'changed since you downloaded' in hr.locator('[data-testid=me-section-direct] tr[data-code=T8004]').inner_text())
+        t2 = hr.locator('[data-testid=me-section-details] tr[data-code=T8002]').inner_text()
+        check('hr sees the new account as the last 4 only', (True, False), ('****0022' in t2, '2222000022' in t2))
         check('bad account T8003 refused', True, '6 to 20 digits' in hr.locator('[data-testid=me-section-details] tr[data-code=T8003]').inner_text())
         check('Save disabled while problems are there', True, hr.locator('[data-testid=me-save]').is_disabled())
         hr.locator('[data-testid=me-leave-out-direct]').click(); time.sleep(1.2)

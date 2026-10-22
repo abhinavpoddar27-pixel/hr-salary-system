@@ -16,16 +16,27 @@ const REF_HEADERS = new Set(['code', 'name', 'employee code', 'emp code'])
 const norm = (h) => String(h ?? '').trim().toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim()
 const key = (h) => norm(h).replace(/ /g, '_')
 
-/** Cell → text. Numbers never in exponent form (12-digit UANs, long account numbers); dates → YYYY-MM-DD. */
+/** Cell → text. Numbers never in exponent form (12-digit UANs, long account numbers). Read the workbook WITHOUT
+ *  cellDates — a date cell arrives as its serial number and dateCellText turns it into YYYY-MM-DD. */
 export function cellText(v) {
   if (v === null || v === undefined) return ''
-  if (v instanceof Date) {
-    const y = v.getFullYear(); const m = String(v.getMonth() + 1).padStart(2, '0'); const d = String(v.getDate()).padStart(2, '0')
-    return `${y}-${m}-${d}`
-  }
   if (typeof v === 'number') return Number.isInteger(v) ? v.toFixed(0) : String(v)
   return String(v).trim()
 }
+
+/** Excel date serial → YYYY-MM-DD via SheetJS's own calendar (no JS Date, no browser time zone — review fix 4).
+ *  Text is returned as typed (the server reads DD-MM-YYYY and YYYY-MM-DD). */
+export function dateCellText(v) {
+  if (typeof v === 'number' && Number.isFinite(v)) {
+    const p = XLSX.SSF.parse_date_code(v)
+    if (!p || !p.y) return String(v)
+    return `${String(p.y).padStart(4, '0')}-${String(p.m).padStart(2, '0')}-${String(p.d).padStart(2, '0')}`
+  }
+  return cellText(v)
+}
+
+/** A bank account typed as a number with more than 15 digits has already lost its last digits in Excel (review fix 5). */
+export const longNumberCell = (v) => typeof v === 'number' && Number.isFinite(v) && Math.abs(v).toFixed(0).length > 15
 
 /**
  * @param {object[]} rows  [{ code, name, values: { field: value } }] from POST /bulk/master-edit/export
@@ -58,7 +69,7 @@ export function buildSheet(rows, fields, shifts = []) {
 
 /**
  * Read an uploaded workbook.
- * @param {object} wb  XLSX workbook (read with cellDates: true)
+ * @param {object} wb  XLSX workbook (read WITHOUT cellDates — see dateCellText)
  * @param {object} meta  GET /bulk/master-edit/meta data (fields, refused)
  * @returns {{ rows: [{code, changes, base?, noMeta?}], noMeta: boolean, columns: string[], ignored: string[], error?: string }}
  */
@@ -94,11 +105,12 @@ export function readSheet(wb, meta) {
     const code = cellText(r[codeCol])
     if (!code) continue
     const b = base ? base.get(code.toLowerCase()) : null
-    const changes = {}; const rowBase = {}
+    const changes = {}; const rowBase = {}; const numeric = []
     let exit = null
     for (const c of cols) {
-      const v = cellText(r[c.i])
+      const v = c.field === 'exit' && c.part === 'date' ? dateCellText(r[c.i]) : cellText(r[c.i])
       if (c.field === 'exit') { if (v) { exit = exit || { date: '', reason: '' }; exit[c.part] = v } continue }
+      if (c.field === 'account' && longNumberCell(r[c.i])) numeric.push('account')
       if (b && c.field in b) {
         if (v === String(b[c.field] ?? '')) continue
         changes[c.field] = v; rowBase[c.field] = b[c.field]
@@ -108,7 +120,8 @@ export function readSheet(wb, meta) {
     }
     if (exit) changes.exit = exit
     if (!Object.keys(changes).length) continue
-    rows.push({ code, changes, ...(Object.keys(rowBase).length ? { base: rowBase } : {}), ...(b ? {} : { noMeta: true }) })
+    rows.push({ code, changes, ...(Object.keys(rowBase).length ? { base: rowBase } : {}), ...(b ? {} : { noMeta: true }),
+      ...(numeric.length ? { numeric } : {}) })
   }
   return { rows, noMeta: !base, columns: cols.map(c => header[c.i]), ignored }
 }
@@ -129,7 +142,9 @@ export function splitRows(rows, meta) {
     for (const k of Object.keys(out)) {
       if (!Object.keys(parts[k]).length) continue
       const b = r.base ? Object.fromEntries(Object.entries(r.base).filter(([f]) => f in parts[k])) : null
-      out[k].push({ code: r.code, changes: parts[k], ...(b && Object.keys(b).length ? { base: b } : {}), ...(r.noMeta ? { noMeta: true } : {}) })
+      const num = (r.numeric || []).filter(f => f in parts[k])
+      out[k].push({ code: r.code, changes: parts[k], ...(b && Object.keys(b).length ? { base: b } : {}), ...(r.noMeta ? { noMeta: true } : {}),
+        ...(num.length ? { numeric: num } : {}) })
     }
   }
   return out

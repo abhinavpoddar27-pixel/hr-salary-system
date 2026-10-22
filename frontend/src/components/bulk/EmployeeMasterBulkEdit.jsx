@@ -161,7 +161,7 @@ export default function EmployeeMasterBulkEdit({ employees = [], listCodes = [],
     e.target.value = ''
     if (!f || !meta) return
     try {
-      const wb = XLSX.read(await f.arrayBuffer(), { type: 'array', cellDates: true })
+      const wb = XLSX.read(await f.arrayBuffer(), { type: 'array' })
       const got = readSheet(wb, meta)
       if (got.error) { toast.error(got.error); return }
       set({ sheetRows: got.rows, sheetInfo: { name: f.name, noMeta: got.noMeta, columns: got.columns, ignored: got.ignored, people: got.rows.length } })

@@ -27,7 +27,7 @@ beforeAll(() => {
 afterAll(() => api.close());
 
 const RESET = `DELETE FROM bulk_rows; DELETE FROM bulk_batches; DELETE FROM audit_log; DELETE FROM notifications;
-  DELETE FROM salary_computations;
+  DELETE FROM salary_computations; DELETE FROM day_calculations;
   DELETE FROM monthly_imports; DELETE FROM usage_logs; DELETE FROM employees;`;
 beforeEach(() => { db.exec(RESET); });
 
@@ -268,7 +268,7 @@ describe('master-edit-sensitive (finance approval)', () => {
     const { p, out } = await save('master-edit-sensitive', [{ code: a.code, changes: {
       account: '22223333 44', ifsc: 'hdfc0000002', bank_name: 'HDFC', pan: 'abcde1234f', uan: '100000000001', esi_number: '2000000001' } }]);
     expect(p.body.requiresApproval).toBe(true);
-    expect(p.body.rows[0].changeText).toMatch(/Bank account: 1111111111 → 2222333344/);
+    expect(p.body.rows[0].changeText).toMatch(/Bank account: \*\*\*\*1111 → \*\*\*\*3344/); // hr sees the last 4 (review fix 3)
     const id = out[0].body.batchId;
     expect(emp(a).account_number).toBe('1111111111');
     expect((await act(id, 'approve', 'hr1')).status).toBe(403);
@@ -301,12 +301,12 @@ describe('master-edit-sensitive (finance approval)', () => {
       { code: b.code, changes: { uan: '100000000005' } }, { code: c.code, changes: { uan: '1000 0000 0005' } },
       { code: a.code + 'X', changes: {} },
     ]);
-    expect(r.body.rows[0].messages.join(' ')).toMatch(new RegExp(`already belongs to ${other.code}`));
+    expect(r.body.rows[0].messages.join(' ')).toMatch(new RegExp(`already belongs to employee ${other.code}`));
     expect(r.body.rows[1].messages.join(' ')).toMatch(new RegExp(`also given for ${c.code}`));
     expect(r.body.rows[2].messages.join(' ')).toMatch(new RegExp(`also given for ${b.code}`));
     const w = await check('master-edit-sensitive', [{ code: a.code, changes: { account: '5555555555', ifsc: 'SBIN0000003' } }]);
     expect(w.body.rows[0].state).toBe('warning');
-    expect(w.body.rows[0].messages.join(' ')).toMatch(new RegExp(`also on ${other.code}`));
+    expect(w.body.rows[0].messages.join(' ')).toMatch(new RegExp(`also on employee ${other.code}`));
     const e1 = await check('master-edit-sensitive', [{ code: b.code, changes: { esi_number: '2000000009' } }]);
     expect(e1.body.rows[0].state).toBe('error');
   });
@@ -422,5 +422,122 @@ describe('master-edit-sensitive — leaving', () => {
     expect(s.body.rows[0].state).toBe('skipped');
     const mixed = await check('master-edit-sensitive', [{ code: a.code, changes: { exit: { date: '2026-08-10', reason: 'Resigned' }, bank_name: 'SBI' } }], { section: 'exit' });
     expect(mixed.body.rows[0].messages.join(' ')).toMatch(/separate batch from leaving/);
+  });
+});
+
+/* ── P5-02 independent review fixes ── */
+describe('review fixes', () => {
+  const sal = (code, m, y, company = CO) => db.prepare(`INSERT INTO salary_computations (employee_code, month, year, company, gross_salary,
+    gross_earned, total_deductions, net_salary) VALUES (?, ?, ?, ?, 20000, 20000, 1000, 19000)`).run(code, m, y, company);
+  const dc = (code, m, y) => db.prepare(`INSERT INTO day_calculations (employee_code, month, year, company, total_payable_days, salary_stale)
+    VALUES (?, ?, ?, ?, 26, 0)`).run(code, m, y, CO);
+  const stale = (code) => db.prepare('SELECT month, salary_stale FROM day_calculations WHERE employee_code = ? ORDER BY year, month').all(code)
+    .map(r => [r.month, r.salary_stale]);
+
+  test('fix 1: approving a company change marks that person\'s open-month day calculations stale (finalised month left alone)', async () => {
+    const c = person(); const other = person();
+    db.prepare("INSERT INTO monthly_imports (month, year, company, is_finalised) VALUES (8, 2026, ?, 1)").run(CO);
+    sal(c.code, 9, 2026); dc(c.code, 8, 2026); dc(c.code, 9, 2026); dc(other.code, 9, 2026);
+    const { p, out } = await save('master-edit-sensitive', [{ code: c.code, changes: { company: CO2 } }]);
+    expect(p.body.rows[0].messages.join(' ')).toMatch(/re-run Stage 6 and 7 for it \(All companies\) after approval/);
+    expect(stale(c.code)).toEqual([[8, 0], [9, 0]]); // sending writes nothing
+    expect((await act(out[0].body.batchId, 'approve', 'fin1')).status).toBe(200);
+    expect(stale(c.code)).toEqual([[8, 0], [9, 1]]);
+    expect(stale(other.code)).toEqual([[9, 0]]);
+    // the payroll /finalise gate counts exactly these rows
+    expect(db.prepare('SELECT COUNT(*) AS cnt FROM day_calculations WHERE salary_stale = 1 AND month = ? AND year = ?').get(9, 2026).cnt).toBe(1);
+    // a bank-only change does not touch day calculations
+    const { out: o2 } = await save('master-edit-sensitive', [{ code: other.code, changes: { bank_name: 'TEST BANK' } }]);
+    expect((await act(o2[0].body.batchId, 'approve', 'fin1')).status).toBe(200);
+    expect(stale(other.code)).toEqual([[9, 0]]);
+  });
+
+  test('fix 2: bank file sent = bank-salary-file download or bank-transfer read for that month and year (SQL filter)', () => {
+    const { bankFileDownloaded } = require('../services/bulk/kinds/masterEdit');
+    const log = (path) => db.prepare(`INSERT INTO usage_logs (username, role, action, method, path) VALUES ('fin1', 'finance', 'GET', 'GET', ?)`).run(path);
+    log('/api/reports/bank-salary-file?month=1&year=2026&company=X'); // preview only
+    log('/api/reports/bank-salary-file?month=10&year=2025&download=true');
+    expect(bankFileDownloaded(db, 1, 2026)).toBe(false);
+    expect(bankFileDownloaded(db, 10, 2026)).toBe(false); // other year
+    expect(bankFileDownloaded(db, 1, 2025)).toBe(false); // month=10 is not month=1
+    expect(bankFileDownloaded(db, 10, 2025)).toBe(true);
+    log('/api/reports/bank-transfer?month=9&year=2026&company=Indriyan%20Beverages%20Pvt%20Ltd');
+    expect(bankFileDownloaded(db, 9, 2026)).toBe(true);
+    log('/api/reports/bank-salary-file?year=2026&download=true&month=03');
+    expect(bankFileDownloaded(db, 3, 2026)).toBe(true);
+    expect(bankFileDownloaded(db, '3', '2026')).toBe(true);
+    log('/api/reports/bank-transfer-other?month=4&year=2026');
+    expect(bankFileDownloaded(db, 4, 2026)).toBe(false);
+  });
+
+  test('fix 3: messages never carry a full account / PAN / UAN / ESI number', async () => {
+    const other = person({ pan: 'ZZZZZ9999Z', uan: '100000000009', esi_number: '2000000009', account: '5555555555' });
+    const a = person({ account: '1234567890' }); const b = person(); const c = person();
+    const r = await check('master-edit-sensitive', [
+      { code: a.code, changes: { pan: 'ZZZZZ9999Z' } }, { code: b.code, changes: { uan: '100000000005' } },
+      { code: c.code, changes: { uan: '100000000005' } },
+    ]);
+    const w = await check('master-edit-sensitive', [{ code: b.code, changes: { account: '5555555555', ifsc: 'SBIN0000003' } }]);
+    const e = await check('master-edit-sensitive', [{ code: c.code, changes: { esi_number: '2000000009' } }]);
+    const st = await check('master-edit-sensitive', [{ code: a.code, changes: { account: '7777777777' }, base: { account: '9999999999' } }]);
+    const all = [r, w, e, st].flatMap(x => x.body.rows.flatMap(row => row.messages)).join(' | ');
+    for (const full of ['ZZZZZ9999Z', '100000000005', '100000000009', '5555555555', '2000000009', '1234567890']) expect(all).not.toContain(full);
+    expect(all).toMatch(/\*\*\*\*999Z already belongs to employee/);
+    expect(all).toMatch(/\*\*\*\*5555 is also on employee/);
+    expect(all).toMatch(/now "\*\*\*\*7890"/);
+  });
+
+  test('fix 3: hr sees masked values in preview display and batch detail (input kept only in its own preview); finance/admin see full', async () => {
+    const a = person({ account: '1234567890', ifsc: 'SBIN0000001', pan: 'ABCDE1234F' });
+    const p = await check('master-edit-sensitive', [{ code: a.code, changes: { account: '2222000022', pan: 'PQRSX6789Z' } }]);
+    const row = p.body.rows[0];
+    expect(row.changeText).not.toMatch(/2222000022|1234567890|PQRSX6789Z|ABCDE1234F/);
+    expect(row.changeText).toMatch(/\*\*\*\*7890 → \*\*\*\*0022/);
+    expect(row.changes.find(c => c.field === 'pan').new).toBe('****789Z');
+    expect(row.input.changes).toEqual({ account: '2222000022', pan: 'PQRSX6789Z' }); // the panel saves from it
+    const { out } = await save('master-edit-sensitive', [{ code: a.code, changes: { account: '2222000022', pan: 'PQRSX6789Z' } }]);
+    const id = out[0].body.batchId;
+    const asHr = await api.request('GET', `/api/bulk/batches/${id}`, { as: 'hr1' });
+    expect(JSON.stringify(asHr.body)).not.toMatch(/2222000022|1234567890|PQRSX6789Z|ABCDE1234F/);
+    expect(asHr.body.data.rows[0].changeText).toMatch(/\*\*\*\*7890 → \*\*\*\*0022/);
+    for (const who of ['fin1', 'admin1']) {
+      const full = await api.request('GET', `/api/bulk/batches/${id}`, { as: who });
+      expect(full.body.data.rows[0].changeText).toMatch(/1234567890 → 2222000022/);
+      expect(full.body.data.rows[0].changes.find(c => c.field === 'pan').new).toBe('PQRSX6789Z');
+    }
+    // stored rows keep the full values, so approval applies them
+    expect((await act(id, 'approve', 'fin1')).status).toBe(200);
+    expect([emp(a).account_number, emp(a).pan]).toEqual(['2222000022', 'PQRSX6789Z']);
+  });
+
+  test('fix 3: export carries only the ticked columns', async () => {
+    const a = person({ account: '1234567890', pan: 'ABCDE1234F', uan: '100000000001' });
+    const r = await post('/api/bulk/master-edit/export', { fields: ['department'], codes: [a.code] });
+    expect(r.body.data[0].values).toEqual({ department: 'PRODUCTION' });
+    expect(JSON.stringify(r.body)).not.toMatch(/1234567890|ABCDE1234F|100000000001/);
+    const r2 = await post('/api/bulk/master-edit/export', { fields: ['account'], codes: [a.code] });
+    expect(r2.body.data[0].values).toEqual({ account: '1234567890' });
+  });
+
+  test('fix 5: a bank account that was a number cell (more than 15 digits) is refused', async () => {
+    const a = person();
+    const r = await check('master-edit-sensitive', [{ code: a.code, changes: { account: '12345678901234560000' }, numeric: ['account'] }]);
+    expect(r.body.rows[0].state).toBe('error');
+    expect(r.body.rows[0].messages.join(' ')).toMatch(/type the account as text/);
+    const ok = await check('master-edit-sensitive', [{ code: a.code, changes: { account: '1234567890', ifsc: 'SBIN0000001' } }]);
+    expect(ok.body.rows[0].state).toBe('ok');
+  });
+
+  test('fix 7: leaving date before a finalised month in which the person was paid is refused', async () => {
+    const a = person(); const b = person();
+    db.prepare("INSERT INTO monthly_imports (month, year, company, is_finalised) VALUES (9, 2026, ?, 1)").run(CO);
+    sal(a.code, 9, 2026);
+    const r = await check('master-edit-sensitive', [{ code: a.code, changes: { exit: { date: '2026-08-20', reason: 'Resigned' } } }], { section: 'exit' });
+    expect(r.body.rows[0].state).toBe('error');
+    expect(r.body.rows[0].messages.join(' ')).toMatch(/paid in Sep 2026, which is finalised — the leaving date cannot be in an earlier month/);
+    const ok = await check('master-edit-sensitive', [{ code: a.code, changes: { exit: { date: '2026-10-05', reason: 'Resigned' } } }], { section: 'exit' });
+    expect(ok.body.rows[0].state).toBe('ok');
+    const unpaid = await check('master-edit-sensitive', [{ code: b.code, changes: { exit: { date: '2026-08-20', reason: 'Resigned' } } }], { section: 'exit' });
+    expect(unpaid.body.rows[0].state).toBe('ok');
   });
 });

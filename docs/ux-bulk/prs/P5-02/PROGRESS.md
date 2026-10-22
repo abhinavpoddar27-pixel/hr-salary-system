@@ -27,6 +27,17 @@ BUILT, verified, handed to the planner for independent review (MONEY-ADJACENT). 
   "Bulk edit" + "Set field for N" (replaces the Assign Shift window), BulkBatchList for both kinds (ed2f6795).
 - `backend/scripts/bulk-master-edit-check.py` 37/37, `--base` on b2badcab 3/3; full jest 131 suites / 2329 tests.
 
+- **Independent review (22 Oct): SHIP WITH FIXES — applied:** (1) approving a company change sets
+  `day_calculations.salary_stale = 1` on that person's open-month rows in the same txn; (2) bank-file check also matches
+  `/api/reports/bank-transfer` reads, filtered in SQL by month/year; (3) account / PAN / UAN / ESI masked (last 4) in every
+  message; hr sees masked values in preview display and batch detail, finance/admin full; export only the ticked columns;
+  (4) sheet date serials via `XLSX.SSF.parse_date_code`, workbook read without cellDates; (5) a numeric bank-account cell
+  with > 15 digits refused ("type the account as text"); (7) leaving date before a finalised month in which the person was
+  paid refused. 6 and 8: no change (8 registered).
+- **Register (for the planner):** R-a plant bank file needs a real export stamp (today: usage_logs heuristic);
+  R-b single PUT /:code writes bank/PAN/UAN/ESI/company with no finance step (Q10); R-c designation changes in bulk can
+  change the contract-loader early-exit exemption in Attendance Review (review item 8).
+
 ## Next (old plan list — all done)
 1. Extract `markLeft` into `services/employeeExit.js` and `setShift` into `services/employeeMaster.js`. Run the parity suites.
 2. Build the `masterEdit.js` kinds and add the 2-line `KINDS` entry.
@@ -73,6 +84,11 @@ Owner rulings Q3, Q4 (a), Q10, Q11; planner Q1–Q13 (22 Oct).
   leaving (exit) batches (`markLeft`, never undoable). Refused with a reason: gross/components (→ bulk salary revision),
   PF/ESI/LWF flags (→ Statutory Flags), employment_type, weekly_off_day, category, code, status, punch_no, reporting_manager,
   personal fields.
+- **Review fixes:** company approval marks open-month `day_calculations.salary_stale = 1` (finalise then refuses until
+  Stage 6/7 re-run; the warning text stays); account / PAN / UAN / ESI shown as last 4 in every message and, for hr, in
+  preview display + batch detail (finance/admin see full; `bulk_rows` keep full values to apply); export = ticked columns only;
+  sheet dates via `XLSX.SSF.parse_date_code`; a > 15-digit numeric account cell refused; leaving date before a finalised
+  paid month refused.
 - **Checks:** stale cell vs the downloaded sheet (`_meta`) → error; sheet without `_meta` → warning (Q9); department change that
   flips the contractor keyword when employment_type is blank → error; PAN/UAN/ESI held by another employee or repeated in the
   list → error; shared bank account → warning (Q5); exit: real date, not future (IST), not before DOJ, reason ≥ 5, month not
@@ -85,13 +101,17 @@ Owner rulings Q3, Q4 (a), Q10, Q11; planner Q1–Q13 (22 Oct).
   (saved now / to finance / leaving); "Save N now · Send M to finance"; result with Undo. Finance approves in Finance Verification
   → Bulk batches (full account + IFSC shown, Q6). The old Assign Shift window is gone.
 - **Fragile:** (1) "bank file has gone out" for plant = a usage_logs row for `/api/reports/bank-salary-file?…download=true`
-  (no export stamp exists; production has 0 such downloads). (2) LEGACY_SHIFT_CODES is a second copy in the panel — keep in
+  or any `/api/reports/bank-transfer` read for that month/year (no export stamp exists; production has 0 such downloads) —
+  SQL filter in `bankFileDownloaded`. Masking for hr lives in `routes/bulk.js redactFor` + the kind's `redactRow` —
+  a new sensitive field must be added to `MASKED_FIELDS`. The workbook must be read WITHOUT `cellDates`. (2) LEGACY_SHIFT_CODES is a second copy in the panel — keep in
   step with the shift list filter. (3) Exits are never undoable. (4) Sheet cells are compared as text to `_meta`; a cell Excel
   reformats counts as a change and is then checked. (5) Q10 register: single PUT /:code still writes bank/PAN/UAN/ESI/company
   with no finance step.
-- **Verified:** new `bulkMasterEdit.test.js` 20 (parity, direct, sensitive, exit); full jest 131 suites / 2329.
+- **Verified:** new `bulkMasterEdit.test.js` 27 (parity, direct, sensitive, exit, 7 review-fix tests); full jest 131 suites /
+  2336. `node backend/scripts/master-edit-sheet-check.mjs` 13/13 in UTC, Asia/Kolkata, America/Los_Angeles, Pacific/Kiritimati
+  (leaving-date serial round trip incl. 29 Feb, long-number account flag).
   `backend/scripts/bulk-master-edit-check.py` (Chromium, built dist, scratch DB, hr/finance/admin, fictional T80xx, port 3506)
-  37/37 — set field for 3 (double click → 1 batch, shift audit = bulk-shift text), sheet download/edit/upload, stale + bad
+  38/38 (incl. hr sees the account as last 4) — set field for 3 (double click → 1 batch, shift audit = bulk-shift text), sheet download/edit/upload, stale + bad
   account refused, leave out, undo, leaving with a loan, no-_meta warning, 390 px, finance sees full account and approves both,
   four bank columns + masked audit, Left + loan recover_at_exit, admin self-approval 403, drift 0, 0 page/console errors,
   0 API ≥ 400. `--base` on b2badcab 3/3 (no Bulk edit, old Assign Shift window, kind 404).
