@@ -119,7 +119,7 @@ function SalaryForm({ employee, emp, onClose }) {
       } else {
         toast.success('Salary structure saved')
       }
-      qc.invalidateQueries(['employee-detail', employee.code])
+      qc.invalidateQueries({ queryKey: ['employee-detail', employee.code] })
       onClose()
     },
     // P1-14: a refused save (e.g. BANK_PAIR_MISMATCH) says why; the window stays open.
@@ -270,7 +270,14 @@ function EditEmployeeModal({ employee, onClose }) {
 
   const saveMutation = useMutation({
     mutationFn: (data) => isNew ? createEmployee(data) : updateEmployee(employee.code, data),
-    onSuccess: () => { toast.success(isNew ? 'Employee created' : 'Employee updated'); qc.invalidateQueries(['employees']); onClose() },
+    onSuccess: () => {
+      toast.success(isNew ? 'Employee created' : 'Employee updated')
+      // FRESH-3: prefix filters (a bare array refreshed every query on screen)
+      qc.invalidateQueries({ queryKey: ['employees'] })
+      qc.invalidateQueries({ queryKey: ['departments'] })
+      if (!isNew) qc.invalidateQueries({ queryKey: ['employee-detail', employee.code] })
+      onClose()
+    },
     onError: (err) => toast.error(err?.response?.data?.error || 'Save failed')
   })
 
@@ -977,7 +984,8 @@ export default function Employees() {
     mutationFn: ({ shiftId, shiftCode }) => bulkAssignShift(Array.from(selectedCodes), shiftId, shiftCode),
     onSuccess: (res) => {
       toast.success(`Shift updated for ${res?.data?.updated || selectedCodes.size} employees`)
-      qcEmp.invalidateQueries(['employees'])
+      qcEmp.invalidateQueries({ queryKey: ['employees'] })
+      qcEmp.invalidateQueries({ queryKey: ['employee-detail'] })
       clearSelection()
       setShowBulkShift(false)
     },

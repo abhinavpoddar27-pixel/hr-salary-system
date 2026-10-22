@@ -50,11 +50,11 @@ function ShiftsTab() {
 
   const createMutation = useMutation({
     mutationFn: (d) => createShift(d),
-    onSuccess: () => { toast.success('Shift created'); qc.invalidateQueries(['shifts']); setShowCreate(false); resetForm() }
+    onSuccess: () => { toast.success('Shift created'); qc.invalidateQueries({ queryKey: ['shifts'] }); setShowCreate(false); resetForm() }
   })
   const updateMutation = useMutation({
     mutationFn: ({ id, data }) => updateShift(id, data),
-    onSuccess: () => { toast.success('Shift updated'); qc.invalidateQueries(['shifts']); setEditId(null); resetForm() }
+    onSuccess: () => { toast.success('Shift updated'); qc.invalidateQueries({ queryKey: ['shifts'] }); setEditId(null); resetForm() }
   })
 
   function resetForm() {
@@ -199,11 +199,11 @@ function HolidaysTab() {
 
   const createMutation = useMutation({
     mutationFn: (d) => createHoliday(d),
-    onSuccess: () => { toast.success('Holiday added'); qc.invalidateQueries(['holidays', selectedYear]); setForm({ date: '', name: '', type: 'National', isRecurring: false, applicableTo: 'All' }) }
+    onSuccess: () => { toast.success('Holiday added'); qc.invalidateQueries({ queryKey: ['holidays', selectedYear] }); setForm({ date: '', name: '', type: 'National', isRecurring: false, applicableTo: 'All' }) }
   })
   const deleteMutation = useMutation({
     mutationFn: (id) => deleteHoliday(id),
-    onSuccess: () => { toast.success('Holiday removed'); qc.invalidateQueries(['holidays', selectedYear]) }
+    onSuccess: () => { toast.success('Holiday removed'); qc.invalidateQueries({ queryKey: ['holidays', selectedYear] }) }
   })
 
   return (
@@ -299,7 +299,7 @@ function PolicyTab() {
 
   const updateMutation = useMutation({
     mutationFn: (d) => updatePolicyConfig(d),
-    onSuccess: () => { toast.success('Policy saved'); qc.invalidateQueries(['policy']) }
+    onSuccess: () => { toast.success('Policy saved'); qc.invalidateQueries({ queryKey: ['policy'] }) }
   })
 
   const POLICY_GROUPS = [
@@ -683,7 +683,7 @@ function UserManagementTab() {
     mutationFn: (d) => createUser(d),
     onSuccess: () => {
       toast.success('User created')
-      qc.invalidateQueries(['users'])
+      qc.invalidateQueries({ queryKey: ['users'] })
       setShowCreate(false)
       setForm({ username: '', password: '', role: 'viewer', allowedCompanies: ['*'] })
     }
@@ -693,7 +693,7 @@ function UserManagementTab() {
     mutationFn: ({ id, payload }) => updateUser(id, payload),
     onSuccess: () => {
       toast.success('User updated')
-      qc.invalidateQueries(['users'])
+      qc.invalidateQueries({ queryKey: ['users'] })
       setEditing(null)
       setEditForm({ role: 'viewer', allowedCompanies: ['*'], password: '' })
     },
