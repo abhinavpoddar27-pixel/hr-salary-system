@@ -52,7 +52,7 @@ export const login = (username, password) => api.post('/auth/login', { username,
 export const logout = () => api.post('/auth/logout')
 export const getMe = () => api.get('/auth/me')
 export const changePassword = (data) => api.post('/auth/change-password', data)
-export const getUsers = () => api.get('/auth/users')
+export const getUsers = () => api.get('/auth/users', fresh) // FRESH-3: no-cache — re-read right after a write (server GET max-age=5)
 export const createUser = (data) => api.post('/auth/users', data)
 
 // ── Import ──────────────────────────────────────────────
@@ -85,8 +85,8 @@ export const updateRecordShift = (id, data) => api.put(`/attendance/record/${id}
 export const recalculateMetrics = (month, year) => api.post('/attendance/recalculate-metrics', { month, year })
 
 // ── Employees ──────────────────────────────────────────
-export const getEmployees = (params) => api.get('/employees', { params })
-export const getEmployee = (code) => api.get(`/employees/${code}`)
+export const getEmployees = (params) => api.get('/employees', { params, ...fresh }) // FRESH-3: no-cache — re-read right after a write (server GET max-age=5)
+export const getEmployee = (code) => api.get(`/employees/${code}`, fresh) // FRESH-3: no-cache — re-read right after a write (server GET max-age=5)
 export const createEmployee = (data) => api.post('/employees', data)
 export const updateEmployee = (code, data) => api.put(`/employees/${code}`, data)
 export const updateSalaryStructure = (code, data) => api.put(`/employees/${code}/salary`, data)
@@ -94,7 +94,7 @@ export const getEmployeeLeaves = (code, year) => api.get(`/employees/${code}/lea
 export const getLeaveBalances = (code, year) => api.get(`/employees/${code}/leaves`, { params: { year } })
 export const updateEmployeeLeaves = (code, data) => api.put(`/employees/${code}/leaves`, data)
 export const updateLeaveBalance = (code, data) => api.put(`/employees/${code}/leaves`, data)
-export const getDepartments = () => api.get('/employees/departments')
+export const getDepartments = () => api.get('/employees/departments', fresh) // FRESH-3: no-cache — re-read right after a write (server GET max-age=5)
 export const getDepartmentsMeta = () => api.get('/employees/meta/departments')
 export const getEmployeeDocuments = (code) => api.get(`/employees/${code}/documents`, fresh) // G3: no-cache — a remove/upload must show at once (server GET max-age=5)
 export const uploadEmployeeDocument = (code, formData) => api.post(`/employees/${code}/documents`, formData, { headers: { 'Content-Type': 'multipart/form-data' } })
@@ -132,11 +132,11 @@ export const getOrgOverview = (month, year, startDateOrOpts, endDate, company) =
     if (endDate) params.endDate = endDate
   }
   if (company) params.company = company
-  return api.get('/analytics/overview', { params })
+  return api.get('/analytics/overview', { params, ...fresh }) // FRESH-3: no-cache — re-read right after a write (server GET max-age=5)
 }
-export const getHeadcountTrend = (month, year, months, company, opts = {}) => api.get('/analytics/headcount-trend', { params: { month, year, months, ...(company ? { company } : {}), ...opts } })
+export const getHeadcountTrend = (month, year, months, company, opts = {}) => api.get('/analytics/headcount-trend', { params: { month, year, months, ...(company ? { company } : {}), ...opts }, ...fresh }) // FRESH-3: no-cache — re-read right after a write (server GET max-age=5)
 export const getSalaryTrend = (month, year, years, company) => api.get('/analytics/salary-trend', { params: { month, year, years, ...(company ? { company } : {}) } })
-export const getAttritionData = (month, year, company) => api.get('/analytics/attrition', { params: { month, year, ...(company ? { company } : {}) } })
+export const getAttritionData = (month, year, company) => api.get('/analytics/attrition', { params: { month, year, ...(company ? { company } : {}) }, ...fresh }) // FRESH-3: no-cache — re-read right after a write (server GET max-age=5)
 export const getAttrition = (month, year) => api.get('/analytics/attrition', { params: { month, year } })
 export const getChronicAbsentees = (month, year, startDate, endDate, company) => api.get('/analytics/absentees', { params: { month, year, startDate, endDate, ...(company ? { company } : {}) } })
 export const getAbsentees = (month, year) => api.get('/analytics/absentees', { params: { month, year } })
@@ -234,7 +234,7 @@ export const getEmployeeBehavioralProfile = (code, month, year) => api.get(`/ana
 export const getBehavioralPatterns = (month, year) => api.get('/analytics/patterns', { params: { month, year } })
 export const getWorkingHoursByDept = (month, year) => api.get('/analytics/working-hours-by-dept', { params: { month, year } })
 export const detectInactiveEmployees = (month, year, inactiveDays) => api.post('/analytics/detect-inactive', { month, year, inactiveDays })
-export const getInactiveEmployees = (company) => api.get('/analytics/inactive-employees', { params: { ...(company ? { company } : {}) } })
+export const getInactiveEmployees = (company) => api.get('/analytics/inactive-employees', { params: { ...(company ? { company } : {}) }, ...fresh }) // FRESH-3: no-cache — re-read right after a write (server GET max-age=5)
 export const reactivateEmployee = (code) => api.post('/analytics/reactivate-employee', { code })
 
 // ── Usage Logs (admin only) ──────────────────────────
@@ -341,7 +341,7 @@ export const getMonthEndChecklist = (month, year, company) => api.get('/payroll/
 export const getSalaryComparison = (month, year, company) => api.get('/payroll/salary-comparison', { params: { month, year, company } })
 
 // ── Import Reconciliation ─────────────────────────────
-export const getImportReconciliation = (month, year, company) => api.get(`/import/reconciliation/${month}/${year}`, { params: { company } })
+export const getImportReconciliation = (month, year, company) => api.get(`/import/reconciliation/${month}/${year}`, { params: { company }, ...fresh }) // FRESH-3: no-cache — re-read right after a write (server GET max-age=5)
 export const updateDepartmentsFromReconciliation = (corrections) => api.post('/import/reconciliation/update-departments', { corrections })
 export const addEmployeesToMaster = (employees) => api.post('/import/reconciliation/add-to-master', { employees })
 
@@ -349,17 +349,17 @@ export const addEmployeesToMaster = (employees) => api.post('/import/reconciliat
 export const updateUser = (id, data) => api.put(`/auth/users/${id}`, data)
 
 // ── Settings ───────────────────────────────────────────
-export const getShifts = () => api.get('/settings/shifts')
+export const getShifts = () => api.get('/settings/shifts', fresh) // FRESH-3: no-cache — re-read right after a write (server GET max-age=5)
 export const createShift = (data) => api.post('/settings/shifts', data)
 export const updateShift = (id, data) => api.put(`/settings/shifts/${id}`, data)
-export const getHolidays = (year) => api.get('/settings/holidays', { params: { year } })
+export const getHolidays = (year) => api.get('/settings/holidays', { params: { year }, ...fresh }) // FRESH-3: no-cache — re-read right after a write (server GET max-age=5)
 export const createHoliday = (data) => api.post('/settings/holidays', data)
 export const deleteHoliday = (id) => api.delete(`/settings/holidays/${id}`)
-export const getPolicyConfig = () => api.get('/settings/policy')
+export const getPolicyConfig = () => api.get('/settings/policy', fresh) // FRESH-3: no-cache — re-read right after a write (server GET max-age=5)
 export const getPolicy = () => api.get('/settings/policy')
 export const updatePolicyConfig = (data) => api.put('/settings/policy', data)
 export const updatePolicy = (data) => api.put('/settings/policy', data)
-export const getComplianceItems = (year, company) => api.get('/settings/compliance', { params: { year, ...(company ? { company } : {}) } })
+export const getComplianceItems = (year, company) => api.get('/settings/compliance', { params: { year, ...(company ? { company } : {}) }, ...fresh }) // FRESH-3: no-cache — re-read right after a write (server GET max-age=5)
 export const updateComplianceItem = (id, data) => api.put(`/settings/compliance/${id}`, data)
 export const generateComplianceCalendar = (year) => api.post(`/settings/compliance/generate/${year}`)
 

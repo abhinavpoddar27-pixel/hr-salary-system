@@ -127,12 +127,12 @@ export default function Compliance() {
 
   const generateMutation = useMutation({
     mutationFn: () => generateComplianceCalendar(year),
-    onSuccess: () => { toast.success('Compliance calendar generated'); qc.invalidateQueries(['compliance', year]) }
+    onSuccess: () => { toast.success('Compliance calendar generated'); qc.invalidateQueries({ queryKey: ['compliance', year] }) }
   })
 
   const updateMutation = useMutation({
     mutationFn: ({ id, data }) => updateComplianceItem(id, data),
-    onSuccess: () => { toast.success('Updated'); setEditItem(null); qc.invalidateQueries(['compliance', year]) }
+    onSuccess: () => { toast.success('Updated'); setEditItem(null); qc.invalidateQueries({ queryKey: ['compliance', year] }) }
   })
 
   const filteredItems = items.filter(i => {

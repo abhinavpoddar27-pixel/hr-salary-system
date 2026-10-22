@@ -83,7 +83,7 @@ export default function FinanceVerification() {
   }
   // P1-15: mirrors POST /signoff — approve is refused while any row this month is flagged or rejected.
   const openFlags = (dash?.summary?.flagged || 0) + (dash?.summary?.rejected || 0)
-  const bulkMut = useMutation({ mutationFn: bulkVerifyEmployees, onSuccess: (r) => { qc.invalidateQueries(['fin-dash']); qc.invalidateQueries(['fin-emps']); toast.success(`${r.data.verified} employees verified`) } })
+  const bulkMut = useMutation({ mutationFn: bulkVerifyEmployees, onSuccess: (r) => { qc.invalidateQueries({ queryKey: ['fin-dash'] }); qc.invalidateQueries({ queryKey: ['fin-emps'] }); toast.success(`${r.data.verified} employees verified`) } })
   // P1-13: show the stored decision straight from the POST reply; only the dashboard is
   // refetched (its read is no-cache). Refetching the sign-off status here could get the
   // browser's 5 s cached copy from before the write and put the old banner back.

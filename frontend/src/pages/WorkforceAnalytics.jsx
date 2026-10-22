@@ -327,8 +327,9 @@ function AttritionTab({ selectedMonth, selectedYear, selectedCompany }) {
       const count = res?.data?.markedInactive || 0
       toast.success(`Detected ${count} inactive employees`)
       refetchInactive()
-      qc.invalidateQueries(['org-overview'])
-      qc.invalidateQueries(['headcount-trend'])
+      qc.invalidateQueries({ queryKey: ['org-overview'] })
+      qc.invalidateQueries({ queryKey: ['headcount-trend'] })
+      qc.invalidateQueries({ queryKey: ['attrition'] })
     }
   })
 

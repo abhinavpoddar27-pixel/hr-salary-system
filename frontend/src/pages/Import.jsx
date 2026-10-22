@@ -44,7 +44,9 @@ function ReconciliationPanel({ month, year }) {
       const res = await updateDepartmentsFromReconciliation(corrections)
       toast.success(res.data.message)
       setDeptEdits({})
-      queryClient.invalidateQueries(['reconciliation'])
+      queryClient.invalidateQueries({ queryKey: ['reconciliation'] })
+      queryClient.invalidateQueries({ queryKey: ['employees'] })
+      queryClient.invalidateQueries({ queryKey: ['departments'] })
     } catch (err) {
       toast.error('Failed: ' + (err.response?.data?.error || err.message))
     } finally {
@@ -65,7 +67,9 @@ function ReconciliationPanel({ month, year }) {
       const res = await addEmployeesToMaster(employees)
       toast.success(res.data.message)
       setDeptEdits({})
-      queryClient.invalidateQueries(['reconciliation'])
+      queryClient.invalidateQueries({ queryKey: ['reconciliation'] })
+      queryClient.invalidateQueries({ queryKey: ['employees'] })
+      queryClient.invalidateQueries({ queryKey: ['departments'] })
     } catch (err) {
       toast.error('Failed: ' + (err.response?.data?.error || err.message))
     } finally {
