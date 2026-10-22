@@ -146,17 +146,32 @@ describe('single approved salary change — stamped, not asked again', () => {
     expect(auditRows(f.id)).toHaveLength(2); // stays withdrawn, nothing more written
   });
 
-  test('a newer approved request takes over → withdrawn and re-stamped for the new request', async () => {
-    const { e, id, f } = await approvedChange(18000);
+  test('a second approved change in the same month (18k → 20k) → auto-approval withdrawn; the 15k → 20k move waits for finance', async () => {
+    const { e, f } = await approvedChange(18000);
     await list();
     const id2 = raise(e, 20000);
+    expect((await approve(id2, 'fin2')).status).toBe(200);
+    stage7(e);
+    const row = (await list()).body.data.find((x) => x.id === f.id);
+    // review fix 1: request #2's old gross (18000) is not the flag's old gross (15000) → not vouched for
+    expect(row.finance_approved).toBe(0);
+    expect(row.preapproved).toBeUndefined();
+    expect(auditRows(f.id).map((x) => x.stage)).toEqual(['FLAG_PREAPPROVED', 'FLAG_PREAPPROVAL_WITHDRAWN']);
+  });
+
+  test('re-stamp: the stamped request is reverted and a fresh one with the same old gross takes over', async () => {
+    const { e, id, f } = await approvedChange(18000);
+    await list();
+    db.prepare("UPDATE salary_change_requests SET status = 'Reverted' WHERE id = ?").run(id);
+    db.prepare('UPDATE employees SET gross_salary = 15000 WHERE id = ?').run(e.id);
+    const id2 = raise(e, 18000);
+    db.prepare('UPDATE salary_change_requests SET old_gross = 15000 WHERE id = ?').run(id2); // master is back at 15k
     expect((await approve(id2, 'fin2')).status).toBe(200);
     stage7(e);
     const row = (await list()).body.data.find((x) => x.id === f.id);
     expect(row.finance_approved).toBe(1);
     expect(row.approved_by).toBe('fin2');
     expect(row.preapproved.request_id).toBe(id2);
-    expect(id2).not.toBe(id);
     expect(auditRows(f.id).map((x) => x.stage)).toEqual(['FLAG_PREAPPROVED', 'FLAG_PREAPPROVAL_WITHDRAWN', 'FLAG_PREAPPROVED']);
   });
 
@@ -256,6 +271,57 @@ describe('never stamped', () => {
       VALUES (?, 9, 2026, 'MANUAL_TDS', 'tds', 0, 500, 500, 'system', 'synthetic')`).run(e.code).lastInsertRowid);
     await list();
     expect(db.prepare('SELECT finance_approved FROM salary_manual_flags WHERE id = ?').get(fid).finance_approved).toBe(0);
+  });
+});
+
+describe('review fixes (Q-B6 review, 22 Oct)', () => {
+  test('R1: A 15k→18k approved, B 18k→20k approved then reverted; next flag 20k→18k stays pending', async () => {
+    const e = person();
+    const a = raise(e, 18000);
+    expect((await approve(a)).status).toBe(200);
+    const b = raise(e, 20000);
+    expect((await approve(b, 'fin2')).status).toBe(200);
+    db.prepare("UPDATE salary_change_requests SET status = 'Reverted' WHERE id = ?").run(b);
+    db.prepare('UPDATE employees SET gross_salary = 18000 WHERE id = ?').run(e.id);
+    const fid = Number(db.prepare(`INSERT INTO salary_manual_flags (employee_code, month, year, flag_type, field_name, system_value, manual_value, delta, changed_by, notes)
+      VALUES (?, 10, 2026, 'GROSS_STRUCTURE_CHANGE', 'gross_salary', 20000, 18000, -2000, 'system', 'synthetic')`).run(e.code).lastInsertRowid);
+    await list('fin1', 10);
+    expect(db.prepare('SELECT finance_approved FROM salary_manual_flags WHERE id = ?').get(fid).finance_approved).toBe(0);
+    expect(auditRows(fid)).toHaveLength(0);
+  });
+
+  test('R2: approval dated after the flag month (structure effective later) stays pending', async () => {
+    const e = person();
+    const id = raise(e, 18000);
+    expect((await approve(id, 'fin1', '2026-10-01')).status).toBe(200); // structure effective October
+    stage7(e); // Stage 7 pays the master gross for September anyway → September flag
+    const f = flagOf(e);
+    expect(f).toBeTruthy();
+    await list();
+    expect(flagOf(e).finance_approved).toBe(0);
+    expect(auditRows(f.id)).toHaveLength(0);
+  });
+
+  test('R2: approval effective on or before the flag month end is stamped (mid-month date)', async () => {
+    const e = person();
+    const id = raise(e, 18000);
+    expect((await approve(id, 'fin1', '2026-09-30')).status).toBe(200);
+    stage7(e);
+    await list();
+    expect(flagOf(e).finance_approved).toBe(1);
+  });
+
+  test('R3: a hand comment starting "[auto req #" is never treated as an auto-stamp', async () => {
+    const { e, f } = await approvedChange(18000);
+    const r = await api.request('PUT', `/api/finance-audit/approve-flag/${f.id}`, { as: 'fin2', body: { status: 'APPROVED', comments: '[auto req #999] typed by hand' } });
+    expect(r.status).toBe(200);
+    db.prepare('UPDATE employees SET gross_salary = 19500 WHERE id = ?').run(e.id);
+    stage7(e);
+    const row = (await list()).body.data.find((x) => x.id === f.id);
+    expect(row.finance_approved).toBe(1);
+    expect(row.approved_by).toBe('fin2');
+    expect(row.preapproved).toBeUndefined();
+    expect(auditRows(f.id).map((x) => x.stage)).toEqual(['FINANCE_FLAG_APPROVE']);
   });
 });
 

@@ -1,6 +1,6 @@
 # Q-B6 — PROGRESS
 
-**State:** Phases 1–3 done. Built, verified, pushed. NO PR (planner opens after the independent MONEY review).
+**State:** Review fixes 1–3 applied (SHIP WITH FIXES, 22 Oct). Verified, pushed. NO PR.
 Branch `fix/bulk-revision-preapproved-flags` off main b2badcab. MONEY PR. Port 3503.
 
 ## Done
@@ -28,8 +28,24 @@ Branch `fix/bulk-revision-preapproved-flags` off main b2badcab. MONEY PR. Port 3
 - Production expectation (read-only, latest-request rule): first read stamps Mar 1, Apr 26 of 30, May 3, Jun 1, Jul 2,
   Aug 79 = 112; Feb 3 + Apr 4 stay pending.
 
-## Next
-- Independent review (planner). Register Q7 (Finance Verification gross_changed note).
+## Review fixes (22 Oct, SHIP WITH FIXES)
+- F1: stamp path only — request old gross must equal the flag's old gross ± ₹1 (reject path + grossRequestForFlag unchanged).
+- F2: stamp only when a salary_structures row of the employee with gross = request new gross ± ₹1 is effective on or
+  before the last day of the flag's month.
+- F3: an auto-stamp is the latest audit_log row (salary_manual_flags, field finance_approved) with stage FLAG_PREAPPROVED;
+  request / batch ids read from that row's remark; the finance_approvals comment is no longer trusted.
+- Failing-first: R1, R2 (later month), R3 failed on the pre-fix code; R2 (month end) passes as the control.
+  The old "newer request takes over" test now expects a withdrawal (F1: 18k→20k request cannot vouch for 15k→20k);
+  a new re-stamp test covers a fresh request with the same old gross.
+- Verified: suite 22/22; full jest 131 suites / 2326 → 2331 tests; check script 30/30 (added T9407: approval effective
+  October → September flag pending); --base on origin/main 5/5; fix mode on origin/main 18 pass / 12 fail.
+- Production expectation after F1 + F2 (read-only): Mar 1, Apr 25 of 30, May 2 of 3, Jun 1, Jul 2, Aug 74 of 79 = 105
+  stamped; 18 stay pending (Feb 3, Apr 5, May 1, Aug 5).
+
+## Register
+- Q7: Finance Verification `gross_changed` warning could say "approved in request #N".
+- Review note 5: a flag approved BY HAND stays approved when Stage 7 later rewrites its values (UPSERT keeps
+  finance_approved) — the withdraw guard covers auto-stamps only. Pre-existing behaviour.
 
 ## Rulings (22 Oct 2026, planner/owner)
 - Option (b) stamp-on-read. Q1 OWNER: all finance-approved salary change requests (single + bulk), one helper.
@@ -61,9 +77,12 @@ Q4 withdraw on mismatch; Q5 note on the row; Q6 backlog included (never a finali
   Interventions shows "With bulk batch #B / With request #N · approved by X" (`flag-preapproved-<id>`). salaryComputation.js,
   payroll.js, schema.js untouched; no schema change.
 - **Fragile:** (1) Stage 7's flag UPSERT keeps finance_approved when values change — the withdraw guard covers auto-stamps only;
-  hand approvals keep the old behaviour. (2) Auto rows are recognised by the `[auto req #` prefix on finance_approvals.comments —
-  keep the tag. (3) The GET readers write (idempotent). (4) Match = LATEST approved gross-changing request (same rule as N-23).
-- **Verified:** grossFlagPreapproval.test.js 17 (real Stage 7 + routes + real bulk approve; re-run keeps the stamp, value
-  change withdraws, finalised month untouched, self-approved not stamped, reject still reverts); jest 131/2326;
-  gross-flag-preapproval-check.py 28/28, --base 5/5; drift 0. **Not tested:** Railway; production data.
-- **Register:** Q7 — Finance Verification `gross_changed` warning could say "approved in request #N".
+  hand approvals keep the old behaviour. (2) Auto-stamps are recognised by the latest audit_log stage FLAG_PREAPPROVED (field finance_approved) — every
+  writer of finance_approved must keep logging that field. (3) The GET readers write (idempotent). (4) Match = LATEST approved gross-changing request (same rule as N-23).
+- **Verified:** grossFlagPreapproval.test.js 22 (real Stage 7 + routes + real bulk approve; re-run keeps the stamp, value
+  change withdraws, finalised month untouched, self-approved not stamped, reject still reverts); jest 131/2331;
+  gross-flag-preapproval-check.py 30/30, --base 5/5; drift 0. **Not tested:** Railway; production data.
+- **Review fixes:** stamp also needs request old gross = flag old gross ± ₹1, and a structure row at the new gross effective
+  on or before the flag month end; auto-stamps detected by audit stage FLAG_PREAPPROVED (not comment text).
+  Prod expectation 105 stamped (Mar 1, Apr 25, May 2, Jun 1, Jul 2, Aug 74), 18 stay pending.
+- **Register:** Q7 — Finance Verification `gross_changed` note; review 5 — hand approvals stay approved on value change.

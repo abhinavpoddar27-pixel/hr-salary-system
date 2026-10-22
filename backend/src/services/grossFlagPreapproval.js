@@ -22,7 +22,6 @@
 
 const GROSS_FLAG = 'GROSS_STRUCTURE_CHANGE';
 const GROSS_MOVED_TOLERANCE = 1; // rupees — same rule decideManualFlag uses (N-MONEY Q1)
-const AUTO_TAG_RE = /^\[auto req #(\d+)(?: batch #(\d+))?\]/;
 
 const sameUser = (a, b) => !!a && !!b && String(a).trim().toLowerCase() === String(b).trim().toLowerCase();
 const isPerson = (u) => !!u && !['system', 'salary_compute'].includes(String(u).trim().toLowerCase());
@@ -44,12 +43,27 @@ function grossRequestForFlag(db, flag) {
   return Math.abs((Number(reqRow.new_gross) || 0) - (parseFloat(flag.manual_value) || 0)) <= GROSS_MOVED_TOLERANCE ? reqRow : null;
 }
 
-/** The request may stand in for finance's flag decision: a named approver who is not the requester. */
+const lastDayOf = (month, year) => `${year}-${String(month).padStart(2, '0')}-${String(new Date(Date.UTC(year, month, 0)).getUTCDate()).padStart(2, '0')}`;
+
+/**
+ * The request may stand in for finance's flag decision (stamp path only — the reject path keeps grossRequestForFlag):
+ *  - a named approver who is not the requester;
+ *  - the request's OLD gross is the flag's old gross (± ₹1) — so a later change that was reverted cannot make an older
+ *    request vouch for a different move (review fix 1);
+ *  - the structure row the approval wrote (same employee, gross = new gross ± ₹1) is effective on or before the last day
+ *    of the flag's month — an approval dated for a later month does not cover this month's pay (review fix 2).
+ */
 function eligibleRequest(db, flag) {
   const req = grossRequestForFlag(db, flag);
   if (!req) return null;
   if (!isPerson(req.approved_by)) return null;
   if (sameUser(req.approved_by, req.requested_by)) return null;
+  if (Math.abs((Number(req.old_gross) || 0) - (parseFloat(flag.system_value) || 0)) > GROSS_MOVED_TOLERANCE) return null;
+  const empId = req.employee_id || (db.prepare('SELECT id FROM employees WHERE code = ?').get(req.employee_code) || {}).id;
+  if (!empId) return null;
+  const structure = db.prepare(`SELECT 1 x FROM salary_structures WHERE employee_id = ? AND ABS(COALESCE(gross_salary,0) - ?) <= ?
+    AND effective_from <= ? LIMIT 1`).get(empId, Number(req.new_gross) || 0, GROSS_MOVED_TOLERANCE, lastDayOf(flag.month, flag.year));
+  if (!structure) return null;
   return req;
 }
 
@@ -63,12 +77,24 @@ function monthFinalised(db, month, year) {
   return !!db.prepare('SELECT 1 x FROM monthly_imports WHERE month = ? AND year = ? AND is_finalised = 1 LIMIT 1').get(month, year);
 }
 
-/** The latest finance_approvals row of a flag, parsed when it is an auto-stamp. */
+const AUTO_STAGE = 'FLAG_PREAPPROVED';
+const WITHDRAWN_STAGE = 'FLAG_PREAPPROVAL_WITHDRAWN';
+const REQ_RE = /salary change request #(\d+)/;
+const BATCH_RE = /\(bulk batch #(\d+)\)/;
+
+/**
+ * The latest decision on a flag's finance_approved, from audit_log (review fix 3: an auto-stamp is recognised by its
+ * audit stage, never by comment text a person could type). Every writer of finance_approved logs field
+ * 'finance_approved' on table salary_manual_flags (decideManualFlag via logAudit, and this module).
+ */
 function latestDecision(db, flagId) {
-  const row = db.prepare('SELECT * FROM finance_approvals WHERE flag_id = ? ORDER BY id DESC LIMIT 1').get(flagId);
+  const row = db.prepare(`SELECT * FROM audit_log WHERE table_name = 'salary_manual_flags' AND record_id = ? AND field_name = 'finance_approved'
+    ORDER BY id DESC LIMIT 1`).get(String(flagId));
   if (!row) return null;
-  const m = AUTO_TAG_RE.exec(String(row.comments || ''));
-  return { row, auto: !!m && row.status === 'APPROVED', requestId: m ? Number(m[1]) : null, batchId: m && m[2] ? Number(m[2]) : null };
+  const auto = row.stage === AUTO_STAGE;
+  const r = auto ? REQ_RE.exec(String(row.remark || '')) : null;
+  const b = auto ? BATCH_RE.exec(String(row.remark || '')) : null;
+  return { row, auto, withdrawn: row.stage === WITHDRAWN_STAGE, requestId: r ? Number(r[1]) : null, batchId: b ? Number(b[1]) : null };
 }
 
 function audit(db, flag, oldVal, newVal, stage, remark) {
@@ -89,7 +115,7 @@ function stamp(db, flag, req) {
     VALUES (?, ?, ?, ?, 'APPROVED', ?, datetime('now'), ?)`)
     .run(flag.employee_code, flag.month, flag.year, flag.id, req.approved_by,
       `${tag} Approved with ${via} by ${req.approved_by}${approvedOn ? ` on ${approvedOn}` : ''} — not asked again`);
-  audit(db, flag, 0, 1, 'FLAG_PREAPPROVED',
+  audit(db, flag, 0, 1, AUTO_STAGE,
     `${flag.employee_code} ${flag.month}/${flag.year}: gross ${flag.system_value} → ${flag.manual_value} already approved with ${via} `
     + `by ${req.approved_by} (requested by ${req.requested_by || '—'})`);
   return true;
@@ -102,7 +128,7 @@ function withdraw(db, flag, dec, reason) {
   db.prepare(`INSERT INTO finance_approvals (employee_code, month, year, flag_id, status, reviewed_by, reviewed_at, comments)
     VALUES (?, ?, ?, ?, 'WITHDRAWN', 'system', datetime('now'), ?)`)
     .run(flag.employee_code, flag.month, flag.year, flag.id, `[auto-withdrawn req #${dec.requestId}] ${reason}`);
-  audit(db, flag, 1, 0, 'FLAG_PREAPPROVAL_WITHDRAWN',
+  audit(db, flag, 1, 0, WITHDRAWN_STAGE,
     `${flag.employee_code} ${flag.month}/${flag.year}: auto-approval from salary change request #${dec.requestId} withdrawn — ${reason}`);
   return true;
 }
@@ -135,7 +161,7 @@ function syncGrossFlagPreapprovals(db, month, year) {
       // A person set it back to pending by hand (status CLEAR) — their decision stands; only a flag nobody decided,
       // or one whose auto-approval was withdrawn, is stamped.
       const last = latestDecision(db, flag.id);
-      if (last && !last.auto && last.row.status !== 'WITHDRAWN') continue;
+      if (last && !last.auto && !last.withdrawn) continue;
       const req = eligibleRequest(db, flag);
       if (req && stamp(db, flag, req)) out.stamped++;
     }
@@ -149,12 +175,12 @@ function preapprovalInfo(db, flags) {
   for (const f of flags) {
     if (f.flag_type !== GROSS_FLAG || Number(f.finance_approved) !== 1) continue;
     const dec = latestDecision(db, f.id);
-    if (dec && dec.auto) map[f.id] = { request_id: dec.requestId, batch_id: dec.batchId, approved_by: dec.row.reviewed_by };
+    if (dec && dec.auto) map[f.id] = { request_id: dec.requestId, batch_id: dec.batchId, approved_by: f.approved_by };
   }
   return map;
 }
 
 module.exports = {
   grossRequestForFlag, eligibleRequest, syncGrossFlagPreapprovals, preapprovalInfo,
-  GROSS_MOVED_TOLERANCE, AUTO_TAG_RE,
+  GROSS_MOVED_TOLERANCE,
 };

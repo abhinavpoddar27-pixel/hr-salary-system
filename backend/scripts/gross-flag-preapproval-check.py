@@ -8,6 +8,7 @@ Chromium against the BUILT dist, real finance + hr logins, scratch DATA_DIR, fic
     T9403 self-approved legacy (boss → boss)                    → stays pending (Approve / Reject shown)
     T9404 no request                                            → stays pending
     T9405 request gross 18000, flag 18500                       → stays pending
+    T9407 approved request, structure effective Oct (after Sep) → stays pending
   Aug 2026 (finalised): T9406 flag + approved request           → untouched
 Usage:
   PORT=3503 python3 backend/scripts/gross-flag-preapproval-check.py
@@ -41,7 +42,7 @@ IDS = {}
 
 def seed():
     c = sqlite3.connect(DB)
-    for code, g in (('T9401', 18000), ('T9402', 20000), ('T9403', 18000), ('T9404', 18000), ('T9405', 18500), ('T9406', 18000)):
+    for code, g in (('T9401', 18000), ('T9402', 20000), ('T9403', 18000), ('T9404', 18000), ('T9405', 18500), ('T9406', 18000), ('T9407', 18000)):
         c.execute("INSERT INTO employees(code,name,department,company,status,employment_type,gross_salary) "
                   "VALUES(?,?,'TEST DEPT',?,'Active','Permanent',?)", (code, f'TEST EMP {code[3:]}', C, g))
 
@@ -54,14 +55,20 @@ def seed():
     req('T9403', 18000, 'boss', 'Boss')
     req('T9405', 18000, 'hr', 'admin')
     req('T9406', 18000, 'hr', 'admin')
+    req('T9407', 18000, 'hr', 'admin')
     IDS['K'] = c.execute("INSERT INTO bulk_batches(kind,month,year,status,created_by,row_count) VALUES('salary-revision',9,2026,'applied','hr',1)").lastrowid
     c.execute("INSERT INTO bulk_rows(batch_id,row_no,row_key,state,action,target_table,target_id) "
               "VALUES(?,1,'T9402','ok','create','salary_change_requests',?)", (IDS['K'], IDS['B']))
     for code, m, mv in (('T9401', 9, 18000), ('T9402', 9, 20000), ('T9403', 9, 18000), ('T9404', 9, 18000),
-                        ('T9405', 9, 18500), ('T9406', 8, 18000)):
+                        ('T9405', 9, 18500), ('T9406', 8, 18000), ('T9407', 9, 18000)):
         c.execute("INSERT INTO salary_manual_flags(employee_code,month,year,flag_type,field_name,system_value,manual_value,delta,changed_by,notes) "
                   "VALUES(?,?,2026,'GROSS_STRUCTURE_CHANGE','gross_salary',15000,?,?,'system','Gross changed')", (code, m, mv, mv - 15000))
     c.execute("INSERT INTO monthly_imports(month,year,company,is_finalised) VALUES(8,2026,?,1)", (C,))
+    # the structure rows the approvals wrote (review fix 2: effective on or before the flag month end)
+    for code, g, eff in (('T9401', 18000, '2026-09-01'), ('T9402', 20000, '2026-09-01'), ('T9403', 18000, '2026-09-01'),
+                         ('T9405', 18000, '2026-09-01'), ('T9406', 18000, '2026-08-01'), ('T9407', 18000, '2026-10-01')):
+        eid = c.execute('SELECT id FROM employees WHERE code=?', (code,)).fetchone()[0]
+        c.execute("INSERT INTO salary_structures(employee_id,effective_from,gross_salary,basic,hra) VALUES(?,?,?,?,?)", (eid, eff, g, g * .5, g * .2))
     c.commit(); c.close()
 
 
@@ -122,7 +129,7 @@ try:
             check('old: DB T9401 pending', 0, appr('T9401')[0])
             rd = api(pg, '/api/finance-audit/readiness-check?month=9&year=2026')
             blk = [x for x in rd['body'].get('data', {}).get('blockers', []) if x['type'] == 'UNAPPROVED_MANUAL_FLAGS']
-            check('old: readiness blocker counts all 5 gross flags', 5, blk[0]['count'] if blk else 0)
+            check('old: readiness blocker counts all 6 gross flags', 6, blk[0]['count'] if blk else 0)
             b.close()
         else:
             print('\n— finance opens Manual Interventions, Sep 2026 —')
@@ -133,7 +140,7 @@ try:
             check(f'T9401 note "With request #{IDS["A"]} · approved by admin"', True, f'With request #{IDS["A"]} · approved by admin' in r1)
             check(f'T9402 note "With bulk batch #{IDS["K"]} · approved by admin"', True, f'With bulk batch #{IDS["K"]} · approved by admin' in r2)
             check('T9401 has no Approve/Reject buttons', 0, row(pg, 'T9401').get_by_role('button', name='Reject').count())
-            for code, why in (('T9403', 'self-approved'), ('T9404', 'no request'), ('T9405', 'gross differs')):
+            for code, why in (('T9403', 'self-approved'), ('T9404', 'no request'), ('T9405', 'gross differs'), ('T9407', 'approval effective October')):
                 t = row(pg, code).inner_text()
                 check(f'{code} ({why}) stays Pending with Approve/Reject', (True, 1), ('Pending' in t, row(pg, code).get_by_role('button', name='Reject').count()))
                 check(f'{code} DB pending', 0, appr(code)[0])
@@ -141,7 +148,7 @@ try:
             print('\n— readiness —')
             rd = api(pg, '/api/finance-audit/readiness-check?month=9&year=2026')
             blk = [x for x in rd['body'].get('data', {}).get('blockers', []) if x['type'] == 'UNAPPROVED_MANUAL_FLAGS']
-            check('readiness blocker counts only the 3 still pending', 3, blk[0]['count'] if blk else 0)
+            check('readiness blocker counts only the 4 still pending', 4, blk[0]['count'] if blk else 0)
             check('audit FLAG_PREAPPROVED rows = 2', 2, q("SELECT COUNT(*) FROM audit_log WHERE stage='FLAG_PREAPPROVED'")[0][0])
             pg.reload(); pg.wait_for_load_state('networkidle'); time.sleep(.8)
             check('second read writes nothing more', 2, q("SELECT COUNT(*) FROM finance_approvals")[0][0])
@@ -174,7 +181,7 @@ try:
             pg, errs, bad = login(ctx, 'hr', 'Indriyan@2025')
             open_tab(pg, 9)
             check('hr sees T9402 note', True, 'With bulk batch' in row(pg, 'T9402').inner_text())
-            check('hr: still no new stamps (T9403-5 pending)', [0, 0, 0], [appr(c_)[0] for c_ in ('T9403', 'T9404', 'T9405')])
+            check('hr: still no new stamps (T9403-5, T9407 pending)', [0, 0, 0, 0], [appr(c_)[0] for c_ in ('T9403', 'T9404', 'T9405', 'T9407')])
             check('hr: page errors', [], errs)
             b.close()
 finally:
