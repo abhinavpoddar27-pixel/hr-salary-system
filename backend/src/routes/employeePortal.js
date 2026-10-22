@@ -1,6 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const { getDb } = require('../database/db');
+const { istYear } = require('../utils/istDate'); // P3-IST-BE
 
 // All portal routes require authenticated user with employee_code set
 function requireEmployee(req, res, next) {
@@ -48,7 +49,7 @@ router.get('/leave-balance', requireEmployee, (req, res) => {
   const db = getDb();
   const emp = db.prepare('SELECT id FROM employees WHERE code = ?').get(req.user.employee_code);
   if (!emp) return res.status(404).json({ success: false, error: 'Employee not found' });
-  const year = req.query.year || new Date().getFullYear();
+  const year = req.query.year || istYear();
   const balances = db.prepare('SELECT * FROM leave_balances WHERE employee_id = ? AND year = ?').all(emp.id, year);
   res.json({ success: true, data: balances });
 });

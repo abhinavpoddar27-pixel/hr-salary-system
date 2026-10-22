@@ -9,6 +9,7 @@ const express = require('express');
 const router = express.Router();
 const path = require('path');
 const fs = require('fs');
+const { istToday, istYear } = require('../utils/istDate'); // P3-IST-BE
 const crypto = require('crypto');
 const multer = require('multer');
 const { getDb } = require('../database/db');
@@ -1492,7 +1493,7 @@ router.post('/employees', (req, res) => {
       const grossNum = Number(body.gross_salary) || 0;
       const effectiveFrom = (body.doj && String(body.doj).trim())
         ? String(body.doj).trim().substring(0, 7)
-        : new Date().toISOString().substring(0, 7);
+        : istToday().substring(0, 7);
       // Create may set flags on the new employee (§4.4); omitted = 0.
       const pfApp = body.pf_applicable ? 1 : 0;
       const esiApp = body.esi_applicable ? 1 : 0;
@@ -1595,7 +1596,7 @@ router.put('/employees/:code', (req, res) => {
   // changes). Default = current calendar month, zero-padded YYYY-MM (matches
   // the create-path fallback). Optional body override lets a targeted/cohort
   // correction stamp a specific cycle (e.g. 2026-05 for May arrears).
-  let effectiveFrom = new Date().toISOString().substring(0, 7);
+  let effectiveFrom = istToday().substring(0, 7); // P3-IST-BE: IST month
   if (body.effective_from !== undefined && body.effective_from !== null
       && String(body.effective_from).trim() !== '') {
     const v = String(body.effective_from).trim();
@@ -1658,7 +1659,7 @@ router.put('/employees/:code', (req, res) => {
 
     // Loans PR-8: the rep's open sales loans are flagged for exit recovery (code + company).
     if (becameExit) {
-      const exitDate = (body.dol && String(body.dol).trim()) || existing.dol || new Date().toISOString().split('T')[0];
+      const exitDate = (body.dol && String(body.dol).trim()) || existing.dol || istToday();
       loanExit = flagSalesBorrowerForExit(db, { employeeCode: existing.code, company, exitDate, reason: `status ${existing.status} → ${body.status}` },
         { username: user, role: normalizeRole(req.user?.role) });
     }
@@ -1693,7 +1694,7 @@ router.put('/employees/:code/mark-left', (req, res) => {
     return res.status(400).json({ success: false, error: 'Sales employee already marked as Left' });
   }
 
-  const dol = body.dol || new Date().toISOString().split('T')[0];
+  const dol = body.dol || istToday();
   const reason = body.reason || '';
 
   // Loans PR-8 (ruling Q6): the status change and the exit flag on the rep's open
@@ -1860,7 +1861,7 @@ function writeAuditP2(db, table, { recordId, field, oldVal, newVal, user, action
 router.get('/holidays', (req, res) => {
   const company = (req.query.company || '').trim();
   if (!company) return res.status(400).json({ success: false, error: 'company query param required' });
-  const year = parseInt(req.query.year, 10) || new Date().getFullYear();
+  const year = parseInt(req.query.year, 10) || istYear();
 
   const db = getDb();
   const rows = db.prepare(`

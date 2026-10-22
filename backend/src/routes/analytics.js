@@ -3,6 +3,7 @@ const router = express.Router();
 const { requireHrOrAdmin, roleIn } = require('../middleware/roles'); // P2-11 role guards
 const requireHrFinanceOrAdmin = (req, res, next) => (roleIn(req, 'admin', 'hr', 'finance') ? next() : res.status(403).json({ success: false, error: 'HR, finance or admin access required' }));
 const { getDb } = require('../database/db');
+const { istToday, istYearMonth, istYear, istAddMonths } = require('../utils/istDate'); // P3-IST-BE
 const {
   computeOrgOverview, computeHeadcountTrend, computeAttrition,
   computeChronicAbsentees, computePunctualityReport, computeOvertimeReport,
@@ -577,8 +578,8 @@ router.get('/employee/:code/profile', (req, res) => {
     const employee = db.prepare('SELECT * FROM employees WHERE code = ?').get(code);
     if (!employee) return res.status(404).json({ success: false, error: 'Employee not found' });
 
-    const m = parseInt(month) || new Date().getMonth() + 1;
-    const y = parseInt(year) || new Date().getFullYear();
+    const m = parseInt(month) || istYearMonth().month;
+    const y = parseInt(year) || istYear();
 
     // Current month patterns
     const patternResult = detectPatterns(db, code, m, y);
@@ -722,8 +723,8 @@ router.get('/working-hours-by-dept', (req, res) => {
 router.get('/salary-trend', (req, res) => {
   try {
     const db = getDb();
-    const endMonth = parseInt(req.query.month) || new Date().getMonth() + 1;
-    const endYear = parseInt(req.query.year) || new Date().getFullYear();
+    const endMonth = parseInt(req.query.month) || istYearMonth().month;
+    const endYear = parseInt(req.query.year) || istYear();
     const numYears = Math.min(parseInt(req.query.years) || 3, 5);
     const company = req.query.company || null;
 
@@ -816,12 +817,10 @@ router.get('/employee/:code/profile-range', (req, res) => {
 
     // Defaults: from = 6 months ago, to = today
     if (!to) {
-      to = new Date().toISOString().split('T')[0];
+      to = istToday();
     }
     if (!from) {
-      const d = new Date();
-      d.setMonth(d.getMonth() - 6);
-      from = d.toISOString().split('T')[0];
+      from = istAddMonths(istToday(), -6);
     }
 
     const dateRegex = /^\d{4}-\d{2}-\d{2}$/;
@@ -858,12 +857,10 @@ router.post('/employee/:code/ai-review', requireHrFinanceOrAdmin, async (req, re
 
     // Defaults: from = 6 months ago, to = today
     if (!to) {
-      to = new Date().toISOString().split('T')[0];
+      to = istToday();
     }
     if (!from) {
-      const d = new Date();
-      d.setMonth(d.getMonth() - 6);
-      from = d.toISOString().split('T')[0];
+      from = istAddMonths(istToday(), -6);
     }
 
     const dateRegex = /^\d{4}-\d{2}-\d{2}$/;
@@ -900,12 +897,10 @@ router.get('/department-dashboard', (req, res) => {
     const db = getDb();
     let { from, to } = req.query;
     if (!to) {
-      to = new Date().toISOString().split('T')[0];
+      to = istToday();
     }
     if (!from) {
-      const d = new Date();
-      d.setMonth(d.getMonth() - 6);
-      from = d.toISOString().split('T')[0];
+      from = istAddMonths(istToday(), -6);
     }
     const dateRegex = /^\d{4}-\d{2}-\d{2}$/;
     if (!dateRegex.test(from) || !dateRegex.test(to)) {
@@ -928,12 +923,10 @@ router.get('/org-metrics', (req, res) => {
     const db = getDb();
     let { from, to } = req.query;
     if (!to) {
-      to = new Date().toISOString().split('T')[0];
+      to = istToday();
     }
     if (!from) {
-      const d = new Date();
-      d.setMonth(d.getMonth() - 6);
-      from = d.toISOString().split('T')[0];
+      from = istAddMonths(istToday(), -6);
     }
     const dateRegex = /^\d{4}-\d{2}-\d{2}$/;
     if (!dateRegex.test(from) || !dateRegex.test(to)) {

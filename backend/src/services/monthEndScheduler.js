@@ -33,19 +33,19 @@ function createNotification(roleTarget, type, message, link) {
 
 function checkPipelineStatus() {
   const db = getDb();
-  const now = new Date();
-  const dayOfMonth = now.getDate();
+  const ist = istParts(); // P3-IST-BE: the IST calendar day, not the UTC one
+  const dayOfMonth = ist.day;
 
   // Determine which month to check
   let checkMonth, checkYear;
   if (dayOfMonth <= 10) {
     // Check previous month
-    checkMonth = now.getMonth(); // 0-indexed, so this is prev month
-    checkYear = now.getFullYear();
+    checkMonth = ist.month - 1;
+    checkYear = ist.year;
     if (checkMonth === 0) { checkMonth = 12; checkYear--; }
   } else {
-    checkMonth = now.getMonth() + 1;
-    checkYear = now.getFullYear();
+    checkMonth = ist.month;
+    checkYear = ist.year;
   }
 
   const MONTHS = ['', 'January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
@@ -186,8 +186,11 @@ function startScheduler() {
     try { checkPipelineStatus(); } catch (e) { console.error('[Scheduler] Error:', e.message); }
     try { runNightlyLeaveSweep(); } catch (e) { console.error('[Scheduler] Leave sweep error:', e.message); }
   });
-  // 00:05 IST (18:35 UTC the previous day) — year-boundary seed / lapse.
-  cron.schedule('35 18 * * *', () => {
+  // 00:00 IST (18:30 UTC the previous day) — year-boundary seed / lapse. P3-IST-BE: was
+  // 00:05 IST, which left /leaves/adjust refusing for five minutes on 1 Jan (no new-year
+  // balance row yet). Both sides are guarded keys + INSERT OR IGNORE, so the earlier minute
+  // changes nothing else; istParts() reads the IST day, which has already turned at 18:30 UTC.
+  cron.schedule('30 18 * * *', () => {
     try { runYearBoundaryCheck(); } catch (e) { console.error('[Scheduler] Year-boundary error:', e.message); }
   });
   // Also run on startup

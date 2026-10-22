@@ -7,6 +7,7 @@ const express = require('express');
 const router = express.Router();
 const XLSX = require('xlsx');
 const { getDb, logAudit } = require('../database/db');
+const { istToday, istYearMonth, istYear, istAddDays } = require('../utils/istDate'); // P3-IST-BE
 const { detectEarlyExits } = require('../services/earlyExitDetection');
 
 // ─── Utility: previous month/year ─────────────────────────
@@ -79,13 +80,11 @@ router.post('/detect', requireHrOrAdmin, (req, res) => {
 
     // Default to yesterday
     if (!date) {
-      const d = new Date();
-      d.setDate(d.getDate() - 1);
-      date = d.toISOString().split('T')[0];
+      date = istAddDays(istToday(), -1);
     }
 
     // Reject future dates — detection requires actual punch-out data
-    const today = new Date().toISOString().split('T')[0];
+    const today = istToday();
     if (date > today) {
       return res.status(400).json({
         success: false,
@@ -127,7 +126,7 @@ router.post('/detect-range', requireHrOrAdmin, (req, res) => {
     if (startDate > endDate) {
       return res.status(400).json({ success: false, error: 'startDate must be <= endDate' });
     }
-    const today = new Date().toISOString().split('T')[0];
+    const today = istToday();
     const effectiveEnd = endDate > today ? today : endDate;
     const span = daysBetween(startDate, effectiveEnd);
     if (span > 90) {
@@ -216,8 +215,8 @@ router.get('/', requireHrFinanceOrAdmin, (req, res) => {
 router.get('/summary', requireHrFinanceOrAdmin, (req, res) => {
   try {
     const db = getDb();
-    const month = parseInt(req.query.month) || (new Date().getMonth() + 1);
-    const year = parseInt(req.query.year) || new Date().getFullYear();
+    const month = parseInt(req.query.month) || istYearMonth().month;
+    const year = parseInt(req.query.year) || istYear();
     const company = req.query.company;
 
     let whereClause = "CAST(strftime('%m', eed.date) AS INTEGER) = ? AND CAST(strftime('%Y', eed.date) AS INTEGER) = ?";
@@ -243,9 +242,9 @@ router.get('/summary', requireHrFinanceOrAdmin, (req, res) => {
     `).get(month, year);
 
     // Trend: current 30d vs previous 30d
-    const now = new Date();
-    const d30ago = new Date(now); d30ago.setDate(d30ago.getDate() - 30);
-    const d60ago = new Date(now); d60ago.setDate(d60ago.getDate() - 60);
+    const todayIso = istToday();
+    const d30ago = istAddDays(todayIso, -30);
+    const d60ago = istAddDays(todayIso, -60);
 
     let trendWhere = "eed.detection_status != 'exempted'";
     if (company) trendWhere += ` AND eed.company = '${company}'`;
@@ -253,12 +252,12 @@ router.get('/summary', requireHrFinanceOrAdmin, (req, res) => {
     const current30 = db.prepare(`
       SELECT COUNT(*) as cnt FROM early_exit_detections eed
       WHERE eed.date >= ? AND eed.date <= ? AND ${trendWhere}
-    `).get(d30ago.toISOString().split('T')[0], now.toISOString().split('T')[0]);
+    `).get(d30ago, todayIso);
 
     const prev30 = db.prepare(`
       SELECT COUNT(*) as cnt FROM early_exit_detections eed
       WHERE eed.date >= ? AND eed.date < ? AND ${trendWhere}
-    `).get(d60ago.toISOString().split('T')[0], d30ago.toISOString().split('T')[0]);
+    `).get(d60ago, d30ago);
 
     const trend = (current30?.cnt || 0) - (prev30?.cnt || 0);
 
@@ -288,26 +287,24 @@ router.get('/employee/:employeeCode/analytics', requireHrFinanceOrAdmin, (req, r
   try {
     const db = getDb();
     const { employeeCode } = req.params;
-    const now = new Date();
+    const todayIso = istToday();
 
     // 4 x 30-day windows
     const windows = [];
     for (let i = 0; i < 4; i++) {
-      const endDate = new Date(now);
-      endDate.setDate(endDate.getDate() - (i * 30));
-      const startDate = new Date(endDate);
-      startDate.setDate(startDate.getDate() - 30);
+      const endDate = istAddDays(todayIso, -(i * 30));
+      const startDate = istAddDays(endDate, -30);
 
       const count = db.prepare(`
         SELECT COUNT(*) as cnt FROM early_exit_detections
         WHERE employee_code = ? AND date >= ? AND date <= ?
           AND detection_status != 'exempted'
-      `).get(employeeCode, startDate.toISOString().split('T')[0], endDate.toISOString().split('T')[0]);
+      `).get(employeeCode, startDate, endDate);
 
       windows.push({
         period: i === 0 ? 'Current' : `${i * 30}d ago`,
-        start: startDate.toISOString().split('T')[0],
-        end: endDate.toISOString().split('T')[0],
+        start: startDate,
+        end: endDate,
         count: count?.cnt || 0
       });
     }
