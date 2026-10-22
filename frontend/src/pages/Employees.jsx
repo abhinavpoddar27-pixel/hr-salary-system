@@ -275,7 +275,10 @@ function EditEmployeeModal({ employee, onClose }) {
       // FRESH-3: prefix filters (a bare array refreshed every query on screen)
       qc.invalidateQueries({ queryKey: ['employees'] })
       qc.invalidateQueries({ queryKey: ['departments'] })
-      if (!isNew) qc.invalidateQueries({ queryKey: ['employee-detail', employee.code] })
+      if (!isNew) {
+        qc.invalidateQueries({ queryKey: ['employee-detail', employee.code] })
+        qc.invalidateQueries({ queryKey: ['employee-quick', employee.code] }) // the row drill-down (EmployeeQuickView, staleTime 120 s)
+      }
       onClose()
     },
     onError: (err) => toast.error(err?.response?.data?.error || 'Save failed')
@@ -986,6 +989,7 @@ export default function Employees() {
       toast.success(`Shift updated for ${res?.data?.updated || selectedCodes.size} employees`)
       qcEmp.invalidateQueries({ queryKey: ['employees'] })
       qcEmp.invalidateQueries({ queryKey: ['employee-detail'] })
+      qcEmp.invalidateQueries({ queryKey: ['employee-quick'] }) // open row drill-downs
       clearSelection()
       setShowBulkShift(false)
     },
