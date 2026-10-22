@@ -1,6 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const { getDb } = require('../database/db');
+const { istYearMonth, istYear } = require('../utils/istDate'); // P3-IST-BE
 const { SCHEMA_REFERENCE } = require('../config/schemaReference');
 
 const MAX_ROWS = 100;
@@ -104,8 +105,8 @@ router.post('/run', async (req, res) => {
       sql = query.trim();
     } else {
       // Natural language mode — translate via Claude
-      const currentMonth = month || new Date().getMonth() + 1;
-      const currentYear = year || new Date().getFullYear();
+      const currentMonth = month || istYearMonth().month;
+      const currentYear = year || istYear();
       sql = await translateToSQL(query.trim(), currentMonth, currentYear);
     }
 

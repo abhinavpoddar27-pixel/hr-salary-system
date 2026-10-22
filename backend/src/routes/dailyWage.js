@@ -1,6 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const { getDb } = require('../database/db');
+const { istYearMonth } = require('../utils/istDate'); // P3-IST-BE
 const { requireHrOrAdmin, requireFinanceOrAdmin } = require('../middleware/roles');
 
 // ── Helper: write DW audit log ────────────────────────────────
@@ -1540,7 +1541,8 @@ router.get('/reports/contractor-summary/:id', (req, res) => {
   ).all(req.params.id);
 
   // Current month stats
-  const now = new Date();
+  const nowYm = istYearMonth();
+  const now = new Date(nowYm.year, nowYm.month - 1, 1); // P3-IST-BE: IST month
   const curPrefix = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
   const thisMonth = db.prepare(`
     SELECT COALESCE(SUM(total_worker_count), 0) as worker_days,
@@ -1667,7 +1669,8 @@ router.get('/reports/pending-liabilities', (req, res) => {
 router.get('/reports/seasonal-trends', (req, res) => {
   const db = getDb();
   const months = [];
-  const now = new Date();
+  const nowYm = istYearMonth();
+  const now = new Date(nowYm.year, nowYm.month - 1, 1); // P3-IST-BE: IST month
 
   for (let i = 0; i < 12; i++) {
     const d = new Date(now.getFullYear(), now.getMonth() - i, 1);

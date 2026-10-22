@@ -12,6 +12,7 @@
 const express = require('express');
 const router = express.Router();
 const { getDb, logAudit } = require('../database/db');
+const { istYearMonth, istYear } = require('../utils/istDate'); // P3-IST-BE
 const { refreshEarlyExits, safeRefresh } = require('../services/earlyExitDetection');
 
 // ─── Role helpers ─────────────────────────────────────────
@@ -296,8 +297,8 @@ router.get('/quota/:employeeCode', requireHrFinanceOrAdmin, (req, res) => {
   try {
     const db = getDb();
     const { employeeCode } = req.params;
-    const month = parseInt(req.query.month) || (new Date().getMonth() + 1);
-    const year = parseInt(req.query.year) || new Date().getFullYear();
+    const month = parseInt(req.query.month) || istYearMonth().month;
+    const year = parseInt(req.query.year) || istYear();
 
     const records = db.prepare(`
       SELECT * FROM short_leaves

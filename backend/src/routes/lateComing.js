@@ -11,6 +11,7 @@ const express = require('express');
 const router = express.Router();
 const XLSX = require('xlsx');
 const { getDb } = require('../database/db');
+const { istYearMonth } = require('../utils/istDate'); // P3-IST-BE
 
 // ─── Role helpers ─────────────────────────────────────────
 function requireHrOrAdmin(req, res, next) {
@@ -314,7 +315,8 @@ router.get('/employee-history', (req, res) => {
   }
 
   // Build last N (month, year) tuples working backwards from today.
-  const today = new Date();
+  const ym = istYearMonth();
+  const today = new Date(Date.UTC(ym.year, ym.month - 1, 1));
   const tuples = [];
   for (let i = 0; i < months; i++) {
     const d = new Date(Date.UTC(today.getUTCFullYear(), today.getUTCMonth() - i, 1));

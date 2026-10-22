@@ -24,6 +24,7 @@ each read in context. Line numbers are on b2badcab.
 | M5 | `routes/sales.js:1493` (sales POST /employees, no DOJ) | first `sales_salary_structures.effective_from` (YYYY-MM). On the 1st 00:00–05:30 IST → last month. |
 | M6 | `routes/advance.js:69, :85` (mark advance paid) | `salary_advances.paid_date = date('now')` → IST date. Record only (recovery keys on month/year). |
 | M7 | `routes/leaves.js:501, :524-535, :627, :649-653, :670` (/adjust, /bulk-adjust) | which YEAR's leave balance is moved + the ledger row's month/year. On 1 Jan 00:00–05:30 IST it moves last year's EL (paid leave). |
+| M9 | `routes/sales.js:1599` (sales PUT /employees/:code, gross changed, no `effective_from`) | month of the new sales structure version (found in Phase 1 re-grep: `.substring(0, 7)` form). On the 1st 00:00–05:30 IST → last month's cycle. Money. |
 | M8 | `routes/employees.js:338` (POST /employees) | year of the opening leave balance + CL pro-rata for a new joiner. |
 
 **Non-money (default period / "today" checks):**

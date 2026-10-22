@@ -12,6 +12,7 @@
 const LEAVE_ELIGIBLE_TYPES = ['Permanent'];
 
 const { isContractorForPayroll } = require('../utils/employeeClassification');
+const { istToday } = require('../utils/istDate'); // P3-IST-BE
 
 /**
  * CL entitlement for a given year based on effective join month.
@@ -299,7 +300,7 @@ function generateComplianceAlerts(db, month, year) {
   const pfDueMonth = month === 12 ? 1 : month + 1;
   const pfDueYear = month === 12 ? year + 1 : year;
   const pfDueDate = `${pfDueYear}-${String(pfDueMonth).padStart(2,'0')}-15`;
-  const today = new Date().toISOString().slice(0, 10);
+  const today = istToday();
   const daysUntilPF = Math.ceil((new Date(pfDueDate) - new Date(today)) / 86400000);
 
   if (daysUntilPF <= 10 && daysUntilPF > 0) {

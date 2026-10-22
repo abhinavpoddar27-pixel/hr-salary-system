@@ -9,7 +9,7 @@ const express = require('express');
 const router = express.Router();
 const path = require('path');
 const fs = require('fs');
-const { istToday, istYearMonth, istYear, istAddDays, istAddMonths, IST_TODAY_SQL } = require('../utils/istDate'); // P3-IST-BE
+const { istToday, istYear } = require('../utils/istDate'); // P3-IST-BE
 const crypto = require('crypto');
 const multer = require('multer');
 const { getDb } = require('../database/db');
@@ -1596,7 +1596,7 @@ router.put('/employees/:code', (req, res) => {
   // changes). Default = current calendar month, zero-padded YYYY-MM (matches
   // the create-path fallback). Optional body override lets a targeted/cohort
   // correction stamp a specific cycle (e.g. 2026-05 for May arrears).
-  let effectiveFrom = new Date().toISOString().substring(0, 7);
+  let effectiveFrom = istToday().substring(0, 7); // P3-IST-BE: IST month
   if (body.effective_from !== undefined && body.effective_from !== null
       && String(body.effective_from).trim() !== '') {
     const v = String(body.effective_from).trim();

@@ -1,6 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const { getDb } = require('../database/db');
+const { istToday } = require('../utils/istDate'); // P3-IST-BE
 const {
   getDailySummary,
   getNightShiftReport,
@@ -17,7 +18,7 @@ const {
  */
 router.get('/summary', (req, res) => {
   const db = getDb();
-  const date = req.query.date || new Date().toISOString().split('T')[0];
+  const date = req.query.date || istToday();
 
   const summary = getDailySummary(db, date);
   const departments = getDepartmentBreakdown(db, date);
@@ -39,7 +40,7 @@ router.get('/summary', (req, res) => {
  */
 router.get('/night-shift', (req, res) => {
   const db = getDb();
-  const date = req.query.date || new Date().toISOString().split('T')[0];
+  const date = req.query.date || istToday();
 
   const report = getNightShiftReport(db, date);
   res.json({ success: true, data: report });
@@ -51,7 +52,7 @@ router.get('/night-shift', (req, res) => {
  */
 router.get('/shift-breakdown', (req, res) => {
   const db = getDb();
-  const date = req.query.date || new Date().toISOString().split('T')[0];
+  const date = req.query.date || istToday();
 
   const breakdown = getShiftWiseBreakdown(db, date);
   res.json({ success: true, data: breakdown });
@@ -63,7 +64,7 @@ router.get('/shift-breakdown', (req, res) => {
  */
 router.get('/worker-breakdown', (req, res) => {
   const db = getDb();
-  const date = req.query.date || new Date().toISOString().split('T')[0];
+  const date = req.query.date || istToday();
 
   const breakdown = getWorkerTypeBreakdown(db, date);
   res.json({ success: true, data: breakdown });
@@ -75,7 +76,7 @@ router.get('/worker-breakdown', (req, res) => {
  */
 router.get('/punched-in', (req, res) => {
   const db = getDb();
-  const date = req.query.date || new Date().toISOString().split('T')[0];
+  const date = req.query.date || istToday();
 
   const records = db.prepare(`
     SELECT ap.employee_code, e.name as employee_name, e.department, e.designation,
@@ -98,7 +99,7 @@ router.get('/punched-in', (req, res) => {
  */
 router.get('/absentees', (req, res) => {
   const db = getDb();
-  const date = req.query.date || new Date().toISOString().split('T')[0];
+  const date = req.query.date || istToday();
 
   const allEmployees = db.prepare(`
     SELECT code, name, department, designation FROM employees
@@ -172,7 +173,7 @@ router.get('/previous-day-report', (req, res) => {
  */
 router.get('/late-coming-summary', (req, res) => {
   const db = getDb();
-  const date = req.query.date || new Date().toISOString().split('T')[0];
+  const date = req.query.date || istToday();
   const company = req.query.company || null;
 
   const [yStr, mStr, dStr] = String(date).split('-');

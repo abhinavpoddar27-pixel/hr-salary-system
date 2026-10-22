@@ -6,6 +6,7 @@
  */
 
 const { parseTimeToMinutes } = require('../employeeProfileService');
+const { istYear } = require('../../utils/istDate'); // P3-IST-BE
 
 const PRESENT = ['P', 'WOP', '½P', 'WO½P'];
 
@@ -111,7 +112,7 @@ function detectSuddenLeaveBurn(records, context) {
   try {
     balances = db.prepare(
       'SELECT leave_type, balance FROM leave_balances WHERE employee_id = ? AND year = ?'
-    ).all(employee.id, new Date().getFullYear());
+    ).all(employee.id, istYear());
   } catch (_) { return null; }
 
   if (!balances.length) return null;

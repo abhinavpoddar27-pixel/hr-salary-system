@@ -33,19 +33,19 @@ function createNotification(roleTarget, type, message, link) {
 
 function checkPipelineStatus() {
   const db = getDb();
-  const now = new Date();
-  const dayOfMonth = now.getDate();
+  const ist = istParts(); // P3-IST-BE: the IST calendar day, not the UTC one
+  const dayOfMonth = ist.day;
 
   // Determine which month to check
   let checkMonth, checkYear;
   if (dayOfMonth <= 10) {
     // Check previous month
-    checkMonth = now.getMonth(); // 0-indexed, so this is prev month
-    checkYear = now.getFullYear();
+    checkMonth = ist.month - 1;
+    checkYear = ist.year;
     if (checkMonth === 0) { checkMonth = 12; checkYear--; }
   } else {
-    checkMonth = now.getMonth() + 1;
-    checkYear = now.getFullYear();
+    checkMonth = ist.month;
+    checkYear = ist.year;
   }
 
   const MONTHS = ['', 'January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];

@@ -2,6 +2,7 @@ const express = require('express');
 const router = express.Router();
 const { requireFinanceOrAdmin } = require('../middleware/roles'); // P2-11 role guards
 const { getDb } = require('../database/db');
+const { istYear } = require('../utils/istDate'); // P3-IST-BE
 
 // ─── Admin-only middleware ───────────────────────────────
 function requireAdmin(req, res, next) {
@@ -278,7 +279,7 @@ router.put('/policy', requireAdmin, (req, res) => {
 router.get('/compliance', (req, res) => {
   const db = getDb();
   const { year } = req.query;
-  const data = db.prepare(`SELECT * FROM compliance_items WHERE year = ? ORDER BY due_date`).all(year || new Date().getFullYear());
+  const data = db.prepare(`SELECT * FROM compliance_items WHERE year = ? ORDER BY due_date`).all(year || istYear());
   res.json({ success: true, data });
 });
 
