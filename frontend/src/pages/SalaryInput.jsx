@@ -117,8 +117,11 @@ export default function SalaryInput() {
       newStructure: editForm,
       reason
     }),
-    onSuccess: () => {
-      toast.success('Salary change request submitted for approval')
+    onSuccess: (res) => {
+      const data = res?.data || {}
+      // N-PF-LOWS (Q8): one pending request per employee — a second one is not saved; say so.
+      if (data.alreadyPending) toast(data.message || 'A salary change request is already pending for this employee.', { icon: 'ℹ️', duration: 6000 })
+      else toast.success('Salary change request submitted for approval')
       setEditEmployee(null)
       setReason('')
       refetchPending()

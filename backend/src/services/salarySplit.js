@@ -8,16 +8,35 @@
 const DEFAULT_SPLIT = { basic_percent: 50, hra_percent: 20, da_percent: 0, special_allowance: 0, other_allowances: 0, pf_wage_ceiling: 15000 };
 
 /**
- * N-19: read one split field. Missing / blank / unreadable → `fallback` (the
- * stored value). 0 is a real value (the old `parseFloat(x) || 50` turned an
- * explicit 0 into 50).
+ * N-19: read one split field. Missing / blank → `fallback` (the stored value).
+ * 0 is a real value (the old `parseFloat(x) || 50` turned an explicit 0 into 50).
+ * N-PF-LOWS (ruling Q2): a value that is present but not a number ('abc',
+ * '15,000', {}) is NOT silently replaced by the stored value any more — it
+ * returns NaN, and resolveSplit turns that into 400 NOT_A_NUMBER.
  */
 function readSplitNum(body, key, fallback) {
   const v = body[key];
   if (v === undefined || v === null || (typeof v === 'string' && v.trim() === '')) return fallback;
+  if (typeof v !== 'number' && typeof v !== 'string') return NaN;
   const n = typeof v === 'number' ? v : Number(String(v).trim());
-  return Number.isFinite(n) ? n : fallback;
+  return Number.isFinite(n) ? n : NaN;
 }
+
+// N-PF-LOWS (rulings Q1, Q3): a per-employee PF wage ceiling must be more than
+// ₹0 and at most this. PF is switched off by the statutory flag, never by a 0 ceiling.
+const PF_CEILING_MAX = 100000;
+
+const FIELD_LABELS = {
+  basic_percent: 'Basic %', hra_percent: 'HRA %', da_percent: 'DA %',
+  special_allowance_percent: 'Special allowance %', other_allowance: 'Other allowance',
+  pf_wage_ceiling: 'PF wage ceiling', gross_salary: 'Gross salary',
+};
+const notANumber = (field) => ({ error: `${FIELD_LABELS[field] || field} must be a number`, code: 'NOT_A_NUMBER', field });
+const ceilingOutOfRange = () => ({
+  error: `PF wage ceiling must be more than ₹0 and at most ₹${PF_CEILING_MAX.toLocaleString('en-IN')}`,
+  code: 'SPLIT_OUT_OF_RANGE', field: 'pf_wage_ceiling',
+});
+const ceilingInRange = (n) => Number.isFinite(n) && n > 0 && n <= PF_CEILING_MAX;
 
 const numOr = (v, d) => (v === undefined || v === null || !Number.isFinite(Number(v)) ? d : Number(v));
 
@@ -35,21 +54,67 @@ function storedSplit(struct) {
   };
 }
 
-/** The split the window asks for; a field left out keeps the stored value. null + error when out of range. */
+/**
+ * The split the window asks for; a field left out keeps the stored value.
+ * Returns { split } or { error, code, field } (NOT_A_NUMBER / SPLIT_OUT_OF_RANGE).
+ */
 function resolveSplit(body, stored) {
-  const split = {
-    basicPct: readSplitNum(body, 'basic_percent', stored.basicPct),
-    hraPct: readSplitNum(body, 'hra_percent', stored.hraPct),
-    daPct: readSplitNum(body, 'da_percent', stored.daPct),
-    specialPct: readSplitNum(body, 'special_allowance_percent', stored.specialPct),
-    other: readSplitNum(body, 'other_allowance', stored.other),
-    pfCeiling: readSplitNum(body, 'pf_wage_ceiling', stored.pfCeiling),
-  };
-  for (const k of ['basicPct', 'hraPct', 'daPct', 'specialPct']) {
-    if (split[k] < 0 || split[k] > 100) return { error: 'Salary split percentages must be between 0 and 100' };
+  const keys = [
+    ['basicPct', 'basic_percent'], ['hraPct', 'hra_percent'], ['daPct', 'da_percent'],
+    ['specialPct', 'special_allowance_percent'], ['other', 'other_allowance'], ['pfCeiling', 'pf_wage_ceiling'],
+  ];
+  const split = {};
+  for (const [k, field] of keys) {
+    split[k] = readSplitNum(body, field, stored[k]);
+    if (Number.isNaN(split[k])) return notANumber(field);
   }
-  if (split.other < 0 || split.pfCeiling < 0) return { error: 'Other allowance and PF wage ceiling cannot be negative' };
+  for (const k of ['basicPct', 'hraPct', 'daPct', 'specialPct']) {
+    if (split[k] < 0 || split[k] > 100) return { error: 'Salary split percentages must be between 0 and 100', code: 'SPLIT_OUT_OF_RANGE', field: k };
+  }
+  if (split.other < 0) return { error: 'Other allowance and PF wage ceiling cannot be negative', code: 'SPLIT_OUT_OF_RANGE', field: 'other_allowance' };
+  if (split.pfCeiling < 0) return { error: 'Other allowance and PF wage ceiling cannot be negative', code: 'SPLIT_OUT_OF_RANGE', field: 'pf_wage_ceiling' };
+  // Q1/Q3: only a ceiling the caller SENT is range-checked; a stored value
+  // outside the range (none in production) does not block an unrelated save.
+  if (!isBlank(body.pf_wage_ceiling) && !ceilingInRange(split.pfCeiling)) return ceilingOutOfRange();
   return { split };
+}
+
+const isBlank = (v) => v === undefined || v === null || (typeof v === 'string' && v.trim() === '');
+
+/** Is the requested split (incl. ceiling) the stored one? Used when no gross is given. */
+function splitDiffers(stored, split) {
+  const far = (a, b) => Math.abs((Number(a) || 0) - (Number(b) || 0)) > 0.01;
+  return ['basicPct', 'hraPct', 'daPct', 'specialPct', 'other', 'pfCeiling'].some((k) => far(split[k], stored[k]));
+}
+
+/**
+ * N-PF-LOWS (Salary Input request-change, ruling Q8 batch): the same number rules
+ * for a free-form new_structure. Components + gross: a number ≥ 0 when present;
+ * percents 0–100; ceiling > 0 and ≤ PF_CEILING_MAX. null = fine.
+ */
+function checkRequestStructure(ns) {
+  const s = ns || {};
+  const num = (v) => (typeof v === 'number' ? v : (typeof v === 'string' ? Number(v.trim()) : NaN));
+  const LABEL = { basic: 'Basic', da: 'DA', hra: 'HRA', conveyance: 'Conveyance', special_allowance: 'Special allowance',
+    other_allowances: 'Other allowances', gross_salary: 'Gross salary' };
+  for (const k of Object.keys(LABEL)) {
+    if (isBlank(s[k])) continue;
+    const n = num(s[k]);
+    if (!Number.isFinite(n)) return { error: `${LABEL[k]} must be a number`, code: 'NOT_A_NUMBER', field: k };
+    if (n < 0) return { error: `${LABEL[k]} cannot be negative`, code: 'SPLIT_OUT_OF_RANGE', field: k };
+  }
+  for (const k of ['basic_percent', 'hra_percent', 'da_percent']) {
+    if (isBlank(s[k])) continue;
+    const n = num(s[k]);
+    if (!Number.isFinite(n)) return notANumber(k);
+    if (n < 0 || n > 100) return { error: 'Salary split percentages must be between 0 and 100', code: 'SPLIT_OUT_OF_RANGE', field: k };
+  }
+  if (!isBlank(s.pf_wage_ceiling)) {
+    const n = num(s.pf_wage_ceiling);
+    if (!Number.isFinite(n)) return notANumber('pf_wage_ceiling');
+    if (!ceilingInRange(n)) return ceilingOutOfRange();
+  }
+  return null;
 }
 
 const r2 = (x) => Math.round(x * 100) / 100;
@@ -102,4 +167,5 @@ function buildRevisionStructure(struct, gross, ptValue) {
 
 module.exports = {
   DEFAULT_SPLIT, readSplitNum, numOr, storedSplit, resolveSplit, r2, splitAmounts, splitUnchanged, buildRevisionStructure,
+  PF_CEILING_MAX, ceilingInRange, splitDiffers, checkRequestStructure, isBlank,
 };

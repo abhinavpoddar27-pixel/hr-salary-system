@@ -117,7 +117,8 @@ function SalaryForm({ employee, emp, onClose }) {
       } else if (data?.pendingApproval) {
         toast.success(data.message || 'Salary change submitted for finance approval', { duration: 5000 })
       } else {
-        toast.success('Salary structure saved')
+        // N-PF-LOWS (L3): the server says what was saved (e.g. only bank / ID details).
+        toast.success(data?.message || 'Salary structure saved')
       }
       qc.invalidateQueries(['employee-detail', employee.code])
       onClose()
@@ -169,7 +170,8 @@ function SalaryForm({ employee, emp, onClose }) {
             </div>
             <div>
               <label className="label">PF Wage Ceiling (₹)</label>
-              <input type="number" value={form.pf_wage_ceiling} onChange={e => setForm(f => ({ ...f, pf_wage_ceiling: e.target.value }))} className="input" />
+              {/* N-PF-LOWS (Q9): same range the server checks — more than ₹0, at most ₹1,00,000 */}
+              <input type="number" min="1" max="100000" value={form.pf_wage_ceiling} onChange={e => setForm(f => ({ ...f, pf_wage_ceiling: e.target.value }))} className="input" data-testid="pf-ceiling-input" />
             </div>
           </div>
 
