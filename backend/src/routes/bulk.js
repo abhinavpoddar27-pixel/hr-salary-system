@@ -66,6 +66,18 @@ router.get('/salary-revision/defaults', requireHrOrAdmin, (req, res) => {
   res.json({ success: true, data: { effective_from: kind.defaultEffectiveFrom(db), firstOpen: kind.firstOpenMonth(db) } });
 });
 
+// P5-02: employee master bulk edit — field table + lists for the screen, and current values for the export sheet.
+const masterEdit = require('../services/bulk/kinds/masterEdit');
+router.get('/master-edit/meta', requireHrOrAdmin, (req, res) => {
+  res.json({ success: true, data: masterEdit.meta(getDb()) });
+});
+router.post('/master-edit/export', requireHrOrAdmin, (req, res) => {
+  const fields = Array.isArray(req.body?.fields) ? req.body.fields.map(String) : [];
+  const codes = Array.isArray(req.body?.codes) ? req.body.codes.map(String).slice(0, 5000) : null;
+  if (!fields.length) return res.status(400).json({ success: false, error: 'Choose at least one field' });
+  res.json({ success: true, data: masterEdit.exportRows(getDb(), { fields, codes }) });
+});
+
 // Lists: only kinds the role may create, or (approval kinds) decide. Asking for any other kind → 403.
 router.get('/batches', (req, res) => {
   const role = roleOf(req);

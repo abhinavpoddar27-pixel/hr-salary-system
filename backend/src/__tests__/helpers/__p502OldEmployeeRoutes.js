@@ -1,5 +1,6 @@
 // Test-only: PUT /api/employees/bulk-shift and PUT /:code/mark-left as they were on origin/main b2badcab (verbatim
 // handlers), used by bulkMasterEdit.test.js to prove the setShift() / markLeft() extraction changed nothing.
+// Only the require() paths were adjusted for this folder.
 const express = require('express');
 const router = express.Router();
 const { getDb } = require('../../database/db');
@@ -68,7 +69,7 @@ router.put('/:code/mark-left', requireHrOrAdmin, (req, res) => {
   if (!emp) return res.status(404).json({ success: false, error: 'Employee not found' });
   if (emp.status === 'Left') return res.status(400).json({ success: false, error: 'Employee already marked as Left' });
 
-  const { logAudit } = require('../database/db');
+  const { logAudit } = require('../../database/db');
 
   // Loans PR-1: the loan block below needs the rebuilt loan schema. If that
   // migration refused (old loan tables not empty), skip the loan block rather
@@ -77,8 +78,8 @@ router.put('/:code/mark-left', requireHrOrAdmin, (req, res) => {
     "SELECT 1 FROM policy_config WHERE key = 'migration_loans_schema_v2_done' AND value = '1'"
   ).get();
 
-  const { consolidateForExit } = require('../services/loans/exit');
-  const { notifyAlerts } = require('../services/loans/notify');
+  const { consolidateForExit } = require('../../services/loans/exit');
+  const { notifyAlerts } = require('../../services/loans/notify');
   const exitAlerts = [];
   const loanSummary = [];   // Loans PR-7: what each flagged loan now owes (the Mark Left dialog, PR-6b)
 

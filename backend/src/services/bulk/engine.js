@@ -21,6 +21,8 @@ const BULK_PREVIEW_MAX = 1000;
 const KINDS = {
   'extra-duty': require('./kinds/extraDuty'),
   'salary-revision': require('./kinds/salaryRevision'), // P5-04 — first approval kind
+  'master-edit': require('./kinds/masterEdit').direct,              // P5-02 — direct master fields
+  'master-edit-sensitive': require('./kinds/masterEdit').sensitive, // P5-02 — bank / statutory / company / leaving (finance)
 };
 // P5-01: a fictional approval kind for tests and the check script only. Never set on Railway.
 if (process.env.BULK_TEST_KINDS === '1') KINDS['test-approval'] = require('./kinds/testApproval');
