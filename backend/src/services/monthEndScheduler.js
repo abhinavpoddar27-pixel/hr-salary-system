@@ -186,8 +186,11 @@ function startScheduler() {
     try { checkPipelineStatus(); } catch (e) { console.error('[Scheduler] Error:', e.message); }
     try { runNightlyLeaveSweep(); } catch (e) { console.error('[Scheduler] Leave sweep error:', e.message); }
   });
-  // 00:05 IST (18:35 UTC the previous day) — year-boundary seed / lapse.
-  cron.schedule('35 18 * * *', () => {
+  // 00:00 IST (18:30 UTC the previous day) — year-boundary seed / lapse. P3-IST-BE: was
+  // 00:05 IST, which left /leaves/adjust refusing for five minutes on 1 Jan (no new-year
+  // balance row yet). Both sides are guarded keys + INSERT OR IGNORE, so the earlier minute
+  // changes nothing else; istParts() reads the IST day, which has already turned at 18:30 UTC.
+  cron.schedule('30 18 * * *', () => {
     try { runYearBoundaryCheck(); } catch (e) { console.error('[Scheduler] Year-boundary error:', e.message); }
   });
   // Also run on startup

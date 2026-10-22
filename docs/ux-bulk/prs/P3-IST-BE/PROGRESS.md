@@ -12,8 +12,22 @@ State: **Phase 3 hand-off — built, verified, pushed. No PR (planner opens it a
   so one clock decides and the pinned-clock test can see it.
 - Phase 2: `istDateFallbacks.test.js` 15; full jest; --base; Stage 7 sim drift.
 
+- Review (planner, 22 Oct): SHIP with 4 Lows. Applied:
+  - L1: year-boundary cron `'35 18 * * *'` → `'30 18 * * *'` (00:00 IST). Chosen over changing seedYearOpenings:
+    both sides are already guarded (`leave_year_open_<Y>_done` / `cl_seed_<Y>_v1`, `INSERT OR IGNORE`), so a
+    one-string change; istParts() has already turned to the new IST day at 18:30:00 UTC. Test pins 18:30:00Z on
+    31 Dec → seeds 2027, second run leaves a changed row alone; 18:29:59Z is still 31 Dec.
+  - L3: tests for M3 (sales PUT status → Left, no dol → loan exit_date = IST date) and M5 (sales create, no doj →
+    structure month = IST month).
+  - L2 (note): on b2badcab the M6 (advance paid_date) and on-leave-today tests fail only because the old code reads
+    SQLite's real clock (`date('now')`), which the Date-only fake clock cannot move — a clock artefact, not proof of the
+    00:00–05:30 bug in the test itself. The bug is the same one (UTC date), shown by the other route tests.
+  - L4 → register, not fixed here (own item): the 31 Dec year-end lapse runs at the start of 31 Dec IST (now 00:00,
+    was 00:05), so leave taken on 31 Dec is lapsed before it is used/recorded. Needs an owner ruling on when the lapse
+    should run (e.g. 00:00 IST 1 Jan for the previous year).
+
 ## Next
-Planner: independent review of M1, M2, M3, M7, then open the PR.
+Planner: open the PR.
 
 ## Rulings (planner, 22 Oct 2026)
 - Q1 leave the 5 private IST copies (dailyWage, salaryChange, missPunch, attendanceReviewService, loans/close) — later clean-up.
@@ -47,12 +61,16 @@ Plan + log: `docs/ux-bulk/prs/P3-IST-BE/PLAN.md`, `PROGRESS.md`. Register item f
 - **Fragile:** any new business "today"/default month must use `utils/istDate`. Between 00:00 and 00:05 IST on 1 Jan,
   /adjust refuses ("no balance") until the year-boundary cron seeds the new year (Q5). The old year defaults read the
   server's LOCAL zone — they only looked right on a container set to IST.
-- **Verified:** new `istDateFallbacks.test.js` 15 (Date-only fake clock, real routers + JWTs; 00:30 IST 11 Oct, 1 Nov,
-  1 Jan); passes under TZ UTC / Asia/Kolkata / America/New_York; `--base` on b2badcab under TZ=UTC 10 of 10 route tests
-  fail (the explicit-date control passes). Full jest 130/2309 → 131/2324 (TZ=UTC and IST). Stage 7 simulation drift 0.
-- **Not tested:** Railway; browser (no frontend change); M3 has no direct test (exit date only reaches the loan flag —
-  code read, same one-line swap as M4).
+- **Year boundary (review L1):** monthEndScheduler cron `'35 18 * * *'` → `'30 18 * * *'` (00:00 IST); seed + lapse
+  stay guarded by policy keys + INSERT OR IGNORE. The 31 Dec lapse now also runs at 00:00 IST 31 Dec — register item L4.
+- **Verified:** new `istDateFallbacks.test.js` 18 (Date-only fake clock, real routers + JWTs; 00:30 IST 11 Oct, 1 Nov,
+  1 Jan; node-cron mocked for the schedule string); passes under TZ UTC / Asia/Kolkata / America/New_York; `--base` on
+  b2badcab under TZ=UTC 13 of 13 route/cron tests fail (M6 + on-leave-today fail there via SQLite's real clock — clock
+  artefact). Full jest 130/2309 → 131/2327 (TZ=UTC and IST). Stage 7 simulation drift 0.
+- **Not tested:** Railway; browser (no frontend change); the real cron firing at 18:30 UTC (schedule string + handler
+  tested separately).
 - **Production (read-only, last 6 months):** 1.1 % of API traffic and 303 of 46,711 audit rows fall in 00:00–05:30 IST;
   0 salary structures, 0 gate passes, 3 leave-ledger rows, 0 leaver status rows in that window. No data repair.
+- **Register:** L4 — year-end lapse runs at the start of 31 Dec IST, before that day's leave is used (owner ruling).
 - **Found, not fixed:** `early-exits.js /summary` builds `'${company}'` into SQL (pre-existing string interpolation).
 

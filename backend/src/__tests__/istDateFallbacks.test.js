@@ -14,7 +14,10 @@
  * container set to IST hides three of the failures (jest sandboxes process.env, so the
  * zone cannot be forced from inside this file).
  */
+jest.mock('node-cron', () => ({ schedule: jest.fn() }));
+const cron = require('node-cron');
 const { startJwtApi } = require('./helpers/jwtApiHarness');
+const S = require('./helpers/salesLoanFixture');
 const ist = require('../utils/istDate');
 
 const NIGHT = Date.parse('2026-10-10T19:00:00Z');       // 00:30 IST 11 Oct
@@ -175,5 +178,43 @@ describe('routes at 00:30 IST', () => {
     const months = db.prepare('SELECT effective_from FROM sales_salary_structures WHERE employee_id = ?').all(sid).map((x) => x.effective_from);
     expect(months).toContain('2026-11');
     expect(months).not.toContain('2026-10');
+  });
+
+  test('M3 sales PUT status → Left with no dol → the loan exit date = IST today', async () => {
+    S.addRep(db, { code: 'S903', company: COMPANY });
+    const loanId = S.salesLoan(db, { code: 'S903', company: COMPANY });
+    pin(NIGHT);
+    const r = await api.request('PUT', `/api/sales/employees/S903?company=${encodeURIComponent(COMPANY)}`, { as: 'hr1', body: { status: 'Left' } });
+    expect(r.status).toBe(200);
+    expect(db.prepare('SELECT exit_flag, exit_date FROM loans WHERE id = ?').get(loanId)).toEqual({ exit_flag: 1, exit_date: '2026-10-11' });
+  });
+
+  test('M5 sales create with no doj → first structure month = IST month', async () => {
+    pin(NEW_MONTH);
+    const r = await api.request('POST', '/api/sales/employees', { as: pinnedUser(), body: {
+      name: 'TEST', company: COMPANY, bank_name: 'BANK', account_no: 'AC904', ifsc: 'IFSC0000001', gross_salary: 18000 } });
+    expect(r.status).toBe(201);
+    const months = db.prepare('SELECT effective_from FROM sales_salary_structures WHERE employee_id = ?').all(r.body.data.id).map((x) => x.effective_from);
+    expect(months).toEqual(['2026-11']);
+  });
+
+  test('1 Jan seed: cron fires at 00:00 IST, seeds the new year then, and a second run changes nothing', async () => {
+    const { startScheduler, runYearBoundaryCheck, istParts } = require('../services/monthEndScheduler');
+    startScheduler();
+    const crons = cron.schedule.mock.calls.map((c) => c[0]);
+    expect(crons).toContain('30 18 * * *');
+    expect(crons).not.toContain('35 18 * * *');
+    const id = addEmp('T9009', { doj: '2024-01-01' });
+    pin(Date.parse('2026-12-31T18:30:00Z'));                       // 00:00:00 IST 1 Jan 2027
+    expect(istParts()).toEqual({ year: 2027, month: 1, day: 1 });
+    runYearBoundaryCheck();
+    const rows = () => db.prepare('SELECT leave_type, balance FROM leave_balances WHERE employee_id = ? AND year = 2027 ORDER BY leave_type').all(id);
+    const first = rows();
+    expect(first.map((x) => x.leave_type)).toEqual(['CL', 'EL']);
+    db.prepare("UPDATE leave_balances SET balance = 99 WHERE employee_id = ? AND year = 2027 AND leave_type = 'EL'").run(id);
+    runYearBoundaryCheck();                                          // guarded: no re-seed, no overwrite
+    expect(rows().find((x) => x.leave_type === 'EL').balance).toBe(99);
+    pin(Date.parse('2026-12-31T18:29:59Z'));                       // 23:59:59 IST 31 Dec: still the old day
+    expect(istParts()).toEqual({ year: 2026, month: 12, day: 31 });
   });
 });
