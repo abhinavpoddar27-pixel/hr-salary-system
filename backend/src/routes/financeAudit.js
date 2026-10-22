@@ -18,6 +18,12 @@ const { safeTrigger, queueLeaveRecalc, checkAutoStage6, isMonthFinalized } = req
 const { requireFinanceOrAdmin, roleIn } = require('../middleware/roles');
 const { adjustLeaveBalance } = require('../services/leaveBalanceGuard');
 const { syncSalaryStructureFromEmployee } = require('./employees');
+const { grossRequestForFlag, syncGrossFlagPreapprovals, preapprovalInfo } = require('../services/grossFlagPreapproval');
+
+/** Q-B6: stamp gross flags finance already approved through a salary change request. Never breaks a read. */
+function syncPreapprovals(db, month, year) {
+  try { syncGrossFlagPreapprovals(db, month, year); } catch (e) { console.error('[Q-B6] gross flag pre-approval sync failed:', e.message); }
+}
 
 const CORRECTION_REASONS = [
   'Gate register mismatch',
@@ -1191,6 +1197,7 @@ router.get('/salary-manual-flags', (req, res) => {
   const db = getDb();
   const { month, year, company } = req.query;
   if (!month || !year) return res.status(400).json({ success: false, error: 'month and year required' });
+  syncPreapprovals(db, month, year);
 
   try {
     const m = parseInt(month);
@@ -1213,6 +1220,10 @@ router.get('/salary-manual-flags', (req, res) => {
         ${company ? 'AND (e.company = ? OR e.company IS NULL)' : ''}
       ORDER BY smf.finance_approved ASC, smf.flag_type, e.department, e.name
     `).all(...(company ? [m, y, company] : [m, y]));
+
+    // Q-B6: why an approved gross flag needs no decision (request / bulk batch + approver).
+    const preapproved = preapprovalInfo(db, flags);
+    for (const f of flags) if (preapproved[f.id]) f.preapproved = preapproved[f.id];
 
     // ── 2. LIVE punch corrections (one row per correction, not aggregate) ──
     const punchRows = db.prepare(`
@@ -1357,21 +1368,7 @@ function flagRefusal(status, body) {
 const sameUser = (a, b) => !!a && !!b && String(a).trim().toLowerCase() === String(b).trim().toLowerCase();
 const isPerson = (u) => !!u && !['system', 'salary_compute'].includes(String(u).trim().toLowerCase());
 
-/**
- * The salary change request behind a GROSS_STRUCTURE_CHANGE flag, when it can be
- * identified reliably: the employee's LATEST approved request that changed the
- * gross, and its new gross is the flag's new gross (± ₹1). Else null.
- */
-function grossRequestForFlag(db, flag) {
-  if (flag.flag_type !== 'GROSS_STRUCTURE_CHANGE') return null;
-  const reqRow = db.prepare(`
-    SELECT * FROM salary_change_requests
-    WHERE employee_code = ? AND status = 'Approved' AND ABS(COALESCE(new_gross,0) - COALESCE(old_gross,0)) > 0.01
-    ORDER BY COALESCE(approved_at, created_at) DESC, id DESC LIMIT 1
-  `).get(flag.employee_code);
-  if (!reqRow) return null;
-  return Math.abs((Number(reqRow.new_gross) || 0) - (parseFloat(flag.manual_value) || 0)) <= GROSS_MOVED_TOLERANCE ? reqRow : null;
-}
+// grossRequestForFlag lives in services/grossFlagPreapproval.js (Q-B6) — one copy for the decision and the stamp.
 
 /** Who caused the flag: a person in changed_by, and the gross request's requester. */
 function flagCausers(db, flag) {
@@ -1561,6 +1558,7 @@ router.get('/readiness-check', (req, res) => {
   const blockers = [];
   const warnings = [];
   const passed = [];
+  syncPreapprovals(db, month, year);
 
   // Wrap entire body so any single failing sub-query (e.g. schema drift on a
   // newer column) doesn't 500 the whole readiness page — finance still gets

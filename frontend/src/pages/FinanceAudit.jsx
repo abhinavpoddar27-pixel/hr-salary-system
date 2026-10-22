@@ -891,7 +891,15 @@ function ManualInterventionsTab() {
                   <td className="text-right text-xs font-mono">{f.manual_value ? fmtINR2(f.manual_value) : '—'}</td>
                   <td className="text-right text-xs font-mono font-bold">{f.delta > 0 ? '+' : ''}{f.delta ? fmtINR2(f.delta) : '—'}</td>
                   <td className="text-xs text-slate-500 max-w-[200px] truncate" title={f.notes}>{f.notes}</td>
-                  <td>{statusBadge(f.finance_approved)}</td>
+                  <td>
+                    {statusBadge(f.finance_approved)}
+                    {f.preapproved && f.finance_approved === 1 && (
+                      <div className="text-[10px] text-slate-500 mt-0.5" data-testid={`flag-preapproved-${f.id}`}
+                        title="Finance approved this salary change when the request was decided — not asked again">
+                        {f.preapproved.batch_id ? `With bulk batch #${f.preapproved.batch_id}` : `With request #${f.preapproved.request_id}`} · approved by {f.preapproved.approved_by}
+                      </div>
+                    )}
+                  </td>
                   <td>
                     {live ? (
                       <span className="text-[10px] text-slate-400">{f.finance_approved ? 'Applied' : 'Auto-included'}</span>
